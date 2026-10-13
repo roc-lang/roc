@@ -17439,7 +17439,7 @@ fn collectCheckResult(
     build_env: *BuildEnv,
     drained: []const BuildEnv.DrainedModuleReports,
     include_timing: bool,
-) Allocator.Error!CheckResult {
+) CheckFileWithBuildEnvPreservedError!CheckResult {
     defer build_env.freeDrainedReportsPathsOnly(drained);
 
     var error_count: u32 = 0;
