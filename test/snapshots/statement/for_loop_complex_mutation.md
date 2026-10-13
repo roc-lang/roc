@@ -180,42 +180,44 @@ NO CHANGE
 						(e-num (value "9"))
 						(e-num (value "10"))))
 				(e-block
-					(e-if
-						(if-branches
-							(if-branch
-								(e-method-eq (negated "false")
-									(lhs
-										(e-dispatch-call (method "rem_by") (constraint-fn-var 396)
-											(receiver
-												(e-lookup-local
-													(p-assign (ident "n"))))
-											(args
-												(e-num (value "2")))))
-									(rhs
-										(e-num (value "0"))))
+					(s-expr
+						(e-if
+							(if-branches
+								(if-branch
+									(e-method-eq (negated "false")
+										(lhs
+											(e-dispatch-call (method "rem_by") (constraint-fn-var 398)
+												(receiver
+													(e-lookup-local
+														(p-assign (ident "n"))))
+												(args
+													(e-num (value "2")))))
+										(rhs
+											(e-num (value "0"))))
+									(e-block
+										(s-reassign
+											(p-var-assign (ident "count_"))
+											(e-dispatch-call (method "plus") (constraint-fn-var 418)
+												(receiver
+													(e-lookup-local
+														(p-var-assign (ident "count_"))))
+												(args
+													(e-num (value "1")))))
+										(s-reassign
+											(p-var-assign (ident "sum_"))
+											(e-dispatch-call (method "plus") (constraint-fn-var 420)
+												(receiver
+													(e-lookup-local
+														(p-var-assign (ident "sum_"))))
+												(args
+													(e-lookup-local
+														(p-assign (ident "n"))))))
+										(e-empty_record))))
+							(if-else
 								(e-block
-									(s-reassign
-										(p-var-assign (ident "count_"))
-										(e-dispatch-call (method "plus") (constraint-fn-var 416)
-											(receiver
-												(e-lookup-local
-													(p-var-assign (ident "count_"))))
-											(args
-												(e-num (value "1")))))
-									(s-reassign
-										(p-var-assign (ident "sum_"))
-										(e-dispatch-call (method "plus") (constraint-fn-var 418)
-											(receiver
-												(e-lookup-local
-													(p-var-assign (ident "sum_"))))
-											(args
-												(e-lookup-local
-													(p-assign (ident "n"))))))
-									(e-empty_record))))
-						(if-else
-							(e-block
-								(e-empty_record))))))
-			(e-dispatch-call (method "times") (constraint-fn-var 422)
+									(e-empty_record)))))
+					(e-empty_record)))
+			(e-dispatch-call (method "times") (constraint-fn-var 425)
 				(receiver
 					(e-lookup-local
 						(p-var-assign (ident "count_"))))
