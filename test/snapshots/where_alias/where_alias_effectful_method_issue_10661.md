@@ -91,17 +91,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-a.Runner :  where [a.run! : a => {}]
-
-Task := [Task].{
-	run! : Task => {}
-	run! = |_| {}
-}
-
-go! : a => {} where [a.Runner]
-go! = |value| value.run!()
-
-main! = |_| go!(Task.Task)
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

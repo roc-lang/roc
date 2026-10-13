@@ -1109,7 +1109,7 @@ pub const Store = struct {
     /// Bound an annotated definition's implicitly opened row (design.md
     /// "Polarity"). The bound travels with the row's equivalence class.
     pub fn markBoundedRowExt(self: *Self, target_var: Var) Allocator.Error!void {
-        const resolved = self.resolveVar(target_var);
+        const resolved = try self.resolveWriteTarget(target_var);
         var desc = resolved.desc;
         desc.flags.bounded_row_ext = true;
         try self.setDesc(resolved.desc_idx, desc);
@@ -1118,7 +1118,7 @@ pub const Store = struct {
     /// End the bound on a row every use shares: a weak value binding's row is
     /// bounded only while its own right-hand side is checked.
     pub fn clearBoundedRowExt(self: *Self, target_var: Var) Allocator.Error!void {
-        const resolved = self.resolveVar(target_var);
+        const resolved = try self.resolveWriteTarget(target_var);
         var desc = resolved.desc;
         desc.flags.bounded_row_ext = false;
         try self.setDesc(resolved.desc_idx, desc);
@@ -2655,6 +2655,27 @@ test "a content write aimed at a frozen class's member changes only that member"
     try store.setVarContent(member, .err);
 
     try std.testing.expectEqual(Content.err, store.resolveVar(member).desc.content);
+    try expectFrozenEmptyRecord(&store, class.anchor);
+    try expectFrozenEmptyRecord(&store, class.use);
+}
+
+test "a row bound aimed at a frozen class's member changes only that member" {
+    const gpa = std.testing.allocator;
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const class = try frozenClassWithUse(&store);
+    const member = try store.freshRedirect(class.use);
+    try store.markBoundedRowExt(member);
+
+    try std.testing.expect(store.resolveVar(member).desc.flags.bounded_row_ext);
+    try expectFrozenEmptyRecord(&store, class.anchor);
+    try expectFrozenEmptyRecord(&store, class.use);
+    try std.testing.expect(!store.resolveVar(class.use).desc.flags.bounded_row_ext);
+
+    const other = try store.freshRedirect(class.use);
+    try store.clearBoundedRowExt(other);
+    try std.testing.expect(!store.resolveVar(other).desc.flags.bounded_row_ext);
     try expectFrozenEmptyRecord(&store, class.anchor);
     try expectFrozenEmptyRecord(&store, class.use);
 }

@@ -499,7 +499,7 @@ fn writeFnEvidence(
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
 ) void {
-    writeBytes(hasher, "roc.monotype.fn_evidence.v6");
+    writeBytes(hasher, "roc.monotype.fn_evidence.v7");
     writeU32(hasher, @intCast(evidence.len));
     for (evidence) |entry| {
         writeU8(hasher, @backingInt(entry));
@@ -527,16 +527,15 @@ fn writeFnEvidence(
                 writeStructuralDerivation(hasher, structural.derivation);
                 if (structural.checked) |checked_structural| {
                     writeU8(hasher, 1);
-                    writeBytes(hasher, &checked_structural.view.bytes);
+                    if (checked_structural.generated_codec_content) |content| {
+                        writeU8(hasher, 1);
+                        writeBytes(hasher, &content.bytes);
+                    } else {
+                        writeU8(hasher, 0);
+                        writeBytes(hasher, &checked_structural.view.bytes);
+                    }
                     writeBytes(hasher, &checked_structural.dispatcher_key.bytes);
                     writeBytes(hasher, &checked_structural.callable_key.bytes);
-                    writeOptionalU32(
-                        hasher,
-                        if (checked_structural.generated_codec_identity) |derivation|
-                            @backingInt(derivation)
-                        else
-                            null,
-                    );
                 } else writeU8(hasher, 0);
             },
             .from_callable => |use| {
@@ -2956,31 +2955,8 @@ test "codec function evidence identity excludes per-use replay addresses" {
         ty.* = try types.reserveSyntheticTypeRoot(allocator, .{ .bytes = @as([32]u8, @splat(2)) }, true);
         try types.fillSyntheticTypeRoot(allocator, ty.*, .{ .flex = .{} });
     }
-    // Fill the proof table and its indices before building stored evidence.
-    var derivations: [3]static_dispatch.GeneratedCodecDerivation = undefined;
     var derivation_ids: [3]static_dispatch.GeneratedCodecDerivationId = undefined;
-    for (&derivations, &derivation_ids, 0..) |*derivation, *id, index| {
-        id.* = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-        const ty = replay_types[if (index == 1) 2 else 0];
-        derivation.* = .{
-            .identity = if (index == 1) derivation_ids[0] else id.*,
-            .kind = if (index == 2) .parser else .encoder,
-            .source_constructor_ty = ty,
-            .source_runtime_ty = ty,
-            .source_shape_ty = ty,
-            .source_body_shape_ty = ty,
-            .source_encoding_ty = ty,
-            .source_state_ty = ty,
-            .source_error_ty = ty,
-            .constructor_ty = ty,
-            .runtime_ty = ty,
-            .shape_ty = ty,
-            .body_shape_ty = ty,
-            .encoding_ty = ty,
-            .state_ty = ty,
-            .error_ty = ty,
-        };
-    }
+    for (&derivation_ids, 0..) |*id, index| id.* = @fromBackingInt(@intCast(index));
     const Evidence = check.ConstStore.ConstFnEvidence;
     const frames = [_]check.ConstStore.ConstFnEvidenceFrame{
         check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1),
@@ -2994,7 +2970,7 @@ test "codec function evidence identity excludes per-use replay addresses" {
             .callable_key = types.view().rootKey(replay_types[1]),
             .callable_ty = replay_types[1],
             .generated_codec_derivation = derivation_ids[0],
-            .generated_codec_identity = derivations[0].identity,
+            .generated_codec_content = .{ .bytes = @as([32]u8, @splat(4)) },
         },
     } }};
     var right = left;
@@ -3003,8 +2979,12 @@ test "codec function evidence identity excludes per-use replay addresses" {
     right[0].structural.checked.?.generated_codec_derivation = derivation_ids[1];
     try std.testing.expect(fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
     try std.testing.expectEqual(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0));
+    // Equal contracts recorded by different modules are one identity.
+    right[0].structural.checked.?.view = .{ .bytes = @as([32]u8, @splat(5)) };
+    try std.testing.expect(fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
+    try std.testing.expectEqual(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0));
     right[0].structural.checked.?.generated_codec_derivation = derivation_ids[2];
-    right[0].structural.checked.?.generated_codec_identity = derivations[2].identity;
+    right[0].structural.checked.?.generated_codec_content = .{ .bytes = @as([32]u8, @splat(6)) };
     try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
     try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
 }
