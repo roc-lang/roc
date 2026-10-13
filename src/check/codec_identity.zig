@@ -10,6 +10,7 @@ const CodecId = dispatch.GeneratedCodecDerivationId;
 const Span = @import("artifact_serialize.zig").Span;
 const canonical = @import("canonical_names.zig");
 const TypeDigestHasher = @import("base").TypeDigestHasher;
+const collections = @import("collections");
 const type_roles = .{ "source_constructor_ty", "source_runtime_ty", "source_shape_ty", "source_body_shape_ty", "source_encoding_ty", "source_state_ty", "source_error_ty", "constructor_ty", "runtime_ty", "shape_ty", "body_shape_ty", "encoding_ty", "state_ty", "error_ty" };
 
 /// Intern each completed contract once, in table order. Type and call keys
@@ -99,10 +100,10 @@ const ContentDigester = struct {
     hasher: TypeDigestHasher = undefined,
     codec_ordinals: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     evidence_ordinals: std.AutoHashMapUnmanaged(u32, u32) = .empty,
-    variable_ordinals: std.AutoHashMapUnmanaged(TypeId, u32) = .empty,
+    variable_ordinals: collections.DenseMapUnmanaged(TypeId, u32) = .empty,
     /// Each root's variables in key order. Checked types are immutable here,
     /// so the order is computed once per root for every contract.
-    identity_orders: std.AutoHashMapUnmanaged(TypeId, []const TypeId) = .empty,
+    identity_orders: collections.DenseMapUnmanaged(TypeId, []const TypeId) = .empty,
     tasks: std.ArrayList(Task) = .empty,
     children: std.ArrayList(Task) = .empty,
 
@@ -276,7 +277,7 @@ const ContentDigester = struct {
         const order = try self.identityOrder(ty);
         for (order) |variable| {
             const entry = try self.variable_ordinals.getOrPut(self.allocator, variable);
-            if (!entry.found_existing) entry.value_ptr.* = self.variable_ordinals.count() - 1;
+            if (!entry.found_existing) entry.value_ptr.* = @intCast(self.variable_ordinals.count() - 1);
             self.writeU32(entry.value_ptr.*);
         }
     }
