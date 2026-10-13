@@ -65,6 +65,30 @@ pub const Store = struct {
         return self.roc_ctx.fileExists(path);
     }
 
+    fn programPath(self: *const Store, key: [32]u8) Allocator.Error![]u8 {
+        const name = try std.fmt.allocPrint(self.allocator, "{s}.rpo", .{&std.fmt.bytesToHex(key, .lower)});
+        defer self.allocator.free(name);
+        return std.fs.path.join(self.allocator, &.{ self.root, "programs", name });
+    }
+
+    /// The runtime output recorded for the program `key` names, or null.
+    /// An unreadable record is a miss.
+    pub fn readProgram(self: *const Store, io: std.Io, key: [32]u8, allocator: Allocator) Allocator.Error!?[]u8 {
+        const path = try self.programPath(key);
+        defer self.allocator.free(path);
+        return std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(4 * 1024 * 1024 * 1024)) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => null,
+        };
+    }
+
+    /// Record the runtime output of the program `key` names.
+    pub fn writeProgram(self: *const Store, key: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
+        const path = try self.programPath(key);
+        defer self.allocator.free(path);
+        try self.writePath(path, bytes);
+    }
+
     /// Stage the pack beside its final path and rename it into place. A
     /// pack already present is left alone: it holds the same bytes.
     pub fn write(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {

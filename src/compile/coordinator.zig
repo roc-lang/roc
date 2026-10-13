@@ -1279,6 +1279,10 @@ pub const Coordinator = struct {
     /// which requires a checked app root.
     checked_program: bool = false,
     runtime_lowering: ?compile_build.RuntimeLoweringConfig = null,
+    runtime_output_probe: ?compile_build.RuntimeOutputProbe = null,
+    /// Set by checked-program finalization when the probe found this exact
+    /// program's runtime output cached, so no runtime program was lowered.
+    runtime_output_cached: bool = false,
     compile_time_object_cache: ?eval.CompileTimeFinalization.CompileTimeObjectCache = null,
     /// The checked modules whose `expect`s are the developer's own tests, in
     /// the order their test roots join compile-time evaluation. Every command
@@ -2229,13 +2233,33 @@ pub const Coordinator = struct {
                 }
             }
             try self.prepareExecutableArtifacts();
-            try self.evaluatePreparedModules(true, null, platform, self.executableRootCheckedArtifact());
+            try self.evaluateProgram(platform, self.executableRootCheckedArtifact());
         } else {
             // Only a compilation that publishes executable artifacts has a
             // program: `roc check`, `roc build` and `roc run` all do.
             const program_root = if (self.checked_program) self.executableRootCheckedArtifact() else null;
-            try self.evaluatePreparedModules(true, null, null, program_root);
+            try self.evaluateProgram(null, program_root);
         }
+    }
+
+    /// Evaluate the checked program. A build whose runtime output for exactly
+    /// this program is already cached evaluates it as checking does, and
+    /// lowers no runtime program.
+    fn evaluateProgram(
+        self: *Coordinator,
+        extra_cached: ?*const CheckedArtifact.CheckedModuleArtifact,
+        program_root: ?*const CheckedArtifact.CheckedModuleArtifact,
+    ) CoordinatorError!void {
+        if (self.runtime_lowering != null) if (program_root) |root| if (self.runtime_output_probe) |probe| {
+            if (try probe.cached(probe.context, root)) {
+                self.runtime_output_cached = true;
+                const runtime = self.runtime_lowering;
+                self.runtime_lowering = null;
+                defer self.runtime_lowering = runtime;
+                return self.evaluatePreparedModules(true, null, extra_cached, program_root);
+            }
+        };
+        return self.evaluatePreparedModules(true, null, extra_cached, program_root);
     }
 
     /// Whether the last checked-program finalization published a program.
@@ -4677,8 +4701,7 @@ pub const Coordinator = struct {
         // cache key names, so they never prevent reuse. A stored entry is one
         // whose checking and evaluation reported nothing further.
         mod.pre_check_report_count = mod.reports.items.len;
-        if (self.tryLoadCachedCheckedModule(pkg, mod, imported_envs, imported_artifacts, platform_requirement_context, explicit_roots))
-        {
+        if (self.tryLoadCachedCheckedModule(pkg, mod, imported_envs, imported_artifacts, platform_requirement_context, explicit_roots)) {
             task_payload_alloc.free(imported_envs);
             task_payload_alloc.free(imported_artifacts);
             task_payload_alloc.free(available_artifacts);
