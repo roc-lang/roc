@@ -1297,6 +1297,201 @@ const BoundSet = struct {
     }
 };
 
+/// A lexical-scope operation of a capture walk, pushed among an
+/// expression's children so it runs in source order.
+const ScopeWork = union(enum) {
+    /// Bind a pattern's locals into the innermost lexical scope.
+    bind_pat: Mono.PatId,
+    bind_typed_locals: Ast.Span(Ast.TypedLocal),
+    /// Bind one local outside any tracked scope; paired with `remove_local`.
+    bind_local: Mono.LocalId,
+    remove_local: Mono.LocalId,
+    begin_scope,
+    /// Remove the innermost scope's locals, in reverse binding order.
+    end_scope,
+};
+
+/// Push `expr_id`'s children onto `children` in source order, interleaved
+/// with the scope operations that bind and release the locals they see.
+/// `children` supplies the walk's own work: `child(expr)` and `stmt(stmt)`
+/// push a child, `scope(op)` a scope operation, `free(local)` reads a local
+/// in place and `deferredFree(local)` where it is pushed, and `defRef`,
+/// `fnRef`, `fnDef`, `lambda`, and `callProc` handle the forms whose
+/// treatment is the walk's own.
+fn pushExprChildren(input: *const Ast.Program, expr_id: Mono.ExprId, children: anytype) Allocator.Error!void {
+    const expr = input.getExpr(expr_id);
+    switch (expr.data) {
+        .local => |local| try children.free(local),
+        .@"unreachable",
+        .unit,
+        .int_lit,
+        .frac_f32_lit,
+        .frac_f64_lit,
+        .dec_lit,
+        .str_lit,
+        .bytes_lit,
+        .uninitialized,
+        .uninitialized_payload,
+        .crash,
+        .checked_error,
+        .comptime_exhaustiveness_failed,
+        => {},
+        .def_ref => try children.defRef(),
+        .fn_ref => |fn_ref| try children.fnRef(expr_id, fn_ref),
+        .fn_def => |fn_def| try children.fnDef(fn_def),
+        .list,
+        .tuple,
+        => |items| try children.span(items),
+        .record => |fields| {
+            const field_exprs = input.fieldExprSpan(fields);
+            for (0..field_exprs.len) |field_index| try children.child(GuardedList.at(field_exprs, field_index).value);
+        },
+        .record_update => |update| {
+            try children.child(update.base);
+            const field_exprs = input.fieldExprSpan(update.fields);
+            for (0..field_exprs.len) |field_index| try children.child(GuardedList.at(field_exprs, field_index).value);
+        },
+        .tag => |tag| try children.span(tag.payloads),
+        .static_data_candidate => |candidate| try children.child(candidate.runtime_expr),
+        .comptime_value => |candidate| try children.child(candidate.initializer),
+        .typed_boundary => |boundary| try children.child(boundary.value),
+        .row_widen => |widen| try children.child(widen.value),
+        .nominal,
+        .dbg,
+        .expect,
+        => |child| try children.child(child),
+        .return_ => |ret| try children.child(ret.value),
+        .expect_err => |expect_err| try children.child(expect_err.msg),
+        .literal_rejected => |rejected| try children.child(rejected.msg),
+        .comptime_branch_taken => |taken| try children.child(taken.body),
+        .let_ => |let_| {
+            try children.child(let_.value);
+            try children.scope(.begin_scope);
+            try children.scope(.{ .bind_pat = let_.bind });
+            try children.child(let_.rest);
+            try children.scope(.end_scope);
+        },
+        .lambda => |lambda| {
+            try children.lambda();
+            try children.scope(.begin_scope);
+            try children.scope(.{ .bind_typed_locals = lambda.args });
+            try children.child(lambda.body);
+            try children.scope(.end_scope);
+        },
+        .call_value => |call| {
+            try children.child(call.callee);
+            try children.span(call.args);
+        },
+        .call_proc => |call| try children.callProc(expr_id, call),
+        .low_level => |call| try children.span(call.args),
+        .field_access => |field| try children.child(field.receiver),
+        .tuple_access => |access| try children.child(access.tuple),
+        .structural_eq => |eq| {
+            try children.child(eq.lhs);
+            try children.child(eq.rhs);
+        },
+        .structural_hash => |h| {
+            try children.child(h.value);
+            try children.child(h.hasher);
+        },
+        .match_ => |match| {
+            try children.child(match.scrutinee);
+            const branches = input.branchSpan(match.branches);
+            for (0..branches.len) |branch_index| {
+                const branch = GuardedList.at(branches, branch_index);
+                try children.scope(.begin_scope);
+                try children.scope(.{ .bind_pat = branch.pat });
+                const bindings = input.stmtSpan(branch.bindings);
+                for (0..bindings.len) |binding_index| try children.stmt(GuardedList.at(bindings, binding_index));
+                if (branch.guard) |guard| try children.child(guard);
+                try children.child(branch.body);
+                try children.scope(.end_scope);
+            }
+        },
+        .if_ => |if_| {
+            const branches = input.ifBranchSpan(if_.branches);
+            for (0..branches.len) |branch_index| {
+                const branch = GuardedList.at(branches, branch_index);
+                try children.child(branch.cond);
+                try children.child(branch.body);
+            }
+            try children.child(if_.final_else);
+        },
+        .if_initialized_payload => |payload_switch| {
+            try children.child(payload_switch.cond);
+            try children.deferredFree(payload_switch.payload);
+            try children.child(payload_switch.initialized);
+            try children.child(payload_switch.uninitialized);
+        },
+        .try_sequence => |sequence| {
+            try children.child(sequence.try_expr);
+            try children.scope(.{ .bind_local = sequence.ok_local });
+            try children.child(sequence.ok_body);
+            try children.scope(.{ .remove_local = sequence.ok_local });
+        },
+        .try_record_sequence => |sequence| {
+            try children.child(sequence.try_expr);
+            try children.scope(.{ .bind_local = sequence.value_local });
+            try children.scope(.{ .bind_local = sequence.rest_local });
+            try children.child(sequence.ok_body);
+            try children.scope(.{ .remove_local = sequence.rest_local });
+            try children.scope(.{ .remove_local = sequence.value_local });
+        },
+        .block => |block| {
+            try children.scope(.begin_scope);
+            const statements = input.stmtSpan(block.statements);
+            for (0..statements.len) |stmt_index| try children.stmt(GuardedList.at(statements, stmt_index));
+            try children.child(block.final_expr);
+            try children.scope(.end_scope);
+        },
+        .loop_ => |loop| {
+            try children.span(loop.initial_values);
+            try children.scope(.begin_scope);
+            try children.scope(.{ .bind_typed_locals = loop.params });
+            try children.child(loop.body);
+            try children.scope(.end_scope);
+        },
+        .break_ => |maybe| if (maybe) |value| try children.child(value),
+        .continue_ => |continue_| try children.span(continue_.values),
+        .join_point => |join_point| {
+            const retained = input.typedLocalSpan(join_point.retained);
+            for (0..retained.len) |index| try children.free(GuardedList.at(retained, index).local);
+            try children.scope(.begin_scope);
+            try children.scope(.{ .bind_typed_locals = join_point.params });
+            try children.child(join_point.body);
+            try children.scope(.end_scope);
+            try children.child(join_point.remainder);
+        },
+        .jump => |jump| {
+            try children.span(jump.loop_values);
+            try children.span(jump.args);
+        },
+    }
+}
+
+/// Push `stmt_id`'s children onto `children` in source order, as
+/// `pushExprChildren` pushes an expression's.
+fn pushStmtChildren(input: *const Ast.Program, stmt_id: Mono.StmtId, children: anytype) Allocator.Error!void {
+    switch (input.getStmt(stmt_id)) {
+        .uninitialized => |pat| try children.scope(.{ .bind_pat = pat }),
+        .let_ => |let_| {
+            if (let_.recursive) {
+                try children.scope(.{ .bind_pat = let_.pat });
+                try children.child(let_.value);
+            } else {
+                try children.child(let_.value);
+                try children.scope(.{ .bind_pat = let_.pat });
+            }
+        },
+        .expr,
+        .expect,
+        .dbg,
+        => |expr| try children.child(expr),
+        .return_ => |ret| try children.child(ret.value),
+        .crash, .checked_error => {},
+    }
+}
+
 const CaptureSet = struct {
     allocator: Allocator,
     lifter: ?*Lifter,
@@ -1367,15 +1562,7 @@ const CaptureSet = struct {
     const Work = union(enum) {
         expr: Mono.ExprId,
         stmt: Mono.StmtId,
-        /// Bind a pattern's locals into the innermost lexical scope.
-        bind_pat: Mono.PatId,
-        bind_typed_locals: Ast.Span(Ast.TypedLocal),
-        /// Bind one local outside any tracked scope; paired with `remove_local`.
-        bind_local: Mono.LocalId,
-        remove_local: Mono.LocalId,
-        begin_scope,
-        /// Remove the innermost scope's locals, in reverse binding order.
-        end_scope,
+        scope: ScopeWork,
         add_if_free: Mono.LocalId,
         /// Assemble a function reference's capture operands once its operand
         /// values are collected.
@@ -1397,16 +1584,18 @@ const CaptureSet = struct {
         try work.append(self.allocator, .{ .expr = expr_id });
         while (work.pop()) |item| switch (item) {
             .expr => |expr| try self.pushExprWork(&work, expr, bound),
-            .stmt => |stmt| try self.pushStmtWork(&work, stmt),
-            .bind_pat => |pat| try bindPat(self.allocator, input, pat, bound, &scopes.items[scopes.items.len - 1]),
-            .bind_typed_locals => |span| try bindTypedLocalsTracked(self.allocator, input, bound, input.typedLocalSpan(span), &scopes.items[scopes.items.len - 1]),
-            .bind_local => |local| try bound.put(input, local),
-            .remove_local => |local| _ = bound.remove(input, local),
-            .begin_scope => try scopes.append(self.allocator, .empty),
-            .end_scope => {
-                var scope = scopes.pop().?;
-                defer scope.deinit(self.allocator);
-                removeBound(input, bound, scope.items);
+            .stmt => |stmt| try self.pushStmtWork(&work, stmt, bound),
+            .scope => |op| switch (op) {
+                .bind_pat => |pat| try bindPat(self.allocator, input, pat, bound, &scopes.items[scopes.items.len - 1]),
+                .bind_typed_locals => |span| try bindTypedLocalsTracked(self.allocator, input, bound, input.typedLocalSpan(span), &scopes.items[scopes.items.len - 1]),
+                .bind_local => |local| try bound.put(input, local),
+                .remove_local => |local| _ = bound.remove(input, local),
+                .begin_scope => try scopes.append(self.allocator, .empty),
+                .end_scope => {
+                    var scope = scopes.pop().?;
+                    defer scope.deinit(self.allocator);
+                    removeBound(input, bound, scope.items);
+                },
             },
             .add_if_free => |local| try self.addIfFree(local, bound),
             .finalize_fn_ref => |ref_expr| try self.finalizeFnRef(ref_expr, bound),
@@ -1470,225 +1659,94 @@ const CaptureSet = struct {
         } });
     }
 
-    fn pushStmtWork(self: *CaptureSet, work: *std.ArrayList(Work), stmt_id: Mono.StmtId) Allocator.Error!void {
-        switch (self.program.getStmt(stmt_id)) {
-            .uninitialized => |pat| try work.append(self.allocator, .{ .bind_pat = pat }),
-            .let_ => |let_| {
-                if (let_.recursive) {
-                    try work.append(self.allocator, .{ .expr = let_.value });
-                    try work.append(self.allocator, .{ .bind_pat = let_.pat });
-                } else {
-                    try work.append(self.allocator, .{ .bind_pat = let_.pat });
-                    try work.append(self.allocator, .{ .expr = let_.value });
-                }
-            },
-            .expr,
-            .expect,
-            .dbg,
-            => |expr| try work.append(self.allocator, .{ .expr = expr }),
-            .return_ => |ret| try work.append(self.allocator, .{ .expr = ret.value }),
-            .crash, .checked_error => {},
-        }
-    }
+    /// The capture-set walk's children of one expression or statement.
+    const Children = struct {
+        set: *CaptureSet,
+        bound: *BoundSet,
+        list: *std.ArrayList(Work),
 
-    fn pushExprWork(self: *CaptureSet, work: *std.ArrayList(Work), expr_id: Mono.ExprId, bound: *BoundSet) Allocator.Error!void {
-        const input = self.program;
-        const expr = input.getExpr(expr_id);
+        fn add(children: Children, item: Work) Allocator.Error!void {
+            try children.list.append(children.set.allocator, item);
+        }
+
+        fn child(children: Children, child_expr: Mono.ExprId) Allocator.Error!void {
+            try children.add(.{ .expr = child_expr });
+        }
+
+        fn stmt(children: Children, child_stmt: Mono.StmtId) Allocator.Error!void {
+            try children.add(.{ .stmt = child_stmt });
+        }
+
+        fn scope(children: Children, op: ScopeWork) Allocator.Error!void {
+            try children.add(.{ .scope = op });
+        }
+
+        fn span(children: Children, items: Ast.Span(Ast.ExprId)) Allocator.Error!void {
+            const values = children.set.program.exprSpan(items);
+            for (0..values.len) |index| try children.child(GuardedList.at(values, index));
+        }
+
+        fn free(children: Children, local: Mono.LocalId) Allocator.Error!void {
+            try children.set.addIfFree(local, children.bound);
+        }
+
+        fn deferredFree(children: Children, local: Mono.LocalId) Allocator.Error!void {
+            try children.add(.{ .add_if_free = local });
+        }
+
+        fn defRef(_: Children) Allocator.Error!void {}
+
+        fn lambda(_: Children) Allocator.Error!void {}
+
+        fn fnRef(children: Children, expr_id: Mono.ExprId, fn_ref: anytype) Allocator.Error!void {
+            const operands = children.set.program.captureOperandSpan(fn_ref.captures);
+            for (0..operands.len) |index| try children.child(GuardedList.at(operands, index).value);
+            if (children.set.finalize_operands) try children.add(.{ .finalize_fn_ref = expr_id });
+        }
+
+        fn fnDef(children: Children, fn_def: anytype) Allocator.Error!void {
+            const set = children.set;
+            const lifter = set.lifter orelse Common.invariant("post-lift capture recomputation saw a pre-lift function definition");
+            const explicit = set.program.fnDefCaptureSpan(fn_def.captures);
+            if (explicit.len == 0) {
+                try set.collectFnCaptures(lifter.liftedFn(fn_def.fn_id), children.bound);
+            } else {
+                try set.collectFnCapturesExceptExplicit(lifter.liftedFn(fn_def.fn_id), explicit, children.bound);
+                const captures = set.program.fnDefCaptureSpan(fn_def.captures);
+                for (0..captures.len) |capture_index| try children.child(GuardedList.at(captures, capture_index).value);
+            }
+        }
+
+        fn callProc(children: Children, expr_id: Mono.ExprId, call: anytype) Allocator.Error!void {
+            const set = children.set;
+            switch (call.callee) {
+                .func => |slot| switch (slot) {
+                    .local => |mono_fn_id| {
+                        const lifter = set.lifter orelse Common.invariant("post-lift capture recomputation saw a pre-lift function call");
+                        try set.collectFnCaptures(lifter.liftedFn(mono_fn_id), children.bound);
+                    },
+                },
+                .lifted => |fn_id| try set.collectFnCaptures(fn_id, children.bound),
+            }
+            try children.span(call.args);
+            const captures = set.program.captureOperandSpan(call.captures);
+            for (0..captures.len) |capture_index| try children.child(GuardedList.at(captures, capture_index).value);
+            if (set.finalize_operands) try children.add(.{ .finalize_call_proc = expr_id });
+        }
+    };
+
+    fn pushStmtWork(self: *CaptureSet, work: *std.ArrayList(Work), stmt_id: Mono.StmtId, bound: *BoundSet) Allocator.Error!void {
         // Children are appended in source order, then reversed onto the stack.
         const children_start = work.items.len;
         defer std.mem.reverse(Work, work.items[children_start..]);
-        const Children = struct {
-            list: *std.ArrayList(Work),
-            allocator: Allocator,
+        try pushStmtChildren(self.program, stmt_id, Children{ .set = self, .bound = bound, .list = work });
+    }
 
-            fn add(children: @This(), item: Work) Allocator.Error!void {
-                try children.list.append(children.allocator, item);
-            }
-
-            fn child(children: @This(), child_expr: Mono.ExprId) Allocator.Error!void {
-                try children.add(.{ .expr = child_expr });
-            }
-
-            fn span(children: @This(), program: *const Ast.Program, items: Ast.Span(Ast.ExprId)) Allocator.Error!void {
-                const values = program.exprSpan(items);
-                for (0..values.len) |index| try children.child(GuardedList.at(values, index));
-            }
-        };
-        const children = Children{ .list = work, .allocator = self.allocator };
-        switch (expr.data) {
-            .local => |local| try self.addIfFree(local, bound),
-            .@"unreachable",
-            .unit,
-            .int_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .dec_lit,
-            .str_lit,
-            .bytes_lit,
-            .uninitialized,
-            .uninitialized_payload,
-            .def_ref,
-            .crash,
-            .checked_error,
-            .comptime_exhaustiveness_failed,
-            => {},
-            .fn_ref => |fn_ref| {
-                const operands = input.captureOperandSpan(fn_ref.captures);
-                for (0..operands.len) |index| try children.child(GuardedList.at(operands, index).value);
-                if (self.finalize_operands) try children.add(.{ .finalize_fn_ref = expr_id });
-            },
-            .fn_def => |fn_def| {
-                const lifter = self.lifter orelse Common.invariant("post-lift capture recomputation saw a pre-lift function definition");
-                const explicit = input.fnDefCaptureSpan(fn_def.captures);
-                if (explicit.len == 0) {
-                    try self.collectFnCaptures(lifter.liftedFn(fn_def.fn_id), bound);
-                } else {
-                    try self.collectFnCapturesExceptExplicit(lifter.liftedFn(fn_def.fn_id), explicit, bound);
-                    const captures = input.fnDefCaptureSpan(fn_def.captures);
-                    for (0..captures.len) |capture_index| try children.child(GuardedList.at(captures, capture_index).value);
-                }
-            },
-            .list,
-            .tuple,
-            => |items| try children.span(input, items),
-            .record => |fields| {
-                const field_exprs = input.fieldExprSpan(fields);
-                for (0..field_exprs.len) |field_index| try children.child(GuardedList.at(field_exprs, field_index).value);
-            },
-            .record_update => |update| {
-                try children.child(update.base);
-                const field_exprs = input.fieldExprSpan(update.fields);
-                for (0..field_exprs.len) |field_index| try children.child(GuardedList.at(field_exprs, field_index).value);
-            },
-            .tag => |tag| try children.span(input, tag.payloads),
-            .static_data_candidate => |candidate| try children.child(candidate.runtime_expr),
-            .comptime_value => |candidate| try children.child(candidate.initializer),
-            .typed_boundary => |boundary| try children.child(boundary.value),
-            .row_widen => |widen| try children.child(widen.value),
-            .nominal,
-            .dbg,
-            .expect,
-            => |child| try children.child(child),
-            .return_ => |ret| try children.child(ret.value),
-            .expect_err => |expect_err| try children.child(expect_err.msg),
-            .literal_rejected => |rejected| try children.child(rejected.msg),
-            .comptime_branch_taken => |taken| try children.child(taken.body),
-            .let_ => |let_| {
-                try children.child(let_.value);
-                try children.add(.begin_scope);
-                try children.add(.{ .bind_pat = let_.bind });
-                try children.child(let_.rest);
-                try children.add(.end_scope);
-            },
-            .lambda => |lambda| {
-                try children.add(.begin_scope);
-                try children.add(.{ .bind_typed_locals = lambda.args });
-                try children.child(lambda.body);
-                try children.add(.end_scope);
-            },
-            .call_value => |call| {
-                try children.child(call.callee);
-                try children.span(input, call.args);
-            },
-            .call_proc => |call| {
-                switch (call.callee) {
-                    .func => |slot| switch (slot) {
-                        .local => |mono_fn_id| {
-                            const lifter = self.lifter orelse Common.invariant("post-lift capture recomputation saw a pre-lift function call");
-                            try self.collectFnCaptures(lifter.liftedFn(mono_fn_id), bound);
-                        },
-                    },
-                    .lifted => |fn_id| try self.collectFnCaptures(fn_id, bound),
-                }
-                try children.span(input, call.args);
-                const captures = input.captureOperandSpan(call.captures);
-                for (0..captures.len) |capture_index| try children.child(GuardedList.at(captures, capture_index).value);
-                if (self.finalize_operands) try children.add(.{ .finalize_call_proc = expr_id });
-            },
-            .low_level => |call| try children.span(input, call.args),
-            .field_access => |field| try children.child(field.receiver),
-            .tuple_access => |access| try children.child(access.tuple),
-            .structural_eq => |eq| {
-                try children.child(eq.lhs);
-                try children.child(eq.rhs);
-            },
-            .structural_hash => |h| {
-                try children.child(h.value);
-                try children.child(h.hasher);
-            },
-            .match_ => |match| {
-                try children.child(match.scrutinee);
-                const branches = input.branchSpan(match.branches);
-                for (0..branches.len) |branch_index| {
-                    const branch = GuardedList.at(branches, branch_index);
-                    try children.add(.begin_scope);
-                    try children.add(.{ .bind_pat = branch.pat });
-                    const bindings = input.stmtSpan(branch.bindings);
-                    for (0..bindings.len) |binding_index| try children.add(.{ .stmt = GuardedList.at(bindings, binding_index) });
-                    if (branch.guard) |guard| try children.child(guard);
-                    try children.child(branch.body);
-                    try children.add(.end_scope);
-                }
-            },
-            .if_ => |if_| {
-                const branches = input.ifBranchSpan(if_.branches);
-                for (0..branches.len) |branch_index| {
-                    const branch = GuardedList.at(branches, branch_index);
-                    try children.child(branch.cond);
-                    try children.child(branch.body);
-                }
-                try children.child(if_.final_else);
-            },
-            .if_initialized_payload => |payload_switch| {
-                try children.child(payload_switch.cond);
-                try children.add(.{ .add_if_free = payload_switch.payload });
-                try children.child(payload_switch.initialized);
-                try children.child(payload_switch.uninitialized);
-            },
-            .try_sequence => |sequence| {
-                try children.child(sequence.try_expr);
-                try children.add(.{ .bind_local = sequence.ok_local });
-                try children.child(sequence.ok_body);
-                try children.add(.{ .remove_local = sequence.ok_local });
-            },
-            .try_record_sequence => |sequence| {
-                try children.child(sequence.try_expr);
-                try children.add(.{ .bind_local = sequence.value_local });
-                try children.add(.{ .bind_local = sequence.rest_local });
-                try children.child(sequence.ok_body);
-                try children.add(.{ .remove_local = sequence.rest_local });
-                try children.add(.{ .remove_local = sequence.value_local });
-            },
-            .block => |block| {
-                try children.add(.begin_scope);
-                const statements = input.stmtSpan(block.statements);
-                for (0..statements.len) |stmt_index| try children.add(.{ .stmt = GuardedList.at(statements, stmt_index) });
-                try children.child(block.final_expr);
-                try children.add(.end_scope);
-            },
-            .loop_ => |loop| {
-                try children.span(input, loop.initial_values);
-                try children.add(.begin_scope);
-                try children.add(.{ .bind_typed_locals = loop.params });
-                try children.child(loop.body);
-                try children.add(.end_scope);
-            },
-            .break_ => |maybe| if (maybe) |value| try children.child(value),
-            .continue_ => |continue_| try children.span(input, continue_.values),
-            .join_point => |join_point| {
-                const retained = input.typedLocalSpan(join_point.retained);
-                for (0..retained.len) |index| try self.addIfFree(GuardedList.at(retained, index).local, bound);
-                try children.add(.begin_scope);
-                try children.add(.{ .bind_typed_locals = join_point.params });
-                try children.child(join_point.body);
-                try children.add(.end_scope);
-                try children.child(join_point.remainder);
-            },
-            .jump => |jump| {
-                try children.span(input, jump.loop_values);
-                try children.span(input, jump.args);
-            },
-        }
+    fn pushExprWork(self: *CaptureSet, work: *std.ArrayList(Work), expr_id: Mono.ExprId, bound: *BoundSet) Allocator.Error!void {
+        // Children are appended in source order, then reversed onto the stack.
+        const children_start = work.items.len;
+        defer std.mem.reverse(Work, work.items[children_start..]);
+        try pushExprChildren(self.program, expr_id, Children{ .set = self, .bound = bound, .list = work });
     }
 
     /// Contribute a referenced function's solved captures to the current set,
@@ -2242,15 +2300,7 @@ const CaptureGraphBuilder = struct {
     const Work = union(enum) {
         expr: struct { expr: Ast.ExprId, node: CaptureNodeId },
         stmt: struct { stmt: Ast.StmtId, node: CaptureNodeId },
-        /// Bind a pattern's locals into the innermost lexical scope.
-        bind_pat: Ast.PatId,
-        bind_typed_locals: Ast.Span(Ast.TypedLocal),
-        /// Bind one local outside any tracked scope; paired with `remove_local`.
-        bind_local: Ast.LocalId,
-        remove_local: Ast.LocalId,
-        begin_scope,
-        /// Remove the innermost scope's locals, in reverse binding order.
-        end_scope,
+        scope: ScopeWork,
         add_direct: struct { node: CaptureNodeId, local: Ast.LocalId },
         /// Start a capture edge: collect each operand into its own child
         /// node, in operand order, then finish the edge.
@@ -2291,15 +2341,17 @@ const CaptureGraphBuilder = struct {
         while (work.pop()) |item| switch (item) {
             .expr => |visit| try self.pushExprWork(&work, visit.expr, visit.node),
             .stmt => |visit| try self.pushStmtWork(&work, visit.stmt, visit.node),
-            .bind_pat => |pat| try self.bindPat(pat, &scopes.items[scopes.items.len - 1]),
-            .bind_typed_locals => |span| try self.bindTypedLocals(self.graph.program.typedLocalSpan(span), &scopes.items[scopes.items.len - 1]),
-            .bind_local => |local| try self.bindLocal(local, null),
-            .remove_local => |local| self.removeLocal(local),
-            .begin_scope => try scopes.append(allocator, .empty),
-            .end_scope => {
-                var scope = scopes.pop().?;
-                defer scope.deinit(allocator);
-                self.removeLocals(scope.items);
+            .scope => |op| switch (op) {
+                .bind_pat => |pat| try self.bindPat(pat, &scopes.items[scopes.items.len - 1]),
+                .bind_typed_locals => |span| try self.bindTypedLocals(self.graph.program.typedLocalSpan(span), &scopes.items[scopes.items.len - 1]),
+                .bind_local => |local| try self.bindLocal(local, null),
+                .remove_local => |local| self.removeLocal(local),
+                .begin_scope => try scopes.append(allocator, .empty),
+                .end_scope => {
+                    var scope = scopes.pop().?;
+                    defer scope.deinit(allocator);
+                    self.removeLocals(scope.items);
+                },
             },
             .add_direct => |direct| try self.addDirect(direct.node, direct.local),
             .begin_edge => |edge| try self.pushEdgeWork(&work, &edges, edge),
@@ -2350,26 +2402,97 @@ const CaptureGraphBuilder = struct {
         }
     }
 
-    fn pushStmtWork(self: *CaptureGraphBuilder, work: *std.ArrayList(Work), stmt_id: Ast.StmtId, node: CaptureNodeId) Allocator.Error!void {
-        const allocator = self.graph.allocator;
-        switch (self.graph.program.getStmt(stmt_id)) {
-            .uninitialized => |pat| try work.append(allocator, .{ .bind_pat = pat }),
-            .let_ => |let_| {
-                if (let_.recursive) {
-                    try work.append(allocator, .{ .expr = .{ .expr = let_.value, .node = node } });
-                    try work.append(allocator, .{ .bind_pat = let_.pat });
-                } else {
-                    try work.append(allocator, .{ .bind_pat = let_.pat });
-                    try work.append(allocator, .{ .expr = .{ .expr = let_.value, .node = node } });
-                }
-            },
-            .expr,
-            .expect,
-            .dbg,
-            => |expr| try work.append(allocator, .{ .expr = .{ .expr = expr, .node = node } }),
-            .return_ => |ret| try work.append(allocator, .{ .expr = .{ .expr = ret.value, .node = node } }),
-            .crash, .checked_error => {},
+    /// The capture-graph walk's children of one expression or statement,
+    /// collected into `node`.
+    const Children = struct {
+        builder: *CaptureGraphBuilder,
+        list: *std.ArrayList(Work),
+        node: CaptureNodeId,
+
+        fn add(children: Children, item: Work) Allocator.Error!void {
+            try children.list.append(children.builder.graph.allocator, item);
         }
+
+        fn child(children: Children, child_expr: Ast.ExprId) Allocator.Error!void {
+            try children.add(.{ .expr = .{ .expr = child_expr, .node = children.node } });
+        }
+
+        fn stmt(children: Children, child_stmt: Ast.StmtId) Allocator.Error!void {
+            try children.add(.{ .stmt = .{ .stmt = child_stmt, .node = children.node } });
+        }
+
+        fn scope(children: Children, op: ScopeWork) Allocator.Error!void {
+            try children.add(.{ .scope = op });
+        }
+
+        fn span(children: Children, items: Ast.Span(Ast.ExprId)) Allocator.Error!void {
+            const values = children.builder.graph.program.exprSpan(items);
+            for (0..values.len) |index| try children.child(GuardedList.at(values, index));
+        }
+
+        fn free(children: Children, local: Ast.LocalId) Allocator.Error!void {
+            try children.builder.addDirect(children.node, local);
+        }
+
+        fn deferredFree(children: Children, local: Ast.LocalId) Allocator.Error!void {
+            try children.add(.{ .add_direct = .{ .node = children.node, .local = local } });
+        }
+
+        fn defRef(children: Children) Allocator.Error!void {
+            if (children.builder.graph.lifter == null) Common.invariant("post-lift capture graph saw a definition reference");
+        }
+
+        fn lambda(children: Children) Allocator.Error!void {
+            if (children.builder.graph.lifter == null) Common.invariant("post-lift capture graph saw an inline lambda");
+        }
+
+        fn fnRef(children: Children, expr_id: Ast.ExprId, fn_ref: anytype) Allocator.Error!void {
+            const graph = children.builder.graph;
+            if (graph.lifter == null) {
+                try children.add(.{ .begin_edge = .{ .parent = children.node, .target = fn_ref.fn_id, .site = .{ .fn_ref = expr_id }, .values = .{ .operands = fn_ref.captures } } });
+            } else {
+                // A pre-existing lifted reference already carries its exact
+                // capture payload. It is not part of the local Monotype
+                // definition graph, so its explicit values contribute
+                // directly and its lifted target is not subscribed here.
+                const operands = graph.program.captureOperandSpan(fn_ref.captures);
+                for (0..operands.len) |index| try children.child(GuardedList.at(operands, index).value);
+            }
+        }
+
+        fn fnDef(children: Children, fn_def: anytype) Allocator.Error!void {
+            const lifter = children.builder.graph.lifter orelse Common.invariant("post-lift capture graph saw a function definition");
+            try children.add(.{ .begin_edge = .{ .parent = children.node, .target = lifter.liftedFn(fn_def.fn_id), .site = .pre_lift, .values = .{ .fn_def = fn_def.captures } } });
+        }
+
+        fn callProc(children: Children, expr_id: Ast.ExprId, call: anytype) Allocator.Error!void {
+            const graph = children.builder.graph;
+            const maybe_target: ?Ast.FnId = switch (call.callee) {
+                .func => |slot| switch (slot) {
+                    .local => |mono_fn_id| blk: {
+                        const lifter = graph.lifter orelse Common.invariant("post-lift capture graph saw a pre-lift direct call");
+                        break :blk lifter.liftedFn(mono_fn_id);
+                    },
+                },
+                .lifted => |fn_id| fn_id,
+            };
+            try children.span(call.args);
+            if (maybe_target) |target| {
+                try children.add(.{ .begin_edge = .{
+                    .parent = children.node,
+                    .target = target,
+                    .site = if (graph.lifter == null) .{ .call_proc = expr_id } else .pre_lift,
+                    .values = .{ .operands = call.captures },
+                } });
+            }
+        }
+    };
+
+    fn pushStmtWork(self: *CaptureGraphBuilder, work: *std.ArrayList(Work), stmt_id: Ast.StmtId, node: CaptureNodeId) Allocator.Error!void {
+        // Children are appended in source order, then reversed onto the stack.
+        const children_start = work.items.len;
+        defer std.mem.reverse(Work, work.items[children_start..]);
+        try pushStmtChildren(self.graph.program, stmt_id, Children{ .builder = self, .list = work, .node = node });
     }
 
     fn pushExprWork(
@@ -2378,213 +2501,10 @@ const CaptureGraphBuilder = struct {
         expr_id: Ast.ExprId,
         node: CaptureNodeId,
     ) Allocator.Error!void {
-        const allocator = self.graph.allocator;
-        const input = self.graph.program;
-        const expr = input.getExpr(expr_id);
         // Children are appended in source order, then reversed onto the stack.
         const children_start = work.items.len;
         defer std.mem.reverse(Work, work.items[children_start..]);
-        const Children = struct {
-            list: *std.ArrayList(Work),
-            allocator: Allocator,
-            node: CaptureNodeId,
-
-            fn add(children: @This(), item: Work) Allocator.Error!void {
-                try children.list.append(children.allocator, item);
-            }
-
-            fn child(children: @This(), child_expr: Ast.ExprId) Allocator.Error!void {
-                try children.add(.{ .expr = .{ .expr = child_expr, .node = children.node } });
-            }
-
-            fn span(children: @This(), program: *const Ast.Program, items: Ast.Span(Ast.ExprId)) Allocator.Error!void {
-                const values = program.exprSpan(items);
-                for (0..values.len) |index| try children.child(GuardedList.at(values, index));
-            }
-        };
-        const children = Children{ .list = work, .allocator = allocator, .node = node };
-        switch (expr.data) {
-            .local => |local| try self.addDirect(node, local),
-            .unit,
-            .@"unreachable",
-            .int_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .dec_lit,
-            .str_lit,
-            .bytes_lit,
-            .uninitialized,
-            .uninitialized_payload,
-            .crash,
-            .checked_error,
-            .comptime_exhaustiveness_failed,
-            => {},
-            .def_ref => if (self.graph.lifter == null) Common.invariant("post-lift capture graph saw a definition reference"),
-            .fn_ref => |fn_ref| {
-                if (self.graph.lifter == null) {
-                    try children.add(.{ .begin_edge = .{ .parent = node, .target = fn_ref.fn_id, .site = .{ .fn_ref = expr_id }, .values = .{ .operands = fn_ref.captures } } });
-                } else {
-                    // A pre-existing lifted reference already carries its exact
-                    // capture payload. It is not part of the local Monotype
-                    // definition graph, so its explicit values contribute
-                    // directly and its lifted target is not subscribed here.
-                    const operands = input.captureOperandSpan(fn_ref.captures);
-                    for (0..operands.len) |index| try children.child(GuardedList.at(operands, index).value);
-                }
-            },
-            .fn_def => |fn_def| {
-                const lifter = self.graph.lifter orelse Common.invariant("post-lift capture graph saw a function definition");
-                try children.add(.{ .begin_edge = .{ .parent = node, .target = lifter.liftedFn(fn_def.fn_id), .site = .pre_lift, .values = .{ .fn_def = fn_def.captures } } });
-            },
-            .list,
-            .tuple,
-            => |items| try children.span(input, items),
-            .record => |fields| {
-                const field_exprs = input.fieldExprSpan(fields);
-                for (0..field_exprs.len) |index| try children.child(GuardedList.at(field_exprs, index).value);
-            },
-            .record_update => |update| {
-                try children.child(update.base);
-                const field_exprs = input.fieldExprSpan(update.fields);
-                for (0..field_exprs.len) |index| try children.child(GuardedList.at(field_exprs, index).value);
-            },
-            .tag => |tag| try children.span(input, tag.payloads),
-            .static_data_candidate => |candidate| try children.child(candidate.runtime_expr),
-            .comptime_value => |candidate| try children.child(candidate.initializer),
-            .typed_boundary => |boundary| try children.child(boundary.value),
-            .row_widen => |widen| try children.child(widen.value),
-            .nominal,
-            .dbg,
-            .expect,
-            => |child| try children.child(child),
-            .return_ => |ret| try children.child(ret.value),
-            .expect_err => |expect_err| try children.child(expect_err.msg),
-            .literal_rejected => |rejected| try children.child(rejected.msg),
-            .comptime_branch_taken => |taken| try children.child(taken.body),
-            .let_ => |let_| {
-                try children.child(let_.value);
-                try children.add(.begin_scope);
-                try children.add(.{ .bind_pat = let_.bind });
-                try children.child(let_.rest);
-                try children.add(.end_scope);
-            },
-            .lambda => |lambda| {
-                if (self.graph.lifter == null) Common.invariant("post-lift capture graph saw an inline lambda");
-                try children.add(.begin_scope);
-                try children.add(.{ .bind_typed_locals = lambda.args });
-                try children.child(lambda.body);
-                try children.add(.end_scope);
-            },
-            .call_value => |call| {
-                try children.child(call.callee);
-                try children.span(input, call.args);
-            },
-            .call_proc => |call| {
-                const maybe_target: ?Ast.FnId = switch (call.callee) {
-                    .func => |slot| switch (slot) {
-                        .local => |mono_fn_id| blk: {
-                            const lifter = self.graph.lifter orelse Common.invariant("post-lift capture graph saw a pre-lift direct call");
-                            break :blk lifter.liftedFn(mono_fn_id);
-                        },
-                    },
-                    .lifted => |fn_id| fn_id,
-                };
-                try children.span(input, call.args);
-                if (maybe_target) |target| {
-                    try children.add(.{ .begin_edge = .{
-                        .parent = node,
-                        .target = target,
-                        .site = if (self.graph.lifter == null) .{ .call_proc = expr_id } else .pre_lift,
-                        .values = .{ .operands = call.captures },
-                    } });
-                }
-            },
-            .low_level => |call| try children.span(input, call.args),
-            .field_access => |field| try children.child(field.receiver),
-            .tuple_access => |access| try children.child(access.tuple),
-            .structural_eq => |eq| {
-                try children.child(eq.lhs);
-                try children.child(eq.rhs);
-            },
-            .structural_hash => |hash| {
-                try children.child(hash.value);
-                try children.child(hash.hasher);
-            },
-            .match_ => |match| {
-                try children.child(match.scrutinee);
-                const branches = input.branchSpan(match.branches);
-                for (0..branches.len) |index| {
-                    const branch = GuardedList.at(branches, index);
-                    try children.add(.begin_scope);
-                    try children.add(.{ .bind_pat = branch.pat });
-                    const bindings = input.stmtSpan(branch.bindings);
-                    for (0..bindings.len) |binding_index| {
-                        try children.add(.{ .stmt = .{ .stmt = GuardedList.at(bindings, binding_index), .node = node } });
-                    }
-                    if (branch.guard) |guard| try children.child(guard);
-                    try children.child(branch.body);
-                    try children.add(.end_scope);
-                }
-            },
-            .if_ => |if_| {
-                const branches = input.ifBranchSpan(if_.branches);
-                for (0..branches.len) |index| {
-                    const branch = GuardedList.at(branches, index);
-                    try children.child(branch.cond);
-                    try children.child(branch.body);
-                }
-                try children.child(if_.final_else);
-            },
-            .if_initialized_payload => |payload_switch| {
-                try children.child(payload_switch.cond);
-                try children.add(.{ .add_direct = .{ .node = node, .local = payload_switch.payload } });
-                try children.child(payload_switch.initialized);
-                try children.child(payload_switch.uninitialized);
-            },
-            .try_sequence => |sequence| {
-                try children.child(sequence.try_expr);
-                try children.add(.{ .bind_local = sequence.ok_local });
-                try children.child(sequence.ok_body);
-                try children.add(.{ .remove_local = sequence.ok_local });
-            },
-            .try_record_sequence => |sequence| {
-                try children.child(sequence.try_expr);
-                try children.add(.{ .bind_local = sequence.value_local });
-                try children.add(.{ .bind_local = sequence.rest_local });
-                try children.child(sequence.ok_body);
-                try children.add(.{ .remove_local = sequence.rest_local });
-                try children.add(.{ .remove_local = sequence.value_local });
-            },
-            .block => |block| {
-                try children.add(.begin_scope);
-                const statements = input.stmtSpan(block.statements);
-                for (0..statements.len) |index| try children.add(.{ .stmt = .{ .stmt = GuardedList.at(statements, index), .node = node } });
-                try children.child(block.final_expr);
-                try children.add(.end_scope);
-            },
-            .loop_ => |loop| {
-                try children.span(input, loop.initial_values);
-                try children.add(.begin_scope);
-                try children.add(.{ .bind_typed_locals = loop.params });
-                try children.child(loop.body);
-                try children.add(.end_scope);
-            },
-            .break_ => |maybe| if (maybe) |value| try children.child(value),
-            .continue_ => |continue_| try children.span(input, continue_.values),
-            .join_point => |join_point| {
-                const retained = input.typedLocalSpan(join_point.retained);
-                for (0..retained.len) |index| try self.addDirect(node, GuardedList.at(retained, index).local);
-                try children.add(.begin_scope);
-                try children.add(.{ .bind_typed_locals = join_point.params });
-                try children.child(join_point.body);
-                try children.add(.end_scope);
-                try children.child(join_point.remainder);
-            },
-            .jump => |jump| {
-                try children.span(input, jump.loop_values);
-                try children.span(input, jump.args);
-            },
-        }
+        try pushExprChildren(self.graph.program, expr_id, Children{ .builder = self, .list = work, .node = node });
     }
 };
 

@@ -18,10 +18,11 @@
 // is preserved.
 
 const std = @import("std");
+const ieee = @import("ieee.zig");
 const trig = @import("tan.zig");
 
-const canonical_nan: f64 = @bitCast(@as(u64, 0x7ff8_0000_0000_0000));
-const positive_infinity: f64 = @bitCast(@as(u64, 0x7ff0_0000_0000_0000));
+const canonical_nan = ieee.canonicalNan(f64);
+const positive_infinity = ieee.positiveInfinity(f64);
 
 const bp = [2]f64{ 1.0, 1.5 };
 const dp_high = [2]f64{ 0.0, 5.84962487220764160156e-01 };
@@ -65,37 +66,6 @@ fn withHighWord(value: f64, high: u32) f64 {
 fn withLowWord(value: f64, low: u32) f64 {
     const bits: u64 = @bitCast(value);
     return @bitCast((bits & 0xffff_ffff_0000_0000) | low);
-}
-
-fn scalePowerOfTwo(value: f64, power: i32) f64 {
-    var bits: u64 = @bitCast(value);
-    const sign = bits & 0x8000_0000_0000_0000;
-    var exponent: i32 = @intCast((bits >> 52) & 0x7ff);
-    if (exponent == 0x7ff or bits & 0x7fff_ffff_ffff_ffff == 0) return value;
-
-    if (exponent == 0) {
-        const scaled = value * 0x1.0p54;
-        bits = @bitCast(scaled);
-        exponent = @as(i32, @intCast((bits >> 52) & 0x7ff)) - 54;
-    }
-
-    const new_exponent = exponent + power;
-    if (new_exponent >= 0x7ff) return @bitCast(sign | 0x7ff0_0000_0000_0000);
-    if (new_exponent > 0) return @bitCast((bits & 0x800f_ffff_ffff_ffff) | (@as(u64, @intCast(new_exponent)) << 52));
-    if (new_exponent <= -54) return @bitCast(sign);
-
-    const adjusted_power = new_exponent + 54;
-    const normal_bits = (bits & 0x800f_ffff_ffff_ffff) | (@as(u64, @intCast(adjusted_power)) << 52);
-    const normal: f64 = @bitCast(normal_bits);
-    return normal * 0x1.0p-54;
-}
-
-fn isOddInteger(value: f64) bool {
-    const abs_bits = @as(u64, @bitCast(value)) & 0x7fff_ffff_ffff_ffff;
-    if (abs_bits >= 0x4340_0000_0000_0000) return false;
-    if (@trunc(value) != value) return false;
-    const integer: i64 = @intFromFloat(value);
-    return integer & 1 != 0;
 }
 
 /// Computes the magnitude of `base^exponent` for a positive, finite, nonzero
@@ -223,50 +193,11 @@ fn finitePowerMagnitude(base: f64, exponent: f64) f64 {
     const correction = exp_argument - square * (p1 + square * (p2 + square * (p3 + square * (p4 + square * p5))));
     const approximation = (exp_argument * correction) / (correction - 2.0) - (exp_tail + exp_argument * exp_tail);
     exp_argument = 1.0 - (approximation - exp_argument);
-    return scalePowerOfTwo(exp_argument, scale_exponent);
+    return ieee.scalePowerOfTwo(f64, 54, exp_argument, scale_exponent);
 }
 
 /// Returns `base` raised to `exponent`, computed entirely with binary64 operations.
-pub fn pow(base: f64, exponent: f64) f64 {
-    @setFloatMode(.strict);
-
-    if (exponent == 0.0 or base == 1.0) return 1.0;
-    const base_bits: u64 = @bitCast(base);
-    const exponent_bits: u64 = @bitCast(exponent);
-    const base_abs_bits = base_bits & 0x7fff_ffff_ffff_ffff;
-    const exponent_abs_bits = exponent_bits & 0x7fff_ffff_ffff_ffff;
-    if (base_abs_bits > 0x7ff0_0000_0000_0000 or exponent_abs_bits > 0x7ff0_0000_0000_0000) return canonical_nan;
-    if (exponent == 1.0) return base;
-    if (exponent == -1.0) return 1.0 / base;
-    if (exponent == 2.0) return base * base;
-
-    if (base_abs_bits == 0) {
-        if (exponent < 0.0) return if (isOddInteger(exponent)) @bitCast((base_bits & 0x8000_0000_0000_0000) | 0x7ff0_0000_0000_0000) else positive_infinity;
-        return if (isOddInteger(exponent)) base else 0.0;
-    }
-
-    if (exponent_abs_bits == 0x7ff0_0000_0000_0000) {
-        if (base == -1.0) return 1.0;
-        const tends_to_zero = (@abs(base) < 1.0) == (exponent > 0.0);
-        return if (tends_to_zero) 0.0 else positive_infinity;
-    }
-    if (base_abs_bits == 0x7ff0_0000_0000_0000) {
-        if (base_bits >> 63 != 0) {
-            const reciprocal: f64 = @bitCast(base_bits & 0x8000_0000_0000_0000);
-            return pow(reciprocal, -exponent);
-        }
-        return if (exponent < 0.0) 0.0 else positive_infinity;
-    }
-    if (exponent == 0.5) return @sqrt(base);
-    if (exponent == -0.5) return 1.0 / @sqrt(base);
-
-    const exponent_is_integer = @trunc(exponent) == exponent;
-    if (base < 0.0 and !exponent_is_integer) return canonical_nan;
-
-    var result = finitePowerMagnitude(@abs(base), exponent);
-    if (base < 0.0 and isOddInteger(exponent)) result = -result;
-    return result;
-}
+pub const pow = ieee.powFn(f64, finitePowerMagnitude);
 
 /// Returns the sine of `value`, computed entirely with binary64 operations.
 pub fn sin(value: f64) f64 {

@@ -63,12 +63,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-Holder := {}.{
-	a.Show :  where [a.to_str : a -> Str]
-}
-
-describe : a -> Str where [a.Holder.Show]
-describe = |value| value.to_str()
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

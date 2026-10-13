@@ -103,6 +103,18 @@ foo = 0
 foo = 1
 ```
 
+Calling a method on a `var` doesn't change it. A method like `List.append` returns
+an updated copy, so to update the `var`, you reassign it to that copy:
+
+```roc
+var $names = []
+$names = $names.append("Sam")
+```
+
+Calling the method without reassigning, as in `$names.append("Sam")` on a line by
+itself, gives a warning, because the updated copy is thrown away and `$names` stays
+the same.
+
 An [`expect`](#expect) cannot reassign a `var` declared outside of it. (See
 [control flow and variables inside `expect`](#expect-control-flow).)
 

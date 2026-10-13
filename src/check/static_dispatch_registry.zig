@@ -48,17 +48,19 @@ const DispatchExprTag = enum {
     e_method_eq,
 };
 
-fn typeDispatchOwnerVar(module: TypedCIR.Module, stmt_idx: CIR.Statement.Idx) Var {
-    const stmt = module.getStatement(stmt_idx);
+/// The dispatcher variable a type-dispatch owner statement declares.
+pub fn typeDispatchOwnerVar(env: *const ModuleEnv, stmt_idx: CIR.Statement.Idx) Var {
+    const stmt = env.store.getStatement(stmt_idx);
     const tag = std.meta.activeTag(stmt);
     if (tag == .s_type_var_alias) return ModuleEnv.varFrom(stmt.s_type_var_alias.type_var_anno);
     if (tag == .s_alias_decl) return ModuleEnv.varFrom(stmt_idx);
     base.invariant("{s}", .{"type dispatch owner statement was not a type-var alias or type alias"});
 }
 
-fn typeDispatchCallDispatcherVar(module: TypedCIR.Module, owner: CIR.TypeDispatchOwner) Var {
+/// The dispatcher variable a type-dispatch call dispatches on.
+pub fn typeDispatchCallDispatcherVar(env: *const ModuleEnv, owner: CIR.TypeDispatchOwner) Var {
     return switch (owner) {
-        .statement => |stmt_idx| typeDispatchOwnerVar(module, stmt_idx),
+        .statement => |stmt_idx| typeDispatchOwnerVar(env, stmt_idx),
         .dispatcher => |dispatcher| dispatcher,
     };
 }
@@ -1928,6 +1930,13 @@ pub const GeneratedCodecDerivationKind = enum(u8) {
 /// Stable index of a checked generated-codec derivation contract.
 pub const GeneratedCodecDerivationId = enum(u32) { _ };
 
+/// SHA-256 of a generated codec contract's complete proof graph, encoded
+/// without module-local ids: equal digests denote equivalent contracts even
+/// when different checked modules recorded them.
+pub const GeneratedCodecContentDigest = struct {
+    bytes: [32]u8 = @splat(0),
+};
+
 /// The exact checked resolution of one compiler-generated codec call.
 /// `pending` exists only while CheckedModule publication links the checker
 /// snapshot to its target evidence or nested structural derivation.
@@ -1956,6 +1965,10 @@ pub const GeneratedCodecDerivation = struct {
     /// Producer-proven equivalence class of the complete codec proof graph.
     /// Source/frozen roles remain specific to this contract for replay.
     identity: GeneratedCodecDerivationId,
+    /// Identity of the equivalence class across checked modules. Specialization
+    /// identity names a contract by this digest, never by the module that
+    /// recorded it.
+    content: GeneratedCodecContentDigest = .{},
     kind: GeneratedCodecDerivationKind,
     source_constructor_ty: CheckedTypeId,
     source_runtime_ty: CheckedTypeId,
@@ -2296,13 +2309,13 @@ pub const StaticDispatchPlanTable = struct {
                         .expr = checked_expr,
                         .method = try names.internMethodIdent(idents, dispatch_call.method_name),
                         .dispatcher = .type_only,
-                        .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, typeDispatchCallDispatcherVar(module, dispatch_call.owner)),
+                        .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, typeDispatchCallDispatcherVar(module.moduleEnvConst(), dispatch_call.owner)),
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatch_call.constraint_fn_var),
                         .args = ar,
                         .result_mode = try staticDispatchResultModeForCheckedValueCall(allocator, module, checked_types, &constraint_index, dispatch_call.method_name, dispatch_call.constraint_fn_var),
                     });
                     try plan_sources.append(allocator, .{
-                        .dispatcher_var = typeDispatchCallDispatcherVar(module, dispatch_call.owner),
+                        .dispatcher_var = typeDispatchCallDispatcherVar(module.moduleEnvConst(), dispatch_call.owner),
                         .constraint_fn_var = dispatch_call.constraint_fn_var,
                     });
                 },

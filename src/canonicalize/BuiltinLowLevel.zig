@@ -280,52 +280,32 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         .{ "list_map_write_unsafe", .list_map_write_unsafe },
         .{ "dict_pseudo_seed", .dict_pseudo_seed },
         .{ "hasher_finish", .hasher_finish },
+        .{ "Builtin.Hasher.write_bool", .hasher_write_bool },
+        .{ "Builtin.Hasher.write_u8", .hasher_write_u8 },
+        .{ "Builtin.Hasher.write_u16", .hasher_write_u16 },
+        .{ "Builtin.Hasher.write_u32", .hasher_write_u32 },
+        .{ "Builtin.Hasher.write_u64", .hasher_write_u64 },
+        .{ "Builtin.Hasher.write_u128", .hasher_write_u128 },
+        .{ "Builtin.Hasher.write_i8", .hasher_write_i8 },
+        .{ "Builtin.Hasher.write_i16", .hasher_write_i16 },
+        .{ "Builtin.Hasher.write_i32", .hasher_write_i32 },
+        .{ "Builtin.Hasher.write_i64", .hasher_write_i64 },
+        .{ "Builtin.Hasher.write_i128", .hasher_write_i128 },
+        .{ "Builtin.Hasher.write_f32", .hasher_write_f32 },
+        .{ "Builtin.Hasher.write_f64", .hasher_write_f64 },
+        .{ "Builtin.Hasher.write_dec", .hasher_write_dec },
+        .{ "Builtin.Hasher.write_bytes", .hasher_write_bytes },
+        .{ "Builtin.Hasher.write_str", .hasher_write_str },
+        .{ "crypto_sha256_hash_bytes", .crypto_sha256_hash_bytes },
+        .{ "crypto_sha256_hasher_empty", .crypto_sha256_hasher_empty },
+        .{ "crypto_sha256_hasher_write", .crypto_sha256_hasher_write },
+        .{ "crypto_sha256_hasher_finish", .crypto_sha256_hasher_finish },
+        .{ "crypto_blake3_hash_bytes", .crypto_blake3_hash_bytes },
+        .{ "crypto_blake3_hasher_empty", .crypto_blake3_hasher_empty },
+        .{ "crypto_blake3_hasher_write", .crypto_blake3_hasher_write },
+        .{ "crypto_blake3_hasher_finish", .crypto_blake3_hasher_finish },
     }) |entry| {
         if (env.common.findIdent(entry[0])) |ident| try low_level_map.put(ident, entry[1]);
-    }
-    const hasher_primitives = [_]struct {
-        name: []const u8,
-        op: CIR.Expr.LowLevel,
-    }{
-        .{ .name = "Builtin.Hasher.write_bool", .op = .hasher_write_bool },
-        .{ .name = "Builtin.Hasher.write_u8", .op = .hasher_write_u8 },
-        .{ .name = "Builtin.Hasher.write_u16", .op = .hasher_write_u16 },
-        .{ .name = "Builtin.Hasher.write_u32", .op = .hasher_write_u32 },
-        .{ .name = "Builtin.Hasher.write_u64", .op = .hasher_write_u64 },
-        .{ .name = "Builtin.Hasher.write_u128", .op = .hasher_write_u128 },
-        .{ .name = "Builtin.Hasher.write_i8", .op = .hasher_write_i8 },
-        .{ .name = "Builtin.Hasher.write_i16", .op = .hasher_write_i16 },
-        .{ .name = "Builtin.Hasher.write_i32", .op = .hasher_write_i32 },
-        .{ .name = "Builtin.Hasher.write_i64", .op = .hasher_write_i64 },
-        .{ .name = "Builtin.Hasher.write_i128", .op = .hasher_write_i128 },
-        .{ .name = "Builtin.Hasher.write_f32", .op = .hasher_write_f32 },
-        .{ .name = "Builtin.Hasher.write_f64", .op = .hasher_write_f64 },
-        .{ .name = "Builtin.Hasher.write_dec", .op = .hasher_write_dec },
-        .{ .name = "Builtin.Hasher.write_bytes", .op = .hasher_write_bytes },
-        .{ .name = "Builtin.Hasher.write_str", .op = .hasher_write_str },
-    };
-    for (hasher_primitives) |primitive| {
-        if (env.common.findIdent(primitive.name)) |ident| {
-            try low_level_map.put(ident, primitive.op);
-        }
-    }
-    const crypto_primitives = [_]struct {
-        name: []const u8,
-        op: CIR.Expr.LowLevel,
-    }{
-        .{ .name = "crypto_sha256_hash_bytes", .op = .crypto_sha256_hash_bytes },
-        .{ .name = "crypto_sha256_hasher_empty", .op = .crypto_sha256_hasher_empty },
-        .{ .name = "crypto_sha256_hasher_write", .op = .crypto_sha256_hasher_write },
-        .{ .name = "crypto_sha256_hasher_finish", .op = .crypto_sha256_hasher_finish },
-        .{ .name = "crypto_blake3_hash_bytes", .op = .crypto_blake3_hash_bytes },
-        .{ .name = "crypto_blake3_hasher_empty", .op = .crypto_blake3_hasher_empty },
-        .{ .name = "crypto_blake3_hasher_write", .op = .crypto_blake3_hasher_write },
-        .{ .name = "crypto_blake3_hasher_finish", .op = .crypto_blake3_hasher_finish },
-    };
-    for (crypto_primitives) |primitive| {
-        if (env.common.findIdent(primitive.name)) |ident| {
-            try low_level_map.put(ident, primitive.op);
-        }
     }
     const numeric_types = numeric_type_names;
     const signed_types = [_][]const u8{ "I8", "I16", "I32", "I64", "I128", "Dec", "F32", "F64" };

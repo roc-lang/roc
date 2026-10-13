@@ -106,10 +106,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-a.Looping :  where [a.Looping, a.to_str : a -> Str]
-
-describe : a -> Str where [a.Looping]
-describe = |value| value.to_str()
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

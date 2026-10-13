@@ -34,7 +34,7 @@ UNUSED VARIABLE - type_var_namespace.md:7:5:7:9
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "item")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_item")

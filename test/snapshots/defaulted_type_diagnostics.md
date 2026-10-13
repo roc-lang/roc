@@ -77,7 +77,7 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 		(title "Type Not Determined")
 		(region (start 15 18) (end 15 25))
 		(headline
-			(reflow "Nothing in this program determines the type of this string:"))
+			(reflow "Nothing in this program determines the type of this string."))
 		(document
 			(source-region (file "defaulted_type_diagnostics.md") (start 15 18) (end 15 25) (annotation error) (line-text "string_compare = \"apple\" > \"banana\""))
 			(line-break)
@@ -110,7 +110,7 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 		(title "Type Not Determined")
 		(region (start 17 17) (end 17 20))
 		(headline
-			(reflow "Nothing in this program determines the type of this string:"))
+			(reflow "Nothing in this program determines the type of this string."))
 		(document
 			(source-region (file "defaulted_type_diagnostics.md") (start 17 17) (end 17 20) (annotation error) (line-text "string_method = \"s\".foo()"))
 			(line-break)
@@ -143,7 +143,7 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 		(title "Type Not Determined")
 		(region (start 9 18) (end 9 20))
 		(headline
-			(reflow "Nothing in this program determines the type of this number:"))
+			(reflow "Nothing in this program determines the type of this number."))
 		(document
 			(source-region (file "defaulted_type_diagnostics.md") (start 9 18) (end 9 20) (annotation error) (line-text "literal_method = 35.foo()"))
 			(line-break)
@@ -176,7 +176,7 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 		(title "Type Not Determined")
 		(region (start 11 21) (end 11 23))
 		(headline
-			(reflow "Nothing in this program determines the type of this number:"))
+			(reflow "Nothing in this program determines the type of this number."))
 		(document
 			(source-region (file "defaulted_type_diagnostics.md") (start 11 21) (end 11 23) (annotation error) (line-text "literal_signature = 35.plus(\"s\")"))
 			(line-break)
@@ -204,7 +204,7 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 		(title "Type Mismatch")
 		(region (start 13 34) (end 13 37))
 		(headline
-			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:"))
+			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both."))
 		(document
 			(source-region (file "defaulted_type_diagnostics.md") (start 13 34) (end 13 37) (annotation error) (line-text "shared_literals = if True 1 else \"s\""))
 			(line-break)
@@ -216,7 +216,7 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 		(title "Type Not Determined")
 		(region (start 7 16) (end 7 17))
 		(headline
-			(reflow "Nothing in this program determines a type this needs:"))
+			(reflow "Nothing in this program determines a type this needs."))
 		(document
 			(source-region (file "defaulted_type_diagnostics.md") (start 7 16) (end 7 17) (annotation error) (line-text "materialized = g(|n| n + 1)"))
 			(line-break)

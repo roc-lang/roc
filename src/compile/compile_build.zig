@@ -135,25 +135,36 @@ fn freeConstSlice(gpa: Allocator, s: []const u8) void {
     gpa.free(@constCast(s));
 }
 
-// Rooted path + normalization helper
-const PathUtils = struct {
-    fn normalizeAndJoin(gpa: Allocator, root: []const u8, rel: []const u8) Allocator.Error![]const u8 {
-        const joined = try std.fs.path.join(gpa, &.{ root, rel });
-        errdefer gpa.free(joined);
-        // Resolve .. and . components
-        const canon = try std.fs.path.resolve(gpa, &.{joined});
-        gpa.free(joined);
-        return canon;
+/// The roc cache directory for downloaded packages:
+/// - Linux/macOS: ~/.cache/roc/packages/ (respects XDG_CACHE_HOME if set)
+/// - Windows: %LOCALAPPDATA%\roc\packages\
+pub fn packagesCacheDir(fs: CoreCtx, allocator: Allocator) error{ OutOfMemory, NoCacheDir }![]const u8 {
+    if (try optionalEnvVar(fs, allocator, "XDG_CACHE_HOME")) |xdg_cache| {
+        defer allocator.free(xdg_cache);
+        return std.fs.path.join(allocator, &.{ xdg_cache, "roc", "packages" });
     }
-
-    fn makeAbsolute(gpa: Allocator, base_dir: []const u8, path: []const u8) Allocator.Error![]const u8 {
-        if (std.fs.path.isAbsolute(path)) {
-            return try std.fs.path.resolve(gpa, &.{path});
-        } else {
-            return try normalizeAndJoin(gpa, base_dir, path);
+    if (comptime builtin.os.tag == .windows) {
+        if (try optionalEnvVar(fs, allocator, "LOCALAPPDATA")) |local_app_data| {
+            defer allocator.free(local_app_data);
+            return std.fs.path.join(allocator, &.{ local_app_data, "roc", "packages" });
         }
     }
+    if (try optionalEnvVar(fs, allocator, "HOME")) |home| {
+        defer allocator.free(home);
+        return std.fs.path.join(allocator, &.{ home, ".cache", "roc", "packages" });
+    }
+    return error.NoCacheDir;
+}
 
+fn optionalEnvVar(fs: CoreCtx, allocator: Allocator, key: []const u8) Allocator.Error!?[]const u8 {
+    return fs.getEnvVar(key, allocator) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.EnvironmentVariableMissing => null,
+    };
+}
+
+// Rooted path + normalization helper
+const PathUtils = struct {
     fn isWithinRoot(candidate: []const u8, roots: []const []const u8) bool {
         for (roots) |root| {
             if (!std.mem.startsWith(u8, candidate, root)) continue;
@@ -1050,7 +1061,7 @@ pub const BuildEnv = struct {
                 try coord.ensurePackageWithUrl(entry.key_ptr.*, pkg.root_dir, url.view())
             else
                 try coord.ensurePackage(entry.key_ptr.*, pkg.root_dir);
-            try coord_pkg.setRootInput(self.gpa, pkg.root_file, pkg.root_file_state);
+            try coord_pkg.setRootFile(self.gpa, pkg.root_file);
             for (pkg.public_surface.modules.items) |public_module| {
                 try coord_pkg.addPublicModule(
                     self.gpa,
@@ -1581,41 +1592,6 @@ pub const BuildEnv = struct {
     /// Cross-platform environment variable lookup.
     /// Uses the filesystem vtable which works on both POSIX, Windows, and wasm
     /// (unlike std.posix.getenv which only works on POSIX systems).
-    fn getEnvVar(self: *BuildEnv, allocator: Allocator, key: []const u8) Allocator.Error!?[]const u8 {
-        return self.filesystem.getEnvVar(key, allocator) catch |err| switch (err) {
-            error.OutOfMemory => error.OutOfMemory,
-            error.EnvironmentVariableMissing => null,
-        };
-    }
-
-    /// Get the roc cache directory for downloaded packages.
-    /// Standard cache locations by platform:
-    /// - Linux/macOS: ~/.cache/roc/packages/ (respects XDG_CACHE_HOME if set)
-    /// - Windows: %LOCALAPPDATA%\roc\packages\
-    fn getRocCacheDir(self: *BuildEnv, allocator: Allocator) BuildError![]const u8 {
-        // Check XDG_CACHE_HOME first (Linux/macOS)
-        if (try self.getEnvVar(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
-            defer allocator.free(xdg_cache);
-            return std.fs.path.join(allocator, &.{ xdg_cache, "roc", "packages" });
-        }
-
-        // Fall back to %LOCALAPPDATA%\roc\packages (Windows)
-        if (comptime builtin.os.tag == .windows) {
-            if (try self.getEnvVar(allocator, "LOCALAPPDATA")) |local_app_data| {
-                defer allocator.free(local_app_data);
-                return std.fs.path.join(allocator, &.{ local_app_data, "roc", "packages" });
-            }
-        }
-
-        // Fall back to ~/.cache/roc/packages (Unix)
-        if (try self.getEnvVar(allocator, "HOME")) |home| {
-            defer allocator.free(home);
-            return std.fs.path.join(allocator, &.{ home, ".cache", "roc", "packages" });
-        }
-
-        return error.NoCacheDir;
-    }
-
     fn logicalModuleToPath(self: *BuildEnv, root_dir: []const u8, logical_name: []const u8) (Allocator.Error || error{PathOutsideWorkspace})![]const u8 {
         var parts = std.mem.splitScalar(u8, logical_name, '/');
         var segs = std.ArrayList([]const u8).empty;
@@ -1725,35 +1701,9 @@ pub const BuildEnv = struct {
     /// no URL dependencies; URL specs report a download failure.
     fn ensurePackageCacheDir(self: *BuildEnv) Allocator.Error!void {
         if (self.package_cache_dir == null) {
-            self.package_cache_dir = self.getRocCacheDir(self.gpa) catch |err| switch (err) {
+            self.package_cache_dir = packagesCacheDir(self.filesystem, self.gpa) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
-                error.AccessDenied,
-                error.BuiltinLowLevelAnnotationMustBeFunction,
-                error.DownloadFailed,
-                error.ExpectedPlatformString,
-                error.ExpectedString,
-                error.FileError,
-                error.FileNotFound,
-                error.Internal,
-                error.InvalidDependency,
-                error.InvalidNullByteInPath,
-                error.InvalidUrl,
-                error.IoError,
-                error.LockedMemoryLimitExceeded,
-                error.LowLevelOperationsNotFound,
-                error.MissingFilesDirectory,
-                error.MissingTargetFile,
-                error.InvalidTargetConfiguration,
-                error.NoCacheDir,
-                error.NoPackageSource,
-                error.PathOutsideWorkspace,
-                error.StreamTooLong,
-                error.SystemResources,
-                error.ThreadQuotaExceeded,
-                error.Unexpected,
-                error.UnsupportedBuiltinAnnotationOnly,
-                error.UnsupportedHeader,
-                => null,
+                error.NoCacheDir => null,
             };
         }
     }
@@ -2408,27 +2358,8 @@ pub const BuildEnv = struct {
         return .{};
     }
 
-    pub fn freeWatchInputs(self: *BuildEnv, inputs: []const []const u8) void {
-        for (inputs) |path| self.gpa.free(path);
-        self.gpa.free(inputs);
-    }
-
     pub fn freeWatchInputStates(self: *BuildEnv, inputs: []const watch_inputs.Input) void {
         watch_inputs.deinit(self.gpa, inputs);
-    }
-
-    fn appendWatchInput(
-        self: *BuildEnv,
-        paths: *std.ArrayList([]const u8),
-        seen: *std.StringHashMapUnmanaged(void),
-        path: []const u8,
-    ) Allocator.Error!void {
-        if (seen.contains(path)) return;
-        const owned = try self.gpa.dupe(u8, path);
-        errdefer self.gpa.free(owned);
-        try paths.append(self.gpa, owned);
-        errdefer _ = paths.pop();
-        try seen.put(self.gpa, owned, {});
     }
 
     fn appendWatchInputState(
@@ -2444,21 +2375,6 @@ pub const BuildEnv = struct {
         try inputs.append(self.gpa, .{ .path = owned, .state = state });
         errdefer _ = inputs.pop();
         try seen.put(self.gpa, owned, {});
-    }
-
-    fn appendFileDependencyWatchInputs(
-        self: *BuildEnv,
-        paths: *std.ArrayList([]const u8),
-        seen: *std.StringHashMapUnmanaged(void),
-        source_dir: []const u8,
-        env: *const ModuleEnv,
-    ) Allocator.Error!void {
-        for (env.file_dependencies.items.items) |dep| {
-            const relative_path = env.fileDependencyRelativePath(dep);
-            const full_path = try std.fs.path.resolve(self.gpa, &.{ source_dir, relative_path });
-            defer self.gpa.free(full_path);
-            try self.appendWatchInput(paths, seen, full_path);
-        }
     }
 
     fn appendFileDependencyWatchInputStates(
@@ -2480,39 +2396,6 @@ pub const BuildEnv = struct {
             };
             try self.appendWatchInputState(inputs, seen, full_path, state);
         }
-    }
-
-    /// Collect exact filesystem inputs read by the current build. Returned paths
-    /// are owned by the BuildEnv allocator and must be released with
-    /// `freeWatchInputs`.
-    pub fn collectWatchInputs(self: *BuildEnv) Allocator.Error![]const []const u8 {
-        var paths = std.ArrayList([]const u8).empty;
-        errdefer {
-            for (paths.items) |path| self.gpa.free(path);
-            paths.deinit(self.gpa);
-        }
-        var seen = std.StringHashMapUnmanaged(void){};
-        defer seen.deinit(self.gpa);
-
-        var build_pkg_it = self.packages.iterator();
-        while (build_pkg_it.next()) |entry| {
-            if (entry.value_ptr.url == null) try self.appendWatchInput(&paths, &seen, entry.value_ptr.root_file);
-        }
-
-        if (self.coordinator) |coord| {
-            var pkg_it = coord.packages.iterator();
-            while (pkg_it.next()) |entry| {
-                const pkg = entry.value_ptr.*;
-                if (pkg.url != null) continue;
-                for (pkg.modules.items) |*mod| {
-                    try self.appendWatchInput(&paths, &seen, mod.path);
-                    const module_env = mod.moduleEnv() orelse continue;
-                    try self.appendFileDependencyWatchInputs(&paths, &seen, mod.canonicalSourceDir(), module_env);
-                }
-            }
-        }
-
-        return paths.toOwnedSlice(self.gpa);
     }
 
     /// Collect exact filesystem inputs read by the current build, paired with
@@ -3312,61 +3195,29 @@ pub const BuildEnv = struct {
         return artifacts.toOwnedSlice(allocator);
     }
 
+    /// Collect published checked artifacts available to post-check lowering.
     pub fn collectImportedArtifactViews(
         self: *BuildEnv,
         allocator: Allocator,
         root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     ) Allocator.Error![]check.CheckedArtifact.ImportedModuleView {
-        var views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
-        errdefer views.deinit(allocator);
-
-        try appendImportedArtifactViewIfMissing(
-            &views,
-            allocator,
-            root_artifact.key,
-            &self.builtin_modules.checked_artifact,
-        );
-
-        for (root_artifact.lowering_visibility.module_ids) |key| {
-            if (rootRelationContainsArtifact(root_artifact, key)) continue;
-            const artifact = self.artifactByKey(key) orelse {
-                if (builtin.mode == .debug) {
-                    base.invariant("build env invariant violated: missing lowering visibility artifact", .{});
-                }
-                unreachable;
-            };
-            try appendImportedArtifactViewIfMissing(&views, allocator, root_artifact.key, artifact);
-        }
-
-        return views.toOwnedSlice(allocator);
+        return self.builtCoordinator().collectImportedArtifactViews(allocator, root_artifact);
     }
 
+    /// Collect the app artifacts a platform root's required bindings name.
     pub fn collectRelationArtifactViews(
         self: *BuildEnv,
         allocator: Allocator,
         root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     ) Allocator.Error![]check.CheckedArtifact.ImportedModuleView {
-        var views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
-        errdefer views.deinit(allocator);
+        return self.builtCoordinator().collectRelationArtifactViews(allocator, root_artifact);
+    }
 
-        for (root_artifact.platform_required_bindings.bindings) |binding| {
-            const artifact = self.artifactByKey(binding.app_value.artifact) orelse {
-                if (builtin.mode == .debug) {
-                    base.invariant("build env invariant violated: missing relation artifact", .{});
-                }
-                unreachable;
-            };
-            var seen = false;
-            for (views.items) |view| {
-                if (checkedArtifactKeysEqual(view.key, artifact.key)) {
-                    seen = true;
-                    break;
-                }
-            }
-            if (!seen) try views.append(allocator, check.CheckedArtifact.importedView(artifact));
-        }
-
-        return views.toOwnedSlice(allocator);
+    fn builtCoordinator(self: *BuildEnv) *Coordinator {
+        return self.coordinator orelse {
+            if (builtin.mode == .debug) base.invariant("build env invariant violated: artifact views requested before a build", .{});
+            unreachable;
+        };
     }
 
     fn checkedArtifactKeysEqual(
@@ -3374,29 +3225,6 @@ pub const BuildEnv = struct {
         b: check.CheckedArtifact.CheckedModuleArtifactKey,
     ) bool {
         return std.mem.eql(u8, &a.bytes, &b.bytes);
-    }
-
-    fn appendImportedArtifactViewIfMissing(
-        views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
-        allocator: Allocator,
-        root_key: check.CheckedArtifact.CheckedModuleArtifactKey,
-        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    ) Allocator.Error!void {
-        if (checkedArtifactKeysEqual(artifact.key, root_key)) return;
-        for (views.items) |view| {
-            if (checkedArtifactKeysEqual(view.key, artifact.key)) return;
-        }
-        try views.append(allocator, check.CheckedArtifact.importedView(artifact));
-    }
-
-    fn rootRelationContainsArtifact(
-        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        key: check.CheckedArtifact.CheckedModuleArtifactKey,
-    ) bool {
-        for (root_artifact.platform_required_bindings.bindings) |binding| {
-            if (checkedArtifactKeysEqual(binding.app_value.artifact, key)) return true;
-        }
-        return false;
     }
 
     fn artifactByKey(
@@ -3836,7 +3664,6 @@ test "BuildEnv collectWatchInputStates resolves file dependencies from module so
     env.coordinator = coord;
 
     const coord_pkg = try coord.ensurePackage("pkg", generated_dir);
-    try coord_pkg.setRootInput(allocator, generated_app_path, .{ .hash = @as([32]u8, @splat(1)) });
     const coord_module_id = try coord_pkg.ensureModule(allocator, "App", generated_app_path);
     const coord_mod = &coord_pkg.modules.items[coord_module_id];
     coord_mod.source_dir_override = try allocator.dupe(u8, real_src_dir);

@@ -5,7 +5,6 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const builtin = @import("builtin");
 const base = @import("base");
 
 const AST = @import("AST.zig");
@@ -167,6 +166,114 @@ fn narrowNodeTag(comptime T: type, tag: Node.Tag) ?T {
     return table.get(tag);
 }
 
+/// Where one field of a slot-encoded AST variant is stored in its node.
+const Slot = enum {
+    main_token,
+    lhs,
+    rhs,
+    /// A span: its start in `lhs` and its length in `rhs`.
+    span,
+    /// The field's word is appended to extra_data and its index stored in `main_token`.
+    main_token_extra,
+    /// A span appended to extra_data as start then length, with its index stored in `rhs`.
+    rhs_extra_span,
+};
+
+/// Builds the node for a slot-encoded AST variant. `shape` is the node tag
+/// followed by a struct mapping each field of `value` other than `region` to
+/// the `Slot` that stores it.
+fn slotNode(store: *NodeStore, comptime shape: anytype, value: anytype) std.mem.Allocator.Error!Node {
+    const slots = shape[1];
+    var node = Node{ .tag = shape[0], .main_token = 0, .data = .{ .lhs = 0, .rhs = 0 }, .region = value.region };
+    inline for (@typeInfo(@TypeOf(value)).@"struct".field_names) |name| {
+        if (comptime std.mem.eql(u8, name, "region")) continue;
+        const field = @field(value, name);
+        switch (@as(Slot, @field(slots, name))) {
+            .main_token => node.main_token = try store.encodeSlotWord(field),
+            .lhs => node.data.lhs = try store.encodeSlotWord(field),
+            .rhs => node.data.rhs = try store.encodeSlotWord(field),
+            .span => node.data = .{ .lhs = field.span.start, .rhs = field.span.len },
+            .main_token_extra => {
+                node.main_token = @intCast(store.extra_data.items.len);
+                try store.extra_data.append(store.gpa, try store.encodeSlotWord(field));
+            },
+            .rhs_extra_span => {
+                node.data.rhs = @intCast(store.extra_data.items.len);
+                try store.extra_data.appendSlice(store.gpa, &.{ field.span.start, field.span.len });
+            },
+        }
+    }
+    return node;
+}
+
+/// Reads the `Union` variant stored by `slotNode` in a node tagged `tag`, whose
+/// shape is the entry in `shapes` with that tag.
+fn slotValue(store: *const NodeStore, comptime Union: type, comptime shapes: anytype, comptime tag: anytype, node: Node) Union {
+    const variant = comptime blk: {
+        for (@typeInfo(@TypeOf(shapes)).@"struct".field_names) |name| {
+            if (@field(shapes, name)[0] == @field(Node.Tag, @tagName(tag))) break :blk name;
+        }
+        @compileError("no slot shape stores a ." ++ @tagName(tag) ++ " node");
+    };
+    return @unionInit(Union, variant, store.slotStruct(@FieldType(Union, variant), @field(shapes, variant)[1], node));
+}
+
+/// Reads the `V` stored by `slotNode` under `slots` back out of `node`.
+fn slotStruct(store: *const NodeStore, comptime V: type, comptime slots: anytype, node: Node) V {
+    var value: V = undefined;
+    inline for (@typeInfo(V).@"struct".field_names) |name| {
+        const T = @FieldType(V, name);
+        if (comptime std.mem.eql(u8, name, "region")) {
+            value.region = node.region;
+        } else {
+            @field(value, name) = switch (@as(Slot, @field(slots, name))) {
+                .main_token => store.decodeSlotWord(T, node.main_token),
+                .lhs => store.decodeSlotWord(T, node.data.lhs),
+                .rhs => store.decodeSlotWord(T, node.data.rhs),
+                .span => .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
+                .main_token_extra => store.decodeSlotWord(T, store.extra_data.items[node.main_token]),
+                .rhs_extra_span => .{ .span = .{
+                    .start = store.extra_data.items[node.data.rhs],
+                    .len = store.extra_data.items[node.data.rhs + 1],
+                } },
+            };
+        }
+    }
+    return value;
+}
+
+/// Appends the node `slotNode` builds for the AST struct `value` and returns its index.
+fn addSlotted(store: *NodeStore, comptime Idx: type, comptime shape: anytype, value: anytype) std.mem.Allocator.Error!Idx {
+    const nid = try store.nodes.append(store.gpa, try store.slotNode(shape, value));
+    return @fromBackingInt(@intCast(@backingInt(nid)));
+}
+
+/// Reads the AST struct `V` stored by `addSlotted` under `shape` at `idx`.
+fn getSlotted(store: *const NodeStore, comptime V: type, comptime shape: anytype, idx: anytype) V {
+    const node = store.nodes.get(@fromBackingInt(@intCast(@backingInt(idx))));
+    std.debug.assert(node.tag == shape[0]);
+    return store.slotStruct(V, shape[1], node);
+}
+
+/// Converts a slot field to the word that stores it: an index to its backing
+/// integer, an optional to zero or its packed non-null word, and a literal
+/// type suffix to its extra-data index.
+fn encodeSlotWord(store: *NodeStore, value: anytype) std.mem.Allocator.Error!u32 {
+    const T = @TypeOf(value);
+    if (T == AST.LiteralTypeSuffix) return store.addLiteralTypeSuffix(value);
+    if (@typeInfo(T) == .optional) return if (value) |inner| packNonNullOptionalU32(try store.encodeSlotWord(inner)) else 0;
+    if (@typeInfo(T) == .@"enum") return @backingInt(value);
+    return value;
+}
+
+/// Converts a slot word back to the field it stores, inverting `encodeSlotWord`.
+fn decodeSlotWord(store: *const NodeStore, comptime T: type, word: u32) T {
+    if (T == AST.LiteralTypeSuffix) return store.getLiteralTypeSuffix(word);
+    if (@typeInfo(T) == .optional) return if (word == 0) null else store.decodeSlotWord(@typeInfo(T).optional.child, unpackNonNullOptionalU32(word));
+    if (@typeInfo(T) == .@"enum") return @fromBackingInt(@intCast(word));
+    return word;
+}
+
 /// Packed optional indices store null as 0 and non-null values as value + 1.
 /// All producers must use the fallible helpers below so maxInt(u32) overflows
 /// become OutOfMemory in every build mode.
@@ -177,28 +284,47 @@ pub const root_node_idx: Node.List.Idx = .first;
 
 const NodeStore = @This();
 
+/// The kinds whose indices are collected in scratch buffers before being
+/// moved into `extra_data` spans, one buffer per kind.
+const scratch_kinds = [_]type{
+    AST.Statement,
+    Token,
+    AST.Expr,
+    AST.Pattern,
+    AST.PatternStringPart,
+    AST.RecordField,
+    AST.PatternRecordField,
+    AST.MatchBranch,
+    AST.TypeAnno,
+    AST.AnnoRecordField,
+    AST.ExposedItem,
+    AST.WhereClause,
+    AST.TargetEntry,
+    AST.TargetFile,
+    AST.TargetConfigEntry,
+    AST.TargetConfigValue,
+    AST.SymbolMapEntry,
+    AST.ForClauseTypeAlias,
+    AST.RequiresEntry,
+};
+
+const Scratches = @Tuple(&blk: {
+    var types: [scratch_kinds.len]type = undefined;
+    for (scratch_kinds, &types) |Kind, *T| T.* = base.Scratch(Kind.Idx);
+    break :blk types;
+});
+
+fn scratchIndex(comptime Kind: type) usize {
+    for (scratch_kinds, 0..) |K, i| {
+        if (K == Kind) return i;
+    }
+    @compileError("no scratch buffer for " ++ @typeName(Kind));
+}
+
 gpa: std.mem.Allocator,
 nodes: Node.List,
 extra_data: std.ArrayList(u32),
-scratch_statements: base.Scratch(AST.Statement.Idx),
-scratch_tokens: base.Scratch(Token.Idx),
-scratch_exprs: base.Scratch(AST.Expr.Idx),
-scratch_patterns: base.Scratch(AST.Pattern.Idx),
-scratch_pattern_string_parts: base.Scratch(AST.PatternStringPart.Idx),
-scratch_record_fields: base.Scratch(AST.RecordField.Idx),
-scratch_pattern_record_fields: base.Scratch(AST.PatternRecordField.Idx),
-scratch_match_branches: base.Scratch(AST.MatchBranch.Idx),
-scratch_type_annos: base.Scratch(AST.TypeAnno.Idx),
-scratch_anno_record_fields: base.Scratch(AST.AnnoRecordField.Idx),
-scratch_exposed_items: base.Scratch(AST.ExposedItem.Idx),
-scratch_where_clauses: base.Scratch(AST.WhereClause.Idx),
-scratch_target_entries: base.Scratch(AST.TargetEntry.Idx),
-scratch_target_files: base.Scratch(AST.TargetFile.Idx),
-scratch_target_config_entries: base.Scratch(AST.TargetConfigEntry.Idx),
-scratch_target_config_values: base.Scratch(AST.TargetConfigValue.Idx),
-scratch_symbol_map_entries: base.Scratch(AST.SymbolMapEntry.Idx),
-scratch_for_clause_type_aliases: base.Scratch(AST.ForClauseTypeAlias.Idx),
-scratch_requires_entries: base.Scratch(AST.RequiresEntry.Idx),
+scratch: Scratches,
 numeric_literals: std.ArrayList(NumericLiteral.Stored),
 numeric_literal_bytes: std.ArrayList(u8),
 pattern_string_parts: std.ArrayList(AST.PatternStringPart),
@@ -320,44 +446,14 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     errdefer nodes.deinit(gpa);
     var extra_data = try std.ArrayList(u32).initCapacity(gpa, capacity / 2);
     errdefer extra_data.deinit(gpa);
-    var scratch_statements = try base.Scratch(AST.Statement.Idx).init(gpa);
-    errdefer scratch_statements.deinit();
-    var scratch_tokens = try base.Scratch(Token.Idx).init(gpa);
-    errdefer scratch_tokens.deinit();
-    var scratch_exprs = try base.Scratch(AST.Expr.Idx).init(gpa);
-    errdefer scratch_exprs.deinit();
-    var scratch_patterns = try base.Scratch(AST.Pattern.Idx).init(gpa);
-    errdefer scratch_patterns.deinit();
-    var scratch_pattern_string_parts = try base.Scratch(AST.PatternStringPart.Idx).init(gpa);
-    errdefer scratch_pattern_string_parts.deinit();
-    var scratch_record_fields = try base.Scratch(AST.RecordField.Idx).init(gpa);
-    errdefer scratch_record_fields.deinit();
-    var scratch_pattern_record_fields = try base.Scratch(AST.PatternRecordField.Idx).init(gpa);
-    errdefer scratch_pattern_record_fields.deinit();
-    var scratch_match_branches = try base.Scratch(AST.MatchBranch.Idx).init(gpa);
-    errdefer scratch_match_branches.deinit();
-    var scratch_type_annos = try base.Scratch(AST.TypeAnno.Idx).init(gpa);
-    errdefer scratch_type_annos.deinit();
-    var scratch_anno_record_fields = try base.Scratch(AST.AnnoRecordField.Idx).init(gpa);
-    errdefer scratch_anno_record_fields.deinit();
-    var scratch_exposed_items = try base.Scratch(AST.ExposedItem.Idx).init(gpa);
-    errdefer scratch_exposed_items.deinit();
-    var scratch_where_clauses = try base.Scratch(AST.WhereClause.Idx).init(gpa);
-    errdefer scratch_where_clauses.deinit();
-    var scratch_target_entries = try base.Scratch(AST.TargetEntry.Idx).init(gpa);
-    errdefer scratch_target_entries.deinit();
-    var scratch_target_files = try base.Scratch(AST.TargetFile.Idx).init(gpa);
-    errdefer scratch_target_files.deinit();
-    var scratch_target_config_entries = try base.Scratch(AST.TargetConfigEntry.Idx).init(gpa);
-    errdefer scratch_target_config_entries.deinit();
-    var scratch_target_config_values = try base.Scratch(AST.TargetConfigValue.Idx).init(gpa);
-    errdefer scratch_target_config_values.deinit();
-    var scratch_symbol_map_entries = try base.Scratch(AST.SymbolMapEntry.Idx).init(gpa);
-    errdefer scratch_symbol_map_entries.deinit();
-    var scratch_for_clause_type_aliases = try base.Scratch(AST.ForClauseTypeAlias.Idx).init(gpa);
-    errdefer scratch_for_clause_type_aliases.deinit();
-    var scratch_requires_entries = try base.Scratch(AST.RequiresEntry.Idx).init(gpa);
-    errdefer scratch_requires_entries.deinit();
+    var scratch: Scratches = undefined;
+    inline for (0..scratch_kinds.len) |i| {
+        scratch[i] = @TypeOf(scratch[i]).init(gpa) catch |err| {
+            inline for (0..i) |j| scratch[j].deinit();
+            return err;
+        };
+    }
+    errdefer inline for (0..scratch_kinds.len) |i| scratch[i].deinit();
     var numeric_literals = try std.ArrayList(NumericLiteral.Stored).initCapacity(gpa, capacity / 8);
     errdefer numeric_literals.deinit(gpa);
     var numeric_literal_bytes = try std.ArrayList(u8).initCapacity(gpa, capacity);
@@ -371,25 +467,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .gpa = gpa,
         .nodes = nodes,
         .extra_data = extra_data,
-        .scratch_statements = scratch_statements,
-        .scratch_tokens = scratch_tokens,
-        .scratch_exprs = scratch_exprs,
-        .scratch_patterns = scratch_patterns,
-        .scratch_pattern_string_parts = scratch_pattern_string_parts,
-        .scratch_record_fields = scratch_record_fields,
-        .scratch_pattern_record_fields = scratch_pattern_record_fields,
-        .scratch_match_branches = scratch_match_branches,
-        .scratch_type_annos = scratch_type_annos,
-        .scratch_anno_record_fields = scratch_anno_record_fields,
-        .scratch_exposed_items = scratch_exposed_items,
-        .scratch_where_clauses = scratch_where_clauses,
-        .scratch_target_entries = scratch_target_entries,
-        .scratch_target_files = scratch_target_files,
-        .scratch_target_config_entries = scratch_target_config_entries,
-        .scratch_target_config_values = scratch_target_config_values,
-        .scratch_symbol_map_entries = scratch_symbol_map_entries,
-        .scratch_for_clause_type_aliases = scratch_for_clause_type_aliases,
-        .scratch_requires_entries = scratch_requires_entries,
+        .scratch = scratch,
         .numeric_literals = numeric_literals,
         .numeric_literal_bytes = numeric_literal_bytes,
         .pattern_string_parts = pattern_string_parts,
@@ -403,11 +481,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
         .data = .{ .lhs = 0, .rhs = 0 },
         .region = .{ .start = 0, .end = 0 },
     });
-    if (comptime builtin.mode == .debug) {
-        std.debug.assert(@backingInt(idx) == expected_idx);
-    } else if (@backingInt(idx) != expected_idx) {
-        unreachable;
-    }
+    std.debug.assert(@backingInt(idx) == expected_idx);
     return store;
 }
 
@@ -418,25 +492,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
 pub fn deinit(store: *NodeStore) void {
     store.nodes.deinit(store.gpa);
     store.extra_data.deinit(store.gpa);
-    store.scratch_statements.deinit();
-    store.scratch_tokens.deinit();
-    store.scratch_exprs.deinit();
-    store.scratch_patterns.deinit();
-    store.scratch_pattern_string_parts.deinit();
-    store.scratch_record_fields.deinit();
-    store.scratch_pattern_record_fields.deinit();
-    store.scratch_match_branches.deinit();
-    store.scratch_type_annos.deinit();
-    store.scratch_anno_record_fields.deinit();
-    store.scratch_exposed_items.deinit();
-    store.scratch_where_clauses.deinit();
-    store.scratch_target_entries.deinit();
-    store.scratch_target_files.deinit();
-    store.scratch_target_config_entries.deinit();
-    store.scratch_target_config_values.deinit();
-    store.scratch_symbol_map_entries.deinit();
-    store.scratch_for_clause_type_aliases.deinit();
-    store.scratch_requires_entries.deinit();
+    inline for (0..scratch_kinds.len) |i| store.scratch[i].deinit();
     store.numeric_literals.deinit(store.gpa);
     store.numeric_literal_bytes.deinit(store.gpa);
     store.pattern_string_parts.deinit(store.gpa);
@@ -446,22 +502,7 @@ pub fn deinit(store: *NodeStore) void {
 /// Ensures that all scratch buffers in the store
 /// are clear for use.
 pub fn emptyScratch(store: *NodeStore) void {
-    store.scratch_statements.clearFrom(0);
-    store.scratch_tokens.clearFrom(0);
-    store.scratch_exprs.clearFrom(0);
-    store.scratch_patterns.clearFrom(0);
-    store.scratch_pattern_string_parts.clearFrom(0);
-    store.scratch_record_fields.clearFrom(0);
-    store.scratch_pattern_record_fields.clearFrom(0);
-    store.scratch_match_branches.clearFrom(0);
-    store.scratch_type_annos.clearFrom(0);
-    store.scratch_anno_record_fields.clearFrom(0);
-    store.scratch_exposed_items.clearFrom(0);
-    store.scratch_where_clauses.clearFrom(0);
-    store.scratch_target_entries.clearFrom(0);
-    store.scratch_target_files.clearFrom(0);
-    store.scratch_for_clause_type_aliases.clearFrom(0);
-    store.scratch_requires_entries.clearFrom(0);
+    inline for (0..scratch_kinds.len) |i| store.scratch[i].clearFrom(0);
 }
 
 /// Prints debug information about all nodes and scratch buffers in the store.
@@ -478,17 +519,9 @@ pub fn debugTo(store: *NodeStore, writer: *std.Io.Writer) error{WriteFailed}!voi
         try writer.print("{d}: {any}\n", .{ @backingInt(idx), store.nodes.get(idx) });
     }
     try writer.print("Extra Data: {any}\n", .{store.extra_data.items});
-    try writer.print("Scratch statements: {any}\n", .{store.scratch_statements.items});
-    try writer.print("Scratch tokens: {any}\n", .{store.scratch_tokens.items});
-    try writer.print("Scratch exprs: {any}\n", .{store.scratch_exprs.items});
-    try writer.print("Scratch patterns: {any}\n", .{store.scratch_patterns.items});
-    try writer.print("Scratch record fields: {any}\n", .{store.scratch_record_fields.items});
-    try writer.print("Scratch pattern record fields: {any}\n", .{store.scratch_pattern_record_fields.items});
-    try writer.print("Scratch match branches: {any}\n", .{store.scratch_match_branches.items});
-    try writer.print("Scratch type annos: {any}\n", .{store.scratch_type_annos.items});
-    try writer.print("Scratch anno record fields: {any}\n", .{store.scratch_anno_record_fields.items});
-    try writer.print("Scratch exposes items: {any}\n", .{store.scratch_exposed_items.items});
-    try writer.print("Scratch where clauses: {any}\n", .{store.scratch_where_clauses.items});
+    inline for (scratch_kinds, 0..) |Kind, i| {
+        try writer.print("Scratch " ++ @typeName(Kind) ++ ": {any}\n", .{store.scratch[i].items});
+    }
     try writer.print("==> IR.NodeStore DEBUG <==\n\n", .{});
 }
 
@@ -575,6 +608,15 @@ pub fn addCollection(store: *NodeStore, tag: Node.Tag, collection: AST.Collectio
     return @fromBackingInt(@intCast(@backingInt(nid)));
 }
 
+/// Node shapes of the `AST.Header` variants stored by `slotNode`, by variant name.
+const header_shapes = .{
+    .module = .{ .module_header, .{ .exposes = .lhs } },
+    .hosted = .{ .hosted_header, .{ .exposes = .lhs } },
+    .type_module = .{ .type_module_header, .{} },
+    .default_app = .{ .default_app_header, .{ .main_fn_idx = .main_token } },
+    .malformed = .{ .malformed, .{ .reason = .lhs } },
+};
+
 /// Adds a header node of any type (app, module, hosted, package, platform) and returns its index.
 pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!AST.Header.Idx {
     var node = Node{
@@ -587,40 +629,21 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
         .region = AST.TokenizedRegion.empty(),
     };
     switch (header) {
-        .app => |app| {
-            node.tag = .app_header;
-            // Store provides collection
-            node.data.lhs = @backingInt(app.provides);
+        inline .app, .package => |h, variant| {
+            node.tag = if (variant == .app) .app_header else .package_header;
+            // The provided or exposed collection is stored in the node.
             // `packages`, the optional platform entry, and the optional `roc`
             // version pin do not all fit in the node, so they share an
             // extra_data record.
+            node.data.lhs = @backingInt(if (variant == .app) h.provides else h.exposes);
             const ed_start = try store.reserveExtraDataStart(3);
-            store.extra_data.appendAssumeCapacity(@backingInt(app.packages));
-            store.extra_data.appendAssumeCapacity(try packOptionalIndex(app.roc_version));
-            store.extra_data.appendAssumeCapacity(try packOptionalIndex(app.platform_idx));
+            store.extra_data.appendAssumeCapacity(@backingInt(h.packages));
+            store.extra_data.appendAssumeCapacity(try packOptionalIndex(h.roc_version));
+            store.extra_data.appendAssumeCapacity(try packOptionalIndex(h.platform_idx));
             node.data.rhs = ed_start;
-            node.region = app.region;
+            node.region = h.region;
         },
-        .module => |mod| {
-            node.tag = .module_header;
-            node.data.lhs = @backingInt(mod.exposes);
-            node.region = mod.region;
-        },
-        .hosted => |hosted| {
-            node.tag = .hosted_header;
-            node.data.lhs = @backingInt(hosted.exposes);
-            node.region = hosted.region;
-        },
-        .package => |package| {
-            node.tag = .package_header;
-            node.data.lhs = @backingInt(package.exposes);
-            const ed_start = try store.reserveExtraDataStart(3);
-            store.extra_data.appendAssumeCapacity(@backingInt(package.packages));
-            store.extra_data.appendAssumeCapacity(try packOptionalIndex(package.roc_version));
-            store.extra_data.appendAssumeCapacity(try packOptionalIndex(package.platform_idx));
-            node.data.rhs = ed_start;
-            node.region = package.region;
-        },
+        inline .module, .hosted, .type_module, .default_app => |v, variant| node = try store.slotNode(@field(header_shapes, @tagName(variant)), v),
         .platform => |platform| {
             node.tag = .platform_header;
             node.main_token = platform.name;
@@ -652,15 +675,6 @@ pub fn addHeader(store: *NodeStore, header: AST.Header) std.mem.Allocator.Error!
 
             node.region = platform.region;
         },
-        .type_module => |type_module| {
-            node.tag = .type_module_header;
-            node.region = type_module.region;
-        },
-        .default_app => |default_app| {
-            node.tag = .default_app_header;
-            node.main_token = default_app.main_fn_idx;
-            node.region = default_app.region;
-        },
         .malformed => {
             base.invariant("{s}", .{"Use addMalformed instead"});
         },
@@ -683,25 +697,8 @@ pub fn addExposedItem(store: *NodeStore, item: AST.ExposedItem) std.mem.Allocato
     };
 
     switch (item) {
-        .lower_ident => |i| {
-            node.tag = .exposed_item_lower;
-            node.main_token = i.ident;
-            if (i.qualifiers.span.len > 0) {
-                const extra_start = @as(u32, @intCast(store.extra_data.items.len));
-                try store.extra_data.append(store.gpa, i.qualifiers.span.start);
-                try store.extra_data.append(store.gpa, i.qualifiers.span.len);
-                try store.extra_data.append(store.gpa, if (i.as) |a| a else 0);
-                node.data.lhs = extra_start;
-                node.data.rhs = 2;
-            } else if (i.as) |a| {
-                std.debug.assert(a > 0);
-                node.data.lhs = a;
-                node.data.rhs = 1;
-            }
-            node.region = i.region;
-        },
-        .upper_ident => |i| {
-            node.tag = .exposed_item_upper;
+        inline .lower_ident, .upper_ident => |i, variant| {
+            node.tag = if (variant == .lower_ident) .exposed_item_lower else .exposed_item_upper;
             node.main_token = i.ident;
             if (i.qualifiers.span.len > 0) {
                 const extra_start = @as(u32, @intCast(store.extra_data.items.len));
@@ -736,6 +733,19 @@ pub fn addExposedItem(store: *NodeStore, item: AST.ExposedItem) std.mem.Allocato
     return @fromBackingInt(@intCast(@backingInt(nid)));
 }
 
+/// Node shapes of the `AST.Statement` variants stored by `slotNode`, by variant name.
+const statement_shapes = .{
+    .decl = .{ .decl, .{ .pattern = .lhs, .body = .rhs } },
+    .@"var" = .{ .@"var", .{ .name = .main_token, .body = .lhs } },
+    .expr = .{ .expr, .{ .expr = .lhs } },
+    .crash = .{ .crash, .{ .expr = .lhs } },
+    .dbg = .{ .dbg, .{ .expr = .lhs } },
+    .expect = .{ .expect, .{ .body = .lhs } },
+    .@"return" = .{ .@"return", .{ .expr = .lhs } },
+    .@"break" = .{ .@"break", .{} },
+    .malformed = .{ .malformed, .{ .reason = .lhs } },
+};
+
 /// Adds a statement node (value def, type def, import, etc.) and returns its index.
 pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocator.Error!AST.Statement.Idx {
     var node = Node{
@@ -748,38 +758,7 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
         .region = AST.TokenizedRegion.empty(),
     };
     switch (statement) {
-        .decl => |d| {
-            node.tag = .decl;
-            node.data.lhs = @backingInt(d.pattern);
-            node.data.rhs = @backingInt(d.body);
-            node.region = d.region;
-        },
-        .@"var" => |v| {
-            node.tag = .@"var";
-            node.main_token = v.name;
-            node.data.lhs = try packOptionalIndex(v.body);
-            node.region = v.region;
-        },
-        .expr => |expr| {
-            node.tag = .expr;
-            node.data.lhs = @backingInt(expr.expr);
-            node.region = expr.region;
-        },
-        .crash => |c| {
-            node.tag = .crash;
-            node.data.lhs = @backingInt(c.expr);
-            node.region = c.region;
-        },
-        .dbg => |d| {
-            node.tag = .dbg;
-            node.data.lhs = @backingInt(d.expr);
-            node.region = d.region;
-        },
-        .expect => |e| {
-            node.tag = .expect;
-            node.data.lhs = @backingInt(e.body);
-            node.region = e.region;
-        },
+        inline .decl, .@"var", .expr, .crash, .dbg, .expect, .@"break", .@"return" => |v, variant| node = try store.slotNode(@field(statement_shapes, @tagName(variant)), v),
         .@"for" => |f| {
             node.tag = switch (f.kind) {
                 .iter => .@"for",
@@ -796,15 +775,6 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
             node.data.lhs = @backingInt(w.cond);
             node.data.rhs = @backingInt(w.body);
             node.region = w.region;
-        },
-        .@"break" => |b| {
-            node.tag = .@"break";
-            node.region = b.region;
-        },
-        .@"return" => |r| {
-            node.tag = .@"return";
-            node.data.lhs = @backingInt(r.expr);
-            node.region = r.region;
         },
         .import => |i| {
             node.tag = .import;
@@ -914,6 +884,24 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
     return @fromBackingInt(@intCast(@backingInt(nid)));
 }
 
+/// Node shapes of the `AST.Pattern` variants stored by `slotNode`, by variant name.
+const pattern_shapes = .{
+    .ident = .{ .ident_patt, .{ .ident_tok = .main_token } },
+    .var_ident = .{ .var_ident_patt, .{ .ident_tok = .main_token } },
+    .int = .{ .int_patt, .{ .number_tok = .main_token, .literal = .lhs } },
+    .frac = .{ .frac_patt, .{ .number_tok = .main_token, .literal = .lhs } },
+    .typed_int = .{ .typed_int_patt, .{ .number_tok = .main_token, .type_suffix = .lhs, .literal = .rhs } },
+    .typed_frac = .{ .typed_frac_patt, .{ .number_tok = .main_token, .type_suffix = .lhs, .literal = .rhs } },
+    .string = .{ .string_patt, .{ .string_tok = .main_token, .parts = .span } },
+    .record = .{ .record_patt, .{ .fields = .span } },
+    .list = .{ .list_patt, .{ .patterns = .span } },
+    .tuple = .{ .tuple_patt, .{ .patterns = .span } },
+    .underscore = .{ .underscore_patt, .{} },
+    .alternatives = .{ .alternatives_patt, .{ .patterns = .span } },
+    .as = .{ .as_patt, .{ .pattern = .lhs, .name = .main_token } },
+    .malformed = .{ .malformed, .{ .reason = .lhs } },
+};
+
 /// Adds a pattern node (identifier, literal, record destructure, etc.) and returns its index.
 pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Error!AST.Pattern.Idx {
     var node = Node{
@@ -926,16 +914,7 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Err
         .region = AST.TokenizedRegion.empty(),
     };
     switch (pattern) {
-        .ident => |i| {
-            node.tag = .ident_patt;
-            node.region = i.region;
-            node.main_token = i.ident_tok;
-        },
-        .var_ident => |i| {
-            node.tag = .var_ident_patt;
-            node.region = i.region;
-            node.main_token = i.ident_tok;
-        },
+        inline .ident, .var_ident, .int, .frac, .typed_int, .typed_frac, .string, .record, .list, .tuple, .underscore, .as => |v, variant| node = try store.slotNode(@field(pattern_shapes, @tagName(variant)), v),
         .tag => |t| {
             std.debug.assert(!t.record_shorthand or (t.backing_value and t.args.span.len == 1));
             const data_start = @as(u32, @intCast(store.extra_data.items.len));
@@ -952,39 +931,6 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Err
             node.data.lhs = t.args.span.start;
             node.data.rhs = data_start;
         },
-        .int => |n| {
-            node.tag = .int_patt;
-            node.region = n.region;
-            node.main_token = n.number_tok;
-            node.data.lhs = @backingInt(n.literal);
-        },
-        .frac => |n| {
-            node.tag = .frac_patt;
-            node.region = n.region;
-            node.main_token = n.number_tok;
-            node.data.lhs = @backingInt(n.literal);
-        },
-        .typed_int => |n| {
-            node.tag = .typed_int_patt;
-            node.region = n.region;
-            node.main_token = n.number_tok;
-            node.data.lhs = try store.addLiteralTypeSuffix(n.type_suffix);
-            node.data.rhs = @backingInt(n.literal);
-        },
-        .typed_frac => |n| {
-            node.tag = .typed_frac_patt;
-            node.region = n.region;
-            node.main_token = n.number_tok;
-            node.data.lhs = try store.addLiteralTypeSuffix(n.type_suffix);
-            node.data.rhs = @backingInt(n.literal);
-        },
-        .string => |s| {
-            node.tag = .string_patt;
-            node.region = s.region;
-            node.main_token = s.string_tok;
-            node.data.lhs = s.parts.span.start;
-            node.data.rhs = s.parts.span.len;
-        },
         .single_quote => |sq| {
             node.tag = .single_quote_patt;
             node.region = sq.region;
@@ -994,34 +940,12 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Err
                 node.data.rhs = @intFromBool(true);
             }
         },
-        .record => |r| {
-            node.tag = .record_patt;
-            node.region = r.region;
-            node.data.lhs = r.fields.span.start;
-            node.data.rhs = r.fields.span.len;
-        },
-        .list => |l| {
-            node.tag = .list_patt;
-            node.region = l.region;
-            node.data.lhs = l.patterns.span.start;
-            node.data.rhs = l.patterns.span.len;
-        },
         .list_rest => |r| {
             node.tag = .list_rest_patt;
             node.region = r.region;
             if (r.name) |n| {
                 node.data.lhs = n;
             }
-        },
-        .tuple => |t| {
-            node.tag = .tuple_patt;
-            node.region = t.region;
-            node.data.lhs = t.patterns.span.start;
-            node.data.rhs = t.patterns.span.len;
-        },
-        .underscore => |u| {
-            node.tag = .underscore_patt;
-            node.region = u.region;
         },
         .alternatives => |a| {
             std.debug.assert(a.patterns.span.len > 1);
@@ -1030,12 +954,6 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Err
             node.data.lhs = a.patterns.span.start;
             node.data.rhs = a.patterns.span.len;
         },
-        .as => |a| {
-            node.region = a.region;
-            node.tag = .as_patt;
-            node.main_token = a.name;
-            node.data.lhs = @backingInt(a.pattern);
-        },
         .malformed => {
             base.invariant("{s}", .{"Use addMalformed instead"});
         },
@@ -1043,6 +961,40 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Err
     const nid = try store.nodes.append(store.gpa, node);
     return @fromBackingInt(@intCast(@backingInt(nid)));
 }
+
+/// Node shapes of the `AST.Expr` variants stored by `slotNode`, by variant name.
+const expr_shapes = .{
+    .int = .{ .int, .{ .token = .main_token, .literal = .lhs } },
+    .frac = .{ .frac, .{ .token = .main_token, .literal = .lhs } },
+    .typed_int = .{ .typed_int, .{ .token = .main_token, .type_suffix = .lhs, .literal = .rhs } },
+    .typed_frac = .{ .typed_frac, .{ .token = .main_token, .type_suffix = .lhs, .literal = .rhs } },
+    .string_part = .{ .string_part, .{ .token = .main_token } },
+    .string = .{ .string, .{ .token = .main_token, .parts = .span } },
+    .multiline_string = .{ .multiline_string, .{ .token = .main_token, .parts = .span } },
+    .typed_string = .{ .typed_string, .{ .token = .main_token, .type_suffix = .lhs, .parts = .rhs_extra_span } },
+    .typed_multiline_string = .{ .typed_multiline_string, .{ .token = .main_token, .type_suffix = .lhs, .parts = .rhs_extra_span } },
+    .list = .{ .list, .{ .items = .span } },
+    .tuple = .{ .tuple, .{ .items = .span } },
+    .lambda = .{ .lambda, .{ .args = .span, .body = .main_token_extra } },
+    .apply = .{ .apply, .{ .args = .span, .@"fn" = .main_token_extra } },
+    .record_updater = .{ .record_update, .{ .token = .main_token } },
+    .method_call = .{ .method_call, .{ .receiver = .lhs, .method_token = .main_token, .args = .rhs_extra_span } },
+    .tuple_access = .{ .tuple_access, .{ .expr = .lhs, .elem_token = .main_token } },
+    .bin_op = .{ .bin_op, .{ .left = .lhs, .right = .rhs, .operator = .main_token } },
+    .suffix_single_question = .{ .suffix_single_question, .{ .operator = .main_token, .expr = .lhs } },
+    .unary_op = .{ .unary_op, .{ .operator = .main_token, .expr = .lhs } },
+    .if_without_else = .{ .if_without_else, .{ .condition = .lhs, .then = .rhs } },
+    .match = .{ .match, .{ .expr = .main_token_extra, .branches = .span } },
+    .dbg = .{ .dbg, .{ .expr = .lhs } },
+    .crash = .{ .crash, .{ .expr = .lhs } },
+    .nominal_record = .{ .nominal_record, .{ .mapper = .lhs, .backing = .rhs } },
+    .nominal_apply = .{ .nominal_apply, .{ .mapper = .lhs, .args = .rhs_extra_span } },
+    .ellipsis = .{ .ellipsis, .{} },
+    .@"break" = .{ .break_expr, .{} },
+    .@"return" = .{ .return_expr, .{ .expr = .lhs } },
+    .block = .{ .block, .{ .statements = .span, .scope = .main_token } },
+    .malformed = .{ .malformed, .{ .reason = .lhs } },
+};
 
 /// Adds an expression node (literal, variable, call, record, etc.) and returns its index.
 pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Expr.Idx {
@@ -1053,32 +1005,7 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
         .region = AST.TokenizedRegion.empty(),
     };
     switch (expr) {
-        .int => |e| {
-            node.tag = .int;
-            node.region = e.region;
-            node.main_token = e.token;
-            node.data.lhs = @backingInt(e.literal);
-        },
-        .frac => |e| {
-            node.tag = .frac;
-            node.region = e.region;
-            node.main_token = e.token;
-            node.data.lhs = @backingInt(e.literal);
-        },
-        .typed_int => |e| {
-            node.tag = .typed_int;
-            node.region = e.region;
-            node.main_token = e.token;
-            node.data.lhs = try store.addLiteralTypeSuffix(e.type_suffix);
-            node.data.rhs = @backingInt(e.literal);
-        },
-        .typed_frac => |e| {
-            node.tag = .typed_frac;
-            node.region = e.region;
-            node.main_token = e.token;
-            node.data.lhs = try store.addLiteralTypeSuffix(e.type_suffix);
-            node.data.rhs = @backingInt(e.literal);
-        },
+        inline .int, .frac, .typed_int, .typed_frac, .string_part, .string, .multiline_string, .typed_string, .typed_multiline_string, .tuple, .lambda, .apply, .record_updater, .method_call, .tuple_access, .bin_op, .suffix_single_question, .unary_op, .if_without_else, .match, .dbg, .crash, .nominal_record, .nominal_apply, .ellipsis, .@"break", .@"return", .block => |v, variant| node = try store.slotNode(@field(expr_shapes, @tagName(variant)), v),
         .tag => |e| {
             node.tag = .tag;
             node.region = e.region;
@@ -1097,57 +1024,12 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
                 node.data.rhs = @intFromBool(true);
             }
         },
-        .string_part => |e| {
-            node.tag = .string_part;
-            node.region = e.region;
-            node.main_token = e.token;
-        },
-        .string => |e| {
-            node.tag = .string;
-            node.region = e.region;
-            node.main_token = e.token;
-            node.data.lhs = e.parts.span.start;
-            node.data.rhs = e.parts.span.len;
-        },
-        .multiline_string => |e| {
-            node.tag = .multiline_string;
-            node.region = e.region;
-            node.main_token = e.token;
-            node.data.lhs = e.parts.span.start;
-            node.data.rhs = e.parts.span.len;
-        },
-        .typed_string => |e| {
-            node.tag = .typed_string;
-            node.region = e.region;
-            node.main_token = e.token;
-            node.data.lhs = try store.addLiteralTypeSuffix(e.type_suffix);
-            const parts_data_idx = store.extra_data.items.len;
-            try store.extra_data.append(store.gpa, e.parts.span.start);
-            try store.extra_data.append(store.gpa, e.parts.span.len);
-            node.data.rhs = @as(u32, @intCast(parts_data_idx));
-        },
-        .typed_multiline_string => |e| {
-            node.tag = .typed_multiline_string;
-            node.region = e.region;
-            node.main_token = e.token;
-            node.data.lhs = try store.addLiteralTypeSuffix(e.type_suffix);
-            const parts_data_idx = store.extra_data.items.len;
-            try store.extra_data.append(store.gpa, e.parts.span.start);
-            try store.extra_data.append(store.gpa, e.parts.span.len);
-            node.data.rhs = @as(u32, @intCast(parts_data_idx));
-        },
         .list => |l| {
             node.tag = .list;
             node.region = l.region;
             node.main_token = l.region.start;
             node.data.lhs = l.items.span.start;
             node.data.rhs = l.items.span.len;
-        },
-        .tuple => |t| {
-            node.tag = .tuple;
-            node.region = t.region;
-            node.data.lhs = t.items.span.start;
-            node.data.rhs = t.items.span.len;
         },
         .record => |r| {
             node.tag = .record;
@@ -1166,51 +1048,12 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.data.lhs = data_start;
             node.data.rhs = 0; // Not used
         },
-        .lambda => |l| {
-            node.tag = .lambda;
-            node.region = l.region;
-            node.data.lhs = l.args.span.start;
-            node.data.rhs = l.args.span.len;
-            const body_idx = store.extra_data.items.len;
-            try store.extra_data.append(store.gpa, @backingInt(l.body));
-            node.main_token = @as(u32, @intCast(body_idx));
-        },
-        .apply => |app| {
-            node.tag = .apply;
-            node.region = app.region;
-            node.data.lhs = app.args.span.start;
-            node.data.rhs = app.args.span.len;
-            const fn_ed_idx = store.extra_data.items.len;
-            try store.extra_data.append(store.gpa, @backingInt(app.@"fn"));
-            node.main_token = @as(u32, @intCast(fn_ed_idx));
-        },
-        .record_updater => |updater| {
-            node.tag = .record_update;
-            node.region = updater.region;
-            node.main_token = updater.token;
-        },
         .field_access => |fa| {
             node.tag = .field_access;
             node.region = fa.region;
             node.data.lhs = @backingInt(fa.receiver);
             node.data.rhs = fa.segments.span.start;
             node.main_token = fa.segments.span.len;
-        },
-        .method_call => |mc| {
-            node.tag = .method_call;
-            node.region = mc.region;
-            node.main_token = mc.method_token;
-            node.data.lhs = @backingInt(mc.receiver);
-            const args_data_idx = store.extra_data.items.len;
-            try store.extra_data.append(store.gpa, mc.args.span.start);
-            try store.extra_data.append(store.gpa, mc.args.span.len);
-            node.data.rhs = @as(u32, @intCast(args_data_idx));
-        },
-        .tuple_access => |ta| {
-            node.tag = .tuple_access;
-            node.region = ta.region;
-            node.main_token = ta.elem_token;
-            node.data.lhs = @backingInt(ta.expr);
         },
         .arrow_call => |ld| {
             node.tag = switch (ld.target_kind) {
@@ -1222,25 +1065,6 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.data.lhs = @backingInt(ld.left);
             node.data.rhs = @backingInt(ld.right);
         },
-        .bin_op => |op| {
-            node.tag = .bin_op;
-            node.region = op.region;
-            node.main_token = op.operator;
-            node.data.lhs = @backingInt(op.left);
-            node.data.rhs = @backingInt(op.right);
-        },
-        .suffix_single_question => |op| {
-            node.tag = .suffix_single_question;
-            node.region = op.region;
-            node.main_token = op.operator;
-            node.data.lhs = @backingInt(op.expr);
-        },
-        .unary_op => |u| {
-            node.tag = .unary_op;
-            node.region = u.region;
-            node.main_token = u.operator;
-            node.data.lhs = @backingInt(u.expr);
-        },
         .if_then_else => |i| {
             node.tag = .if_then_else;
             node.region = i.region;
@@ -1248,21 +1072,6 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.data.rhs = @as(u32, @intCast(store.extra_data.items.len));
             try store.extra_data.append(store.gpa, @backingInt(i.then));
             try store.extra_data.append(store.gpa, @backingInt(i.@"else"));
-        },
-        .if_without_else => |i| {
-            node.tag = .if_without_else;
-            node.region = i.region;
-            node.data.lhs = @backingInt(i.condition);
-            node.data.rhs = @backingInt(i.then);
-        },
-        .match => |m| {
-            node.tag = .match;
-            node.region = m.region;
-            node.data.lhs = m.branches.span.start;
-            node.data.rhs = m.branches.span.len;
-            const expr_idx = store.extra_data.items.len;
-            try store.extra_data.append(store.gpa, @backingInt(m.expr));
-            node.main_token = @as(u32, @intCast(expr_idx));
         },
         .ident => |id| {
             node.tag = .ident;
@@ -1272,16 +1081,6 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
                 node.data.lhs = id.qualifiers.span.start;
                 node.data.rhs = id.qualifiers.span.len;
             }
-        },
-        .dbg => |d| {
-            node.tag = .dbg;
-            node.region = d.region;
-            node.data.lhs = @backingInt(d.expr);
-        },
-        .crash => |c| {
-            node.tag = .crash;
-            node.region = c.region;
-            node.data.lhs = @backingInt(c.expr);
         },
         .record_builder => |rb| {
             node.tag = .record_builder;
@@ -1293,28 +1092,6 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             try store.extra_data.append(store.gpa, @backingInt(rb.mapper));
             node.data.lhs = data_start;
         },
-        .nominal_record => |nr| {
-            node.tag = .nominal_record;
-            node.region = nr.region;
-            node.data.lhs = @backingInt(nr.mapper);
-            node.data.rhs = @backingInt(nr.backing);
-        },
-        .nominal_apply => |na| {
-            node.tag = .nominal_apply;
-            node.region = na.region;
-            node.data.lhs = @backingInt(na.mapper);
-            const args_data_idx = store.extra_data.items.len;
-            try store.extra_data.append(store.gpa, na.args.span.start);
-            try store.extra_data.append(store.gpa, na.args.span.len);
-            node.data.rhs = @as(u32, @intCast(args_data_idx));
-        },
-        .block => |body| {
-            node.tag = .block;
-            node.region = body.region;
-            node.main_token = @backingInt(body.scope);
-            node.data.lhs = body.statements.span.start;
-            node.data.rhs = body.statements.span.len;
-        },
         .for_expr => |f| {
             node.tag = switch (f.kind) {
                 .iter => .for_expr,
@@ -1324,19 +1101,6 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.main_token = @backingInt(f.patt);
             node.data.lhs = @backingInt(f.expr);
             node.data.rhs = @backingInt(f.body);
-        },
-        .@"break" => |b| {
-            node.tag = .break_expr;
-            node.region = b.region;
-        },
-        .@"return" => |r| {
-            node.tag = .return_expr;
-            node.region = r.region;
-            node.data.lhs = @backingInt(r.expr);
-        },
-        .ellipsis => |e| {
-            node.tag = .ellipsis;
-            node.region = e.region;
         },
         .malformed => {
             base.invariant("{s}", .{"Use addMalformed instead"});
@@ -1403,39 +1167,20 @@ pub fn addRecordField(store: *NodeStore, field: AST.RecordField) std.mem.Allocat
     return @fromBackingInt(@intCast(@backingInt(nid)));
 }
 
+/// Node shape of an `AST.MatchBranch`, stored by `slotNode`.
+const match_branch_shape = .{ .branch, .{ .pattern = .lhs, .body = .rhs, .guard = .main_token } };
+
 /// TODO
 pub fn addMatchBranch(store: *NodeStore, branch: AST.MatchBranch) std.mem.Allocator.Error!AST.MatchBranch.Idx {
-    const node = Node{
-        .tag = .branch,
-        .main_token = try packOptionalIndex(branch.guard),
-        .data = .{
-            .lhs = @backingInt(branch.pattern),
-            .rhs = @backingInt(branch.body),
-        },
-        .region = branch.region,
-    };
-
-    const nid = try store.nodes.append(store.gpa, node);
-    return @fromBackingInt(@intCast(@backingInt(nid)));
+    return store.addSlotted(AST.MatchBranch.Idx, match_branch_shape, branch);
 }
+
+/// Node shape of an `AST.TypeHeader`, stored by `slotNode`.
+const type_header_shape = .{ .ty_header, .{ .name = .main_token, .args = .span } };
 
 /// TODO
 pub fn addTypeHeader(store: *NodeStore, header: AST.TypeHeader) std.mem.Allocator.Error!AST.TypeHeader.Idx {
-    var node = Node{
-        .tag = .ty_header,
-        .main_token = header.name,
-        .data = .{
-            .lhs = 0,
-            .rhs = 0,
-        },
-        .region = header.region,
-    };
-
-    node.data.lhs = header.args.span.start;
-    node.data.rhs = header.args.span.len;
-
-    const nid = try store.nodes.append(store.gpa, node);
-    return @fromBackingInt(@intCast(@backingInt(nid)));
+    return store.addSlotted(AST.TypeHeader.Idx, type_header_shape, header);
 }
 
 /// TODO
@@ -1467,6 +1212,13 @@ pub fn addAnnoRecordField(store: *NodeStore, field: AST.AnnoRecordField) std.mem
     return @fromBackingInt(@intCast(@backingInt(nid)));
 }
 
+/// Node shapes of the `AST.WhereClause` variants stored by `slotNode`, by variant name.
+const where_clause_shapes = .{
+    .mod_method = .{ .where_mod_method, .{ .var_tok = .main_token, .name_tok = .lhs, .anno = .rhs } },
+    .mod_alias = .{ .where_mod_alias, .{ .var_tok = .main_token, .alias = .lhs } },
+    .malformed = .{ .malformed, .{ .reason = .lhs } },
+};
+
 /// Adds a WhereClause node to the store, returning a type-safe index to the node.
 pub fn addWhereClause(store: *NodeStore, clause: AST.WhereClause) std.mem.Allocator.Error!AST.WhereClause.Idx {
     var node = Node{
@@ -1480,19 +1232,7 @@ pub fn addWhereClause(store: *NodeStore, clause: AST.WhereClause) std.mem.Alloca
     };
 
     switch (clause) {
-        .mod_method => |c| {
-            node.tag = .where_mod_method;
-            node.region = c.region;
-            node.main_token = c.var_tok;
-            node.data.lhs = c.name_tok;
-            node.data.rhs = @backingInt(c.anno);
-        },
-        .mod_alias => |c| {
-            node.tag = .where_mod_alias;
-            node.region = c.region;
-            node.main_token = c.var_tok;
-            node.data.lhs = @backingInt(c.alias);
-        },
+        inline .mod_method, .mod_alias => |v, variant| node = try store.slotNode(@field(where_clause_shapes, @tagName(variant)), v),
         .malformed => {
             base.invariant("{s}", .{"Use addMalformed instead"});
         },
@@ -1501,6 +1241,67 @@ pub fn addWhereClause(store: *NodeStore, clause: AST.WhereClause) std.mem.Alloca
     const nid = try store.nodes.append(store.gpa, node);
     return @fromBackingInt(@intCast(@backingInt(nid)));
 }
+
+/// Appends a span and a type annotation extension to extra_data as
+/// [span.start, span.len, ext_data...], returning node data whose `lhs` is
+/// that extra-data index and whose `rhs` records the extension kind.
+fn addSpanWithExt(store: *NodeStore, span: base.DataSpan, ext: AST.TypeAnno.Ext) std.mem.Allocator.Error!Node.Data {
+    const data_start = @as(u32, @intCast(store.extra_data.items.len));
+    try store.extra_data.append(store.gpa, span.start);
+    try store.extra_data.append(store.gpa, span.len);
+
+    // ext_kind: 0 = closed, 1 = anonymous open, 2 = named open
+    const ext_kind: u2 = switch (ext) {
+        .closed => 0,
+        .open => 1,
+        .named => 2,
+    };
+    switch (ext) {
+        .named => |named| {
+            try store.extra_data.append(store.gpa, @backingInt(named.anno));
+            try store.extra_data.append(store.gpa, named.region.start);
+            try store.extra_data.append(store.gpa, named.region.end);
+        },
+        .open => |double_dot_tok| {
+            try store.extra_data.append(store.gpa, double_dot_tok);
+        },
+        .closed => {},
+    }
+    return .{ .lhs = data_start, .rhs = @bitCast(AST.TypeAnno.ExtRhs{ .ext_kind = ext_kind }) };
+}
+
+/// Reads the span and extension stored by `addSpanWithExt`.
+fn spanWithExt(store: *const NodeStore, data: Node.Data) struct { span: base.DataSpan, ext: AST.TypeAnno.Ext } {
+    const rhs = @as(AST.TypeAnno.ExtRhs, @bitCast(data.rhs));
+    const pos = data.lhs;
+    return .{
+        .span = .{ .start = store.extra_data.items[pos], .len = store.extra_data.items[pos + 1] },
+        .ext = switch (rhs.ext_kind) {
+            0 => .closed,
+            1 => .{ .open = store.extra_data.items[pos + 2] },
+            2 => .{ .named = .{
+                .anno = @fromBackingInt(@intCast(store.extra_data.items[pos + 2])),
+                .region = .{
+                    .start = store.extra_data.items[pos + 3],
+                    .end = store.extra_data.items[pos + 4],
+                },
+            } },
+            3 => unreachable,
+        },
+    };
+}
+
+/// Node shapes of the `AST.TypeAnno` variants stored by `slotNode`, by variant name.
+const type_anno_shapes = .{
+    .apply = .{ .ty_apply, .{ .args = .span } },
+    .ty_var = .{ .ty_var, .{ .tok = .main_token } },
+    .underscore_type_var = .{ .ty_underscore_var, .{ .tok = .main_token } },
+    .underscore = .{ .ty_underscore, .{} },
+    .ty = .{ .ty_ty, .{ .token = .main_token, .qualifiers = .span } },
+    .tuple = .{ .ty_tuple, .{ .annos = .span } },
+    .parens = .{ .ty_parens, .{ .anno = .lhs } },
+    .malformed = .{ .malformed, .{ .reason = .lhs } },
+};
 
 /// TODO
 pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Error!AST.TypeAnno.Idx {
@@ -1515,106 +1316,16 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
     };
 
     switch (anno) {
-        .apply => |a| {
-            node.tag = .ty_apply;
-            node.region = a.region;
-            node.data.lhs = a.args.span.start;
-            node.data.rhs = a.args.span.len;
-        },
-        .ty_var => |v| {
-            node.tag = .ty_var;
-            node.region = v.region;
-            node.main_token = v.tok;
-        },
-        .underscore_type_var => |utv| {
-            node.tag = .ty_underscore_var;
-            node.region = utv.region;
-            node.main_token = utv.tok;
-        },
-        .underscore => |u| {
-            node.tag = .ty_underscore;
-            node.region = u.region;
-        },
-        .ty => |t| {
-            node.tag = .ty_ty;
-            node.region = t.region;
-            node.main_token = t.token;
-            node.data.lhs = t.qualifiers.span.start;
-            node.data.rhs = t.qualifiers.span.len;
-        },
+        inline .apply, .ty_var, .underscore_type_var, .underscore, .ty, .tuple, .parens => |v, variant| node = try store.slotNode(@field(type_anno_shapes, @tagName(variant)), v),
         .tag_union => |tu| {
             node.tag = .ty_union;
             node.region = tu.region;
-
-            // Store all tag_union data in flat format:
-            // [tags.span.start, tags.span.len, ext_data...]
-            const data_start = @as(u32, @intCast(store.extra_data.items.len));
-            try store.extra_data.append(store.gpa, tu.tags.span.start);
-            try store.extra_data.append(store.gpa, tu.tags.span.len);
-
-            // ext_kind: 0 = closed, 1 = anonymous open, 2 = named open
-            const ext_kind: u2 = switch (tu.ext) {
-                .closed => 0,
-                .open => 1,
-                .named => 2,
-            };
-            const rhs = AST.TypeAnno.TagUnionRhs{
-                .ext_kind = ext_kind,
-            };
-            switch (tu.ext) {
-                .named => |named| {
-                    try store.extra_data.append(store.gpa, @backingInt(named.anno));
-                    try store.extra_data.append(store.gpa, named.region.start);
-                    try store.extra_data.append(store.gpa, named.region.end);
-                },
-                .open => |double_dot_tok| {
-                    try store.extra_data.append(store.gpa, double_dot_tok);
-                },
-                .closed => {},
-            }
-
-            node.data.lhs = data_start;
-            node.data.rhs = @as(u32, @bitCast(rhs));
-        },
-        .tuple => |t| {
-            node.tag = .ty_tuple;
-            node.region = t.region;
-            node.data.lhs = t.annos.span.start;
-            node.data.rhs = t.annos.span.len;
+            node.data = try store.addSpanWithExt(tu.tags.span, tu.ext);
         },
         .record => |r| {
             node.tag = .ty_record;
             node.region = r.region;
-
-            // Store all data in extra_data:
-            // [fields.span.start, fields.span.len, ext_data...]
-            const data_start = @as(u32, @intCast(store.extra_data.items.len));
-            try store.extra_data.append(store.gpa, r.fields.span.start);
-            try store.extra_data.append(store.gpa, r.fields.span.len);
-
-            // ext_kind: 0 = closed, 1 = anonymous open, 2 = named open
-            const ext_kind: u2 = switch (r.ext) {
-                .closed => 0,
-                .open => 1,
-                .named => 2,
-            };
-            const rhs = AST.TypeAnno.RecordRhs{
-                .ext_kind = ext_kind,
-            };
-            switch (r.ext) {
-                .named => |named| {
-                    try store.extra_data.append(store.gpa, @backingInt(named.anno));
-                    try store.extra_data.append(store.gpa, named.region.start);
-                    try store.extra_data.append(store.gpa, named.region.end);
-                },
-                .open => |double_dot_tok| {
-                    try store.extra_data.append(store.gpa, double_dot_tok);
-                },
-                .closed => {},
-            }
-
-            node.data.lhs = data_start;
-            node.data.rhs = @as(u32, @bitCast(rhs));
+            node.data = try store.addSpanWithExt(r.fields.span, r.ext);
         },
         .@"fn" => |f| {
             node.tag = .ty_fn;
@@ -1627,11 +1338,6 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
             const ret_idx = store.extra_data.items.len;
             try store.extra_data.append(store.gpa, @backingInt(f.ret));
             node.main_token = @intCast(ret_idx);
-        },
-        .parens => |p| {
-            node.tag = .ty_parens;
-            node.region = p.region;
-            node.data.lhs = @backingInt(p.anno);
         },
         .malformed => {
             base.invariant("{s}", .{"Use addMalformed instead"});
@@ -1779,38 +1485,18 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
     const tag = narrowNodeTag(HeaderNodeTag, node.tag) orelse
         base.invariant("Expected a valid header tag, got {s}", .{@tagName(node.tag)});
     switch (tag) {
-        .app_header => {
+        inline .app_header, .package_header => |t| {
             const ed_start = node.data.rhs;
-            return .{ .app = .{
-                .platform_idx = unpackOptionalIndex(AST.RecordField.Idx, store.extra_data.items[ed_start + 2]),
-                .provides = @fromBackingInt(@intCast(node.data.lhs)),
-                .packages = @fromBackingInt(@intCast(store.extra_data.items[ed_start])),
-                .roc_version = unpackOptionalIndex(AST.RecordField.Idx, store.extra_data.items[ed_start + 1]),
-                .region = node.region,
-            } };
+            const collection: AST.Collection.Idx = @fromBackingInt(@intCast(node.data.lhs));
+            const packages: AST.Collection.Idx = @fromBackingInt(@intCast(store.extra_data.items[ed_start]));
+            const roc_version = unpackOptionalIndex(AST.RecordField.Idx, store.extra_data.items[ed_start + 1]);
+            const platform_idx = unpackOptionalIndex(AST.RecordField.Idx, store.extra_data.items[ed_start + 2]);
+            return if (t == .app_header)
+                .{ .app = .{ .provides = collection, .platform_idx = platform_idx, .packages = packages, .roc_version = roc_version, .region = node.region } }
+            else
+                .{ .package = .{ .exposes = collection, .platform_idx = platform_idx, .packages = packages, .roc_version = roc_version, .region = node.region } };
         },
-        .module_header => {
-            return .{ .module = .{
-                .exposes = @fromBackingInt(@intCast(node.data.lhs)),
-                .region = node.region,
-            } };
-        },
-        .hosted_header => {
-            return .{ .hosted = .{
-                .exposes = @fromBackingInt(@intCast(node.data.lhs)),
-                .region = node.region,
-            } };
-        },
-        .package_header => {
-            const ed_start = node.data.rhs;
-            return .{ .package = .{
-                .exposes = @fromBackingInt(@intCast(node.data.lhs)),
-                .packages = @fromBackingInt(@intCast(store.extra_data.items[ed_start])),
-                .roc_version = unpackOptionalIndex(AST.RecordField.Idx, store.extra_data.items[ed_start + 1]),
-                .platform_idx = unpackOptionalIndex(AST.RecordField.Idx, store.extra_data.items[ed_start + 2]),
-                .region = node.region,
-            } };
-        },
+        inline .module_header, .hosted_header, .type_module_header, .default_app_header, .malformed => |t| return store.slotValue(AST.Header, header_shapes, t, node),
         .platform_header => {
             const ed_start = node.data.lhs;
             std.debug.assert(node.data.rhs == 17);
@@ -1850,23 +1536,6 @@ pub fn getHeader(store: *const NodeStore, header_idx: AST.Header.Idx) AST.Header
                 .region = node.region,
             } };
         },
-        .type_module_header => {
-            return .{ .type_module = .{
-                .region = node.region,
-            } };
-        },
-        .default_app_header => {
-            return .{ .default_app = .{
-                .main_fn_idx = node.main_token,
-                .region = node.region,
-            } };
-        },
-        .malformed => {
-            return .{ .malformed = .{
-                .reason = @fromBackingInt(@intCast(node.data.lhs)),
-                .region = node.region,
-            } };
-        },
     }
 }
 
@@ -1876,59 +1545,23 @@ pub fn getExposedItem(store: *const NodeStore, exposed_item_idx: AST.ExposedItem
     const tag = narrowNodeTag(ExposedItemNodeTag, node.tag) orelse
         base.invariant("Expected a valid exposed item tag, got {s}", .{@tagName(node.tag)});
     switch (tag) {
-        .exposed_item_lower => {
+        inline .exposed_item_lower, .exposed_item_upper => |t| {
+            var qualifiers = base.DataSpan.empty();
+            var as: ?Token.Idx = null;
             if (node.data.rhs == 2) {
                 const extra_start = node.data.lhs;
-                const q_start = store.extra_data.items[extra_start];
-                const q_len = store.extra_data.items[extra_start + 1];
+                qualifiers = .{ .start = store.extra_data.items[extra_start], .len = store.extra_data.items[extra_start + 1] };
                 const as_tok = store.extra_data.items[extra_start + 2];
-                return .{ .lower_ident = .{
-                    .region = node.region,
-                    .ident = node.main_token,
-                    .qualifiers = .{ .span = .{ .start = q_start, .len = q_len } },
-                    .as = if (as_tok != 0) as_tok else null,
-                } };
+                as = if (as_tok != 0) as_tok else null;
             } else if (node.data.rhs == 1) {
-                return .{ .lower_ident = .{
-                    .region = node.region,
-                    .ident = node.main_token,
-                    .qualifiers = .{ .span = base.DataSpan.empty() },
-                    .as = node.data.lhs,
-                } };
+                as = node.data.lhs;
             }
-            return .{ .lower_ident = .{
+            return @unionInit(AST.ExposedItem, if (t == .exposed_item_lower) "lower_ident" else "upper_ident", .{
                 .region = node.region,
                 .ident = node.main_token,
-                .qualifiers = .{ .span = base.DataSpan.empty() },
-                .as = null,
-            } };
-        },
-        .exposed_item_upper => {
-            if (node.data.rhs == 2) {
-                const extra_start = node.data.lhs;
-                const q_start = store.extra_data.items[extra_start];
-                const q_len = store.extra_data.items[extra_start + 1];
-                const as_tok = store.extra_data.items[extra_start + 2];
-                return .{ .upper_ident = .{
-                    .region = node.region,
-                    .ident = node.main_token,
-                    .qualifiers = .{ .span = .{ .start = q_start, .len = q_len } },
-                    .as = if (as_tok != 0) as_tok else null,
-                } };
-            } else if (node.data.rhs == 1) {
-                return .{ .upper_ident = .{
-                    .region = node.region,
-                    .ident = node.main_token,
-                    .qualifiers = .{ .span = base.DataSpan.empty() },
-                    .as = node.data.lhs,
-                } };
-            }
-            return .{ .upper_ident = .{
-                .region = node.region,
-                .ident = node.main_token,
-                .qualifiers = .{ .span = base.DataSpan.empty() },
-                .as = null,
-            } };
+                .qualifiers = .{ .span = qualifiers },
+                .as = as,
+            });
         },
         .exposed_item_upper_star => {
             return .{ .upper_ident_star = .{
@@ -1952,26 +1585,7 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
     const tag = narrowNodeTag(StatementNodeTag, node.tag) orelse
         base.invariant("Expected a valid statement tag, got {s}", .{@tagName(node.tag)});
     switch (tag) {
-        .decl => {
-            return .{ .decl = .{
-                .pattern = @fromBackingInt(@intCast(node.data.lhs)),
-                .body = @fromBackingInt(@intCast(node.data.rhs)),
-                .region = node.region,
-            } };
-        },
-        .@"var" => {
-            return .{ .@"var" = .{
-                .name = node.main_token,
-                .body = unpackOptionalIndex(AST.Expr.Idx, node.data.lhs),
-                .region = node.region,
-            } };
-        },
-        .expr => {
-            return .{ .expr = .{
-                .expr = @fromBackingInt(@intCast(node.data.lhs)),
-                .region = node.region,
-            } };
-        },
+        inline .decl, .@"var", .expr, .expect, .crash, .dbg, .@"return", .@"break", .malformed => |t| return store.slotValue(AST.Statement, statement_shapes, t, node),
         .import => {
             const rhs = @as(AST.ImportRhs, @bitCast(node.data.rhs));
 
@@ -2025,12 +1639,6 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 .region = node.region,
             } };
         },
-        .expect => {
-            return .{ .expect = .{
-                .body = @fromBackingInt(@intCast(node.data.lhs)),
-                .region = node.region,
-            } };
-        },
         .@"for", .for_bang => {
             return .{ .@"for" = .{
                 .kind = if (tag == .for_bang) .stream else .iter,
@@ -2044,29 +1652,6 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
             return .{ .@"while" = .{
                 .cond = @fromBackingInt(@intCast(node.data.lhs)),
                 .body = @fromBackingInt(@intCast(node.data.rhs)),
-                .region = node.region,
-            } };
-        },
-        .crash => {
-            return .{ .crash = .{
-                .expr = @fromBackingInt(@intCast(node.data.lhs)),
-                .region = node.region,
-            } };
-        },
-        .dbg => {
-            return .{ .dbg = .{
-                .expr = @fromBackingInt(@intCast(node.data.lhs)),
-                .region = node.region,
-            } };
-        },
-        .@"return" => {
-            return .{ .@"return" = .{
-                .expr = @fromBackingInt(@intCast(node.data.lhs)),
-                .region = node.region,
-            } };
-        },
-        .@"break" => {
-            return .{ .@"break" = .{
                 .region = node.region,
             } };
         },
@@ -2147,12 +1732,6 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
                 .region = node.region,
             } };
         },
-        .malformed => {
-            return .{ .malformed = .{
-                .reason = @fromBackingInt(@intCast(node.data.lhs)),
-                .region = node.region,
-            } };
-        },
     }
 }
 
@@ -2162,18 +1741,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
     const tag = narrowNodeTag(PatternNodeTag, node.tag) orelse
         base.invariant("Expected a valid pattern tag, got {s}", .{@tagName(node.tag)});
     switch (tag) {
-        .ident_patt => {
-            return .{ .ident = .{
-                .ident_tok = node.main_token,
-                .region = node.region,
-            } };
-        },
-        .var_ident_patt => {
-            return .{ .var_ident = .{
-                .ident_tok = node.main_token,
-                .region = node.region,
-            } };
-        },
+        inline .ident_patt, .var_ident_patt, .int_patt, .frac_patt, .typed_int_patt, .typed_frac_patt, .string_patt, .record_patt, .list_patt, .tuple_patt, .underscore_patt, .alternatives_patt, .as_patt, .malformed => |t| return store.slotValue(AST.Pattern, pattern_shapes, t, node),
         .tag_patt => {
             const args_start = node.data.lhs;
 
@@ -2201,16 +1769,6 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
                 .region = node.region,
             } };
         },
-        .string_patt => {
-            return .{ .string = .{
-                .string_tok = node.main_token,
-                .region = node.region,
-                .parts = .{ .span = .{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
-                } },
-            } };
-        },
         .single_quote_patt => {
             return .{ .single_quote = .{
                 .token = node.main_token,
@@ -2218,94 +1776,10 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
                 .region = node.region,
             } };
         },
-        .int_patt => {
-            return .{ .int = .{
-                .number_tok = node.main_token,
-                .literal = @fromBackingInt(@intCast(node.data.lhs)),
-                .region = node.region,
-            } };
-        },
-        .frac_patt => {
-            return .{ .frac = .{
-                .number_tok = node.main_token,
-                .literal = @fromBackingInt(@intCast(node.data.lhs)),
-                .region = node.region,
-            } };
-        },
-        .typed_int_patt => {
-            return .{ .typed_int = .{
-                .number_tok = node.main_token,
-                .type_suffix = store.getLiteralTypeSuffix(node.data.lhs),
-                .literal = @fromBackingInt(@intCast(node.data.rhs)),
-                .region = node.region,
-            } };
-        },
-        .typed_frac_patt => {
-            return .{ .typed_frac = .{
-                .number_tok = node.main_token,
-                .type_suffix = store.getLiteralTypeSuffix(node.data.lhs),
-                .literal = @fromBackingInt(@intCast(node.data.rhs)),
-                .region = node.region,
-            } };
-        },
-        .record_patt => {
-            return .{ .record = .{
-                .region = node.region,
-                .fields = .{ .span = .{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
-                } },
-            } };
-        },
-        .list_patt => {
-            return .{ .list = .{
-                .region = node.region,
-                .patterns = .{ .span = .{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
-                } },
-            } };
-        },
         .list_rest_patt => {
             return .{ .list_rest = .{
                 .region = node.region,
                 .name = if (node.data.lhs == 0) null else node.data.lhs,
-            } };
-        },
-        .tuple_patt => {
-            return .{ .tuple = .{
-                .region = node.region,
-                .patterns = .{ .span = .{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
-                } },
-            } };
-        },
-        .alternatives_patt => {
-            return .{ .alternatives = .{
-                .region = node.region,
-                .patterns = .{ .span = .{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
-                } },
-            } };
-        },
-        .underscore_patt => {
-            return .{ .underscore = .{
-                .region = node.region,
-            } };
-        },
-        .as_patt => {
-            return .{ .as = .{
-                .region = node.region,
-                .name = node.main_token,
-                .pattern = @fromBackingInt(@intCast(node.data.lhs)),
-            } };
-        },
-        .malformed => {
-            return .{ .malformed = .{
-                .reason = @fromBackingInt(@intCast(node.data.lhs)),
-                .region = node.region,
             } };
         },
     }
@@ -2317,36 +1791,7 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
     const tag = narrowNodeTag(ExprNodeTag, node.tag) orelse
         base.invariant("Expected a valid expr tag, got {s}", .{@tagName(node.tag)});
     switch (tag) {
-        .int => {
-            return .{ .int = .{
-                .token = node.main_token,
-                .literal = @fromBackingInt(@intCast(node.data.lhs)),
-                .region = node.region,
-            } };
-        },
-        .frac => {
-            return .{ .frac = .{
-                .token = node.main_token,
-                .literal = @fromBackingInt(@intCast(node.data.lhs)),
-                .region = node.region,
-            } };
-        },
-        .typed_int => {
-            return .{ .typed_int = .{
-                .token = node.main_token,
-                .type_suffix = store.getLiteralTypeSuffix(node.data.lhs),
-                .literal = @fromBackingInt(@intCast(node.data.rhs)),
-                .region = node.region,
-            } };
-        },
-        .typed_frac => {
-            return .{ .typed_frac = .{
-                .token = node.main_token,
-                .type_suffix = store.getLiteralTypeSuffix(node.data.lhs),
-                .literal = @fromBackingInt(@intCast(node.data.rhs)),
-                .region = node.region,
-            } };
-        },
+        inline .int, .frac, .typed_int, .typed_frac, .string_part, .string, .multiline_string, .typed_string, .typed_multiline_string, .list, .tuple, .lambda, .apply, .record_update, .method_call, .tuple_access, .bin_op, .suffix_single_question, .unary_op, .if_without_else, .match, .dbg, .crash, .nominal_record, .nominal_apply, .ellipsis, .break_expr, .return_expr, .block, .malformed => |t| return store.slotValue(AST.Expr, expr_shapes, t, node),
         .single_quote => {
             return .{ .single_quote = .{
                 .token = node.main_token,
@@ -2380,74 +1825,6 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .region = node.region,
             } };
         },
-        .string_part => {
-            return .{ .string_part = .{
-                .region = node.region,
-                .token = node.main_token,
-            } };
-        },
-        .string => {
-            return .{ .string = .{
-                .token = node.main_token,
-                .parts = .{ .span = base.DataSpan{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
-                } },
-                .region = node.region,
-            } };
-        },
-        .typed_string => {
-            const parts_data_idx = node.data.rhs;
-            return .{ .typed_string = .{
-                .token = node.main_token,
-                .type_suffix = store.getLiteralTypeSuffix(node.data.lhs),
-                .parts = .{ .span = .{
-                    .start = store.extra_data.items[parts_data_idx],
-                    .len = store.extra_data.items[parts_data_idx + 1],
-                } },
-                .region = node.region,
-            } };
-        },
-        .typed_multiline_string => {
-            const parts_data_idx = node.data.rhs;
-            return .{ .typed_multiline_string = .{
-                .token = node.main_token,
-                .type_suffix = store.getLiteralTypeSuffix(node.data.lhs),
-                .parts = .{ .span = .{
-                    .start = store.extra_data.items[parts_data_idx],
-                    .len = store.extra_data.items[parts_data_idx + 1],
-                } },
-                .region = node.region,
-            } };
-        },
-        .multiline_string => {
-            return .{ .multiline_string = .{
-                .token = node.main_token,
-                .parts = .{ .span = base.DataSpan{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
-                } },
-                .region = node.region,
-            } };
-        },
-        .list => {
-            return .{ .list = .{
-                .items = .{ .span = base.DataSpan{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
-                } },
-                .region = node.region,
-            } };
-        },
-        .tuple => {
-            return .{ .tuple = .{
-                .items = .{ .span = base.DataSpan{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
-                } },
-                .region = node.region,
-            } };
-        },
         .record => {
             const extra_data_pos = node.data.lhs;
             const fields_start = store.extra_data.items[extra_data_pos];
@@ -2466,12 +1843,6 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .region = node.region,
             } };
         },
-        .record_update => {
-            return .{ .record_updater = .{
-                .token = node.main_token,
-                .region = node.region,
-            } };
-        },
         .field_access => {
             return .{ .field_access = .{
                 .receiver = @fromBackingInt(@intCast(node.data.lhs)),
@@ -2479,25 +1850,6 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                     .start = node.data.rhs,
                     .len = node.main_token,
                 } },
-                .region = node.region,
-            } };
-        },
-        .method_call => {
-            const args_data_idx = node.data.rhs;
-            return .{ .method_call = .{
-                .receiver = @fromBackingInt(@intCast(node.data.lhs)),
-                .method_token = node.main_token,
-                .args = .{ .span = .{
-                    .start = store.extra_data.items[args_data_idx],
-                    .len = store.extra_data.items[args_data_idx + 1],
-                } },
-                .region = node.region,
-            } };
-        },
-        .tuple_access => {
-            return .{ .tuple_access = .{
-                .expr = @fromBackingInt(@intCast(node.data.lhs)),
-                .elem_token = node.main_token,
                 .region = node.region,
             } };
         },
@@ -2519,30 +1871,6 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .target_kind = .method_call,
             } };
         },
-        .lambda => {
-            return .{ .lambda = .{
-                .body = @fromBackingInt(@intCast(store.extra_data.items[node.main_token])),
-                .args = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
-                .region = node.region,
-            } };
-        },
-        .apply => {
-            return .{ .apply = .{
-                .@"fn" = @fromBackingInt(@intCast(store.extra_data.items[node.main_token])),
-                .args = .{ .span = base.DataSpan{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
-                } },
-                .region = node.region,
-            } };
-        },
-        .suffix_single_question => {
-            return .{ .suffix_single_question = .{
-                .region = node.region,
-                .operator = node.main_token,
-                .expr = @fromBackingInt(@intCast(node.data.lhs)),
-            } };
-        },
         .if_then_else => {
             const then_idx = @as(usize, @intCast(node.data.rhs));
             const else_idx = then_idx + 1;
@@ -2555,82 +1883,12 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                 .@"else" = @fromBackingInt(@intCast(else_ed)),
             } };
         },
-        .if_without_else => {
-            return .{ .if_without_else = .{
-                .region = node.region,
-                .condition = @fromBackingInt(@intCast(node.data.lhs)),
-                .then = @fromBackingInt(@intCast(node.data.rhs)),
-            } };
-        },
-        .match => {
-            return .{ .match = .{
-                .region = node.region,
-                .expr = @fromBackingInt(@intCast(store.extra_data.items[node.main_token])),
-                .branches = .{ .span = .{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
-                } },
-            } };
-        },
-        .dbg => {
-            return .{ .dbg = .{
-                .region = node.region,
-                .expr = @fromBackingInt(@intCast(node.data.lhs)),
-            } };
-        },
-        .crash => {
-            return .{ .crash = .{
-                .region = node.region,
-                .expr = @fromBackingInt(@intCast(node.data.lhs)),
-            } };
-        },
-        .bin_op => {
-            return .{ .bin_op = .{
-                .left = @fromBackingInt(@intCast(node.data.lhs)),
-                .right = @fromBackingInt(@intCast(node.data.rhs)),
-                .operator = node.main_token,
-                .region = node.region,
-            } };
-        },
-        .block => {
-            const statements = AST.Statement.Span{ .span = .{
-                .start = node.data.lhs,
-                .len = node.data.rhs,
-            } };
-            return .{ .block = .{
-                .statements = statements,
-                .scope = @fromBackingInt(@intCast(node.main_token)),
-                .region = node.region,
-            } };
-        },
-        .ellipsis => {
-            return .{ .ellipsis = .{
-                .region = node.region,
-            } };
-        },
         .for_expr, .for_bang_expr => {
             return .{ .for_expr = .{
                 .kind = if (tag == .for_bang_expr) .stream else .iter,
                 .patt = @fromBackingInt(@intCast(node.main_token)),
                 .expr = @fromBackingInt(@intCast(node.data.lhs)),
                 .body = @fromBackingInt(@intCast(node.data.rhs)),
-                .region = node.region,
-            } };
-        },
-        .break_expr => {
-            return .{ .@"break" = .{
-                .region = node.region,
-            } };
-        },
-        .return_expr => {
-            return .{ .@"return" = .{
-                .expr = @fromBackingInt(@intCast(node.data.lhs)),
-                .region = node.region,
-            } };
-        },
-        .malformed => {
-            return .{ .malformed = .{
-                .reason = @fromBackingInt(@intCast(node.data.lhs)),
                 .region = node.region,
             } };
         },
@@ -2645,31 +1903,6 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
                     .start = fields_start,
                     .len = fields_len,
                 } },
-                .region = node.region,
-            } };
-        },
-        .nominal_record => {
-            return .{ .nominal_record = .{
-                .mapper = @fromBackingInt(@intCast(node.data.lhs)),
-                .backing = @fromBackingInt(@intCast(node.data.rhs)),
-                .region = node.region,
-            } };
-        },
-        .nominal_apply => {
-            const args_data_idx = @as(usize, @intCast(node.data.rhs));
-            return .{ .nominal_apply = .{
-                .mapper = @fromBackingInt(@intCast(node.data.lhs)),
-                .args = .{ .span = .{
-                    .start = store.extra_data.items[args_data_idx],
-                    .len = store.extra_data.items[args_data_idx + 1],
-                } },
-                .region = node.region,
-            } };
-        },
-        .unary_op => {
-            return .{ .unary_op = .{
-                .operator = node.main_token,
-                .expr = @fromBackingInt(@intCast(node.data.lhs)),
                 .region = node.region,
             } };
         },
@@ -2715,31 +1948,14 @@ pub fn singleStringPartToken(store: *const NodeStore, expr_idx: AST.Expr.Idx) ?T
 
 /// Retrieves match branch data from a stored match branch node.
 pub fn getBranch(store: *const NodeStore, branch_idx: AST.MatchBranch.Idx) AST.MatchBranch {
-    const node = store.nodes.get(@fromBackingInt(@intCast(@backingInt(branch_idx))));
-    return .{
-        .region = node.region,
-        .pattern = @fromBackingInt(@intCast(node.data.lhs)),
-        .body = @fromBackingInt(@intCast(node.data.rhs)),
-        .guard = unpackOptionalIndex(AST.Expr.Idx, node.main_token),
-    };
+    return store.getSlotted(AST.MatchBranch, match_branch_shape, branch_idx);
 }
 
 /// Retrieves type header data from a stored type header node.
 pub fn getTypeHeader(store: *const NodeStore, header_idx: AST.TypeHeader.Idx) error{MalformedNode}!AST.TypeHeader {
     const node = store.nodes.get(@fromBackingInt(@intCast(@backingInt(header_idx))));
-
-    if (node.tag != .ty_header) {
-        return error.MalformedNode;
-    }
-
-    return .{
-        .region = node.region,
-        .name = node.main_token,
-        .args = .{ .span = .{
-            .start = node.data.lhs,
-            .len = node.data.rhs,
-        } },
-    };
+    if (node.tag != .ty_header) return error.MalformedNode;
+    return store.slotStruct(AST.TypeHeader, type_header_shape[1], node);
 }
 
 /// Retrieves annotation record field data from a stored annotation record field node.
@@ -2785,27 +2001,7 @@ pub fn getWhereClause(store: *const NodeStore, where_clause_idx: AST.WhereClause
     const tag = narrowNodeTag(WhereClauseNodeTag, node.tag) orelse
         base.invariant("Expected a valid where clause node, found {s}", .{@tagName(node.tag)});
     switch (tag) {
-        .where_mod_method => {
-            return .{ .mod_method = .{
-                .region = node.region,
-                .var_tok = node.main_token,
-                .name_tok = node.data.lhs,
-                .anno = @fromBackingInt(@intCast(node.data.rhs)),
-            } };
-        },
-        .where_mod_alias => {
-            return .{ .mod_alias = .{
-                .region = node.region,
-                .var_tok = node.main_token,
-                .alias = @fromBackingInt(@intCast(node.data.lhs)),
-            } };
-        },
-        .malformed => {
-            return .{ .malformed = .{
-                .reason = @fromBackingInt(@intCast(node.data.lhs)),
-                .region = node.region,
-            } };
-        },
+        inline .where_mod_method, .where_mod_alias, .malformed => |t| return store.slotValue(AST.WhereClause, where_clause_shapes, t, node),
     }
 }
 
@@ -2818,110 +2014,21 @@ pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.T
     } };
 
     switch (tag) {
-        .ty_apply => {
-            return .{ .apply = .{
-                .region = node.region,
-                .args = .{ .span = .{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
-                } },
-            } };
-        },
-        .ty_var => {
-            return .{ .ty_var = .{
-                .tok = node.main_token,
-                .region = node.region,
-            } };
-        },
-        .ty_underscore_var => {
-            return .{ .underscore_type_var = .{
-                .tok = node.main_token,
-                .region = node.region,
-            } };
-        },
-        .ty_underscore => {
-            return .{ .underscore = .{
-                .region = node.region,
-            } };
-        },
-        .ty_ty => {
-            return .{ .ty = .{
-                .token = node.main_token,
-                .qualifiers = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
-                .region = node.region,
-            } };
-        },
+        inline .ty_apply, .ty_var, .ty_underscore_var, .ty_underscore, .ty_ty, .ty_tuple, .ty_parens, .malformed => |t| return store.slotValue(AST.TypeAnno, type_anno_shapes, t, node),
         .ty_union => {
-            const rhs = @as(AST.TypeAnno.TagUnionRhs, @bitCast(node.data.rhs));
-
-            // Read flat data format: [tags.span.start, tags.span.len, ext_data...]
-            var extra_data_pos = node.data.lhs;
-            const tags_start = store.extra_data.items[extra_data_pos];
-            extra_data_pos += 1;
-            const tags_len = store.extra_data.items[extra_data_pos];
-            extra_data_pos += 1;
-
-            // ext_kind: 0 = closed, 1 = anonymous open, 2 = named open
-            const ext: AST.TypeAnno.TagUnionExt = switch (rhs.ext_kind) {
-                0 => .closed,
-                1 => .{ .open = store.extra_data.items[extra_data_pos] },
-                2 => .{ .named = .{
-                    .anno = @fromBackingInt(@intCast(store.extra_data.items[extra_data_pos])),
-                    .region = .{
-                        .start = store.extra_data.items[extra_data_pos + 1],
-                        .end = store.extra_data.items[extra_data_pos + 2],
-                    },
-                } },
-                3 => unreachable,
-            };
-
+            const span_with_ext = store.spanWithExt(node.data);
             return .{ .tag_union = .{
                 .region = node.region,
-                .ext = ext,
-                .tags = .{ .span = .{
-                    .start = tags_start,
-                    .len = tags_len,
-                } },
-            } };
-        },
-        .ty_tuple => {
-            return .{ .tuple = .{
-                .region = node.region,
-                .annos = .{ .span = .{
-                    .start = node.data.lhs,
-                    .len = node.data.rhs,
-                } },
+                .ext = span_with_ext.ext,
+                .tags = .{ .span = span_with_ext.span },
             } };
         },
         .ty_record => {
-            const rhs = @as(AST.TypeAnno.RecordRhs, @bitCast(node.data.rhs));
-            var extra_data_pos = node.data.lhs;
-            const fields_start = store.extra_data.items[extra_data_pos];
-            extra_data_pos += 1;
-            const fields_len = store.extra_data.items[extra_data_pos];
-            extra_data_pos += 1;
-
-            // ext_kind: 0 = closed, 1 = anonymous open, 2 = named open
-            const ext: AST.TypeAnno.RecordExt = switch (rhs.ext_kind) {
-                0 => .closed,
-                1 => .{ .open = store.extra_data.items[extra_data_pos] },
-                2 => .{ .named = .{
-                    .anno = @fromBackingInt(@intCast(store.extra_data.items[extra_data_pos])),
-                    .region = .{
-                        .start = store.extra_data.items[extra_data_pos + 1],
-                        .end = store.extra_data.items[extra_data_pos + 2],
-                    },
-                } },
-                3 => unreachable,
-            };
-
+            const span_with_ext = store.spanWithExt(node.data);
             return .{ .record = .{
                 .region = node.region,
-                .fields = .{ .span = .{
-                    .start = fields_start,
-                    .len = fields_len,
-                } },
-                .ext = ext,
+                .fields = .{ .span = span_with_ext.span },
+                .ext = span_with_ext.ext,
             } };
         },
         .ty_fn => {
@@ -2936,54 +2043,7 @@ pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.T
                 .effectful = rhs.effectful == 1,
             } };
         },
-        .ty_parens => {
-            return .{ .parens = .{
-                .region = node.region,
-                .anno = @fromBackingInt(@intCast(node.data.lhs)),
-            } };
-        },
-        .malformed => {
-            return .{ .malformed = .{
-                .reason = @fromBackingInt(@intCast(node.data.lhs)),
-                .region = node.region,
-            } };
-        },
     }
-
-    const nid = try store.nodes.append(store.gpa, node);
-    return @fromBackingInt(@intCast(@backingInt(nid)));
-}
-
-/// Returns the start position for a new Span of AST.Expr.Idxs in scratch
-pub fn scratchExprTop(store: *NodeStore) u32 {
-    return store.scratch_exprs.top();
-}
-
-/// Places a new AST.Expr.Idx in the scratch.
-pub fn addScratchExpr(store: *NodeStore, idx: AST.Expr.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_exprs.append(idx);
-}
-
-/// Creates a new span starting at start.  Moves the items from scratch
-/// to extra_data as appropriate.
-pub fn exprSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.Expr.Span {
-    const end = store.scratch_exprs.top();
-    defer store.scratch_exprs.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    std.debug.assert(end >= i);
-    while (i < end) {
-        try store.extra_data.append(store.gpa, @backingInt(store.scratch_exprs.items.items[i]));
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
-}
-
-/// Clears any ExprIds added to scratch from start until the end.
-/// Should be used wherever the scratch items will not be used,
-/// as in when parsing fails.
-pub fn clearScratchExprsFrom(store: *NodeStore, start: u32) void {
-    store.scratch_exprs.clearFrom(start);
 }
 
 /// Returns a new ExprIter so that the caller can iterate through
@@ -2992,67 +2052,10 @@ pub fn exprSlice(store: *const NodeStore, span: AST.Expr.Span) []AST.Expr.Idx {
     return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
 }
 
-/// Returns the start position for a new Span of AST.Statement.Idxs in scratch
-pub fn scratchStatementTop(store: *NodeStore) u32 {
-    return store.scratch_statements.top();
-}
-
-/// Places a new AST.Statement.Idx in the scratch.
-pub fn addScratchStatement(store: *NodeStore, idx: AST.Statement.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_statements.append(idx);
-}
-
-/// Creates a new span starting at start.  Moves the items from scratch
-/// to extra_data as appropriate.
-pub fn statementSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.Statement.Span {
-    const end = store.scratch_statements.top();
-    defer store.scratch_statements.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    std.debug.assert(end >= i);
-    while (i < end) {
-        try store.extra_data.append(store.gpa, @backingInt(store.scratch_statements.items.items[i]));
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
-}
-
 /// Returns a new Statement slice so that the caller can iterate through
 /// all items in the span.
 pub fn statementSlice(store: *const NodeStore, span: AST.Statement.Span) []AST.Statement.Idx {
     return store.sliceFromSpan(AST.Statement.Idx, span.span);
-}
-
-/// Returns the start position for a new Span of AST.Pattern.Idx in scratch
-pub fn scratchPatternTop(store: *NodeStore) u32 {
-    return store.scratch_patterns.top();
-}
-
-/// Places a new AST.Pattern.Idx in the scratch.
-pub fn addScratchPattern(store: *NodeStore, idx: AST.Pattern.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_patterns.append(idx);
-}
-
-/// Creates a new span starting at start.  Moves the items from scratch
-/// to extra_data as appropriate.
-pub fn patternSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.Pattern.Span {
-    const end = store.scratch_patterns.top();
-    defer store.scratch_patterns.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    std.debug.assert(end >= i);
-    while (i < end) {
-        try store.extra_data.append(store.gpa, @backingInt(store.scratch_patterns.items.items[i]));
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
-}
-
-/// Clears any PatternIds added to scratch from start until the end.
-/// Should be used wherever the scratch items will not be used,
-/// as in when parsing fails.
-pub fn clearScratchPatternsFrom(store: *NodeStore, start: u32) void {
-    store.scratch_patterns.clearFrom(start);
 }
 
 /// Appends a pattern string part and returns its id.
@@ -3067,38 +2070,51 @@ pub fn getPatternStringPart(store: *const NodeStore, idx: AST.PatternStringPart.
     return store.pattern_string_parts.items[@backingInt(idx)];
 }
 
-/// Returns the start position for a new Span of AST.PatternStringPart.Idx in scratch.
-pub fn scratchPatternStringPartTop(store: *NodeStore) u32 {
-    return store.scratch_pattern_string_parts.top();
-}
-
-/// Places a pattern string part id in scratch.
-pub fn addScratchPatternStringPart(store: *NodeStore, idx: AST.PatternStringPart.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_pattern_string_parts.append(idx);
-}
-
-/// Creates a pattern string part span from scratch.
-pub fn patternStringPartSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.PatternStringPart.Span {
-    const end = store.scratch_pattern_string_parts.top();
-    defer store.scratch_pattern_string_parts.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    std.debug.assert(end >= i);
-    while (i < end) {
-        try store.extra_data.append(store.gpa, @backingInt(store.scratch_pattern_string_parts.items.items[i]));
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
-}
-
-/// Clears pattern string part scratch entries from start.
-pub fn clearScratchPatternStringPartsFrom(store: *NodeStore, start: u32) void {
-    store.scratch_pattern_string_parts.clearFrom(start);
-}
-
 /// Returns pattern string part ids for a span.
 pub fn patternStringPartSlice(store: *const NodeStore, span: AST.PatternStringPart.Span) []AST.PatternStringPart.Idx {
     return store.sliceFromSpan(AST.PatternStringPart.Idx, span.span);
+}
+
+/// Returns the scratch buffer that collects `Kind.Idx` values.
+pub fn scratchFor(store: *NodeStore, comptime Kind: type) *base.Scratch(Kind.Idx) {
+    return &store.scratch[comptime scratchIndex(Kind)];
+}
+
+/// Returns the start position for a new span of `Kind.Idx` values in scratch.
+pub fn scratchTop(store: *NodeStore, comptime Kind: type) u32 {
+    return store.scratchFor(Kind).top();
+}
+
+/// Places a new `Kind.Idx` in scratch.
+pub fn addScratch(store: *NodeStore, comptime Kind: type, idx: Kind.Idx) std.mem.Allocator.Error!void {
+    try store.scratchFor(Kind).append(idx);
+}
+
+/// Clears any `Kind.Idx` values added to scratch from `start` until the end.
+/// Should be used wherever the scratch items will not be used,
+/// as in when parsing fails.
+pub fn clearScratchFrom(store: *NodeStore, comptime Kind: type, start: u32) void {
+    store.scratchFor(Kind).clearFrom(start);
+}
+
+/// Creates a new span of the `Kind.Idx` values added to scratch since
+/// `start`, moving them from scratch to extra_data.
+pub fn spanFrom(store: *NodeStore, comptime Kind: type, start: u32) std.mem.Allocator.Error!Kind.Span {
+    return .{ .span = try store.dataSpanFrom(Kind, start) };
+}
+
+/// Moves the `Kind` scratch items from `start` to the top of scratch into
+/// extra_data and returns the span they occupy there.
+fn dataSpanFrom(store: *NodeStore, comptime Kind: type, start: u32) std.mem.Allocator.Error!base.DataSpan {
+    const scratch = store.scratchFor(Kind);
+    const end = scratch.top();
+    defer scratch.clearFrom(start);
+    std.debug.assert(end >= start);
+    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+    for (scratch.items.items[start..end]) |item| {
+        try store.extra_data.append(store.gpa, if (Kind.Idx == u32) item else @backingInt(item));
+    }
+    return .{ .start = ed_start, .len = end - start };
 }
 
 /// Creates a slice corresponding to a span.
@@ -3118,114 +2134,15 @@ pub fn patternSlice(store: *const NodeStore, span: AST.Pattern.Span) []AST.Patte
 pub fn patternRecordFieldSlice(store: *const NodeStore, span: AST.PatternRecordField.Span) []AST.PatternRecordField.Idx {
     return store.sliceFromSpan(AST.PatternRecordField.Idx, span.span);
 }
-/// Returns the start position for a new Span of patternRecordFieldIdxs in scratch
-pub fn scratchPatternRecordFieldTop(store: *NodeStore) u32 {
-    return store.scratch_pattern_record_fields.top();
-}
-
-/// Places a new AST.PatternRecordField.Idx in the scratch.
-pub fn addScratchPatternRecordField(store: *NodeStore, idx: AST.PatternRecordField.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_pattern_record_fields.append(idx);
-}
-
-/// Moves the scratch items from `start` to the top of `scratch` into
-/// extra_data and returns the span they occupy there.
-inline fn dataSpanFromScratch(store: *NodeStore, scratch: anytype, start: u32) std.mem.Allocator.Error!base.DataSpan {
-    const end = scratch.top();
-    defer scratch.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    while (i < end) {
-        try store.extra_data.append(store.gpa, @backingInt(scratch.items.items[i]));
-        i += 1;
-    }
-    return .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start };
-}
-
-/// Creates a new span starting at start.  Moves the items from scratch
-/// to extra_data as appropriate.
-pub fn patternRecordFieldSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.PatternRecordField.Span {
-    return .{ .span = try store.dataSpanFromScratch(&store.scratch_pattern_record_fields, start) };
-}
-
-/// Clears any AST.PatternRecordFieldIds added to scratch from start until the end.
-/// Should be used wherever the scratch items will not be used,
-/// as in when parsing fails.
-pub fn clearScratchPatternRecordFieldsFrom(store: *NodeStore, start: u32) void {
-    store.scratch_pattern_record_fields.clearFrom(start);
-}
-
 /// Returns a new RecordField slice so that the caller can iterate through
 /// all items in the span.
 pub fn recordFieldSlice(store: *const NodeStore, span: AST.RecordField.Span) []AST.RecordField.Idx {
     return sliceFromSpan(store, AST.RecordField.Idx, span.span);
 }
-/// Returns the start position for a new Span of recordFieldIdxs in scratch
-pub fn scratchRecordFieldTop(store: *NodeStore) u32 {
-    return store.scratch_record_fields.top();
-}
-
-/// Places a new AST.RecordField.Idx in the scratch.
-pub fn addScratchRecordField(store: *NodeStore, idx: AST.RecordField.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_record_fields.append(idx);
-}
-
-/// Creates a new span starting at start.  Moves the items from scratch
-/// to extra_data as appropriate.
-pub fn recordFieldSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.RecordField.Span {
-    return .{ .span = try store.dataSpanFromScratch(&store.scratch_record_fields, start) };
-}
-
-/// Clears any RecordFieldIds added to scratch from start until the end.
-/// Should be used wherever the scratch items will not be used,
-/// as in when parsing fails.
-pub fn clearScratchRecordFieldsFrom(store: *NodeStore, start: u32) void {
-    store.scratch_record_fields.clearFrom(start);
-}
-
-/// Returns the start position for a new Span of _LOWER_Idxs in scratch
-pub fn scratchMatchBranchTop(store: *NodeStore) u32 {
-    return store.scratch_match_branches.top();
-}
-
-/// Places a new AST.WhenBranch.Idx in the scratch.
-pub fn addScratchMatchBranch(store: *NodeStore, idx: AST.MatchBranch.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_match_branches.append(idx);
-}
-
-/// Creates a new span starting at start.  Moves the items from scratch
-/// to extra_data as appropriate.
-pub fn matchBranchSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.MatchBranch.Span {
-    return .{ .span = try store.dataSpanFromScratch(&store.scratch_match_branches, start) };
-}
-
 /// Returns a new WhenBranch slice so that the caller can iterate through
 /// all items in the span.
 pub fn matchBranchSlice(store: *const NodeStore, span: AST.MatchBranch.Span) []AST.MatchBranch.Idx {
     return store.sliceFromSpan(AST.MatchBranch.Idx, span.span);
-}
-
-/// Returns the start position for a new Span of typeAnnoIdxs in scratch
-pub fn scratchTypeAnnoTop(store: *NodeStore) u32 {
-    return store.scratch_type_annos.top();
-}
-
-/// Places a new AST.TypeAnno.Idx in the scratch.
-pub fn addScratchTypeAnno(store: *NodeStore, idx: AST.TypeAnno.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_type_annos.append(idx);
-}
-
-/// Creates a new span starting at start.  Moves the items from scratch
-/// to extra_data as appropriate.
-pub fn typeAnnoSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.TypeAnno.Span {
-    return .{ .span = try store.dataSpanFromScratch(&store.scratch_type_annos, start) };
-}
-
-/// Clears any TypeAnnoIds added to scratch from start until the end.
-/// Should be used wherever the scratch items will not be used,
-/// as in when parsing fails.
-pub fn clearScratchTypeAnnosFrom(store: *NodeStore, start: u32) void {
-    store.scratch_type_annos.clearFrom(start);
 }
 
 /// Returns a new TypeAnno slice so that the caller can iterate through
@@ -3234,57 +2151,10 @@ pub fn typeAnnoSlice(store: *const NodeStore, span: AST.TypeAnno.Span) []AST.Typ
     return store.sliceFromSpan(AST.TypeAnno.Idx, span.span);
 }
 
-/// Returns the start position for a new Span of annoRecordFieldIdxs in scratch
-pub fn scratchAnnoRecordFieldTop(store: *NodeStore) u32 {
-    return store.scratch_anno_record_fields.top();
-}
-
-/// Places a new AST.AnnoRecordField.Idx in the scratch.
-pub fn addScratchAnnoRecordField(store: *NodeStore, idx: AST.AnnoRecordField.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_anno_record_fields.append(idx);
-}
-
-/// Creates a new span starting at start.  Moves the items from scratch
-/// to extra_data as appropriate.
-pub fn annoRecordFieldSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.AnnoRecordField.Span {
-    return .{ .span = try store.dataSpanFromScratch(&store.scratch_anno_record_fields, start) };
-}
-
-/// Clears any AnnoRecordFieldIds added to scratch from start until the end.
-/// Should be used wherever the scratch items will not be used,
-/// as in when parsing fails.
-pub fn clearScratchAnnoRecordFieldsFrom(store: *NodeStore, start: u32) void {
-    store.scratch_anno_record_fields.clearFrom(start);
-}
-
 /// Returns a new AnnoRecordField slice so that the caller can iterate through
 /// all items in the span.
 pub fn annoRecordFieldSlice(store: *const NodeStore, span: AST.AnnoRecordField.Span) []AST.AnnoRecordField.Idx {
     return store.sliceFromSpan(AST.AnnoRecordField.Idx, span.span);
-}
-
-/// Returns the start position for a new Span of token_Idxs in scratch
-pub fn scratchTokenTop(store: *NodeStore) u32 {
-    return store.scratch_tokens.top();
-}
-
-/// Places a new Token.Idx in the scratch.
-pub fn addScratchToken(store: *NodeStore, idx: Token.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_tokens.append(idx);
-}
-
-/// Creates a new span starting at start.  Moves the items from scratch
-/// to extra_data as appropriate.
-pub fn tokenSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!Token.Span {
-    const end = store.scratch_tokens.top();
-    defer store.scratch_tokens.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    while (i < end) {
-        try store.extra_data.append(store.gpa, store.scratch_tokens.items.items[i]);
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
 }
 
 const LiteralTypeSuffixKind = enum(u32) { path, deprecated_builtin };
@@ -3325,56 +2195,10 @@ pub fn tokenSlice(store: *const NodeStore, span: Token.Span) []Token.Idx {
     return store.sliceFromSpan(Token.Idx, span.span);
 }
 
-/// Returns the start position for a new Span of exposedItemIdxs in scratch
-pub fn scratchExposedItemTop(store: *NodeStore) u32 {
-    return store.scratch_exposed_items.top();
-}
-
-/// Places a new AST.ExposedItem.Idx in the scratch.
-pub fn addScratchExposedItem(store: *NodeStore, idx: AST.ExposedItem.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_exposed_items.append(idx);
-}
-
-/// Creates a new span starting at start.  Moves the items from scratch
-/// to extra_data as appropriate.
-pub fn exposedItemSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.ExposedItem.Span {
-    return .{ .span = try store.dataSpanFromScratch(&store.scratch_exposed_items, start) };
-}
-
-/// Clears any ExposedItemIds added to scratch from start until the end.
-/// Should be used wherever the scratch items will not be used,
-/// as in when parsing fails.
-pub fn clearScratchExposedItemsFrom(store: *NodeStore, start: u32) void {
-    store.scratch_exposed_items.clearFrom(start);
-}
-
 /// Returns a new ExposedItem slice so that the caller can iterate through
 /// all items in the span.
 pub fn exposedItemSlice(store: *const NodeStore, span: AST.ExposedItem.Span) []AST.ExposedItem.Idx {
     return store.sliceFromSpan(AST.ExposedItem.Idx, span.span);
-}
-
-/// Returns the start position for a new Span of whereClauseIdxs in scratch
-pub fn scratchWhereClauseTop(store: *NodeStore) u32 {
-    return store.scratch_where_clauses.top();
-}
-
-/// Places a new AST.WhereClause.Idx in the scratch.
-pub fn addScratchWhereClause(store: *NodeStore, idx: AST.WhereClause.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_where_clauses.append(idx);
-}
-
-/// Creates a new span starting at start.  Moves the items from scratch
-/// to extra_data as appropriate.
-pub fn whereClauseSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.WhereClause.Span {
-    return .{ .span = try store.dataSpanFromScratch(&store.scratch_where_clauses, start) };
-}
-
-/// Clears any WhereClauseIds added to scratch from start until the end.
-/// Should be used wherever the scratch items will not be used,
-/// as in when parsing fails.
-pub fn clearScratchWhereClausesFrom(store: *NodeStore, start: u32) void {
-    store.scratch_where_clauses.clearFrom(start);
 }
 
 /// Returns a new WhereClause slice so that the caller can iterate through
@@ -3398,43 +2222,29 @@ pub fn addTargetsSection(store: *NodeStore, section: AST.TargetsSection) std.mem
     return @fromBackingInt(@intCast(@backingInt(nid)));
 }
 
+/// Node shape of an `AST.SymbolMapEntry`, stored by `slotNode`.
+const symbol_map_entry_shape = .{ .symbol_map_entry, .{ .symbol = .main_token, .module = .lhs, .func = .rhs } };
+
 /// Adds a SymbolMapEntry node and returns its index.
 pub fn addSymbolMapEntry(store: *NodeStore, entry: AST.SymbolMapEntry) std.mem.Allocator.Error!AST.SymbolMapEntry.Idx {
-    const node = Node{
-        .tag = .symbol_map_entry,
-        .main_token = entry.symbol,
-        .data = .{
-            .lhs = if (entry.module) |module| try packNonNullOptionalU32(module) else 0,
-            .rhs = entry.func,
-        },
-        .region = entry.region,
-    };
-    const nid = try store.nodes.append(store.gpa, node);
-    return @fromBackingInt(@intCast(@backingInt(nid)));
+    return store.addSlotted(AST.SymbolMapEntry.Idx, symbol_map_entry_shape, entry);
 }
+
+/// Node shape of an `AST.TargetEntry`, stored by `slotNode`.
+const target_entry_shape = .{ .target_entry, .{ .target = .main_token, .config = .lhs } };
 
 /// Adds a TargetEntry node and returns its index.
 pub fn addTargetEntry(store: *NodeStore, entry: AST.TargetEntry) std.mem.Allocator.Error!AST.TargetEntry.Idx {
-    const node = Node{
-        .tag = .target_entry,
-        .main_token = entry.target,
-        .data = .{
-            .lhs = @backingInt(entry.config),
-            .rhs = 0,
-        },
-        .region = entry.region,
-    };
-    const nid = try store.nodes.append(store.gpa, node);
-    return @fromBackingInt(@intCast(@backingInt(nid)));
+    return store.addSlotted(AST.TargetEntry.Idx, target_entry_shape, entry);
 }
 
 /// Adds a TargetFile node and returns its index.
-pub fn addTargetFile(store: *NodeStore, file: AST.TargetFile) std.mem.Allocator.Error!AST.TargetFile.Idx {
+pub fn addTargetFile(store: *NodeStore, file: AST.TargetFile, region: AST.TokenizedRegion) std.mem.Allocator.Error!AST.TargetFile.Idx {
     var node = Node{
         .tag = .malformed,
         .main_token = 0,
         .data = .{ .lhs = 0, .rhs = 0 },
-        .region = AST.TokenizedRegion.empty(),
+        .region = region,
     };
 
     switch (file) {
@@ -3458,43 +2268,29 @@ pub fn addTargetFile(store: *NodeStore, file: AST.TargetFile) std.mem.Allocator.
     return @fromBackingInt(@intCast(@backingInt(nid)));
 }
 
+/// Node shape of an `AST.TargetConfig`, stored by `slotNode`.
+const target_config_shape = .{ .target_config, .{ .entries = .span } };
+
 /// Adds a TargetConfig node and returns its index.
 pub fn addTargetConfig(store: *NodeStore, config: AST.TargetConfig) std.mem.Allocator.Error!AST.TargetConfig.Idx {
-    const node = Node{
-        .tag = .target_config,
-        .main_token = 0,
-        .data = .{
-            .lhs = config.entries.span.start,
-            .rhs = config.entries.span.len,
-        },
-        .region = config.region,
-    };
-    const nid = try store.nodes.append(store.gpa, node);
-    return @fromBackingInt(@intCast(@backingInt(nid)));
+    return store.addSlotted(AST.TargetConfig.Idx, target_config_shape, config);
 }
+
+/// Node shape of an `AST.TargetConfigEntry`, stored by `slotNode`.
+const target_config_entry_shape = .{ .target_config_entry, .{ .name = .main_token, .value = .lhs } };
 
 /// Adds a TargetConfigEntry node and returns its index.
 pub fn addTargetConfigEntry(store: *NodeStore, entry: AST.TargetConfigEntry) std.mem.Allocator.Error!AST.TargetConfigEntry.Idx {
-    const node = Node{
-        .tag = .target_config_entry,
-        .main_token = entry.name,
-        .data = .{
-            .lhs = @backingInt(entry.value),
-            .rhs = 0,
-        },
-        .region = entry.region,
-    };
-    const nid = try store.nodes.append(store.gpa, node);
-    return @fromBackingInt(@intCast(@backingInt(nid)));
+    return store.addSlotted(AST.TargetConfigEntry.Idx, target_config_entry_shape, entry);
 }
 
 /// Adds a TargetConfigValue node and returns its index.
-pub fn addTargetConfigValue(store: *NodeStore, value: AST.TargetConfigValue) std.mem.Allocator.Error!AST.TargetConfigValue.Idx {
+pub fn addTargetConfigValue(store: *NodeStore, value: AST.TargetConfigValue, region: AST.TokenizedRegion) std.mem.Allocator.Error!AST.TargetConfigValue.Idx {
     var node = Node{
         .tag = .target_config_value,
         .main_token = 0,
         .data = .{ .lhs = 0, .rhs = 0 },
-        .region = AST.TokenizedRegion.empty(),
+        .region = region,
     };
 
     switch (value) {
@@ -3540,49 +2336,9 @@ pub fn addTargetConfigValue(store: *NodeStore, value: AST.TargetConfigValue) std
     return @fromBackingInt(@intCast(@backingInt(nid)));
 }
 
-/// Returns the start position for a new Span of TargetEntry.Idxs in scratch
-pub fn scratchTargetEntryTop(store: *NodeStore) u32 {
-    return store.scratch_target_entries.top();
-}
-
-/// Places a new AST.TargetEntry.Idx in the scratch.
-pub fn addScratchTargetEntry(store: *NodeStore, idx: AST.TargetEntry.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_target_entries.append(idx);
-}
-
-/// Creates a new span starting at start. Moves the items from scratch to extra_data.
-pub fn targetEntrySpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.TargetEntry.Span {
-    return .{ .span = try store.dataSpanFromScratch(&store.scratch_target_entries, start) };
-}
-
-/// Clears any TargetEntry.Idxs added to scratch from start until the end.
-pub fn clearScratchTargetEntriesFrom(store: *NodeStore, start: u32) void {
-    store.scratch_target_entries.clearFrom(start);
-}
-
 /// Returns a new TargetEntry slice for iteration.
 pub fn targetEntrySlice(store: *const NodeStore, span: AST.TargetEntry.Span) []AST.TargetEntry.Idx {
     return store.sliceFromSpan(AST.TargetEntry.Idx, span.span);
-}
-
-/// Returns the start position for a new Span of TargetFile.Idxs in scratch
-pub fn scratchTargetFileTop(store: *NodeStore) u32 {
-    return store.scratch_target_files.top();
-}
-
-/// Places a new AST.TargetFile.Idx in the scratch.
-pub fn addScratchTargetFile(store: *NodeStore, idx: AST.TargetFile.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_target_files.append(idx);
-}
-
-/// Creates a new span starting at start. Moves the items from scratch to extra_data.
-pub fn targetFileSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.TargetFile.Span {
-    return .{ .span = try store.dataSpanFromScratch(&store.scratch_target_files, start) };
-}
-
-/// Clears any TargetFile.Idxs added to scratch from start until the end.
-pub fn clearScratchTargetFilesFrom(store: *NodeStore, start: u32) void {
-    store.scratch_target_files.clearFrom(start);
 }
 
 /// Returns a new TargetFile slice for iteration.
@@ -3590,82 +2346,19 @@ pub fn targetFileSlice(store: *const NodeStore, span: AST.TargetFile.Span) []AST
     return store.sliceFromSpan(AST.TargetFile.Idx, span.span);
 }
 
-/// Returns the start position for a new Span of TargetConfigEntry.Idxs in scratch.
-pub fn scratchTargetConfigEntryTop(store: *NodeStore) u32 {
-    return store.scratch_target_config_entries.top();
-}
-
-/// Places a new AST.TargetConfigEntry.Idx in the scratch.
-pub fn addScratchTargetConfigEntry(store: *NodeStore, idx: AST.TargetConfigEntry.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_target_config_entries.append(idx);
-}
-
-/// Creates a new span starting at start. Moves the items from scratch to extra_data.
-pub fn targetConfigEntrySpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.TargetConfigEntry.Span {
-    return .{ .span = try store.dataSpanFromScratch(&store.scratch_target_config_entries, start) };
-}
-
-/// Clears any TargetConfigEntry.Idxs added to scratch from start until the end.
-pub fn clearScratchTargetConfigEntriesFrom(store: *NodeStore, start: u32) void {
-    store.scratch_target_config_entries.clearFrom(start);
-}
-
 /// Returns a new TargetConfigEntry slice for iteration.
 pub fn targetConfigEntrySlice(store: *const NodeStore, span: AST.TargetConfigEntry.Span) []AST.TargetConfigEntry.Idx {
     return store.sliceFromSpan(AST.TargetConfigEntry.Idx, span.span);
 }
 
-/// Returns the start position for a new Span of TargetConfigValue.Idxs in scratch.
-pub fn scratchTargetConfigValueTop(store: *NodeStore) u32 {
-    return store.scratch_target_config_values.top();
-}
-
-/// Places a new AST.TargetConfigValue.Idx in the scratch.
-pub fn addScratchTargetConfigValue(store: *NodeStore, idx: AST.TargetConfigValue.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_target_config_values.append(idx);
-}
-
-/// Creates a new span starting at start. Moves the items from scratch to extra_data.
-pub fn targetConfigValueSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.TargetConfigValue.Span {
-    return .{ .span = try store.dataSpanFromScratch(&store.scratch_target_config_values, start) };
-}
-
-/// Returns the current top of the SymbolMapEntry scratch list.
-pub fn scratchSymbolMapEntryTop(store: *NodeStore) u32 {
-    return store.scratch_symbol_map_entries.top();
-}
-
-/// Adds a SymbolMapEntry index to scratch.
-pub fn addScratchSymbolMapEntry(store: *NodeStore, idx: AST.SymbolMapEntry.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_symbol_map_entries.append(idx);
-}
-
-/// Clears any SymbolMapEntry.Idxs added to scratch from start until the end.
-pub fn clearScratchSymbolMapEntriesFrom(store: *NodeStore, start: u32) void {
-    store.scratch_symbol_map_entries.clearFrom(start);
-}
-
 /// Creates a SymbolMapEntry span from scratch entries added since start.
 pub fn symbolMapEntrySpanFrom(store: *NodeStore, start: u32, region: AST.TokenizedRegion, layout: AST.CollectionLayout) std.mem.Allocator.Error!AST.SymbolMapEntry.Span {
-    const end = store.scratch_symbol_map_entries.top();
-    defer store.scratch_symbol_map_entries.clearFrom(start);
-    var i = @as(usize, @intCast(start));
-    const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    while (i < end) {
-        try store.extra_data.append(store.gpa, @backingInt(store.scratch_symbol_map_entries.items.items[i]));
-        i += 1;
-    }
-    return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start }, .region = region, .layout = layout };
+    return .{ .span = try store.dataSpanFrom(AST.SymbolMapEntry, start), .region = region, .layout = layout };
 }
 
 /// Returns a SymbolMapEntry slice for iteration over a span.
 pub fn symbolMapEntrySlice(store: *const NodeStore, span: AST.SymbolMapEntry.Span) []AST.SymbolMapEntry.Idx {
     return store.sliceFromSpan(AST.SymbolMapEntry.Idx, span.span);
-}
-
-/// Clears any TargetConfigValue.Idxs added to scratch from start until the end.
-pub fn clearScratchTargetConfigValuesFrom(store: *NodeStore, start: u32) void {
-    store.scratch_target_config_values.clearFrom(start);
 }
 
 /// Returns a new TargetConfigValue slice for iteration.
@@ -3689,27 +2382,12 @@ pub fn getTargetsSection(store: *const NodeStore, idx: AST.TargetsSection.Idx) A
 
 /// Retrieves a SymbolMapEntry from a stored node.
 pub fn getSymbolMapEntry(store: *const NodeStore, idx: AST.SymbolMapEntry.Idx) AST.SymbolMapEntry {
-    const node = store.nodes.get(@fromBackingInt(@intCast(@backingInt(idx))));
-    std.debug.assert(node.tag == .symbol_map_entry);
-
-    return .{
-        .symbol = node.main_token,
-        .module = if (node.data.lhs == 0) null else unpackNonNullOptionalU32(node.data.lhs),
-        .func = node.data.rhs,
-        .region = node.region,
-    };
+    return store.getSlotted(AST.SymbolMapEntry, symbol_map_entry_shape, idx);
 }
 
 /// Retrieves a TargetEntry from a stored node.
 pub fn getTargetEntry(store: *const NodeStore, idx: AST.TargetEntry.Idx) AST.TargetEntry {
-    const node = store.nodes.get(@fromBackingInt(@intCast(@backingInt(idx))));
-    std.debug.assert(node.tag == .target_entry);
-
-    return .{
-        .target = node.main_token,
-        .config = @fromBackingInt(@intCast(node.data.lhs)),
-        .region = node.region,
-    };
+    return store.getSlotted(AST.TargetEntry, target_entry_shape, idx);
 }
 
 /// Retrieves a TargetFile from a stored node.
@@ -3736,25 +2414,12 @@ pub fn getTargetFile(store: *const NodeStore, idx: AST.TargetFile.Idx) AST.Targe
 
 /// Retrieves a TargetConfig from a stored node.
 pub fn getTargetConfig(store: *const NodeStore, idx: AST.TargetConfig.Idx) AST.TargetConfig {
-    const node = store.nodes.get(@fromBackingInt(@intCast(@backingInt(idx))));
-    std.debug.assert(node.tag == .target_config);
-
-    return .{
-        .entries = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
-        .region = node.region,
-    };
+    return store.getSlotted(AST.TargetConfig, target_config_shape, idx);
 }
 
 /// Retrieves a TargetConfigEntry from a stored node.
 pub fn getTargetConfigEntry(store: *const NodeStore, idx: AST.TargetConfigEntry.Idx) AST.TargetConfigEntry {
-    const node = store.nodes.get(@fromBackingInt(@intCast(@backingInt(idx))));
-    std.debug.assert(node.tag == .target_config_entry);
-
-    return .{
-        .name = node.main_token,
-        .value = @fromBackingInt(@intCast(node.data.lhs)),
-        .region = node.region,
-    };
+    return store.getSlotted(AST.TargetConfigEntry, target_config_entry_shape, idx);
 }
 
 /// Retrieves a TargetConfigValue from a stored node.
@@ -3789,39 +2454,12 @@ pub fn getTargetConfigValue(store: *const NodeStore, idx: AST.TargetConfigValue.
     };
 }
 
+/// Node shape of an `AST.ForClauseTypeAlias`, stored by `slotNode`.
+const for_clause_type_alias_shape = .{ .for_clause_type_alias, .{ .alias_name = .main_token, .rigid_name = .lhs } };
+
 /// Adds a ForClauseTypeAlias node and returns its index.
 pub fn addForClauseTypeAlias(store: *NodeStore, alias: AST.ForClauseTypeAlias) std.mem.Allocator.Error!AST.ForClauseTypeAlias.Idx {
-    const node = Node{
-        .tag = .for_clause_type_alias,
-        .main_token = alias.alias_name,
-        .data = .{
-            .lhs = alias.rigid_name,
-            .rhs = 0,
-        },
-        .region = alias.region,
-    };
-    const nid = try store.nodes.append(store.gpa, node);
-    return @fromBackingInt(@intCast(@backingInt(nid)));
-}
-
-/// Returns the start position for a new Span of ForClauseTypeAlias.Idxs in scratch
-pub fn scratchForClauseTypeAliasTop(store: *NodeStore) u32 {
-    return store.scratch_for_clause_type_aliases.top();
-}
-
-/// Places a new AST.ForClauseTypeAlias.Idx in the scratch.
-pub fn addScratchForClauseTypeAlias(store: *NodeStore, idx: AST.ForClauseTypeAlias.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_for_clause_type_aliases.append(idx);
-}
-
-/// Creates a new span starting at start. Moves the items from scratch to extra_data.
-pub fn forClauseTypeAliasSpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.ForClauseTypeAlias.Span {
-    return .{ .span = try store.dataSpanFromScratch(&store.scratch_for_clause_type_aliases, start) };
-}
-
-/// Clears any ForClauseTypeAlias.Idxs added to scratch from start until the end.
-pub fn clearScratchForClauseTypeAliasesFrom(store: *NodeStore, start: u32) void {
-    store.scratch_for_clause_type_aliases.clearFrom(start);
+    return store.addSlotted(AST.ForClauseTypeAlias.Idx, for_clause_type_alias_shape, alias);
 }
 
 /// Returns a new ForClauseTypeAlias slice for iteration.
@@ -3831,14 +2469,7 @@ pub fn forClauseTypeAliasSlice(store: *const NodeStore, span: AST.ForClauseTypeA
 
 /// Retrieves a ForClauseTypeAlias from a stored node.
 pub fn getForClauseTypeAlias(store: *const NodeStore, idx: AST.ForClauseTypeAlias.Idx) AST.ForClauseTypeAlias {
-    const node = store.nodes.get(@fromBackingInt(@intCast(@backingInt(idx))));
-    std.debug.assert(node.tag == .for_clause_type_alias);
-
-    return .{
-        .alias_name = node.main_token,
-        .rigid_name = node.data.lhs,
-        .region = node.region,
-    };
+    return store.getSlotted(AST.ForClauseTypeAlias, for_clause_type_alias_shape, idx);
 }
 
 /// Adds a RequiresEntry node and returns its index.
@@ -3856,26 +2487,6 @@ pub fn addRequiresEntry(store: *NodeStore, entry: AST.RequiresEntry) std.mem.All
     };
     const nid = try store.nodes.append(store.gpa, node);
     return @fromBackingInt(@intCast(@backingInt(nid)));
-}
-
-/// Returns the start position for a new Span of RequiresEntry.Idxs in scratch
-pub fn scratchRequiresEntryTop(store: *NodeStore) u32 {
-    return store.scratch_requires_entries.top();
-}
-
-/// Places a new AST.RequiresEntry.Idx in the scratch.
-pub fn addScratchRequiresEntry(store: *NodeStore, idx: AST.RequiresEntry.Idx) std.mem.Allocator.Error!void {
-    try store.scratch_requires_entries.append(idx);
-}
-
-/// Creates a new span starting at start. Moves the items from scratch to extra_data.
-pub fn requiresEntrySpanFrom(store: *NodeStore, start: u32) std.mem.Allocator.Error!AST.RequiresEntry.Span {
-    return .{ .span = try store.dataSpanFromScratch(&store.scratch_requires_entries, start) };
-}
-
-/// Clears any RequiresEntry.Idxs added to scratch from start until the end.
-pub fn clearScratchRequiresEntriesFrom(store: *NodeStore, start: u32) void {
-    store.scratch_requires_entries.clearFrom(start);
 }
 
 /// Returns a new RequiresEntry slice for iteration.

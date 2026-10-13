@@ -2153,7 +2153,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_ident = try report.addOwnedString(ident_name);
             try report.headline.addReflowingText("Variable ");
             try report.headline.addUnqualifiedSymbol(owned_ident);
-            try report.headline.addReflowingText(" is defined here and then never used:");
+            try report.headline.addReflowingText(" is defined here and then never used.");
 
             try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
             const ident_with_underscore = try std.fmt.allocPrint(allocator, "_{s}", .{owned_ident});
@@ -2235,7 +2235,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addType(owned_type_name);
             try report.document.addReflowingText(" was already declared in ");
             try report.document.addSourceLocation(original_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try self.addSourceRegionTo(&report.document, original_region_info, .dimmed, owned_filename);
 
@@ -2260,7 +2260,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addType(owned_type_name);
             try report.document.addReflowingText(" was already declared in ");
             try report.document.addSourceLocation(original_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try self.addSourceRegionTo(&report.document, original_region_info, .dimmed, owned_filename);
 
@@ -2285,7 +2285,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addType(owned_type_name);
             try report.document.addReflowingText(" was already declared in ");
             try report.document.addSourceLocation(original_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try self.addSourceRegionTo(&report.document, original_region_info, .dimmed, owned_filename);
 
@@ -2390,7 +2390,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addRecordField(owned_field_name);
             try report.document.addReflowingText(" was first defined in ");
             try report.document.addSourceLocation(original_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try self.addSourceRegionTo(&report.document, original_region_info, .dimmed, owned_filename);
 
@@ -2547,7 +2547,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_ident = try report.addOwnedString(ident_name);
             try report.headline.addReflowingText("The name ");
             try report.headline.addUnqualifiedSymbol(owned_ident);
-            try report.headline.addReflowingText(" is being redeclared here:");
+            try report.headline.addReflowingText(" is being redeclared here.");
 
             // The primary region shows the new declaration; point below it at the original.
             const owned_filename = try report.addOwnedString(filename);
@@ -2558,7 +2558,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addUnqualifiedSymbol(owned_ident);
             try report.document.addReflowingText(" was already defined in ");
             try report.document.addSourceLocation(original_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try self.addSourceRegionTo(&report.document, original_region_info, .dimmed, owned_filename);
 
@@ -3513,7 +3513,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             var report = try Report.init(allocator, "Trailing `?`", "", .warning);
             try report.headline.addReflowingText("It's usually a mistake to use a postfix ");
             try report.headline.addAnnotated("?", .inline_code);
-            try report.headline.addReflowingText(" on values being returned implicitly at the end of a function like this:");
+            try report.headline.addReflowingText(" on a value being returned implicitly at the end of a function.");
 
             try self.addSourceRegionTo(&report.document, region_info, .warning_highlight, filename);
             try report.document.addLineBreak();
@@ -3691,13 +3691,15 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addAnnotated("expect", .inline_code);
             try report.headline.addReflowingText(" reassigns ");
             try report.headline.addUnqualifiedSymbol(owned_ident);
-            try report.headline.addReflowingText(", which was declared outside of it:");
+            try report.headline.addReflowingText(", which was declared outside of it.");
 
             try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
 
             try report.document.addLineBreak();
             try report.document.addUnqualifiedSymbol(owned_ident);
-            try report.document.addReflowingText(" was declared here:");
+            try report.document.addReflowingText(" was declared in ");
+            try report.document.addSourceLocation(declaration_region_info, owned_filename);
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try self.addSourceRegionTo(&report.document, declaration_region_info, .dimmed, owned_filename);
 
@@ -3721,29 +3723,30 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             var report = try Report.init(allocator, "Mutually Recursive Type Aliases", "", .runtime_error);
             const owned_type_name = try report.addOwnedString(type_name);
             const owned_other_name = try report.addOwnedString(other_type_name);
-            try report.headline.addReflowingText("The type alias ");
+            try report.headline.addReflowingText("The type aliases ");
             try report.headline.addInlineCode(owned_type_name);
             try report.headline.addReflowingText(" and ");
             try report.headline.addInlineCode(owned_other_name);
             try report.headline.addReflowingText(" form a recursive cycle.");
 
-            try report.document.addReflowingText("Type aliases are transparent synonyms and cannot be mutually recursive. ");
-            try report.document.addReflowingText("If you need recursive types, use nominal types (");
-            try report.document.addAnnotated(":=", .inline_code);
-            try report.document.addReflowingText(") instead.");
-            try report.document.addLineBreaks(2);
-
             const owned_filename = try report.addOwnedString(filename);
             try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
 
             try report.document.addLineBreak();
-            try report.document.addReflowingText("And it references ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(" references ");
             try report.document.addType(owned_other_name);
-            try report.document.addReflowingText(" declared in ");
+            try report.document.addReflowingText(", which is declared in ");
             try report.document.addSourceLocation(other_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try self.addSourceRegionTo(&report.document, other_region_info, .dimmed, owned_filename);
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Type aliases are transparent synonyms and cannot be mutually recursive. ");
+            try report.document.addReflowingText("If you need recursive types, use nominal types (");
+            try report.document.addAnnotated(":=", .inline_code);
+            try report.document.addReflowingText(") instead.");
 
             break :blk report;
         },
@@ -4947,44 +4950,19 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
 }
 
 /// Add a new expression to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addDef(self: *Self, expr: CIR.Def, region: Region) std.mem.Allocator.Error!CIR.Def.Idx {
-    const expr_idx = try self.store.addDef(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addDef = storeAdder("addDef");
 
 /// Add a new type header to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addTypeHeader(self: *Self, expr: CIR.TypeHeader, region: Region) std.mem.Allocator.Error!CIR.TypeHeader.Idx {
-    const expr_idx = try self.store.addTypeHeader(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addTypeHeader = storeAdder("addTypeHeader");
 
 /// Add a new statement to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addStatement(self: *Self, expr: CIR.Statement, region: Region) std.mem.Allocator.Error!CIR.Statement.Idx {
-    const expr_idx = try self.store.addStatement(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addStatement = storeAdder("addStatement");
 
 /// Add a new pattern to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addPattern(self: *Self, expr: CIR.Pattern, region: Region) std.mem.Allocator.Error!CIR.Pattern.Idx {
-    const expr_idx = try self.store.addPattern(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addPattern = storeAdder("addPattern");
 
 /// Add a new expression to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addExpr(self: *Self, expr: CIR.Expr, region: Region) std.mem.Allocator.Error!CIR.Expr.Idx {
-    const expr_idx = try self.store.addExpr(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addExpr = storeAdder("addExpr");
 
 /// Reserve one contiguous field-access path plus its enclosing expression.
 pub fn startFieldAccessPath(self: *Self, segment_count: u32) std.mem.Allocator.Error!NodeStore.FieldAccessPathBuilder {
@@ -5017,91 +4995,59 @@ pub fn rollbackFieldAccessPath(self: *Self, builder: NodeStore.FieldAccessPathBu
 }
 
 /// Add a new capture to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addCapture(self: *Self, capture: CIR.Expr.Capture, region: Region) std.mem.Allocator.Error!CIR.Expr.Capture.Idx {
-    const capture_idx = try self.store.addCapture(capture, region);
-    self.debugAssertArraysInSync();
-    return capture_idx;
-}
+pub const addCapture = storeAdder("addCapture");
 
 /// Add a new record field to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addRecordField(self: *Self, expr: CIR.RecordField, region: Region) std.mem.Allocator.Error!CIR.RecordField.Idx {
-    const expr_idx = try self.store.addRecordField(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addRecordField = storeAdder("addRecordField");
 
 /// Add a new unset record field (`name: _`) to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addUnsetField(self: *Self, unset_field: CIR.UnsetField, region: Region) std.mem.Allocator.Error!CIR.UnsetField.Idx {
-    const unset_idx = try self.store.addUnsetField(unset_field, region);
-    self.debugAssertArraysInSync();
-    return unset_idx;
-}
+pub const addUnsetField = storeAdder("addUnsetField");
 
 /// Add a new record destructuring to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addRecordDestruct(self: *Self, expr: CIR.Pattern.RecordDestruct, region: Region) std.mem.Allocator.Error!CIR.Pattern.RecordDestruct.Idx {
-    const expr_idx = try self.store.addRecordDestruct(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addRecordDestruct = storeAdder("addRecordDestruct");
 
 /// Adds a new if branch to the store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addIfBranch(self: *Self, expr: CIR.Expr.IfBranch, region: Region) std.mem.Allocator.Error!CIR.Expr.IfBranch.Idx {
-    const expr_idx = try self.store.addIfBranch(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addIfBranch = storeAdder("addIfBranch");
 
 /// Add a new match branch to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addMatchBranch(self: *Self, expr: CIR.Expr.Match.Branch, region: Region) std.mem.Allocator.Error!CIR.Expr.Match.Branch.Idx {
-    const expr_idx = try self.store.addMatchBranch(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addMatchBranch = storeAdder("addMatchBranch");
 
 /// Add a new where clause to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addWhereClause(self: *Self, expr: CIR.WhereClause, region: Region) std.mem.Allocator.Error!CIR.WhereClause.Idx {
-    const expr_idx = try self.store.addWhereClause(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addWhereClause = storeAdder("addWhereClause");
 
 /// Add a new type annotation to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addTypeAnno(self: *Self, expr: CIR.TypeAnno, region: Region) std.mem.Allocator.Error!CIR.TypeAnno.Idx {
-    const expr_idx = try self.store.addTypeAnno(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addTypeAnno = storeAdder("addTypeAnno");
 
 /// Add a new annotation to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addAnnotation(self: *Self, expr: CIR.Annotation, region: Region) std.mem.Allocator.Error!CIR.Annotation.Idx {
-    const expr_idx = try self.store.addAnnotation(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addAnnotation = storeAdder("addAnnotation");
 
 /// Add a new record field to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addAnnoRecordField(self: *Self, expr: CIR.TypeAnno.RecordField, region: Region) std.mem.Allocator.Error!CIR.TypeAnno.RecordField.Idx {
-    const expr_idx = try self.store.addAnnoRecordField(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addAnnoRecordField = storeAdder("addAnnoRecordField");
 
 /// Add a new exposed item to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addExposedItem(self: *Self, expr: CIR.ExposedItem, region: Region) std.mem.Allocator.Error!CIR.ExposedItem.Idx {
-    const expr_idx = try self.store.addExposedItem(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
+pub const addExposedItem = storeAdder("addExposedItem");
+
+/// The value type `NodeStore.<name>` stores.
+fn StoreValue(comptime name: []const u8) type {
+    return @typeInfo(@TypeOf(@field(NodeStore, name))).@"fn".param_types[1].?;
+}
+
+/// The index type `NodeStore.<name>` returns.
+fn StoreIdx(comptime name: []const u8) type {
+    const store_fn = @typeInfo(@TypeOf(@field(NodeStore, name))).@"fn";
+    return @typeInfo(store_fn.return_type.?).error_union.payload;
+}
+
+/// `NodeStore.<name>(value, region)` forwarded through this env, asserting the
+/// node and region arrays are in sync once the store has grown.
+fn storeAdder(comptime name: []const u8) fn (*Self, StoreValue(name), Region) std.mem.Allocator.Error!StoreIdx(name) {
+    return struct {
+        fn add(self: *Self, value: StoreValue(name), region: Region) std.mem.Allocator.Error!StoreIdx(name) {
+            const idx = try @field(NodeStore, name)(&self.store, value, region);
+            self.debugAssertArraysInSync();
+            return idx;
+        }
+    }.add;
 }
 
 /// Add a diagnostic.
@@ -5113,20 +5059,10 @@ pub fn addDiagnostic(self: *Self, reason: CIR.Diagnostic) std.mem.Allocator.Erro
 }
 
 /// Add a new malformed node to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addMalformed(self: *Self, diagnostic_idx: CIR.Diagnostic.Idx, region: Region) std.mem.Allocator.Error!CIR.Node.Idx {
-    const malformed_idx = try self.store.addMalformed(diagnostic_idx, region);
-    self.debugAssertArraysInSync();
-    return malformed_idx;
-}
+pub const addMalformed = storeAdder("addMalformed");
 
 /// Add a new match branch pattern to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addMatchBranchPattern(self: *Self, expr: CIR.Expr.Match.BranchPattern, region: Region) std.mem.Allocator.Error!CIR.Expr.Match.BranchPattern.Idx {
-    const expr_idx = try self.store.addMatchBranchPattern(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addMatchBranchPattern = storeAdder("addMatchBranchPattern");
 
 /// Retrieves the text of an identifier by its index
 pub fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {

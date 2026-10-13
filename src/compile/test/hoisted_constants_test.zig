@@ -2672,7 +2672,6 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -2699,8 +2698,6 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .ret,
@@ -2731,6 +2728,7 @@ fn storedI64(
     const node_from_root = switch (root.payload) {
         .const_node => |node| node,
         .pending,
+        .unevaluated,
         .fn_value,
         .discarded,
         .expect,
@@ -2757,6 +2755,7 @@ fn rootStoredI64(
     const node = switch (root.payload) {
         .const_node => |const_node| const_node,
         .pending,
+        .unevaluated,
         .fn_value,
         .discarded,
         .expect,

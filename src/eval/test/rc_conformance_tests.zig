@@ -1103,13 +1103,8 @@ const cases = [_]Case{
 const exemptions = [_]Exemption{
     .{ .op = .box_unbox, .reason = "allocation-consuming compiled variant is pinned by focused LIR and runtime-helper tests" },
     .{ .op = .list_prefetched, .reason = "never executed: LIR lowering splits it into list_prefetch and an alias of the list" },
-    .{ .op = .list_first, .reason = "no producer: List.first lowers through list_get_unsafe" },
-    .{ .op = .list_last, .reason = "no producer: List.last lowers through list_get_unsafe" },
-    .{ .op = .list_drop_first, .reason = "no producer: List.drop_first lowers through list_sublist" },
-    .{ .op = .list_drop_last, .reason = "no producer: List.drop_last lowers through list_sublist" },
     .{ .op = .list_prefetched, .reason = "no LIR producer: lowering splits List.prefetched into an alias of its list and list_prefetch" },
     .{ .op = .list_reverse, .reason = "no producer: List.rev is written in Roc over list_get_unsafe" },
-    .{ .op = .num_to_str, .reason = "no producer: each numeric type maps to its own <type>_to_str op" },
     .{ .op = .list_prefetched, .reason = "replaced: LIR lowering splits List.prefetched into list_prefetch and an alias of the list" },
 };
 
@@ -1133,7 +1128,7 @@ fn sharedPrePublishedBuiltin(allocator: Allocator) SweepError!helpers.PrePublish
 /// A source with problems still lowers to something runnable, but not to the
 /// program the case meant to write, and its ops quietly go uncovered.
 fn assertCaseChecks(allocator: Allocator, case: Case) SweepError!void {
-    var resources = try helpers.parseAndCheckProgramForProblemsWithBuiltin(
+    var resources = try helpers.parseAndCheckProgramForProblems(
         allocator,
         case.source_kind,
         case.source,
@@ -1163,7 +1158,7 @@ fn runCase(allocator: Allocator, case: Case) SweepError!void {
     // wrapper inlining, and it does not take a pre-published Builtin, so cases
     // pay for loading one only when they need that lowering.
     var wrapper_compiled = if (case.inline_wrappers)
-        try helpers.compileAllocationProgram(allocator, std.testing.io, case.source_kind, case.source, &.{})
+        try helpers.compileProgram(allocator, std.testing.io, case.source_kind, case.source, &.{}, helpers.allocation_test_lower_options)
     else
         null;
     defer if (wrapper_compiled) |*compiled| compiled.deinit(allocator);

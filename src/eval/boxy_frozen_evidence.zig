@@ -60,7 +60,7 @@ pub const Matcher = struct {
         return switch (ref) {
             .static => |id| self.runtime.requireBoxyTypeDesc(id),
             .runtime => |id| self.runtime.runtime_boxy_type_descs.items[id],
-            .local, .dict_method_arg, .dict_method_hidden => invariant("{s}", .{"materialized freeze witness retained frame evidence"}),
+            .local, .dict_method_hidden => invariant("{s}", .{"materialized freeze witness retained frame evidence"}),
         };
     }
 
@@ -99,23 +99,6 @@ pub const Matcher = struct {
         return b == null;
     }
 
-    fn payload(self: *Matcher, a: Program.BoxySpan, b: Program.BoxySpan) std.mem.Allocator.Error!bool {
-        if (a.len != b.len) return false;
-        for (self.runtime.requireBoxyPayloadSteps(a), self.runtime.requireBoxyPayloadSteps(b)) |left, right| {
-            if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
-            switch (left) {
-                .concrete => |step| if (!std.meta.eql(step, right.concrete)) {
-                    return false;
-                },
-                .dynamic => |step| {
-                    if (step.op != right.dynamic.op) return false;
-                    try self.pushDescriptor(step.desc, right.dynamic.desc);
-                },
-            }
-        }
-        return true;
-    }
-
     /// Compare two descriptors' own fields, queueing the descriptors they
     /// reference.
     fn descriptorFields(self: *Matcher, a: *const Program.BoxyTypeDesc, b: *const Program.BoxyTypeDesc) std.mem.Allocator.Error!bool {
@@ -133,7 +116,6 @@ pub const Matcher = struct {
         const right_names = self.runtime.requireBoxyFieldNames(b.field_names);
         if (left_names.len != right_names.len) return false;
         for (left_names, right_names) |left, right| if (left != right) return false;
-        if (!try self.payload(a.copy_plan, b.copy_plan) or !try self.payload(a.drop_plan, b.drop_plan)) return false;
         if (a.tag_variants.len != b.tag_variants.len) return false;
         for (self.runtime.requireBoxyTagVariants(a.tag_variants), self.runtime.requireBoxyTagVariants(b.tag_variants)) |left, right| {
             inline for (.{ "name", "discriminant", "payload_count", "payload_layout" }) |field| {

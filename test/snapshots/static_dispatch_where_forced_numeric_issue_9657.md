@@ -37,7 +37,7 @@ TYPE NOT DETERMINED - static_dispatch_where_forced_numeric_issue_9657.md:19:17:1
 		(title "Type Not Determined")
 		(region (start 19 17) (end 19 25))
 		(headline
-			(reflow "Nothing in this program determines a type this needs:"))
+			(reflow "Nothing in this program determines a type this needs."))
 		(document
 			(source-region (file "static_dispatch_where_forced_numeric_issue_9657.md") (start 19 17) (end 19 25) (annotation error) (line-text "    transform = make_map(|n| n + 1)"))
 			(line-break)

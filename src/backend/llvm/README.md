@@ -13,7 +13,7 @@ Monomorphized IR  →  LLVM IR Builder  →  LLVM Bitcode  →  Object Code (.o)
 1. **Monomorphized IR**: The input from the Roc compiler's earlier stages (type checking, monomorphization)
 2. **LLVM IR Builder** (`Builder.zig`): Constructs LLVM IR in memory
 3. **Bitcode Writer** (`bitcode_writer.zig`): Serializes the IR to LLVM bitcode format
-4. **LLVM Backend** (`bindings.zig`): Parses bitcode and compiles to native object code
+4. **LLVM Backend** (`vendor/llvm_compile_bindings.zig`): Parses bitcode and compiles to native object code
 5. **Linker**: Links object code with platform host to produce final executable
 
 ## Files
@@ -23,8 +23,6 @@ Monomorphized IR  →  LLVM IR Builder  →  LLVM Bitcode  →  Object Code (.o)
 | `Builder.zig` | LLVM IR builder - constructs LLVM modules, functions, basic blocks, and instructions in memory |
 | `ir.zig` | LLVM IR data structures, opcodes, and type definitions |
 | `bitcode_writer.zig` | Serializes Builder's in-memory IR to LLVM bitcode binary format |
-| `BitcodeReader.zig` | Parses LLVM bitcode (for debugging/verification) |
-| `bindings.zig` | Zig bindings to LLVM C API for compiling bitcode to object code |
 
 ## Building with LLVM
 

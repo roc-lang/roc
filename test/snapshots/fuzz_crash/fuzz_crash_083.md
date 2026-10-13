@@ -55,7 +55,7 @@ TOO MANY ARGS - fuzz_crash_083.md:3:11:3:18
 				(file "fuzz_crash_083.md")
 				(line 2)
 				(column 3))
-			(text ":")
+			(text ".")
 			(line-break)
 			(source-region (file "fuzz_crash_083.md") (start 2 3) (end 2 4) (annotation dim) (line-text "C(b, b) : (a, b)"))))
 	(report

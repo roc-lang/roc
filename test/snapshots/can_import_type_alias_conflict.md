@@ -25,7 +25,7 @@ TYPE REDECLARED - can_import_type_alias_conflict.md:4:1:4:16
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "Json")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "can_import_type_alias_conflict.md") (start 1 1) (end 1 38) (annotation error) (line-text "import json.Json exposing [JsonValue]"))
 			(line-break)
@@ -36,7 +36,7 @@ TYPE REDECLARED - can_import_type_alias_conflict.md:4:1:4:16
 				(file "can_import_type_alias_conflict.md")
 				(line 1)
 				(column 1))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "can_import_type_alias_conflict.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json exposing [JsonValue]"))))
 	(report
@@ -57,7 +57,7 @@ TYPE REDECLARED - can_import_type_alias_conflict.md:4:1:4:16
 				(file "can_import_type_alias_conflict.md")
 				(line 1)
 				(column 1))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "can_import_type_alias_conflict.md") (start 1 1) (end 1 38) (annotation dim) (line-text "import json.Json exposing [JsonValue]")))))
 ~~~

@@ -762,12 +762,6 @@ pub const Store = struct {
         return try self.freshFromContent(Content{ .flex = Flex.init() });
     }
 
-    /// Create a new unbound, flexible type variable without a name
-    /// Used in canonicalization when creating type slots
-    pub fn freshWithRank(self: *Self, rank: Rank) std.mem.Allocator.Error!Var {
-        return try self.freshFromContentWithRank(Content{ .flex = Flex.init() }, rank);
-    }
-
     /// Create a new variable with the provided desc
     /// Used in tests
     /// TODO: Can we remove this function? It hardcodes rank, which is fine for
@@ -842,16 +836,6 @@ pub const Store = struct {
         desc.flags.frozen = true;
         try self.frozen_anchors.put(self.gpa, @backingInt(storage.desc_idx), var_);
         try self.setDescUnguarded(storage.desc_idx, desc);
-    }
-
-    /// Whether `var_` belongs to a frozen class.
-    pub fn varIsFrozen(self: *const Self, var_: Var) bool {
-        return self.resolveStorageRoot(var_).desc.flags.frozen;
-    }
-
-    /// The frozen classes, by anchor, for verifying them.
-    pub fn frozenAnchors(self: *const Self) std.AutoHashMapUnmanaged(u32, Var).ValueIterator {
-        return self.frozen_anchors.valueIterator();
     }
 
     /// End every class's freeze; afterwards the store holds no frozen class.
@@ -988,8 +972,7 @@ pub const Store = struct {
     /// Whether two descriptors agree on every flag an instantiated copy
     /// carries over.
     fn sameCopiedFlags(a: types.DescriptorFlags, b: types.DescriptorFlags) bool {
-        return a.empty_tag_union_is_default == b.empty_tag_union_is_default and
-            a.nominal_backing_structure == b.nominal_backing_structure;
+        return @as(u8, @bitCast(a.copied())) == @as(u8, @bitCast(b.copied()));
     }
 
     pub fn groundEpoch(self: *const Self) u64 {
@@ -1110,7 +1093,7 @@ pub const Store = struct {
     /// Bound an annotated definition's implicitly opened row (design.md
     /// "Polarity"). The bound travels with the row's equivalence class.
     pub fn markBoundedRowExt(self: *Self, target_var: Var) Allocator.Error!void {
-        const resolved = self.resolveVar(target_var);
+        const resolved = try self.resolveWriteTarget(target_var);
         var desc = resolved.desc;
         desc.flags.bounded_row_ext = true;
         try self.setDesc(resolved.desc_idx, desc);
@@ -1119,7 +1102,7 @@ pub const Store = struct {
     /// End the bound on a row every use shares: a weak value binding's row is
     /// bounded only while its own right-hand side is checked.
     pub fn clearBoundedRowExt(self: *Self, target_var: Var) Allocator.Error!void {
-        const resolved = self.resolveVar(target_var);
+        const resolved = try self.resolveWriteTarget(target_var);
         var desc = resolved.desc;
         desc.flags.bounded_row_ext = false;
         try self.setDesc(resolved.desc_idx, desc);
@@ -1445,13 +1428,6 @@ pub const Store = struct {
     /// Given a range, get a slice of vars from the backing array
     pub fn sliceVars(self: *const Self, range: VarSafeList.Range) []Var {
         return self.vars.sliceRange(range);
-    }
-
-    /// Get an iterator over vars for the given range.
-    /// Use this instead of sliceVars when the iteration may trigger
-    /// reallocations (e.g., during unification).
-    pub fn iterVars(self: *const Self, range: VarSafeList.Range) VarSafeList.Iterator {
-        return self.vars.iterRange(range);
     }
 
     /// Get a var at a specific offset within a range.
@@ -1786,6 +1762,17 @@ pub const Store = struct {
         const trace = tracy.traceNamed(@src(), "typesStore.resolveVar");
         defer trace.end();
         return publicResolved(initial_var, self.resolveStorageRoot(initial_var));
+    }
+
+    /// Resolve `var_` through any chain of aliases to the content they name.
+    pub fn resolveThroughAliases(self: *const Self, var_: Var) ResolvedVarDesc {
+        var resolved = self.resolveVar(var_);
+        var guard = debug.IterationGuard.init("resolveThroughAliases");
+        while (resolved.desc.content == .alias) {
+            guard.tick();
+            resolved = self.resolveVar(self.getAliasBackingVar(resolved.desc.content.alias));
+        }
+        return resolved;
     }
 
     /// Whether `var_` resolves through aliases to a function structure.
@@ -2656,6 +2643,27 @@ test "a content write aimed at a frozen class's member changes only that member"
     try store.setVarContent(member, .err);
 
     try std.testing.expectEqual(Content.err, store.resolveVar(member).desc.content);
+    try expectFrozenEmptyRecord(&store, class.anchor);
+    try expectFrozenEmptyRecord(&store, class.use);
+}
+
+test "a row bound aimed at a frozen class's member changes only that member" {
+    const gpa = std.testing.allocator;
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    const class = try frozenClassWithUse(&store);
+    const member = try store.freshRedirect(class.use);
+    try store.markBoundedRowExt(member);
+
+    try std.testing.expect(store.resolveVar(member).desc.flags.bounded_row_ext);
+    try expectFrozenEmptyRecord(&store, class.anchor);
+    try expectFrozenEmptyRecord(&store, class.use);
+    try std.testing.expect(!store.resolveVar(class.use).desc.flags.bounded_row_ext);
+
+    const other = try store.freshRedirect(class.use);
+    try store.clearBoundedRowExt(other);
+    try std.testing.expect(!store.resolveVar(other).desc.flags.bounded_row_ext);
     try expectFrozenEmptyRecord(&store, class.anchor);
     try expectFrozenEmptyRecord(&store, class.use);
 }

@@ -83,7 +83,7 @@ DUPLICATE DEFINITION - pattern_duplicate_binder.md:32:6:32:11
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "from")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_from")
@@ -185,7 +185,7 @@ DUPLICATE DEFINITION - pattern_duplicate_binder.md:32:6:32:11
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "n")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "pattern_duplicate_binder.md") (start 25 22) (end 25 23) (annotation error) (line-text "nested_shadow = |n| |n| n"))
 			(line-break)
@@ -196,7 +196,7 @@ DUPLICATE DEFINITION - pattern_duplicate_binder.md:32:6:32:11
 				(file "pattern_duplicate_binder.md")
 				(line 25)
 				(column 18))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "pattern_duplicate_binder.md") (start 25 18) (end 25 19) (annotation dim) (line-text "nested_shadow = |n| |n| n"))))
 	(report
@@ -206,7 +206,7 @@ DUPLICATE DEFINITION - pattern_duplicate_binder.md:32:6:32:11
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "n")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_n")
@@ -264,7 +264,7 @@ DUPLICATE DEFINITION - pattern_duplicate_binder.md:32:6:32:11
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "outer")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "pattern_duplicate_binder.md") (start 32 6) (end 32 11) (annotation error) (line-text "    (outer, _) => outer"))
 			(line-break)
@@ -275,7 +275,7 @@ DUPLICATE DEFINITION - pattern_duplicate_binder.md:32:6:32:11
 				(file "pattern_duplicate_binder.md")
 				(line 31)
 				(column 2))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "pattern_duplicate_binder.md") (start 31 2) (end 31 7) (annotation dim) (line-text "(outer, nested) = (1, |pair| match pair {")))))
 ~~~

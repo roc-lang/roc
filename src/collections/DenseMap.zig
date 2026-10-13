@@ -280,16 +280,7 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
             return &self.sparse_chunks.items[slot_index].?[index & chunk_mask];
         }
 
-        fn sparseSlotPtr(self: *Self, index: usize) ?*u32 {
-            const chunk_index = index >> chunk_shift;
-            if (chunk_index < self.chunk_base) return null;
-            const slot_index = chunk_index - self.chunk_base;
-            if (slot_index >= self.sparse_chunks.items.len) return null;
-            const chunk = self.sparse_chunks.items[slot_index] orelse return null;
-            return &chunk[index & chunk_mask];
-        }
-
-        fn sparseSlotPtrConst(self: *const Self, index: usize) ?*const u32 {
+        fn sparseSlotPtr(self: *const Self, index: usize) ?*u32 {
             const chunk_index = index >> chunk_shift;
             if (chunk_index < self.chunk_base) return null;
             const slot_index = chunk_index - self.chunk_base;
@@ -299,7 +290,7 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
         }
 
         fn densePosition(self: *const Self, index: usize) ?usize {
-            const raw_position = (self.sparseSlotPtrConst(index) orelse return null).*;
+            const raw_position = (self.sparseSlotPtr(index) orelse return null).*;
             if (raw_position == empty_position) return null;
             const dense_position: usize = raw_position;
             std.debug.assert(dense_position < self.active_indices.items.len);

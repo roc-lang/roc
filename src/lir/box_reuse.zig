@@ -604,17 +604,15 @@ const Transform = struct {
         self.store.getProcSpecPtr(self.proc_id).frame_locals = frame_locals;
     }
 
+    /// The straight-line successor this pass scans through; boxy-dispatch
+    /// statements end the scan like branches and terminals do.
     fn nextOf(self: *const Transform, stmt_id: CFStmtId) ?CFStmtId {
-        return switch (self.store.getCFStmt(stmt_id)) {
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| s.next,
-            .expect_err,
-            .runtime_error,
-            .comptime_exhaustiveness_failed,
+        const stmt = self.store.getCFStmt(stmt_id);
+        return switch (stmt) {
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -622,19 +620,41 @@ const Transform = struct {
             .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
-            .boxy_tag_match,
             .assign_call_dict,
+            => null,
+            .init_uninitialized,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .boxy_tag_match,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .set_local,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .ret,
             .crash,
-            => null,
+            => body_clone.linearNextOrNull(stmt),
         };
     }
 };

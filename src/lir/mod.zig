@@ -118,12 +118,6 @@ pub const stack_probe_page_size = LIR.stack_probe_page_size;
 pub const LirProcSpecId = LIR.LirProcSpecId;
 /// Builtin low-level operation identifier reused from `base`.
 pub const LowLevel = LIR.LowLevel;
-/// Pattern type used in LIR.
-pub const LirPattern = LIR.LirPattern;
-/// Identifier of a stored LirPattern.
-pub const LirPatternId = LIR.LirPatternId;
-/// Span into flat pattern-id storage.
-pub const LirPatternSpan = LIR.LirPatternSpan;
 
 /// Domain category byte mixed into a builtin Hasher for a `hasher_write_*`
 /// low-level op. This is the single source of truth shared by the interpreter

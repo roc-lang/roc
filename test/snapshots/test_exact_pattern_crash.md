@@ -45,7 +45,7 @@ TOO MANY ARGS - test_exact_pattern_crash.md:23:10:23:50
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "p1")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_p1")
