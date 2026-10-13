@@ -308,7 +308,12 @@ pub const Constants = struct {
     ///      whose bodies closed an annotated open result row.
     /// 144: Annotation polarity flips through function argument positions, so a
     ///      callback's result row is generated closed and its argument row open.
-    pub const CACHE_VERSION = 144;
+    /// 145: Checked modules publish compile-time roots no compilation
+    ///      demanded as unevaluated, with every evaluated root's reads.
+    /// 146: Annotations record an erroneous generated type, and procedure
+    ///      templates record whether their signature reaches every scheme
+    ///      variable.
+    pub const CACHE_VERSION = 146;
 };
 
 /// Configuration for the Roc cache system.

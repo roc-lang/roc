@@ -62,7 +62,7 @@ EndOfFile,
 ~~~roc
 {
 	x = "hello"
-		x.inspect()
+	x.inspect()
 }
 ~~~
 # CANONICALIZE

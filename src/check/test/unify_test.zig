@@ -83,7 +83,7 @@ const TestEnv = struct {
         const gpa = self.module_env.gpa;
         self.nominal_decl_statements.deinit(gpa);
         self.snapshots.deinit();
-        self.problems.deinit(gpa);
+        self.problems.deinit();
         self.type_writer.deinit();
         self.scratch.deinit();
         self.occurs_scratch.deinit();
@@ -94,7 +94,6 @@ const TestEnv = struct {
     /// Helper function to call unify with args from TestEnv
     fn unify(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!Result {
         const env = unify_mod.Env{
-            .problems_gpa = self.module_env.gpa,
             .ident_store = self.module_env.getIdentStoreConst(),
             .self_module_identity = self.module_env.selfModuleIdentity(),
             .types = &self.module_env.types,
@@ -110,7 +109,6 @@ const TestEnv = struct {
     /// Helper to call the write-no-report unify variant from TestEnv.
     fn unifyWriteNoReport(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!Result {
         const env = unify_mod.Env{
-            .problems_gpa = self.module_env.gpa,
             .ident_store = self.module_env.getIdentStoreConst(),
             .self_module_identity = self.module_env.selfModuleIdentity(),
             .types = &self.module_env.types,
@@ -125,7 +123,6 @@ const TestEnv = struct {
 
     fn unifyExact(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!Result {
         const env = unify_mod.Env{
-            .problems_gpa = self.module_env.gpa,
             .ident_store = self.module_env.getIdentStoreConst(),
             .self_module_identity = self.module_env.selfModuleIdentity(),
             .types = &self.module_env.types,

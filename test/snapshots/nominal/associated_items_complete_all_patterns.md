@@ -11514,11 +11514,9 @@ second = 100
 
 d1_1 = d1_forward.first
 
-
 inner = 200
 
 d1_2 = d1_scope.inner
-
 
 Inner := [D].{
 	inner_val = outer_val
@@ -11530,7 +11528,6 @@ d2_1 = d2_inner_first.outer_val
 
 d2_2 = .inner_val
 
-
 Inner := [H].{
 	inner_val = outer_val
 }
@@ -11538,7 +11535,6 @@ Inner := [H].{
 outer_val = 500
 
 d2_3 = .inner_val
-
 
 outer_val = .inner_val
 
@@ -11548,14 +11544,11 @@ Inner := [J].{
 
 d2_4 = d2_outer_refs_inner.outer_val
 
-
 Inner := [L].{
 	inner_private = 700
 }
 
 outer_trying_inner = inner_private
-
-
 
 InnerA := [N].{
 	valA = .valB + 1
@@ -11566,7 +11559,6 @@ InnerB := [O].{
 }
 
 d2_5 = .valA
-
 
 L2 := [Q].{
 	L3 := [R].{
@@ -11584,7 +11576,6 @@ d3_2 = .val2
 
 d3_3 = .val3
 
-
 val1 = 30
 
 L2 := [T].{
@@ -11601,7 +11592,6 @@ d3_5 = .val2
 
 d3_6 = .val3
 
-
 L2 := [W].{
 	L3 := [X].{
 		l3_private = 999
@@ -11610,8 +11600,6 @@ L2 := [W].{
 
 bad_l1 = l3_private
 
-
-
 L2 := [Z].{
 	L3 := [AA].{
 		l3_secret = 888
@@ -11619,8 +11607,6 @@ L2 := [Z].{
 
 	bad_l2 = l3_secret
 }
-
-
 
 L2 := [AC].{
 	L3 := [AD].{
@@ -11638,7 +11624,6 @@ d3_8 = .val2
 
 d3_9 = .val3
 
-
 L2 := [AF].{
 	L3 := [AG].{
 		L4 := [AH].{
@@ -11654,7 +11639,6 @@ L2 := [AF].{
 val1 = 1
 
 d4_1 = .val4
-
 
 val1 = 10
 
@@ -11672,7 +11656,6 @@ L2 := [AJ].{
 
 d4_2 = .val4
 
-
 L2 := [AN].{
 	L3 := [AO].{
 		L4 := [AP].{
@@ -11688,7 +11671,6 @@ L2 := [AN].{
 val1 = 7
 
 d4_3 = .val4
-
 
 val1 = 15
 
@@ -11706,7 +11688,6 @@ L2 := [AR].{
 
 d4_4 = .val4
 
-
 L2 := [BB].{
 	L3 := [BC].{
 		L4 := [BD].{
@@ -11717,7 +11698,6 @@ L2 := [BB].{
 }
 
 d4_5 = .val4
-
 
 L2 := [BF].{
 	L3 := [BG].{
@@ -11732,7 +11712,6 @@ L2 := [BF].{
 }
 
 d4_6 = .val4
-
 
 L2 := [BJ].{
 	L3 := [BK].{
@@ -11750,7 +11729,6 @@ val1 = 3
 
 d4_7 = .val4
 
-
 L2 := [BN].{
 	L3 := [BO].{
 		L4 := [BP].{
@@ -11760,8 +11738,6 @@ L2 := [BN].{
 }
 
 bad = l4_val
-
-
 
 L2 := [BR].{
 	L3 := [BS].{
@@ -11773,8 +11749,6 @@ L2 := [BR].{
 	bad = l4_secret
 }
 
-
-
 L2 := [BV].{
 	L3 := [BW].{
 		L4 := [BX].{
@@ -11784,8 +11758,6 @@ L2 := [BV].{
 		attempt = l4_private
 	}
 }
-
-
 
 L2 := [BZ].{
 	L3 := [CA].{
@@ -11807,7 +11779,6 @@ val1 = 1
 
 d5_1 = .val5
 
-
 val1 = 100
 
 L2 := [CE].{
@@ -11827,7 +11798,6 @@ L2 := [CE].{
 }
 
 d5_2 = .val5
-
 
 val1 = 2
 
@@ -11849,7 +11819,6 @@ L2 := [CJ].{
 
 d5_3 = .val5
 
-
 L2 := [CO].{
 	L3 := [CP].{
 		L4 := [CQ].{
@@ -11863,7 +11832,6 @@ L2 := [CO].{
 }
 
 d5_4 = .val5
-
 
 L2 := [CT].{
 	L3 := [CU].{
@@ -11880,7 +11848,6 @@ L2 := [CT].{
 }
 
 d5_5 = .val5
-
 
 L2 := [DD].{
 	val2 = val1 + 10
@@ -11910,7 +11877,6 @@ d5_9 = .val4
 
 d5_10 = .val5
 
-
 L2 := [DI].{
 	L3 := [DJ].{
 		L4 := [DK].{
@@ -11923,8 +11889,6 @@ L2 := [DI].{
 
 bad = deep_secret
 
-
-
 L2 := [DN].{
 	L3 := [DO].{
 		L4 := [DP].{
@@ -11936,8 +11900,6 @@ L2 := [DN].{
 		bad = l5_secret
 	}
 }
-
-
 
 L2 := [DS].{
 	L3 := [DT].{

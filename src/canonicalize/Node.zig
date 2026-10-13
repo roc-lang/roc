@@ -1247,8 +1247,11 @@ pub const Payload = extern union {
             /// for annotations the compiler synthesizes, which have no name in
             /// source.
             has_name_region: bool = false,
+            /// Set by type checking when the annotation's generated type
+            /// contains an error (see `CIR.Annotation.erroneous`).
+            erroneous: bool = false,
             /// Unused bits, kept zero so the byte compares equal across builds.
-            unused: u3 = 0,
+            unused: u2 = 0,
         };
     };
 

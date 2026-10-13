@@ -11,7 +11,7 @@ foo : BadType
 foo = 42
 ~~~
 # EXPECTED
-UNDERSCORE IN TYPE ALIAS - simple_underscore_error.md:1:1:1:1
+UNDERSCORE IN TYPE ALIAS - simple_underscore_error.md:1:12:1:13
 TYPE MISMATCH - simple_underscore_error.md:4:7:4:9
 # PROBLEMS
 ~~~clojure
@@ -19,11 +19,11 @@ TYPE MISMATCH - simple_underscore_error.md:4:7:4:9
 	(report
 		(severity runtime_error)
 		(title "Underscore In Type Alias")
-		(region (start 1 1) (end 1 1))
+		(region (start 1 12) (end 1 13))
 		(headline
 			(reflow "Underscores are not allowed in type alias declarations."))
 		(document
-			(source-region (file "simple_underscore_error.md") (start 1 1) (end 1 1) (annotation error) (line-text "BadType := _"))
+			(source-region (file "simple_underscore_error.md") (start 1 12) (end 1 13) (annotation error) (line-text "BadType := _"))
 			(line-break)
 			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
 	(report

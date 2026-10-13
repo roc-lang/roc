@@ -19,7 +19,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 6;
+pub const format_version: u32 = 7;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// artifact holding its procedure, and the ownership signature and
@@ -30,6 +30,9 @@ pub const SpecEntry = struct {
     artifact: u32,
     /// Null is an authoritative independent summary, not missing metadata.
     platform_requirement_relation: ?[32]u8 = null,
+    /// The compile-time roots the procedure's code reads, which a linking
+    /// program demands (`Common.SpecCacheHit.comptime_root_reads`).
+    comptime_root_reads: []const lir.CheckedPipeline.ComptimeRootRead = &.{},
     rc_borrowed_params: u64,
     rc_ret_borrowed: bool,
     rc_ret_lenders: u64,
@@ -186,6 +189,11 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
         try writer.word(spec.artifact);
         try writer.byte(@intFromBool(spec.platform_requirement_relation != null));
         if (spec.platform_requirement_relation) |relation| try writer.raw(&relation);
+        try writer.word(@intCast(spec.comptime_root_reads.len));
+        for (spec.comptime_root_reads) |root_read| {
+            try writer.raw(&root_read.module);
+            try writer.word(root_read.root);
+        }
         try writer.wide(spec.rc_borrowed_params);
         try writer.byte(@intFromBool(spec.rc_ret_borrowed));
         try writer.wide(spec.rc_ret_lenders);
@@ -367,6 +375,11 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
                 0 => null,
                 1 => (try reader.raw(32))[0..32].*,
                 else => return error.MalformedPack,
+            },
+            .comptime_root_reads = reads: {
+                const reads = try arena_allocator.alloc(lir.CheckedPipeline.ComptimeRootRead, try reader.word());
+                for (reads) |*root_read| root_read.* = .{ .module = (try reader.raw(32))[0..32].*, .root = try reader.word() };
+                break :reads reads;
             },
             .rc_borrowed_params = try reader.wide(),
             .rc_ret_borrowed = switch (try reader.byte()) {
@@ -558,6 +571,10 @@ test "pack bytes round-trip every artifact field and spec entry" {
             .rc_ret_unique = true,
             .rc_ret_unique_fields = 0b10,
             .rc_ret_conditions = &.{ 0x0001_02ff, 0x0000_0403 },
+            .comptime_root_reads = &.{
+                .{ .module = @as([32]u8, @splat(0x11)), .root = 3 },
+                .{ .module = @as([32]u8, @splat(0x22)), .root = 0 },
+            },
         },
     };
 
@@ -578,6 +595,7 @@ test "pack bytes round-trip every artifact field and spec entry" {
     try testing.expect(pack.specs[0].rc_ret_unique);
     try testing.expectEqual(specs[0].rc_ret_unique_fields, pack.specs[0].rc_ret_unique_fields);
     try testing.expectEqualSlices(u32, specs[0].rc_ret_conditions, pack.specs[0].rc_ret_conditions);
+    try testing.expectEqualDeep(specs[0].comptime_root_reads, pack.specs[0].comptime_root_reads);
     const proc = pack.set.artifacts[0];
     try testing.expectEqualSlices(u8, &lir.ProcIdentity.forTest(7).bytes, &proc.kind.proc.bytes);
     try testing.expectEqualSlices(u8, artifacts[0].code, proc.code);
