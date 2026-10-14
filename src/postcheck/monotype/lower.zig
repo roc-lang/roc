@@ -52330,7 +52330,7 @@ const BodyContext = struct {
         const evidence_node = try evidence_ctx.instNode(structural.evidence.callable_ty);
         const constraint_node = try scheme_ctx.instNode(param.callable_ty);
         try relateRequestComponent(self.graph, evidence_node, constraint_node);
-        try self.graph.settleLeafScope(scope);
+        if (@import("builtin").mode == .debug) try self.graph.debugAssertLeafScopeJoined(scope);
     }
 
     /// Parameters that retain the checked target's exact callable instantiation
@@ -57069,7 +57069,7 @@ const BodyContext = struct {
             });
         }
         const instantiated_calls = self.instantiated_codec_calls.items[calls_start..];
-        try self.graph.settleLeafScope(scope);
+        if (@import("builtin").mode == .debug) try self.graph.debugAssertLeafScopeJoined(scope);
         const method_call_slots = try self.codecMethodCallSlots(instantiated_calls);
         // An instantiation that consulted no enclosing evidence is determined
         // by its boundary classes alone, so later uses of this contract at
