@@ -56,7 +56,9 @@ fn panicHandler(msg: []const u8, ret_addr: ?usize) noreturn {
         panic_jmp = null; // prevent re-entry
         sljmp.longjmp(jmp, 1);
     }
-    // No protection active—use default behavior.
+    // No protection active: report the in-flight compiler work, then use
+    // default behavior.
+    base.ice_context.reportPanicToStderr();
     std.debug.defaultPanic(msg, @returnAddress());
 }
 

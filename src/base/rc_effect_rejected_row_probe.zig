@@ -1,14 +1,14 @@
 //! Compile-failure probe for the `RcEffect` structural validator.
 //!
-//! This file must NOT compile. `zig build run-test-rc-effect-row-rejected`
+//! This file must NOT compile. `zig build run-test-rc-effect-rejected-row`
 //! builds it and requires the compile to fail with the rule the row breaks, so
 //! the guarantee "a wrong row is a compile error" is itself tested rather than
 //! assumed.
 //!
-//! The row below is the one PR roc-lang/roc#10023 removed: `str_drop_prefix`
-//! returns a slice of its argument's allocation, so claiming `result_unique`
-//! alongside `result_shares_args` made ARC count a fresh birth on top of a
-//! link to the lender, leaking one reference per call.
+//! The row below has the roc-lang/roc#10023 shape: `str_drop_prefix` returns a
+//! slice of its argument's allocation, so claiming `result_unique` alongside
+//! `result_shares_args` makes ARC count a fresh birth on top of a link to the
+//! lender, leaking one reference per call.
 
 const base = @import("base");
 

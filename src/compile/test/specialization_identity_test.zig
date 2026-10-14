@@ -59,7 +59,7 @@ fn countU64IdentitySpecs(program: anytype, callable: U64IdentityCallable) usize 
             .proc_template => if (callable != .proc_template) continue,
             .hosted, .generated => continue,
         }
-        const fn_type = switch (program.types.get(record.request_fn_ty)) {
+        const fn_type = switch (program.types.get(record.identity.request_fn_ty)) {
             .func => |func| func,
             .primitive, .named, .record, .tuple, .tag_union, .list, .box, .erased, .zst => continue,
         };

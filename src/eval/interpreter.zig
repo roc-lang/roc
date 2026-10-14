@@ -1590,6 +1590,13 @@ pub const Interpreter = struct {
         defer if (comptime tracks_compiler_signals) {
             base.stack_overflow.interpreting_roc_program = outer_interpreting;
         };
+        // Crash reports are the compiler's; a platform build touches no
+        // thread-local storage.
+        const records_ice_context = comptime builtins.host_abi.host_role == .in_process;
+        const ice = if (comptime records_ice_context)
+            base.ice_context.enter(.{ .phase = .interpret, .proc = self.store.iceContextProc(request.proc_id) })
+        else {};
+        defer if (comptime records_ice_context) ice.leave();
         self.bindBoxyRuntime();
         self.roc_env.resetForEval();
         self.call_stack.clearRetainingCapacity();

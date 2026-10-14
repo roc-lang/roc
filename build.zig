@@ -3,6 +3,7 @@ const stack_budget = @import("src/base/stack_budget.zig");
 const builtin = @import("builtin");
 const downstream_package = @import("src/build/downstream_package.zig");
 const modules = @import("src/build/modules.zig");
+const zig_test_suites = @import("src/build/zig_test_suites.zig");
 const glibc_stub_build = @import("src/build/glibc_stub.zig");
 const ci_steps = @import("src/build/ci_steps.zig");
 const roc_target = @import("src/target/mod.zig");
@@ -685,6 +686,10 @@ const TestSuiteSpec = struct {
     default_step: bool = false,
     /// Run fixture consumers in a private prepared project directory.
     fixture_root: bool = false,
+    /// Which inventory lists this suite: a per-module suite comes from the
+    /// module inventory in `src/build/modules.zig`; every other suite must be
+    /// listed in `src/build/zig_test_suites.zig`, which says where CI runs it.
+    inventory: enum { module_tests, zig_test_suites } = .zig_test_suites,
 };
 
 /// Configures Roc's registered Zig unit tests to use Zig's stock runner with
@@ -750,6 +755,10 @@ const TestSuiteRegistry = struct {
 
     fn register(self: TestSuiteRegistry, spec: TestSuiteSpec) void {
         const b = self.b;
+
+        if (spec.inventory == .zig_test_suites and zig_test_suites.find(spec.step_suffix) == null) {
+            std.debug.panic("run-test-zig-{s} is not listed in src/build/zig_test_suites.zig", .{spec.step_suffix});
+        }
 
         self.unit_test_runner.configure(spec.compile);
 
@@ -4015,6 +4024,7 @@ pub fn build(b: *std.Build) void {
             .compile = module_test.test_step,
             .deps = module_deps,
             .default_step = true,
+            .inventory = .module_tests,
         });
     }
 

@@ -667,6 +667,14 @@ pub const NominalType = struct {
         return self.source.sourceDecl().toOptional();
     }
 
+    /// The statement index of this type's declaration in its origin module env.
+    /// Every nominal type the checker produces names its declaration.
+    pub fn statement(self: NominalType) u32 {
+        const source_decl = self.source.sourceDecl();
+        std.debug.assert(source_decl.present);
+        return source_decl.statement;
+    }
+
     pub fn isOpaque(self: NominalType) bool {
         return self.source.isOpaque();
     }

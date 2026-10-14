@@ -6563,6 +6563,13 @@ pub const InstGraph = struct {
     /// other side's structure moves to a fresh node that unifies with the
     /// nominal's backing, so every Monotype view of either side carries the
     /// named wrapper, exactly as later stages expect.
+    ///
+    /// Named arguments need no pairing here. The structural side has none to
+    /// pair with, and a nominal's arguments, phantom ones included, stay on
+    /// the joined class, so evidence about them reaches every node of either
+    /// side. An alias argument either occurs in the backing, and is related
+    /// through it, or is unused by the backing; Monotype equality unwraps
+    /// aliases, so an unused alias argument never affects a type's identity.
     fn unifyThroughBacking(
         self: *InstGraph,
         named_node: NodeId,

@@ -176,9 +176,9 @@ jobs:
 
       # Each step below also runs when an earlier one failed, so one push
       # reports every static problem.
-      - name: Check this workflow runs every MiniCI shard
+      - name: Check the CI files run MiniCI as declared
         if: ${{ !cancelled() }}
-        run: zig build minici -- --minici-verify-workflow .github/workflows/ci_manager.yml
+        run: zig build minici -- --minici-verify-workflows
 
       # Not a MiniCI job; covers ci/tidy.zig itself.
       - name: Run tidy unit tests

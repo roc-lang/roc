@@ -17,6 +17,9 @@ const roc_target = @import("roc_target");
 const CoreCtx = @import("ctx").CoreCtx;
 const Coordinator = @import("../coordinator.zig").Coordinator;
 const is_freestanding = @import("../threading.zig").is_freestanding;
+const static_data_exports = @import("static_data");
+const collections = @import("collections");
+const GuardedList = collections.GuardedList;
 
 const platform_files = [_]struct { path: []const u8, source: []const u8 }{
     .{ .path = ".roc_echo_platform/main.roc", .source =
@@ -418,5 +421,177 @@ test "a compile-time table re-bound from a helper's returned record field each i
         // takes its fresh form.
         try std.testing.expectEqual(@as(usize, 0), countListSlots(result));
         try std.testing.expectEqual(@as(usize, 1), countLowLevel(result, .list_append_range_within_unsafe));
+    }
+}
+
+/// The constant-aggregate shapes whose lowering must not grow with their
+/// element count.
+const AggregateShape = enum {
+    /// `List.repeat` of a list: one row shared by every element.
+    nested_rows,
+    /// `List.repeat` of a heap string.
+    heap_strings,
+    /// `List.repeat` of a record holding a heap string.
+    string_records,
+    /// A literal list of distinct scalars.
+    literal_scalars,
+    /// A literal count of copies of a value known only at runtime.
+    runtime_repeat,
+};
+
+const row_len = 260;
+
+fn aggregateSource(arena: std.mem.Allocator, shape: AggregateShape, count: usize) std.mem.Allocator.Error![]const u8 {
+    const header =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\
+    ;
+    const read =
+        \\main! = |args| {
+        \\    Echo.line!(Str.inspect(List.get(m, List.len(args))))
+        \\    Ok({})
+        \\}
+        \\
+    ;
+    return switch (shape) {
+        .nested_rows => try std.fmt.allocPrint(arena, "{s}m = List.repeat(List.repeat(1.U64, {d}), {d})\n{s}", .{ header, row_len, count, read }),
+        .heap_strings => try std.fmt.allocPrint(arena, "{s}m = List.repeat(\"a string too long to be stored inline\", {d})\n{s}", .{ header, count, read }),
+        .string_records => try std.fmt.allocPrint(arena, "{s}m = List.repeat({{ name: \"a record name too long to be inline\", n: 7.U32 }}, {d})\n{s}", .{ header, count, read }),
+        .literal_scalars => blk: {
+            var items: std.ArrayList(u8) = .empty;
+            for (0..count) |index| try items.print(arena, "{d}, ", .{index * 7 + 1});
+            break :blk try std.fmt.allocPrint(arena, "{s}m : List(U64)\nm = [{s}]\n{s}", .{ header, items.items, read });
+        },
+        // The label gives the build a compile-time root, so it continues
+        // from an evaluation as every build with constants does.
+        .runtime_repeat => try std.fmt.allocPrint(arena,
+            \\{s}label = "copies"
+            \\main! = |args| {{
+            \\    Echo.line!(label)
+            \\    m = List.repeat(List.len(args), {d})
+            \\    Echo.line!(Str.inspect(List.get(m, List.len(args))))
+            \\    Ok({{}})
+            \\}}
+            \\
+        , .{ header, count }),
+    };
+}
+
+/// What a constant aggregate's lowering costs the program that runs it.
+const ProgramSize = struct {
+    statements: usize = 0,
+    widest_frame: usize = 0,
+    widest_list: usize = 0,
+};
+
+fn programSize(result: *lir.Program.Result) std.mem.Allocator.Error!ProgramSize {
+    var size: ProgramSize = .{};
+    for (result.store.getProcSpecs()) |proc| {
+        size.widest_frame = @max(size.widest_frame, proc.frame_locals.len);
+        // Initializer procedures count too: moving per-element code out of
+        // the entrypoint still makes every later pass process it.
+        const body = proc.body orelse continue;
+        var statements = try lir.BodyClone.ReachableStmts.init(&result.store, body);
+        defer statements.deinit();
+        while (try statements.next()) |_| size.statements += 1;
+    }
+    for (result.store.getCFStmts()) |stmt| {
+        if (stmt == .assign_list) size.widest_list = @max(size.widest_list, stmt.assign_list.elems.len);
+    }
+    return size;
+}
+
+/// Calls that pass a local holding the integer literal `value`.
+fn callsPassingIntLiteral(gpa: std.mem.Allocator, result: *const lir.Program.Result, value: i128) std.mem.Allocator.Error!usize {
+    var holders: collections.DenseMapUnmanaged(lir.LIR.LocalId, void) = .empty;
+    defer holders.deinit(gpa);
+    for (result.store.getCFStmts()) |stmt| {
+        if (stmt != .assign_literal) continue;
+        const literal: i128 = switch (stmt.assign_literal.value) {
+            .i64_literal => |int| int.value,
+            .i128_literal => |int| int.value,
+            .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => continue,
+        };
+        if (literal == value) try holders.put(gpa, stmt.assign_literal.target, {});
+    }
+    var count: usize = 0;
+    for (result.store.getCFStmts()) |stmt| {
+        if (stmt != .assign_call) continue;
+        const args = result.store.getLocalSpan(stmt.assign_call.args);
+        for (0..GuardedList.borrowLen(args)) |index| {
+            if (holders.contains(GuardedList.at(args, index))) {
+                count += 1;
+                break;
+            }
+        }
+    }
+    return count;
+}
+
+const small_count = 100;
+const large_count = 5000;
+
+test "a constant aggregate costs the continued runtime program the same at any element count" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    inline for (@typeInfo(AggregateShape).@"enum".field_names) |field_name| {
+        const shape = @field(AggregateShape, field_name);
+        var sizes: [2]ProgramSize = undefined;
+        var restored_sizes: [2]ProgramSize = undefined;
+        for ([_]usize{ small_count, large_count }, 0..) |count, index| {
+            var arena = base.SingleThreadArena.init(gpa);
+            defer arena.deinit();
+            var tmp_dir = std.testing.tmpDir(.{});
+            defer tmp_dir.cleanup();
+            var lowered = try lowerBothPaths(gpa, arena.allocator(), tmp_dir, try aggregateSource(arena.allocator(), shape, count), .none);
+            defer lowered.deinit();
+            sizes[index] = try programSize(&lowered.continued.lir_result);
+            restored_sizes[index] = try programSize(&lowered.restored.lir_result);
+            const continued = &lowered.continued;
+            // No frame holds a local per element, and no list is assembled
+            // from a span over the elements.
+            try std.testing.expect(sizes[index].widest_frame < small_count);
+            try std.testing.expect(sizes[index].widest_list < small_count);
+            switch (shape) {
+                .runtime_repeat => {
+                    // The copies are made by one call that takes the count,
+                    // the builtin's, not by per-element stores.
+                    try std.testing.expectEqual(@as(usize, 1), try callsPassingIntLiteral(gpa, &continued.lir_result, count));
+                },
+                .literal_scalars => {
+                    // The packed buffer is emitted once.
+                    const frozen = continued.frozen_static_data orelse return error.TestUnexpectedResult;
+                    var buffers: usize = 0;
+                    for (frozen.exports) |item| {
+                        if (item.bytes.len >= count * @sizeOf(u64)) buffers += 1;
+                    }
+                    try std.testing.expectEqual(@as(usize, 1), buffers);
+                },
+                .nested_rows => {
+                    // Every element names the one frozen row.
+                    const frozen = continued.frozen_static_data orelse return error.TestUnexpectedResult;
+                    var rows: usize = 0;
+                    var outer: ?static_data_exports.StaticDataExport = null;
+                    for (frozen.exports) |item| {
+                        // A row is its elements behind a refcount header,
+                        // with no pointers of its own.
+                        if (item.relocations.len == 0 and item.bytes.len >= row_len * @sizeOf(u64) and item.bytes.len <= (row_len + 2) * @sizeOf(u64)) rows += 1;
+                        if (item.relocations.len == count) outer = item;
+                    }
+                    try std.testing.expectEqual(@as(usize, 1), rows);
+                    const elements = (outer orelse return error.TestUnexpectedResult).relocations;
+                    for (elements) |relocation| try std.testing.expectEqual(elements[0].target.data_symbol, relocation.target.data_symbol);
+                },
+                .heap_strings, .string_records => {},
+            }
+        }
+        try std.testing.expectEqual(sizes[0], sizes[1]);
+        // A program restored from the constant store builds packed scalars
+        // and runtime repeats at a fixed size too.
+        switch (shape) {
+            .literal_scalars, .runtime_repeat => try std.testing.expectEqual(restored_sizes[0], restored_sizes[1]),
+            .nested_rows, .heap_strings, .string_records => {},
+        }
     }
 }

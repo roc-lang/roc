@@ -2761,11 +2761,7 @@ const Certifier = struct {
     }
 
     fn restitutedParamsForDiscriminant(self: *const Certifier, discriminant: u32) ?arc_sig.ParamMask {
-        const outcomes = self.sigs.outcomesOf(self.current_sig);
-        for (outcomes) |outcome| {
-            if (outcome.discriminant == discriminant) return outcome.restituted_params;
-        }
-        return null;
+        return arc_sig.outcomeMaskForValue(self.sigs.outcomesOf(self.current_sig), discriminant);
     }
 
     fn applyOutcomeRestitution(self: *Certifier, state: *State) CertifyError!void {
@@ -2806,13 +2802,9 @@ const Certifier = struct {
     }
 
     fn callOutcomeMask(self: *const Certifier, value: ValueId, discriminant: u64) ?arc_sig.ParamMask {
-        if (value >= self.values.items.len or discriminant > std.math.maxInt(u32)) return null;
-        const info = self.values.items[value];
-        const outcomes = self.sigs.outcomesOf(.{ .outcomes = info.call_outcomes });
-        for (outcomes) |outcome| {
-            if (outcome.discriminant == @as(u32, @intCast(discriminant))) return outcome.restituted_params;
-        }
-        return null;
+        if (value >= self.values.items.len) return null;
+        const outcomes = self.sigs.outcomesOf(.{ .outcomes = self.values.items[value].call_outcomes });
+        return arc_sig.outcomeMaskForValue(outcomes, discriminant);
     }
 
     fn defaultCallOutcomeMask(
@@ -2821,23 +2813,8 @@ const Certifier = struct {
         branches: anytype,
     ) ?arc_sig.ParamMask {
         if (value >= self.values.items.len) return null;
-        const info = self.values.items[value];
-        const outcomes = self.sigs.outcomesOf(.{ .outcomes = info.call_outcomes });
-        var mask: arc_sig.ParamMask = std.math.maxInt(arc_sig.ParamMask);
-        var any = false;
-        for (outcomes) |outcome| {
-            var explicit = false;
-            for (0..GuardedList.borrowLen(branches)) |index| {
-                if (GuardedList.at(branches, index).value == outcome.discriminant) {
-                    explicit = true;
-                    break;
-                }
-            }
-            if (explicit) continue;
-            any = true;
-            mask &= outcome.restituted_params;
-        }
-        return if (any) mask else null;
+        const outcomes = self.sigs.outcomesOf(.{ .outcomes = self.values.items[value].call_outcomes });
+        return arc_sig.defaultOutcomeMask(outcomes, branches);
     }
 
     fn restoreCallOutcome(
@@ -5315,6 +5292,9 @@ const Certifier = struct {
             // Any write to the returned local kills its discriminant witness;
             // `assign_tag` establishes a replacement after this kill.
             if (self.current_return_local) |return_local| {
+                // Emission rebinding of the returned local kills its witness exactly
+                // as it does in the solver's outcome domain; `assign_tag`
+                // establishes a replacement witness after this generic kill.
                 if (body_clone.writtenLocal(stmt)) |target| {
                     if (target == return_local) state.result_discriminant = no_dense;
                 }

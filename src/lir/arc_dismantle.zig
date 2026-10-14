@@ -1399,77 +1399,6 @@ const FieldRestitution = struct {
     outcomes: arc_sig.OutcomeSpan,
 };
 
-fn findOutcomeRefinement(
-    allocator: Allocator,
-    store: *const LirStore,
-    target: LIR.LocalId,
-    next: LIR.CFStmtId,
-    outcomes: arc_sig.OutcomeSpan,
-) Error!?LIR.CFStmtId {
-    if (outcomes.isEmpty()) return null;
-    var aliases = std.ArrayList(LIR.LocalId).empty;
-    defer aliases.deinit(allocator);
-    try aliases.append(allocator, target);
-    var discriminant: ?LIR.LocalId = null;
-    var cursor = next;
-    while (true) {
-        const stmt = store.getCFStmtImmediate(cursor);
-        if (stmt.* == .assign_ref) {
-            const assign = stmt.assign_ref;
-            switch (assign.op) {
-                .local => |source| {
-                    var source_is_result = false;
-                    for (aliases.items) |alias| source_is_result = source_is_result or alias == source;
-                    if (!source_is_result) return null;
-                    var already = false;
-                    for (aliases.items) |alias| already = already or alias == assign.target;
-                    if (!already) try aliases.append(allocator, assign.target);
-                    cursor = assign.next;
-                },
-                .discriminant => |op| {
-                    var source_is_result = false;
-                    for (aliases.items) |alias| source_is_result = source_is_result or alias == op.source;
-                    if (!source_is_result or discriminant != null) return null;
-                    discriminant = assign.target;
-                    cursor = assign.next;
-                },
-                .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return null,
-            }
-        } else if (stmt.* == .switch_stmt) {
-            if (discriminant == null or stmt.switch_stmt.cond != discriminant.?) return null;
-            return cursor;
-        } else {
-            return null;
-        }
-    }
-}
-
-fn outcomeMaskForValue(outcomes: []const arc_sig.Outcome, value: u64) ?arc_sig.ParamMask {
-    if (value > std.math.maxInt(u32)) return null;
-    for (outcomes) |outcome| {
-        if (outcome.discriminant == @as(u32, @intCast(value))) return outcome.restituted_params;
-    }
-    return null;
-}
-
-fn defaultOutcomeMask(outcomes: []const arc_sig.Outcome, branches: anytype) ?arc_sig.ParamMask {
-    var mask: arc_sig.ParamMask = std.math.maxInt(arc_sig.ParamMask);
-    var any = false;
-    for (outcomes) |outcome| {
-        var explicit = false;
-        for (0..GuardedList.borrowLen(branches)) |index| {
-            if (GuardedList.at(branches, index).value == outcome.discriminant) {
-                explicit = true;
-                break;
-            }
-        }
-        if (explicit) continue;
-        any = true;
-        mask &= outcome.restituted_params;
-    }
-    return if (any) mask else null;
-}
-
 fn restoredFieldMaskForBranch(
     solution: *const arc_solve.Solution,
     restorations: []const FieldRestitution,
@@ -1481,7 +1410,7 @@ fn restoredFieldMaskForBranch(
         if (receipt.switch_stmt != switch_stmt) continue;
         const position_bit = arc_sig.paramBit(receipt.call_arg.position).?;
         const outcomes = solution.sigTable().outcomesOf(.{ .outcomes = receipt.outcomes });
-        const mask = outcomeMaskForValue(outcomes, value) orelse continue;
+        const mask = arc_sig.outcomeMaskForValue(outcomes, value) orelse continue;
         if ((mask & position_bit) != 0) restored |= receipt.field_mask;
     }
     return restored;
@@ -1499,7 +1428,7 @@ fn restoredFieldMaskForDefault(
         if (receipt.switch_stmt != switch_stmt) continue;
         const position_bit = arc_sig.paramBit(receipt.call_arg.position).?;
         const outcomes = solution.sigTable().outcomesOf(.{ .outcomes = receipt.outcomes });
-        const mask = defaultOutcomeMask(outcomes, branches) orelse continue;
+        const mask = arc_sig.defaultOutcomeMask(outcomes, branches) orelse continue;
         if ((mask & position_bit) != 0) restored |= receipt.field_mask;
     }
     return restored;
@@ -2908,7 +2837,7 @@ pub fn compute(
             const callee_sig = solution.sigOf(call_stmt.assign_call.proc);
             if (callee_sig.paramMode(position) != .owned) continue;
             const outcomes = solution.availableOutcomeSpanOf(call_stmt.assign_call.proc);
-            const refinement = (try findOutcomeRefinement(gpa, store, call_stmt.assign_call.target, call_stmt.assign_call.next, outcomes)) orelse continue;
+            const refinement = (try arc_solve.findOutcomeRefinement(gpa, store, call_stmt.assign_call.target, call_stmt.assign_call.next, outcomes)) orelse continue;
             const position_bit = arc_sig.paramBit(position).?;
             var any_restitution = false;
             for (solution.sigTable().outcomesOf(.{ .outcomes = outcomes })) |outcome| {

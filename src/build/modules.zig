@@ -171,9 +171,6 @@ pub const Tests = union(enum) {
         /// build through `std.testing.refAllDecls`. A filtered run keeps them,
         /// so the inner tests the filter names still get compiled.
         aggregators: []const []const u8 = &.{},
-        /// Whether MiniCI runs the step. A step it does not run is covered
-        /// only by the nightly `run-test-zig` aggregate.
-        minici: bool = true,
     },
     /// The module is the spec list of a test runner that build.zig wires to
     /// `run-test-zig-module-<name>` itself.
@@ -405,7 +402,7 @@ pub const ModuleType = enum {
                 .root = "src/glue/mod.zig",
                 .deps = &.{ .base, .collections, .parse, .compile, .can, .check, .reporting, .echo_platform, .builtins, .roc_target, .types, .layout, .backend, .eval, .lir, .build_options },
                 .extra_imports = &.{"compiler_platform_sources"},
-                .tests = .{ .unit = .{ .aggregators = &.{"glue tests"}, .minici = false } },
+                .tests = .{ .unit = .{ .aggregators = &.{"glue tests"} } },
             },
             .compile => .{
                 .root = "src/compile/mod.zig",

@@ -334,6 +334,13 @@ pub const ParallelMetrics = struct {
     tasks_committed: u64 = 0,
     patterns_recorded: u64 = 0,
     patterns_admitted: u64 = 0,
+    /// Call-pattern workers whose bodies were cloned, across every admission
+    /// path (syntactic collection, staged discovery, and serial cloning).
+    workers_written: u64 = 0,
+    /// Distinct new call patterns the coordinator refused because their source
+    /// function already held `spec_constr_specialization_count` workers. Each
+    /// such call keeps its ordinary direct call.
+    spec_count_denials: u64 = 0,
     bodies_committed: u64 = 0,
     expressions_committed: u64 = 0,
     peak_retained_shards: u64 = 0,
@@ -346,6 +353,8 @@ pub const ParallelMetrics = struct {
         self.tasks_committed +|= other.tasks_committed;
         self.patterns_recorded +|= other.patterns_recorded;
         self.patterns_admitted +|= other.patterns_admitted;
+        self.workers_written +|= other.workers_written;
+        self.spec_count_denials +|= other.spec_count_denials;
         self.bodies_committed +|= other.bodies_committed;
         self.expressions_committed +|= other.expressions_committed;
         self.peak_retained_shards = @max(self.peak_retained_shards, other.peak_retained_shards);
@@ -1599,10 +1608,11 @@ const Pass = struct {
 
     fn admitPatternRequest(self: *Pass, request: PatternRequest) Allocator.Error!bool {
         const raw = @backingInt(request.fn_id);
-        if (self.newSpecAdmission(raw) != .admitted) return false;
+        if (!self.plans[raw].source.size.admits()) return false;
         for (self.plans[raw].specs.items) |spec| {
             if (try patternEql(self.program, spec.pattern, request.pattern)) return false;
         }
+        if (!self.admitDistinctPattern(raw)) return false;
         const args = try self.arena.allocator().alloc(Shape, request.pattern.args.len);
         for (args, request.pattern.args) |*arg, source| arg.* = try copyShape(self.arena.allocator(), source);
         try self.plans[raw].specs.append(self.allocator, .{ .pattern = .{ .args = args } });
@@ -2607,6 +2617,52 @@ const Pass = struct {
         return .admitted;
     }
 
+    /// Coordinator admission of a call pattern already known to differ from
+    /// every pattern recorded for `raw`. A refusal leaves the call as its
+    /// ordinary direct call; a refusal by the per-function worker budget is
+    /// counted so a corpus run shows how often that budget binds.
+    fn admitDistinctPattern(self: *Pass, raw: usize) bool {
+        if (self.borrowed_worker) Common.invariant("SpecConstr body worker attempted coordinator pattern admission");
+        switch (self.newSpecAdmission(raw)) {
+            .admitted => return true,
+            .denied_body_size => return false,
+            .denied_spec_count => {
+                if (self.options.metrics_out) |metrics| metrics.spec_count_denials +|= 1;
+                return false;
+            },
+        }
+    }
+
+    /// The order in which a call tries the workers admitted for source function
+    /// `raw`: most specific pattern first, ties in admission order. Every
+    /// worker whose pattern accepts a call's arguments is a sound target;
+    /// trying them in this order binds the call to the one that knows the
+    /// most about its arguments. Specificity is the pattern's constructor node
+    /// count. All patterns that accept one call's arguments refine a common
+    /// value, so whenever one of them refines another it also has strictly
+    /// more constructor nodes, and the first accepting pattern in this order
+    /// is never strictly less specific than another accepting pattern.
+    fn specSelectionOrder(self: *Pass, raw: usize, order: *[spec_constr_specialization_count]u8) Allocator.Error![]const u8 {
+        const specs = self.plans[raw].specs.items;
+        if (specs.len > spec_constr_specialization_count) Common.invariant("source function held more call-pattern workers than its budget");
+        var counts: [spec_constr_specialization_count]usize = undefined;
+        for (specs, 0..) |spec, index| {
+            order[index] = @intCast(index);
+            counts[index] = try patternConstructorCount(self.allocator, spec.pattern);
+        }
+        // Stable insertion sort by descending constructor count.
+        var index: usize = 1;
+        while (index < specs.len) : (index += 1) {
+            const current = order[index];
+            var slot = index;
+            while (slot > 0 and counts[order[slot - 1]] < counts[current]) : (slot -= 1) {
+                order[slot] = order[slot - 1];
+            }
+            order[slot] = current;
+        }
+        return order[0..specs.len];
+    }
+
     const InlineSourceBody = struct {
         expr: Ast.ExprId,
         size: BodySize,
@@ -2635,7 +2691,7 @@ const Pass = struct {
 
     fn recordCallPattern(self: *Pass, fn_id: Ast.FnId, args_span: Ast.Span(Ast.ExprId)) Allocator.Error!void {
         const raw = @backingInt(fn_id);
-        if (self.newSpecAdmission(raw) != .admitted) return;
+        if (!self.plans[raw].source.size.admits()) return;
         const args = try GuardedList.dupe(self.allocator, Ast.ExprId, self.program.exprSpan(args_span));
         defer self.allocator.free(args);
         const fn_args = self.program.typedLocalSpan(self.program.getFnAt(raw).args);
@@ -2661,6 +2717,7 @@ const Pass = struct {
         for (self.plans[raw].specs.items) |spec| {
             if (try patternEql(self.program, spec.pattern, pattern)) return;
         }
+        if (!self.admitDistinctPattern(raw)) return;
 
         try self.plans[raw].specs.append(self.allocator, .{
             .pattern = pattern,
@@ -2700,7 +2757,7 @@ const Pass = struct {
         for (self.plans[raw].specs.items) |spec| {
             if (try patternEql(self.program, spec.pattern, pattern)) return;
         }
-        if (self.newSpecAdmission(raw) != .admitted) return;
+        if (!self.admitDistinctPattern(raw)) return;
 
         const source_fn = self.program.getFnAt(raw);
         const symbol = self.symbols.fresh();
@@ -2789,6 +2846,7 @@ const Pass = struct {
             .shapes = shapes,
         });
         try self.copyProcDebugName(source_fn.symbol, symbol);
+        if (self.options.metrics_out) |metrics| metrics.workers_written +|= 1;
     }
 
     fn rewriteExistingCalls(self: *Pass) Allocator.Error!void {
@@ -4661,7 +4719,9 @@ const Pass = struct {
 
         const args = try GuardedList.dupe(self.allocator, Ast.ExprId, self.program.exprSpan(call.args));
         defer self.allocator.free(args);
-        for (self.plans[raw].specs.items) |spec| {
+        var order_buffer: [spec_constr_specialization_count]u8 = undefined;
+        for (try self.specSelectionOrder(raw, &order_buffer)) |spec_index| {
+            const spec = self.plans[raw].specs.items[spec_index];
             var rewritten_args = std.ArrayList(Ast.ExprId).empty;
             defer rewritten_args.deinit(self.allocator);
 
@@ -9780,7 +9840,9 @@ const Cloner = struct {
         task.out = try arena.create(std.ArrayList(Ast.ExprId));
         task.out.* = .empty;
         task.out_owned = true;
-        for (self.pass.plans[raw].specs.items) |spec| {
+        var order_buffer: [spec_constr_specialization_count]u8 = undefined;
+        for (try self.pass.specSelectionOrder(raw, &order_buffer)) |spec_index| {
+            const spec = self.pass.plans[raw].specs.items[spec_index];
             if (!try callPatternMatchesValues(self.pass.program, spec.pattern, task.values)) continue;
             task.spec_pattern = spec.pattern;
             task.spec_fn = spec.fn_id orelse Common.invariant("call-pattern specialization id was not assigned before cloning calls");
@@ -15746,6 +15808,27 @@ fn writePatternU32(hasher: *TypeDigestHasher, value: u32) void {
     hasher.update(&buffer);
 }
 
+/// The number of constructor (non-`any`) nodes in a call pattern: the
+/// specificity measure `Pass.specSelectionOrder` ranks workers by.
+fn patternConstructorCount(allocator: Allocator, pattern: CallPattern) Allocator.Error!usize {
+    var pending = std.ArrayList(Shape).empty;
+    defer pending.deinit(allocator);
+    try pending.appendSlice(allocator, pattern.args);
+    var count: usize = 0;
+    while (pending.pop()) |shape| {
+        switch (shape) {
+            .any => continue,
+            .tag => |tag| try pending.appendSlice(allocator, tag.payloads),
+            .record => |record| for (record.fields) |field| try pending.append(allocator, field.shape),
+            .tuple => |tuple| try pending.appendSlice(allocator, tuple.items),
+            .nominal => |nominal| try pending.append(allocator, nominal.backing.*),
+            .callable => |callable| try pending.appendSlice(allocator, callable.captures),
+        }
+        count += 1;
+    }
+    return count;
+}
+
 fn patternEql(program: *Ast.Program, lhs: CallPattern, rhs: CallPattern) Allocator.Error!bool {
     if (lhs.args.len != rhs.args.len) return false;
     for (lhs.args, rhs.args) |lhs_arg, rhs_arg| {
@@ -17529,6 +17612,144 @@ test "SpecConstr admission uses body size and worker count before cloning" {
     });
     try pass.refreshPreCloneSource(1);
     try std.testing.expectEqual(SpecAdmission.admitted, pass.newSpecAdmission(1));
+}
+
+test "SpecConstr worker budget leaves further distinct call patterns as residual direct calls" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const tag_ty = try program.types.add(.{ .tag_union = Type.Span.empty() });
+    const unit = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    const arg = try program.addLocal(@fromBackingInt(1), tag_ty);
+    const target = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(2),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = arg, .ty = tag_ty }}),
+        .captures = .empty(),
+        .body = .{ .roc = unit },
+        .ret = unit_ty,
+    });
+    const label_texts = [_][]const u8{ "First", "Second", "Third", "Fourth", "Fifth" };
+    var calls: [label_texts.len]Ast.ExprId = undefined;
+    for (label_texts, &calls) |text, *call| {
+        const tag = try program.addExpr(.{ .ty = tag_ty, .data = .{ .tag = .{
+            .name = try program.names.internTagLabel(text),
+            .payloads = .empty(),
+        } } });
+        call.* = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+            .callee = .{ .lifted = target },
+            .args = try program.addExprSpan(&.{tag}),
+            .captures = .empty(),
+        } } });
+    }
+    program.next_symbol = 3;
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var metrics: ParallelMetrics = .{};
+    pass.options = .{ .metrics_out = &metrics };
+    pass.plans[0].used_args[0] = true;
+
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    cloner.inline_calls = .none;
+    for (calls, 0..) |call, index| {
+        const cloned = program.getExpr(try cloner.cloneExpr(call)).data.call_proc;
+        const callee = Ast.localDirectCallee(cloned) orelse return error.TestUnexpectedResult;
+        if (index < spec_constr_specialization_count) {
+            // Each distinct pattern within the budget reserves its own worker.
+            try std.testing.expectEqual(pass.plans[0].specs.items[index].fn_id.?, callee);
+        } else {
+            // Past the budget the call keeps its ordinary direct callee.
+            try std.testing.expectEqual(target, callee);
+        }
+    }
+    try std.testing.expectEqual(spec_constr_specialization_count, pass.plans[0].specs.items.len);
+    try std.testing.expectEqual(@as(u64, label_texts.len - spec_constr_specialization_count), metrics.spec_count_denials);
+}
+
+test "SpecConstr redirects a call to its most specific accepting worker" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const tag_ty = try program.types.add(.{ .tag_union = Type.Span.empty() });
+    const wrap = try program.names.internTagLabel("Wrap");
+    const leaf = try program.names.internTagLabel("Leaf");
+    const source_arg = try program.addLocal(@fromBackingInt(1), tag_ty);
+    const source_body = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    const source_fn_id = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(2),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = source_arg, .ty = tag_ty }}),
+        .captures = .empty(),
+        .body = .{ .roc = source_body },
+        .ret = unit_ty,
+    });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+
+    // Two workers whose patterns both accept `Wrap(Leaf)`. The less specific
+    // one is admitted first, so admission order alone would select it.
+    var worker_ids: [2]Ast.FnId = undefined;
+    for (&worker_ids, 3..) |*worker_id, symbol| {
+        worker_id.* = try program.addFn(.{
+            .shapes = program.finishFnShapes(.{}),
+            .symbol = @fromBackingInt(@intCast(symbol)),
+            .args = .empty(),
+            .captures = .empty(),
+            .body = .hosted,
+            .ret = unit_ty,
+        });
+    }
+    const arena = pass.arena.allocator();
+    const general_payloads = try arena.dupe(Shape, &.{.{ .any = tag_ty }});
+    const specific_payloads = try arena.dupe(Shape, &.{.{ .tag = .{ .ty = tag_ty, .name = leaf, .payloads = &.{} } }});
+    try pass.plans[@backingInt(source_fn_id)].specs.append(allocator, .{
+        .pattern = .{ .args = try arena.dupe(Shape, &.{.{ .tag = .{ .ty = tag_ty, .name = wrap, .payloads = general_payloads } }}) },
+        .fn_id = worker_ids[0],
+        .written = true,
+    });
+    try pass.plans[@backingInt(source_fn_id)].specs.append(allocator, .{
+        .pattern = .{ .args = try arena.dupe(Shape, &.{.{ .tag = .{ .ty = tag_ty, .name = wrap, .payloads = specific_payloads } }}) },
+        .fn_id = worker_ids[1],
+        .written = true,
+    });
+
+    // A generated body calling the source function with `Wrap(Leaf)`.
+    const caller_fn_id = try program.reserveFnSlot();
+    const outer_shapes = program.beginFnShapes(caller_fn_id);
+    const leaf_expr = try program.addExpr(.{ .ty = tag_ty, .data = .{ .tag = .{ .name = leaf, .payloads = .empty() } } });
+    const wrap_expr = try program.addExpr(.{ .ty = tag_ty, .data = .{ .tag = .{
+        .name = wrap,
+        .payloads = try program.addExprSpan(&.{leaf_expr}),
+    } } });
+    const caller_body = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = source_fn_id },
+        .args = try program.addExprSpan(&.{wrap_expr}),
+        .captures = .empty(),
+    } } });
+    program.setFn(caller_fn_id, .{
+        .shapes = program.finishFnShapes(outer_shapes),
+        .symbol = @fromBackingInt(5),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = caller_body },
+        .ret = unit_ty,
+    });
+
+    var order_buffer: [spec_constr_specialization_count]u8 = undefined;
+    try std.testing.expectEqualSlices(u8, &.{ 1, 0 }, try pass.specSelectionOrder(@backingInt(source_fn_id), &order_buffer));
+
+    try pass.rewriteExistingCalls();
+    const redirected = program.getExpr(caller_body).data.call_proc;
+    try std.testing.expectEqual(@as(?Ast.FnId, worker_ids[1]), Ast.localDirectCallee(redirected));
+    // The specific worker takes no runtime arguments: the call supplies none.
+    try std.testing.expectEqual(@as(usize, 0), program.exprSpan(redirected.args).len);
 }
 
 test "SpecConstr bounds cumulative inlining across small acyclic wrappers" {
