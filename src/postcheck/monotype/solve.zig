@@ -236,6 +236,90 @@ pub const ClosedCheckedKey = struct {
     ty: checked.CheckedTypeId,
 };
 
+/// A store type and a type it may hold, packed into one key.
+fn typePairKey(root: Type.TypeId, target: Type.TypeId) u64 {
+    return (@as(u64, @backingInt(root)) << 32) | @backingInt(target);
+}
+
+/// Per-type stamps over a dense type-id range. Starting a new pass is one
+/// increment, so a pass costs only the types it touches, however many an
+/// earlier pass touched.
+const TypeMarks = struct {
+    stamps: std.ArrayList(u32) = .empty,
+    epoch: u32 = 0,
+
+    fn deinit(self: *TypeMarks, allocator: Allocator) void {
+        self.stamps.deinit(allocator);
+    }
+
+    fn startPass(self: *TypeMarks) void {
+        self.epoch +%= 1;
+        if (self.epoch == 0) {
+            @memset(self.stamps.items, 0);
+            self.epoch = 1;
+        }
+    }
+
+    /// Mark `ty`, returning whether it was unmarked in this pass.
+    fn mark(self: *TypeMarks, allocator: Allocator, ty: Type.TypeId) Allocator.Error!bool {
+        const slot: usize = @backingInt(ty);
+        if (slot >= self.stamps.items.len) try self.stamps.appendNTimes(allocator, 0, slot + 1 - self.stamps.items.len);
+        if (self.stamps.items[slot] == self.epoch) return false;
+        self.stamps.items[slot] = self.epoch;
+        return true;
+    }
+
+    fn isMarked(self: *const TypeMarks, ty: Type.TypeId) bool {
+        const slot: usize = @backingInt(ty);
+        return slot < self.stamps.items.len and self.stamps.items[slot] == self.epoch;
+    }
+
+    fn unmark(self: *TypeMarks, ty: Type.TypeId) void {
+        self.stamps.items[@backingInt(ty)] = 0;
+    }
+};
+
+/// A type `measureTypeHeight` is visiting, and its next component.
+const HeightFrame = struct { ty: Type.TypeId, components_start: usize, next: usize };
+
+/// `typeHeight`'s entry for a type it has not measured.
+const unmeasured_height = std.math.maxInt(u32);
+
+/// One type a holds search reached, and the step it was reached from.
+const HoldsSearchStep = struct {
+    ty: Type.TypeId,
+    parent: u32,
+};
+
+/// The unread joined classes with one leaf scope among their origins. A
+/// class starts in `scanned`, where each cell the scope creates is checked
+/// against it, and moves to `by_held_type`, indexed under each type it holds,
+/// once building that list costs no more than the checks it has had. Either
+/// way a cell finds exactly the classes holding its type, and the work stays
+/// within a constant factor of the cheaper of the two for every class. A
+/// class that has since been read is dropped when next visited.
+const LeafScopeJoinedClasses = struct {
+    scanned: std.ArrayList(ScannedJoinedClass) = .empty,
+    by_held_type: collections.DenseMapUnmanaged(Type.TypeId, std.ArrayList(NodeId)) = .empty,
+
+    fn deinit(self: *LeafScopeJoinedClasses, allocator: Allocator) void {
+        self.scanned.deinit(allocator);
+        var lists = self.by_held_type.valueIterator();
+        while (lists.next()) |list| list.deinit(allocator);
+        self.by_held_type.deinit(allocator);
+    }
+};
+
+const ScannedJoinedClass = struct {
+    root: NodeId,
+    /// The class type's height once measured: a cell taller than it is not
+    /// held by it.
+    height: u32 = unmeasured_height,
+    checks: u32 = 0,
+    /// The check count at which building the held list is next tried.
+    budget: u32 = 1,
+};
+
 /// A closed checked type a measuring instantiation built, and its node.
 pub const ClosedTypeBuild = struct {
     checked_ty: checked.CheckedTypeId,
@@ -2099,15 +2183,15 @@ pub const InstGraph = struct {
     /// One memo per leaf scope, from each closed type instantiated as a
     /// checked-origin leaf there to its node.
     leaf_scopes: std.ArrayList(collections.DenseMap(Type.TypeId, NodeId)) = .empty,
-    /// Per leaf scope, each type an unread joined class with the scope among
-    /// its origins holds below its root, to those classes' roots. A root
-    /// whose class has since been read is dropped when next visited.
-    leaf_scope_joined_classes: std.ArrayList(collections.DenseMap(Type.TypeId, std.ArrayList(NodeId))) = .empty,
+    /// Per leaf scope, the unread joined classes with the scope among their
+    /// origins (see `LeafScopeJoinedClasses`).
+    leaf_scope_joined_classes: std.ArrayList(LeafScopeJoinedClasses) = .empty,
     /// Leaf-scope cells and the memo cells an unread joined class makes them
     /// one class with (see `queueLeafScopeCellJoins`). They are joined once
     /// no unification is in progress.
     leaf_scope_cell_joins: std.ArrayList(LeafScopeCellJoin) = .empty,
     draining_leaf_scope_cell_joins: bool = false,
+    /// Scratch for a joined class's origins.
     leaf_origin_scratch: std.ArrayList(LeafOrigin) = .empty,
     /// Unifications in progress, so leaf-scope cell joins wait for the
     /// outermost to finish instead of changing roots it is relating.
@@ -2121,10 +2205,29 @@ pub const InstGraph = struct {
     /// instantiates to, in this graph's cumulative type store. Store types
     /// are immutable, so entries outlive every graph reset.
     closed_checked_monos: std.AutoHashMapUnmanaged(ClosedCheckedKey, Type.TypeId) = .empty,
-    /// The types each store type holds below its root where an instantiation
-    /// of it reads them through its origin's memo (see `heldMemoTypes`).
-    /// Store types are immutable, so entries outlive every graph reset.
-    held_memo_types: std.AutoHashMapUnmanaged(Type.TypeId, []const Type.TypeId) = .empty,
+    /// The types a store type holds below its root, sorted, for each type
+    /// whose list was built (see `heldMemoTypesWithin`), and the answers to
+    /// single holds questions (see `typeHoldsMemoComponent`). Store types
+    /// are immutable, so entries outlive every graph reset.
+    held_memo_types: collections.DenseMapUnmanaged(Type.TypeId, []const Type.TypeId) = .empty,
+    type_holds_memo_component: std.AutoHashMapUnmanaged(u64, bool) = .empty,
+    /// Each store type's height (see `typeHeight`), outliving graph resets
+    /// for the same reason.
+    type_heights: std.ArrayList(u32) = .empty,
+    /// Scratch for `measureTypeHeight`.
+    height_frames: std.ArrayList(HeightFrame) = .empty,
+    height_components: std.ArrayList(ImportComponent) = .empty,
+    height_group_stack: std.ArrayList(Type.TypeId) = .empty,
+    height_on_stack: TypeMarks = .{},
+    height_order: std.ArrayList(u32) = .empty,
+    height_low: std.ArrayList(u32) = .empty,
+    height_group_members: TypeMarks = .{},
+    height_member_components: std.ArrayList(ImportComponent) = .empty,
+    /// Scratch for `typeHoldsMemoComponent`.
+    holds_visited: TypeMarks = .{},
+    holds_visited_types: std.ArrayList(Type.TypeId) = .empty,
+    holds_queue: std.ArrayList(HoldsSearchStep) = .empty,
+    holds_components: std.ArrayList(ImportComponent) = .empty,
     /// Exact immutable Monotype snapshot imported at each permanent node.
     /// Unlike `node_snapshots`, these are producer-owned representation
     /// witnesses. Keeping the direct node association lets consumers of an
@@ -2334,7 +2437,7 @@ pub const InstGraph = struct {
         self.imported_type_nodes.clearRetainingCapacity();
         for (self.leaf_scopes.items) |*scope| scope.deinit();
         self.leaf_scopes.clearRetainingCapacity();
-        for (self.leaf_scope_joined_classes.items) |*index| deinitJoinedClassIndex(self.allocator, index);
+        for (self.leaf_scope_joined_classes.items) |*classes| classes.deinit(self.allocator);
         self.leaf_scope_joined_classes.clearRetainingCapacity();
         self.leaf_scope_cell_joins.clearRetainingCapacity();
         var alias_lists = self.leaf_alias_origins.valueIterator();
@@ -2458,7 +2561,7 @@ pub const InstGraph = struct {
         self.imported_type_nodes.deinit();
         for (self.leaf_scopes.items) |*scope| scope.deinit();
         self.leaf_scopes.deinit(self.allocator);
-        for (self.leaf_scope_joined_classes.items) |*index| deinitJoinedClassIndex(self.allocator, index);
+        for (self.leaf_scope_joined_classes.items) |*classes| classes.deinit(self.allocator);
         self.leaf_scope_joined_classes.deinit(self.allocator);
         self.leaf_scope_cell_joins.deinit(self.allocator);
         self.leaf_origin_scratch.deinit(self.allocator);
@@ -2469,6 +2572,20 @@ pub const InstGraph = struct {
         var held_lists = self.held_memo_types.valueIterator();
         while (held_lists.next()) |held| self.allocator.free(held.*);
         self.held_memo_types.deinit(self.allocator);
+        self.type_holds_memo_component.deinit(self.allocator);
+        self.type_heights.deinit(self.allocator);
+        self.height_frames.deinit(self.allocator);
+        self.height_components.deinit(self.allocator);
+        self.height_group_stack.deinit(self.allocator);
+        self.height_on_stack.deinit(self.allocator);
+        self.height_order.deinit(self.allocator);
+        self.height_low.deinit(self.allocator);
+        self.height_group_members.deinit(self.allocator);
+        self.height_member_components.deinit(self.allocator);
+        self.holds_visited.deinit(self.allocator);
+        self.holds_visited_types.deinit(self.allocator);
+        self.holds_queue.deinit(self.allocator);
+        self.holds_components.deinit(self.allocator);
         self.related_named_backings.deinit();
         self.related_named_instances.deinit();
         self.class_member_tail.deinit(allocator);
@@ -3985,7 +4102,7 @@ pub const InstGraph = struct {
         try self.leaf_scopes.ensureUnusedCapacity(self.allocator, 1);
         try self.leaf_scope_joined_classes.ensureUnusedCapacity(self.allocator, 1);
         self.leaf_scopes.appendAssumeCapacity(collections.DenseMap(Type.TypeId, NodeId).init(self.allocator));
-        self.leaf_scope_joined_classes.appendAssumeCapacity(collections.DenseMap(Type.TypeId, std.ArrayList(NodeId)).init(self.allocator));
+        self.leaf_scope_joined_classes.appendAssumeCapacity(.{});
         return id;
     }
 
@@ -4059,8 +4176,8 @@ pub const InstGraph = struct {
         try self.union_(winner, loser);
         const root = self.find(winner);
         const leaf = self.joinedLeaf(root) orelse return;
-        if (!winner_registered) try self.registerJoinedLeafClass(root, leaf, winner_leaf.origin);
-        if (!loser_registered) try self.registerJoinedLeafClass(root, leaf, loser_leaf.origin);
+        if (!winner_registered) try self.registerJoinedLeafClass(root, winner_leaf.origin);
+        if (!loser_registered) try self.registerJoinedLeafClass(root, loser_leaf.origin);
         try self.queueJoinedLeafClassCells(root, leaf);
     }
 
@@ -4079,33 +4196,64 @@ pub const InstGraph = struct {
     /// origin's memo cell of that type, exactly as relating eager
     /// instantiations would have made it, and joining them needs no read.
     fn queueLeafScopeCellJoins(self: *InstGraph, scope: LeafScopeId, cell: LeafScopeCell) Allocator.Error!void {
-        const classes = self.leaf_scope_joined_classes.items[@backingInt(scope)].getPtr(cell.ty) orelse return;
+        // Queuing joins creates no leaf-scope cells, so these lists stay put.
+        const classes = &self.leaf_scope_joined_classes.items[@backingInt(scope)];
+        if (classes.by_held_type.getPtr(cell.ty)) |holders| {
+            var index: usize = 0;
+            while (index < holders.items.len) {
+                const root = self.find(holders.items[index]);
+                const leaf = self.joinedLeaf(root) orelse {
+                    _ = holders.swapRemove(index);
+                    continue;
+                };
+                holders.items[index] = root;
+                index += 1;
+                try self.queueOriginMemoJoins(root, leaf, cell);
+            }
+        }
+        if (classes.scanned.items.len == 0) return;
+        const cell_height = try self.typeHeight(cell.ty);
         var index: usize = 0;
-        while (index < classes.items.len) {
-            const root = self.find(classes.items[index]);
+        while (index < classes.scanned.items.len) {
+            const entry = &classes.scanned.items[index];
+            const root = self.find(entry.root);
             const leaf = self.joinedLeaf(root) orelse {
-                _ = classes.swapRemove(index);
+                _ = classes.scanned.swapRemove(index);
                 continue;
             };
-            classes.items[index] = root;
+            entry.root = root;
+            entry.checks += 1;
+            if (entry.height == unmeasured_height) entry.height = try self.typeHeight(leaf.ty);
+            const checks = entry.checks;
+            const budget = entry.budget;
+            if (cell_height <= entry.height and
+                self.cellNeedsOriginJoins(root, leaf, cell) and
+                try self.typeHoldsMemoComponent(leaf.ty, cell.ty))
+            {
+                try self.queueOriginMemoJoins(root, leaf, cell);
+            }
+            if (checks >= budget) {
+                if (try self.heldMemoTypesWithin(leaf.ty, checks)) |held| {
+                    for (held) |ty| {
+                        const holders = try classes.by_held_type.getOrPut(self.allocator, ty);
+                        if (!holders.found_existing) holders.value_ptr.* = .empty;
+                        try holders.value_ptr.append(self.allocator, root);
+                    }
+                    _ = classes.scanned.swapRemove(index);
+                    continue;
+                }
+                classes.scanned.items[index].budget = budget *| 2;
+            }
             index += 1;
-            try self.queueOriginMemoJoins(root, leaf, cell);
         }
     }
 
-    /// Index a joined class under each type it holds below its root, for
-    /// the cells `origin`'s leaf scope creates later.
-    fn registerJoinedLeafClass(self: *InstGraph, root: NodeId, leaf: InstLeaf, origin: LeafOrigin) Allocator.Error!void {
-        const scope = switch (origin) {
-            .import => return,
-            .checked => |scope| scope,
-        };
-        const held = try self.heldMemoTypes(leaf.ty);
-        const index = &self.leaf_scope_joined_classes.items[@backingInt(scope)];
-        for (held) |ty| {
-            const entry = try index.getOrPut(ty);
-            if (!entry.found_existing) entry.value_ptr.* = .empty;
-            try entry.value_ptr.append(self.allocator, root);
+    /// Register a joined class with `origin`'s leaf scope, for the cells it
+    /// creates later.
+    fn registerJoinedLeafClass(self: *InstGraph, root: NodeId, origin: LeafOrigin) Allocator.Error!void {
+        switch (origin) {
+            .import => {},
+            .checked => |scope| try self.leaf_scope_joined_classes.items[@backingInt(scope)].scanned.append(self.allocator, .{ .root = root }),
         }
     }
 
@@ -4114,15 +4262,26 @@ pub const InstGraph = struct {
     fn queueJoinedLeafClassCells(self: *InstGraph, root: NodeId, leaf: InstLeaf) Allocator.Error!void {
         var cells = std.ArrayList(LeafScopeCell).empty;
         defer cells.deinit(self.allocator);
-        const held = try self.heldMemoTypes(leaf.ty);
         try self.appendLeafOrigins(&self.leaf_origin_scratch, root, leaf);
         for (self.leaf_origin_scratch.items) |origin| switch (origin) {
             .import => {},
             .checked => |scope| {
                 const memo = &self.leaf_scopes.items[@backingInt(scope)];
-                for (held) |ty| {
-                    const node = memo.get(ty) orelse continue;
-                    try cells.append(self.allocator, .{ .ty = ty, .node = node });
+                // Either side finds the same cells, so walk the held list
+                // when building it costs no more than walking the memo.
+                if (try self.heldMemoTypesWithin(leaf.ty, memo.count())) |held| {
+                    for (held) |ty| {
+                        const node = memo.get(ty) orelse continue;
+                        try cells.append(self.allocator, .{ .ty = ty, .node = node });
+                    }
+                } else {
+                    var memo_cells = memo.iterator();
+                    while (memo_cells.next()) |entry| {
+                        const cell: LeafScopeCell = .{ .ty = entry.key_ptr.*, .node = entry.value_ptr.* };
+                        if (!self.cellNeedsOriginJoins(root, leaf, cell)) continue;
+                        if (!try self.typeHoldsMemoComponent(leaf.ty, cell.ty)) continue;
+                        try cells.append(self.allocator, cell);
+                    }
                 }
             },
         };
@@ -4147,19 +4306,42 @@ pub const InstGraph = struct {
         try out.appendSlice(self.allocator, self.leaf_alias_origins.get(root).?.items);
     }
 
+    /// Whether joining `cell` with a joined class's origins could change
+    /// anything: some origin has a memo cell of its type in another class,
+    /// or the import memo, which joins no cell it creates later, has none.
+    fn cellNeedsOriginJoins(self: *InstGraph, root: NodeId, leaf: InstLeaf, cell: LeafScopeCell) bool {
+        const aliases = self.leaf_alias_origins.get(root).?.items;
+        if (self.originMemoCellNeedsJoin(leaf.origin, cell)) return true;
+        for (aliases) |origin| if (self.originMemoCellNeedsJoin(origin, cell)) return true;
+        return false;
+    }
+
+    fn originMemoCellNeedsJoin(self: *InstGraph, origin: LeafOrigin, cell: LeafScopeCell) bool {
+        const memo_node = switch (origin) {
+            .import => self.imported_type_nodes.get(cell.ty) orelse return true,
+            .checked => |scope| self.leaf_scopes.items[@backingInt(scope)].get(cell.ty) orelse return false,
+        };
+        return !self.sameClass(memo_node, cell.node);
+    }
+
     fn queueOriginMemoJoins(self: *InstGraph, root: NodeId, leaf: InstLeaf, cell: LeafScopeCell) Allocator.Error!void {
-        var origins = std.ArrayList(LeafOrigin).empty;
-        defer origins.deinit(self.allocator);
-        try self.appendLeafOrigins(&origins, root, leaf);
-        for (origins.items) |origin| {
-            const memo_node = try self.originMemoNode(origin, cell.ty);
+        // Finding a memo cell creates no leaf-scope cell, so nothing else
+        // reaches the scratch list meanwhile.
+        try self.appendLeafOrigins(&self.leaf_origin_scratch, root, leaf);
+        for (self.leaf_origin_scratch.items) |origin| {
+            const memo_node = try self.originMemoNode(origin, cell.ty) orelse continue;
             if (self.sameClass(memo_node, cell.node)) continue;
             try self.leaf_scope_cell_joins.append(self.allocator, .{ .memo = memo_node, .cell = cell.node });
         }
     }
 
     /// Join the queued leaf-scope cells once no unification is in progress.
-    fn drainLeafScopeCellJoins(self: *InstGraph) Allocator.Error!void {
+    inline fn drainLeafScopeCellJoins(self: *InstGraph) Allocator.Error!void {
+        if (self.leaf_scope_cell_joins.items.len == 0) return;
+        try self.drainQueuedLeafScopeCellJoins();
+    }
+
+    fn drainQueuedLeafScopeCellJoins(self: *InstGraph) Allocator.Error!void {
         if (self.unify_depth != 0 or self.draining_leaf_scope_cell_joins) return;
         self.draining_leaf_scope_cell_joins = true;
         defer self.draining_leaf_scope_cell_joins = false;
@@ -4179,14 +4361,17 @@ pub const InstGraph = struct {
     };
 
     /// The memo cell `origin` gives a component of type `ty` that is not a
-    /// nominal's own backing, leaving the joins a new cell needs queued.
-    fn originMemoNode(self: *InstGraph, origin: LeafOrigin, ty: Type.TypeId) Allocator.Error!NodeId {
+    /// nominal's own backing, when a join with it is due now. A leaf scope
+    /// without one yet joins it when it creates it, since every joined class
+    /// with the scope among its origins is registered with it; the import
+    /// memo has no such hook, so its cell is created now.
+    fn originMemoNode(self: *InstGraph, origin: LeafOrigin, ty: Type.TypeId) Allocator.Error!?NodeId {
         switch (origin) {
             .import => {
                 if (self.imported_type_nodes.get(ty)) |existing| return self.find(existing);
                 return try self.newMemoLeaf(ty);
             },
-            .checked => |scope| return try self.checkedLeafQueued(scope, ty),
+            .checked => |scope| return if (self.leaf_scopes.items[@backingInt(scope)].get(ty)) |existing| self.find(existing) else null,
         }
     }
 
@@ -4203,8 +4388,11 @@ pub const InstGraph = struct {
                 if (std.meta.eql(origin, LeafOrigin{ .checked = scope })) break true;
             } else std.meta.eql(leaf.origin, LeafOrigin{ .checked = scope });
             if (!involves_scope) continue;
-            for (try self.heldMemoTypes(leaf.ty)) |ty| {
-                const node = memo.get(ty) orelse continue;
+            var cells = memo.iterator();
+            while (cells.next()) |cell| {
+                const ty = cell.key_ptr.*;
+                const node = cell.value_ptr.*;
+                if (!try self.typeHoldsMemoComponent(leaf.ty, ty)) continue;
                 const own_separate = !self.debugOriginMemoJoined(leaf.origin, ty, node);
                 const alias_separate = for (entry.value_ptr.items) |origin| {
                     if (!self.debugOriginMemoJoined(origin, ty, node)) break true;
@@ -4222,15 +4410,194 @@ pub const InstGraph = struct {
     fn debugOriginMemoJoined(self: *InstGraph, origin: LeafOrigin, ty: Type.TypeId, node: NodeId) bool {
         const memo_node = switch (origin) {
             .import => self.imported_type_nodes.get(ty),
-            .checked => |other| self.leaf_scopes.items[@backingInt(other)].get(ty),
+            .checked => |other| self.leaf_scopes.items[@backingInt(other)].get(ty) orelse return true,
         } orelse return false;
         return self.sameClass(memo_node, node);
     }
 
-    /// The types `root` holds below its root other than as a nominal's own
-    /// backing, where an instantiation of `root` reads them through its
-    /// origin's memo. `root` itself is among them when it holds itself.
-    fn heldMemoTypes(self: *InstGraph, root: Type.TypeId) Allocator.Error![]const Type.TypeId {
+    /// Whether `root` holds `target` below its root other than as a
+    /// nominal's own backing, where an instantiation of `root` reads it
+    /// through its origin's memo; `root` holds itself when it is recursive.
+    /// The search goes breadth first, so a shallow component is found
+    /// without walking deep ones. A hit records the answer for every type on
+    /// the path to it and a miss for every type the search visited, since
+    /// each of their components was visited too.
+    fn typeHoldsMemoComponent(self: *InstGraph, root: Type.TypeId, target: Type.TypeId) Allocator.Error!bool {
+        // A type holds only types no taller than itself.
+        const target_height = try self.typeHeight(target);
+        if (target_height > try self.typeHeight(root)) return false;
+        if (self.held_memo_types.get(root)) |held| return heldContains(held, target);
+        if (self.type_holds_memo_component.get(typePairKey(root, target))) |known| return known;
+        const visited = &self.holds_visited;
+        const visited_types = &self.holds_visited_types;
+        const queue = &self.holds_queue;
+        const components = &self.holds_components;
+        visited.startPass();
+        visited_types.clearRetainingCapacity();
+        queue.clearRetainingCapacity();
+        try queue.append(self.allocator, .{ .ty = root, .parent = 0 });
+        _ = try visited.mark(self.allocator, root);
+        try visited_types.append(self.allocator, root);
+        var next: u32 = 0;
+        const hit_step: ?u32 = search: while (next < queue.items.len) : (next += 1) {
+            components.clearRetainingCapacity();
+            try self.importComponents(components, queue.items[next].ty);
+            for (components.items) |component| {
+                if (component.ty == target and !component.owned_backing) break :search next;
+                if (try self.typeHeight(component.ty) < target_height) continue;
+                if (!try visited.mark(self.allocator, component.ty)) continue;
+                try visited_types.append(self.allocator, component.ty);
+                const known = if (self.held_memo_types.get(component.ty)) |held|
+                    heldContains(held, target)
+                else
+                    self.type_holds_memo_component.get(typePairKey(component.ty, target));
+                if (known) |holds| {
+                    if (holds) break :search next;
+                    continue;
+                }
+                try queue.append(self.allocator, .{ .ty = component.ty, .parent = next });
+            }
+        } else null;
+        if (hit_step) |hit| {
+            var step = hit;
+            while (true) {
+                try self.type_holds_memo_component.put(self.allocator, typePairKey(queue.items[step].ty, target), true);
+                if (step == 0) break;
+                step = queue.items[step].parent;
+            }
+            return true;
+        }
+        try self.type_holds_memo_component.ensureUnusedCapacity(self.allocator, @intCast(visited_types.items.len));
+        for (visited_types.items) |ty| self.type_holds_memo_component.putAssumeCapacity(typePairKey(ty, target), false);
+        return false;
+    }
+
+    /// A store type's height: zero for a type without components, and
+    /// otherwise one more than its tallest component outside its strongly
+    /// connected group, shared by the whole group. A type holding another is
+    /// therefore at least as tall, and taller unless both are in one group.
+    /// Groups are found with an explicit stack, so deep types need no deep
+    /// recursion.
+    fn typeHeight(self: *InstGraph, root: Type.TypeId) Allocator.Error!u32 {
+        return self.knownTypeHeight(root) orelse try self.measureTypeHeight(root);
+    }
+
+    fn measureTypeHeight(self: *InstGraph, root: Type.TypeId) Allocator.Error!u32 {
+        const frames = &self.height_frames;
+        const components = &self.height_components;
+        const group_stack = &self.height_group_stack;
+        // Visit order and the lowest visit order reachable, for types on the
+        // group stack.
+        const on_stack = &self.height_on_stack;
+        const order = &self.height_order;
+        const low = &self.height_low;
+        const group_members = &self.height_group_members;
+        const member_components = &self.height_member_components;
+        frames.clearRetainingCapacity();
+        components.clearRetainingCapacity();
+        group_stack.clearRetainingCapacity();
+        low.clearRetainingCapacity();
+        on_stack.startPass();
+
+        try self.setHeightOrder(root, 0);
+        try low.append(self.allocator, 0);
+        try group_stack.append(self.allocator, root);
+        const root_start = components.items.len;
+        try self.importComponents(components, root);
+        try frames.append(self.allocator, .{ .ty = root, .components_start = root_start, .next = root_start });
+        while (frames.items.len != 0) {
+            const top = frames.items.len - 1;
+            const frame = frames.items[top];
+            const frame_order = order.items[@backingInt(frame.ty)];
+            if (frame.next < components.items.len) {
+                frames.items[top].next += 1;
+                const child = components.items[frame.next].ty;
+                if (self.knownTypeHeight(child) != null) continue;
+                if (on_stack.isMarked(child)) {
+                    // Still on the group stack: it shares a group with this
+                    // frame's type.
+                    const child_order = order.items[@backingInt(child)];
+                    low.items[frame_order] = @min(low.items[frame_order], low.items[child_order]);
+                    continue;
+                }
+                const child_order: u32 = @intCast(low.items.len);
+                try self.setHeightOrder(child, child_order);
+                try low.append(self.allocator, child_order);
+                try group_stack.append(self.allocator, child);
+                const start = components.items.len;
+                try self.importComponents(components, child);
+                try frames.append(self.allocator, .{ .ty = child, .components_start = start, .next = start });
+                continue;
+            }
+            _ = frames.pop();
+            components.shrinkRetainingCapacity(frame.components_start);
+            if (frames.items.len != 0) {
+                const parent_order = order.items[@backingInt(frames.items[frames.items.len - 1].ty)];
+                low.items[parent_order] = @min(low.items[parent_order], low.items[frame_order]);
+            }
+            if (low.items[frame_order] != frame_order) continue;
+            // `frame.ty` roots a group: everything above it on the group
+            // stack belongs to it, and every component outside the group
+            // already has its height.
+            group_members.startPass();
+            var index = group_stack.items.len;
+            while (true) {
+                index -= 1;
+                _ = try group_members.mark(self.allocator, group_stack.items[index]);
+                if (group_stack.items[index] == frame.ty) break;
+            }
+            var height: u32 = 0;
+            for (group_stack.items[index..]) |member| {
+                member_components.clearRetainingCapacity();
+                try self.importComponents(member_components, member);
+                for (member_components.items) |component| {
+                    if (group_members.isMarked(component.ty)) continue;
+                    height = @max(height, self.knownTypeHeight(component.ty).? + 1);
+                }
+            }
+            for (group_stack.items[index..]) |member| {
+                const slot: usize = @backingInt(member);
+                if (slot >= self.type_heights.items.len) {
+                    try self.type_heights.appendNTimes(self.allocator, unmeasured_height, slot + 1 - self.type_heights.items.len);
+                }
+                self.type_heights.items[slot] = height;
+                on_stack.unmark(member);
+            }
+            group_stack.shrinkRetainingCapacity(index);
+        }
+        return self.knownTypeHeight(root).?;
+    }
+
+    fn setHeightOrder(self: *InstGraph, ty: Type.TypeId, visit_order: u32) Allocator.Error!void {
+        _ = try self.height_on_stack.mark(self.allocator, ty);
+        const slot: usize = @backingInt(ty);
+        if (slot >= self.height_order.items.len) try self.height_order.appendNTimes(self.allocator, 0, slot + 1 - self.height_order.items.len);
+        self.height_order.items[slot] = visit_order;
+    }
+
+    fn knownTypeHeight(self: *const InstGraph, ty: Type.TypeId) ?u32 {
+        const slot: usize = @backingInt(ty);
+        if (slot >= self.type_heights.items.len) return null;
+        const height = self.type_heights.items[slot];
+        return if (height == unmeasured_height) null else height;
+    }
+
+    fn heldContains(held: []const Type.TypeId, target: Type.TypeId) bool {
+        return std.sort.binarySearch(Type.TypeId, held, target, orderTypeIds) != null;
+    }
+
+    fn orderTypeIds(target: Type.TypeId, item: Type.TypeId) std.math.Order {
+        return std.math.order(@backingInt(target), @backingInt(item));
+    }
+
+    fn typeIdLessThan(_: void, left: Type.TypeId, right: Type.TypeId) bool {
+        return @backingInt(left) < @backingInt(right);
+    }
+
+    /// The types `root` holds below its root (see `typeHoldsMemoComponent`),
+    /// sorted, when building the list visits at most `budget` types; null
+    /// otherwise, leaving nothing recorded.
+    fn heldMemoTypesWithin(self: *InstGraph, root: Type.TypeId, budget: usize) Allocator.Error!?[]const Type.TypeId {
         if (self.held_memo_types.get(root)) |held| return held;
         var visited = collections.DenseMap(Type.TypeId, void).init(self.allocator);
         defer visited.deinit();
@@ -4242,10 +4609,21 @@ pub const InstGraph = struct {
         defer components.deinit(self.allocator);
         try queue.append(self.allocator, root);
         try visited.put(root, {});
+        var spent: usize = 0;
         var next: usize = 0;
         while (next < queue.items.len) : (next += 1) {
+            const ty = queue.items[next];
+            // A component already listed contributes its whole list.
+            if (ty != root) if (self.held_memo_types.get(ty)) |known| {
+                spent += known.len;
+                if (spent > budget) return null;
+                for (known) |known_ty| try held.put(known_ty, {});
+                continue;
+            };
             components.clearRetainingCapacity();
-            try self.importComponents(&components, queue.items[next]);
+            try self.importComponents(&components, ty);
+            spent += components.items.len;
+            if (spent > budget) return null;
             for (components.items) |component| {
                 if (!component.owned_backing) try held.put(component.ty, {});
                 if ((try visited.getOrPut(component.ty)).found_existing) continue;
@@ -4257,14 +4635,9 @@ pub const InstGraph = struct {
         var types = held.keyIterator();
         var index: usize = 0;
         while (types.next()) |ty| : (index += 1) list[index] = ty.*;
+        std.mem.sort(Type.TypeId, list, {}, typeIdLessThan);
         try self.held_memo_types.put(self.allocator, root, list);
         return list;
-    }
-
-    fn deinitJoinedClassIndex(allocator: Allocator, index: *collections.DenseMap(Type.TypeId, std.ArrayList(NodeId))) void {
-        var lists = index.valueIterator();
-        while (lists.next()) |list| list.deinit(allocator);
-        index.deinit();
     }
 
     /// `newLeaf` for an occurrence of the current ownership scope, which

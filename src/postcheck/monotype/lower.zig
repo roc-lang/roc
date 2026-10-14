@@ -56914,7 +56914,7 @@ const BodyContext = struct {
         kind: CodecKind,
         callable_node: NodeId,
         shape_node: NodeId,
-    ) Allocator.Error!void {
+    ) Allocator.Error!NodeId {
         const constructor = try self.graph.functionNodes(callable_node);
         if (constructor.args.len != 1) {
             Common.invariant("generated codec boundary constructor did not have one encoding argument");
@@ -56986,6 +56986,7 @@ const BodyContext = struct {
         if (derivation.error_ty != derivation.source_error_ty) {
             try self.bindCheckedCodecContractType(contract_ctx, derivation.error_ty, error_node);
         }
+        return body_shape_node;
     }
 
     fn instantiateCheckedCodecContract(
@@ -57041,7 +57042,7 @@ const BodyContext = struct {
         contract_ctx.evidence = self.evidence;
         const scope = try self.graph.newLeafScope();
         contract_ctx.instantiation.closed_types = .{ .leaves = scope };
-        try self.bindCodecContractBoundary(
+        const body_shape_node = try self.bindCodecContractBoundary(
             &contract_ctx,
             derivation,
             kind,
@@ -57069,6 +57070,7 @@ const BodyContext = struct {
             });
         }
         const instantiated_calls = self.instantiated_codec_calls.items[calls_start..];
+        try self.readCodecContractRegion(checked_view, boundary.shape_node, body_shape_node, instantiated_calls);
         if (@import("builtin").mode == .debug) try self.graph.debugAssertLeafScopeJoined(scope);
         const method_call_slots = try self.codecMethodCallSlots(instantiated_calls);
         // An instantiation that consulted no enclosing evidence is determined
@@ -57120,6 +57122,103 @@ const BodyContext = struct {
                 self.graph.sameClass(cached.shape_node, boundary.shape_node)) return cached;
         }
         return null;
+    }
+
+    /// Read the boundary shape down to the contract's nested codec
+    /// boundaries. A closed checked type in the contract's leaf scope joins
+    /// the boundary component it denotes only when a class holding both is
+    /// read (see `InstGraph.expandLeaf`), while generated-call roles are
+    /// selected by their subject node's class. Reading every class between
+    /// the boundary and the subjects therefore makes each subject one class
+    /// with its occurrence in the shape, as relating the contract eagerly
+    /// would have. A nested boundary's components are the subjects of the
+    /// contract that boundary activates, so the read stops there.
+    fn readCodecContractRegion(
+        self: *BodyContext,
+        checked_view: ModuleView,
+        shape_node: NodeId,
+        body_shape_node: NodeId,
+        calls: []const InstantiatedGeneratedCodecCall,
+    ) Allocator.Error!void {
+        var nested_boundaries = std.ArrayList(NodeId).empty;
+        defer nested_boundaries.deinit(self.allocator);
+        for (calls) |call| {
+            const subject = call.subject_node orelse continue;
+            const method_name = checked_view.names.methodNameText(call.checked.method);
+            if (std.mem.eql(u8, method_name, Ident.PARSER_FOR_METHOD_NAME) or
+                std.mem.eql(u8, method_name, Ident.ENCODER_FOR_METHOD_NAME))
+            {
+                try nested_boundaries.append(self.allocator, subject);
+            }
+        }
+        var pending = std.ArrayList(NodeId).empty;
+        defer pending.deinit(self.allocator);
+        var read = collections.DenseMap(NodeId, void).init(self.allocator);
+        defer read.deinit();
+        try pending.append(self.allocator, body_shape_node);
+        try pending.append(self.allocator, shape_node);
+        while (pending.pop()) |node| {
+            const root = self.graph.rootNode(node);
+            if ((try read.getOrPut(root)).found_existing) continue;
+            if (!self.graph.sameClass(root, shape_node) and
+                !self.graph.sameClass(root, body_shape_node) and
+                try self.isNestedCodecBoundary(root, nested_boundaries.items)) continue;
+            switch (try self.graph.content(root)) {
+                .redirect, .leaf => unreachable,
+                .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
+                .list, .box => |child| try pending.append(self.allocator, child),
+                .tuple => |items| try pending.appendSlice(self.allocator, items),
+                .func => |function| {
+                    try pending.appendSlice(self.allocator, function.args);
+                    try pending.append(self.allocator, function.ret);
+                },
+                .tag_union => |row| {
+                    for (row.tags) |tag| try pending.appendSlice(self.allocator, tag.payloads);
+                    try pending.append(self.allocator, row.ext);
+                },
+                .record => |row| {
+                    for (row.fields) |field| {
+                        try pending.append(self.allocator, field.ty);
+                        if (field.value_ty) |value_ty| try pending.append(self.allocator, value_ty);
+                    }
+                    try pending.append(self.allocator, row.ext);
+                },
+                .named => |named| {
+                    try pending.appendSlice(self.allocator, named.args);
+                    if (named.backing) |backing| try pending.append(self.allocator, backing.node);
+                },
+            }
+        }
+        if (@import("builtin").mode == .debug) {
+            var read_roots = collections.DenseMap(NodeId, void).init(self.allocator);
+            defer read_roots.deinit();
+            var read_nodes = read.keyIterator();
+            while (read_nodes.next()) |node| try read_roots.put(self.graph.rootNode(node.*), {});
+            for (calls) |call| {
+                const subject = call.subject_node orelse continue;
+                // A primitive or nominal subject selects its role by its
+                // own identity (see `sameCodecSubject`).
+                switch (try self.graph.content(subject)) {
+                    .primitive, .named => continue,
+                    .redirect, .leaf, .unresolved, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+                }
+                if (!read_roots.contains(self.graph.rootNode(subject))) {
+                    base.invariant(
+                        "postcheck invariant violated: generated codec subject of {s} was not an occurrence in its contract's boundary shape",
+                        .{checked_view.names.methodNameText(call.checked.method)},
+                    );
+                }
+            }
+        }
+    }
+
+    /// Whether `node` is an occurrence a nested codec boundary call names,
+    /// by the same subject identity role selection uses.
+    fn isNestedCodecBoundary(self: *BodyContext, node: NodeId, boundary_subjects: []const NodeId) Allocator.Error!bool {
+        for (boundary_subjects) |subject| {
+            if (try self.sameCodecSubject(subject, node)) return true;
+        }
+        return false;
     }
 
     fn activeCodecCalls(self: *const BodyContext) []const InstantiatedGeneratedCodecCall {
