@@ -560,10 +560,7 @@ fn runCheck(
     source_kind: test_helpers.SourceKind,
     source: []const u8,
 ) BuiltinDocTestError!?[]u8 {
-    var resources = (if (prePublishedBuiltin()) |ppb|
-        test_helpers.parseAndCheckProgramForProblemsWithBuiltin(allocator, source_kind, source, &.{}, ppb)
-    else
-        test_helpers.parseAndCheckProgramForProblems(allocator, source_kind, source, &.{})) catch |err|
+    var resources = test_helpers.parseAndCheckProgramForProblems(allocator, source_kind, source, &.{}, prePublishedBuiltin()) catch |err|
         return try dupeErr(allocator, "parseAndCheckProgramForProblems: {s}", .{@errorName(err)});
     defer resources.deinit(allocator);
 
@@ -576,10 +573,7 @@ fn runCheck(
 /// Run an expect-only block through checked-artifact compile-time evaluation.
 /// This matches the path used by `roc test` for top-level expects.
 fn runExpects(allocator: Allocator, source: []const u8) BuiltinDocTestError!?[]u8 {
-    const outcome = (if (prePublishedBuiltin()) |ppb|
-        test_helpers.publishProgramForComptimeProblemsWithBuiltin(allocator, .module, source, &.{}, ppb)
-    else
-        test_helpers.publishProgramForComptimeProblems(allocator, .module, source, &.{})) catch |err| {
+    const outcome = test_helpers.publishProgramForComptimeProblems(allocator, .module, source, &.{}, prePublishedBuiltin()) catch |err| {
         return try dupeErr(allocator, "publishProgramForComptimeProblems: {s}", .{@errorName(err)});
     };
 

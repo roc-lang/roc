@@ -75,7 +75,6 @@ pub fn record(self: *Self, id: LIR.CFStmtId, stmt: LIR.CFStmt) std.mem.Allocator
         .assign_boxy_dict_ref,
         .assign_boxy_box,
         .assign_boxy_record_update,
-        .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
@@ -106,8 +105,6 @@ pub fn record(self: *Self, id: LIR.CFStmtId, stmt: LIR.CFStmt) std.mem.Allocator
         .switch_initialized_payload,
         .str_match,
         .str_match_set,
-        .loop_continue,
-        .loop_break,
         .jump,
         .ret,
         .crash,
@@ -124,7 +121,7 @@ pub fn record(self: *Self, id: LIR.CFStmtId, stmt: LIR.CFStmt) std.mem.Allocator
 pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCalls {
     std.debug.assert(!self.published);
     const proc = self.proc.?;
-    const ret_layout = store.getProcSpec(proc).ret_layout;
+    const ret_layout = store.getProcSpecImmediate(proc).ret_layout;
     var head: ?LIR.CFStmtId = null;
     for (self.calls.items) |id| {
         const stmt = store.getCFStmt(id);
@@ -136,7 +133,7 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
                 const target_desc = store.getLocal(erased.target).boxy_desc orelse continue;
                 if (target_desc.localOrNull() != out_desc) continue;
             }
-            if (store.getCFStmt(erased.next) == .ret) continue;
+            if (store.getCFStmtImmediate(erased.next).* == .ret) continue;
             if (store.getLocal(erased.target).layout_idx != ret_layout) continue;
             const returned = try self.returnedLocal(store, erased.next) orelse continue;
             if (returned != erased.target) continue;
@@ -152,7 +149,7 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
         // with the value only when the callee writes it to the descriptor
         // local this procedure returns, which is the value's own.
         if (call.out_desc) |out_desc| {
-            if (store.getProcSpec(proc).runtime_ret_desc != out_desc) continue;
+            if (store.getProcSpecImmediate(proc).runtime_ret_desc != out_desc) continue;
             const target_desc = store.getLocal(call.target).boxy_desc orelse continue;
             if (target_desc.localOrNull() != out_desc) continue;
         }
@@ -163,7 +160,7 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
         if (call.proc == proc and call.out_desc == null) {
             store.getCFStmtPtr(id).assign_call.tail_call = .{ .next = head };
             head = id;
-        } else if (store.getCFStmt(call.next) != .ret and store.getLocal(call.target).layout_idx == ret_layout) {
+        } else if (store.getCFStmtImmediate(call.next).* != .ret and store.getLocal(call.target).layout_idx == ret_layout) {
             const ret = try store.addCFStmt(.{ .ret = .{ .value = call.target } }, store.stmtOrigin(id));
             store.getCFStmtPtr(id).assign_call.next = ret;
         }
@@ -184,11 +181,7 @@ fn successor(self: *const Self, stmt: LIR.CFStmt) ?LIR.CFStmtId {
             .tag_payload_struct,
             => null,
         },
-        .assign_boxy_adapt => |assign| if (assign.source_mode == .move and
-            self.adapters[@backingInt(assign.adapter)].operation == .relabel)
-            assign.next
-        else
-            null,
+        .assign_boxy_adapt => |assign| if (assign.source_mode == .move and self.adapters[@backingInt(assign.adapter)].operation == .relabel) assign.next else null,
         .set_local => |assign| if (assign.mode == .initialize_join_param) assign.next else null,
         .init_uninitialized,
         .assign_literal,
@@ -199,7 +192,6 @@ fn successor(self: *const Self, stmt: LIR.CFStmt) ?LIR.CFStmtId {
         .assign_boxy_dict_ref,
         .assign_boxy_box,
         .assign_boxy_record_update,
-        .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_inspect,
         .assign_boxy_eq,
@@ -228,8 +220,6 @@ fn successor(self: *const Self, stmt: LIR.CFStmt) ?LIR.CFStmtId {
         .switch_initialized_payload,
         .str_match,
         .str_match_set,
-        .loop_continue,
-        .loop_break,
         .ret,
         .crash,
         => null,
@@ -254,7 +244,8 @@ fn returnedLocal(self: *Self, store: anytype, start: LIR.CFStmtId) std.mem.Alloc
     };
     while (self.path.pop()) |id| {
         if (result) |local| {
-            switch (store.getCFStmt(id)) {
+            // The path holds only statements `successor` forwards through.
+            switch (store.getCFStmtImmediate(id).*) {
                 .assign_ref => |assign| {
                     result = if (assign.target != local) null else switch (assign.op) {
                         .local => |source| source,
@@ -279,7 +270,6 @@ fn returnedLocal(self: *Self, store: anytype, start: LIR.CFStmtId) std.mem.Alloc
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_inspect,
                 .assign_boxy_eq,
@@ -308,8 +298,6 @@ fn returnedLocal(self: *Self, store: anytype, start: LIR.CFStmtId) std.mem.Alloc
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .loop_continue,
-                .loop_break,
                 .ret,
                 .crash,
                 => unreachable,

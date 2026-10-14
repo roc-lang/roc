@@ -68,10 +68,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-a.Encodable(fmt) :  where [a.encode : a, fmt -> fmt]
-
-render : a, fmt -> Str where [a.Encodable(fmt), fmt.finish : fmt -> Str]
-render = |value, fmt| value.encode(fmt).finish()
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -27,7 +27,7 @@ TYPE NOT DETERMINED - static_dispatch_unresolved_via_helper.md:5:13:5:25
 			(reflow " ")
 			(annotated code "to_i128")
 			(reflow " ")
-			(reflow "method, but nothing in this program determines the type it is called on:"))
+			(reflow "method, but nothing in this program determines the type it is called on."))
 		(document
 			(source-region (file "static_dispatch_unresolved_via_helper.md") (start 5 13) (end 5 25) (annotation error) (line-text "ambiguous = conv(poly())"))
 			(line-break)

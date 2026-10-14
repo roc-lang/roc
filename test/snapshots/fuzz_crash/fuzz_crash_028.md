@@ -1536,7 +1536,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rest")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rest")
@@ -1565,7 +1565,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rest")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rest")
@@ -1607,7 +1607,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rest")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rest")
@@ -1636,7 +1636,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "b")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_b")
@@ -1860,7 +1860,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "tag_")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_tag_")
@@ -1874,7 +1874,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "i")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_i")
@@ -1888,7 +1888,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "t")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_t")
@@ -1902,7 +1902,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rd")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rd")
@@ -1916,7 +1916,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "mle")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_mle")
@@ -1930,7 +1930,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "b")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_b")
@@ -1944,7 +1944,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "le")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_le")
@@ -1994,7 +1994,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "f")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_f")
@@ -2453,7 +2453,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 			(reflow " ")
 			(annotated code "od")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "method is called on."))
 		(document
 			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 12) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
 			(line-break)
@@ -2476,7 +2476,7 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 			(reflow " ")
 			(annotated code "ned")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "method is called on."))
 		(document
 			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 18) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
 			(line-break)
@@ -3195,7 +3195,7 @@ EndOfFile,
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1355) (dispatcher-var 281)
+						(e-interpolation (constraint-fn-var 1357) (dispatcher-var 281)
 							(first
 								(e-literal (string "H, ")))
 							(parts
@@ -3210,8 +3210,10 @@ EndOfFile,
 					(p-assign (ident "n"))
 					(e-runtime-error (tag "ident_not_in_scope"))
 					(e-block
-						(e-runtime-error (tag "erroneous_value_expr")
-							(e-runtime-error (tag "erroneous_value_expr")))))
+						(s-runtime-error (tag "erroneous_value_expr")
+							(e-runtime-error (tag "erroneous_value_expr")
+								(e-runtime-error (tag "erroneous_value_expr"))))
+						(e-empty_record)))
 				(s-let
 					(p-assign (ident "rd"))
 					(e-runtime-error (tag "erroneous_value_expr")
@@ -3250,11 +3252,11 @@ EndOfFile,
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 1538)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 1540)
 									(receiver
 										(e-runtime-error (tag "erroneous_value_expr")))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 1535)
+										(e-dispatch-call (method "times") (constraint-fn-var 1537)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -3269,18 +3271,18 @@ EndOfFile,
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 1571)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 1573)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 1561)
+															(e-dispatch-call (method "plus") (constraint-fn-var 1563)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 1598)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 1600)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 1588)
+															(e-dispatch-call (method "minus") (constraint-fn-var 1590)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -3295,11 +3297,11 @@ EndOfFile,
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 1637)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 1639)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 1634)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 1636)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -3314,12 +3316,12 @@ EndOfFile,
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 1703)
+													(e-dispatch-call (method "ned") (constraint-fn-var 1705)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 1673)
+																		(e-dispatch-call (method "od") (constraint-fn-var 1675)
 																			(receiver
 																				(e-runtime-error (tag "erroneous_value_expr")))
 																			(args)))

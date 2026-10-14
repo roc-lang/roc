@@ -297,55 +297,29 @@ fn loadDevProgram(
     for (view.relocations, relocation_records) |record, *relocation| {
         const name = try view.symbolName(record.symbol);
         const shim_function_addr = resolveShimFunction(name);
-        switch (try record.relocationKind()) {
-            .linked_function => {
-                const target_addr = shim_function_addr orelse return unresolvedSymbol(name);
+        const data_kind: ?@FieldType(@FieldType(backend.Relocation, "linked_data"), "kind") = switch (try record.relocationKind()) {
+            .linked_function => null,
+            .linked_data_abs64 => .abs64,
+            .linked_data_rel32 => .rel32,
+            .linked_data_page21 => .page21,
+            .linked_data_pageoff12 => .pageoff12,
+        };
+        if (data_kind) |kind| {
+            if (shim_function_addr) |target_addr| {
                 try ensureFunctionStub(gpa, &function_stubs, name, target_addr);
-                relocation.* = .{ .linked_function = .{
-                    .offset = record.code_offset,
-                    .name = name,
-                } };
-            },
-            .linked_data_abs64 => {
-                if (shim_function_addr) |target_addr| {
-                    try ensureFunctionStub(gpa, &function_stubs, name, target_addr);
-                }
-                relocation.* = .{ .linked_data = .{
-                    .offset = record.code_offset,
-                    .name = name,
-                    .kind = .abs64,
-                } };
-            },
-            .linked_data_rel32 => {
-                if (shim_function_addr) |target_addr| {
-                    try ensureFunctionStub(gpa, &function_stubs, name, target_addr);
-                }
-                relocation.* = .{ .linked_data = .{
-                    .offset = record.code_offset,
-                    .name = name,
-                    .kind = .rel32,
-                } };
-            },
-            .linked_data_page21 => {
-                if (shim_function_addr) |target_addr| {
-                    try ensureFunctionStub(gpa, &function_stubs, name, target_addr);
-                }
-                relocation.* = .{ .linked_data = .{
-                    .offset = record.code_offset,
-                    .name = name,
-                    .kind = .page21,
-                } };
-            },
-            .linked_data_pageoff12 => {
-                if (shim_function_addr) |target_addr| {
-                    try ensureFunctionStub(gpa, &function_stubs, name, target_addr);
-                }
-                relocation.* = .{ .linked_data = .{
-                    .offset = record.code_offset,
-                    .name = name,
-                    .kind = .pageoff12,
-                } };
-            },
+            }
+            relocation.* = .{ .linked_data = .{
+                .offset = record.code_offset,
+                .name = name,
+                .kind = kind,
+            } };
+        } else {
+            const target_addr = shim_function_addr orelse return unresolvedSymbol(name);
+            try ensureFunctionStub(gpa, &function_stubs, name, target_addr);
+            relocation.* = .{ .linked_function = .{
+                .offset = record.code_offset,
+                .name = name,
+            } };
         }
     }
     const stub_size = try jumpStubSize();

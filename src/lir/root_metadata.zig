@@ -9,36 +9,15 @@ const check = @import("check");
 const checked = check.CheckedArtifact;
 
 /// Source role for a root procedure emitted into LIR.
-pub const RootKind = enum {
-    runtime_entrypoint,
-    provided_export,
-    platform_required_binding,
-    hosted_export,
-    test_expect,
-    repl_expr,
-    dev_expr,
-    compile_time_constant,
-    compile_time_callable,
-};
+pub const RootKind = checked.RootRequestKind;
 
 /// Calling convention category for a root procedure.
-pub const RootAbi = enum {
-    roc,
-    platform,
-    hosted,
-    test_expect,
-    compile_time,
-};
+pub const RootAbi = checked.RootAbi;
 
 /// Visibility category for a root procedure.
-pub const RootExposure = enum {
-    private,
-    exported,
-    platform_required,
-    hosted,
-};
+pub const RootExposure = checked.RootExposure;
 
-/// LIR-owned copy of checked root request metadata.
+/// The checked root request metadata a root procedure carries into LIR.
 pub const RootMetadata = struct {
     pub const TestPlanMetadata = struct {
         result_index: u32,
@@ -53,33 +32,7 @@ pub const RootMetadata = struct {
     test_plan: ?TestPlanMetadata = null,
 
     pub fn fromCheckedRoot(root: checked.RootRequest) RootMetadata {
-        return .{
-            .order = root.order,
-            .kind = switch (root.kind) {
-                .runtime_entrypoint => .runtime_entrypoint,
-                .provided_export => .provided_export,
-                .platform_required_binding => .platform_required_binding,
-                .hosted_export => .hosted_export,
-                .test_expect => .test_expect,
-                .repl_expr => .repl_expr,
-                .dev_expr => .dev_expr,
-                .compile_time_constant => .compile_time_constant,
-                .compile_time_callable => .compile_time_callable,
-            },
-            .abi = switch (root.abi) {
-                .roc => .roc,
-                .platform => .platform,
-                .hosted => .hosted,
-                .test_expect => .test_expect,
-                .compile_time => .compile_time,
-            },
-            .exposure = switch (root.exposure) {
-                .private => .private,
-                .exported => .exported,
-                .platform_required => .platform_required,
-                .hosted => .hosted,
-            },
-        };
+        return .{ .order = root.order, .kind = root.kind, .abi = root.abi, .exposure = root.exposure };
     }
 };
 

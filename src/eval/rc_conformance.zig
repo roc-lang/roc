@@ -247,11 +247,6 @@ pub fn end() void {
     DebugRefcountTracker.disable();
 }
 
-/// Whether observation is on right now.
-pub fn isActive() bool {
-    return enabled and active_flag;
-}
-
 /// Rows that did not match their builtin during this run, oldest first.
 pub fn findings() []const Finding {
     return findings_buf[0..findings_len];

@@ -36,7 +36,7 @@ test "issue 11945: record builder reports a duplicate field" {
         \\```
         \\    ^^^^^^^
         \\
-        \\The field `retries` was first defined in Test:9:5:
+        \\The field `retries` was first defined in Test:9:5.
         \\```roc
         \\    retries: Builder.pure(3),
         \\```

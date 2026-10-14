@@ -39,7 +39,7 @@ MISSING METHOD - lambda_multi_arg_mismatch.md:11:5:11:12
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "x3")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_x3")
@@ -53,7 +53,7 @@ MISSING METHOD - lambda_multi_arg_mismatch.md:11:5:11:12
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "x5")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_x5")
@@ -67,7 +67,7 @@ MISSING METHOD - lambda_multi_arg_mismatch.md:11:5:11:12
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "x7")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_x7")

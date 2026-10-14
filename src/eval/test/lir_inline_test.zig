@@ -170,7 +170,7 @@ fn lowerModuleWithOptions(
     inline_mode: lir.CheckedPipeline.InlineMode,
     options: LowerModuleOptions,
 ) TestError!LoweredSource {
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, options.imports, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, source, options.imports, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
     if (options.checked_body_edit) |edit| edit(&resources.checked_artifact.checked_bodies);
 
@@ -251,7 +251,7 @@ fn lowerMonotypeModuleWithOptions(
     source: []const u8,
     options: LowerMonotypeOptions,
 ) TestError!MonotypeSource {
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
@@ -308,7 +308,7 @@ fn monotypeCountersForModuleWithImports(
     source: []const u8,
     imports: []const helpers.ModuleSource,
 ) TestError!postcheck.Monotype.Lower.SpecializationCounters {
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, imports, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, source, imports, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
@@ -575,15 +575,14 @@ fn boxyStructuralJsonParserCounts(allocator: Allocator, field_count: usize, pars
     try source_buf.appendSlice(allocator, "\n");
     const source = source_buf.items;
 
-    var compiled = try helpers.compileProgramForTargetWithBuiltinAndContext(
+    var compiled = try helpers.compileForTarget(
         allocator,
         std.testing.io,
         .module,
         source,
         &.{},
         .native,
-        try sharedPrePublishedBuiltin(),
-        null,
+        .{ .pre_published_builtin = try sharedPrePublishedBuiltin() },
         .boxy,
     );
     defer compiled.deinit(allocator);
@@ -617,15 +616,14 @@ fn boxyStructuralJsonEncoderIncrefs(allocator: Allocator, field_count: usize) Te
         \\
     );
 
-    var compiled = try helpers.compileProgramForTargetWithBuiltinAndContext(
+    var compiled = try helpers.compileForTarget(
         allocator,
         std.testing.io,
         .module,
         source_buf.items,
         &.{},
         .native,
-        try sharedPrePublishedBuiltin(),
-        null,
+        .{ .pre_published_builtin = try sharedPrePublishedBuiltin() },
         .boxy,
     );
     defer compiled.deinit(allocator);
@@ -768,7 +766,6 @@ fn countDebugEffectStmts(lowered: *const lir.CheckedPipeline.LoweredProgram) Deb
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -797,8 +794,6 @@ fn countDebugEffectStmts(lowered: *const lir.CheckedPipeline.LoweredProgram) Deb
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .ret,
@@ -1053,7 +1048,7 @@ fn liftModuleAfterSpecConstr(
     allocator: Allocator,
     source: []const u8,
 ) TestError!LiftedSource {
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     errdefer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
@@ -1257,7 +1252,7 @@ fn expectInlinePlanDecision(
     expected: bool,
 ) TestError!void {
     const allocator = std.testing.allocator;
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
@@ -1344,7 +1339,7 @@ fn collectAssignCallProcs(
         const visited_entry = try visited.getOrPut(stmt_id);
         if (visited_entry.found_existing) continue;
 
-        switch (lowered.lir_result.store.getCFStmt(stmt_id)) {
+        switch (lowered.lir_result.store.getCFStmtImmediate(stmt_id).*) {
             .assign_ref => |stmt| try work.append(allocator, stmt.next),
             .assign_literal => |stmt| try work.append(allocator, stmt.next),
             .init_uninitialized => |stmt| try work.append(allocator, stmt.next),
@@ -1360,7 +1355,6 @@ fn collectAssignCallProcs(
             .assign_boxy_dict_ref => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_box => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_record_update => |stmt| try work.append(allocator, stmt.next),
-            .assign_boxy_reuse_box => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_unbox => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_adapt => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_inspect => |stmt| try work.append(allocator, stmt.next),
@@ -1416,8 +1410,6 @@ fn collectAssignCallProcs(
             },
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .loop_continue,
-            .loop_break,
             .jump,
             .ret,
             .crash,
@@ -2125,7 +2117,7 @@ test "boxy root that parses JSON directly receives its codec evidence" {
     // `main`'s scheme captures the codec requirement of its `Json.parse`
     // call. A root has no caller, so its checked root evidence supplies it.
     const allocator = std.testing.allocator;
-    var compiled = try helpers.compileProgramForTargetWithBuiltinAndContext(
+    var compiled = try helpers.compileForTarget(
         allocator,
         std.testing.io,
         .module,
@@ -2139,8 +2131,7 @@ test "boxy root that parses JSON directly receives its codec evidence" {
     ,
         &.{},
         .native,
-        try sharedPrePublishedBuiltin(),
-        null,
+        .{ .pre_published_builtin = try sharedPrePublishedBuiltin() },
         .boxy,
     );
     defer compiled.deinit(allocator);
@@ -3023,7 +3014,7 @@ test "issue 11144 nested lambdas in one large body specialize in linear work" {
     {
         const source = try issue11144EventHandlerViewSource(allocator, 2);
         defer allocator.free(source);
-        var resources = try helpers.parseAndCheckProgramForProblemsWithBuiltin(
+        var resources = try helpers.parseAndCheckProgramForProblems(
             allocator,
             .module,
             source,
@@ -3250,7 +3241,7 @@ test "differently ordered source record rows produce normalized monotype rows" {
         \\main = choose(Bool.True)
     ;
 
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const import_count = resources.import_artifacts.len + if (resources.borrowed_builtin_artifact == null) @as(usize, 0) else 1;
@@ -3530,7 +3521,7 @@ test "self-recursive direct wrapper is not inlined" {
     const target = try rootDirectCallTarget(allocator, &lowered_source.lowered);
     try std.testing.expectEqual(
         LIR.TailTransform.tce,
-        lowered_source.lowered.lir_result.store.getProcSpec(target).tail_transform,
+        lowered_source.lowered.lir_result.store.getProcSpecImmediate(target).tail_transform,
     );
     const target_calls = try collectAssignCallProcs(allocator, &lowered_source.lowered, target);
     defer allocator.free(target_calls);
@@ -3584,7 +3575,7 @@ fn expectRootTargetTailTransform(
     const target = try rootDirectCallTarget(allocator, &lowered_source.lowered);
     try std.testing.expectEqual(
         expected,
-        lowered_source.lowered.lir_result.store.getProcSpec(target).tail_transform,
+        lowered_source.lowered.lir_result.store.getProcSpecImmediate(target).tail_transform,
     );
 }
 
@@ -3713,7 +3704,7 @@ test "spec constr retains an exact virtual source frame for an inlined procedure
     defer lowered_source.deinit(allocator);
 
     const store = &lowered_source.lowered.lir_result.store;
-    try std.testing.expect(store.inlineScopeCount() > 0);
+    try std.testing.expect(store.inline_scopes.len() > 0);
 
     var found_source_scope = false;
     for (0..store.cf_stmts.len()) |stmt_index| {
@@ -4347,17 +4338,17 @@ test "LIR statements and procs carry resolved source locations" {
     defer lowered_source.deinit(allocator);
 
     const store = &lowered_source.lowered.lir_result.store;
-    try std.testing.expectEqual(store.getCFStmts().len, store.getCFStmtLocs().len);
-    try std.testing.expectEqual(store.getCFStmts().len, store.getCFStmtRegions().len);
-    try std.testing.expectEqual(store.getProcSpecs().len, store.getProcLocs().len);
-    try std.testing.expect(store.getProcDebugNames().len > 0);
-    for (store.getProcDebugNames()) |entry| {
+    try std.testing.expectEqual(store.getCFStmts().len, store.cf_stmt_locs.unsafeRawItemsForView().len);
+    try std.testing.expectEqual(store.getCFStmts().len, store.cf_stmt_regions.unsafeRawItemsForView().len);
+    try std.testing.expectEqual(store.getProcSpecs().len, store.proc_locs.unsafeRawItemsForView().len);
+    try std.testing.expect(store.proc_debug_names.unsafeRawItemsForView().len > 0);
+    for (store.proc_debug_names.unsafeRawItemsForView()) |entry| {
         try std.testing.expect(entry.proc < store.getProcSpecs().len);
     }
     try std.testing.expect(store.sourceFileCount() >= 1);
 
     var located: usize = 0;
-    for (store.getCFStmtLocs(), store.getCFStmtRegions(), store.getCFStmts()) |loc, region, stmt| {
+    for (store.cf_stmt_locs.unsafeRawItemsForView(), store.cf_stmt_regions.unsafeRawItemsForView(), store.getCFStmts()) |loc, region, stmt| {
         const has_source = switch (stmt) {
             .incref,
             .decref,
@@ -4375,7 +4366,6 @@ test "LIR statements and procs carry resolved source locations" {
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -4402,8 +4392,6 @@ test "LIR statements and procs carry resolved source locations" {
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .ret,
@@ -4425,7 +4413,7 @@ test "LIR statements and procs carry resolved source locations" {
     try std.testing.expect(located > 0);
 
     var located_procs: usize = 0;
-    for (store.getProcLocs()) |loc| {
+    for (store.proc_locs.unsafeRawItemsForView()) |loc| {
         if (loc.hasLocation()) {
             located_procs += 1;
             try std.testing.expect(loc.file < store.sourceFileCount());
@@ -4530,7 +4518,7 @@ test "LIR statements carry source locations under optimizing inline mode" {
 
     const store = &lowered_source.lowered.lir_result.store;
     var located: usize = 0;
-    for (store.getCFStmtLocs(), store.getCFStmtRegions()) |loc, region| {
+    for (store.cf_stmt_locs.unsafeRawItemsForView(), store.cf_stmt_regions.unsafeRawItemsForView()) |loc, region| {
         if (loc.hasLocation()) located += 1;
         if (loc.hasLocation()) try std.testing.expect(!region.isEmpty());
     }
@@ -4578,7 +4566,7 @@ test "LIR locals carry source-level names" {
     defer lowered_source.deinit(allocator);
 
     const store = &lowered_source.lowered.lir_result.store;
-    try std.testing.expectEqual(store.getLocals().len, store.getLocalNamesRaw().len);
+    try std.testing.expectEqual(store.getLocals().len, store.local_names.unsafeRawItemsForView().len);
 
     var found_first = false;
     var found_second = false;
@@ -4732,7 +4720,7 @@ fn collectLirResultProcShape(
         const visited_entry = try visited.getOrPut(stmt_id);
         if (visited_entry.found_existing) continue;
 
-        switch (result.store.getCFStmt(stmt_id)) {
+        switch (result.store.getCFStmtImmediate(stmt_id).*) {
             .assign_ref => |stmt| try work.append(allocator, stmt.next),
             .assign_literal => |stmt| try work.append(allocator, stmt.next),
             .init_uninitialized => |stmt| try work.append(allocator, stmt.next),
@@ -4753,7 +4741,6 @@ fn collectLirResultProcShape(
             .assign_boxy_dict_ref => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_box => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_record_update => |stmt| try work.append(allocator, stmt.next),
-            .assign_boxy_reuse_box => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_unbox => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_adapt => |stmt| try work.append(allocator, stmt.next),
             .assign_boxy_inspect => |stmt| try work.append(allocator, stmt.next),
@@ -4861,8 +4848,6 @@ fn collectLirResultProcShape(
             },
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .loop_continue,
-            .loop_break,
             .ret,
             .crash,
             .expect_err,
@@ -4922,7 +4907,7 @@ fn perElementProcSummary(
     while (reachable.pop()) |proc_id| {
         const proc_entry = try reachable_visited.getOrPut(proc_id);
         if (proc_entry.found_existing) continue;
-        const proc_body = store.getProcSpec(proc_id).body orelse continue;
+        const proc_body = store.getProcSpecImmediate(proc_id).body orelse continue;
 
         const calls = try collectAssignCallProcs(allocator, lowered, proc_id);
         defer allocator.free(calls);
@@ -5092,7 +5077,7 @@ fn perElementConstructionSummary(
     lowered: *lir.CheckedPipeline.LoweredProgram,
 ) TestError!PerElementConstructionSummary {
     const store = &lowered.lir_result.store;
-    const root_body = store.getProcSpec(try rootProc(lowered)).body orelse return error.MissingRootProcedure;
+    const root_body = store.getProcSpecImmediate(try rootProc(lowered)).body orelse return error.MissingRootProcedure;
     const loop = try findSingleLoopJoin(store, root_body);
 
     var bodies = std.ArrayList(LIR.CFStmtId).empty;
@@ -5121,7 +5106,7 @@ fn perElementConstructionSummary(
             if (stmt == .assign_call) {
                 const entry = try visited_procs.getOrPut(stmt.assign_call.proc);
                 if (!entry.found_existing) {
-                    const proc_body = store.getProcSpec(stmt.assign_call.proc).body orelse continue;
+                    const proc_body = store.getProcSpecImmediate(stmt.assign_call.proc).body orelse continue;
                     try bodies.append(allocator, proc_body);
                 }
             }
@@ -5133,7 +5118,7 @@ fn perElementConstructionSummary(
 fn loopCarriedWrapperCount(lowered: *lir.CheckedPipeline.LoweredProgram) TestError!usize {
     const store = &lowered.lir_result.store;
     const layouts = &lowered.lir_result.layouts;
-    const root_body = store.getProcSpec(try rootProc(lowered)).body orelse return error.MissingRootProcedure;
+    const root_body = store.getProcSpecImmediate(try rootProc(lowered)).body orelse return error.MissingRootProcedure;
     const loop = try findSingleLoopJoin(store, root_body);
     const params = store.getLocalSpan(loop.params);
     var count: usize = 0;
@@ -5197,7 +5182,7 @@ test "ARC keeps a loop-invariant record field out of the loop body keep" {
         defer lowered.deinit(allocator);
 
         const store = &lowered.lowered.lir_result.store;
-        const root_body = store.getProcSpec(try rootProc(&lowered.lowered)).body orelse return error.MissingRootProcedure;
+        const root_body = store.getProcSpecImmediate(try rootProc(&lowered.lowered)).body orelse return error.MissingRootProcedure;
         var walk = try lir.BodyClone.ReachableStmts.init(store, root_body);
         defer walk.deinit();
 
@@ -8991,7 +8976,7 @@ const dispatch_boundary_source =
 
 test "dispatch evidence boundary validator accepts a published artifact" {
     const allocator = std.testing.allocator;
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, dispatch_boundary_source, &.{}, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, dispatch_boundary_source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     try std.testing.expect((try resources.checked_artifact.validateDispatchEvidence()) == null);
@@ -9014,7 +8999,7 @@ test "deeply nested tuple literal publishes evidence paths linear in its depth" 
     for (0..depth) |_| try source.appendSlice(allocator, ")");
     try source.appendSlice(allocator, "\n\nmain : Str\nmain = \"ok\"\n");
 
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source.items, &.{}, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, source.items, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const templates = &resources.checked_artifact.checked_procedure_templates;
@@ -9051,12 +9036,12 @@ test "literal conversion ownership includes nested codec evidence" {
             "run : {} -> [Nope, Yes({})]\n" ++
             "run = |_| query(" ++ conversion[3] ++ ")\n" ++
             "main = run({})\n";
-        var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(
+        var resources = try helpers.parseProgram(
             allocator,
             .module,
             source,
             &.{},
-            try sharedPrePublishedBuiltin(),
+            .{ .pre_published_builtin = try sharedPrePublishedBuiltin() },
         );
         defer helpers.cleanupParseAndCanonical(allocator, resources);
         const artifact = &resources.checked_artifact;
@@ -9144,12 +9129,12 @@ test "custom literal field default gets an ordinary conversion root" {
         \\main = config.size
     ;
 
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(
+    var resources = try helpers.parseProgram(
         allocator,
         .module,
         source,
         &.{},
-        try sharedPrePublishedBuiltin(),
+        .{ .pre_published_builtin = try sharedPrePublishedBuiltin() },
     );
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
@@ -9251,7 +9236,7 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
         \\    wrap(f)()
         \\}
     ;
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const artifact = &resources.checked_artifact;
@@ -9399,7 +9384,7 @@ test "dispatch evidence boundary validator rejects non-normalized and malformed 
         \\main : Str
         \\main = helper("hi")
     ;
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const templates = &resources.checked_artifact.checked_procedure_templates;
@@ -9439,7 +9424,7 @@ test "dispatch evidence boundary validator rejects non-normalized and malformed 
 
 test "dispatch evidence boundary validator reports a removed dispatch plan by expression" {
     const allocator = std.testing.allocator;
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, dispatch_boundary_source, &.{}, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, dispatch_boundary_source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     var removed: ?check.CheckedArtifact.CheckedExprId = null;
@@ -9460,7 +9445,7 @@ test "dispatch evidence boundary validator reports a removed dispatch plan by ex
 
 test "dispatch evidence boundary validator names the method of a dangling evidence node" {
     const allocator = std.testing.allocator;
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, dispatch_boundary_source, &.{}, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, dispatch_boundary_source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const table = &resources.checked_artifact.static_dispatch_plans;
@@ -9510,7 +9495,7 @@ test "dispatch evidence boundary validator reports a site-evidence key outside t
         \\main : Str
         \\main = helper(Thing.Val("hi"))
     ;
-    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(allocator, .module, source, &.{}, try sharedPrePublishedBuiltin());
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = try sharedPrePublishedBuiltin() });
     defer helpers.cleanupParseAndCanonical(allocator, resources);
 
     const table = &resources.checked_artifact.static_dispatch_plans;
@@ -10562,7 +10547,7 @@ fn recordFieldReadCounts(
     var seen_call = false;
     var steps: usize = 0;
     while (steps < 4096) : (steps += 1) {
-        switch (store.getCFStmt(cursor)) {
+        switch (store.getCFStmtImmediate(cursor).*) {
             .assign_ref => |stmt| {
                 switch (stmt.op) {
                     .local => |src| if (aliases.contains(src)) try aliases.put(stmt.target, {}),
@@ -10587,7 +10572,7 @@ fn recordFieldReadCounts(
                 seen_call = true;
                 cursor = stmt.next;
             },
-            inline .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+            inline .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                 cursor = stmt.next;
             },
             .expect_err,
@@ -10598,8 +10583,6 @@ fn recordFieldReadCounts(
             .str_match,
             .str_match_set,
             .boxy_tag_match,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .ret,
@@ -10688,7 +10671,7 @@ fn fieldReadRetainCount(
         while (stack.pop()) |cursor| {
             const seen = try visited.getOrPut(@backingInt(cursor));
             if (seen.found_existing) continue;
-            switch (store.getCFStmt(cursor)) {
+            switch (store.getCFStmtImmediate(cursor).*) {
                 .assign_ref => |stmt| {
                     switch (stmt.op) {
                         .field => try read_targets.put(stmt.target, {}),
@@ -10710,7 +10693,7 @@ fn fieldReadRetainCount(
                     }
                     try stack.append(allocator, stmt.next);
                 },
-                inline .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .decref, .decref_if_initialized, .free => |stmt| {
+                inline .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .decref, .decref_if_initialized, .free => |stmt| {
                     try stack.append(allocator, stmt.next);
                 },
                 .switch_stmt => |stmt| {
@@ -10747,8 +10730,6 @@ fn fieldReadRetainCount(
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .loop_continue,
-                .loop_break,
                 .jump,
                 .ret,
                 .crash,
@@ -10928,7 +10909,7 @@ test "field takes dismantle a Try whose caller match tag reachability folded" {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const name = store.procDebugName(proc_id) orelse continue;
         if (!std.mem.eql(u8, name, "main")) continue;
-        if (store.getProcSpec(proc_id).body == null) continue;
+        if (store.getProcSpecImmediate(proc_id).body == null) continue;
         const retained = try fieldReadRetainCount(allocator, &lowered.lowered, proc_id);
         main_retained = (main_retained orelse 0) + retained;
     }
@@ -10984,7 +10965,7 @@ test "a field take assigned into a join result cell keeps a loop list unique" {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const name = store.procDebugName(proc_id) orelse continue;
         if (!std.mem.eql(u8, name, "main")) continue;
-        if (store.getProcSpec(proc_id).body == null) continue;
+        if (store.getProcSpecImmediate(proc_id).body == null) continue;
         const sets = listSetCounts(store, proc_id);
         var total = main_sets orelse ListSetCounts{};
         total.checked += sets.checked;
@@ -11086,7 +11067,7 @@ fn listSetCounts(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) ListSet
         const cursor = cursor_stack[top];
         if (seen.isSet(@backingInt(cursor))) continue;
         seen.set(@backingInt(cursor));
-        switch (store.getCFStmt(cursor)) {
+        switch (store.getCFStmtImmediate(cursor).*) {
             .assign_low_level => |stmt| {
                 if (stmt.op == .list_set) {
                     if (stmt.unique_args == 0) counts.checked += 1 else counts.check_free += 1;
@@ -11096,7 +11077,7 @@ fn listSetCounts(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) ListSet
                     top += 1;
                 }
             },
-            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                 if (top < cursor_stack.len) {
                     cursor_stack[top] = stmt.next;
                     top += 1;
@@ -11135,8 +11116,6 @@ fn listSetCounts(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) ListSet
             .str_match,
             .str_match_set,
             .boxy_tag_match,
-            .loop_continue,
-            .loop_break,
             .jump,
             .ret,
             .crash,
@@ -11908,7 +11887,7 @@ test "tail calls behind an inlined loop still become jumps" {
             }
             return error.MissingProcSpec;
         };
-        try std.testing.expectEqual(LIR.TailTransform.tce, result.store.getProcSpec(walk_proc).tail_transform);
+        try std.testing.expectEqual(LIR.TailTransform.tce, result.store.getProcSpecImmediate(walk_proc).tail_transform);
     }
 }
 
@@ -11955,7 +11934,7 @@ test "tail-call lowering handles a source loop in both inline modes" {
             const name = result.store.procDebugName(proc_id) orelse continue;
             if (!std.mem.eql(u8, name, "walk")) continue;
             found_walk = true;
-            try std.testing.expectEqual(LIR.TailTransform.tce, result.store.getProcSpec(proc_id).tail_transform);
+            try std.testing.expectEqual(LIR.TailTransform.tce, result.store.getProcSpecImmediate(proc_id).tail_transform);
         }
         try std.testing.expect(found_walk);
     }
@@ -12210,7 +12189,7 @@ test "tail-call lowering loops a boxy self-call whose resolved ABI needs no retu
         // on the provisional descriptor ABI; `walk` returns no runtime
         // descriptor, so the call is replaced by its static form before the
         // tail-call proof runs, and nothing adapts its result on the way out.
-        try std.testing.expectEqual(LIR.TailTransform.tce, result.store.getProcSpec(proc_id).tail_transform);
+        try std.testing.expectEqual(LIR.TailTransform.tce, result.store.getProcSpecImmediate(proc_id).tail_transform);
     }
     try std.testing.expect(found_walk);
 }
@@ -13011,7 +12990,7 @@ fn procStmts(
     defer work.deinit(allocator);
     var seen = collections.DenseMap(LIR.CFStmtId, void).init(allocator);
     defer seen.deinit();
-    try work.append(allocator, store.getProcSpec(proc).body orelse return error.MissingProcSpec);
+    try work.append(allocator, store.getProcSpecImmediate(proc).body orelse return error.MissingProcSpec);
     while (work.pop()) |stmt_id| {
         if ((try seen.getOrPut(stmt_id)).found_existing) continue;
         try lir.BodyClone.appendSuccessors(store, &work, stmt_id, allocator);
@@ -13038,14 +13017,14 @@ test "provenance: TRMC statements state their kind at the site they rewrite" {
 
     const store = &lowered_source.lowered.lir_result.store;
     const repeat = try rootDirectCallTarget(allocator, &lowered_source.lowered);
-    try std.testing.expectEqual(LIR.TailTransform.trmc, store.getProcSpec(repeat).tail_transform);
+    try std.testing.expectEqual(LIR.TailTransform.trmc, store.getProcSpecImmediate(repeat).tail_transform);
 
     const stmts = try procStmts(allocator, store, repeat);
     defer allocator.free(stmts);
 
     // The loop join TRMC wraps around the body sits at the procedure body.
-    const entry = store.getProcSpec(repeat).body.?;
-    try std.testing.expect(store.getCFStmt(entry) == .join);
+    const entry = store.getProcSpecImmediate(repeat).body.?;
+    try std.testing.expect(store.getCFStmtImmediate(entry).* == .join);
     try std.testing.expect(store.stmtOriginKind(entry) == .trmc);
     try std.testing.expectEqual(@as(u32, 5), store.stmtLoc(entry).line);
 
@@ -13064,7 +13043,7 @@ test "provenance: TRMC statements state their kind at the site they rewrite" {
         trmc_count += 1;
         // The loop-back that replaces the recursive call carries the
         // recursive call's location, not the procedure's.
-        if (store.getCFStmt(stmt_id) == .jump and loc.line == 8) recursive_site_loop_backs += 1;
+        if (store.getCFStmtImmediate(stmt_id).* == .jump and loc.line == 8) recursive_site_loop_backs += 1;
     }
     try std.testing.expect(trmc_count > 0);
     try std.testing.expectEqual(@as(usize, 1), recursive_site_loop_backs);
@@ -13095,7 +13074,7 @@ test "provenance: ARC RC statements state their subject, reason, and deciding lo
         defer allocator.free(stmts);
         for (stmts) |stmt_id| {
             const kind = store.stmtOriginKind(stmt_id);
-            switch (store.getCFStmt(stmt_id)) {
+            switch (store.getCFStmtImmediate(stmt_id).*) {
                 .incref => |rc| {
                     try std.testing.expect(kind == .arc_incref);
                     try std.testing.expectEqual(rc.value, kind.arc_incref.subject_local);
@@ -13108,7 +13087,7 @@ test "provenance: ARC RC statements state their subject, reason, and deciding lo
                     try std.testing.expect(store.stmtLoc(stmt_id).hasLocation());
                     decrefs += 1;
                 },
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => try std.testing.expect(!kind.isArcInserted()),
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => try std.testing.expect(!kind.isArcInserted()),
             }
         }
     }
@@ -13120,7 +13099,7 @@ test "provenance: ARC RC statements state their subject, reason, and deciding lo
     const pair_stmts = try procStmts(allocator, store, pair);
     defer allocator.free(pair_stmts);
     for (pair_stmts) |stmt_id| {
-        if (store.getCFStmt(stmt_id) != .incref) continue;
+        if (store.getCFStmtImmediate(stmt_id).* != .incref) continue;
         try std.testing.expectEqual(LIR.RcReason.alias_bind, store.stmtOriginKind(stmt_id).arc_incref.reason);
         try std.testing.expectEqual(@as(u32, 3), store.stmtLoc(stmt_id).line);
     }
@@ -13129,7 +13108,7 @@ test "provenance: ARC RC statements state their subject, reason, and deciding lo
     const root_stmts = try procStmts(allocator, store, root);
     defer allocator.free(root_stmts);
     for (root_stmts) |stmt_id| {
-        if (store.getCFStmt(stmt_id) != .decref) continue;
+        if (store.getCFStmtImmediate(stmt_id).* != .decref) continue;
         try std.testing.expectEqual(LIR.RcReason.dead_after_stmt, store.stmtOriginKind(stmt_id).arc_decref.reason);
         try std.testing.expectEqual(@as(u32, 5), store.stmtLoc(stmt_id).line);
     }
@@ -13152,7 +13131,7 @@ test "provenance: an overflow inside a TCE loop reports the overflowing line" {
 
     const store = &lowered_source.lowered.lir_result.store;
     const count = try rootDirectCallTarget(allocator, &lowered_source.lowered);
-    try std.testing.expectEqual(LIR.TailTransform.tce, store.getProcSpec(count).tail_transform);
+    try std.testing.expectEqual(LIR.TailTransform.tce, store.getProcSpecImmediate(count).tail_transform);
 
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();

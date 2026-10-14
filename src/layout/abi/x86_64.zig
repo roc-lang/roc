@@ -166,9 +166,13 @@ fn integerAggregateSysV(size: u32) [8]Class {
 /// an explicit worklist and aggregate nesting never becomes native call depth.
 fn classifyAggregateSysV(allocator: std.mem.Allocator, store: *const Store, result: *[8]Class, base_offset: u32, idx: Idx) std.mem.Allocator.Error!void {
     const Member = struct { offset: u32, idx: Idx };
+    // Aggregates classify in a few members, so the worklist starts on the stack.
+    var pending_buffer: [256]u8 align(@alignOf(usize)) = undefined;
+    var pending_state = std.heap.BufferFirstAllocator.init(&pending_buffer, allocator);
+    const pending_allocator = pending_state.allocator();
     var pending: std.ArrayList(Member) = .empty;
-    defer pending.deinit(allocator);
-    try pending.append(allocator, .{ .offset = base_offset, .idx = idx });
+    defer pending.deinit(pending_allocator);
+    try pending.append(pending_allocator, .{ .offset = base_offset, .idx = idx });
     while (pending.pop()) |member| {
         const lay = store.getLayout(member.idx);
         switch (lay.tag) {
@@ -185,7 +189,7 @@ fn classifyAggregateSysV(allocator: std.mem.Allocator, store: *const Store, resu
                         classifyPaddingBytesSysV(result, field_off, store.getStructFieldSize(struct_idx, i));
                         continue;
                     }
-                    try pending.append(allocator, .{ .offset = field_off, .idx = store.getStructFieldLayout(struct_idx, i) });
+                    try pending.append(pending_allocator, .{ .offset = field_off, .idx = store.getStructFieldLayout(struct_idx, i) });
                 }
             },
             .tag_union => {
@@ -197,7 +201,7 @@ fn classifyAggregateSysV(allocator: std.mem.Allocator, store: *const Store, resu
                 while (v < variants.len) : (v += 1) {
                     const payload_idx = variants.get(v).payload_layout;
                     if (store.getLayout(payload_idx).tag == .zst) continue;
-                    try pending.append(allocator, .{ .offset = member.offset, .idx = payload_idx });
+                    try pending.append(pending_allocator, .{ .offset = member.offset, .idx = payload_idx });
                 }
                 // The discriminant is an integer placed at its offset.
                 if (data.discriminant_size > 0) {
@@ -205,7 +209,7 @@ fn classifyAggregateSysV(allocator: std.mem.Allocator, store: *const Store, resu
                     combineInto(result, disc_off / 8, .integer);
                 }
             },
-            .closure => try pending.append(allocator, .{ .offset = member.offset, .idx = lay.getClosure().captures_layout_idx }),
+            .closure => try pending.append(pending_allocator, .{ .offset = member.offset, .idx = lay.getClosure().captures_layout_idx }),
             // A zero-sized member occupies no bytes, so it contributes no eightbyte class.
             .zst => {},
             // A leaf member combines its own eightbyte classes.

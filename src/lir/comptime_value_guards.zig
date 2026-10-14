@@ -48,9 +48,9 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
         while (work.pop()) |stmt_id| {
             if ((try visited.getOrPut(stmt_id)).found_existing) continue;
             try Body.appendSuccessors(store, &work, stmt_id, allocator);
-            const assign = switch (store.getCFStmt(stmt_id)) {
+            const assign = switch (store.getCFStmtImmediate(stmt_id).*) {
                 .assign_literal => |a| a,
-                .init_uninitialized, .assign_ref, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => continue,
+                .init_uninitialized, .assign_ref, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => continue,
             };
             const slot = switch (assign.value) {
                 .static_data => |id| id,
@@ -145,7 +145,7 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
         while (use_index < uses.items.len and uses.items[use_index].proc == proc_id) : (use_index += 1) {
             try locals.appendSlice(allocator, &guards.get(uses.items[use_index].stmt).?.locals);
         }
-        const frame = store.getLocalSpan(store.getProcSpec(proc_id).frame_locals);
+        const frame = store.getLocalSpan(store.getProcSpecImmediate(proc_id).frame_locals);
         for (0..frame.len) |i| try locals.append(allocator, GuardedList.at(frame, i));
         std.mem.sort(LIR.LocalId, locals.items, {}, localLessThan);
         var count: usize = 0;
@@ -264,7 +264,7 @@ fn testSharedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || er
     // Completion restores the producer-recorded edge, including its original
     // target and suffix, without examining the emitted guard's shape.
     try completeSuccessfulSlot(&program, slot);
-    const restored = program.store.getCFStmt(load).assign_literal;
+    const restored = program.store.getCFStmtImmediate(load).assign_literal;
     try std.testing.expectEqual(target, restored.target);
     try std.testing.expectEqual(slot, restored.value.static_data);
     try std.testing.expectEqual(ret, restored.next);
@@ -274,10 +274,10 @@ fn testSharedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || er
         try std.testing.expectEqual(@as(u64, 1), proc.native_code_revision);
         try std.testing.expectEqual(LIR.ProcIdentity.forTest(1), proc.identity);
     }
-    try std.testing.expectEqual(@as(u64, 0), program.store.getProcSpec(unrelated).native_code_revision);
+    try std.testing.expectEqual(@as(u64, 0), program.store.getProcSpecImmediate(unrelated).native_code_revision);
     var clone = try program.store.cloneForProcRewrite(allocator, owners[0]);
     defer clone.deinit();
-    try std.testing.expectEqual(@as(u64, 1), clone.getProcSpec(owners[0]).native_code_revision);
+    try std.testing.expectEqual(@as(u64, 1), clone.getProcSpecImmediate(owners[0]).native_code_revision);
 }
 
 test "completed compile-time values guard only the reads of failed values" {
@@ -355,12 +355,12 @@ fn testCompletedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error ||
     const guard = program.comptime_value_guards.items[0];
     try std.testing.expectEqual(owners[1], guard.owner);
     try std.testing.expectEqual(value_slots[1], guard.value_slot);
-    try std.testing.expect(program.store.getCFStmt(loads[1]).assign_literal.value.static_data != value_slots[1]);
-    try std.testing.expectEqual(@as(usize, 4), program.store.getLocalSpan(program.store.getProcSpec(owners[1]).frame_locals).len);
+    try std.testing.expect(program.store.getCFStmtImmediate(loads[1]).assign_literal.value.static_data != value_slots[1]);
+    try std.testing.expectEqual(@as(usize, 4), program.store.getLocalSpan(program.store.getProcSpecImmediate(owners[1]).frame_locals).len);
 
     // The successful read is left exactly as lowered.
-    const kept = program.store.getCFStmt(loads[0]).assign_literal;
+    const kept = program.store.getCFStmtImmediate(loads[0]).assign_literal;
     try std.testing.expectEqual(value_slots[0], kept.value.static_data);
-    try std.testing.expectEqual(@as(usize, 1), program.store.getLocalSpan(program.store.getProcSpec(owners[0]).frame_locals).len);
-    try std.testing.expectEqual(@as(u64, 0), program.store.getProcSpec(owners[0]).native_code_revision);
+    try std.testing.expectEqual(@as(usize, 1), program.store.getLocalSpan(program.store.getProcSpecImmediate(owners[0]).frame_locals).len);
+    try std.testing.expectEqual(@as(u64, 0), program.store.getProcSpecImmediate(owners[0]).native_code_revision);
 }

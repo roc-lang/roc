@@ -3904,7 +3904,7 @@ Builtin :: [].{
 	## `order_relative_to : item, item -> [Before, Same, After]`.
 	## These tags say which argument comes first; they deliberately do not tie
 	## sorting to "less than" or to the `<` and `>` operators.
-	item.Sort :  where [item.order_relative_to : item, item -> [Before, Same, After]]
+	item.Sort : where [item.order_relative_to : item, item -> [Before, Same, After]]
 
 	List(_item) :: [ProvidedByCompiler].{
 		parser_for : _

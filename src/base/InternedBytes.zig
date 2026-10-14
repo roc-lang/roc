@@ -157,9 +157,11 @@ pub fn Index(comptime Policy: type) type {
                 }
 
                 const id = Policy.idFromCell(cell);
-                if (std.mem.eql(u8, bytes, Policy.textForId(owner, id))) {
-                    return .{ .idx = id, .slot = slot };
-                }
+                const matches = if (@hasDecl(Policy, "textEql"))
+                    Policy.textEql(owner, id, bytes)
+                else
+                    std.mem.eql(u8, bytes, Policy.textForId(owner, id));
+                if (matches) return .{ .idx = id, .slot = slot };
 
                 slot = (slot + 1) & (table_size - 1);
             }

@@ -72,7 +72,7 @@ const EntrypointTable = struct {
         const store = &view.store;
         var arg_count: usize = 0;
         for (view.platform_entrypoints) |entrypoint| {
-            arg_count += store.getLocalSpan(store.getProcSpec(entrypoint.root_proc).args).len;
+            arg_count += store.getLocalSpan(store.getProcSpecImmediate(entrypoint.root_proc).args).len;
         }
 
         const arg_layouts = try gpa.alloc(layout.Idx, arg_count);

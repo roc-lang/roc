@@ -310,8 +310,8 @@ pub const CallableIdentity = union(enum(u8)) {
 ///
 /// The identity is immutable: it is written once when the record is reserved
 /// and never rewritten. Body evidence that refines the requested type is data
-/// on the `SpecRecord` (`request_fn_ty`/`solved_fn_ty` views), reachable
-/// through additional lookup aliases—never a rekey of this identity.
+/// on the `SpecRecord` (its `solved_fn_ty` view), reachable through an
+/// additional lookup alias—never a rekey of this identity.
 pub const SpecIdentity = struct {
     callable: CallableIdentity,
     method_scope: names.CheckedModuleDigest,
@@ -385,16 +385,13 @@ pub const SpecStatus = enum(u8) {
 
 /// Durable record describing one reserved, lowering, or ready specialization.
 ///
-/// `identity` is the immutable creation-time key. The type views are data:
-/// `request_fn_ty` starts as the identity's requested type and may be refined
-/// while the record is still `.reserved`—once per deferring graph that
-/// seals its view of the request; `solved_fn_ty` mirrors the request view
-/// until `.ready` records the body's solved type. Both views only ever become
-/// more specific; a finished record is never widened (one-way snapshot rule).
+/// `identity` is the immutable creation-time key, and its requested type is
+/// the record's request view. `solved_fn_ty` is data: it mirrors the request
+/// view until `.ready` records the body's solved type, which only ever makes
+/// it more specific; a finished record is never widened (one-way snapshot
+/// rule).
 pub const SpecRecord = struct {
     identity: SpecIdentity,
-    request_fn_ty: Type.TypeId,
-    request_fn_ty_digest: names.TypeDigest,
     solved_fn_ty: Type.TypeId,
     solved_fn_ty_digest: names.TypeDigest,
     fn_id: FnId,
@@ -499,7 +496,7 @@ fn writeFnEvidence(
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
 ) void {
-    writeBytes(hasher, "roc.monotype.fn_evidence.v6");
+    writeBytes(hasher, "roc.monotype.fn_evidence.v7");
     writeU32(hasher, @intCast(evidence.len));
     for (evidence) |entry| {
         writeU8(hasher, @backingInt(entry));
@@ -527,16 +524,15 @@ fn writeFnEvidence(
                 writeStructuralDerivation(hasher, structural.derivation);
                 if (structural.checked) |checked_structural| {
                     writeU8(hasher, 1);
-                    writeBytes(hasher, &checked_structural.view.bytes);
+                    if (checked_structural.generated_codec_content) |content| {
+                        writeU8(hasher, 1);
+                        writeBytes(hasher, &content.bytes);
+                    } else {
+                        writeU8(hasher, 0);
+                        writeBytes(hasher, &checked_structural.view.bytes);
+                    }
                     writeBytes(hasher, &checked_structural.dispatcher_key.bytes);
                     writeBytes(hasher, &checked_structural.callable_key.bytes);
-                    writeOptionalU32(
-                        hasher,
-                        if (checked_structural.generated_codec_identity) |derivation|
-                            @backingInt(derivation)
-                        else
-                            null,
-                    );
                 } else writeU8(hasher, 0);
             },
             .from_callable => |use| {
@@ -1012,6 +1008,12 @@ pub const IfExpr = struct {
 /// Compiler-generated branch that ties an ordinary presence condition to the
 /// payload local whose initialization that condition represents. The
 /// initialized branch may read `payload`; the uninitialized branch must not.
+///
+/// `payload` is a use of an enclosing binding, never a binder: the producer
+/// (Monotype's generated record parser) binds each payload local as a parser
+/// loop parameter whose initial value is `uninitialized_payload`, and this
+/// switch reads that existing local. Capture analysis therefore treats it as
+/// a free-variable occurrence, exactly like a `local` expression.
 pub const InitializedPayloadSwitch = struct {
     cond: ExprId,
     cond_mask: u64 = 1,
@@ -1186,7 +1188,7 @@ pub const ExprData = union(enum(u8)) {
     int_lit: can.CIR.IntValue,
     frac_f32_lit: f32,
     frac_f64_lit: f64,
-    dec_lit: builtins.dec.RocDec,
+    dec_lit: builtins.dec.RocDec align(8),
     str_lit: StringLiteralId,
     bytes_lit: PackedListLiteral,
     static_data_candidate: StaticDataCandidate,
@@ -1309,7 +1311,7 @@ pub const PatData = union(enum(u8)) {
     },
     nominal: PatId,
     int_lit: can.CIR.IntValue,
-    dec_lit: builtins.dec.RocDec,
+    dec_lit: builtins.dec.RocDec align(8),
     frac_f32_lit: f32,
     frac_f64_lit: f64,
     str_lit: StringLiteralId,
@@ -1436,21 +1438,28 @@ pub const ProcDebugName = struct {
 /// Builder-owned procedure debug-name table.
 pub const ProcDebugNameMap = struct {
     allocator: std.mem.Allocator,
+    /// The names in the order they were first given.
     items: std.ArrayList(ProcDebugName),
+    /// Each named symbol's position in `items`, so a lookup is one direct
+    /// index rather than a scan of every name.
+    positions: collections.DenseMap(Common.Symbol, u32),
 
     pub fn init(allocator: std.mem.Allocator) ProcDebugNameMap {
         return .{
             .allocator = allocator,
             .items = .empty,
+            .positions = collections.DenseMap(Common.Symbol, u32).init(allocator),
         };
     }
 
     pub fn deinit(self: *ProcDebugNameMap) void {
         self.items.deinit(self.allocator);
+        self.positions.deinit();
     }
 
     pub fn get(self: *const ProcDebugNameMap, symbol: Common.Symbol) ?names.ExportNameId {
-        return procDebugNameInSlice(self.items.items, symbol);
+        const position = self.positions.get(symbol) orelse return null;
+        return self.items.items[position].name;
     }
 
     pub fn view(self: *const ProcDebugNameMap) []const ProcDebugName {
@@ -1458,25 +1467,24 @@ pub const ProcDebugNameMap = struct {
     }
 
     pub fn put(self: *ProcDebugNameMap, symbol: Common.Symbol, name: names.ExportNameId) std.mem.Allocator.Error!void {
-        for (self.items.items) |*entry| {
-            if (entry.symbol == symbol) {
-                entry.name = name;
-                return;
-            }
+        const entry = try self.positions.getOrPut(symbol);
+        if (entry.found_existing) {
+            self.items.items[entry.value_ptr.*].name = name;
+            return;
         }
+        errdefer _ = self.positions.remove(symbol);
+        entry.value_ptr.* = @intCast(self.items.items.len);
         try self.items.append(self.allocator, .{
             .symbol = symbol,
             .name = name,
         });
     }
-};
 
-fn procDebugNameInSlice(entries: []const ProcDebugName, symbol: Common.Symbol) ?names.ExportNameId {
-    for (entries) |entry| {
-        if (entry.symbol == symbol) return entry.name;
+    /// Give every name in `entries`, in order.
+    pub fn putAll(self: *ProcDebugNameMap, entries: []const ProcDebugName) std.mem.Allocator.Error!void {
+        for (entries) |entry| try self.put(entry.symbol, entry.name);
     }
-    return null;
-}
+};
 
 /// Root request bound to a Monotype definition.
 pub const Root = struct {
@@ -1569,7 +1577,7 @@ pub const ProgramView = struct {
     branches: []const Branch,
     if_branches: []const IfBranch,
     string_literals: []const StringLiteral,
-    proc_debug_names: []const ProcDebugName,
+    proc_debug_names: *const ProcDebugNameMap,
     roots: []const Root,
     literal_roots: []const LiteralRoot,
     layout_requests: []const LayoutRequest,
@@ -1616,7 +1624,7 @@ pub const ProgramView = struct {
     }
 
     pub fn procDebugName(self: ProgramView, symbol: Common.Symbol) ?names.ExportNameId {
-        return procDebugNameInSlice(self.proc_debug_names, symbol);
+        return self.proc_debug_names.get(symbol);
     }
 
     /// Verify that a completed program view refers only to durable type-store
@@ -1631,7 +1639,6 @@ pub const ProgramView = struct {
             if (spec.identity.codec_contract) |contract| {
                 if (!self.typeRefInBounds(contract.constructor_ty) or !self.typeRefInBounds(contract.shape_ty)) return .spec_type_out_of_bounds;
             }
-            if (!self.typeRefInBounds(spec.request_fn_ty)) return .spec_type_out_of_bounds;
             if (!self.typeRefInBounds(spec.solved_fn_ty)) return .spec_type_out_of_bounds;
         }
         for (self.fns) |fn_| {
@@ -1854,7 +1861,7 @@ pub const ProgramBuilder = struct {
         inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "literal_roots", "layout_requests", "comptime_value_reads", "runtime_schema_requests", "static_data_values", "lowering_modules", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
             try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
         }
-        try result.proc_debug_names.items.appendSlice(allocator, self.proc_debug_names.view());
+        try result.proc_debug_names.putAll(self.proc_debug_names.view());
         for (self.string_literals.unsafeRawItemsForView()) |literal| {
             const copied = try literal.clone(allocator);
             result.string_literals.append(allocator, copied) catch |err| {
@@ -2072,7 +2079,7 @@ pub const ProgramBuilder = struct {
             .branches = self.branches.unsafeRawItemsForView(),
             .if_branches = self.if_branches.unsafeRawItemsForView(),
             .string_literals = self.string_literals.unsafeRawItemsForView(),
-            .proc_debug_names = self.proc_debug_names.view(),
+            .proc_debug_names = &self.proc_debug_names,
             .roots = self.roots.unsafeRawItemsForView(),
             .literal_roots = self.literal_roots.unsafeRawItemsForView(),
             .layout_requests = self.layout_requests.unsafeRawItemsForView(),
@@ -2600,8 +2607,6 @@ test "monotype program view exposes read-only side arrays" {
             .request_fn_ty_digest = .{},
             .request_fn_ty = unit_ty,
         },
-        .request_fn_ty = unit_ty,
-        .request_fn_ty_digest = .{},
         .solved_fn_ty = unit_ty,
         .solved_fn_ty_digest = .{},
         .fn_id = fn_id,
@@ -2956,31 +2961,8 @@ test "codec function evidence identity excludes per-use replay addresses" {
         ty.* = try types.reserveSyntheticTypeRoot(allocator, .{ .bytes = @as([32]u8, @splat(2)) }, true);
         try types.fillSyntheticTypeRoot(allocator, ty.*, .{ .flex = .{} });
     }
-    // Fill the proof table and its indices before building stored evidence.
-    var derivations: [3]static_dispatch.GeneratedCodecDerivation = undefined;
     var derivation_ids: [3]static_dispatch.GeneratedCodecDerivationId = undefined;
-    for (&derivations, &derivation_ids, 0..) |*derivation, *id, index| {
-        id.* = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-        const ty = replay_types[if (index == 1) 2 else 0];
-        derivation.* = .{
-            .identity = if (index == 1) derivation_ids[0] else id.*,
-            .kind = if (index == 2) .parser else .encoder,
-            .source_constructor_ty = ty,
-            .source_runtime_ty = ty,
-            .source_shape_ty = ty,
-            .source_body_shape_ty = ty,
-            .source_encoding_ty = ty,
-            .source_state_ty = ty,
-            .source_error_ty = ty,
-            .constructor_ty = ty,
-            .runtime_ty = ty,
-            .shape_ty = ty,
-            .body_shape_ty = ty,
-            .encoding_ty = ty,
-            .state_ty = ty,
-            .error_ty = ty,
-        };
-    }
+    for (&derivation_ids, 0..) |*id, index| id.* = @fromBackingInt(@intCast(index));
     const Evidence = check.ConstStore.ConstFnEvidence;
     const frames = [_]check.ConstStore.ConstFnEvidenceFrame{
         check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 1),
@@ -2994,7 +2976,7 @@ test "codec function evidence identity excludes per-use replay addresses" {
             .callable_key = types.view().rootKey(replay_types[1]),
             .callable_ty = replay_types[1],
             .generated_codec_derivation = derivation_ids[0],
-            .generated_codec_identity = derivations[0].identity,
+            .generated_codec_content = .{ .bytes = @as([32]u8, @splat(4)) },
         },
     } }};
     var right = left;
@@ -3003,8 +2985,12 @@ test "codec function evidence identity excludes per-use replay addresses" {
     right[0].structural.checked.?.generated_codec_derivation = derivation_ids[1];
     try std.testing.expect(fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
     try std.testing.expectEqual(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0));
+    // Equal contracts recorded by different modules are one identity.
+    right[0].structural.checked.?.view = .{ .bytes = @as([32]u8, @splat(5)) };
+    try std.testing.expect(fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
+    try std.testing.expectEqual(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0));
     right[0].structural.checked.?.generated_codec_derivation = derivation_ids[2];
-    right[0].structural.checked.?.generated_codec_identity = derivations[2].identity;
+    right[0].structural.checked.?.generated_codec_content = .{ .bytes = @as([32]u8, @splat(6)) };
     try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
     try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
 }

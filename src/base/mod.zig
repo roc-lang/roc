@@ -34,6 +34,15 @@ pub const ConcurrentU64 = @import("ConcurrentU64.zig").ConcurrentU64;
 pub const SmallStringInterner = @import("SmallStringInterner.zig");
 
 pub const invariant = @import("invariant.zig").invariant;
+/// Tests that pin a compiler invariant firing, by running the violation in a
+/// child copy of the test binary.
+pub const death_test = @import("death_test.zig");
+/// Per-thread record of in-flight compiler work, printed when the compiler
+/// crashes.
+pub const ice_context = @import("ice_context.zig");
+/// The exhaustive classification of each phase-state field against the
+/// phase's definitional frames.
+pub const state_discipline = @import("state_discipline.zig");
 pub const SerialStringInterner = @import("SerialStringInterner.zig");
 pub const InternedBytes = @import("InternedBytes.zig");
 pub const SpecializationStrategy = @import("SpecializationStrategy.zig").SpecializationStrategy;
@@ -46,7 +55,8 @@ pub const ModuleIdentity = @import("module_identity.zig");
 /// that already depend on `base`.
 pub const SingleThreadArena = @import("collections").SingleThreadArena;
 
-pub const DeterministicAllocator = @import("DeterministicAllocator.zig");
+/// Allocator that refuses in-place growth, re-exported from `collections`.
+pub const DeterministicAllocator = @import("collections").DeterministicAllocator;
 pub const memory_fault = @import("memory_fault.zig");
 pub const process_memory = @import("process_memory.zig");
 pub const signal_handler = @import("signal_handler.zig");
@@ -103,7 +113,6 @@ test {
     std.testing.refAllDecls(cpu_count);
     std.testing.refAllDecls(TypeDigestHasher);
     std.testing.refAllDecls(@import("sha256.zig"));
-    std.testing.refAllDecls(DeterministicAllocator);
     std.testing.refAllDecls(module_path_mod);
     std.testing.refAllDecls(@import("roc_version.zig"));
 }
@@ -186,7 +195,9 @@ test "base tests" {
     std.testing.refAllDecls(@import("CommonEnv.zig"));
     std.testing.refAllDecls(@import("ConcurrentU64.zig"));
     std.testing.refAllDecls(@import("DataSpan.zig"));
+    std.testing.refAllDecls(@import("death_test.zig"));
     std.testing.refAllDecls(@import("Ident.zig"));
+    std.testing.refAllDecls(@import("ice_context.zig"));
     std.testing.refAllDecls(@import("InternedBytes.zig"));
     std.testing.refAllDecls(@import("LowLevel.zig"));
     std.testing.refAllDecls(@import("memory_fault.zig"));
@@ -198,6 +209,7 @@ test "base tests" {
     std.testing.refAllDecls(@import("rc_effect_rules.zig"));
     std.testing.refAllDecls(@import("signal_handler.zig"));
     std.testing.refAllDecls(@import("Scratch.zig"));
+    std.testing.refAllDecls(@import("state_discipline.zig"));
     std.testing.refAllDecls(@import("SExprTree.zig"));
     std.testing.refAllDecls(@import("SerialStringInterner.zig"));
     std.testing.refAllDecls(@import("SmallStringInterner.zig"));

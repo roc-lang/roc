@@ -243,7 +243,7 @@ fn executeWave(comptime CG: type, allocator: Allocator, jobs: []Job(CG), executo
         }
         session.end();
     } else {
-        var scratch = std.heap.ArenaAllocator.init(allocator);
+        var scratch = base.SingleThreadArena.init(allocator);
         defer scratch.deinit();
         var accepted: usize = 0;
         for (jobs) |*job| {

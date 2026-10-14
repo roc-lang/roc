@@ -1,6 +1,7 @@
 //! Persistent sparse snapshots for exact procedure-local ARC facts.
 
 const std = @import("std");
+const collections = @import("collections");
 
 const Allocator = std.mem.Allocator;
 
@@ -561,7 +562,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
 }
 
 test "persistent sparse snapshots share forks and meet exactly" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
 
     const Sparse = Snapshot(u32, 0);
@@ -591,7 +592,7 @@ test "persistent sparse snapshots share forks and meet exactly" {
 }
 
 test "sparse range queries are exact across tree boundaries and shared updates" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const Sparse = Snapshot(u32, 0);
     var original = Sparse.init(arena.allocator(), 1);
@@ -629,7 +630,7 @@ test "sparse range queries are exact across tree boundaries and shared updates" 
 }
 
 test "sparse iteration preserves forks and skips absent history" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const Sparse = Snapshot(i32, 0);
     var original = Sparse.init(arena.allocator(), 0);
@@ -657,7 +658,7 @@ test "sparse iteration preserves forks and skips absent history" {
 }
 
 test "sparse structural difference skips shared subtrees and preserves exact values" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const Sparse = Snapshot(u64, 0);
     var owned = Sparse.init(arena.allocator(), 512);
@@ -708,7 +709,7 @@ test "sparse structural difference skips shared subtrees and preserves exact val
 }
 
 test "sparse reverse iteration carries values across radix boundaries" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const Sparse = Snapshot(u32, 0);
     var state = Sparse.init(arena.allocator(), 1);
@@ -729,7 +730,7 @@ test "sparse reverse iteration carries values across radix boundaries" {
 }
 
 test "sparse range iteration excludes populated subtrees and preserves exact boundaries" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const Sparse = Snapshot(u32, 0);
     var snapshot = Sparse.init(arena.allocator(), 0);

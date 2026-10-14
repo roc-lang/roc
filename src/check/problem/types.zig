@@ -29,8 +29,10 @@ pub const ExtraStringIdx = ByteListRange;
 pub const MissingPatternsRange = struct { start: usize, count: usize };
 
 /// The checker relation that recorded a problem, or whose unification queued
-/// a dispatch obligation whose problems then belong to it (design.md "Every
-/// Rejection Is Explicit Recovery"). A relation is void at the settled state
+/// a dispatch obligation whose problems then belong to it, unless the
+/// obligation is an expression's own dispatch, which that expression's
+/// relation owns wherever it is queued (design.md "Every Rejection Is
+/// Explicit Recovery"). A relation is void at the settled state
 /// when it read an erroneous value, and a void relation's problems are
 /// withdrawn: an erroneous value relates to nothing. `kind` says which
 /// values the relation read.
@@ -132,6 +134,7 @@ pub const Problem = union(enum) {
     unmatchable_pattern: UnmatchablePattern,
     match_alt_binder_missing: MatchAltBinderMissing,
     unreachable_code: UnreachableCode,
+    discarded_var_update: DiscardedVarUpdate,
     comptime_unused_branch: ComptimeUnusedBranch,
     comptime_condition: ComptimeCondition,
     derived_parser_error_row: DerivedParserErrorRow,
@@ -626,6 +629,24 @@ pub const TypeMismatch = struct {
     /// a nested mismatch hidden behind the root operands. This is populated
     /// only for contexts that consume it.
     evidence: TypeMismatchEvidence = .none,
+    /// The pair whose relation failed, snapshotted before the root operands
+    /// were poisoned.
+    leaf: ?TypePair = null,
+    /// Set when `leaf` failed because the use gave one instantiated
+    /// interpolation's values different types.
+    interpolation_tie: ?InterpolationTie = null,
+};
+
+/// A use of a generalized definition gave the values one of its
+/// interpolations shares between them different types: the interpolation
+/// converts them all with one `from_interpolation` call, so they have one
+/// item type (design.md "Builtin Str Interpolation Part Compatibility").
+pub const InterpolationTie = struct {
+    /// The interpolation in this module's source, or null when the
+    /// definition is in another module.
+    interpolation_region: ?base.Region,
+    /// The use that instantiated the definition.
+    use_region: base.Region,
 };
 
 /// The expected and actual types in a type mismatch
@@ -736,6 +757,15 @@ pub const MatchAltBinderMissing = struct {
 /// Code that appears after an expression or statement that never returns.
 pub const UnreachableCode = struct {
     region: base.Region,
+};
+
+/// A statement that calls a method on a `var` and discards the result, which
+/// could have been assigned back to that `var` (e.g. `$acc.append(e)`).
+pub const DiscardedVarUpdate = struct {
+    /// The discarded method call.
+    expr_region: base.Region,
+    /// The `var` the method was called on.
+    var_ident: Ident.Idx,
 };
 
 // static dispatch //

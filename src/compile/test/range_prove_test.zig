@@ -1756,7 +1756,7 @@ fn countBareCompareShape(store: *const lir.LirStore, layouts: *const layout.Stor
             .found = true,
             .is_lt = std.mem.count(u8, text, "num_is_lt("),
             .switches = std.mem.count(u8, text, "switch "),
-            .checked_arithmetic = store.getProcSpec(proc_id).shapes.checked_arithmetic,
+            .checked_arithmetic = store.getProcSpecImmediate(proc_id).shapes.checked_arithmetic,
         };
         return;
     }

@@ -334,6 +334,13 @@ pub const ParallelMetrics = struct {
     tasks_committed: u64 = 0,
     patterns_recorded: u64 = 0,
     patterns_admitted: u64 = 0,
+    /// Call-pattern workers whose bodies were cloned, across every admission
+    /// path (syntactic collection, staged discovery, and serial cloning).
+    workers_written: u64 = 0,
+    /// Distinct new call patterns the coordinator refused because their source
+    /// function already held `spec_constr_specialization_count` workers. Each
+    /// such call keeps its ordinary direct call.
+    spec_count_denials: u64 = 0,
     bodies_committed: u64 = 0,
     expressions_committed: u64 = 0,
     peak_retained_shards: u64 = 0,
@@ -346,6 +353,8 @@ pub const ParallelMetrics = struct {
         self.tasks_committed +|= other.tasks_committed;
         self.patterns_recorded +|= other.patterns_recorded;
         self.patterns_admitted +|= other.patterns_admitted;
+        self.workers_written +|= other.workers_written;
+        self.spec_count_denials +|= other.spec_count_denials;
         self.bodies_committed +|= other.bodies_committed;
         self.expressions_committed +|= other.expressions_committed;
         self.peak_retained_shards = @max(self.peak_retained_shards, other.peak_retained_shards);
@@ -1312,8 +1321,13 @@ const InlineScopeRebasePair = struct {
 };
 
 const Pass = struct {
+    /// Containers of finished cloners, kept for the next clone (see
+    /// `ClonerScratch`). A fixed number are kept so returning a cloner never
+    /// allocates; beyond that a finished cloner's containers are freed.
+    spare_cloner_scratch: [max_spare_cloner_scratch]ClonerScratch = undefined,
+    spare_cloner_scratch_len: usize = 0,
     allocator: Allocator,
-    arena: std.heap.ArenaAllocator,
+    arena: collections.SingleThreadArena,
     program: *Ast.Program,
     plans: []FnPlan,
     symbols: Common.SymbolGen,
@@ -1353,11 +1367,11 @@ const Pass = struct {
     /// What each frozen source loop body contains, keyed by the body. One
     /// walk of an outer loop records every loop nested in it, so nested
     /// loops never rescan their bodies.
-    loop_body_contents: std.AutoHashMapUnmanaged(Ast.ExprId, LoopBodyContents) = .empty,
+    loop_body_contents: collections.DenseMapUnmanaged(Ast.ExprId, LoopBodyContents) = .empty,
 
     const PatternRequest = struct { fn_id: Ast.FnId, pattern: CallPattern };
     const RequestSink = struct {
-        arena: std.heap.ArenaAllocator,
+        arena: collections.SingleThreadArena,
         items: std.ArrayList(PatternRequest) = .empty,
     };
 
@@ -1389,13 +1403,13 @@ const Pass = struct {
             output.* = .{
                 .allocator = allocator,
                 .program = try self.source.program.cloneForSpecConstrBody(allocator, self.fn_id),
-                .requests = .{ .arena = std.heap.ArenaAllocator.init(allocator) },
+                .requests = .{ .arena = collections.SingleThreadArena.init(allocator) },
             };
             errdefer output.program.deinit();
             errdefer output.requests.arena.deinit();
             var pass: Pass = .{
                 .allocator = scratch,
-                .arena = std.heap.ArenaAllocator.init(scratch),
+                .arena = collections.SingleThreadArena.init(scratch),
                 .program = &output.program,
                 .plans = self.source.plans,
                 .symbols = self.source.symbols,
@@ -1412,6 +1426,7 @@ const Pass = struct {
             defer pass.static_data_structure.deinit();
             defer pass.callable_workers.deinit();
             defer pass.loop_body_contents.deinit(scratch);
+            defer pass.releaseSpareClonerScratch();
             if (self.phase == .discovery) pass.pattern_requests = &output.requests;
             switch (self.phase) {
                 .discovery => {
@@ -1426,7 +1441,7 @@ const Pass = struct {
                     pass.rewindAnalysis(mark);
                 },
                 .iterator_fusion => {
-                    try pass.cloneFnBodyForIteratorFusion(self.fn_id);
+                    try pass.cloneFnBody(.iterator_fusion, self.fn_id);
                     output.changed = true;
                 },
                 .unused_loop_results => output.changed = try pass.projectUnusedLoopResultsInFn(self.fn_id),
@@ -1537,7 +1552,7 @@ const Pass = struct {
                 if (failure) |err| return err;
             } else {
                 for (work[0..count]) |*item| {
-                    var scratch = std.heap.ArenaAllocator.init(self.allocator);
+                    var scratch = collections.SingleThreadArena.init(self.allocator);
                     defer scratch.deinit();
                     try item.execute(self.allocator, scratch.allocator());
                 }
@@ -1593,10 +1608,11 @@ const Pass = struct {
 
     fn admitPatternRequest(self: *Pass, request: PatternRequest) Allocator.Error!bool {
         const raw = @backingInt(request.fn_id);
-        if (self.newSpecAdmission(raw) != .admitted) return false;
+        if (!self.plans[raw].source.size.admits()) return false;
         for (self.plans[raw].specs.items) |spec| {
             if (try patternEql(self.program, spec.pattern, request.pattern)) return false;
         }
+        if (!self.admitDistinctPattern(raw)) return false;
         const args = try self.arena.allocator().alloc(Shape, request.pattern.args.len);
         for (args, request.pattern.args) |*arg, source| arg.* = try copyShape(self.arena.allocator(), source);
         try self.plans[raw].specs.append(self.allocator, .{ .pattern = .{ .args = args } });
@@ -1609,7 +1625,7 @@ const Pass = struct {
         next_join_point: u32,
     };
     fn init(allocator: Allocator, program: *Ast.Program) Allocator.Error!Pass {
-        var arena = std.heap.ArenaAllocator.init(allocator);
+        var arena = collections.SingleThreadArena.init(allocator);
         errdefer arena.deinit();
 
         const plans = try allocator.alloc(FnPlan, program.fnCount());
@@ -1904,7 +1920,37 @@ const Pass = struct {
         return contents;
     }
 
+    const max_spare_cloner_scratch = 8;
+
+    /// Empty cloner containers, reusing a finished cloner's when one is spare.
+    fn takeClonerScratch(self: *Pass) ClonerScratch {
+        if (self.spare_cloner_scratch_len > 0) {
+            self.spare_cloner_scratch_len -= 1;
+            return self.spare_cloner_scratch[self.spare_cloner_scratch_len];
+        }
+        return ClonerScratch.fresh(self.allocator);
+    }
+
+    /// Keep a finished cloner's containers for the next clone.
+    fn returnClonerScratch(self: *Pass, scratch: *ClonerScratch) void {
+        if (self.spare_cloner_scratch_len == max_spare_cloner_scratch) {
+            scratch.deinit(self.allocator);
+            return;
+        }
+        scratch.clear();
+        self.spare_cloner_scratch[self.spare_cloner_scratch_len] = scratch.*;
+        self.spare_cloner_scratch_len += 1;
+    }
+
+    /// Free every spare cloner's containers through the pass's current
+    /// allocator.
+    fn releaseSpareClonerScratch(self: *Pass) void {
+        for (self.spare_cloner_scratch[0..self.spare_cloner_scratch_len]) |*spare| spare.deinit(self.allocator);
+        self.spare_cloner_scratch_len = 0;
+    }
+
     fn deinit(self: *Pass) void {
+        self.releaseSpareClonerScratch();
         self.loop_body_contents.deinit(self.allocator);
         self.static_data_structure.deinit();
         self.callable_sources.deinit();
@@ -2571,6 +2617,52 @@ const Pass = struct {
         return .admitted;
     }
 
+    /// Coordinator admission of a call pattern already known to differ from
+    /// every pattern recorded for `raw`. A refusal leaves the call as its
+    /// ordinary direct call; a refusal by the per-function worker budget is
+    /// counted so a corpus run shows how often that budget binds.
+    fn admitDistinctPattern(self: *Pass, raw: usize) bool {
+        if (self.borrowed_worker) Common.invariant("SpecConstr body worker attempted coordinator pattern admission");
+        switch (self.newSpecAdmission(raw)) {
+            .admitted => return true,
+            .denied_body_size => return false,
+            .denied_spec_count => {
+                if (self.options.metrics_out) |metrics| metrics.spec_count_denials +|= 1;
+                return false;
+            },
+        }
+    }
+
+    /// The order in which a call tries the workers admitted for source function
+    /// `raw`: most specific pattern first, ties in admission order. Every
+    /// worker whose pattern accepts a call's arguments is a sound target;
+    /// trying them in this order binds the call to the one that knows the
+    /// most about its arguments. Specificity is the pattern's constructor node
+    /// count. All patterns that accept one call's arguments refine a common
+    /// value, so whenever one of them refines another it also has strictly
+    /// more constructor nodes, and the first accepting pattern in this order
+    /// is never strictly less specific than another accepting pattern.
+    fn specSelectionOrder(self: *Pass, raw: usize, order: *[spec_constr_specialization_count]u8) Allocator.Error![]const u8 {
+        const specs = self.plans[raw].specs.items;
+        if (specs.len > spec_constr_specialization_count) Common.invariant("source function held more call-pattern workers than its budget");
+        var counts: [spec_constr_specialization_count]usize = undefined;
+        for (specs, 0..) |spec, index| {
+            order[index] = @intCast(index);
+            counts[index] = try patternConstructorCount(self.allocator, spec.pattern);
+        }
+        // Stable insertion sort by descending constructor count.
+        var index: usize = 1;
+        while (index < specs.len) : (index += 1) {
+            const current = order[index];
+            var slot = index;
+            while (slot > 0 and counts[order[slot - 1]] < counts[current]) : (slot -= 1) {
+                order[slot] = order[slot - 1];
+            }
+            order[slot] = current;
+        }
+        return order[0..specs.len];
+    }
+
     const InlineSourceBody = struct {
         expr: Ast.ExprId,
         size: BodySize,
@@ -2599,7 +2691,7 @@ const Pass = struct {
 
     fn recordCallPattern(self: *Pass, fn_id: Ast.FnId, args_span: Ast.Span(Ast.ExprId)) Allocator.Error!void {
         const raw = @backingInt(fn_id);
-        if (self.newSpecAdmission(raw) != .admitted) return;
+        if (!self.plans[raw].source.size.admits()) return;
         const args = try GuardedList.dupe(self.allocator, Ast.ExprId, self.program.exprSpan(args_span));
         defer self.allocator.free(args);
         const fn_args = self.program.typedLocalSpan(self.program.getFnAt(raw).args);
@@ -2625,6 +2717,7 @@ const Pass = struct {
         for (self.plans[raw].specs.items) |spec| {
             if (try patternEql(self.program, spec.pattern, pattern)) return;
         }
+        if (!self.admitDistinctPattern(raw)) return;
 
         try self.plans[raw].specs.append(self.allocator, .{
             .pattern = pattern,
@@ -2664,7 +2757,7 @@ const Pass = struct {
         for (self.plans[raw].specs.items) |spec| {
             if (try patternEql(self.program, spec.pattern, pattern)) return;
         }
-        if (self.newSpecAdmission(raw) != .admitted) return;
+        if (!self.admitDistinctPattern(raw)) return;
 
         const source_fn = self.program.getFnAt(raw);
         const symbol = self.symbols.fresh();
@@ -2753,6 +2846,7 @@ const Pass = struct {
             .shapes = shapes,
         });
         try self.copyProcDebugName(source_fn.symbol, symbol);
+        if (self.options.metrics_out) |metrics| metrics.workers_written +|= 1;
     }
 
     fn rewriteExistingCalls(self: *Pass) Allocator.Error!void {
@@ -2786,7 +2880,7 @@ const Pass = struct {
     fn rewriteAllOriginalBodies(self: *Pass, original_fn_count: usize) Common.LowerError!void {
         for (0..original_fn_count) |index| {
             const fn_id: Ast.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-            try self.cloneFnBodyInPlace(fn_id);
+            try self.cloneFnBody(.normalize, fn_id);
         }
     }
 
@@ -4458,26 +4552,48 @@ const Pass = struct {
         return clone.run(root);
     }
 
-    /// Normalize a whole function body once through the value-aware cloner.
-    /// Structural consumers expose exact producer calls locally, call-pattern
-    /// rewrites consume the resulting values, and loop fixed points scalarize
-    /// known carried structure without a body-category routing decision.
-    fn cloneFnBodyInPlace(self: *Pass, fn_id: Ast.FnId) Common.LowerError!void {
+    /// How a whole function body is cloned in place.
+    const FnBodyCloneMode = enum {
+        /// Normalize the body once through the value-aware cloner: structural
+        /// consumers expose exact producer calls locally, call-pattern
+        /// rewrites consume the resulting values, and loop fixed points
+        /// scalarize known carried structure without a body-category routing
+        /// decision.
+        normalize,
+        /// Inline the body's iterator producers for fusion, leaving call
+        /// patterns and callable workers to the normalizing clone.
+        iterator_fusion,
+    };
+
+    fn cloneFnBody(self: *Pass, comptime mode: FnBodyCloneMode, fn_id: Ast.FnId) Common.LowerError!void {
         const fn_index = @backingInt(fn_id);
-        if (fn_index < self.whole_body_cloned.len and self.whole_body_cloned[fn_index]) return;
+        if (mode == .normalize and fn_index < self.whole_body_cloned.len and self.whole_body_cloned[fn_index]) return;
 
         const fn_ = self.program.getFn(fn_id);
         const body = switch (self.sourceBody(fn_id)) {
             .roc => |body| body,
             .hosted => return,
         };
-        var cloner = Cloner.initForOriginalBodyRewrite(self);
-        defer cloner.deinit();
-        cloner.inline_calls = switch (self.clone_inlining) {
-            .all_calls => .all,
-            .iterator_fusion => .iterator_fusion,
+        var cloner = switch (mode) {
+            .normalize => Cloner.initForOriginalBodyRewrite(self),
+            .iterator_fusion => Cloner.initForRewrite(self),
         };
-        cloner.inline_direct_requires_known_arg = true;
+        defer cloner.deinit();
+        switch (mode) {
+            .normalize => {
+                cloner.inline_calls = switch (self.clone_inlining) {
+                    .all_calls => .all,
+                    .iterator_fusion => .iterator_fusion,
+                };
+                cloner.inline_direct_requires_known_arg = true;
+            },
+            .iterator_fusion => {
+                cloner.inline_calls = .iterator_fusion;
+                cloner.inline_direct_requires_known_arg = false;
+                cloner.rewrite_call_patterns = false;
+                cloner.emit_callable_workers = false;
+            },
+        }
         const args = self.program.typedLocalSpan(fn_.args);
         for (0..args.len) |index| {
             const local = GuardedList.at(args, index).local;
@@ -4499,61 +4615,24 @@ const Pass = struct {
             .spec_constr_pattern = fn_.spec_constr_pattern,
             .root_identity = fn_.root_identity,
             .signature = fn_.signature,
-            .iterator_fusion_scope = fn_.iterator_fusion_scope,
+            .iterator_fusion_scope = switch (mode) {
+                .normalize => fn_.iterator_fusion_scope,
+                .iterator_fusion => true,
+            },
             .args = fn_.args,
             .captures = fn_.captures,
             .body = .{ .roc = cloned },
             .ret = fn_.ret,
             .shapes = shapes,
         });
-        if (fn_index < self.whole_body_cloned.len) self.whole_body_cloned[fn_index] = true;
-    }
-
-    fn cloneFnBodyForIteratorFusion(self: *Pass, fn_id: Ast.FnId) Common.LowerError!void {
-        const fn_index = @backingInt(fn_id);
-        const fn_ = self.program.getFn(fn_id);
-        const body = switch (self.sourceBody(fn_id)) {
-            .roc => |source| source,
-            .hosted => return,
-        };
-
-        var cloner = Cloner.initForRewrite(self);
-        defer cloner.deinit();
-        cloner.inline_calls = .iterator_fusion;
-        cloner.inline_direct_requires_known_arg = false;
-        cloner.rewrite_call_patterns = false;
-        cloner.emit_callable_workers = false;
-
-        const args = self.program.typedLocalSpan(fn_.args);
-        for (0..args.len) |index| {
-            const local = GuardedList.at(args, index).local;
-            try cloner.putLocalAlias(local, local);
+        switch (mode) {
+            .normalize => if (fn_index < self.whole_body_cloned.len) {
+                self.whole_body_cloned[fn_index] = true;
+            },
+            .iterator_fusion => if (!self.borrowed_worker) {
+                self.whole_body_cloned[fn_index] = true;
+            },
         }
-        const captures = self.program.typedLocalSpan(fn_.captures);
-        for (0..captures.len) |index| {
-            const local = GuardedList.at(captures, index).local;
-            try cloner.putLocalAlias(local, local);
-        }
-
-        const outer_shapes = self.program.beginFnShapes(fn_id);
-        const cloned = try cloner.cloneExpr(body);
-        // Unchanged subtrees of the source body are reused rather than
-        // re-created, so the rewritten body keeps the source body's shapes.
-        const shapes = self.program.finishFnShapes(outer_shapes).merged(fn_.shapes);
-        self.program.setFn(fn_id, .{
-            .symbol = fn_.symbol,
-            .source = fn_.source,
-            .spec_constr_pattern = fn_.spec_constr_pattern,
-            .root_identity = fn_.root_identity,
-            .signature = fn_.signature,
-            .iterator_fusion_scope = true,
-            .args = fn_.args,
-            .captures = fn_.captures,
-            .body = .{ .roc = cloned },
-            .ret = fn_.ret,
-            .shapes = shapes,
-        });
-        if (!self.borrowed_worker) self.whole_body_cloned[fn_index] = true;
     }
 
     /// Once the specialization graph is complete, clone only functions whose
@@ -4640,7 +4719,9 @@ const Pass = struct {
 
         const args = try GuardedList.dupe(self.allocator, Ast.ExprId, self.program.exprSpan(call.args));
         defer self.allocator.free(args);
-        for (self.plans[raw].specs.items) |spec| {
+        var order_buffer: [spec_constr_specialization_count]u8 = undefined;
+        for (try self.specSelectionOrder(raw, &order_buffer)) |spec_index| {
+            const spec = self.plans[raw].specs.items[spec_index];
             var rewritten_args = std.ArrayList(Ast.ExprId).empty;
             defer rewritten_args.deinit(self.allocator);
 
@@ -5171,6 +5252,15 @@ const Subst = struct {
         self.exact.deinit();
     }
 
+    /// Forget every substitution while keeping the tables' capacity.
+    fn clearRetainingCapacity(self: *Subst) void {
+        self.changes.clearRetainingCapacity();
+        self.loop_carried_binders.clearRetainingCapacity();
+        self.binder_aliases.clearRetainingCapacity();
+        self.binder_subst.clearRetainingCapacity();
+        self.exact.clearRetainingCapacity();
+    }
+
     /// Identity a local's binder-scoped substitution is keyed by: the pattern
     /// binder together with the digest of the local's monomorphic type. Two
     /// locals that share a binder but were monomorphized at different types are
@@ -5411,6 +5501,126 @@ const Subst = struct {
     }
 };
 
+/// Empty frame stacks kept for reuse by `Cloner.runClone`.
+const CloneFramePool = struct {
+    stacks: [max_stacks]std.ArrayList(Cloner.CloneFrame) = undefined,
+    len: usize = 0,
+
+    const max_stacks = 8;
+
+    fn take(self: *CloneFramePool) std.ArrayList(Cloner.CloneFrame) {
+        if (self.len == 0) return .empty;
+        self.len -= 1;
+        return self.stacks[self.len];
+    }
+
+    /// Keep `frames` empty for the next run, or free it when the pool is full.
+    fn give(self: *CloneFramePool, allocator: Allocator, frames: *std.ArrayList(Cloner.CloneFrame)) void {
+        if (self.len == max_stacks) {
+            frames.deinit(allocator);
+            return;
+        }
+        frames.clearRetainingCapacity();
+        self.stacks[self.len] = frames.*;
+        self.len += 1;
+    }
+
+    fn deinit(self: *CloneFramePool, allocator: Allocator) void {
+        for (self.stacks[0..self.len]) |*frames| frames.deinit(allocator);
+        self.len = 0;
+    }
+};
+
+/// The containers of one `Cloner`, kept with their capacity on the pass after
+/// the cloner finishes so the next clone the pass runs starts from the
+/// capacity the last one reached rather than from empty tables.
+const ClonerScratch = struct {
+    arena: collections.SingleThreadArena,
+    subst: Subst,
+    inline_stack: std.ArrayList(InlineFrame),
+    loop_stack: std.ArrayList(LoopPattern),
+    loop_exit_stack: std.ArrayList(?LoopExitSelection),
+    exit_tuple_items: collections.DenseMap(Ast.LocalId, []?Ast.ExprId),
+    join_stack: std.ArrayList(ActiveJoinClone),
+    let_case_builds: std.ArrayList(*LetCaseBuild),
+    clone_templates: std.ArrayList(ExprIdRange),
+    arm_values: collections.DenseMap(Ast.ExprId, []const Value),
+    block_tail_values: collections.DenseMap(Ast.ExprId, Value),
+    recorded_value_keys: std.ArrayList(RecordedValueKey),
+    active_recursive_value_locals: collections.DenseMap(Ast.LocalId, void),
+    rebased_inline_scopes: std.AutoHashMap(InlineScopeRebasePair, Ast.InlineScopeId),
+    inline_scope_origins: collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId),
+    rebased_inline_scope_changes: std.ArrayList(InlineScopeRebasePair),
+    /// Frame stacks of finished `Cloner.runClone` calls, kept empty with their
+    /// capacity for the next run. A fixed number are kept so returning one
+    /// never allocates.
+    spare_clone_frames: CloneFramePool,
+
+    fn fresh(allocator: Allocator) ClonerScratch {
+        return .{
+            .arena = collections.SingleThreadArena.init(allocator),
+            .subst = Subst.init(allocator),
+            .inline_stack = .empty,
+            .loop_stack = .empty,
+            .loop_exit_stack = .empty,
+            .exit_tuple_items = .init(allocator),
+            .join_stack = .empty,
+            .let_case_builds = .empty,
+            .clone_templates = .empty,
+            .arm_values = collections.DenseMap(Ast.ExprId, []const Value).init(allocator),
+            .block_tail_values = collections.DenseMap(Ast.ExprId, Value).init(allocator),
+            .recorded_value_keys = .empty,
+            .active_recursive_value_locals = collections.DenseMap(Ast.LocalId, void).init(allocator),
+            .rebased_inline_scopes = std.AutoHashMap(InlineScopeRebasePair, Ast.InlineScopeId).init(allocator),
+            .inline_scope_origins = collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId).init(allocator),
+            .rebased_inline_scope_changes = .empty,
+            .spare_clone_frames = .{},
+        };
+    }
+
+    /// Empty every container, keeping its capacity. The arena is released
+    /// outright: retaining its capacity may need a replacement chunk, and a
+    /// failed allocation would have nowhere to go from here.
+    fn clear(self: *ClonerScratch) void {
+        _ = self.arena.reset(.free_all);
+        self.subst.clearRetainingCapacity();
+        self.inline_stack.clearRetainingCapacity();
+        self.loop_stack.clearRetainingCapacity();
+        self.loop_exit_stack.clearRetainingCapacity();
+        self.exit_tuple_items.clearRetainingCapacity();
+        self.join_stack.clearRetainingCapacity();
+        self.let_case_builds.clearRetainingCapacity();
+        self.clone_templates.clearRetainingCapacity();
+        self.arm_values.clearRetainingCapacity();
+        self.block_tail_values.clearRetainingCapacity();
+        self.recorded_value_keys.clearRetainingCapacity();
+        self.active_recursive_value_locals.clearRetainingCapacity();
+        self.rebased_inline_scopes.clearRetainingCapacity();
+        self.inline_scope_origins.clearRetainingCapacity();
+        self.rebased_inline_scope_changes.clearRetainingCapacity();
+    }
+
+    fn deinit(self: *ClonerScratch, allocator: Allocator) void {
+        self.inline_stack.deinit(allocator);
+        self.loop_stack.deinit(allocator);
+        self.loop_exit_stack.deinit(allocator);
+        self.exit_tuple_items.deinit();
+        self.join_stack.deinit(allocator);
+        self.let_case_builds.deinit(allocator);
+        self.clone_templates.deinit(allocator);
+        self.arm_values.deinit();
+        self.block_tail_values.deinit();
+        self.recorded_value_keys.deinit(allocator);
+        self.active_recursive_value_locals.deinit();
+        self.rebased_inline_scopes.deinit();
+        self.inline_scope_origins.deinit();
+        self.rebased_inline_scope_changes.deinit(allocator);
+        self.spare_clone_frames.deinit(allocator);
+        self.subst.deinit();
+        self.arena.deinit();
+    }
+};
+
 const Cloner = struct {
     pass: *Pass,
     purpose: ClonePurpose,
@@ -5420,7 +5630,7 @@ const Cloner = struct {
     /// Symbolic values, shapes, and strict-binding chains owned by this clone.
     /// Accepted call patterns are copied into the pass-wide arena before this
     /// short-lived scratch arena is released.
-    arena: std.heap.ArenaAllocator,
+    arena: collections.SingleThreadArena,
     source_fn: Ast.FnId,
     pattern: CallPattern,
     subst: Subst,
@@ -5482,6 +5692,7 @@ const Cloner = struct {
     /// Insertions into the two inline-scope maps, in order, for rejected loop
     /// attempt rollback. Accepted entries remain useful for the rest of the clone.
     rebased_inline_scope_changes: std.ArrayList(InlineScopeRebasePair),
+    spare_clone_frames: CloneFramePool,
     /// Depth of the wrapper-strip recursion in the static value matchers
     /// (`bindPatToValue`/`bindPatToMatchValue`/`bindPatToFlowValue`), counting
     /// each `runtime_anchor.structure`/`nominal.backing`/
@@ -5541,30 +5752,32 @@ const Cloner = struct {
     };
 
     fn init(pass: *Pass, source_fn: Ast.FnId, pattern: CallPattern) Cloner {
+        const scratch = pass.takeClonerScratch();
         return .{
             .pass = pass,
             .purpose = .specialization,
             .source_reuse = .none,
-            .arena = std.heap.ArenaAllocator.init(pass.allocator),
+            .arena = scratch.arena,
             .source_fn = source_fn,
             .pattern = pattern,
-            .subst = Subst.init(pass.allocator),
-            .inline_stack = .empty,
-            .loop_stack = .empty,
-            .loop_exit_stack = .empty,
-            .exit_tuple_items = .init(pass.allocator),
-            .join_stack = .empty,
+            .subst = scratch.subst,
+            .inline_stack = scratch.inline_stack,
+            .loop_stack = scratch.loop_stack,
+            .loop_exit_stack = scratch.loop_exit_stack,
+            .exit_tuple_items = scratch.exit_tuple_items,
+            .join_stack = scratch.join_stack,
             .let_case_shape_growth = .init(let_case_shape_arm_budget),
-            .let_case_builds = .empty,
+            .let_case_builds = scratch.let_case_builds,
             .output_start = pass.program.exprCount(),
-            .clone_templates = .empty,
-            .arm_values = collections.DenseMap(Ast.ExprId, []const Value).init(pass.allocator),
-            .block_tail_values = collections.DenseMap(Ast.ExprId, Value).init(pass.allocator),
-            .recorded_value_keys = .empty,
-            .active_recursive_value_locals = collections.DenseMap(Ast.LocalId, void).init(pass.allocator),
-            .rebased_inline_scopes = std.AutoHashMap(InlineScopeRebasePair, Ast.InlineScopeId).init(pass.allocator),
-            .inline_scope_origins = collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId).init(pass.allocator),
-            .rebased_inline_scope_changes = .empty,
+            .clone_templates = scratch.clone_templates,
+            .arm_values = scratch.arm_values,
+            .block_tail_values = scratch.block_tail_values,
+            .recorded_value_keys = scratch.recorded_value_keys,
+            .active_recursive_value_locals = scratch.active_recursive_value_locals,
+            .rebased_inline_scopes = scratch.rebased_inline_scopes,
+            .inline_scope_origins = scratch.inline_scope_origins,
+            .rebased_inline_scope_changes = scratch.rebased_inline_scope_changes,
+            .spare_clone_frames = scratch.spare_clone_frames,
             .wrapper_strip_depth = 0,
             .materialize_strip_depth = 0,
             .inline_calls = .all,
@@ -5581,43 +5794,11 @@ const Cloner = struct {
     }
 
     fn initForRewrite(pass: *Pass) Cloner {
-        return .{
-            .pass = pass,
-            .purpose = .rewrite,
-            .source_reuse = .none,
-            .arena = std.heap.ArenaAllocator.init(pass.allocator),
-            .source_fn = undefined, // initForRewrite never calls buildArgs, which is the only reader.
-            .pattern = .{ .args = &.{} },
-            .subst = Subst.init(pass.allocator),
-            .inline_stack = .empty,
-            .loop_stack = .empty,
-            .loop_exit_stack = .empty,
-            .exit_tuple_items = .init(pass.allocator),
-            .join_stack = .empty,
-            .let_case_shape_growth = .init(let_case_shape_arm_budget),
-            .let_case_builds = .empty,
-            .output_start = pass.program.exprCount(),
-            .clone_templates = .empty,
-            .arm_values = collections.DenseMap(Ast.ExprId, []const Value).init(pass.allocator),
-            .block_tail_values = collections.DenseMap(Ast.ExprId, Value).init(pass.allocator),
-            .recorded_value_keys = .empty,
-            .active_recursive_value_locals = collections.DenseMap(Ast.LocalId, void).init(pass.allocator),
-            .rebased_inline_scopes = std.AutoHashMap(InlineScopeRebasePair, Ast.InlineScopeId).init(pass.allocator),
-            .inline_scope_origins = collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId).init(pass.allocator),
-            .rebased_inline_scope_changes = .empty,
-            .wrapper_strip_depth = 0,
-            .materialize_strip_depth = 0,
-            .inline_calls = .all,
-            .iterator_inline_depth = 0,
-            .inline_direct_requires_known_arg = false,
-            .rewrite_call_patterns = true,
-            .emit_callable_workers = true,
-            .case_of_case_growth = .init(case_of_case_work_budget),
-            .inline_body_growth = .init(inline_body_work_budget),
-            .current_loc = SourceLoc.none,
-            .current_region = Region.zero(),
-            .current_inline_scope = Ast.InlineScopeId.none,
-        };
+        // A rewrite never calls buildArgs, the only reader of `source_fn`.
+        var cloner = init(pass, undefined, .{ .args = &.{} });
+        cloner.purpose = .rewrite;
+        cloner.inline_direct_requires_known_arg = false;
+        return cloner;
     }
 
     fn initForOriginalBodyRewrite(pass: *Pass) Cloner {
@@ -5636,22 +5817,26 @@ const Cloner = struct {
     }
 
     fn deinit(self: *Cloner) void {
-        self.inline_stack.deinit(self.pass.allocator);
-        self.loop_stack.deinit(self.pass.allocator);
-        self.loop_exit_stack.deinit(self.pass.allocator);
-        self.exit_tuple_items.deinit();
-        self.join_stack.deinit(self.pass.allocator);
-        self.let_case_builds.deinit(self.pass.allocator);
-        self.clone_templates.deinit(self.pass.allocator);
-        self.arm_values.deinit();
-        self.block_tail_values.deinit();
-        self.recorded_value_keys.deinit(self.pass.allocator);
-        self.active_recursive_value_locals.deinit();
-        self.rebased_inline_scopes.deinit();
-        self.inline_scope_origins.deinit();
-        self.rebased_inline_scope_changes.deinit(self.pass.allocator);
-        self.subst.deinit();
-        self.arena.deinit();
+        var scratch: ClonerScratch = .{
+            .arena = self.arena,
+            .subst = self.subst,
+            .inline_stack = self.inline_stack,
+            .loop_stack = self.loop_stack,
+            .loop_exit_stack = self.loop_exit_stack,
+            .exit_tuple_items = self.exit_tuple_items,
+            .join_stack = self.join_stack,
+            .let_case_builds = self.let_case_builds,
+            .clone_templates = self.clone_templates,
+            .arm_values = self.arm_values,
+            .block_tail_values = self.block_tail_values,
+            .recorded_value_keys = self.recorded_value_keys,
+            .active_recursive_value_locals = self.active_recursive_value_locals,
+            .rebased_inline_scopes = self.rebased_inline_scopes,
+            .inline_scope_origins = self.inline_scope_origins,
+            .rebased_inline_scope_changes = self.rebased_inline_scope_changes,
+            .spare_clone_frames = self.spare_clone_frames,
+        };
+        self.pass.returnClonerScratch(&scratch);
     }
 
     /// Debug validator for the clone-source invariant described on
@@ -5768,8 +5953,8 @@ const Cloner = struct {
 
     /// Run a cloning computation to completion on an explicit frame stack.
     fn runClone(self: *Cloner, root: CloneTask) Common.LowerError!CloneResult {
-        var frames: std.ArrayList(CloneFrame) = .empty;
-        defer frames.deinit(self.pass.allocator);
+        var frames = self.spare_clone_frames.take();
+        defer self.spare_clone_frames.give(self.pass.allocator, &frames);
         errdefer for (frames.items) |*frame| self.releaseCloneFrame(frame);
         try frames.append(self.pass.allocator, .{ .task = root });
         var input: ?CloneResult = null;
@@ -9655,7 +9840,9 @@ const Cloner = struct {
         task.out = try arena.create(std.ArrayList(Ast.ExprId));
         task.out.* = .empty;
         task.out_owned = true;
-        for (self.pass.plans[raw].specs.items) |spec| {
+        var order_buffer: [spec_constr_specialization_count]u8 = undefined;
+        for (try self.pass.specSelectionOrder(raw, &order_buffer)) |spec_index| {
+            const spec = self.pass.plans[raw].specs.items[spec_index];
             if (!try callPatternMatchesValues(self.pass.program, spec.pattern, task.values)) continue;
             task.spec_pattern = spec.pattern;
             task.spec_fn = spec.fn_id orelse Common.invariant("call-pattern specialization id was not assigned before cloning calls");
@@ -13148,15 +13335,27 @@ const Cloner = struct {
         };
     }
 
+    /// The two pattern-to-value binders: the three-way static matcher, which
+    /// answers a `MatchVerdict`, and the structured value-flow binder, which
+    /// never selects a match branch and answers whether every required
+    /// substitution could be formed.
+    const PatValueMode = enum { match, flow };
+
+    fn PatValueAnswer(comptime mode: PatValueMode) type {
+        return switch (mode) {
+            .match => MatchVerdict,
+            .flow => bool,
+        };
+    }
+
     /// Drive a pattern-to-value binding on an explicit frame stack, so
     /// pattern nesting never nests native calls.
     fn runPatValue(
         self: *Cloner,
-        comptime Answer: type,
-        comptime step: fn (*Cloner, *PatValueFrame, ?Answer) Common.LowerError!PatValueStep(Answer),
+        comptime mode: PatValueMode,
         pat_id: Ast.PatId,
         value: Value,
-    ) Common.LowerError!Answer {
+    ) Common.LowerError!PatValueAnswer(mode) {
         var frames = std.ArrayList(PatValueFrame).empty;
         defer {
             // A nominal frame holds one wrapper-strip level until it answers.
@@ -13166,10 +13365,10 @@ const Cloner = struct {
             frames.deinit(self.pass.allocator);
         }
         try frames.append(self.pass.allocator, .{ .pat_id = pat_id, .value = value });
-        var input: ?Answer = null;
+        var input: ?PatValueAnswer(mode) = null;
         while (true) {
             const frame = &frames.items[frames.items.len - 1];
-            const next = try step(self, frame, input);
+            const next = try self.stepBindPat(mode, frame, input);
             input = null;
             switch (next) {
                 .child => |child| try frames.append(self.pass.allocator, .{ .pat_id = child.pat_id, .value = child.value }),
@@ -13183,38 +13382,60 @@ const Cloner = struct {
     }
 
     fn bindPatToValue(self: *Cloner, pat_id: Ast.PatId, value: Value) Common.LowerError!MatchVerdict {
-        return try self.runPatValue(MatchVerdict, stepBindPatToValue, pat_id, value);
+        return try self.runPatValue(.match, pat_id, value);
     }
 
-    fn stepBindPatToValue(self: *Cloner, frame: *PatValueFrame, input: ?MatchVerdict) Common.LowerError!PatValueStep(MatchVerdict) {
+    fn stepBindPat(
+        self: *Cloner,
+        comptime mode: PatValueMode,
+        frame: *PatValueFrame,
+        input: ?PatValueAnswer(mode),
+    ) Common.LowerError!PatValueStep(PatValueAnswer(mode)) {
+        const Answer = PatValueAnswer(mode);
+        const matched: Answer = switch (mode) {
+            .match => .match,
+            .flow => true,
+        };
+        // A form the binder cannot decide from a symbolic value.
+        const declined: Answer = switch (mode) {
+            .match => .unknown,
+            .flow => false,
+        };
         const pat = self.pass.program.getPat(frame.pat_id);
         const value = frame.value;
-        // A component's verdict: a no-match decides the pattern, and an
-        // unknown makes the pattern at most unknown.
-        if (input) |child_verdict| switch (frame.stage) {
+        if (input) |answer| switch (frame.stage) {
             .start => unreachable,
             .as_binding => {
-                if (child_verdict != .match) return .{ .done = child_verdict };
+                if (answer != matched) return .{ .done = answer };
                 try self.subst.put(self.pass.program, pat.data.as.local, value);
-                return .{ .done = .match };
+                return .{ .done = matched };
             },
             .nominal => {
                 self.wrapper_strip_depth -= 1;
                 frame.stage = .start;
-                return .{ .done = child_verdict };
+                return .{ .done = answer };
             },
-            .from_receiver, .from_value => switch (child_verdict) {
-                .match => {},
-                .no_match => return .{ .done = .no_match },
-                .unknown, .unknown_budget_exhausted => frame.verdict = mergeMatchUnknown(frame.verdict, child_verdict),
+            // A component's verdict: a no-match decides the pattern, and an
+            // unknown makes the pattern at most unknown.
+            .from_receiver, .from_value => switch (mode) {
+                .match => switch (answer) {
+                    .match => {},
+                    .no_match => return .{ .done = .no_match },
+                    .unknown, .unknown_budget_exhausted => frame.verdict = mergeMatchUnknown(frame.verdict, answer),
+                },
+                .flow => if (!answer) return .{ .done = false },
             },
+        };
+        const all_matched: Answer = switch (mode) {
+            .match => frame.verdict,
+            .flow => true,
         };
         switch (pat.data) {
             .bind => |local| {
                 try self.subst.put(self.pass.program, local, value);
-                return .{ .done = .match };
+                return .{ .done = matched };
             },
-            .wildcard => return .{ .done = .match },
+            .wildcard => return .{ .done = matched },
             .as => |as| {
                 frame.stage = .as_binding;
                 return .{ .child = .{ .pat_id = as.pattern, .value = value } };
@@ -13222,27 +13443,16 @@ const Cloner = struct {
             .record => |fields_span| {
                 const fields = self.pass.program.recordDestructSpan(fields_span);
                 if (frame.stage == .start) {
-                    // An anchor's structure is matched in its place.
-                    while (frame.value == .runtime_anchor) frame.value = frame.value.runtime_anchor.structure.*;
-                    const record_value = frame.value;
-                    switch (record_value) {
-                        .runtime_anchor => unreachable,
-                        .expr => |receiver| {
-                            if (!canReadFieldsFromExpr(self.pass.program, receiver)) return .{ .done = .unknown };
-                            frame.stage = .from_receiver;
-                            frame.receiver = receiver;
+                    if (try self.startStructuredPatValue(mode, frame)) |answer| return .{ .done = answer };
+                    if (frame.stage == .from_value) frame.record = recordFromValue(frame.value) orelse switch (mode) {
+                        .match => switch (frame.value) {
+                            .tag, .tuple, .callable => Common.invariant("record pattern matched a non-record value"),
+                            .expr, .runtime_anchor, .static_data_candidate, .record, .nominal => Common.invariant("record value had no record backing"),
                         },
-                        .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => {
-                            frame.stage = .from_value;
-                            if (isOpaqueBehindWrappers(record_value)) return .{ .done = .unknown };
-                            frame.record = recordFromValue(record_value) orelse switch (record_value) {
-                                .tag, .tuple, .callable => Common.invariant("record pattern matched a non-record value"),
-                                .expr, .runtime_anchor, .static_data_candidate, .record, .nominal => Common.invariant("record value had no record backing"),
-                            };
-                        },
-                    }
+                        .flow => return .{ .done = false },
+                    };
                 }
-                if (frame.index == fields.len) return .{ .done = frame.verdict };
+                if (frame.index == fields.len) return .{ .done = all_matched };
                 const field = GuardedList.at(fields, frame.index);
                 frame.index += 1;
                 if (frame.stage == .from_receiver) {
@@ -13250,35 +13460,31 @@ const Cloner = struct {
                     const field_expr = try self.addFieldAccessExpr(field_ty, frame.receiver, field.name);
                     return .{ .child = .{ .pat_id = field.pattern, .value = .{ .expr = field_expr } } };
                 }
-                const field_value = fieldFromRecord(self.pass.program, frame.record, field.name) orelse
-                    Common.invariant("record pattern field was absent from the record value");
+                const field_value = fieldFromRecord(self.pass.program, frame.record, field.name) orelse switch (mode) {
+                    .match => Common.invariant("record pattern field was absent from the record value"),
+                    .flow => return .{ .done = false },
+                };
                 return .{ .child = .{ .pat_id = field.pattern, .value = field_value } };
             },
             .tuple => |items_span| {
                 const pats = self.pass.program.patSpan(items_span);
                 if (frame.stage == .start) {
-                    // An anchor's structure is matched in its place.
-                    while (frame.value == .runtime_anchor) frame.value = frame.value.runtime_anchor.structure.*;
-                    const tuple_value = frame.value;
-                    switch (tuple_value) {
-                        .runtime_anchor => unreachable,
-                        .expr => |receiver| {
-                            if (!canReadFieldsFromExpr(self.pass.program, receiver)) return .{ .done = .unknown };
-                            frame.stage = .from_receiver;
-                            frame.receiver = receiver;
-                        },
-                        .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => {
-                            frame.stage = .from_value;
-                            if (isOpaqueBehindWrappers(tuple_value)) return .{ .done = .unknown };
-                            frame.tuple = tupleFromValue(tuple_value) orelse switch (tuple_value) {
+                    if (try self.startStructuredPatValue(mode, frame)) |answer| return .{ .done = answer };
+                    if (frame.stage == .from_value) {
+                        frame.tuple = tupleFromValue(frame.value) orelse switch (mode) {
+                            .match => switch (frame.value) {
                                 .tag, .record, .callable => Common.invariant("tuple pattern matched a non-tuple value"),
                                 .expr, .runtime_anchor, .static_data_candidate, .tuple, .nominal => Common.invariant("tuple value had no tuple backing"),
-                            };
-                            if (pats.len != frame.tuple.items.len) Common.invariant("tuple pattern arity differed from the tuple value");
-                        },
+                            },
+                            .flow => return .{ .done = false },
+                        };
+                        if (pats.len != frame.tuple.items.len) switch (mode) {
+                            .match => Common.invariant("tuple pattern arity differed from the tuple value"),
+                            .flow => return .{ .done = false },
+                        };
                     }
                 }
-                if (frame.index == pats.len) return .{ .done = frame.verdict };
+                if (frame.index == pats.len) return .{ .done = all_matched };
                 const index = frame.index;
                 frame.index += 1;
                 const child_pat = GuardedList.at(pats, index);
@@ -13295,16 +13501,29 @@ const Cloner = struct {
             .tag => |tag_pat| {
                 const pats = self.pass.program.patSpan(tag_pat.payloads);
                 if (frame.stage == .start) {
-                    if (isOpaqueBehindWrappers(value)) return .{ .done = .unknown };
-                    frame.tag = tagFromValue(value) orelse switch (value) {
-                        .record, .tuple, .callable => Common.invariant("tag pattern matched a non-tag value"),
-                        .expr, .runtime_anchor, .static_data_candidate, .tag, .nominal => Common.invariant("tag value had no tag backing"),
+                    switch (mode) {
+                        .match => {
+                            if (isOpaqueBehindWrappers(value)) return .{ .done = .unknown };
+                            frame.tag = tagFromValue(value) orelse switch (value) {
+                                .record, .tuple, .callable => Common.invariant("tag pattern matched a non-tag value"),
+                                .expr, .runtime_anchor, .static_data_candidate, .tag, .nominal => Common.invariant("tag value had no tag backing"),
+                            };
+                        },
+                        .flow => frame.tag = tagFromValue(value) orelse return .{ .done = false },
+                    }
+                    if (!self.pass.program.names.tagLabelTextEql(frame.tag.name, tag_pat.name)) {
+                        return .{ .done = switch (mode) {
+                            .match => .no_match,
+                            .flow => false,
+                        } };
+                    }
+                    if (pats.len != frame.tag.payloads.len) switch (mode) {
+                        .match => Common.invariant("tag pattern payload arity differed from the tag value"),
+                        .flow => return .{ .done = false },
                     };
-                    if (!self.pass.program.names.tagLabelTextEql(frame.tag.name, tag_pat.name)) return .{ .done = .no_match };
-                    if (pats.len != frame.tag.payloads.len) Common.invariant("tag pattern payload arity differed from the tag value");
                     frame.stage = .from_value;
                 }
-                if (frame.index == pats.len) return .{ .done = frame.verdict };
+                if (frame.index == pats.len) return .{ .done = all_matched };
                 const index = frame.index;
                 frame.index += 1;
                 return .{ .child = .{ .pat_id = GuardedList.at(pats, index), .value = frame.tag.payloads[index] } };
@@ -13312,14 +13531,29 @@ const Cloner = struct {
             .nominal => |backing_pat| {
                 // Stripping a nominal or static-data wrapper follows a value
                 // pointer edge that a recursive construction can loop through;
-                // a cyclic value declines to a residual runtime match.
-                if (self.wrapper_strip_depth >= value_wrapper_strip_cap) return .{ .done = .unknown_budget_exhausted };
+                // a cyclic value declines to a residual runtime match, or
+                // declines the flow binding.
+                if (self.wrapper_strip_depth >= value_wrapper_strip_cap) {
+                    return .{ .done = switch (mode) {
+                        .match => .unknown_budget_exhausted,
+                        .flow => false,
+                    } };
+                }
                 const child: Ast.PatId, const child_value: Value = switch (value) {
                     .runtime_anchor => |anchor| .{ frame.pat_id, anchor.structure.* },
                     .static_data_candidate => |candidate| .{ frame.pat_id, candidate.structure.* },
                     .nominal => |nominal| .{ backing_pat, nominal.backing.* },
-                    .expr => return .{ .done = .unknown },
-                    .tag, .record, .tuple, .callable => Common.invariant("nominal pattern matched an unwrapped constructor value"),
+                    .expr => |receiver| switch (mode) {
+                        .match => return .{ .done = .unknown },
+                        .flow => if (canReadFieldsFromExpr(self.pass.program, receiver) and self.patternProjectsNominalBacking(backing_pat))
+                            .{ backing_pat, value }
+                        else
+                            return .{ .done = false },
+                    },
+                    .tag, .record, .tuple, .callable => switch (mode) {
+                        .match => Common.invariant("nominal pattern matched an unwrapped constructor value"),
+                        .flow => return .{ .done = false },
+                    },
                 };
                 self.wrapper_strip_depth += 1;
                 frame.stage = .nominal;
@@ -13334,8 +13568,43 @@ const Cloner = struct {
             .frac_f64_lit,
             .str_lit,
             .str_pattern,
-            => return .{ .done = .unknown },
+            => return .{ .done = declined },
         }
+    }
+
+    /// Choose where a record or tuple pattern reads its components: from a
+    /// readable receiver expression (`from_receiver`) or from a symbolic
+    /// value (`from_value`). Returns the pattern's answer when the value
+    /// decides it before any component is read.
+    fn startStructuredPatValue(self: *Cloner, comptime mode: PatValueMode, frame: *PatValueFrame) Allocator.Error!?PatValueAnswer(mode) {
+        switch (mode) {
+            .match => {
+                // An anchor's structure is matched in its place.
+                while (frame.value == .runtime_anchor) frame.value = frame.value.runtime_anchor.structure.*;
+                switch (frame.value) {
+                    .runtime_anchor => unreachable,
+                    .expr => |receiver| {
+                        if (!canReadFieldsFromExpr(self.pass.program, receiver)) return .unknown;
+                        frame.stage = .from_receiver;
+                        frame.receiver = receiver;
+                    },
+                    .static_data_candidate, .tag, .record, .tuple, .nominal, .callable => {
+                        frame.stage = .from_value;
+                        if (isOpaqueBehindWrappers(frame.value)) return .unknown;
+                    },
+                }
+            },
+            .flow => switch (frame.value) {
+                .expr => |receiver| {
+                    if (!canReadFieldsFromExpr(self.pass.program, receiver)) return false;
+                    frame.receiver = receiver;
+                    frame.stage = .from_receiver;
+                },
+                .record, .tuple, .nominal, .runtime_anchor, .static_data_candidate => frame.stage = .from_value,
+                .tag, .callable => return false,
+            },
+        }
+        return null;
     }
 
     /// Whether a nominal pattern's backing pattern binds its value only
@@ -13359,131 +13628,7 @@ const Cloner = struct {
     /// may project a value of a statically known record or tuple type and
     /// simply reports whether all required substitutions could be formed.
     fn bindPatToFlowValue(self: *Cloner, pat_id: Ast.PatId, value: Value) Common.LowerError!bool {
-        return try self.runPatValue(bool, stepBindPatToFlowValue, pat_id, value);
-    }
-
-    fn stepBindPatToFlowValue(self: *Cloner, frame: *PatValueFrame, input: ?bool) Common.LowerError!PatValueStep(bool) {
-        const pat = self.pass.program.getPat(frame.pat_id);
-        const value = frame.value;
-        if (input) |bound| switch (frame.stage) {
-            .start => unreachable,
-            .as_binding => {
-                if (!bound) return .{ .done = false };
-                try self.subst.put(self.pass.program, pat.data.as.local, value);
-                return .{ .done = true };
-            },
-            .nominal => {
-                self.wrapper_strip_depth -= 1;
-                frame.stage = .start;
-                return .{ .done = bound };
-            },
-            .from_receiver, .from_value => if (!bound) return .{ .done = false },
-        };
-        switch (pat.data) {
-            .bind => |local| {
-                try self.subst.put(self.pass.program, local, value);
-                return .{ .done = true };
-            },
-            .wildcard => return .{ .done = true },
-            .as => |as| {
-                frame.stage = .as_binding;
-                return .{ .child = .{ .pat_id = as.pattern, .value = value } };
-            },
-            .record => |fields_span| {
-                const fields = self.pass.program.recordDestructSpan(fields_span);
-                if (frame.stage == .start) switch (value) {
-                    .record, .nominal, .runtime_anchor, .static_data_candidate => {
-                        frame.record = recordFromValue(value) orelse return .{ .done = false };
-                        frame.stage = .from_value;
-                    },
-                    .expr => |receiver| {
-                        if (!canReadFieldsFromExpr(self.pass.program, receiver)) return .{ .done = false };
-                        frame.receiver = receiver;
-                        frame.stage = .from_receiver;
-                    },
-                    .tag, .tuple, .callable => return .{ .done = false },
-                };
-                if (frame.index == fields.len) return .{ .done = true };
-                const field = GuardedList.at(fields, frame.index);
-                frame.index += 1;
-                if (frame.stage == .from_receiver) {
-                    const field_ty = self.pass.program.getPat(field.pattern).ty;
-                    const field_expr = try self.addFieldAccessExpr(field_ty, frame.receiver, field.name);
-                    return .{ .child = .{ .pat_id = field.pattern, .value = .{ .expr = field_expr } } };
-                }
-                const field_value = fieldFromRecord(self.pass.program, frame.record, field.name) orelse return .{ .done = false };
-                return .{ .child = .{ .pat_id = field.pattern, .value = field_value } };
-            },
-            .tuple => |items_span| {
-                const pats = self.pass.program.patSpan(items_span);
-                if (frame.stage == .start) switch (value) {
-                    .tuple, .nominal, .runtime_anchor, .static_data_candidate => {
-                        frame.tuple = tupleFromValue(value) orelse return .{ .done = false };
-                        if (pats.len != frame.tuple.items.len) return .{ .done = false };
-                        frame.stage = .from_value;
-                    },
-                    .expr => |receiver| {
-                        if (!canReadFieldsFromExpr(self.pass.program, receiver)) return .{ .done = false };
-                        frame.receiver = receiver;
-                        frame.stage = .from_receiver;
-                    },
-                    .tag, .record, .callable => return .{ .done = false },
-                };
-                if (frame.index == pats.len) return .{ .done = true };
-                const index = frame.index;
-                frame.index += 1;
-                const child_pat = GuardedList.at(pats, index);
-                if (frame.stage == .from_receiver) {
-                    const item_ty = self.pass.program.getPat(child_pat).ty;
-                    const item_expr = try self.addExpr(.{ .ty = item_ty, .data = .{ .tuple_access = .{
-                        .tuple = frame.receiver,
-                        .elem_index = @as(u32, @intCast(index)),
-                    } } });
-                    return .{ .child = .{ .pat_id = child_pat, .value = .{ .expr = item_expr } } };
-                }
-                return .{ .child = .{ .pat_id = child_pat, .value = frame.tuple.items[index] } };
-            },
-            .tag => |tag_pat| {
-                const pats = self.pass.program.patSpan(tag_pat.payloads);
-                if (frame.stage == .start) {
-                    frame.tag = tagFromValue(value) orelse return .{ .done = false };
-                    if (!self.pass.program.names.tagLabelTextEql(frame.tag.name, tag_pat.name)) return .{ .done = false };
-                    if (pats.len != frame.tag.payloads.len) return .{ .done = false };
-                    frame.stage = .from_value;
-                }
-                if (frame.index == pats.len) return .{ .done = true };
-                const index = frame.index;
-                frame.index += 1;
-                return .{ .child = .{ .pat_id = GuardedList.at(pats, index), .value = frame.tag.payloads[index] } };
-            },
-            .nominal => |backing_pat| {
-                // Stripping a nominal or static-data wrapper follows a value
-                // pointer edge that a recursive construction can loop through;
-                // a cyclic value declines the flow binding.
-                if (self.wrapper_strip_depth >= value_wrapper_strip_cap) return .{ .done = false };
-                const child: Ast.PatId, const child_value: Value = switch (value) {
-                    .runtime_anchor => |anchor| .{ frame.pat_id, anchor.structure.* },
-                    .static_data_candidate => |candidate| .{ frame.pat_id, candidate.structure.* },
-                    .nominal => |nominal| .{ backing_pat, nominal.backing.* },
-                    .expr => |receiver| if (canReadFieldsFromExpr(self.pass.program, receiver) and self.patternProjectsNominalBacking(backing_pat))
-                        .{ backing_pat, value }
-                    else
-                        return .{ .done = false },
-                    .tag, .record, .tuple, .callable => return .{ .done = false },
-                };
-                self.wrapper_strip_depth += 1;
-                frame.stage = .nominal;
-                return .{ .child = .{ .pat_id = child, .value = child_value } };
-            },
-            .list,
-            .int_lit,
-            .dec_lit,
-            .frac_f32_lit,
-            .frac_f64_lit,
-            .str_lit,
-            .str_pattern,
-            => return .{ .done = false },
-        }
+        return try self.runPatValue(.flow, pat_id, value);
     }
 
     /// Record an identity substitution for a local bound by an already-emitted
@@ -15121,7 +15266,7 @@ fn walkLoopBodyContents(pass: *Pass, root_body: Ast.ExprId, root_uses: []Initial
     defer children.deinit(allocator);
     var open: std.ArrayList(OpenLoop) = .empty;
     defer open.deinit(allocator);
-    var registered: std.AutoHashMapUnmanaged(Ast.LocalId, std.ArrayList(LocalRegistration)) = .empty;
+    var registered: collections.DenseMapUnmanaged(Ast.LocalId, std.ArrayList(LocalRegistration)) = .empty;
     defer {
         var lists = registered.valueIterator();
         while (lists.next()) |list| list.deinit(allocator);
@@ -15222,7 +15367,7 @@ fn markOpenLoopsReturn(open: []OpenLoop) void {
 /// registration is marked once, then dropped.
 fn markLocalReferenced(
     open: []OpenLoop,
-    registered: *std.AutoHashMapUnmanaged(Ast.LocalId, std.ArrayList(LocalRegistration)),
+    registered: *collections.DenseMapUnmanaged(Ast.LocalId, std.ArrayList(LocalRegistration)),
     local: Ast.LocalId,
 ) void {
     const list = registered.getPtr(local) orelse return;
@@ -15661,6 +15806,27 @@ fn writePatternU32(hasher: *TypeDigestHasher, value: u32) void {
     buffer[2] = @truncate(value >> 16);
     buffer[3] = @truncate(value >> 24);
     hasher.update(&buffer);
+}
+
+/// The number of constructor (non-`any`) nodes in a call pattern: the
+/// specificity measure `Pass.specSelectionOrder` ranks workers by.
+fn patternConstructorCount(allocator: Allocator, pattern: CallPattern) Allocator.Error!usize {
+    var pending = std.ArrayList(Shape).empty;
+    defer pending.deinit(allocator);
+    try pending.appendSlice(allocator, pattern.args);
+    var count: usize = 0;
+    while (pending.pop()) |shape| {
+        switch (shape) {
+            .any => continue,
+            .tag => |tag| try pending.appendSlice(allocator, tag.payloads),
+            .record => |record| for (record.fields) |field| try pending.append(allocator, field.shape),
+            .tuple => |tuple| try pending.appendSlice(allocator, tuple.items),
+            .nominal => |nominal| try pending.append(allocator, nominal.backing.*),
+            .callable => |callable| try pending.appendSlice(allocator, callable.captures),
+        }
+        count += 1;
+    }
+    return count;
 }
 
 fn patternEql(program: *Ast.Program, lhs: CallPattern, rhs: CallPattern) Allocator.Error!bool {
@@ -16837,7 +17003,7 @@ const ReverseSpecConstrExecutor = struct {
         const self: *@This() = @ptrCast(@alignCast(context));
         self.len -= 1;
         const task = self.queued[self.len];
-        var scratch = std.heap.ArenaAllocator.init(std.testing.allocator);
+        var scratch = collections.SingleThreadArena.init(std.testing.allocator);
         defer scratch.deinit();
         var lane = TaskExecutor.LaneState.init(std.testing.allocator);
         defer lane.deinit();
@@ -17074,7 +17240,10 @@ test "SpecConstr retained locals allocate by exact leaves not unrelated prefix" 
     var buffer: [4096]u8 = undefined;
     var bounded = std.heap.FixedBufferAllocator.init(&buffer);
     pass.allocator = bounded.allocator();
+    // The cloner's containers return to the pass when the cloner finishes,
+    // so they are released through the bounded allocator before it goes away.
     defer pass.allocator = allocator;
+    defer pass.releaseSpareClonerScratch();
     var cloner = Cloner.initForRewrite(&pass);
     defer cloner.deinit();
     const before_empty = bounded.end_index;
@@ -17445,6 +17614,144 @@ test "SpecConstr admission uses body size and worker count before cloning" {
     try std.testing.expectEqual(SpecAdmission.admitted, pass.newSpecAdmission(1));
 }
 
+test "SpecConstr worker budget leaves further distinct call patterns as residual direct calls" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const tag_ty = try program.types.add(.{ .tag_union = Type.Span.empty() });
+    const unit = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    const arg = try program.addLocal(@fromBackingInt(1), tag_ty);
+    const target = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(2),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = arg, .ty = tag_ty }}),
+        .captures = .empty(),
+        .body = .{ .roc = unit },
+        .ret = unit_ty,
+    });
+    const label_texts = [_][]const u8{ "First", "Second", "Third", "Fourth", "Fifth" };
+    var calls: [label_texts.len]Ast.ExprId = undefined;
+    for (label_texts, &calls) |text, *call| {
+        const tag = try program.addExpr(.{ .ty = tag_ty, .data = .{ .tag = .{
+            .name = try program.names.internTagLabel(text),
+            .payloads = .empty(),
+        } } });
+        call.* = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+            .callee = .{ .lifted = target },
+            .args = try program.addExprSpan(&.{tag}),
+            .captures = .empty(),
+        } } });
+    }
+    program.next_symbol = 3;
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var metrics: ParallelMetrics = .{};
+    pass.options = .{ .metrics_out = &metrics };
+    pass.plans[0].used_args[0] = true;
+
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+    cloner.inline_calls = .none;
+    for (calls, 0..) |call, index| {
+        const cloned = program.getExpr(try cloner.cloneExpr(call)).data.call_proc;
+        const callee = Ast.localDirectCallee(cloned) orelse return error.TestUnexpectedResult;
+        if (index < spec_constr_specialization_count) {
+            // Each distinct pattern within the budget reserves its own worker.
+            try std.testing.expectEqual(pass.plans[0].specs.items[index].fn_id.?, callee);
+        } else {
+            // Past the budget the call keeps its ordinary direct callee.
+            try std.testing.expectEqual(target, callee);
+        }
+    }
+    try std.testing.expectEqual(spec_constr_specialization_count, pass.plans[0].specs.items.len);
+    try std.testing.expectEqual(@as(u64, label_texts.len - spec_constr_specialization_count), metrics.spec_count_denials);
+}
+
+test "SpecConstr redirects a call to its most specific accepting worker" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const tag_ty = try program.types.add(.{ .tag_union = Type.Span.empty() });
+    const wrap = try program.names.internTagLabel("Wrap");
+    const leaf = try program.names.internTagLabel("Leaf");
+    const source_arg = try program.addLocal(@fromBackingInt(1), tag_ty);
+    const source_body = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    const source_fn_id = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(2),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = source_arg, .ty = tag_ty }}),
+        .captures = .empty(),
+        .body = .{ .roc = source_body },
+        .ret = unit_ty,
+    });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+
+    // Two workers whose patterns both accept `Wrap(Leaf)`. The less specific
+    // one is admitted first, so admission order alone would select it.
+    var worker_ids: [2]Ast.FnId = undefined;
+    for (&worker_ids, 3..) |*worker_id, symbol| {
+        worker_id.* = try program.addFn(.{
+            .shapes = program.finishFnShapes(.{}),
+            .symbol = @fromBackingInt(@intCast(symbol)),
+            .args = .empty(),
+            .captures = .empty(),
+            .body = .hosted,
+            .ret = unit_ty,
+        });
+    }
+    const arena = pass.arena.allocator();
+    const general_payloads = try arena.dupe(Shape, &.{.{ .any = tag_ty }});
+    const specific_payloads = try arena.dupe(Shape, &.{.{ .tag = .{ .ty = tag_ty, .name = leaf, .payloads = &.{} } }});
+    try pass.plans[@backingInt(source_fn_id)].specs.append(allocator, .{
+        .pattern = .{ .args = try arena.dupe(Shape, &.{.{ .tag = .{ .ty = tag_ty, .name = wrap, .payloads = general_payloads } }}) },
+        .fn_id = worker_ids[0],
+        .written = true,
+    });
+    try pass.plans[@backingInt(source_fn_id)].specs.append(allocator, .{
+        .pattern = .{ .args = try arena.dupe(Shape, &.{.{ .tag = .{ .ty = tag_ty, .name = wrap, .payloads = specific_payloads } }}) },
+        .fn_id = worker_ids[1],
+        .written = true,
+    });
+
+    // A generated body calling the source function with `Wrap(Leaf)`.
+    const caller_fn_id = try program.reserveFnSlot();
+    const outer_shapes = program.beginFnShapes(caller_fn_id);
+    const leaf_expr = try program.addExpr(.{ .ty = tag_ty, .data = .{ .tag = .{ .name = leaf, .payloads = .empty() } } });
+    const wrap_expr = try program.addExpr(.{ .ty = tag_ty, .data = .{ .tag = .{
+        .name = wrap,
+        .payloads = try program.addExprSpan(&.{leaf_expr}),
+    } } });
+    const caller_body = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = source_fn_id },
+        .args = try program.addExprSpan(&.{wrap_expr}),
+        .captures = .empty(),
+    } } });
+    program.setFn(caller_fn_id, .{
+        .shapes = program.finishFnShapes(outer_shapes),
+        .symbol = @fromBackingInt(5),
+        .args = .empty(),
+        .captures = .empty(),
+        .body = .{ .roc = caller_body },
+        .ret = unit_ty,
+    });
+
+    var order_buffer: [spec_constr_specialization_count]u8 = undefined;
+    try std.testing.expectEqualSlices(u8, &.{ 1, 0 }, try pass.specSelectionOrder(@backingInt(source_fn_id), &order_buffer));
+
+    try pass.rewriteExistingCalls();
+    const redirected = program.getExpr(caller_body).data.call_proc;
+    try std.testing.expectEqual(@as(?Ast.FnId, worker_ids[1]), Ast.localDirectCallee(redirected));
+    // The specific worker takes no runtime arguments: the call supplies none.
+    try std.testing.expectEqual(@as(usize, 0), program.exprSpan(redirected.args).len);
+}
+
 test "SpecConstr bounds cumulative inlining across small acyclic wrappers" {
     const allocator = std.testing.allocator;
     var program = emptyLiftedProgramForTest(allocator);
@@ -17581,7 +17888,7 @@ test "issue 10760 SpecConstr bounds cloning of rewritten inline bodies" {
     defer pass.deinit();
 
     for (0..pass.plans.len) |index| {
-        try pass.cloneFnBodyInPlace(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
+        try pass.cloneFnBody(.normalize, @fromBackingInt(@intCast(@as(u32, @intCast(index)))));
     }
 
     const rewritten_body = switch (program.getFn(callee).body) {
@@ -18073,7 +18380,7 @@ test "value substitutability is exact at any depth" {
     var cloner = Cloner.initForRewrite(&pass);
     defer cloner.deinit();
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     defer arena.deinit();
 
     const u8_ty = try program.types.add(.{ .primitive = .u8 });
@@ -18123,7 +18430,7 @@ test "making a substitutable value reusable keeps it whole at any size" {
     var cloner = Cloner.initForRewrite(&pass);
     defer cloner.deinit();
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     defer arena.deinit();
 
     const u8_ty = try program.types.add(.{ .primitive = .u8 });
@@ -18159,7 +18466,7 @@ test "value substitution bounds the expansion of shared sub-values" {
     var cloner = Cloner.initForRewrite(&pass);
     defer cloner.deinit();
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     defer arena.deinit();
 
     const u8_ty = try program.types.add(.{ .primitive = .u8 });
@@ -18300,7 +18607,7 @@ test "whole-body normalization resolves binder-equivalent argument locals" {
 
     var pass = try Pass.init(allocator, &program);
     defer pass.deinit();
-    try pass.cloneFnBodyInPlace(fn_id);
+    try pass.cloneFnBody(.normalize, fn_id);
 
     const cloned_body = switch (program.getFn(fn_id).body) {
         .roc => |body| body,

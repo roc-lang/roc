@@ -110,7 +110,7 @@ pub const tests = [_]TestCase{
         \\    var $index = 0
         \\    while $index < 3 {
         \\        (word, $index) = get_pair($index)
-        \\        word
+        \\        _ = word
         \\    }
         \\    $index
         \\}

@@ -625,12 +625,6 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(rel)));
         }
 
-        /// Jcc rel8 (conditional jump short)
-        pub fn jccRel8(self: *Self, cond: Condition, rel: i8) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0x70 + @as(u8, @backingInt(cond)));
-            try self.buf.append(self.allocator, @bitCast(rel));
-        }
-
         /// JNE rel32 (jump if not equal)
         pub fn jne(self: *Self, rel: i32) Allocator.Error!void {
             try self.jccRel32(.not_equal, rel);
@@ -1402,15 +1396,6 @@ test "cmp reg, reg" {
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x39, 0xD8 }, asm_buf.buf.items);
 }
 
-test "conditional jump" {
-    var asm_buf = LinuxEmit.init(std.testing.allocator);
-    defer asm_buf.deinit();
-
-    // je +0x10 (short form: 74 10)
-    try asm_buf.jccRel8(.equal, 0x10);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x74, 0x10 }, asm_buf.buf.items);
-}
-
 test "addsd xmm, xmm" {
     var asm_buf = LinuxEmit.init(std.testing.allocator);
     defer asm_buf.deinit();
@@ -1553,25 +1538,6 @@ test "push/pop - all registers" {
         } else {
             try std.testing.expect(emit.buf.items.len == 1);
         }
-    }
-}
-
-test "jcc rel8 - all conditions" {
-    var emit = LinuxEmit.init(std.testing.allocator);
-    defer emit.deinit();
-
-    const conditions = [_]LinuxEmit.Condition{
-        .overflow, .not_overflow,     .below,          .above_or_equal,
-        .equal,    .not_equal,        .below_or_equal, .above,
-        .sign,     .not_sign,         .parity_even,    .parity_odd,
-        .less,     .greater_or_equal, .less_or_equal,  .greater,
-    };
-
-    for (conditions, 0..) |cond, i| {
-        emit.buf.clearRetainingCapacity();
-        try emit.jccRel8(cond, 0x10);
-        try std.testing.expectEqual(@as(u8, 0x70 + @as(u8, @intCast(i))), emit.buf.items[0]);
-        try std.testing.expectEqual(@as(u8, 0x10), emit.buf.items[1]);
     }
 }
 

@@ -837,9 +837,9 @@ fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout
             },
             .allocations_at_most => |expected| blk: {
                 var compiled = (if (expected.optimized)
-                    helpers.compileAllocationProgram(allocator, io, tc.source_kind, tc.source, tc.imports)
+                    helpers.compileProgram(allocator, io, tc.source_kind, tc.source, tc.imports, helpers.allocation_test_lower_options)
                 else
-                    helpers.compileProgram(allocator, io, tc.source_kind, tc.source, tc.imports)) catch {
+                    helpers.compileProgram(allocator, io, tc.source_kind, tc.source, tc.imports, .{})) catch {
                     return .{
                         .status = .fail,
                         .message = "INVALID_SYNTAX—skipped allocation test has parse/check/lower errors",
@@ -855,7 +855,7 @@ fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout
                 };
             },
             .comptime_f32_bits, .comptime_f64_bits, .comptime_f32_list_bits, .comptime_f64_list_bits => blk: {
-                var resources = helpers.parseAndCanonicalizeProgram(allocator, tc.source_kind, tc.source, tc.imports) catch {
+                var resources = helpers.parseProgram(allocator, tc.source_kind, tc.source, tc.imports, .{}) catch {
                     return .{
                         .status = .fail,
                         .message = "INVALID_SYNTAX—skipped compile-time float-bits test has parse/check errors",
@@ -887,7 +887,7 @@ fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout
                 };
             },
             .problem => blk: {
-                var resources = helpers.parseAndCheckProgramForProblems(allocator, tc.source_kind, tc.source, tc.imports) catch {
+                var resources = helpers.parseAndCheckProgramForProblems(allocator, tc.source_kind, tc.source, tc.imports, null) catch {
                     return .{
                         .status = .pass,
                         .timings = .{},
@@ -1004,7 +1004,7 @@ fn runComptimeFloatBitsTest(
     imports: []const helpers.ModuleSource,
     expected: TestCase.Expected,
 ) RunnerError!TestOutcome {
-    var resources = try helpers.parseAndCanonicalizeProgram(allocator, source_kind, src, imports);
+    var resources = try helpers.parseProgram(allocator, source_kind, src, imports, .{});
     defer resources.deinit(allocator);
 
     const timings = EvalTimings{
@@ -1025,7 +1025,7 @@ fn runComptimeFloatBitsTest(
 
     const node = switch (roots[0].payload) {
         .const_node => |value| value,
-        .pending, .fn_value, .discarded, .expect, .runtime => {
+        .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => {
             return .{
                 .status = .fail,
                 .message = "compile-time float root did not produce a ConstStore node",
@@ -1138,7 +1138,7 @@ fn materializedComptimeFloatBitsMatch(
     };
     const const_node = switch (compile_time_root.payload) {
         .const_node => |value| value,
-        .pending, .fn_value, .discarded, .expect, .runtime => return false,
+        .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => return false,
     };
     const static_request = lir.CheckedPipeline.StaticDataRequest{
         .const_locator = const_locator,
@@ -1240,9 +1240,9 @@ fn runAllocationTest(
     skip: TestCase.Skip,
 ) RunnerError!TestOutcome {
     var compiled = if (expected.optimized)
-        try helpers.compileAllocationProgram(allocator, io, source_kind, src, imports)
+        try helpers.compileProgram(allocator, io, source_kind, src, imports, helpers.allocation_test_lower_options)
     else
-        try helpers.compileProgram(allocator, io, source_kind, src, imports);
+        try helpers.compileProgram(allocator, io, source_kind, src, imports, .{});
     defer compiled.deinit(allocator);
 
     const timings = EvalTimings{
@@ -1384,7 +1384,7 @@ fn runInspectTest(
         [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, shouldSkipLlvm(skip.llvm) };
     // Only the wasm backend reads the 32-bit lowering.
     const wasm_lowering: helpers.WasmLowering = if (skips[2] or !WASM_BACKEND_IMPLEMENTED) .skip else .lower;
-    var compiled = try helpers.compileInspectedProgramWithStrategy(allocator, io, source_kind, src, imports, specialization_strategy, wasm_lowering);
+    var compiled = try helpers.compileInspectedProgramWithOptions(allocator, io, source_kind, src, imports, .{ .specialization_strategy = specialization_strategy, .wasm = wasm_lowering });
     defer compiled.deinit(allocator);
 
     const timings = EvalTimings{
@@ -1515,7 +1515,7 @@ fn runTestProblem(
     imports: []const helpers.ModuleSource,
 ) RunnerError!TestOutcome {
     var timer = Timer.start() catch unreachable;
-    var resources = helpers.parseAndCheckProgramForProblems(allocator, source_kind, src, imports) catch {
+    var resources = helpers.parseAndCheckProgramForProblems(allocator, source_kind, src, imports, null) catch {
         // Parse or canonicalize error means a problem was found—that's a pass.
         const elapsed = timer.read();
         return .{
@@ -1548,7 +1548,7 @@ fn runTestProblem(
 
     // Checking found nothing; publish so compile-time evaluation can report
     // problems (e.g. a custom from_numeral rejecting a literal).
-    const comptime_outcome = try helpers.publishProgramForComptimeProblems(allocator, source_kind, src, imports);
+    const comptime_outcome = try helpers.publishProgramForComptimeProblems(allocator, source_kind, src, imports, null);
     if (comptime_outcome == .comptime_problems) {
         return .{
             .status = .pass,
@@ -2524,7 +2524,7 @@ fn writeStatsJson(
     results: []const TestResult,
     spans: []const ?harness.PoolSpan,
 ) RunnerError!void {
-    var stats_arena = std.heap.ArenaAllocator.init(gpa);
+    var stats_arena = base.SingleThreadArena.init(gpa);
     defer stats_arena.deinit();
     const stats_allocator = stats_arena.allocator();
 

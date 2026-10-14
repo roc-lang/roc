@@ -17,7 +17,7 @@ fn retainReachesPrepare(
     var retained_alias = retained;
     var remaining = store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
-        switch (store.getCFStmt(current)) {
+        switch (store.getCFStmtImmediate(current).*) {
             .assign_low_level => |assign| {
                 if (assign.op == .list_map_prepare_reuse) {
                     const args = store.getLocalSpan(assign.args);
@@ -81,7 +81,6 @@ fn retainReachesPrepare(
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -95,8 +94,6 @@ fn retainReachesPrepare(
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .ret,

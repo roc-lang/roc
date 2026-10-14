@@ -13,11 +13,11 @@ const builtin = @import("builtin");
 /// Returns a minimal std.Io implementation for shim and platform-host code.
 pub fn io() std.Io {
     return switch (comptime builtin.os.tag) {
-        .linux => .{ .userdata = null, .vtable = &linux_vtable },
-        .windows => .{ .userdata = null, .vtable = &windows_vtable },
+        .linux => .{ .userdata = null, .vtable = &Shim(linux_os).vtable },
+        .windows => .{ .userdata = null, .vtable = &Shim(windows_os).vtable },
         .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => .{
             .userdata = null,
-            .vtable = &macos_vtable,
+            .vtable = &Shim(macos_os).vtable,
         },
         // Any other host (FreeBSD/NetBSD/OpenBSD/Solaris/etc.) falls through to
         // std.Io.failing, whose vtable panics on every method call. This is a
@@ -110,147 +110,144 @@ fn queryPageSize() usize {
     return std.heap.page_size_max;
 }
 
-const linux_vtable: std.Io.VTable = blk: {
-    var vtable = std.Io.failing.vtable.*;
-    vtable.futexWait = linuxFutexWait;
-    vtable.futexWaitUncancelable = linuxFutexWaitUncancelable;
-    vtable.futexWake = linuxFutexWake;
-    vtable.operate = linuxOperate;
-    vtable.processExecutablePath = linuxProcessExecutablePath;
-    vtable.lockStderr = linuxLockStderr;
-    vtable.tryLockStderr = linuxTryLockStderr;
-    vtable.unlockStderr = linuxUnlockStderr;
-    vtable.swapCancelProtection = linuxSwapCancelProtection;
-    vtable.dirOpenFile = linuxDirOpenFile;
-    vtable.fileReadPositional = linuxFileReadPositional;
-    vtable.fileClose = linuxFileClose;
-    break :blk vtable;
-};
+/// Builds the shim's std.Io vtable around one host's primitive operations.
+/// `Os` supplies the futex, executable-path, and open-file vtable entries
+/// directly, plus `read`/`write`/`pread`/`close` on a single handle and the
+/// `lockStderr`/`tryLockStderr`/`unlockStderr` hooks guarding the shared
+/// stderr writer.
+fn Shim(comptime Os: type) type {
+    return struct {
+        var stderr_writer: std.Io.File.Writer = undefined;
+        var stderr_writer_initialized = false;
 
-var stderr_writer: std.Io.File.Writer = undefined;
-var stderr_writer_initialized = false;
-
-fn linuxFutexWait(_: ?*anyopaque, ptr: *const u32, expected: u32, _: std.Io.Timeout) std.Io.Cancelable!void {
-    linuxFutexWaitUncancelable(null, ptr, expected);
-}
-
-fn linuxFutexWaitUncancelable(_: ?*anyopaque, ptr: *const u32, expected: u32) void {
-    if (builtin.single_threaded) unreachable;
-
-    const linux = std.os.linux;
-    const errno = linux.errno(linux.futex_4arg(
-        ptr,
-        .{ .cmd = .WAIT, .private = true },
-        expected,
-        null,
-    ));
-    if (errno == .SUCCESS or errno == .INTR or errno == .AGAIN or errno == .INVAL or errno == .TIMEDOUT) return;
-    unreachable;
-}
-
-fn linuxFutexWake(_: ?*anyopaque, ptr: *const u32, max_waiters: u32) void {
-    if (max_waiters == 0 or builtin.single_threaded) return;
-
-    const linux = std.os.linux;
-    const errno = linux.errno(linux.futex_3arg(
-        ptr,
-        .{ .cmd = .WAKE, .private = true },
-        @min(max_waiters, std.math.maxInt(i32)),
-    ));
-    if (errno == .SUCCESS or errno == .INVAL or errno == .FAULT) return;
-    unreachable;
-}
-
-fn linuxOperate(_: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
-    return switch (operation) {
-        .file_read_streaming => |op| .{ .file_read_streaming = linuxFileReadStreaming(op.file, op.data) },
-        .file_write_streaming => |op| .{ .file_write_streaming = linuxFileWriteStreaming(op.file, op.header, op.data, op.splat) },
-        .device_io_control => @panic("device_io_control unsupported in shim"),
-        .net_receive => .{ .net_receive = .{ error.NetworkDown, 0 } },
-        .net_send => .{ .net_send = .{ error.NetworkDown, 0 } },
-        .net_read => .{ .net_read = error.NetworkDown },
-        .net_write => .{ .net_write = error.NetworkDown },
-    };
-}
-
-fn linuxLockStderr(_: ?*anyopaque, terminal_mode: ?std.Io.Terminal.Mode) std.Io.Cancelable!std.Io.LockedStderr {
-    initStderrWriter();
-    return .{
-        .file_writer = &stderr_writer,
-        .terminal_mode = terminal_mode orelse .no_color,
-    };
-}
-
-fn linuxTryLockStderr(_: ?*anyopaque, _: ?std.Io.Terminal.Mode) std.Io.Cancelable!?std.Io.LockedStderr {
-    initStderrWriter();
-    return .{
-        .file_writer = &stderr_writer,
-        .terminal_mode = .no_color,
-    };
-}
-
-fn linuxUnlockStderr(_: ?*anyopaque) void {
-    if (stderr_writer.err == null) stderr_writer.interface.flush() catch {};
-    stderr_writer.err = null;
-    stderr_writer.interface.end = 0;
-    stderr_writer.interface.buffer = &.{};
-}
-
-fn linuxSwapCancelProtection(_: ?*anyopaque, _: std.Io.CancelProtection) std.Io.CancelProtection {
-    return .unblocked;
-}
-
-fn initStderrWriter() void {
-    if (stderr_writer_initialized) return;
-    stderr_writer = std.Io.File.stderr().writerStreaming(io(), &.{});
-    stderr_writer_initialized = true;
-}
-
-fn linuxProcessExecutablePath(_: ?*anyopaque, out_buffer: []u8) std.process.ExecutablePathError!usize {
-    const linux = std.os.linux;
-    const rc = linux.readlink("/proc/self/exe", out_buffer.ptr, out_buffer.len);
-    const errno = linux.errno(rc);
-    if (errno == .SUCCESS) return if (rc == out_buffer.len) error.NameTooLong else rc;
-    if (errno == .ACCES) return error.AccessDenied;
-    if (errno == .LOOP) return error.SymLinkLoop;
-    if (errno == .NAMETOOLONG) return error.NameTooLong;
-    if (errno == .NOENT) return error.FileNotFound;
-    if (errno == .NOMEM) return error.SystemResources;
-    if (errno == .NOTDIR) return error.NotDir;
-    return error.Unexpected;
-}
-
-fn linuxDirOpenFile(
-    _: ?*anyopaque,
-    dir: std.Io.Dir,
-    sub_path: []const u8,
-    options: std.Io.Dir.OpenFileOptions,
-) std.Io.File.OpenError!std.Io.File {
-    const linux = std.os.linux;
-
-    if (std.mem.findScalar(u8, sub_path, 0) != null) return error.BadPathName;
-    const sub_path_posix = std.posix.toPosixPath(sub_path) catch return error.NameTooLong;
-
-    var flags: linux.O = .{
-        .ACCMODE = switch (options.mode) {
-            .read_only => .RDONLY,
-            .write_only => .WRONLY,
-            .read_write => .RDWR,
-        },
-    };
-    if (@hasField(linux.O, "CLOEXEC")) flags.CLOEXEC = true;
-    if (@hasField(linux.O, "NOCTTY")) flags.NOCTTY = !options.allow_ctty;
-    if (@hasField(linux.O, "NOFOLLOW")) flags.NOFOLLOW = !options.follow_symlinks;
-    if (@hasField(linux.O, "PATH")) flags.PATH = options.path_only;
-
-    const rc = linux.openat(dir.handle, &sub_path_posix, flags, 0);
-    const errno = linux.errno(rc);
-    if (errno == .SUCCESS) {
-        return .{
-            .handle = @intCast(rc),
-            .flags = .{ .nonblocking = false },
+        const vtable: std.Io.VTable = blk: {
+            var result = std.Io.failing.vtable.*;
+            result.futexWait = futexWait;
+            result.futexWaitUncancelable = Os.futexWaitUncancelable;
+            result.futexWake = Os.futexWake;
+            result.operate = operate;
+            result.processExecutablePath = Os.processExecutablePath;
+            result.lockStderr = lockStderr;
+            result.tryLockStderr = tryLockStderr;
+            result.unlockStderr = unlockStderr;
+            result.swapCancelProtection = swapCancelProtection;
+            result.dirOpenFile = Os.dirOpenFile;
+            result.fileReadPositional = fileReadPositional;
+            result.fileClose = fileClose;
+            break :blk result;
         };
-    }
+
+        fn futexWait(_: ?*anyopaque, ptr: *const u32, expected: u32, _: std.Io.Timeout) std.Io.Cancelable!void {
+            Os.futexWaitUncancelable(null, ptr, expected);
+        }
+
+        fn operate(_: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
+            return switch (operation) {
+                .file_read_streaming => |op| .{ .file_read_streaming = fileReadStreaming(op.file, op.data) },
+                .file_write_streaming => |op| .{ .file_write_streaming = fileWriteStreaming(op.file, op.header, op.data, op.splat) },
+                .device_io_control => @panic("device_io_control unsupported in shim"),
+                .net_receive => .{ .net_receive = .{ error.NetworkDown, 0 } },
+                .net_send => .{ .net_send = .{ error.NetworkDown, 0 } },
+                .net_read => .{ .net_read = error.NetworkDown },
+                .net_write => .{ .net_write = error.NetworkDown },
+            };
+        }
+
+        fn initStderrWriter() void {
+            if (stderr_writer_initialized) return;
+            stderr_writer = std.Io.File.stderr().writerStreaming(io(), &.{});
+            stderr_writer_initialized = true;
+        }
+
+        fn lockStderr(_: ?*anyopaque, terminal_mode: ?std.Io.Terminal.Mode) std.Io.Cancelable!std.Io.LockedStderr {
+            initStderrWriter();
+            Os.lockStderr();
+            return .{
+                .file_writer = &stderr_writer,
+                .terminal_mode = terminal_mode orelse .no_color,
+            };
+        }
+
+        fn tryLockStderr(_: ?*anyopaque, _: ?std.Io.Terminal.Mode) std.Io.Cancelable!?std.Io.LockedStderr {
+            initStderrWriter();
+            if (!Os.tryLockStderr()) return null;
+            return .{
+                .file_writer = &stderr_writer,
+                .terminal_mode = .no_color,
+            };
+        }
+
+        fn unlockStderr(_: ?*anyopaque) void {
+            if (stderr_writer.err == null) stderr_writer.interface.flush() catch {};
+            stderr_writer.err = null;
+            stderr_writer.interface.end = 0;
+            stderr_writer.interface.buffer = &.{};
+            Os.unlockStderr();
+        }
+
+        fn swapCancelProtection(_: ?*anyopaque, _: std.Io.CancelProtection) std.Io.CancelProtection {
+            return .unblocked;
+        }
+
+        fn fileReadPositional(
+            _: ?*anyopaque,
+            file: std.Io.File,
+            data: []const []u8,
+            offset: u64,
+        ) std.Io.File.ReadPositionalError!usize {
+            var total: usize = 0;
+            for (data) |buffer| {
+                if (buffer.len == 0) continue;
+                const n = try Os.pread(file.handle, buffer, offset + total);
+                total += n;
+                if (n < buffer.len) break;
+            }
+            return total;
+        }
+
+        fn fileReadStreaming(
+            file: std.Io.File,
+            data: []const []u8,
+        ) std.Io.Operation.FileReadStreaming.Result {
+            for (data) |buffer| {
+                if (buffer.len == 0) continue;
+                return Os.read(file.handle, buffer);
+            }
+            return 0;
+        }
+
+        fn fileWriteStreaming(
+            file: std.Io.File,
+            header: []const u8,
+            data: []const []const u8,
+            splat: usize,
+        ) std.Io.Operation.FileWriteStreaming.Result {
+            var total: usize = 0;
+            if (header.len > 0) {
+                const n = try Os.write(file.handle, header);
+                total += n;
+                if (n < header.len) return total;
+            }
+            for (data, 0..) |buffer, index| {
+                const repeat_count = if (index == data.len - 1) splat else 1;
+                for (0..repeat_count) |_| {
+                    if (buffer.len == 0) continue;
+                    const n = try Os.write(file.handle, buffer);
+                    total += n;
+                    if (n < buffer.len) return total;
+                }
+            }
+            return total;
+        }
+
+        fn fileClose(_: ?*anyopaque, files: []const std.Io.File) void {
+            for (files) |file| Os.close(file.handle);
+        }
+    };
+}
+
+/// Maps a failed POSIX `openat` errno (Linux or libc) to `std.Io.File.OpenError`.
+fn posixOpenError(errno: anytype) std.Io.File.OpenError {
     if (errno == .ACCES) return error.AccessDenied;
     if (errno == .AGAIN) return error.WouldBlock;
     if (errno == .BUSY) return error.DeviceBusy;
@@ -273,146 +270,165 @@ fn linuxDirOpenFile(
     return error.Unexpected;
 }
 
-fn linuxFileReadPositional(
-    _: ?*anyopaque,
-    file: std.Io.File,
-    data: []const []u8,
-    offset: u64,
-) std.Io.File.ReadPositionalError!usize {
-    var total: usize = 0;
-
-    for (data) |buffer| {
-        if (buffer.len == 0) continue;
-        const n = try linuxPread(file.handle, buffer, offset + total);
-        total += n;
-        if (n < buffer.len) break;
-    }
-
-    return total;
+/// Maps a failed POSIX `read` errno other than `INTR` to its streaming-read error.
+fn posixReadError(errno: anytype) std.Io.Operation.FileReadStreaming.Error {
+    if (errno == .AGAIN) return error.WouldBlock;
+    if (errno == .BADF) return error.NotOpenForReading;
+    if (errno == .IO) return error.InputOutput;
+    if (errno == .ISDIR) return error.IsDir;
+    if (errno == .NOBUFS or errno == .NOMEM) return error.SystemResources;
+    if (errno == .NOTCONN) return error.SocketUnconnected;
+    if (errno == .CONNRESET) return error.ConnectionResetByPeer;
+    return error.Unexpected;
 }
 
-fn linuxFileReadStreaming(
-    file: std.Io.File,
-    data: []const []u8,
-) std.Io.Operation.FileReadStreaming.Result {
-    for (data) |buffer| {
-        if (buffer.len == 0) continue;
-        return linuxRead(file.handle, buffer);
-    }
-
-    return 0;
+/// Maps a failed POSIX `pread` errno other than `INTR` to its positional-read error.
+fn posixPreadError(errno: anytype) std.Io.File.ReadPositionalError {
+    if (errno == .AGAIN) return error.WouldBlock;
+    if (errno == .BADF) return error.NotOpenForReading;
+    if (errno == .IO) return error.InputOutput;
+    if (errno == .ISDIR) return error.IsDir;
+    if (errno == .NOBUFS or errno == .NOMEM) return error.SystemResources;
+    if (errno == .NXIO or errno == .SPIPE or errno == .OVERFLOW) return error.Unseekable;
+    return error.Unexpected;
 }
 
-fn linuxRead(fd: std.posix.fd_t, buffer: []u8) std.Io.Operation.FileReadStreaming.Result {
-    const linux = std.os.linux;
+/// Linux primitives for `Shim`, issued as raw syscalls.
+const linux_os = struct {
+    fn futexWaitUncancelable(_: ?*anyopaque, ptr: *const u32, expected: u32) void {
+        if (builtin.single_threaded) unreachable;
 
-    while (true) {
-        const rc = linux.read(fd, buffer.ptr, buffer.len);
+        const linux = std.os.linux;
+        const errno = linux.errno(linux.futex_4arg(
+            ptr,
+            .{ .cmd = .WAIT, .private = true },
+            expected,
+            null,
+        ));
+        if (errno == .SUCCESS or errno == .INTR or errno == .AGAIN or errno == .INVAL or errno == .TIMEDOUT) return;
+        unreachable;
+    }
+
+    fn futexWake(_: ?*anyopaque, ptr: *const u32, max_waiters: u32) void {
+        if (max_waiters == 0 or builtin.single_threaded) return;
+
+        const linux = std.os.linux;
+        const errno = linux.errno(linux.futex_3arg(
+            ptr,
+            .{ .cmd = .WAKE, .private = true },
+            @min(max_waiters, std.math.maxInt(i32)),
+        ));
+        if (errno == .SUCCESS or errno == .INVAL or errno == .FAULT) return;
+        unreachable;
+    }
+
+    fn lockStderr() void {}
+
+    fn tryLockStderr() bool {
+        return true;
+    }
+
+    fn unlockStderr() void {}
+
+    fn processExecutablePath(_: ?*anyopaque, out_buffer: []u8) std.process.ExecutablePathError!usize {
+        const linux = std.os.linux;
+        const rc = linux.readlink("/proc/self/exe", out_buffer.ptr, out_buffer.len);
         const errno = linux.errno(rc);
-        if (errno == .SUCCESS) return if (rc == 0) error.EndOfStream else rc;
-        if (errno == .INTR) continue;
-        if (errno == .AGAIN) return error.WouldBlock;
-        if (errno == .BADF) return error.NotOpenForReading;
-        if (errno == .IO) return error.InputOutput;
-        if (errno == .ISDIR) return error.IsDir;
-        if (errno == .NOBUFS or errno == .NOMEM) return error.SystemResources;
-        if (errno == .NOTCONN) return error.SocketUnconnected;
-        if (errno == .CONNRESET) return error.ConnectionResetByPeer;
+        if (errno == .SUCCESS) return if (rc == out_buffer.len) error.NameTooLong else rc;
+        if (errno == .ACCES) return error.AccessDenied;
+        if (errno == .LOOP) return error.SymLinkLoop;
+        if (errno == .NAMETOOLONG) return error.NameTooLong;
+        if (errno == .NOENT) return error.FileNotFound;
+        if (errno == .NOMEM) return error.SystemResources;
+        if (errno == .NOTDIR) return error.NotDir;
         return error.Unexpected;
     }
-}
 
-fn linuxFileWriteStreaming(
-    file: std.Io.File,
-    header: []const u8,
-    data: []const []const u8,
-    splat: usize,
-) std.Io.Operation.FileWriteStreaming.Result {
-    var total: usize = 0;
+    fn dirOpenFile(
+        _: ?*anyopaque,
+        dir: std.Io.Dir,
+        sub_path: []const u8,
+        options: std.Io.Dir.OpenFileOptions,
+    ) std.Io.File.OpenError!std.Io.File {
+        const linux = std.os.linux;
 
-    if (header.len > 0) {
-        const n = try linuxWrite(file.handle, header);
-        total += n;
-        if (n < header.len) return total;
+        if (std.mem.findScalar(u8, sub_path, 0) != null) return error.BadPathName;
+        const sub_path_posix = std.posix.toPosixPath(sub_path) catch return error.NameTooLong;
+
+        var flags: linux.O = .{
+            .ACCMODE = switch (options.mode) {
+                .read_only => .RDONLY,
+                .write_only => .WRONLY,
+                .read_write => .RDWR,
+            },
+        };
+        if (@hasField(linux.O, "CLOEXEC")) flags.CLOEXEC = true;
+        if (@hasField(linux.O, "NOCTTY")) flags.NOCTTY = !options.allow_ctty;
+        if (@hasField(linux.O, "NOFOLLOW")) flags.NOFOLLOW = !options.follow_symlinks;
+        if (@hasField(linux.O, "PATH")) flags.PATH = options.path_only;
+
+        const rc = linux.openat(dir.handle, &sub_path_posix, flags, 0);
+        const errno = linux.errno(rc);
+        if (errno == .SUCCESS) {
+            return .{
+                .handle = @intCast(rc),
+                .flags = .{ .nonblocking = false },
+            };
+        }
+        return posixOpenError(errno);
     }
 
-    for (data, 0..) |buffer, index| {
-        const repeat_count = if (index == data.len - 1) splat else 1;
-        for (0..repeat_count) |_| {
-            if (buffer.len == 0) continue;
-            const n = try linuxWrite(file.handle, buffer);
-            total += n;
-            if (n < buffer.len) return total;
+    fn read(fd: std.posix.fd_t, buffer: []u8) std.Io.Operation.FileReadStreaming.Result {
+        const linux = std.os.linux;
+
+        while (true) {
+            const rc = linux.read(fd, buffer.ptr, buffer.len);
+            const errno = linux.errno(rc);
+            if (errno == .SUCCESS) return if (rc == 0) error.EndOfStream else rc;
+            if (errno == .INTR) continue;
+            return posixReadError(errno);
         }
     }
 
-    return total;
-}
+    fn write(fd: std.posix.fd_t, buffer: []const u8) std.Io.Operation.FileWriteStreaming.Result {
+        const linux = std.os.linux;
 
-fn linuxWrite(fd: std.posix.fd_t, buffer: []const u8) std.Io.Operation.FileWriteStreaming.Result {
-    const linux = std.os.linux;
-
-    while (true) {
-        const rc = linux.write(fd, buffer.ptr, buffer.len);
-        const errno = linux.errno(rc);
-        if (errno == .SUCCESS) return rc;
-        if (errno == .INTR) continue;
-        if (errno == .AGAIN) return error.WouldBlock;
-        if (errno == .BADF) return error.NotOpenForWriting;
-        if (errno == .BUSY) return error.DeviceBusy;
-        if (errno == .DQUOT) return error.DiskQuota;
-        if (errno == .FBIG) return error.FileTooBig;
-        if (errno == .IO) return error.InputOutput;
-        if (errno == .NODEV or errno == .NXIO) return error.NoDevice;
-        if (errno == .NOSPC) return error.NoSpaceLeft;
-        if (errno == .PERM) return error.PermissionDenied;
-        if (errno == .PIPE) return error.BrokenPipe;
-        if (errno == .TXTBSY) return error.FileBusy;
-        return error.Unexpected;
+        while (true) {
+            const rc = linux.write(fd, buffer.ptr, buffer.len);
+            const errno = linux.errno(rc);
+            if (errno == .SUCCESS) return rc;
+            if (errno == .INTR) continue;
+            if (errno == .AGAIN) return error.WouldBlock;
+            if (errno == .BADF) return error.NotOpenForWriting;
+            if (errno == .BUSY) return error.DeviceBusy;
+            if (errno == .DQUOT) return error.DiskQuota;
+            if (errno == .FBIG) return error.FileTooBig;
+            if (errno == .IO) return error.InputOutput;
+            if (errno == .NODEV or errno == .NXIO) return error.NoDevice;
+            if (errno == .NOSPC) return error.NoSpaceLeft;
+            if (errno == .PERM) return error.PermissionDenied;
+            if (errno == .PIPE) return error.BrokenPipe;
+            if (errno == .TXTBSY) return error.FileBusy;
+            return error.Unexpected;
+        }
     }
-}
 
-fn linuxPread(fd: std.posix.fd_t, buffer: []u8, offset: u64) std.Io.File.ReadPositionalError!usize {
-    const linux = std.os.linux;
-    const signed_offset = std.math.cast(i64, offset) orelse return error.Unseekable;
+    fn pread(fd: std.posix.fd_t, buffer: []u8, offset: u64) std.Io.File.ReadPositionalError!usize {
+        const linux = std.os.linux;
+        const signed_offset = std.math.cast(i64, offset) orelse return error.Unseekable;
 
-    while (true) {
-        const rc = linux.pread(fd, buffer.ptr, buffer.len, signed_offset);
-        const errno = linux.errno(rc);
-        if (errno == .SUCCESS) return rc;
-        if (errno == .INTR) continue;
-        if (errno == .AGAIN) return error.WouldBlock;
-        if (errno == .BADF) return error.NotOpenForReading;
-        if (errno == .IO) return error.InputOutput;
-        if (errno == .ISDIR) return error.IsDir;
-        if (errno == .NOBUFS or errno == .NOMEM) return error.SystemResources;
-        if (errno == .NXIO or errno == .SPIPE or errno == .OVERFLOW) return error.Unseekable;
-        return error.Unexpected;
+        while (true) {
+            const rc = linux.pread(fd, buffer.ptr, buffer.len, signed_offset);
+            const errno = linux.errno(rc);
+            if (errno == .SUCCESS) return rc;
+            if (errno == .INTR) continue;
+            return posixPreadError(errno);
+        }
     }
-}
 
-fn linuxFileClose(_: ?*anyopaque, files: []const std.Io.File) void {
-    const linux = std.os.linux;
-    for (files) |file| {
-        _ = linux.close(file.handle);
+    fn close(fd: std.posix.fd_t) void {
+        _ = std.os.linux.close(fd);
     }
-}
-
-const windows_vtable: std.Io.VTable = blk: {
-    var vtable = std.Io.failing.vtable.*;
-    vtable.futexWait = windowsFutexWait;
-    vtable.futexWaitUncancelable = windowsFutexWaitUncancelable;
-    vtable.futexWake = windowsFutexWake;
-    vtable.operate = windowsOperate;
-    vtable.processExecutablePath = windowsProcessExecutablePath;
-    vtable.lockStderr = windowsLockStderr;
-    vtable.tryLockStderr = windowsTryLockStderr;
-    vtable.unlockStderr = windowsUnlockStderr;
-    vtable.swapCancelProtection = windowsSwapCancelProtection;
-    vtable.dirOpenFile = windowsDirOpenFile;
-    vtable.fileReadPositional = windowsFileReadPositional;
-    vtable.fileClose = windowsFileClose;
-    break :blk vtable;
 };
 
 const win = struct {
@@ -486,543 +502,307 @@ const win = struct {
     ) callconv(.winapi) HANDLE;
 };
 
-var windows_stderr_writer: std.Io.File.Writer = undefined;
-var windows_stderr_writer_initialized = false;
 var windows_stderr_lock: win.SRWLOCK = .{};
 
-fn windowsInitStderrWriter() void {
-    if (windows_stderr_writer_initialized) return;
-    windows_stderr_writer = std.Io.File.stderr().writerStreaming(io(), &.{});
-    windows_stderr_writer_initialized = true;
-}
-
-// RtlWaitOnAddress is the Windows futex analogue (available since Win8).
-fn windowsFutexWait(_: ?*anyopaque, ptr: *const u32, expected: u32, _: std.Io.Timeout) std.Io.Cancelable!void {
-    windowsFutexWaitUncancelable(null, ptr, expected);
-}
-
-fn windowsFutexWaitUncancelable(_: ?*anyopaque, ptr: *const u32, expected: u32) void {
-    if (builtin.single_threaded) unreachable;
-    var compare = expected;
-    _ = std.os.windows.ntdll.RtlWaitOnAddress(
-        @ptrCast(ptr),
-        @ptrCast(&compare),
-        @sizeOf(u32),
-        null,
-    );
-}
-
-fn windowsFutexWake(_: ?*anyopaque, ptr: *const u32, max_waiters: u32) void {
-    if (max_waiters == 0 or builtin.single_threaded) return;
-    if (max_waiters == 1) {
-        std.os.windows.ntdll.RtlWakeAddressSingle(@ptrCast(ptr));
-    } else {
-        std.os.windows.ntdll.RtlWakeAddressAll(@ptrCast(ptr));
-    }
-}
-
-fn windowsOperate(_: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
-    return switch (operation) {
-        .file_read_streaming => |op| .{ .file_read_streaming = windowsFileReadStreaming(op.file, op.data) },
-        .file_write_streaming => |op| .{ .file_write_streaming = windowsFileWriteStreaming(op.file, op.header, op.data, op.splat) },
-        .device_io_control => @panic("device_io_control unsupported in shim"),
-        .net_receive => .{ .net_receive = .{ error.NetworkDown, 0 } },
-        .net_send => .{ .net_send = .{ error.NetworkDown, 0 } },
-        .net_read => .{ .net_read = error.NetworkDown },
-        .net_write => .{ .net_write = error.NetworkDown },
-    };
-}
-
-fn windowsLockStderr(_: ?*anyopaque, terminal_mode: ?std.Io.Terminal.Mode) std.Io.Cancelable!std.Io.LockedStderr {
-    windowsInitStderrWriter();
-    std.os.windows.ntdll.RtlAcquireSRWLockExclusive(&windows_stderr_lock);
-    return .{
-        .file_writer = &windows_stderr_writer,
-        .terminal_mode = terminal_mode orelse .no_color,
-    };
-}
-
-fn windowsTryLockStderr(_: ?*anyopaque, _: ?std.Io.Terminal.Mode) std.Io.Cancelable!?std.Io.LockedStderr {
-    windowsInitStderrWriter();
-    if (std.os.windows.ntdll.RtlTryAcquireSRWLockExclusive(&windows_stderr_lock) == .FALSE) return null;
-    return .{
-        .file_writer = &windows_stderr_writer,
-        .terminal_mode = .no_color,
-    };
-}
-
-fn windowsUnlockStderr(_: ?*anyopaque) void {
-    if (windows_stderr_writer.err == null) windows_stderr_writer.interface.flush() catch {};
-    windows_stderr_writer.err = null;
-    windows_stderr_writer.interface.end = 0;
-    windows_stderr_writer.interface.buffer = &.{};
-    std.os.windows.ntdll.RtlReleaseSRWLockExclusive(&windows_stderr_lock);
-}
-
-fn windowsSwapCancelProtection(_: ?*anyopaque, _: std.Io.CancelProtection) std.Io.CancelProtection {
-    return .unblocked;
-}
-
-fn windowsProcessExecutablePath(_: ?*anyopaque, out_buffer: []u8) std.process.ExecutablePathError!usize {
-    var wbuf: [std.os.windows.PATH_MAX_WIDE]u16 = undefined;
-    const n = win.GetModuleFileNameW(null, &wbuf, wbuf.len);
-    if (n == 0) return error.Unexpected;
-    if (n == wbuf.len) {
-        // Buffer too small per Win32 docs; also signaled via GetLastError == ERROR_INSUFFICIENT_BUFFER.
-        return error.NameTooLong;
-    }
-    const wide_slice = wbuf[0..n];
-    const required = std.unicode.calcWtf8Len(wide_slice);
-    if (required > out_buffer.len) return error.NameTooLong;
-    return std.unicode.wtf16LeToWtf8(out_buffer, wide_slice);
-}
-
-fn windowsFileReadStreaming(
-    file: std.Io.File,
-    data: []const []u8,
-) std.Io.Operation.FileReadStreaming.Result {
-    for (data) |buffer| {
-        if (buffer.len == 0) continue;
-        return windowsRead(file.handle, buffer);
-    }
-    return 0;
-}
-
-fn windowsRead(handle: std.posix.fd_t, buffer: []u8) std.Io.Operation.FileReadStreaming.Result {
-    const want: u32 = @intCast(@min(buffer.len, std.math.maxInt(u32)));
-    var read_count: win.DWORD = 0;
-    if (win.ReadFile(handle, buffer.ptr, want, &read_count, null) == .FALSE) {
-        const last_error = std.os.windows.GetLastError();
-        if (last_error == .BROKEN_PIPE or last_error == .HANDLE_EOF) return error.EndOfStream;
-        if (last_error == .NO_DATA) return error.WouldBlock;
-        if (last_error == .INVALID_HANDLE) return error.NotOpenForReading;
-        if (last_error == .ACCESS_DENIED) return error.AccessDenied;
-        if (last_error == .LOCK_VIOLATION) return error.LockViolation;
-        if (last_error == .IO_DEVICE or last_error == .CRC or last_error == .NET_WRITE_FAULT) return error.InputOutput;
-        return error.Unexpected;
-    }
-    if (read_count == 0) return error.EndOfStream;
-    return read_count;
-}
-
-fn windowsFileWriteStreaming(
-    file: std.Io.File,
-    header: []const u8,
-    data: []const []const u8,
-    splat: usize,
-) std.Io.Operation.FileWriteStreaming.Result {
-    var total: usize = 0;
-
-    if (header.len > 0) {
-        const n = try windowsWrite(file.handle, header);
-        total += n;
-        if (n < header.len) return total;
+/// Windows primitives for `Shim`, issued through Win32 and ntdll.
+const windows_os = struct {
+    // RtlWaitOnAddress is the Windows futex analogue (available since Win8).
+    fn futexWaitUncancelable(_: ?*anyopaque, ptr: *const u32, expected: u32) void {
+        if (builtin.single_threaded) unreachable;
+        var compare = expected;
+        _ = std.os.windows.ntdll.RtlWaitOnAddress(
+            @ptrCast(ptr),
+            @ptrCast(&compare),
+            @sizeOf(u32),
+            null,
+        );
     }
 
-    for (data, 0..) |buffer, index| {
-        const repeat_count = if (index == data.len - 1) splat else 1;
-        for (0..repeat_count) |_| {
-            if (buffer.len == 0) continue;
-            const n = try windowsWrite(file.handle, buffer);
-            total += n;
-            if (n < buffer.len) return total;
+    fn futexWake(_: ?*anyopaque, ptr: *const u32, max_waiters: u32) void {
+        if (max_waiters == 0 or builtin.single_threaded) return;
+        if (max_waiters == 1) {
+            std.os.windows.ntdll.RtlWakeAddressSingle(@ptrCast(ptr));
+        } else {
+            std.os.windows.ntdll.RtlWakeAddressAll(@ptrCast(ptr));
         }
     }
 
-    return total;
-}
-
-fn windowsWrite(handle: std.posix.fd_t, buffer: []const u8) std.Io.Operation.FileWriteStreaming.Result {
-    const want: u32 = @intCast(@min(buffer.len, std.math.maxInt(u32)));
-    var written: win.DWORD = 0;
-    if (win.WriteFile(handle, buffer.ptr, want, &written, null) == .FALSE) {
-        const last_error = std.os.windows.GetLastError();
-        if (last_error == .INVALID_USER_BUFFER or last_error == .NOT_ENOUGH_MEMORY or last_error == .NOT_ENOUGH_QUOTA) return error.SystemResources;
-        if (last_error == .BROKEN_PIPE or last_error == .NETNAME_DELETED) return error.BrokenPipe;
-        if (last_error == .INVALID_HANDLE) return error.NotOpenForWriting;
-        if (last_error == .LOCK_VIOLATION) return error.LockViolation;
-        if (last_error == .ACCESS_DENIED) return error.AccessDenied;
-        if (last_error == .IO_DEVICE or last_error == .CRC or last_error == .NET_WRITE_FAULT) return error.InputOutput;
-        if (last_error == .DISK_FULL or last_error == .HANDLE_DISK_FULL) return error.NoSpaceLeft;
-        if (last_error == .NO_DATA) return error.WouldBlock;
-        return error.Unexpected;
-    }
-    return written;
-}
-
-fn windowsDirOpenFile(
-    _: ?*anyopaque,
-    _: std.Io.Dir,
-    sub_path: []const u8,
-    options: std.Io.Dir.OpenFileOptions,
-) std.Io.File.OpenError!std.Io.File {
-    // sub_path is WTF-8 on Windows; convert to a NUL-terminated WTF-16 path.
-    // We use the simple Win32 CreateFileW path (rather than NtCreateFile) to
-    // keep the shim small. Relative paths are resolved against the process cwd
-    // rather than `dir.handle`; this is sufficient for the small coordination
-    // file the shim needs, which is always specified by absolute path.
-    var path_w_buf: [std.os.windows.PATH_MAX_WIDE + 1]u16 = undefined;
-    const path_w_len = std.unicode.wtf8ToWtf16Le(&path_w_buf, sub_path) catch return error.BadPathName;
-    if (path_w_len >= path_w_buf.len) return error.NameTooLong;
-    path_w_buf[path_w_len] = 0;
-    const path_w: [*:0]const u16 = @ptrCast(&path_w_buf);
-
-    var desired_access: win.DWORD = 0;
-    switch (options.mode) {
-        .read_only => desired_access |= win.GENERIC_READ,
-        .write_only => desired_access |= win.GENERIC_WRITE,
-        .read_write => desired_access |= win.GENERIC_READ | win.GENERIC_WRITE,
+    fn lockStderr() void {
+        std.os.windows.ntdll.RtlAcquireSRWLockExclusive(&windows_stderr_lock);
     }
 
-    const share_mode = win.FILE_SHARE_READ | win.FILE_SHARE_WRITE | win.FILE_SHARE_DELETE;
-
-    var flags_and_attrs: win.DWORD = win.FILE_ATTRIBUTE_NORMAL;
-    if (options.allow_directory) flags_and_attrs |= win.FILE_FLAG_BACKUP_SEMANTICS;
-
-    const handle = win.CreateFileW(
-        path_w,
-        desired_access,
-        share_mode,
-        null,
-        win.OPEN_EXISTING,
-        flags_and_attrs,
-        null,
-    );
-    if (handle == win.INVALID_HANDLE_VALUE) {
-        const last_error = std.os.windows.GetLastError();
-        if (last_error == .FILE_NOT_FOUND or last_error == .PATH_NOT_FOUND) return error.FileNotFound;
-        if (last_error == .ACCESS_DENIED) return error.AccessDenied;
-        if (last_error == .SHARING_VIOLATION) return error.FileBusy;
-        if (last_error == .PIPE_BUSY) return error.PipeBusy;
-        if (last_error == .INVALID_NAME or last_error == .BAD_PATHNAME) return error.BadPathName;
-        // ERROR_DIRECTORY = "The directory name is invalid"; closest match
-        // for the OpenError set is NotDir.
-        if (last_error == .DIRECTORY) return error.NotDir;
-        if (last_error == .NOT_ENOUGH_MEMORY or last_error == .OUTOFMEMORY) return error.SystemResources;
-        if (last_error == .TOO_MANY_OPEN_FILES) return error.ProcessFdQuotaExceeded;
-        if (last_error == .NETNAME_DELETED or last_error == .BAD_NETPATH) return error.NetworkNotFound;
-        return error.Unexpected;
+    fn tryLockStderr() bool {
+        return std.os.windows.ntdll.RtlTryAcquireSRWLockExclusive(&windows_stderr_lock) != .FALSE;
     }
-    return .{
-        .handle = handle,
-        .flags = .{ .nonblocking = false },
-    };
-}
 
-fn windowsFileReadPositional(
-    _: ?*anyopaque,
-    file: std.Io.File,
-    data: []const []u8,
-    offset: u64,
-) std.Io.File.ReadPositionalError!usize {
-    var total: usize = 0;
-    for (data) |buffer| {
-        if (buffer.len == 0) continue;
-        const n = try windowsPread(file.handle, buffer, offset + total);
-        total += n;
-        if (n < buffer.len) break;
+    fn unlockStderr() void {
+        std.os.windows.ntdll.RtlReleaseSRWLockExclusive(&windows_stderr_lock);
     }
-    return total;
-}
 
-fn windowsPread(handle: std.posix.fd_t, buffer: []u8, offset: u64) std.Io.File.ReadPositionalError!usize {
-    const want: u32 = @intCast(@min(buffer.len, std.math.maxInt(u32)));
-    var overlapped: win.OVERLAPPED = .{
-        .Internal = 0,
-        .InternalHigh = 0,
-        .DUMMY = .{ .Offset = .{
-            .Low = @truncate(offset),
-            .High = @truncate(offset >> 32),
-        } },
-        .hEvent = null,
-    };
-    var read_count: win.DWORD = 0;
-    if (win.ReadFile(handle, buffer.ptr, want, &read_count, &overlapped) == .FALSE) {
-        const last_error = std.os.windows.GetLastError();
-        if (last_error == .HANDLE_EOF or last_error == .BROKEN_PIPE) return 0;
-        if (last_error == .INVALID_HANDLE) return error.NotOpenForReading;
-        if (last_error == .ACCESS_DENIED) return error.AccessDenied;
-        if (last_error == .LOCK_VIOLATION) return error.LockViolation;
-        if (last_error == .IO_DEVICE or last_error == .CRC or last_error == .NET_WRITE_FAULT) return error.InputOutput;
-        if (last_error == .NO_DATA) return error.WouldBlock;
-        return error.Unexpected;
+    fn processExecutablePath(_: ?*anyopaque, out_buffer: []u8) std.process.ExecutablePathError!usize {
+        var wbuf: [std.os.windows.PATH_MAX_WIDE]u16 = undefined;
+        const n = win.GetModuleFileNameW(null, &wbuf, wbuf.len);
+        if (n == 0) return error.Unexpected;
+        if (n == wbuf.len) {
+            // Buffer too small per Win32 docs; also signaled via GetLastError == ERROR_INSUFFICIENT_BUFFER.
+            return error.NameTooLong;
+        }
+        const wide_slice = wbuf[0..n];
+        const required = std.unicode.calcWtf8Len(wide_slice);
+        if (required > out_buffer.len) return error.NameTooLong;
+        return std.unicode.wtf16LeToWtf8(out_buffer, wide_slice);
     }
-    return read_count;
-}
 
-fn windowsFileClose(_: ?*anyopaque, files: []const std.Io.File) void {
-    for (files) |file| {
-        _ = win.CloseHandle(file.handle);
-    }
-}
+    fn dirOpenFile(
+        _: ?*anyopaque,
+        _: std.Io.Dir,
+        sub_path: []const u8,
+        options: std.Io.Dir.OpenFileOptions,
+    ) std.Io.File.OpenError!std.Io.File {
+        // sub_path is WTF-8 on Windows; convert to a NUL-terminated WTF-16 path.
+        // We use the simple Win32 CreateFileW path (rather than NtCreateFile) to
+        // keep the shim small. Relative paths are resolved against the process cwd
+        // rather than `dir.handle`; this is sufficient for the small coordination
+        // file the shim needs, which is always specified by absolute path.
+        var path_w_buf: [std.os.windows.PATH_MAX_WIDE + 1]u16 = undefined;
+        const path_w_len = std.unicode.wtf8ToWtf16Le(&path_w_buf, sub_path) catch return error.BadPathName;
+        if (path_w_len >= path_w_buf.len) return error.NameTooLong;
+        path_w_buf[path_w_len] = 0;
+        const path_w: [*:0]const u16 = @ptrCast(&path_w_buf);
 
-const macos_vtable: std.Io.VTable = blk: {
-    var vtable = std.Io.failing.vtable.*;
-    vtable.futexWait = macosFutexWait;
-    vtable.futexWaitUncancelable = macosFutexWaitUncancelable;
-    vtable.futexWake = macosFutexWake;
-    vtable.operate = macosOperate;
-    vtable.processExecutablePath = macosProcessExecutablePath;
-    vtable.lockStderr = macosLockStderr;
-    vtable.tryLockStderr = macosTryLockStderr;
-    vtable.unlockStderr = macosUnlockStderr;
-    vtable.swapCancelProtection = macosSwapCancelProtection;
-    vtable.dirOpenFile = macosDirOpenFile;
-    vtable.fileReadPositional = macosFileReadPositional;
-    vtable.fileClose = macosFileClose;
-    break :blk vtable;
-};
+        var desired_access: win.DWORD = 0;
+        switch (options.mode) {
+            .read_only => desired_access |= win.GENERIC_READ,
+            .write_only => desired_access |= win.GENERIC_WRITE,
+            .read_write => desired_access |= win.GENERIC_READ | win.GENERIC_WRITE,
+        }
 
-var macos_stderr_writer: std.Io.File.Writer = undefined;
-var macos_stderr_writer_initialized = false;
-var macos_stderr_lock: std.c.os_unfair_lock = .{};
+        const share_mode = win.FILE_SHARE_READ | win.FILE_SHARE_WRITE | win.FILE_SHARE_DELETE;
 
-fn macosInitStderrWriter() void {
-    if (macos_stderr_writer_initialized) return;
-    macos_stderr_writer = std.Io.File.stderr().writerStreaming(io(), &.{});
-    macos_stderr_writer_initialized = true;
-}
+        var flags_and_attrs: win.DWORD = win.FILE_ATTRIBUTE_NORMAL;
+        if (options.allow_directory) flags_and_attrs |= win.FILE_FLAG_BACKUP_SEMANTICS;
 
-fn macosFutexWait(_: ?*anyopaque, ptr: *const u32, expected: u32, _: std.Io.Timeout) std.Io.Cancelable!void {
-    macosFutexWaitUncancelable(null, ptr, expected);
-}
-
-fn macosFutexWaitUncancelable(_: ?*anyopaque, ptr: *const u32, expected: u32) void {
-    if (builtin.single_threaded) unreachable;
-    const flags: std.c.UL = .{ .op = .COMPARE_AND_WAIT, .NO_ERRNO = true };
-    const status = std.c.__ulock_wait(flags, ptr, expected, 0);
-    if (status >= 0) return;
-    const errno: std.c.E = @fromBackingInt(@intCast(-status));
-    if (errno == .INTR or errno == .FAULT or errno == .TIMEDOUT) return;
-    unreachable;
-}
-
-fn macosFutexWake(_: ?*anyopaque, ptr: *const u32, max_waiters: u32) void {
-    if (max_waiters == 0 or builtin.single_threaded) return;
-    const flags: std.c.UL = .{
-        .op = .COMPARE_AND_WAIT,
-        .NO_ERRNO = true,
-        .WAKE_ALL = max_waiters > 1,
-    };
-    while (true) {
-        const status = std.c.__ulock_wake(flags, ptr, 0);
-        if (status >= 0) return;
-        const errno: std.c.E = @fromBackingInt(@intCast(-status));
-        if (errno == .INTR) continue;
-        if (errno == .NOENT) return;
-        unreachable;
-    }
-}
-
-fn macosOperate(_: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
-    return switch (operation) {
-        .file_read_streaming => |op| .{ .file_read_streaming = macosFileReadStreaming(op.file, op.data) },
-        .file_write_streaming => |op| .{ .file_write_streaming = macosFileWriteStreaming(op.file, op.header, op.data, op.splat) },
-        .device_io_control => @panic("device_io_control unsupported in shim"),
-        .net_receive => .{ .net_receive = .{ error.NetworkDown, 0 } },
-        .net_send => .{ .net_send = .{ error.NetworkDown, 0 } },
-        .net_read => .{ .net_read = error.NetworkDown },
-        .net_write => .{ .net_write = error.NetworkDown },
-    };
-}
-
-fn macosLockStderr(_: ?*anyopaque, terminal_mode: ?std.Io.Terminal.Mode) std.Io.Cancelable!std.Io.LockedStderr {
-    macosInitStderrWriter();
-    std.c.os_unfair_lock_lock(&macos_stderr_lock);
-    return .{
-        .file_writer = &macos_stderr_writer,
-        .terminal_mode = terminal_mode orelse .no_color,
-    };
-}
-
-fn macosTryLockStderr(_: ?*anyopaque, _: ?std.Io.Terminal.Mode) std.Io.Cancelable!?std.Io.LockedStderr {
-    macosInitStderrWriter();
-    if (!std.c.os_unfair_lock_trylock(&macos_stderr_lock)) return null;
-    return .{
-        .file_writer = &macos_stderr_writer,
-        .terminal_mode = .no_color,
-    };
-}
-
-fn macosUnlockStderr(_: ?*anyopaque) void {
-    if (macos_stderr_writer.err == null) macos_stderr_writer.interface.flush() catch {};
-    macos_stderr_writer.err = null;
-    macos_stderr_writer.interface.end = 0;
-    macos_stderr_writer.interface.buffer = &.{};
-    std.c.os_unfair_lock_unlock(&macos_stderr_lock);
-}
-
-fn macosSwapCancelProtection(_: ?*anyopaque, _: std.Io.CancelProtection) std.Io.CancelProtection {
-    return .unblocked;
-}
-
-fn macosProcessExecutablePath(_: ?*anyopaque, out_buffer: []u8) std.process.ExecutablePathError!usize {
-    var n: u32 = std.math.cast(u32, out_buffer.len) orelse std.math.maxInt(u32);
-    const rc = std.c._NSGetExecutablePath(out_buffer.ptr, &n);
-    if (rc != 0) return error.NameTooLong;
-    // _NSGetExecutablePath writes a NUL-terminated string; n is set to the
-    // required buffer size including NUL on overflow, but on success it does
-    // not update n. Determine the actual length from the NUL terminator.
-    return std.mem.findScalar(u8, out_buffer, 0) orelse out_buffer.len;
-}
-
-fn macosDirOpenFile(
-    _: ?*anyopaque,
-    dir: std.Io.Dir,
-    sub_path: []const u8,
-    options: std.Io.Dir.OpenFileOptions,
-) std.Io.File.OpenError!std.Io.File {
-    if (std.mem.findScalar(u8, sub_path, 0) != null) return error.BadPathName;
-    const sub_path_posix = std.posix.toPosixPath(sub_path) catch return error.NameTooLong;
-
-    var flags: std.c.O = .{
-        .ACCMODE = switch (options.mode) {
-            .read_only => .RDONLY,
-            .write_only => .WRONLY,
-            .read_write => .RDWR,
-        },
-        .CLOEXEC = true,
-        .NOCTTY = !options.allow_ctty,
-        .NOFOLLOW = !options.follow_symlinks,
-    };
-    _ = &flags;
-
-    const rc = std.c.openat(dir.handle, &sub_path_posix, flags, @as(std.c.mode_t, 0));
-    const errno = std.c.errno(rc);
-    if (errno == .SUCCESS) {
+        const handle = win.CreateFileW(
+            path_w,
+            desired_access,
+            share_mode,
+            null,
+            win.OPEN_EXISTING,
+            flags_and_attrs,
+            null,
+        );
+        if (handle == win.INVALID_HANDLE_VALUE) {
+            const last_error = std.os.windows.GetLastError();
+            if (last_error == .FILE_NOT_FOUND or last_error == .PATH_NOT_FOUND) return error.FileNotFound;
+            if (last_error == .ACCESS_DENIED) return error.AccessDenied;
+            if (last_error == .SHARING_VIOLATION) return error.FileBusy;
+            if (last_error == .PIPE_BUSY) return error.PipeBusy;
+            if (last_error == .INVALID_NAME or last_error == .BAD_PATHNAME) return error.BadPathName;
+            // ERROR_DIRECTORY = "The directory name is invalid"; closest match
+            // for the OpenError set is NotDir.
+            if (last_error == .DIRECTORY) return error.NotDir;
+            if (last_error == .NOT_ENOUGH_MEMORY or last_error == .OUTOFMEMORY) return error.SystemResources;
+            if (last_error == .TOO_MANY_OPEN_FILES) return error.ProcessFdQuotaExceeded;
+            if (last_error == .NETNAME_DELETED or last_error == .BAD_NETPATH) return error.NetworkNotFound;
+            return error.Unexpected;
+        }
         return .{
-            .handle = @intCast(rc),
+            .handle = handle,
             .flags = .{ .nonblocking = false },
         };
     }
-    if (errno == .ACCES) return error.AccessDenied;
-    if (errno == .AGAIN) return error.WouldBlock;
-    if (errno == .BUSY) return error.DeviceBusy;
-    if (errno == .EXIST) return error.PathAlreadyExists;
-    if (errno == .FBIG or errno == .OVERFLOW) return error.FileTooBig;
-    if (errno == .INVAL) return error.BadPathName;
-    if (errno == .ISDIR) return error.IsDir;
-    if (errno == .LOOP) return error.SymLinkLoop;
-    if (errno == .MFILE) return error.ProcessFdQuotaExceeded;
-    if (errno == .NAMETOOLONG) return error.NameTooLong;
-    if (errno == .NFILE) return error.SystemFdQuotaExceeded;
-    if (errno == .NODEV or errno == .NXIO) return error.NoDevice;
-    if (errno == .NOENT or errno == .SRCH) return error.FileNotFound;
-    if (errno == .NOMEM) return error.SystemResources;
-    if (errno == .NOSPC) return error.NoSpaceLeft;
-    if (errno == .NOTDIR) return error.NotDir;
-    if (errno == .PERM) return error.PermissionDenied;
-    if (errno == .ROFS) return error.ReadOnlyFileSystem;
-    if (errno == .TXTBSY) return error.FileBusy;
-    return error.Unexpected;
-}
 
-fn macosFileReadPositional(
-    _: ?*anyopaque,
-    file: std.Io.File,
-    data: []const []u8,
-    offset: u64,
-) std.Io.File.ReadPositionalError!usize {
-    var total: usize = 0;
-    for (data) |buffer| {
-        if (buffer.len == 0) continue;
-        const n = try macosPread(file.handle, buffer, offset + total);
-        total += n;
-        if (n < buffer.len) break;
+    fn read(handle: std.posix.fd_t, buffer: []u8) std.Io.Operation.FileReadStreaming.Result {
+        const want: u32 = @intCast(@min(buffer.len, std.math.maxInt(u32)));
+        var read_count: win.DWORD = 0;
+        if (win.ReadFile(handle, buffer.ptr, want, &read_count, null) == .FALSE) {
+            const last_error = std.os.windows.GetLastError();
+            if (last_error == .BROKEN_PIPE or last_error == .HANDLE_EOF) return error.EndOfStream;
+            if (last_error == .NO_DATA) return error.WouldBlock;
+            if (last_error == .INVALID_HANDLE) return error.NotOpenForReading;
+            if (last_error == .ACCESS_DENIED) return error.AccessDenied;
+            if (last_error == .LOCK_VIOLATION) return error.LockViolation;
+            if (last_error == .IO_DEVICE or last_error == .CRC or last_error == .NET_WRITE_FAULT) return error.InputOutput;
+            return error.Unexpected;
+        }
+        if (read_count == 0) return error.EndOfStream;
+        return read_count;
     }
-    return total;
-}
 
-fn macosFileReadStreaming(
-    file: std.Io.File,
-    data: []const []u8,
-) std.Io.Operation.FileReadStreaming.Result {
-    for (data) |buffer| {
-        if (buffer.len == 0) continue;
-        return macosRead(file.handle, buffer);
+    fn write(handle: std.posix.fd_t, buffer: []const u8) std.Io.Operation.FileWriteStreaming.Result {
+        const want: u32 = @intCast(@min(buffer.len, std.math.maxInt(u32)));
+        var written: win.DWORD = 0;
+        if (win.WriteFile(handle, buffer.ptr, want, &written, null) == .FALSE) {
+            const last_error = std.os.windows.GetLastError();
+            if (last_error == .INVALID_USER_BUFFER or last_error == .NOT_ENOUGH_MEMORY or last_error == .NOT_ENOUGH_QUOTA) return error.SystemResources;
+            if (last_error == .BROKEN_PIPE or last_error == .NETNAME_DELETED) return error.BrokenPipe;
+            if (last_error == .INVALID_HANDLE) return error.NotOpenForWriting;
+            if (last_error == .LOCK_VIOLATION) return error.LockViolation;
+            if (last_error == .ACCESS_DENIED) return error.AccessDenied;
+            if (last_error == .IO_DEVICE or last_error == .CRC or last_error == .NET_WRITE_FAULT) return error.InputOutput;
+            if (last_error == .DISK_FULL or last_error == .HANDLE_DISK_FULL) return error.NoSpaceLeft;
+            if (last_error == .NO_DATA) return error.WouldBlock;
+            return error.Unexpected;
+        }
+        return written;
     }
-    return 0;
-}
 
-fn macosRead(fd: std.posix.fd_t, buffer: []u8) std.Io.Operation.FileReadStreaming.Result {
-    while (true) {
-        const rc = std.c.read(fd, buffer.ptr, buffer.len);
-        if (rc >= 0) return if (rc == 0) error.EndOfStream else @intCast(rc);
-        const errno = std.c.errno(rc);
-        if (errno == .INTR) continue;
-        if (errno == .AGAIN) return error.WouldBlock;
-        if (errno == .BADF) return error.NotOpenForReading;
-        if (errno == .IO) return error.InputOutput;
-        if (errno == .ISDIR) return error.IsDir;
-        if (errno == .NOBUFS or errno == .NOMEM) return error.SystemResources;
-        if (errno == .NOTCONN) return error.SocketUnconnected;
-        if (errno == .CONNRESET) return error.ConnectionResetByPeer;
-        return error.Unexpected;
+    fn pread(handle: std.posix.fd_t, buffer: []u8, offset: u64) std.Io.File.ReadPositionalError!usize {
+        const want: u32 = @intCast(@min(buffer.len, std.math.maxInt(u32)));
+        var overlapped: win.OVERLAPPED = .{
+            .Internal = 0,
+            .InternalHigh = 0,
+            .DUMMY = .{ .Offset = .{
+                .Low = @truncate(offset),
+                .High = @truncate(offset >> 32),
+            } },
+            .hEvent = null,
+        };
+        var read_count: win.DWORD = 0;
+        if (win.ReadFile(handle, buffer.ptr, want, &read_count, &overlapped) == .FALSE) {
+            const last_error = std.os.windows.GetLastError();
+            if (last_error == .HANDLE_EOF or last_error == .BROKEN_PIPE) return 0;
+            if (last_error == .INVALID_HANDLE) return error.NotOpenForReading;
+            if (last_error == .ACCESS_DENIED) return error.AccessDenied;
+            if (last_error == .LOCK_VIOLATION) return error.LockViolation;
+            if (last_error == .IO_DEVICE or last_error == .CRC or last_error == .NET_WRITE_FAULT) return error.InputOutput;
+            if (last_error == .NO_DATA) return error.WouldBlock;
+            return error.Unexpected;
+        }
+        return read_count;
     }
-}
 
-fn macosFileWriteStreaming(
-    file: std.Io.File,
-    header: []const u8,
-    data: []const []const u8,
-    splat: usize,
-) std.Io.Operation.FileWriteStreaming.Result {
-    var total: usize = 0;
-    if (header.len > 0) {
-        const n = try macosWrite(file.handle, header);
-        total += n;
-        if (n < header.len) return total;
+    fn close(handle: std.posix.fd_t) void {
+        _ = win.CloseHandle(handle);
     }
-    for (data, 0..) |buffer, index| {
-        const repeat_count = if (index == data.len - 1) splat else 1;
-        for (0..repeat_count) |_| {
-            if (buffer.len == 0) continue;
-            const n = try macosWrite(file.handle, buffer);
-            total += n;
-            if (n < buffer.len) return total;
+};
+
+var macos_stderr_lock: std.c.os_unfair_lock = .{};
+
+/// Darwin primitives for `Shim`, issued through libc.
+const macos_os = struct {
+    fn futexWaitUncancelable(_: ?*anyopaque, ptr: *const u32, expected: u32) void {
+        if (builtin.single_threaded) unreachable;
+        const flags: std.c.UL = .{ .op = .COMPARE_AND_WAIT, .NO_ERRNO = true };
+        const status = std.c.__ulock_wait(flags, ptr, expected, 0);
+        if (status >= 0) return;
+        const errno: std.c.E = @fromBackingInt(@intCast(-status));
+        if (errno == .INTR or errno == .FAULT or errno == .TIMEDOUT) return;
+        unreachable;
+    }
+
+    fn futexWake(_: ?*anyopaque, ptr: *const u32, max_waiters: u32) void {
+        if (max_waiters == 0 or builtin.single_threaded) return;
+        const flags: std.c.UL = .{
+            .op = .COMPARE_AND_WAIT,
+            .NO_ERRNO = true,
+            .WAKE_ALL = max_waiters > 1,
+        };
+        while (true) {
+            const status = std.c.__ulock_wake(flags, ptr, 0);
+            if (status >= 0) return;
+            const errno: std.c.E = @fromBackingInt(@intCast(-status));
+            if (errno == .INTR) continue;
+            if (errno == .NOENT) return;
+            unreachable;
         }
     }
-    return total;
-}
 
-fn macosWrite(fd: std.posix.fd_t, buffer: []const u8) std.Io.Operation.FileWriteStreaming.Result {
-    while (true) {
-        const rc = std.c.write(fd, buffer.ptr, buffer.len);
-        if (rc >= 0) return @intCast(rc);
+    fn lockStderr() void {
+        std.c.os_unfair_lock_lock(&macos_stderr_lock);
+    }
+
+    fn tryLockStderr() bool {
+        return std.c.os_unfair_lock_trylock(&macos_stderr_lock);
+    }
+
+    fn unlockStderr() void {
+        std.c.os_unfair_lock_unlock(&macos_stderr_lock);
+    }
+
+    fn processExecutablePath(_: ?*anyopaque, out_buffer: []u8) std.process.ExecutablePathError!usize {
+        var n: u32 = std.math.cast(u32, out_buffer.len) orelse std.math.maxInt(u32);
+        const rc = std.c._NSGetExecutablePath(out_buffer.ptr, &n);
+        if (rc != 0) return error.NameTooLong;
+        // _NSGetExecutablePath writes a NUL-terminated string; n is set to the
+        // required buffer size including NUL on overflow, but on success it does
+        // not update n. Determine the actual length from the NUL terminator.
+        return std.mem.findScalar(u8, out_buffer, 0) orelse out_buffer.len;
+    }
+
+    fn dirOpenFile(
+        _: ?*anyopaque,
+        dir: std.Io.Dir,
+        sub_path: []const u8,
+        options: std.Io.Dir.OpenFileOptions,
+    ) std.Io.File.OpenError!std.Io.File {
+        if (std.mem.findScalar(u8, sub_path, 0) != null) return error.BadPathName;
+        const sub_path_posix = std.posix.toPosixPath(sub_path) catch return error.NameTooLong;
+
+        var flags: std.c.O = .{
+            .ACCMODE = switch (options.mode) {
+                .read_only => .RDONLY,
+                .write_only => .WRONLY,
+                .read_write => .RDWR,
+            },
+            .CLOEXEC = true,
+            .NOCTTY = !options.allow_ctty,
+            .NOFOLLOW = !options.follow_symlinks,
+        };
+        _ = &flags;
+
+        const rc = std.c.openat(dir.handle, &sub_path_posix, flags, @as(std.c.mode_t, 0));
         const errno = std.c.errno(rc);
-        if (errno == .INTR) continue;
-        if (errno == .AGAIN) return error.WouldBlock;
-        if (errno == .BADF) return error.NotOpenForWriting;
-        if (errno == .DQUOT) return error.DiskQuota;
-        if (errno == .FBIG) return error.FileTooBig;
-        if (errno == .IO) return error.InputOutput;
-        if (errno == .NODEV or errno == .NXIO) return error.NoDevice;
-        if (errno == .NOSPC) return error.NoSpaceLeft;
-        if (errno == .PERM) return error.PermissionDenied;
-        if (errno == .PIPE) return error.BrokenPipe;
-        return error.Unexpected;
+        if (errno == .SUCCESS) {
+            return .{
+                .handle = @intCast(rc),
+                .flags = .{ .nonblocking = false },
+            };
+        }
+        return posixOpenError(errno);
     }
-}
 
-fn macosPread(fd: std.posix.fd_t, buffer: []u8, offset: u64) std.Io.File.ReadPositionalError!usize {
-    const signed_offset = std.math.cast(i64, offset) orelse return error.Unseekable;
-    while (true) {
-        const rc = std.c.pread(fd, buffer.ptr, buffer.len, signed_offset);
-        if (rc >= 0) return @intCast(rc);
-        const errno = std.c.errno(rc);
-        if (errno == .INTR) continue;
-        if (errno == .AGAIN) return error.WouldBlock;
-        if (errno == .BADF) return error.NotOpenForReading;
-        if (errno == .IO) return error.InputOutput;
-        if (errno == .ISDIR) return error.IsDir;
-        if (errno == .NOBUFS or errno == .NOMEM) return error.SystemResources;
-        if (errno == .NXIO or errno == .SPIPE or errno == .OVERFLOW) return error.Unseekable;
-        return error.Unexpected;
+    fn read(fd: std.posix.fd_t, buffer: []u8) std.Io.Operation.FileReadStreaming.Result {
+        while (true) {
+            const rc = std.c.read(fd, buffer.ptr, buffer.len);
+            if (rc >= 0) return if (rc == 0) error.EndOfStream else @intCast(rc);
+            const errno = std.c.errno(rc);
+            if (errno == .INTR) continue;
+            return posixReadError(errno);
+        }
     }
-}
 
-fn macosFileClose(_: ?*anyopaque, files: []const std.Io.File) void {
-    for (files) |file| {
-        _ = std.c.close(file.handle);
+    fn write(fd: std.posix.fd_t, buffer: []const u8) std.Io.Operation.FileWriteStreaming.Result {
+        while (true) {
+            const rc = std.c.write(fd, buffer.ptr, buffer.len);
+            if (rc >= 0) return @intCast(rc);
+            const errno = std.c.errno(rc);
+            if (errno == .INTR) continue;
+            if (errno == .AGAIN) return error.WouldBlock;
+            if (errno == .BADF) return error.NotOpenForWriting;
+            if (errno == .DQUOT) return error.DiskQuota;
+            if (errno == .FBIG) return error.FileTooBig;
+            if (errno == .IO) return error.InputOutput;
+            if (errno == .NODEV or errno == .NXIO) return error.NoDevice;
+            if (errno == .NOSPC) return error.NoSpaceLeft;
+            if (errno == .PERM) return error.PermissionDenied;
+            if (errno == .PIPE) return error.BrokenPipe;
+            return error.Unexpected;
+        }
     }
-}
+
+    fn pread(fd: std.posix.fd_t, buffer: []u8, offset: u64) std.Io.File.ReadPositionalError!usize {
+        const signed_offset = std.math.cast(i64, offset) orelse return error.Unseekable;
+        while (true) {
+            const rc = std.c.pread(fd, buffer.ptr, buffer.len, signed_offset);
+            if (rc >= 0) return @intCast(rc);
+            const errno = std.c.errno(rc);
+            if (errno == .INTR) continue;
+            return posixPreadError(errno);
+        }
+    }
+
+    fn close(fd: std.posix.fd_t) void {
+        _ = std.c.close(fd);
+    }
+};

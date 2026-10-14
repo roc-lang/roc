@@ -2,11 +2,13 @@
 //! Symbol relocations are the only pointer authority; source bytes are never
 //! interpreted as addresses and no initializer is evaluated.
 const std = @import("std");
+const collections = @import("collections");
 const compilerInvariant = @import("base").invariant;
 const builtins = @import("builtins");
 const layout = @import("layout");
 const lir = @import("lir");
 const static_data = @import("static_data");
+const frozen_graph = @import("frozen_graph.zig");
 const Allocator = std.mem.Allocator;
 const Program = lir.Program;
 const SymbolId = static_data.StaticDataSymbolId;
@@ -30,12 +32,12 @@ pub fn transcodeValueSlot(allocator: Allocator, source_program: *const Program.R
 fn transcodePlans(allocator: Allocator, source_program: *const Program.Result, source_root: PlanView, source_exports: []const static_data.StaticDataExport, source_symbol: SymbolId, target_program: *const Program.Result, target_root: PlanView, target_slot: lir.LIR.StaticDataId) Allocator.Error![]static_data.StaticDataExport {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    var builder = Builder{ .allocator = arena.allocator(), .source_program = source_program, .program = target_program, .source_exports = source_exports, .slot = target_slot };
-    const symbol = try builder.addNode(try Program.staticDataSymbolName(builder.allocator, target_slot), builder.size(target_root.layout_idx), builder.alignment(target_root.layout_idx));
+    var builder = Builder{ .graph = .{ .allocator = arena.allocator(), .program = target_program, .slot = target_slot }, .source_program = source_program, .source_exports = source_exports };
+    const symbol = try builder.graph.addNode(try Program.staticDataSymbolName(builder.graph.allocator, target_slot), builder.graph.size(target_root.layout_idx), builder.graph.alignment(target_root.layout_idx));
     try builder.enqueue(source_root.plan, source_root.layout_idx, target_root.plan, target_root.layout_idx, .{ .symbol = source_symbol, .offset = source_exports[@backingInt(source_symbol)].symbol_offset }, .{ .symbol = symbol }, .value, .value);
     var index: usize = 0;
     while (index < builder.jobs.items.len) : (index += 1) try builder.visit(builder.jobs.items[index]);
-    return builder.finish(allocator);
+    return builder.graph.finish(allocator);
 }
 
 /// Re-encode failure status and message using the paired slots' explicit fields.
@@ -48,69 +50,33 @@ pub fn transcodeFailure(allocator: Allocator, source_program: *const Program.Res
     const target_fields = target.compile_time_root.?.role.failure_message;
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
-    var builder = Builder{ .allocator = arena.allocator(), .source_program = source_program, .program = target_program, .source_exports = source_exports, .slot = target_slot };
-    const symbol = try builder.addNode(try Program.staticDataSymbolName(builder.allocator, target_slot), builder.size(target.layout_idx), builder.alignment(target.layout_idx));
-    builder.bytes(.{ .symbol = symbol, .offset = target_fields.failed_offset }, 1)[0] = builder.sourceBytes(.{ .symbol = source_symbol, .offset = source_exports[@backingInt(source_symbol)].symbol_offset + source_fields.failed_offset }, 1)[0];
+    var builder = Builder{ .graph = .{ .allocator = arena.allocator(), .program = target_program, .slot = target_slot }, .source_program = source_program, .source_exports = source_exports };
+    const symbol = try builder.graph.addNode(try Program.staticDataSymbolName(builder.graph.allocator, target_slot), builder.graph.size(target.layout_idx), builder.graph.alignment(target.layout_idx));
+    builder.graph.bytes(.{ .symbol = symbol, .offset = target_fields.failed_offset }, 1)[0] = builder.sourceBytes(.{ .symbol = source_symbol, .offset = source_exports[@backingInt(source_symbol)].symbol_offset + source_fields.failed_offset }, 1)[0];
     try builder.stringValue(.{ .symbol = source_symbol, .offset = source_exports[@backingInt(source_symbol)].symbol_offset + source_fields.message_offset }, .{ .symbol = symbol, .offset = target_fields.message_offset });
-    return builder.finish(allocator);
+    return builder.graph.finish(allocator);
 }
 
-const Destination = struct {
-    symbol: SymbolId,
-    offset: usize = 0,
-    fn offsetBy(self: Destination, amount: usize) Destination {
-        return .{ .symbol = self.symbol, .offset = self.offset + amount };
-    }
-};
+const Destination = frozen_graph.Destination;
 const Job = struct { source_plan: Program.ConstPlanId, source_layout: layout.Idx, plan: Program.ConstPlanId, layout_idx: layout.Idx, source: Destination, dest: Destination, source_storage: Program.CaptureSlotStorage, storage: Program.CaptureSlotStorage };
-const Node = struct { name: []const u8, bytes: []u8, alignment: u32, relocations: std.ArrayList(static_data.StaticDataRelocation) = .empty };
 const AllocationKey = struct { source: Destination, plan: ?Program.ConstPlanId, layout_idx: layout.Idx, count: usize, kind: enum { value, list, string, erased } };
 const Builder = struct {
-    allocator: Allocator,
+    graph: frozen_graph.Graph(AllocationKey),
     source_program: *const Program.Result,
-    program: *const Program.Result,
     source_exports: []const static_data.StaticDataExport,
-    slot: lir.LIR.StaticDataId,
-    nodes: std.ArrayList(Node) = .empty,
     jobs: std.ArrayList(Job) = .empty,
-    allocations: std.AutoHashMapUnmanaged(AllocationKey, Destination) = .empty,
-    fn word(self: *const Builder) usize {
-        return self.program.layouts.targetUsize().size();
-    }
+    /// Index into the source symbol's relocations, keyed by symbol and offset.
+    source_relocations: std.AutoHashMapUnmanaged(Destination, u32) = .empty,
+    /// Source symbols whose relocations `source_relocations` already indexes.
+    indexed_sources: collections.DenseMapUnmanaged(SymbolId, void) = .empty,
     fn sourceWord(self: *const Builder) usize {
         return self.source_program.layouts.targetUsize().size();
-    }
-    fn size(self: *const Builder, idx: layout.Idx) usize {
-        return self.program.layouts.layoutSize(self.program.layouts.getLayout(idx));
     }
     fn sourceSize(self: *const Builder, idx: layout.Idx) usize {
         return self.source_program.layouts.layoutSize(self.source_program.layouts.getLayout(idx));
     }
-    fn alignment(self: *const Builder, idx: layout.Idx) u32 {
-        return @intCast(self.program.layouts.getLayout(idx).alignment(self.program.layouts.targetUsize()).toByteUnits());
-    }
-    fn addNode(self: *Builder, name: []const u8, byte_count: usize, alignment_: u32) Allocator.Error!SymbolId {
-        const data = try self.allocator.alloc(u8, byte_count);
-        @memset(data, 0);
-        const symbol: SymbolId = @fromBackingInt(@intCast(self.nodes.items.len));
-        try self.nodes.append(self.allocator, .{ .name = name, .bytes = data, .alignment = alignment_ });
-        return symbol;
-    }
-    fn node(self: *Builder, dest: Destination) *Node {
-        return &self.nodes.items[@backingInt(dest.symbol)];
-    }
-    fn bytes(self: *Builder, dest: Destination, count: usize) []u8 {
-        return self.node(dest).bytes[dest.offset..][0..count];
-    }
     fn sourceBytes(self: *Builder, src: Destination, count: usize) []const u8 {
         return self.source_exports[@backingInt(src.symbol)].bytes[src.offset..][0..count];
-    }
-    fn writeWord(self: *Builder, dest: Destination, value: u64) void {
-        switch (self.word()) {
-            4 => std.mem.writeInt(u32, self.bytes(dest, 4)[0..4], @intCast(value), .little),
-            8 => std.mem.writeInt(u64, self.bytes(dest, 8)[0..8], value, .little),
-            else => invariant("unsupported target pointer width"),
-        }
     }
     fn readWord(self: *Builder, src: Destination) usize {
         return switch (self.sourceWord()) {
@@ -119,38 +85,37 @@ const Builder = struct {
             else => invariant("unsupported source pointer width"),
         };
     }
-    fn sourceRelocation(self: *Builder, src: Destination) ?static_data.StaticDataRelocation {
-        for (self.source_exports[@backingInt(src.symbol)].relocations) |rel| if (rel.offset == src.offset) return rel;
-        return null;
+    /// The relocation patching the source word at `src`, found through a
+    /// per-symbol offset index built on the symbol's first read, so a symbol
+    /// holding n pointers costs O(n) to transcode rather than O(n^2).
+    fn sourceRelocation(self: *Builder, src: Destination) Allocator.Error!?static_data.StaticDataRelocation {
+        const relocations = self.source_exports[@backingInt(src.symbol)].relocations;
+        if (!self.indexed_sources.contains(src.symbol)) {
+            try self.source_relocations.ensureUnusedCapacity(self.graph.allocator, @intCast(relocations.len));
+            try self.indexed_sources.put(self.graph.allocator, src.symbol, {});
+            for (relocations, 0..) |rel, index| {
+                const entry = self.source_relocations.getOrPutAssumeCapacity(.{ .symbol = src.symbol, .offset = rel.offset });
+                if (entry.found_existing) invariant("frozen symbol had two relocations at one offset");
+                entry.value_ptr.* = @intCast(index);
+            }
+        }
+        const index = self.source_relocations.get(src) orelse return null;
+        return relocations[index];
     }
-    fn pointer(self: *Builder, src: Destination) Destination {
-        const rel = self.sourceRelocation(src) orelse invariant("frozen pointer lacked a relocation");
+    fn pointer(self: *Builder, src: Destination) Allocator.Error!Destination {
+        const rel = try self.sourceRelocation(src) orelse invariant("frozen pointer lacked a relocation");
         return switch (rel.target) {
             .data_symbol => |symbol| .{ .symbol = symbol, .offset = @intCast(@as(i64, self.source_exports[@backingInt(symbol)].symbol_offset) + rel.addend) },
             .named => invariant("frozen data pointer lacked symbolic graph identity"),
         };
     }
     fn enqueue(self: *Builder, sp: Program.ConstPlanId, sl: layout.Idx, tp: Program.ConstPlanId, tl: layout.Idx, src: Destination, dest: Destination, ss: Program.CaptureSlotStorage, ts: Program.CaptureSlotStorage) Allocator.Error!void {
-        try self.jobs.append(self.allocator, .{ .source_plan = sp, .source_layout = sl, .plan = tp, .layout_idx = tl, .source = src, .dest = dest, .source_storage = ss, .storage = ts });
-    }
-    fn relocate(self: *Builder, dest: Destination, target: Destination) Allocator.Error!void {
-        self.writeWord(dest, 0);
-        try self.node(dest).relocations.append(self.allocator, .{ .offset = dest.offset, .target_symbol_name = self.node(target).name, .target = .{ .data_symbol = target.symbol }, .addend = @intCast(target.offset) });
-    }
-    fn reserveAllocation(self: *Builder, key: AllocationKey, byte_count: usize, alignment_: u32, rc: bool, count: ?usize) Allocator.Error!struct { dest: Destination, fresh: bool } {
-        if (self.allocations.get(key)) |dest| return .{ .dest = dest, .fresh = false };
-        const offset = std.mem.alignForward(usize, (if (rc) @as(usize, 2) else 1) * self.word(), alignment_);
-        const name = try Program.staticDataNodeSymbolName(self.allocator, @backingInt(self.slot), @intCast(self.nodes.items.len));
-        const symbol = try self.addNode(name, offset + byte_count, @intCast(@max(alignment_, self.word())));
-        const dest = Destination{ .symbol = symbol, .offset = offset };
-        if (rc) self.writeWord(.{ .symbol = symbol, .offset = offset - 2 * self.word() }, count orelse 0);
-        try self.allocations.put(self.allocator, key, dest);
-        return .{ .dest = dest, .fresh = true };
+        try self.jobs.append(self.graph.allocator, .{ .source_plan = sp, .source_layout = sl, .plan = tp, .layout_idx = tl, .source = src, .dest = dest, .source_storage = ss, .storage = ts });
     }
     fn boxed(self: *Builder, job: Job, sp: Program.ConstPlanId, sl: layout.Idx, tp: Program.ConstPlanId, tl: layout.Idx) Allocator.Error!void {
-        const src = self.pointer(job.source);
-        const allocation = try self.reserveAllocation(.{ .source = src, .plan = tp, .layout_idx = tl, .count = 1, .kind = .value }, self.size(tl), self.alignment(tl), self.program.layouts.layoutContainsRefcounted(self.program.layouts.getLayout(tl)), null);
-        try self.relocate(job.dest, allocation.dest);
+        const src = try self.pointer(job.source);
+        const allocation = try self.graph.reserveAllocation(.{ .source = src, .plan = tp, .layout_idx = tl, .count = 1, .kind = .value }, self.graph.size(tl), self.graph.alignment(tl), self.graph.program.layouts.layoutContainsRefcounted(self.graph.program.layouts.getLayout(tl)), null);
+        try self.graph.relocate(job.dest, allocation.dest);
         if (allocation.fresh) try self.enqueue(sp, sl, tp, tl, src, allocation.dest, .value, .value);
     }
     /// Each program lays out a recursive type for itself, choosing where its
@@ -159,22 +124,22 @@ const Builder = struct {
     /// neither side boxes it.
     fn recursionBoxed(self: *Builder, job: Job, source_boxed: bool, source_inner: layout.Idx, target_boxed: bool, target_inner: layout.Idx) Allocator.Error!bool {
         if (!source_boxed and !target_boxed) return false;
-        const src = if (source_boxed) self.pointer(job.source) else job.source;
+        const src = if (source_boxed) try self.pointer(job.source) else job.source;
         const sl = if (source_boxed) source_inner else job.source_layout;
         if (!target_boxed) {
             try self.enqueue(job.source_plan, sl, job.plan, job.layout_idx, src, job.dest, .value, .value);
             return true;
         }
-        const allocation = try self.reserveAllocation(.{ .source = src, .plan = job.plan, .layout_idx = target_inner, .count = 1, .kind = .value }, self.size(target_inner), self.alignment(target_inner), self.program.layouts.layoutContainsRefcounted(self.program.layouts.getLayout(target_inner)), null);
-        try self.relocate(job.dest, allocation.dest);
+        const allocation = try self.graph.reserveAllocation(.{ .source = src, .plan = job.plan, .layout_idx = target_inner, .count = 1, .kind = .value }, self.graph.size(target_inner), self.graph.alignment(target_inner), self.graph.program.layouts.layoutContainsRefcounted(self.graph.program.layouts.getLayout(target_inner)), null);
+        try self.graph.relocate(job.dest, allocation.dest);
         if (allocation.fresh) try self.enqueue(job.source_plan, sl, job.plan, target_inner, src, allocation.dest, .value, .value);
         return true;
     }
     fn visit(self: *Builder, job: Job) Allocator.Error!void {
         const source_physical = self.source_program.layouts.getLayout(job.source_layout);
-        const physical = self.program.layouts.getLayout(job.layout_idx);
+        const physical = self.graph.program.layouts.getLayout(job.layout_idx);
         const source_plan = self.source_program.const_plans.items[@backingInt(job.source_plan)];
-        const plan = self.program.const_plans.items[@backingInt(job.plan)];
+        const plan = self.graph.program.const_plans.items[@backingInt(job.plan)];
         if (std.meta.activeTag(source_plan) != std.meta.activeTag(plan)) invariant("paired canonical const plan shapes differ");
         // An explicit `Box` is part of the value; any other box breaks a
         // recursive type's cycle in that program's layout.
@@ -188,17 +153,17 @@ const Builder = struct {
                 // CheckedPrimitive has only fixed-width numeric/vector types.
                 // Target pointer width never changes a language scalar.
                 if (source_physical.tag != .scalar or physical.tag != .scalar or !std.meta.eql(source_physical.getScalar(), physical.getScalar())) invariant("paired fixed-width scalar representations differ");
-                if (self.size(job.layout_idx) != self.sourceSize(job.source_layout)) invariant("paired fixed-width scalar sizes differ");
-                @memcpy(self.bytes(job.dest, self.size(job.layout_idx)), self.sourceBytes(job.source, self.sourceSize(job.source_layout)));
+                if (self.graph.size(job.layout_idx) != self.sourceSize(job.source_layout)) invariant("paired fixed-width scalar sizes differ");
+                @memcpy(self.graph.bytes(job.dest, self.graph.size(job.layout_idx)), self.sourceBytes(job.source, self.sourceSize(job.source_layout)));
             },
             .str => try self.string(job),
             .list => |element| try self.list(job, source_plan.list, element),
             .named => |named| try self.enqueue(source_plan.named.backing, job.source_layout, named.backing, job.layout_idx, job.source, job.dest, .value, .value),
-            .boxy_box => |box| if (self.size(box.layout_idx) != 0) {
+            .boxy_box => |box| if (self.graph.size(box.layout_idx) != 0) {
                 try self.boxed(job, source_plan.boxy_box.payload, source_plan.boxy_box.layout_idx, box.payload, box.layout_idx);
             },
             .box => |element| switch (physical.tag) {
-                .box_of_zst => self.writeWord(job.dest, 0),
+                .box_of_zst => self.graph.writeWord(job.dest, 0),
                 .box => try self.boxed(job, source_plan.box, source_physical.getIdx(), element, physical.getIdx()),
                 .erased_callable => try self.enqueue(source_plan.box, job.source_layout, element, job.layout_idx, job.source, job.dest, .value, .value),
                 .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .tag_union, .ptr, .erased_box => invariant("invalid box layout"),
@@ -216,7 +181,7 @@ const Builder = struct {
                 for (variants) |variant| {
                     if (variant.discriminant != disc) continue;
                     self.writeDiscriminant(job.layout_idx, job.dest, disc);
-                    try self.children(source_variant.payloads, self.payload(self.source_program, job.source_layout, disc), variant.payloads, self.payload(self.program, job.layout_idx, disc), job.source, job.dest, true);
+                    try self.children(source_variant.payloads, self.payload(self.source_program, job.source_layout, disc), variant.payloads, self.payload(self.graph.program, job.layout_idx, disc), job.source, job.dest, true);
                     return;
                 }
                 invariant("target tag absent from plan");
@@ -227,7 +192,7 @@ const Builder = struct {
                 const source_variant = for (source_set.variants) |variant| {
                     if (variant.discriminant == disc) break variant;
                 } else invariant("source callable variant absent");
-                const target_set = self.program.fn_sets.items[@backingInt(set_id)];
+                const target_set = self.graph.program.fn_sets.items[@backingInt(set_id)];
                 requireUniqueFrozenFunction(Program.FnVariant, source_variant.template, target_set.variants);
                 for (target_set.variants) |variant| {
                     if (!sameFrozenFunction(source_variant.template, variant.template)) continue;
@@ -247,41 +212,41 @@ const Builder = struct {
         const raw = self.sourceBytes(source, 3 * self.sourceWord());
         const small = raw[raw.len - 1] & builtins.str.RocStr.small_str_flag != 0;
         const count = if (small) raw[raw.len - 1] & ~builtins.str.RocStr.small_str_flag else self.readWord(source.offsetBy(2 * self.sourceWord()));
-        const src = if (small) source else self.pointer(source);
+        const src = if (small) source else try self.pointer(source);
         const text = self.sourceBytes(src, count);
-        if (count < 3 * self.word()) {
-            @memcpy(self.bytes(dest, count), text);
-            self.bytes(dest, 3 * self.word())[3 * self.word() - 1] = @as(u8, @intCast(count)) | builtins.str.RocStr.small_str_flag;
+        if (count < 3 * self.graph.word()) {
+            @memcpy(self.graph.bytes(dest, count), text);
+            self.graph.bytes(dest, 3 * self.graph.word())[3 * self.graph.word() - 1] = @as(u8, @intCast(count)) | builtins.str.RocStr.small_str_flag;
             return;
         }
-        const result = try self.reserveAllocation(.{ .source = src, .plan = null, .layout_idx = .str, .count = count, .kind = .string }, count, 1, false, null);
-        if (result.fresh) @memcpy(self.bytes(result.dest, count), text);
-        try self.relocate(dest, result.dest);
-        self.writeWord(dest.offsetBy(self.word()), builtins.str.RocStr.encodeCapacityForWidth(count));
-        self.writeWord(dest.offsetBy(2 * self.word()), count);
+        const result = try self.graph.reserveAllocation(.{ .source = src, .plan = null, .layout_idx = .str, .count = count, .kind = .string }, count, 1, false, null);
+        if (result.fresh) @memcpy(self.graph.bytes(result.dest, count), text);
+        try self.graph.relocate(dest, result.dest);
+        self.graph.writeWord(dest.offsetBy(self.graph.word()), builtins.str.RocStr.encodeCapacityForWidth(count));
+        self.graph.writeWord(dest.offsetBy(2 * self.graph.word()), count);
     }
     fn list(self: *Builder, job: Job, sp: Program.ConstPlanId, tp: Program.ConstPlanId) Allocator.Error!void {
         const count = self.readWord(job.source.offsetBy(self.sourceWord()));
-        self.writeWord(job.dest.offsetBy(self.word()), count);
-        self.writeWord(job.dest.offsetBy(2 * self.word()), builtins.list.RocList.encodeCapacityForWidth(count));
-        const physical = self.program.layouts.getLayout(job.layout_idx);
+        self.graph.writeWord(job.dest.offsetBy(self.graph.word()), count);
+        self.graph.writeWord(job.dest.offsetBy(2 * self.graph.word()), builtins.list.RocList.encodeCapacityForWidth(count));
+        const physical = self.graph.program.layouts.getLayout(job.layout_idx);
         if (count == 0 or physical.tag == .list_of_zst) return;
         const sl = self.source_program.layouts.getLayout(job.source_layout).getIdx();
         const tl = physical.getIdx();
-        const src = self.pointer(job.source);
-        const result = try self.reserveAllocation(.{ .source = src, .plan = tp, .layout_idx = tl, .count = count, .kind = .list }, count * self.size(tl), self.alignment(tl), self.program.layouts.layoutContainsRefcounted(self.program.layouts.getLayout(tl)), count);
-        try self.relocate(job.dest, result.dest);
-        if (result.fresh) for (0..count) |i| try self.enqueue(sp, sl, tp, tl, src.offsetBy(i * self.sourceSize(sl)), result.dest.offsetBy(i * self.size(tl)), .value, .value);
+        const src = try self.pointer(job.source);
+        const result = try self.graph.reserveAllocation(.{ .source = src, .plan = tp, .layout_idx = tl, .count = count, .kind = .list }, count * self.graph.size(tl), self.graph.alignment(tl), self.graph.program.layouts.layoutContainsRefcounted(self.graph.program.layouts.getLayout(tl)), count);
+        try self.graph.relocate(job.dest, result.dest);
+        if (result.fresh) for (0..count) |i| try self.enqueue(sp, sl, tp, tl, src.offsetBy(i * self.sourceSize(sl)), result.dest.offsetBy(i * self.graph.size(tl)), .value, .value);
     }
     fn children(self: *Builder, sp: []const Program.ConstPlanId, sl: layout.Idx, tp: []const Program.ConstPlanId, tl: layout.Idx, src: Destination, dest: Destination, tag_payload: bool) Allocator.Error!void {
         if (sp.len != tp.len) invariant("paired aggregate field count differs");
-        if (tp.len == 0 or self.size(tl) == 0) return;
+        if (tp.len == 0 or self.graph.size(tl) == 0) return;
         if (tag_payload and tp.len == 1) return self.enqueue(sp[0], sl, tp[0], tl, src, dest, .value, .value);
         const ss = self.source_program.layouts.getLayout(sl).getStruct().idx;
-        const ts = self.program.layouts.getLayout(tl).getStruct().idx;
+        const ts = self.graph.program.layouts.getLayout(tl).getStruct().idx;
         for (sp, tp, 0..) |s, t, i| {
             const index: u32 = @intCast(i);
-            try self.enqueue(s, self.source_program.layouts.getStructFieldLayoutByOriginalIndex(ss, index), t, self.program.layouts.getStructFieldLayoutByOriginalIndex(ts, index), src.offsetBy(self.source_program.layouts.getStructFieldOffsetByOriginalIndex(ss, index)), dest.offsetBy(self.program.layouts.getStructFieldOffsetByOriginalIndex(ts, index)), .value, .value);
+            try self.enqueue(s, self.source_program.layouts.getStructFieldLayoutByOriginalIndex(ss, index), t, self.graph.program.layouts.getStructFieldLayoutByOriginalIndex(ts, index), src.offsetBy(self.source_program.layouts.getStructFieldOffsetByOriginalIndex(ss, index)), dest.offsetBy(self.graph.program.layouts.getStructFieldOffsetByOriginalIndex(ts, index)), .value, .value);
         }
     }
     fn discriminant(self: *Builder, idx: layout.Idx, src: Destination) u32 {
@@ -291,10 +256,10 @@ const Builder = struct {
         return data.readDiscriminant(self.sourceBytes(src, self.sourceSize(idx)).ptr, self.source_program.layouts.targetUsize());
     }
     fn writeDiscriminant(self: *Builder, idx: layout.Idx, dest: Destination, disc: u32) void {
-        const physical = self.program.layouts.getLayout(idx);
+        const physical = self.graph.program.layouts.getLayout(idx);
         if (physical.tag == .zst) return;
-        const data = self.program.layouts.getTagUnionData(physical.getTagUnion().idx);
-        data.writeDiscriminant(self.bytes(dest, self.size(idx)).ptr, disc, self.program.layouts.targetUsize());
+        const data = self.graph.program.layouts.getTagUnionData(physical.getTagUnion().idx);
+        data.writeDiscriminant(self.graph.bytes(dest, self.graph.size(idx)).ptr, disc, self.graph.program.layouts.targetUsize());
     }
     fn payload(_: *Builder, program: *const Program.Result, idx: layout.Idx, disc: u32) layout.Idx {
         const physical = program.layouts.getLayout(idx);
@@ -309,48 +274,19 @@ const Builder = struct {
         return .{ .idx = idx, .location = location };
     }
     fn captures(self: *Builder, sp: []const Program.CaptureSlot, sl: layout.Idx, tp: []const Program.CaptureSlot, tl: layout.Idx, src: Destination, dest: Destination) Allocator.Error!void {
-        if (self.size(tl) == 0) return;
+        if (self.graph.size(tl) == 0) return;
         for (tp) |t| {
             const s = for (sp) |candidate| {
                 if (std.meta.eql(candidate.id, t.id)) break candidate;
             } else invariant("paired callable capture identity absent");
             const source = captureLocation(self.source_program, sl, s, src, sp.len);
-            const target = captureLocation(self.program, tl, t, dest, tp.len);
+            const target = captureLocation(self.graph.program, tl, t, dest, tp.len);
             try self.enqueue(s.plan, source.idx, t.plan, target.idx, source.location, target.location, s.storage, t.storage);
         }
     }
-    fn boxyCaptureLocation(program: *const Program.Result, idx: layout.Idx, slot: u32) struct { idx: layout.Idx, offset: usize } {
-        const physical = program.layouts.getLayout(idx);
-        if (physical.tag == .struct_) return .{
-            .idx = program.layouts.getStructFieldLayoutByOriginalIndex(physical.getStruct().idx, @intCast(slot)),
-            .offset = program.layouts.getStructFieldOffsetByOriginalIndex(physical.getStruct().idx, @intCast(slot)),
-        };
-        if (slot != 0) invariant("non-struct Boxy capture had multiple fields");
-        return .{ .idx = idx, .offset = 0 };
-    }
-
-    fn frozenDescriptor(self: *Builder, id: Program.BoxyTypeDescId) Allocator.Error!Destination {
-        const descriptor = &self.program.boxy_type_descs.items[@backingInt(id)];
-        if (descriptor.closure != .closed) invariant("target frozen descriptor retains runtime context");
-        const symbol = try self.addNode(try Program.staticDataNodeSymbolName(self.allocator, @backingInt(self.slot), @intCast(self.nodes.items.len)), @sizeOf(Program.BoxyTypeDesc), @alignOf(Program.BoxyTypeDesc));
-        const dest = Destination{ .symbol = symbol };
-        @memcpy(self.bytes(dest, @sizeOf(Program.BoxyTypeDesc)), std.mem.asBytes(descriptor));
-        return dest;
-    }
-
-    fn frozenDictionary(self: *Builder, id: Program.BoxyDictId) Allocator.Error!Destination {
-        const dict = self.program.boxy_dicts.items[@backingInt(id)];
-        if (dict.template) invariant("frozen dictionary retained a runtime template");
-        const name = try Program.staticDataNodeSymbolName(self.allocator, @backingInt(self.slot), @intCast(self.nodes.items.len));
-        const symbol = try self.addNode(name, @sizeOf(Program.BoxyDict), @alignOf(Program.BoxyDict));
-        const dest = Destination{ .symbol = symbol, .offset = 0 };
-        @memcpy(self.bytes(dest, @sizeOf(Program.BoxyDict)), std.mem.asBytes(&dict));
-        return dest;
-    }
-
     fn erased(self: *Builder, job: Job, source_set: Program.ErasedFnsId, target_set: Program.ErasedFnsId) Allocator.Error!void {
-        const src = self.pointer(job.source);
-        const code = self.sourceRelocation(src) orelse invariant("erased code lacked relocation");
+        const src = try self.pointer(job.source);
+        const code = try self.sourceRelocation(src) orelse invariant("erased code lacked relocation");
         const source_proc = code.procedure orelse invariant("erased code lacked procedure identity");
         const source_entries = self.source_program.erased_fns.items[@backingInt(source_set)].entries;
         const source_entry = if (code.boxy_recipe) |index| source_entries[index] else for (source_entries) |entry| {
@@ -358,24 +294,24 @@ const Builder = struct {
         } else invariant("erased procedure absent from source plan");
         if (source_entry.entry != source_proc) invariant("frozen recipe disagreed with its procedure");
         var count: usize = 0;
-        for (self.program.erased_fns.items[@backingInt(target_set)].entries) |entry| {
+        for (self.graph.program.erased_fns.items[@backingInt(target_set)].entries) |entry| {
             if (sameErasedFunction(source_entry, entry)) count += 1;
         }
         if (count != 1) invariant("frozen erased callable lacks unique target identity");
-        for (self.program.erased_fns.items[@backingInt(target_set)].entries, 0..) |entry, recipe_index| {
+        for (self.graph.program.erased_fns.items[@backingInt(target_set)].entries, 0..) |entry, recipe_index| {
             if (!sameErasedFunction(source_entry, entry)) continue;
             // The target program's erased capture prefix stays zeroed: a
             // static value is never dropped, so nothing reads its header.
-            const prefix: usize = self.program.erased_capture_prefix;
-            const capture_offset = std.mem.alignForward(usize, 2 * self.word(), builtins.erased_callable.payload_alignment) + prefix;
-            const capture_size = prefix + self.size(entry.capture_layout);
-            const result = try self.reserveAllocation(.{ .source = src, .plan = job.plan, .layout_idx = job.layout_idx, .count = 1, .kind = .erased }, capture_offset - prefix + (if (entry.boxy != null) std.mem.alignForward(usize, capture_size, self.word()) + self.word() else capture_size), builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
-            try self.relocate(job.dest, result.dest);
+            const prefix: usize = self.graph.program.erased_capture_prefix;
+            const capture_offset = std.mem.alignForward(usize, 2 * self.graph.word(), builtins.erased_callable.payload_alignment) + prefix;
+            const capture_size = prefix + self.graph.size(entry.capture_layout);
+            const result = try self.graph.reserveAllocation(.{ .source = src, .plan = job.plan, .layout_idx = job.layout_idx, .count = 1, .kind = .erased }, capture_offset - prefix + (if (entry.boxy != null) std.mem.alignForward(usize, capture_size, self.graph.word()) + self.graph.word() else capture_size), builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
+            try self.graph.relocate(job.dest, result.dest);
             if (!result.fresh) return;
-            try self.node(result.dest).relocations.append(self.allocator, .{ .offset = result.dest.offset, .target_symbol_name = try static_data.procSymbolName(self.allocator, self.program.store.getProcSpec(entry.entry).identity), .kind = .function_pointer, .callable_capture_offset = @intCast(capture_offset), .procedure = entry.entry, .boxy_recipe = if (entry.boxy != null) @intCast(recipe_index) else null });
+            try self.graph.node(result.dest).relocations.append(self.graph.allocator, .{ .offset = result.dest.offset, .target_symbol_name = try static_data.procSymbolName(self.graph.allocator, self.graph.program.store.getProcSpec(entry.entry).identity), .kind = .function_pointer, .callable_capture_offset = @intCast(capture_offset), .procedure = entry.entry, .boxy_recipe = if (entry.boxy != null) @intCast(recipe_index) else null });
             switch (entry.on_drop) {
                 .none => {},
-                .rc_helper => |helper| try self.node(result.dest).relocations.append(self.allocator, .{ .offset = result.dest.offset + self.word(), .target_symbol_name = try static_data.atomicRcHelperSymbolName(self.allocator, &self.program.layouts, helper), .kind = .function_pointer, .rc_helper = helper }),
+                .rc_helper => |helper| try self.graph.node(result.dest).relocations.append(self.graph.allocator, .{ .offset = result.dest.offset + self.graph.word(), .target_symbol_name = try static_data.atomicRcHelperSymbolName(self.graph.allocator, &self.graph.program.layouts, helper), .kind = .function_pointer, .rc_helper = helper }),
                 .boxy_capture => invariant("frozen callable target lacks durable drop authority"),
             }
 
@@ -384,67 +320,20 @@ const Builder = struct {
                 const source_capture_offset = code.callable_capture_offset orelse invariant("erased source lacked capture offset");
                 for (boxy.captures, source_boxy.captures) |capture, source_capture| {
                     if (capture.slot != source_capture.slot) invariant("paired Boxy captures disagree on field identity");
-                    const source_field = boxyCaptureLocation(self.source_program, source_entry.capture_layout, source_capture.slot);
-                    const field = boxyCaptureLocation(self.program, entry.capture_layout, capture.slot);
+                    const source_field = frozen_graph.boxyCaptureLocation(self.source_program, source_entry.capture_layout, source_capture.slot);
+                    const field = frozen_graph.boxyCaptureLocation(self.graph.program, entry.capture_layout, capture.slot);
                     const dest = result.dest.offsetBy(capture_offset + field.offset);
                     switch (capture.value) {
                         .value => |plan| try self.enqueue(source_capture.value.value, source_field.idx, plan, field.idx, src.offsetBy(source_capture_offset + source_field.offset), dest, .value, .value),
-                        .descriptor, .contents_descriptor => |id| try self.relocate(dest, try self.frozenDescriptor(id)),
-                        .dictionary => |id| try self.relocate(dest, try self.frozenDictionary(id)),
+                        .descriptor, .contents_descriptor => |id| try self.graph.relocate(dest, try self.graph.frozenDescriptor(id)),
+                        .dictionary => |id| try self.graph.relocate(dest, try self.graph.frozenDictionary(id)),
                     }
                 }
-                if (boxy.result_desc) |id| try self.relocate(result.dest.offsetBy(capture_offset - prefix + std.mem.alignForward(usize, capture_size, self.word())), try self.frozenDescriptor(id));
+                if (boxy.result_desc) |id| try self.graph.relocate(result.dest.offsetBy(capture_offset - prefix + std.mem.alignForward(usize, capture_size, self.graph.word())), try self.graph.frozenDescriptor(id));
             } else try self.captures(source_entry.captures, source_entry.capture_layout, entry.captures, entry.capture_layout, src.offsetBy(code.callable_capture_offset orelse invariant("erased source lacked capture offset")), result.dest.offsetBy(capture_offset));
             return;
         }
         invariant("target erased callable correspondence absent");
-    }
-    fn finish(self: *Builder, allocator: Allocator) Allocator.Error![]static_data.StaticDataExport {
-        const exports = try allocator.alloc(static_data.StaticDataExport, self.nodes.items.len);
-        var done: usize = 0;
-        errdefer {
-            for (exports[0..done]) |export_| {
-                allocator.free(export_.symbol_name);
-                allocator.free(export_.bytes);
-                for (export_.relocations) |relocation| {
-                    if (relocation.owns_target_symbol_name) allocator.free(relocation.target_symbol_name);
-                }
-                allocator.free(export_.relocations);
-            }
-            allocator.free(exports);
-        }
-        for (self.nodes.items, exports, 0..) |source, *dest, index| {
-            const name = try allocator.dupe(u8, source.name);
-            errdefer allocator.free(name);
-            const owned_bytes = try allocator.dupe(u8, source.bytes);
-            errdefer allocator.free(owned_bytes);
-            const relocations = try allocator.dupe(static_data.StaticDataRelocation, source.relocations.items);
-            // All names are assigned in a separate pass once every symbol exists.
-            for (relocations) |*relocation| relocation.owns_target_symbol_name = false;
-            dest.* = .{
-                .symbol_name = name,
-                .value_id = if (index == 0) self.slot else null,
-                .bytes = owned_bytes,
-                .alignment = source.alignment,
-                .is_global = false,
-                .is_exported = false,
-                .relocations = relocations,
-            };
-            done += 1;
-        }
-        for (exports) |*export_| {
-            const relocations: []static_data.StaticDataRelocation = @constCast(export_.relocations);
-            for (relocations) |*relocation| {
-                switch (relocation.target) {
-                    .data_symbol => |symbol| relocation.target_symbol_name = exports[@backingInt(symbol)].symbol_name,
-                    .named => {
-                        relocation.target_symbol_name = try allocator.dupe(u8, relocation.target_symbol_name);
-                        relocation.owns_target_symbol_name = true;
-                    },
-                }
-            }
-        }
-        return exports;
     }
 };
 fn invariant(comptime message: []const u8) noreturn {
@@ -520,6 +409,42 @@ test "frozen root transcode preserves shared list strings across pointer widths"
     try std.testing.expectEqual(list_export.relocations[0].target.data_symbol, list_export.relocations[1].target.data_symbol);
     const str_rel = list_export.relocations[0];
     try std.testing.expectEqualStrings(text, converted[@backingInt(str_rel.target.data_symbol)].bytes[@intCast(str_rel.addend)..]);
+}
+
+test "frozen root transcode of a list of many string pointers stays proportional to the list" {
+    // Each element is a pointer the transcoder resolves through its source
+    // relocation; a lookup that scans the symbol's relocations makes this
+    // list quadratic, which at this length runs for minutes.
+    const allocator = std.testing.allocator;
+    const TargetUsize = @import("base").target.TargetUsize;
+    var source = try Program.Result.init(allocator, TargetUsize.native);
+    defer source.deinit();
+    var target = try Program.Result.init(allocator, .u32);
+    defer target.deinit();
+    const str_plan: Program.ConstPlanId = @fromBackingInt(@intCast(source.const_plans.items.len));
+    try source.const_plans.append(allocator, .str);
+    const list_plan: Program.ConstPlanId = @fromBackingInt(@intCast(source.const_plans.items.len));
+    try source.const_plans.append(allocator, .{ .list = str_plan });
+    try target.const_plans.append(allocator, .str);
+    try target.const_plans.append(allocator, .{ .list = str_plan });
+    const source_list = try source.layouts.insertList(.str);
+    const target_list = try target.layouts.insertList(.str);
+    const text = "one heap string every element of the list points at";
+    const string = builtins.str.RocStr{ .bytes = @constCast(text.ptr), .length = text.len, .capacity_or_alloc_ptr = builtins.str.RocStr.encodeCapacity(text.len) };
+    const count = 200_000;
+    const items = try allocator.alloc(builtins.str.RocStr, count);
+    defer allocator.free(items);
+    @memset(items, string);
+    var list_value = builtins.list.RocList{ .bytes = @ptrCast(items.ptr), .length = count, .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(count) };
+    const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, try testSlot(&source, source_list), testRoot(list_plan, source_list), .{ .ptr = @ptrCast(&list_value) }, .{});
+    defer static_data.deinitStaticData(allocator, native);
+    const converted = try transcodeRoot(allocator, &source, testRoot(list_plan, source_list), native, testRootSymbol(native), &target, testRoot(list_plan, target_list), try testSlot(&target, target_list));
+    defer static_data.deinitStaticData(allocator, converted);
+    try std.testing.expectEqual(@as(usize, 3), converted.len);
+    const list_export = converted[@backingInt(converted[0].relocations[0].target.data_symbol)];
+    try std.testing.expectEqual(@as(usize, count), list_export.relocations.len);
+    const backing = list_export.relocations[0].target.data_symbol;
+    for (list_export.relocations) |relocation| try std.testing.expectEqual(backing, relocation.target.data_symbol);
 }
 
 test "frozen root transcode promotes inline strings when target width shrinks" {

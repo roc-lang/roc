@@ -33,9 +33,6 @@ const StrMatchArmSpan = lir_defs.StrMatchArmSpan;
 const StrMatchStep = lir_defs.StrMatchStep;
 const StrMatchStepSpan = lir_defs.StrMatchStepSpan;
 const Symbol = lir_defs.Symbol;
-const LirPattern = lir_defs.LirPattern;
-const LirPatternId = lir_defs.LirPatternId;
-const LirPatternSpan = lir_defs.LirPatternSpan;
 const U64Span = lir_defs.U64Span;
 const U32Span = lir_defs.U32Span;
 const ErasedCallArgsPlan = lir_defs.ErasedCallArgsPlan;
@@ -68,6 +65,9 @@ const RowIdContext = struct {
 const RewriteKeys = struct {
     indices: std.HashMap(u32, u32, RowIdContext, std.hash_map.default_max_load_percentage),
     ids: std.ArrayList(u32) = .empty,
+    /// Whether `ids` is sorted, so a lookup is a binary search over it
+    /// rather than a hash probe. Set by `finish`, cleared by `prepare`.
+    sorted: bool = false,
 
     fn init(allocator: Allocator) RewriteKeys {
         return .{ .indices = std.HashMap(u32, u32, RowIdContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}) };
@@ -83,6 +83,7 @@ const RewriteKeys = struct {
         if (entry.found_existing) return false;
         entry.value_ptr.* = 0;
         try self.ids.append(allocator, id);
+        self.sorted = false;
         return true;
     }
 
@@ -91,10 +92,25 @@ const RewriteKeys = struct {
         for (self.ids.items, 0..) |id, dense_index| {
             self.indices.getPtr(id).?.* = @intCast(dense_index);
         }
+        self.sorted = true;
+    }
+
+    /// The dense position of `id` among the prepared ids, if prepared.
+    fn lookup(self: *const RewriteKeys, id: u32) ?u32 {
+        if (!self.sorted) return self.indices.get(id);
+        var low: usize = 0;
+        var high: usize = self.ids.items.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const candidate = self.ids.items[mid];
+            if (candidate == id) return @intCast(mid);
+            if (candidate < id) low = mid + 1 else high = mid;
+        }
+        return null;
     }
 
     fn index(self: *const RewriteKeys, start: u32, len: u32) ?u32 {
-        const first = self.indices.get(start) orelse return null;
+        const first = self.lookup(start) orelse return null;
         if (len > 1) {
             // Sorted unique IDs make endpoint equality sufficient to prove
             // every row of this span was prepared, without scanning it.
@@ -337,10 +353,9 @@ pub fn procRewriteChanged(self: *const Self) bool {
     }
     if (!std.meta.eql(rewrite.proc, source.getProcSpec(rewrite.proc_id))) return true;
     inline for (.{
-        "cf_stmts",      "cf_switch_branches",    "str_match_steps", "str_match_arms",
-        "join_points",   "locals",                "local_ids",       "u64s",
-        "u32s",          "erased_call_arg_plans", "patterns",        "pattern_ids",
-        "inline_scopes",
+        "cf_stmts",    "cf_switch_branches",    "str_match_steps", "str_match_arms",
+        "join_points", "locals",                "local_ids",       "u64s",
+        "u32s",        "erased_call_arg_plans", "inline_scopes",
     }) |field| {
         if (@field(self, field).len() != 0) return true;
     }
@@ -349,13 +364,9 @@ pub fn procRewriteChanged(self: *const Self) bool {
 
 /// Publish in deterministic procedure order, after all phase tasks complete.
 /// appendBodyShard reserves before mutation; the remaining prefix patches cannot
-/// fail. Join-point identities already belong to the procedure and are preserved.
-pub fn commitProcRewrite(self: *Self, worker: *const Self) AppendBodyError!void {
-    return self.commitProcRewriteWithJoinRelocation(worker, null);
-}
-
-/// Relocate only phase-generated joins, consistently across suffixes, prefix
-/// patches, and procedure metadata. The coordinator supplies the allocator range.
+/// fail. Relocates only phase-generated joins, consistently across suffixes,
+/// prefix patches, and procedure metadata; the coordinator supplies the
+/// allocator range.
 pub fn commitProcRewriteWithJoinRelocation(self: *Self, worker: *const Self, relocation: ?JoinPointRelocation) AppendBodyError!void {
     std.debug.assert(worker.body_coordinator == self);
     const rewrite = if (worker.proc_rewrite) |*prepared| prepared else base.invariant("{s}", .{"LirStore invariant violated: expected procedure rewrite shard"});
@@ -384,8 +395,6 @@ pub const BodyPrefix = struct {
     u64s: u32,
     u32s: u32,
     erased_call_arg_plans: u32,
-    patterns: u32,
-    pattern_ids: u32,
     inline_scopes: u32,
     string_bytes: u32,
     boxy_names: u32,
@@ -429,8 +438,6 @@ pub const BodyRelocation = struct {
     u64s: u32,
     u32s: u32,
     erased_call_arg_plans: u32,
-    patterns: u32,
-    pattern_ids: u32,
     inline_scopes: u32,
     string_bytes: u32,
     join_point_id_base: u32,
@@ -519,8 +526,6 @@ pub fn captureBodyPrefix(self: *const Self) BodyPrefix {
         .u64s = @intCast(self.u64s.len()),
         .u32s = @intCast(self.u32s.len()),
         .erased_call_arg_plans = @intCast(self.erased_call_arg_plans.len()),
-        .patterns = @intCast(self.patterns.len()),
-        .pattern_ids = @intCast(self.pattern_ids.len()),
         .inline_scopes = @intCast(self.inline_scopes.len()),
         .string_bytes = self.stringByteCount(),
         .boxy_names = self.boxyNameCount(),
@@ -575,8 +580,6 @@ pub fn captureBodyShard(self: *const Self, prefix: BodyPrefix) AppendBodyError!B
         prefix.u64s > self.u64s.len() or
         prefix.u32s > self.u32s.len() or
         prefix.erased_call_arg_plans > self.erased_call_arg_plans.len() or
-        prefix.patterns > self.patterns.len() or
-        prefix.pattern_ids > self.pattern_ids.len() or
         prefix.inline_scopes > self.inline_scopes.len() or
         prefix.string_bytes > self.stringByteCount() or
         prefix.boxy_names > self.boxyNameCount() or
@@ -629,10 +632,6 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
         const raw = @backingInt(value);
         return if (raw < bases.join_point_id_first_fresh) value else @fromBackingInt(@intCast(bases.join_point_id_base + raw));
     }
-    if (T == LirPatternId) {
-        if (value == LirPatternId.none) return value;
-        return @fromBackingInt(@intCast(movedIndex(@backingInt(value), prefix.patterns, bases.patterns)));
-    }
     if (T == InlineScopeId) return value;
     if (T == LocalSpan) return if (value.len == 0) value else .{ .start = movedIndex(value.start, prefix.local_ids, bases.local_ids), .len = value.len };
     if (T == CFSwitchBranchSpan) return if (value.len == 0) value else .{ .start = movedIndex(value.start, prefix.cf_switch_branches, bases.cf_switch_branches), .len = value.len };
@@ -641,7 +640,6 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
     if (T == JoinPointSpan) return if (value.len == 0) value else .{ .start = movedIndex(value.start, prefix.join_points, bases.join_points), .len = value.len };
     if (T == U64Span) return if (value.len == 0) value else .{ .start = movedIndex(value.start, prefix.u64s, bases.u64s), .len = value.len };
     if (T == U32Span) return if (value.len == 0) value else .{ .start = movedIndex(value.start, prefix.u32s, bases.u32s), .len = value.len };
-    if (T == LirPatternSpan) return if (value.len == 0) value else .{ .start = movedIndex(value.start, prefix.pattern_ids, bases.pattern_ids), .len = value.len };
 
     const type_info = @typeInfo(T);
     if (comptime std.meta.activeTag(type_info) == .optional) {
@@ -729,8 +727,6 @@ pub fn appendBodyShardWithJoinRelocation(
         .u64s = @intCast(self.u64s.len()),
         .u32s = @intCast(self.u32s.len()),
         .erased_call_arg_plans = @intCast(self.erased_call_arg_plans.len()),
-        .patterns = @intCast(self.patterns.len()),
-        .pattern_ids = @intCast(self.pattern_ids.len()),
         .inline_scopes = @intCast(self.inline_scopes.len()),
         .string_bytes = self.ownStringByteCount(),
         .join_point_id_base = if (relocation) |joins| joins.offset else 0,
@@ -772,8 +768,6 @@ pub fn appendBodyShardWithJoinRelocation(
     try self.u64s.ensureUnusedCapacity(self.allocator, source.u64s.len() - source_prefix.u64s);
     try self.u32s.ensureUnusedCapacity(self.allocator, source.u32s.len() - source_prefix.u32s);
     try self.erased_call_arg_plans.ensureUnusedCapacity(self.allocator, source.erased_call_arg_plans.len() - source_prefix.erased_call_arg_plans);
-    try self.patterns.ensureUnusedCapacity(self.allocator, source.patterns.len() - source_prefix.patterns);
-    try self.pattern_ids.ensureUnusedCapacity(self.allocator, source.pattern_ids.len() - source_prefix.pattern_ids);
     try self.inline_scopes.ensureUnusedCapacity(self.allocator, source.inline_scopes.len() - source_prefix.inline_scopes);
 
     self.strings.appendEncodedAssumeCapacity(source_string_bytes);
@@ -786,22 +780,18 @@ pub fn appendBodyShardWithJoinRelocation(
         self.string_builder.registerExistingAssumeCapacity(&self.strings, destination_id);
     }
     for (source.inline_scopes.unsafeRawItemsForView()[source_prefix.inline_scopes..]) |item| {
-        try self.inline_scopes.append(
-            self.allocator,
+        self.inline_scopes.appendAssumeCapacity(
             relocateBodyValue(InlineScope, item, prefix, bases),
         );
     }
     const local_ids = source.local_ids.unsafeRawItemsForView();
-    for (local_ids[source_prefix.local_ids..]) |item| try self.local_ids.append(self.allocator, relocateBodyValue(LocalId, item, prefix, bases));
-    try self.u64s.appendSlice(self.allocator, source.u64s.unsafeRawItemsForView()[source_prefix.u64s..]);
-    try self.u32s.appendSlice(self.allocator, source.u32s.unsafeRawItemsForView()[source_prefix.u32s..]);
-    for (source.erased_call_arg_plans.unsafeRawItemsForView()[source_prefix.erased_call_arg_plans..]) |item| try self.erased_call_arg_plans.append(self.allocator, relocateBodyValue(ErasedCallArgsPlan, item, prefix, bases));
-    for (source.pattern_ids.unsafeRawItemsForView()[source_prefix.pattern_ids..]) |item| try self.pattern_ids.append(self.allocator, relocateBodyValue(LirPatternId, item, prefix, bases));
-    for (source.patterns.unsafeRawItemsForView()[source_prefix.patterns..]) |item| try self.patterns.append(self.allocator, relocateBodyValue(LirPattern, item, prefix, bases));
-    for (source.locals.unsafeRawItemsForView()[source_prefix.locals..]) |item| try self.locals.append(self.allocator, relocateBodyValue(Local, item, prefix, bases));
+    for (local_ids[source_prefix.local_ids..]) |item| self.local_ids.appendAssumeCapacity(relocateBodyValue(LocalId, item, prefix, bases));
+    self.u64s.appendSliceAssumeCapacity(source.u64s.unsafeRawItemsForView()[source_prefix.u64s..]);
+    self.u32s.appendSliceAssumeCapacity(source.u32s.unsafeRawItemsForView()[source_prefix.u32s..]);
+    for (source.erased_call_arg_plans.unsafeRawItemsForView()[source_prefix.erased_call_arg_plans..]) |item| self.erased_call_arg_plans.appendAssumeCapacity(relocateBodyValue(ErasedCallArgsPlan, item, prefix, bases));
+    for (source.locals.unsafeRawItemsForView()[source_prefix.locals..]) |item| self.locals.appendAssumeCapacity(relocateBodyValue(Local, item, prefix, bases));
     for (source.local_names.unsafeRawItemsForView()[source_prefix.locals..]) |name| {
-        try self.local_names.append(
-            self.allocator,
+        self.local_names.appendAssumeCapacity(
             if (name == no_local_name)
                 no_local_name
             else
@@ -813,22 +803,20 @@ pub fn appendBodyShardWithJoinRelocation(
                 )),
         );
     }
-    for (source.cf_switch_branches.unsafeRawItemsForView()[source_prefix.cf_switch_branches..]) |item| try self.cf_switch_branches.append(self.allocator, relocateBodyValue(CFSwitchBranch, item, prefix, bases));
-    for (source.str_match_steps.unsafeRawItemsForView()[source_prefix.str_match_steps..]) |item| try self.str_match_steps.append(self.allocator, relocateBodyValue(StrMatchStep, item, prefix, bases));
-    for (source.str_match_arms.unsafeRawItemsForView()[source_prefix.str_match_arms..]) |item| try self.str_match_arms.append(self.allocator, relocateBodyValue(StrMatchArm, item, prefix, bases));
-    for (source.join_points.unsafeRawItemsForView()[source_prefix.join_points..]) |item| try self.join_points.append(self.allocator, relocateBodyValue(JoinPoint, item, prefix, bases));
-    for (source.cf_stmts.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |item| try self.cf_stmts.append(self.allocator, relocateBodyValue(CFStmt, item, prefix, bases));
-    try self.cf_stmt_locs.appendSlice(self.allocator, source.cf_stmt_locs.unsafeRawItemsForView()[source_prefix.cf_stmts..]);
-    try self.cf_stmt_regions.appendSlice(self.allocator, source.cf_stmt_regions.unsafeRawItemsForView()[source_prefix.cf_stmts..]);
+    for (source.cf_switch_branches.unsafeRawItemsForView()[source_prefix.cf_switch_branches..]) |item| self.cf_switch_branches.appendAssumeCapacity(relocateBodyValue(CFSwitchBranch, item, prefix, bases));
+    for (source.str_match_steps.unsafeRawItemsForView()[source_prefix.str_match_steps..]) |item| self.str_match_steps.appendAssumeCapacity(relocateBodyValue(StrMatchStep, item, prefix, bases));
+    for (source.str_match_arms.unsafeRawItemsForView()[source_prefix.str_match_arms..]) |item| self.str_match_arms.appendAssumeCapacity(relocateBodyValue(StrMatchArm, item, prefix, bases));
+    for (source.join_points.unsafeRawItemsForView()[source_prefix.join_points..]) |item| self.join_points.appendAssumeCapacity(relocateBodyValue(JoinPoint, item, prefix, bases));
+    for (source.cf_stmts.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |item| self.cf_stmts.appendAssumeCapacity(relocateBodyValue(CFStmt, item, prefix, bases));
+    self.cf_stmt_locs.appendSliceAssumeCapacity(source.cf_stmt_locs.unsafeRawItemsForView()[source_prefix.cf_stmts..]);
+    self.cf_stmt_regions.appendSliceAssumeCapacity(source.cf_stmt_regions.unsafeRawItemsForView()[source_prefix.cf_stmts..]);
     for (source.cf_stmt_inline_scopes.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |scope| {
-        try self.cf_stmt_inline_scopes.append(
-            self.allocator,
+        self.cf_stmt_inline_scopes.appendAssumeCapacity(
             relocateBodyValue(InlineScopeId, scope, prefix, bases),
         );
     }
     for (source.cf_stmt_origin_kinds.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |kind| {
-        try self.cf_stmt_origin_kinds.append(
-            self.allocator,
+        self.cf_stmt_origin_kinds.appendAssumeCapacity(
             relocateBodyValue(OriginKind, kind, prefix, bases),
         );
     }
@@ -870,8 +858,6 @@ string_builder: base.StringLiteral.BuilderState,
 strings_insertable: bool,
 allocator: Allocator,
 next_synthetic_symbol: u64,
-patterns: GuardedList.List(LirPattern, "LirStore.patterns"),
-pattern_ids: GuardedList.List(LirPatternId, "LirStore.pattern_ids"),
 /// Source file table (module display names) for `SourceLoc.file`, flattened
 /// as concatenated bytes plus per-entry end offsets so it can be mapped
 /// zero-copy from a LIR image.
@@ -940,8 +926,6 @@ pub fn init(allocator: Allocator) Self {
         .strings_insertable = true,
         .allocator = allocator,
         .next_synthetic_symbol = 0xf000_0000_0000_0000,
-        .patterns = .empty,
-        .pattern_ids = .empty,
         .source_file_bytes = .empty,
         .source_file_ends = .empty,
         .source_file_qualified_bytes = .empty,
@@ -1005,8 +989,6 @@ pub fn releaseCode(self: *Self) void {
         "u64s",
         "u32s",
         "erased_call_arg_plans",
-        "patterns",
-        "pattern_ids",
         "cf_stmt_locs",
         "cf_stmt_regions",
         "cf_stmt_inline_scopes",
@@ -1035,8 +1017,6 @@ pub fn deinit(self: *Self) void {
     self.string_builder.deinit(self.allocator);
     self.strings.deinit(self.allocator);
     self.boxy_names.deinit(self.allocator);
-    self.patterns.deinit(self.allocator);
-    self.pattern_ids.deinit(self.allocator);
     self.source_file_bytes.deinit(self.allocator);
     self.source_file_ends.deinit(self.allocator);
     self.source_file_qualified_bytes.deinit(self.allocator);
@@ -1092,6 +1072,20 @@ pub fn copyProcDebugInfo(self: *Self, dst: LirProcSpecId, src: LirProcSpecId) Al
 pub fn procDebugName(self: *const Self, id: LirProcSpecId) ?[]const u8 {
     const idx = self.procDebugNameIndex(id) orelse return null;
     return self.getString(idx);
+}
+
+/// `id` as an ICE-context procedure whose source name resolves through this
+/// store only when a crash report is printed.
+pub fn iceContextProc(self: *const Self, id: LirProcSpecId) base.ice_context.Proc {
+    return .{
+        .id = @backingInt(id),
+        .names = .{ .context = self, .nameFn = iceContextProcName },
+    };
+}
+
+fn iceContextProcName(context: *const anyopaque, id: u32) ?[]const u8 {
+    const self: *const Self = @ptrCast(@alignCast(context));
+    return self.procDebugName(@fromBackingInt(id));
 }
 
 /// Stored debug-name string id for a proc, used when a procedure boundary is
@@ -1165,7 +1159,7 @@ pub fn sourceFileModuleIdentity(self: *const Self, file: u32) [32]u8 {
 pub fn stmtLoc(self: *const Self, id: CFStmtId) base.SourceLoc {
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.keys.indices.get(index)) |private| {
+        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
             if (rewrite.cf_stmt_locs.owned(private)) return rewrite.cf_stmt_locs.rows.get(private);
         }
     }
@@ -1180,7 +1174,7 @@ pub fn stmtLoc(self: *const Self, id: CFStmtId) base.SourceLoc {
 pub fn stmtInlineScope(self: *const Self, id: CFStmtId) InlineScopeId {
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.keys.indices.get(index)) |private| {
+        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
             if (rewrite.cf_stmt_inline_scopes.owned(private)) return rewrite.cf_stmt_inline_scopes.rows.get(private);
         }
     }
@@ -1201,11 +1195,6 @@ pub fn inlineScope(self: *const Self, id: InlineScopeId) InlineScope {
     return self.inline_scopes.get(index);
 }
 
-/// Number of virtual source frames.
-pub fn inlineScopeCount(self: *const Self) usize {
-    return self.inline_scopes.len() + if (self.body_coordinator != null) self.body_prefix.inline_scopes else 0;
-}
-
 /// Number of inline scopes physically owned by this store.
 pub fn bodyOwnedInlineScopeCount(self: *const Self) usize {
     return self.inline_scopes.len();
@@ -1224,7 +1213,7 @@ pub fn addInlineScope(self: *Self, scope: InlineScope) Allocator.Error!InlineSco
 pub fn stmtRegion(self: *const Self, id: CFStmtId) base.Region {
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.keys.indices.get(index)) |private| {
+        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
             if (rewrite.cf_stmt_regions.owned(private)) return rewrite.cf_stmt_regions.rows.get(private);
         }
     }
@@ -1239,7 +1228,7 @@ pub fn stmtRegion(self: *const Self, id: CFStmtId) base.Region {
 pub fn stmtOriginKind(self: *const Self, id: CFStmtId) OriginKind {
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.keys.indices.get(index)) |private| {
+        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
             if (rewrite.cf_stmt_origin_kinds.owned(private)) return rewrite.cf_stmt_origin_kinds.rows.get(private);
         }
     }
@@ -1265,33 +1254,6 @@ pub fn stmtOrigin(self: *const Self, id: CFStmtId) StmtOrigin {
 pub fn procLoc(self: *const Self, id: LirProcSpecId) base.SourceLoc {
     if (self.body_coordinator) |coordinator| return coordinator.procLoc(id);
     return self.proc_locs.get(@backingInt(id));
-}
-
-/// Appends a pattern and returns its id.
-pub fn addPattern(self: *Self, pattern: LirPattern) Allocator.Error!LirPatternId {
-    const id: LirPatternId = @fromBackingInt(@intCast(self.patterns.len() + if (self.body_coordinator != null) self.body_prefix.patterns else 0));
-    try self.patterns.append(self.allocator, pattern);
-    return id;
-}
-
-/// Returns the pattern for a given id.
-pub fn getPattern(self: *const Self, id: LirPatternId) LirPattern {
-    const index = @backingInt(id);
-    if (self.body_coordinator) |coordinator| {
-        if (index < self.body_prefix.patterns) return coordinator.getPattern(id);
-        return self.patterns.get(index - self.body_prefix.patterns);
-    }
-    return self.patterns.get(index);
-}
-
-/// Number of stored patterns.
-pub fn patternCount(self: *const Self) usize {
-    return self.patterns.len() + if (self.body_coordinator != null) self.body_prefix.patterns else 0;
-}
-
-/// Returns all stored patterns.
-pub fn getPatterns(self: *const Self) []const LirPattern {
-    return self.patterns.unsafeRawItemsForView();
 }
 
 /// The 32-bit start and length of a span of `count` items appended after
@@ -1348,18 +1310,6 @@ inline fn borrowStoreSpanMut(self: *Self, comptime T: type, comptime field: []co
         self.assertBodyMetadataImmutable();
     }
     return @field(self, field).borrowSpanMut(span.start - if (self.body_coordinator != null) @field(self.body_prefix, field) else 0, span.len);
-}
-
-/// Appends a slice of pattern ids and returns the span.
-pub fn addPatternSpan(self: *Self, ids: []const LirPatternId) Allocator.Error!LirPatternSpan {
-    const range = try spanRange(self.pattern_ids.len() + if (self.body_coordinator != null) self.body_prefix.pattern_ids else 0, ids.len);
-    try self.pattern_ids.appendSlice(self.allocator, ids);
-    return .{ .start = range.start, .len = range.len };
-}
-
-/// Returns the pattern ids for a given span.
-pub fn getPatternSpan(self: *const Self, span: LirPatternSpan) StoreSpanBorrow(LirPatternId, "pattern_ids") {
-    return self.borrowStoreSpan(LirPatternId, "pattern_ids", getPatternSpan, span);
 }
 
 /// Returns a fresh synthetic symbol for compiler-generated locals and procs.
@@ -1652,11 +1602,11 @@ pub fn addCFStmt(self: *Self, stmt: CFStmt, origin: StmtOrigin) Allocator.Error!
     try self.cf_stmt_regions.ensureUnusedCapacity(self.allocator, 1);
     try self.cf_stmt_inline_scopes.ensureUnusedCapacity(self.allocator, 1);
     try self.cf_stmt_origin_kinds.ensureUnusedCapacity(self.allocator, 1);
-    try self.cf_stmts.append(self.allocator, stmt);
-    try self.cf_stmt_locs.append(self.allocator, origin.loc);
-    try self.cf_stmt_regions.append(self.allocator, origin.region);
-    try self.cf_stmt_inline_scopes.append(self.allocator, origin.inline_scope);
-    try self.cf_stmt_origin_kinds.append(self.allocator, origin.kind);
+    self.cf_stmts.appendAssumeCapacity(stmt);
+    self.cf_stmt_locs.appendAssumeCapacity(origin.loc);
+    self.cf_stmt_regions.appendAssumeCapacity(origin.region);
+    self.cf_stmt_inline_scopes.appendAssumeCapacity(origin.inline_scope);
+    self.cf_stmt_origin_kinds.appendAssumeCapacity(origin.kind);
     self.noteStmtShapes(stmt);
     const id: CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(idx))));
     if (self.tail_call_builder) |builder| try builder.record(id, stmt);
@@ -1698,27 +1648,12 @@ pub fn getCFStmts(self: *const Self) []const CFStmt {
     return self.cf_stmts.unsafeRawItemsForView();
 }
 
-/// Number of stored statement source-location entries.
-pub fn cfStmtLocCount(self: *const Self) usize {
-    return self.cf_stmt_locs.len();
-}
-
-/// Returns all stored statement source-location entries.
-pub fn getCFStmtLocs(self: *const Self) []const base.SourceLoc {
-    return self.cf_stmt_locs.unsafeRawItemsForView();
-}
-
-/// Returns all stored statement source-region entries.
-pub fn getCFStmtRegions(self: *const Self) []const base.Region {
-    return self.cf_stmt_regions.unsafeRawItemsForView();
-}
-
 /// Returns the stored statement for the given id.
 pub fn getCFStmt(self: *const Self, id: CFStmtId) CFStmt {
     self.verifyCFStmtId(id);
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.keys.indices.get(index)) |private| {
+        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
             if (rewrite.cf_stmts.owned(private)) return rewrite.cf_stmts.data.rows.get(private);
         }
     }
@@ -1727,6 +1662,25 @@ pub fn getCFStmt(self: *const Self, id: CFStmtId) CFStmt {
         return self.cf_stmts.get(index - self.body_prefix.cf_stmts);
     }
     return self.cf_stmts.get(index);
+}
+
+/// A read-only pointer to the stored statement for the given id, which stays
+/// valid until a statement is next added or a rewrite next materializes. A
+/// caller that only switches on the statement reads it through this instead of
+/// copying the whole statement union out with `getCFStmt`.
+pub fn getCFStmtImmediate(self: *const Self, id: CFStmtId) *const CFStmt {
+    self.verifyCFStmtId(id);
+    const index = @backingInt(id);
+    if (self.proc_rewrite) |*rewrite| {
+        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
+            if (rewrite.cf_stmts.owned(private)) return rewrite.cf_stmts.data.rows.getPtrConstImmediate(private);
+        }
+    }
+    if (self.body_coordinator) |coordinator| {
+        if (index < self.body_prefix.cf_stmts) return coordinator.getCFStmtImmediate(id);
+        return self.cf_stmts.getPtrConstImmediate(index - self.body_prefix.cf_stmts);
+    }
+    return self.cf_stmts.getPtrConstImmediate(index);
 }
 
 /// Returns a mutable pointer to the stored statement for the given id.
@@ -1888,7 +1842,6 @@ fn noteStmtShapes(self: *Self, stmt: CFStmt) void {
         .assign_boxy_dict_ref,
         .assign_boxy_box,
         .assign_boxy_record_update,
-        .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
@@ -1915,8 +1868,6 @@ fn noteStmtShapes(self: *Self, stmt: CFStmt) void {
         .switch_initialized_payload,
         .str_match,
         .str_match_set,
-        .loop_continue,
-        .loop_break,
         .jump,
         .ret,
         .crash,
@@ -1929,24 +1880,9 @@ pub fn procSpecCount(self: *const Self) usize {
     return self.proc_specs.len() + if (self.body_coordinator != null) self.body_prefix.proc_specs else 0;
 }
 
-/// Returns all stored proc source-location entries.
-pub fn getProcLocs(self: *const Self) []const base.SourceLoc {
-    return self.proc_locs.unsafeRawItemsForView();
-}
-
 /// Number of stored proc debug-name entries.
 pub fn procDebugNameCount(self: *const Self) usize {
     return self.proc_debug_names.len();
-}
-
-/// Returns all stored proc debug-name entries.
-pub fn getProcDebugNames(self: *const Self) []const ProcDebugName {
-    return self.proc_debug_names.unsafeRawItemsForView();
-}
-
-/// Returns all raw local-name table entries.
-pub fn getLocalNamesRaw(self: *const Self) []const u32 {
-    return self.local_names.unsafeRawItemsForView();
 }
 
 /// Returns the stored proc specification for the given id.
@@ -1972,6 +1908,18 @@ pub fn setProcSpecBodyAndJoinPoints(self: *Self, idx: LirProcSpecId, body: ?CFSt
     proc.body = body;
     proc.join_points = join_points;
     proc.shapes = proc.shapes.merged(self.shapes);
+}
+
+/// A read-only pointer to the stored procedure specification, valid until a
+/// procedure is next added or a rewrite next materializes. A caller that reads
+/// a field or two goes through this instead of copying the whole
+/// specification out with `getProcSpec`.
+pub fn getProcSpecImmediate(self: *const Self, idx: LirProcSpecId) *const LirProcSpec {
+    if (self.proc_rewrite) |*rewrite| {
+        if (idx == rewrite.proc_id) return &rewrite.proc;
+    }
+    if (self.body_coordinator) |coordinator| return coordinator.getProcSpecImmediate(idx);
+    return self.proc_specs.getPtrConstImmediate(@backingInt(idx));
 }
 
 /// Returns a mutable pointer to the stored proc specification for the given id.
@@ -2068,8 +2016,8 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
     try std.testing.expectEqual(other_ret, a.getProcSpec(second).body.?);
     try std.testing.expect(a.procRewriteChanged());
     try std.testing.expect(b.procRewriteChanged());
-    try coordinator.commitProcRewrite(&a);
-    try coordinator.commitProcRewrite(&b);
+    try coordinator.commitProcRewriteWithJoinRelocation(&a, null);
+    try coordinator.commitProcRewriteWithJoinRelocation(&b, null);
     const committed_a = coordinator.getProcSpec(first);
     const committed_b = coordinator.getProcSpec(second);
     try std.testing.expectEqual(appended_a, committed_a.body.?);
@@ -2222,7 +2170,7 @@ test "procedure rewrite prepares tail chains and overlapping arm spans" {
     try std.testing.expectEqual(appended, GuardedList.at(worker.getStrMatchArms(arms), 1).on_match);
     try std.testing.expectEqual(ret, GuardedList.at(coordinator.getStrMatchArms(arms), 1).on_match);
     try std.testing.expect(coordinator.getCFStmt(tail).assign_call.tail_call.?.next == null);
-    try coordinator.commitProcRewrite(&worker);
+    try coordinator.commitProcRewriteWithJoinRelocation(&worker, null);
     try std.testing.expectEqual(appended, GuardedList.at(coordinator.getStrMatchArms(arms), 1).on_match);
     try std.testing.expectEqual(appended, coordinator.getCFStmt(tail).assign_call.tail_call.?.next.?);
 }
@@ -2290,8 +2238,6 @@ test "body shard relocates nonzero local and body suffixes" {
     defer coordinator.deinit();
     const global = try coordinator.addLocal(.{ .layout_idx = .zst });
     _ = try coordinator.addLocalSpan(&.{global});
-    const global_pattern = try coordinator.addPattern(.{ .wildcard = .{ .layout_idx = .zst } });
-    _ = try coordinator.addPatternSpan(&.{global_pattern});
     const coordinator_name = try coordinator.insertString("coordinator");
     const body_inline_scope = try coordinator.addInlineScope(.{
         .source_symbol = Symbol.fromRaw(123),
@@ -2349,15 +2295,6 @@ test "body shard relocates nonzero local and body suffixes" {
         .params = frame,
         .body = ret,
     }});
-    const child_pattern = try worker.addPattern(.{ .wildcard = .{ .layout_idx = .zst } });
-    const string_pattern = try worker.addPattern(.{ .str_literal = body_name });
-    const pattern_args = try worker.addPatternSpan(&.{child_pattern});
-    const parent_pattern = try worker.addPattern(.{ .tag = .{
-        .discriminant = 1,
-        .union_layout = .zst,
-        .args = pattern_args,
-    } });
-    const pattern_ids = try worker.addPatternSpan(&.{ parent_pattern, child_pattern, string_pattern });
 
     const shard = try worker.captureBodyShard(prefix);
     // Give every destination body space a nonzero base.
@@ -2378,8 +2315,6 @@ test "body shard relocates nonzero local and body suffixes" {
         .on_match = destination_stmt,
     }});
     _ = try coordinator.addJoinPointSpan(&.{.{ .id = @fromBackingInt(@intCast(99)), .params = .empty(), .body = destination_stmt }});
-    const destination_pattern = try coordinator.addPattern(.{ .wildcard = .{ .layout_idx = .zst } });
-    _ = try coordinator.addPatternSpan(&.{destination_pattern});
     const destination_name = try coordinator.insertString("destination");
     _ = try coordinator.addInlineScope(.{
         .source_symbol = Symbol.fromRaw(789),
@@ -2428,17 +2363,7 @@ test "body shard relocates nonzero local and body suffixes" {
         @as(u64, 9),
         GuardedList.at(coordinator.getU64Span(.{ .start = appended.relocation.u64s, .len = masks.len }), 0),
     );
-    const relocated_pattern_ids = coordinator.getPatternSpan(.{ .start = appended.relocation.pattern_ids + 1, .len = pattern_ids.len });
-    try std.testing.expectEqual(@as(u32, 4), @backingInt(GuardedList.at(relocated_pattern_ids, 0)));
-    try std.testing.expectEqual(@as(u32, 2), @backingInt(GuardedList.at(relocated_pattern_ids, 1)));
-    try std.testing.expectEqualStrings(
-        "body_local",
-        coordinator.getString(coordinator.getPattern(GuardedList.at(relocated_pattern_ids, 2)).str_literal),
-    );
-    const relocated_parent = coordinator.getPattern(GuardedList.at(relocated_pattern_ids, 0)).tag;
-    try std.testing.expectEqual(appended.relocation.pattern_ids, relocated_parent.args.start);
-    try std.testing.expectEqual(GuardedList.at(relocated_pattern_ids, 1), GuardedList.at(coordinator.getPatternSpan(relocated_parent.args), 0));
-    try std.testing.expectEqual(coordinator.cfStmtCount(), coordinator.cfStmtLocCount());
+    try std.testing.expectEqual(coordinator.cfStmtCount(), coordinator.cf_stmt_locs.len());
     try std.testing.expectEqual(coordinator.localCount(), coordinator.local_names.len());
 }
 
@@ -2477,11 +2402,6 @@ test "body shard append preserves destination on every reserve-stage allocation 
             _ = try source.addU64Span(&u64s);
             const offsets = try source.addU32Span(&u32s);
             for (0..9) |_| try source.erased_call_arg_plans.append(source.allocator, .{ .offsets = offsets, .size = 4, .alignment = 4 });
-            var pattern_ids: [9]LirPatternId = undefined;
-            for (&pattern_ids) |*pattern_id| {
-                pattern_id.* = try source.addPattern(.{ .wildcard = .{ .layout_idx = .zst } });
-            }
-            _ = try source.addPatternSpan(&pattern_ids);
             var source_stmt: CFStmtId = undefined;
             for (0..9) |index| {
                 const stmt = try source.addCFStmt(.{ .ret = .{ .value = local_ids[0] } }, .test_fixture);
@@ -2521,8 +2441,6 @@ test "body shard append preserves destination on every reserve-stage allocation 
             _ = try destination.addU64Span(&.{3});
             _ = try destination.addU32Span(&.{5});
             try destination.erased_call_arg_plans.append(destination.allocator, .{ .offsets = .{ .start = 0, .len = 1 }, .size = 4, .alignment = 4 });
-            const destination_pattern = try destination.addPattern(.{ .wildcard = .{ .layout_idx = .zst } });
-            _ = try destination.addPatternSpan(&.{destination_pattern});
             const destination_stmt = try destination.addCFStmt(.{ .ret = .{ .value = destination_local } }, .test_fixture);
             _ = try destination.addCFSwitchBranches(&.{.{ .value = 2, .body = destination_stmt }});
             _ = try destination.addStrMatchSteps(&.{.{ .capture = .discard, .delimiter = .{ .backing = .none, .offset = 0, .len = 0 } }});
@@ -2571,8 +2489,6 @@ test "body shard append preserves destination on every reserve-stage allocation 
                 try std.testing.expectEqual(@as(usize, 1), destination.u64s.len());
                 try std.testing.expectEqual(@as(usize, 1), destination.u32s.len());
                 try std.testing.expectEqual(@as(usize, 1), destination.erased_call_arg_plans.len());
-                try std.testing.expectEqual(@as(usize, 1), destination.patterns.len());
-                try std.testing.expectEqual(@as(usize, 1), destination.pattern_ids.len());
                 try std.testing.expectEqual(destination_string_bytes, destination.ownStringByteCount());
                 try std.testing.expectEqual(destination_inline_scopes, destination.inline_scopes.len());
                 try std.testing.expectEqual(@as(u64, 2), destination.cf_switch_branches.get(0).value);

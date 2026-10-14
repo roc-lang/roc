@@ -17,6 +17,9 @@ const SourceFrame = runtime_shared.SourceFrame;
 const normalizedAlignment = runtime_shared.normalizedAlignment;
 const alignForward = runtime_shared.alignForward;
 const defaultTrunc = runtime_shared.defaultTrunc;
+const defaultMemcpy = runtime_shared.defaultMemcpy;
+const defaultMemmove = runtime_shared.defaultMemmove;
+const defaultMemset = runtime_shared.defaultMemset;
 
 pub const panic = std.debug.no_panic;
 
@@ -349,18 +352,7 @@ fn writeAll(fd: usize, bytes: []const u8) void {
 
 fn writeUnsigned(fd: usize, value: anytype) void {
     var buf: [20]u8 = undefined;
-    var index = buf.len;
-    var n: u64 = @intCast(value);
-    if (n == 0) {
-        writeLiteral(fd, "0");
-        return;
-    }
-    while (n != 0) {
-        index -= 1;
-        buf[index] = '0' + @as(u8, @intCast(n % 10));
-        n /= 10;
-    }
-    writeAll(fd, buf[index..]);
+    writeAll(fd, runtime_shared.formatUnsigned(&buf, @intCast(value)));
 }
 
 fn exitFailure() noreturn {
@@ -379,32 +371,4 @@ fn allocationHeaderValue(user: [*]u8, index: usize) usize {
 fn allocationHeaderPtr(user: [*]u8, index: usize) *usize {
     const byte_offset = (allocation_header_words - index) * @sizeOf(usize);
     return @ptrCast(@alignCast(user - byte_offset));
-}
-
-fn defaultMemcpy(dest: [*]u8, src: [*]const u8, len: usize) callconv(.c) [*]u8 {
-    var i: usize = 0;
-    while (i < len) : (i += 1) dest[i] = src[i];
-    return dest;
-}
-
-fn defaultMemmove(dest: [*]u8, src: [*]const u8, len: usize) callconv(.c) [*]u8 {
-    if (@intFromPtr(dest) <= @intFromPtr(src)) {
-        var i: usize = 0;
-        while (i < len) : (i += 1) dest[i] = src[i];
-    } else {
-        var i = len;
-        while (i != 0) {
-            i -= 1;
-            dest[i] = src[i];
-        }
-    }
-    return dest;
-}
-
-fn defaultMemset(dest: [*]u8, value: c_int, len: usize) callconv(.c) [*]u8 {
-    const byte: u8 = @bitCast(@as(i8, @truncate(value)));
-    const volatile_dest: [*]volatile u8 = dest;
-    var i: usize = 0;
-    while (i < len) : (i += 1) volatile_dest[i] = byte;
-    return dest;
 }

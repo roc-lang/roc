@@ -17,6 +17,7 @@ const WindowsFastcall = @import("WindowsFastcall.zig");
 const Relocation = @import("../Relocation.zig").IndexedRelocation;
 const SymbolTable = @import("../SymbolTable.zig");
 const FrameBuilderMod = @import("../FrameBuilder.zig");
+const RegisterPool = @import("../RegisterPool.zig");
 
 const GeneralReg = Registers.GeneralReg;
 const FloatReg = Registers.FloatReg;
@@ -113,71 +114,14 @@ pub fn CodeGen(comptime target: RocTarget) type {
             self.callee_saved_available = CALLEE_SAVED_GENERAL_MASK;
         }
 
-        /// Get the generated code
-        pub fn getCode(self: *Self) []const u8 {
-            return self.emit.buf.items;
-        }
-
-        /// Get current code offset
-        pub fn currentOffset(self: *Self) usize {
-            return self.emit.buf.items.len;
-        }
-
-        // Register allocation. LirCodeGen keeps every semantic local in its
-        // authoritative stable-location table; these masks manage only bounded,
-        // short-lived instruction-selection temporaries.
-
-        pub fn allocGeneral(self: *Self) ?GeneralReg {
-            // Try caller-saved first
-            if (self.allocFromGeneralMask(&self.free_general)) |reg| {
-                return reg;
-            }
-            // Try callee-saved
-            if (self.allocFromGeneralMask(&self.callee_saved_available)) |reg| {
-                self.callee_saved_used |= @as(u16, 1) << @intCast(@backingInt(reg));
-                return reg;
-            }
-            return null;
-        }
-
-        fn allocFromGeneralMask(_: *Self, mask: *u32) ?GeneralReg {
-            if (mask.* == 0) return null;
-            const bit: u5 = @intCast(@ctz(mask.*));
-            mask.* &= ~(@as(u32, 1) << bit);
-            return @fromBackingInt(@intCast(bit));
-        }
-
-        /// Free a general-purpose register, making it available for allocation.
-        pub fn freeGeneral(self: *Self, reg: GeneralReg) void {
-            const idx = @backingInt(reg);
-            // Return to appropriate pool
-            if ((CALLEE_SAVED_GENERAL_MASK & (@as(u32, 1) << idx)) != 0) {
-                self.callee_saved_available |= @as(u32, 1) << idx;
-            } else {
-                self.free_general |= @as(u32, 1) << idx;
-            }
-        }
-
-        /// Mark a register as in use so it won't be allocated.
-        /// Used for return values from function calls that need to persist.
-        pub fn markRegisterInUse(self: *Self, reg: GeneralReg) void {
-            const idx = @backingInt(reg);
-            // Remove from free pool (it's now in use)
-            self.free_general &= ~(@as(u16, 1) << @intCast(idx));
-            self.callee_saved_available &= ~(@as(u16, 1) << @intCast(idx));
-        }
-
-        pub fn allocFloat(self: *Self) ?FloatReg {
-            if (self.free_float == 0) return null;
-            const bit: u5 = @intCast(@ctz(self.free_float));
-            self.free_float &= ~(@as(u32, 1) << bit);
-            return @fromBackingInt(@intCast(bit));
-        }
-
-        pub fn freeFloat(self: *Self, reg: FloatReg) void {
-            const idx = @backingInt(reg);
-            self.free_float |= @as(u32, 1) << idx;
-        }
+        const Pool = RegisterPool.Methods(Self, GeneralReg, FloatReg, CALLEE_SAVED_GENERAL_MASK);
+        pub const getCode = Pool.getCode;
+        pub const currentOffset = Pool.currentOffset;
+        pub const allocGeneral = Pool.allocGeneral;
+        pub const freeGeneral = Pool.freeGeneral;
+        pub const markRegisterInUse = Pool.markRegisterInUse;
+        pub const allocFloat = Pool.allocFloat;
+        pub const freeFloat = Pool.freeFloat;
 
         // Stack management
 

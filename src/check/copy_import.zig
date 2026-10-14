@@ -622,6 +622,7 @@ fn stepIdentity(ctx: *CopyContext, frame: *IdentityFrame) std.mem.Allocator.Erro
                     .expr_region = frame.source_constraints[frame.idx].interpolation.expr_region,
                     .item_var = dest_item_var,
                     .interpolated_parts = dest_parts_range,
+                    .regions = .imported,
                 };
                 frame.stage = .finish_constraint;
             },

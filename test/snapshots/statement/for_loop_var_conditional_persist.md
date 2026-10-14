@@ -174,37 +174,39 @@ NO CHANGE
 						(e-num (value "7"))
 						(e-num (value "8"))))
 				(e-block
-					(e-if
-						(if-branches
-							(if-branch
-								(e-method-eq (negated "false")
-									(lhs
-										(e-dispatch-call (method "rem_by") (constraint-fn-var 378)
-											(receiver
-												(e-lookup-local
-													(p-assign (ident "n"))))
-											(args
-												(e-num (value "2")))))
-									(rhs
-										(e-num (value "0"))))
+					(s-expr
+						(e-if
+							(if-branches
+								(if-branch
+									(e-method-eq (negated "false")
+										(lhs
+											(e-dispatch-call (method "rem_by") (constraint-fn-var 380)
+												(receiver
+													(e-lookup-local
+														(p-assign (ident "n"))))
+												(args
+													(e-num (value "2")))))
+										(rhs
+											(e-num (value "0"))))
+									(e-block
+										(s-reassign
+											(p-var-assign (ident "lastEven_"))
+											(e-lookup-local
+												(p-assign (ident "n"))))
+										(s-reassign
+											(p-var-assign (ident "evenCount_"))
+											(e-dispatch-call (method "plus") (constraint-fn-var 400)
+												(receiver
+													(e-lookup-local
+														(p-var-assign (ident "evenCount_"))))
+												(args
+													(e-num (value "1")))))
+										(e-empty_record))))
+							(if-else
 								(e-block
-									(s-reassign
-										(p-var-assign (ident "lastEven_"))
-										(e-lookup-local
-											(p-assign (ident "n"))))
-									(s-reassign
-										(p-var-assign (ident "evenCount_"))
-										(e-dispatch-call (method "plus") (constraint-fn-var 398)
-											(receiver
-												(e-lookup-local
-													(p-var-assign (ident "evenCount_"))))
-											(args
-												(e-num (value "1")))))
-									(e-empty_record))))
-						(if-else
-							(e-block
-								(e-empty_record))))))
-			(e-dispatch-call (method "times") (constraint-fn-var 402)
+									(e-empty_record)))))
+					(e-empty_record)))
+			(e-dispatch-call (method "times") (constraint-fn-var 405)
 				(receiver
 					(e-lookup-local
 						(p-var-assign (ident "lastEven_"))))

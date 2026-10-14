@@ -38,8 +38,10 @@ comptime {
 // Fluxsort
 // The high level fluxsort functions.
 
-/// TODO: document fluxsort
-pub fn fluxsort(
+/// Sorts `array` with `direct` in place when elements fit the swap buffer,
+/// and otherwise by sorting an array of element pointers and copying back.
+inline fn sortWithIndirection(
+    comptime direct: anytype,
     array: [*]u8,
     len: usize,
     cmp: CompareFn,
@@ -58,14 +60,11 @@ pub fn fluxsort(
     // Then have our builtin dispatch to the correct version.
     // llvm garbage collection would remove all other variants.
     // Also, for numeric types, inlining the compare function can be a 2x perf gain.
-    if (len < 132) {
-        // Just quadsort it.
-        quadsort(array, len, cmp, cmp_data, data_is_owned_runtime, inc_n_context, inc_n_data, element_width, alignment, copy, roc_ops);
-    } else if (element_width <= MAX_ELEMENT_BUFFER_SIZE) {
+    if (element_width <= MAX_ELEMENT_BUFFER_SIZE) {
         if (data_is_owned_runtime) {
-            fluxsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, true, inc_n_context, inc_n_data, false, roc_ops);
+            direct(array, len, cmp, cmp_data, element_width, alignment, copy, true, inc_n_context, inc_n_data, false, roc_ops);
         } else {
-            fluxsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, false, inc_n_context, inc_n_data, false, roc_ops);
+            direct(array, len, cmp, cmp_data, element_width, alignment, copy, false, inc_n_context, inc_n_data, false, roc_ops);
         }
     } else {
         const alloc_ptr = roc_ops.alloc(@alignOf(usize), len * @sizeOf(usize));
@@ -79,9 +78,9 @@ pub fn fluxsort(
 
         // Sort.
         if (data_is_owned_runtime) {
-            fluxsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, true, inc_n_context, inc_n_data, true, roc_ops);
+            direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, true, inc_n_context, inc_n_data, true, roc_ops);
         } else {
-            fluxsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, false, inc_n_context, inc_n_data, true, roc_ops);
+            direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, false, inc_n_context, inc_n_data, true, roc_ops);
         }
 
         const collect_ptr = roc_ops.alloc(alignment, len * element_width);
@@ -93,6 +92,28 @@ pub fn fluxsort(
 
         // Copy to original array as sorted.
         @memcpy(array[0..(len * element_width)], @as([*]u8, @ptrCast(collect_ptr))[0..(len * element_width)]);
+    }
+}
+
+/// TODO: document fluxsort
+pub fn fluxsort(
+    array: [*]u8,
+    len: usize,
+    cmp: CompareFn,
+    cmp_data: Opaque,
+    data_is_owned_runtime: bool,
+    inc_n_context: ?*anyopaque,
+    inc_n_data: IncN,
+    element_width: usize,
+    alignment: u32,
+    copy: CopyFn,
+    roc_ops: *RocOps,
+) void {
+    if (len < 132) {
+        // Just quadsort it.
+        quadsort(array, len, cmp, cmp_data, data_is_owned_runtime, inc_n_context, inc_n_data, element_width, alignment, copy, roc_ops);
+    } else {
+        sortWithIndirection(fluxsort_direct, array, len, cmp, cmp_data, data_is_owned_runtime, inc_n_context, inc_n_data, element_width, alignment, copy, roc_ops);
     }
 }
 
@@ -903,45 +924,7 @@ pub fn quadsort(
     copy: CopyFn,
     roc_ops: *RocOps,
 ) void {
-    // Note, knowing constant versions of element_width and copy could have huge perf gains.
-    // Hopefully llvm will essentially always do it via constant argument propagation and inlining.
-    // If not, we may want to generate `n` different version of this function with comptime.
-    // Then have our builtin dispatch to the correct version.
-    // llvm garbage collection would remove all other variants.
-    // Also, for numeric types, inlining the compare function can be a 2x perf gain.
-    if (element_width <= MAX_ELEMENT_BUFFER_SIZE) {
-        if (data_is_owned_runtime) {
-            quadsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, true, inc_n_context, inc_n_data, false, roc_ops);
-        } else {
-            quadsort_direct(array, len, cmp, cmp_data, element_width, alignment, copy, false, inc_n_context, inc_n_data, false, roc_ops);
-        }
-    } else {
-        const alloc_ptr = roc_ops.alloc(@alignOf(usize), len * @sizeOf(usize));
-
-        // Build list of pointers to sort.
-        const arr_ptr: [*]Opaque = utils.alignedPtrCast([*]Opaque, @as([*]u8, @ptrCast(alloc_ptr)), @src());
-        defer roc_ops.dealloc(alloc_ptr, @alignOf(usize));
-        for (0..len) |i| {
-            arr_ptr[i] = array + i * element_width;
-        }
-
-        // Sort.
-        if (data_is_owned_runtime) {
-            quadsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, true, inc_n_context, inc_n_data, true, roc_ops);
-        } else {
-            quadsort_direct(@ptrCast(arr_ptr), len, cmp, cmp_data, @sizeOf(usize), @alignOf(usize), &pointer_copy, false, inc_n_context, inc_n_data, true, roc_ops);
-        }
-
-        const collect_ptr = roc_ops.alloc(alignment, len * element_width);
-        // Collect sorted pointers into correct order.
-        defer roc_ops.dealloc(collect_ptr, alignment);
-        for (0..len) |i| {
-            copy(@as([*]u8, @ptrCast(collect_ptr)) + i * element_width, arr_ptr[i], element_width);
-        }
-
-        // Copy to original array as sorted.
-        @memcpy(array[0..(len * element_width)], @as([*]u8, @ptrCast(collect_ptr))[0..(len * element_width)]);
-    }
+    return sortWithIndirection(quadsort_direct, array, len, cmp, cmp_data, data_is_owned_runtime, inc_n_context, inc_n_data, element_width, alignment, copy, roc_ops);
 }
 
 fn quadsort_direct(

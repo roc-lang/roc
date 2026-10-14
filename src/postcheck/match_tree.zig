@@ -1177,7 +1177,7 @@ pub fn Compiler(comptime Ctx: type) type {
             /// so a nested scope records each local it adds or changes and
             /// restores them all before its enclosing scope continues.
             const Env = struct {
-                locals: std.AutoHashMapUnmanaged(OccId, EmitLocals),
+                locals: collections.DenseMapUnmanaged(OccId, EmitLocals),
                 undo: std.ArrayList(EnvUndo) = .empty,
 
                 const EnvUndo = struct { occ: OccId, previous: ?EmitLocals };
@@ -1198,7 +1198,7 @@ pub fn Compiler(comptime Ctx: type) type {
                     while (self.undo.items.len > mark) {
                         const entry = self.undo.pop().?;
                         if (entry.previous) |previous| {
-                            self.locals.putAssumeCapacity(entry.occ, previous);
+                            self.locals.putInReservedPage(entry.occ, previous);
                         } else {
                             _ = self.locals.remove(entry.occ);
                         }
@@ -2037,7 +2037,7 @@ fn mockBranches(comptime n: usize, pats: [n]u32) [n]TestCompiler.Branch {
 }
 
 test "N tag branches with wildcard become one multiway test" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2067,7 +2067,7 @@ test "N tag branches with wildcard become one multiway test" {
 }
 
 test "closed tag match is exhaustive with no default and no fail" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2088,7 +2088,7 @@ test "closed tag match is exhaustive with no default and no fail" {
 }
 
 test "open tag match without wildcard keeps a fail default" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2109,7 +2109,7 @@ test "open tag match without wildcard keeps a fail default" {
 }
 
 test "duplicate constructors merge into one arm preserving row order" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2138,7 +2138,7 @@ test "duplicate constructors merge into one arm preserving row order" {
 }
 
 test "guarded wildcard row splits tag groups and shares the continuation" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2174,7 +2174,7 @@ test "guarded wildcard row splits tag groups and shares the continuation" {
 }
 
 test "tag payloads specialize into payload occurrence columns" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2211,7 +2211,7 @@ test "tag payloads specialize into payload occurrence columns" {
 }
 
 test "string arms with identical shapes merge and retry on guard failure" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2258,7 +2258,7 @@ test "string arms with identical shapes merge and retry on guard failure" {
 }
 
 test "list exact lengths bucket into one length test with rest row below" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2297,7 +2297,7 @@ test "list exact lengths bucket into one length test with rest row below" {
 }
 
 test "leading rest row forms a len_check with the remaining rows below" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2325,7 +2325,7 @@ test "leading rest row forms a len_check with the remaining rows below" {
 }
 
 test "continuation referenced from two miss sites keeps its exit join" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2356,7 +2356,7 @@ test "continuation referenced from two miss sites keeps its exit join" {
 }
 
 test "unguarded irrefutable row makes later rows dead" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2376,7 +2376,7 @@ test "unguarded irrefutable row makes later rows dead" {
 }
 
 test "records and tuples destructure without tests" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2414,7 +2414,7 @@ test "records and tuples destructure without tests" {
 }
 
 test "column selection prefers the longer run" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2450,7 +2450,7 @@ test "column selection prefers the longer run" {
 }
 
 test "non-switchable ints fall back to eq_chain kind" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2471,7 +2471,7 @@ test "non-switchable ints fall back to eq_chain kind" {
 }
 
 test "pattern node stats count normalized nodes" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 

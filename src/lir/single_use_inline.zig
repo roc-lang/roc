@@ -84,7 +84,7 @@ const Inventory = struct {
         var queue_index: usize = 0;
         while (queue_index < self.proc_queue.items.len) : (queue_index += 1) {
             const caller = self.proc_queue.items[queue_index];
-            const body = self.store.getProcSpec(caller).body orelse continue;
+            const body = self.store.getProcSpecImmediate(caller).body orelse continue;
             var walk = try body_clone.ReachableStmts.init(self.store, body);
             defer walk.deinit();
             while (try walk.next()) |stmt_id| {
@@ -123,7 +123,7 @@ const Inventory = struct {
         for (0..self.store.procSpecCount()) |callee_index| {
             if (self.direct_calls[callee_index] != 1 or self.escapes[callee_index]) continue;
             const site = self.unique_site[callee_index] orelse continue;
-            if (!self.store.getProcSpec(site.caller).iterator_fusion_scope) continue;
+            if (!self.store.getProcSpecImmediate(site.caller).iterator_fusion_scope) continue;
             const stmt = self.store.getCFStmt(site.stmt);
             if (stmt != .assign_call or @backingInt(stmt.assign_call.proc) != callee_index) continue;
             if (!eligibleCall(self.store, layouts, stmt.assign_call)) continue;
@@ -242,7 +242,7 @@ fn inlineAt(store: *LirStore, layouts: *layout_mod.Store, site: CallSite) Resour
         store,
         .{ .target = call.target, .next = call.next, .call_origin = store.stmtOrigin(site.stmt) },
         inline_scope,
-        store.getProcSpec(site.caller).body.?,
+        store.getProcSpecImmediate(site.caller).body.?,
     );
     defer cloner.deinit();
 
@@ -345,7 +345,7 @@ test "single-use inline keeps writable callee arguments distinct from caller ope
 
     var saw_argument_copy = false;
     var saw_distinct_write = false;
-    var walk = try body_clone.ReachableStmts.init(store, store.getProcSpec(caller).body.?);
+    var walk = try body_clone.ReachableStmts.init(store, store.getProcSpecImmediate(caller).body.?);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);
@@ -400,7 +400,7 @@ test "single-use inline preserves calls with refcounted callee frames" {
 
     try run(&result);
 
-    const preserved = store.getCFStmt(store.getProcSpec(caller).body.?);
+    const preserved = store.getCFStmt(store.getProcSpecImmediate(caller).body.?);
     try testing.expect(preserved == .assign_call);
     try testing.expectEqual(callee, preserved.assign_call.proc);
 }
@@ -437,7 +437,7 @@ test "single-use inline gives the caller the shapes of the body it receives" {
         .ret_layout = .bool,
         .shapes = .{ .loop = true },
     }, .none);
-    try testing.expect(store.getProcSpec(callee).shapes.unsigned_compare);
+    try testing.expect(store.getProcSpecImmediate(callee).shapes.unsigned_compare);
 
     // The caller's own body is a call and a return.
     store.shapes = .{};
@@ -459,12 +459,12 @@ test "single-use inline gives the caller the shapes of the body it receives" {
         .ret_layout = .bool,
     }, .none);
     try result.root_procs.append(testing.allocator, caller);
-    try testing.expect(!store.getProcSpec(caller).shapes.unsigned_compare);
-    try testing.expect(!store.getProcSpec(caller).shapes.loop);
+    try testing.expect(!store.getProcSpecImmediate(caller).shapes.unsigned_compare);
+    try testing.expect(!store.getProcSpecImmediate(caller).shapes.loop);
 
     try run(&result);
 
-    const inlined = store.getProcSpec(caller).shapes;
+    const inlined = store.getProcSpecImmediate(caller).shapes;
     try testing.expect(inlined.unsigned_compare);
     try testing.expect(inlined.loop);
 
@@ -472,7 +472,7 @@ test "single-use inline gives the caller the shapes of the body it receives" {
     // caller now holds.
     try @import("proc_passes.zig").run(testing.allocator, store, &result.layouts, .range, null, null);
     var folded: usize = 0;
-    var walk = try body_clone.ReachableStmts.init(store, store.getProcSpec(caller).body.?);
+    var walk = try body_clone.ReachableStmts.init(store, store.getProcSpecImmediate(caller).body.?);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);

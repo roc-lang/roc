@@ -33,6 +33,7 @@ pub const renderDocumentToMarkdown = @import("renderer.zig").renderDocumentToMar
 pub const renderDocumentToHtml = @import("renderer.zig").renderDocumentToHtml;
 pub const renderDocumentToLsp = @import("renderer.zig").renderDocumentToLsp;
 pub const writeShouted = @import("renderer.zig").writeShouted;
+pub const writeEscapedHtml = @import("renderer.zig").writeEscapedHtml;
 pub const sanitisePathForSnapshots = @import("renderer.zig").sanitisePathForSnapshots;
 
 // Canonical (presentation-independent) S-expression serialization
@@ -40,10 +41,6 @@ pub const pushReportToSExprTree = @import("report_sexpr.zig").pushReportToSExprT
 pub const pushReportsToSExprTree = @import("report_sexpr.zig").pushReportsToSExprTree;
 
 // Configuration utilities
-pub const validateUtf8 = @import("config.zig").validateUtf8;
-pub const truncateUtf8 = @import("config.zig").truncateUtf8;
-pub const formatUtf8 = @import("config.zig").formatUtf8;
-pub const formatUtf8Bounded = @import("config.zig").formatUtf8Bounded;
 
 test {
     const std = @import("std");

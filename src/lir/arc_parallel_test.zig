@@ -188,7 +188,7 @@ test "ARC executor reverse completions match inline RC bodies and identities acr
         const body = direct.store.getCFStmt(spec.body.?);
         try testing.expect(body == .decref);
         try testing.expectEqual(core.LirStore.GuardedList.at(direct.store.getLocalSpan(spec.args), 1), body.decref.value);
-        try testing.expect(direct.store.getCFStmt(body.decref.next) == .ret);
+        try testing.expect(direct.store.getCFStmtImmediate(body.decref.next).* == .ret);
     }
     var expected_metrics: ?arc.ParallelMetrics = null;
     for ([_]usize{ 2, 4 }) |lanes| {
@@ -430,7 +430,7 @@ test "ARC public solve component barriers preserve conditional rows and shared g
             try testing.expectEqual(@as(usize, 0), direct.sigTable().retConditionsOf(sig).len);
         }
     }
-    const shared_param = core.LirStore.GuardedList.at(fixture.fixture.store.getLocalSpan(fixture.fixture.store.getProcSpec(@fromBackingInt(@intCast(5))).args), 0);
+    const shared_param = core.LirStore.GuardedList.at(fixture.fixture.store.getLocalSpan(fixture.fixture.store.getProcSpecImmediate(@fromBackingInt(@intCast(5))).args), 0);
     try testing.expect(!direct.unique_born.isSet(@backingInt(shared_param)));
     for ([_]usize{ 2, 4 }) |lanes| {
         var runner: ReverseExecutor = .{ .lanes = lanes, .rotate_wave_lane = true };
@@ -627,7 +627,7 @@ const OutcomeFixture = struct {
         const s = &self.fixture.store;
         try testing.expectEqual(@as(usize, 3), s.procSpecCount());
         for ([_]u32{ 0, 2 }) |proc| {
-            var cursor = s.getProcSpec(@fromBackingInt(@intCast(proc))).body.?;
+            var cursor = s.getProcSpecImmediate(@fromBackingInt(@intCast(proc))).body.?;
             while (true) {
                 const stmt = s.getCFStmt(cursor);
                 if (stmt == .assign_low_level) {
@@ -640,7 +640,7 @@ const OutcomeFixture = struct {
                 } else cursor = try linearNext(stmt);
             }
         }
-        var cursor = s.getProcSpec(@fromBackingInt(@intCast(1))).body.?;
+        var cursor = s.getProcSpecImmediate(@fromBackingInt(@intCast(1))).body.?;
         while (true) {
             const stmt = s.getCFStmt(cursor);
             if (stmt == .incref) try testing.expect(stmt.incref.value != self.input);
@@ -835,8 +835,11 @@ const DismantleRangeFixture = struct {
 
 fn expectSameMap(expected: anytype, actual: anytype) error{TestExpectedEqual}!void {
     try testing.expectEqual(expected.count(), actual.count());
-    var expected_it = expected.iterator();
-    var actual_it = actual.iterator();
+    // Iteration takes a mutable map; these copies share the maps' storage.
+    var expected_map = expected;
+    var actual_map = actual;
+    var expected_it = expected_map.iterator();
+    var actual_it = actual_map.iterator();
     while (expected_it.next()) |entry| {
         const other = actual_it.next().?;
         try testing.expectEqualDeep(entry.key_ptr.*, other.key_ptr.*);

@@ -494,7 +494,7 @@ fn matchesExpectation(run: RuntimeHostEnv.RecordedRun, tc: TestCase) bool {
 }
 
 fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
-    var compiled = helpers.compileProgram(allocator, io, tc.source_kind, tc.source, tc.imports) catch |err| {
+    var compiled = helpers.compileProgram(allocator, io, tc.source_kind, tc.source, tc.imports, .{}) catch |err| {
         return .{
             .status = .fail,
             .message = allocator.dupe(u8, @errorName(err)) catch null,
@@ -1070,7 +1070,7 @@ fn writeStatsJson(
     results: []const TestResult,
     spans: []const ?harness.PoolSpan,
 ) StatsJsonError!void {
-    var stats_arena = std.heap.ArenaAllocator.init(allocator);
+    var stats_arena = base.SingleThreadArena.init(allocator);
     defer stats_arena.deinit();
     const stats_allocator = stats_arena.allocator();
 

@@ -22,7 +22,7 @@ TYPE MISMATCH - test_instantiated_arg_mismatch.md:5:14:5:21
 		(title "Type Mismatch")
 		(region (start 5 14) (end 5 21))
 		(headline
-			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:"))
+			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both."))
 		(document
 			(source-region (file "test_instantiated_arg_mismatch.md") (start 5 14) (end 5 21) (annotation error) (line-text "    pair(42, \"hello\")"))
 			(line-break)
