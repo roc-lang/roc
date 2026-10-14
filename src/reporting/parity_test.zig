@@ -754,10 +754,11 @@ test "report wrapper entrypoints preserve headline and nested document content o
         const raw = out.written();
         const visible = if (target == .html) try visibleHtml(gpa, raw) else if (target == .color_terminal) try stripAnsi(gpa, raw) else try gpa.dupe(u8, raw);
         defer gpa.free(visible);
-        inline for (.{ "parity wrapper", "The headline survives.", "BeforePayload", "AnnotatedPayload", "AfterPayload", "SourcePayload = 42" }) |payload| {
-            // Markdown's title capitalization is a deliberate wrapper choice.
-            const expected = if (target == .markdown and std.mem.eql(u8, payload, "parity wrapper")) "Parity Wrapper" else payload;
-            try testing.expectEqual(@as(usize, 1), countOccurrences(visible, expected));
+        // LSP omits the category; other targets retain their title styling.
+        const title = if (target == .markdown) "Parity Wrapper" else "parity wrapper";
+        try testing.expectEqual(@as(usize, if (target == .language_server) 0 else 1), countOccurrences(visible, title));
+        inline for (.{ "The headline survives.", "BeforePayload", "AnnotatedPayload", "AfterPayload", "SourcePayload = 42" }) |payload| {
+            try testing.expectEqual(@as(usize, 1), countOccurrences(visible, payload));
         }
         const before = std.mem.find(u8, visible, "BeforePayload").?;
         const annotated = std.mem.find(u8, visible, "AnnotatedPayload").?;

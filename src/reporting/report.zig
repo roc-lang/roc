@@ -229,9 +229,9 @@ fn assertValidTitleAndDescription(title: []const u8, description: []const u8) vo
 /// A structured report containing error information and formatted content.
 pub const Report = struct {
     title: []const u8,
-    /// One-sentence summary shown below the terminal header, or below the title
-    /// in markdown/HTML/LSP. Rich content preserves inline code, type names, and
-    /// operators. Builders with a plain headline pass it to `init`; builders
+    /// One-sentence summary shown below the terminal header, below the title
+    /// in markdown/HTML, or first in LSP. Rich content preserves inline code,
+    /// type names, and operators. Builders with a plain headline pass it to `init`; builders
     /// that need inline styling pass `""` and add to this document directly.
     headline: Document,
     severity: Severity,
