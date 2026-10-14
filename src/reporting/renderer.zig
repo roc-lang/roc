@@ -73,7 +73,7 @@ pub const RenderTarget = enum {
 /// sentence ending in a period. A headline never ends in a colon: it must read
 /// correctly on its own, without relying on the source snippet printed after
 /// it. The headline is the one-sentence summary below the diagnostic header
-/// (or below the title in markdown/HTML/LSP). Compiled out of
+/// (or below the title in markdown/HTML, and first in LSP). Compiled out of
 /// release builds. Reports that have not yet been migrated to a headline
 /// (none of the elements carry text) are exempt.
 fn assertValidHeadline(report: *const Report) void {
@@ -704,9 +704,7 @@ pub fn renderReportToHtml(report: *const Report, writer: *std.Io.Writer, config:
 /// Render a report for language server protocol.
 pub fn renderReportToLsp(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     assertValidHeadline(report);
-    // LSP typically wants plain text without formatting
-    try writeLowercased(writer, report.title);
-    try writer.writeAll("\n\n");
+    // Editors may show only the first line, so lead with the description.
     if (report.headline.elementCount() > 0) {
         try renderDocumentToLsp(&report.headline, writer, config);
         try writer.writeByte('\n');

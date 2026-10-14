@@ -63,8 +63,6 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     writer.clearRetainingCapacity();
     try reporting.renderReportToLsp(&r, &writer.writer, @import("config.zig").ReportingConfig.initLsp());
     const expected_lsp =
-        \\syntax problem
-        \\
         \\Using more than one + like this requires parentheses, to clarify how things should be grouped.
         \\example.roc
         \\         ^^^^^^^^^^
@@ -79,6 +77,28 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     try testing.expect(std.mem.find(u8, plain_out, "── ✗ syntax problem ") != null);
     try testing.expect(std.mem.find(u8, plain_out, "example.roc:1:10") != null);
     try testing.expect(std.mem.find(u8, plain_out, "^^") != null);
+}
+
+test "LSP diagnostics begin with the description instead of the error category" {
+    const gpa = testing.allocator;
+    var writer = std.Io.Writer.Allocating.init(gpa);
+    defer writer.deinit();
+
+    var plain = try Report.init(gpa, "Type Mismatch", "This value has an incompatible type.", .runtime_error);
+    defer plain.deinit();
+    try plain.document.addText("Expected U8, but found Str.");
+    try reporting.renderReportToLsp(&plain, &writer.writer, ReportingConfig.initLsp());
+    try testing.expectEqualStrings("This value has an incompatible type.\nExpected U8, but found Str.", writer.written());
+
+    writer.clearRetainingCapacity();
+    var rich = try Report.init(gpa, "Trailing `?`", "", .warning);
+    defer rich.deinit();
+    try rich.headline.addText("This ");
+    try rich.headline.addBinaryOperator("?");
+    try rich.headline.addText(" is applied to the value this function returns.");
+    try rich.document.addText("Remove the trailing question mark.");
+    try reporting.renderReport(&rich, &writer.writer, .language_server);
+    try testing.expectEqualStrings("This ? is applied to the value this function returns.\nRemove the trailing question mark.", writer.written());
 }
 
 fn buildSyntaxProblemReport(allocator: Allocator) Allocator.Error!Document {
