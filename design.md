@@ -9082,10 +9082,12 @@ The lowering half of row widening is a checker-stamped expression,
 `row_coerce { value }` in checked bodies (`CheckedExprData.row_coerce`), whose
 own type is the wider row a value is used at and whose child keeps its own
 closed row. No CIR form lowers to it; checked-body construction stamps it for
-the two checker records that ask for it: a use of a top-level value
-(`ModuleEnv.RowCoercedUse`; Value Rows: Local Values Share, Top-Level Values
-Widen At Each Use) and a call whose function's body closed an annotated open
-result row (`ModuleEnv.RowCoercedCallee`; Row Subsumption).
+the two checker records that ask for it: a row-coerced expression
+(`ModuleEnv.RowCoercedUse`), which is a use of a top-level value (Value Rows:
+Local Values Share, Top-Level Values Widen At Each Use) or a low-level
+builtin's operation (Low-Level Result Rows), and a call whose function's body
+closed an annotated open result row (`ModuleEnv.RowCoercedCallee`; Row
+Subsumption).
 
 The coercion has a fixed REACH, which contains every position the Result-Row
 Widening Adapter re-tags (the direct result row and a `Try`'s error row).
@@ -9197,6 +9199,47 @@ relation. Those tests are temporary scaffolding until the first producer
 lands; `src/postcheck/structural_test.zig` pins the node's shape at every
 stage. This section adds no Rewrite Inventory entry: the primitive mutates no
 solved type graph.
+
+#### Low-Level Result Rows
+
+A low-level builtin is an annotated function whose body is one operation
+(`e_run_low_level`) that the backends implement. The annotation's output rows
+are implicitly open like any other function's, so a caller may use
+`I64.from_str : Str -> Try(I64, [BadNumStr])` at
+`Try(I64, [AboveLimit, BadNumStr])`, exactly as it may use a Roc-bodied
+builtin that constructs its own error, such as `List.first`. The operation,
+though, writes one fixed representation: the backends know the declared
+`[BadNumStr]` and nothing about any wider union. An operation lowered at a
+wider union's layout would write `BadNumStr`'s discriminant in the declared
+row, which in the wider row is the discriminant of a different tag.
+
+So the operation never has the function's result type. Checking
+(`Check.recordLowLevelResultCoercion`, at the end of the lambda's body check)
+types the operation itself at a copy of the annotated result in which every
+extension the annotation implicitly opened is the empty row
+(`Check.closedLowLevelResultVar`), copying only the spine through the row
+coercion's reach and sharing every other variable. It records the body as a
+row-coerced expression (`ModuleEnv.RowCoercedUse`), and checked-body
+construction lowers it as `row_coerce { run_low_level }`: the operation at
+its declared row, widened into whatever result the specialization requests.
+The function's published scheme is unchanged, so a direct call, a dispatch,
+and a use as a function value all reach the widening in the body. Where the
+specialization's result is the declared row, the coercion is
+value-encoding-equivalent and lowers to a copy.
+
+Two consequences follow. A dispatch to such a builtin reaches its
+procedure rather than the bare operation (`ProcedureRuntimeTarget.low_level`
+is reserved for operations whose body records no coercion), and the
+post-check inliner treats a `row_widen` body over a wrapper body as a wrapper,
+so optimized and dev builds still substitute the operation and its re-tag at
+each call site. And a layout-keyed operation, whose one specialization serves
+every type with its layout, can never have an implicitly opened result row,
+because a widening re-tags by name; checking asserts this.
+
+Implicit opening reaches only positions the row coercion reaches (Result-Row
+Widening Adapter), and the operation's type is the annotated result itself, so
+every extension the annotation opened is still unbound when the copy is made
+and lies inside the reach. Checking asserts both.
 
 ### Value Rows: Local Values Share, Top-Level Values Widen At Each Use
 

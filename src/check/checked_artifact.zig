@@ -4388,7 +4388,7 @@ pub const CheckedTypeStore = struct {
         // or a per-use where-method callable.
         try output_type_roots.forEachSchemeUseTypeRoot(module_env, &publisher);
 
-        // A row-coerced use reads its value at the value's own type
+        // A row-coerced expression produces its value at the value's own type
         // (`ModuleEnv.RowCoercedUse`), which checked-body construction gives
         // the coercion's child.
         for (module_env.row_coerced_uses.items.items) |use| {
@@ -14833,10 +14833,10 @@ const CheckedBodyPayloadCopier = struct {
                 .symbol_name = try self.names.internExternalSymbolIdent(self.module.identStoreConst(), hosted.symbol_name),
                 .args = try self.copyPatternSpan(hosted.args),
             } },
-            .e_run_low_level => |run| .{ .run_low_level = .{
+            .e_run_low_level => |run| try self.rowCoercedUseData(expr_idx, .{ .run_low_level = .{
                 .op = run.op,
                 .args = try self.copyExprSpan(run.args),
-            } },
+            } }),
             .e_deferred_import_ref => checkedArtifactInvariant("deferred import reference reached checked artifact publication", .{}),
         };
     }
@@ -15646,20 +15646,21 @@ const CheckedBodyPayloadCopier = struct {
         return .{ .row_coerce = .{ .value = call_id } };
     }
 
-    /// A use checking recorded as a widening of a top-level value
-    /// (`ModuleEnv.RowCoercedUse`) coerces the value—the lookup, at the
-    /// value's own type—to the row this use relates to, which is this
-    /// expression's checked type (design.md "Value Rows: Local Values Share,
-    /// Top-Level Values Widen At Each Use", "Row Coercion Primitive"). Every
-    /// other lookup is the lookup itself.
-    fn rowCoercedUseData(self: *@This(), expr_idx: CIR.Expr.Idx, lookup_data: CheckedExprData) Allocator.Error!CheckedExprData {
-        const value_var = self.module.moduleEnvConst().rowCoercedUseValueVar(ModuleEnv.nodeIdxFrom(expr_idx)) orelse return lookup_data;
+    /// An expression checking recorded as a widening
+    /// (`ModuleEnv.RowCoercedUse`)—a use of a top-level value, or a
+    /// low-level builtin's operation—coerces the value, at its own type, to
+    /// the row this expression relates to, which is its checked type
+    /// (design.md "Value Rows: Local Values Share, Top-Level Values Widen At
+    /// Each Use", "Low-Level Result Rows", "Row Coercion Primitive"). Every
+    /// other expression is its value itself.
+    fn rowCoercedUseData(self: *@This(), expr_idx: CIR.Expr.Idx, value_data: CheckedExprData) Allocator.Error!CheckedExprData {
+        const value_var = self.module.moduleEnvConst().rowCoercedUseValueVar(ModuleEnv.nodeIdxFrom(expr_idx)) orelse return value_data;
         const value_id: CheckedExprId = @fromBackingInt(try checkedSourceNodeIdFromLen(self.exprs.items.len));
         try self.exprs.append(self.allocator, .{
             .id = value_id,
             .ty = try self.checkedTypeForRequiredVar(value_var, "row-coerced value type root was not published"),
             .source_region = self.module.regionAt(ModuleEnv.nodeIdxFrom(expr_idx)),
-            .data = lookup_data,
+            .data = value_data,
         });
         return .{ .row_coerce = .{ .value = value_id } };
     }

@@ -653,8 +653,22 @@ fn procedureRuntimeTargetForDef(
     if (std.meta.activeTag(method_owner) == .builtin and isIteratorOwner(method_owner.builtin)) {
         return .{ .graph_participating = .{} };
     }
-    if (module.moduleEnvConst().providedLowLevelForDef(def_idx)) |op| return .{ .low_level = op };
+    if (module.moduleEnvConst().providedLowLevelForDef(def_idx)) |op| {
+        // An operation whose body widens its result into the function's
+        // (design.md "Low-Level Result Rows") is the procedure, which makes
+        // that widening; the operation alone produces the declared row.
+        if (lowLevelBodyWidensResult(module.moduleEnvConst(), def_idx)) return .{ .procedure = .{} };
+        return .{ .low_level = op };
+    }
     return .{ .procedure = .{} };
+}
+
+/// Whether a low-level builtin's body was recorded as a row coercion of its
+/// operation (`ModuleEnv.RowCoercedUse`).
+fn lowLevelBodyWidensResult(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) bool {
+    const expr = module_env.store.getExpr(module_env.store.getDef(def_idx).expr);
+    if (expr != .e_lambda) base.invariant("a provided low-level definition was not a lambda", .{});
+    return module_env.rowCoercedUseValueVar(ModuleEnv.nodeIdxFrom(expr.e_lambda.body)) != null;
 }
 
 /// Exact compiler-intrinsic identity for an annotation-only builtin procedure.
