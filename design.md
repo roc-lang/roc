@@ -2022,6 +2022,25 @@ only source-owned identities, so speculative output rewinds cannot invalidate
 them. This avoids cloning a shared initializer at each use while preserving
 constructor evidence for field reads and specialization.
 
+A candidate's parts are candidates too. While Monotype restores a candidate
+whose value is a record, tuple, tag, or nominal, every non-empty list or box
+reachable from it through constructor edges alone restores as its own
+candidate nested in the enclosing candidate's runtime expression
+(`restoredStaticDataPart`), identified by its own stored node under the
+enclosing candidate's checked type. The constructor view reaches such a part
+as a candidate, so a field read, tuple read, or pattern binding that
+SpecConstr resolves through the enclosing value materializes the part's static
+data rather than its runtime construction, which would rebuild a non-empty
+list or a box on the heap at the read. The enclosing candidate's initializer
+lowers the nested candidate as its runtime expression, so the frozen bytes of
+the whole value are unchanged. Items of a list and the payload of a box are
+not parts: no constructor view reaches into them. A part reads no binding of a
+node enclosing it, because the enclosing candidate's stable representation
+leaves its node graph acyclic. A build that restores a constant from the
+const store therefore allocates for a read of a constant's part exactly as a
+build continuing its host's frozen image does, where the part is a read of
+the frozen value.
+
 Compile-time evaluation is allowed to fail with user diagnostics only during
 checking. After checking, stored constant data is ordinary checked output. A
 target static-data builder may decide which reachable evaluated values have a
@@ -10218,7 +10237,7 @@ Constraint creation records the innermost prospective scheme root as the exact
 owner. The owner belongs to the relation, keyed by its constraint callable
 where the relation is minted or copied: resolving it (selecting and
 instantiating its method target, or deriving a structural comparison's
-component obligations) runs under that owner, whichever later unification
+component requirements) runs under that owner, whichever later unification
 grounds its receiver and whichever boundary's checking drains its queue entry.
 Work a relation causes after its owner's boundary has captured belongs to the
 innermost enclosing root still prospective, or to none. At the owner's
@@ -19841,7 +19860,7 @@ order of its structural depth-first walk. The classification scan visits those
 lists, last procedure first, skipping statements it has already classified,
 which is exactly the order of one depth-first walk from every procedure body.
 Every per-statement input of the whole-store passes (explicit join-cell
-initializations, projection and ownership-place edges, and direct calls)
+initializations, field-read and ownership-place edges, and direct calls)
 depends only on its own statement. These inputs are gathered
 in fixed-width statement-id ranges as executor tasks and concatenated in range
 order, so the coordinator sees them in ascending statement order. The place
