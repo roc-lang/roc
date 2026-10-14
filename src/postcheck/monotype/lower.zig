@@ -66027,7 +66027,7 @@ test "draft specialization lookup preserves family evidence and request identity
 
 test "draft specialization candidates retain insertion order across overflow growth and allocation failure" {
     const Scenario = struct {
-        fn run(allocator: Allocator) (Allocator.Error || error{TestUnexpectedResult})!void {
+        fn run(allocator: Allocator) (Allocator.Error || error{TestExpectedEqual})!void {
             var type_store = Type.Store.init(allocator);
             defer type_store.deinit();
             var name_store = names.NameStore.init(allocator);
@@ -66065,26 +66065,29 @@ test "draft specialization candidates retain insertion order across overflow gro
                         try lookup.add(other, raw_spec);
                         try lookup.add(other, std.math.maxInt(u32));
                     }
-                    try std.testing.expect(lookup.openPairs(prefix).len == 61);
+                    try std.testing.expectEqual(@as(usize, 61), lookup.openPairs(prefix).len);
                     var candidates = lookup.get(address).?;
-                    try std.testing.expect(candidates.next().? == std.math.maxInt(u32));
-                    for (0..20) |i| try std.testing.expect(candidates.next().? == i);
-                    try std.testing.expect(candidates.next() == null);
+                    try std.testing.expectEqual(@as(?u32, std.math.maxInt(u32)), candidates.next());
+                    for (0..20) |i| try std.testing.expectEqual(@as(?u32, @intCast(i)), candidates.next());
+                    try std.testing.expectEqual(@as(?u32, null), candidates.next());
                     for (0..20) |i| {
                         var other = lookup.get(.{ .open = .{
                             .prefix = prefix,
                             .node = other_nodes[i],
                         } }).?;
-                        try std.testing.expect(other.next().? == i);
-                        try std.testing.expect(other.next().? == std.math.maxInt(u32));
-                        try std.testing.expect(other.next() == null);
+                        try std.testing.expectEqual(@as(?u32, @intCast(i)), other.next());
+                        try std.testing.expectEqual(@as(?u32, std.math.maxInt(u32)), other.next());
+                        try std.testing.expectEqual(@as(?u32, null), other.next());
                     }
                 }
             }
         }
     };
     try Scenario.run(std.testing.allocator);
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, Scenario.run, .{});
+    std.testing.checkAllAllocationFailures(std.testing.allocator, Scenario.run, .{}) catch |err| {
+        std.debug.print("allocation-failure check failed: {t}\n", .{err});
+        return err;
+    };
 }
 
 test "draft specialization open lookup follows unions within its prefix" {
