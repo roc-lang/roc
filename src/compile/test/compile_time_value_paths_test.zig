@@ -18,7 +18,8 @@ const CoreCtx = @import("ctx").CoreCtx;
 const Coordinator = @import("../coordinator.zig").Coordinator;
 const is_freestanding = @import("../threading.zig").is_freestanding;
 const static_data_exports = @import("static_data");
-const GuardedList = @import("collections").GuardedList;
+const collections = @import("collections");
+const GuardedList = collections.GuardedList;
 
 const platform_files = [_]struct { path: []const u8, source: []const u8 }{
     .{ .path = ".roc_echo_platform/main.roc", .source =
@@ -503,7 +504,7 @@ fn programSize(result: *lir.Program.Result) std.mem.Allocator.Error!ProgramSize 
 
 /// Calls that pass a local holding the integer literal `value`.
 fn callsPassingIntLiteral(gpa: std.mem.Allocator, result: *const lir.Program.Result, value: i128) std.mem.Allocator.Error!usize {
-    var holders: std.AutoHashMapUnmanaged(lir.LIR.LocalId, void) = .empty;
+    var holders: collections.DenseMapUnmanaged(lir.LIR.LocalId, void) = .empty;
     defer holders.deinit(gpa);
     for (result.store.getCFStmts()) |stmt| {
         if (stmt != .assign_literal) continue;

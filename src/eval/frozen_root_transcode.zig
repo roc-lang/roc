@@ -2,6 +2,7 @@
 //! Symbol relocations are the only pointer authority; source bytes are never
 //! interpreted as addresses and no initializer is evaluated.
 const std = @import("std");
+const collections = @import("collections");
 const compilerInvariant = @import("base").invariant;
 const builtins = @import("builtins");
 const layout = @import("layout");
@@ -67,7 +68,7 @@ const Builder = struct {
     /// Index into the source symbol's relocations, keyed by symbol and offset.
     source_relocations: std.AutoHashMapUnmanaged(Destination, u32) = .empty,
     /// Source symbols whose relocations `source_relocations` already indexes.
-    indexed_sources: std.AutoHashMapUnmanaged(SymbolId, void) = .empty,
+    indexed_sources: collections.DenseMapUnmanaged(SymbolId, void) = .empty,
     fn sourceWord(self: *const Builder) usize {
         return self.source_program.layouts.targetUsize().size();
     }
@@ -90,14 +91,13 @@ const Builder = struct {
     fn sourceRelocation(self: *Builder, src: Destination) Allocator.Error!?static_data.StaticDataRelocation {
         const relocations = self.source_exports[@backingInt(src.symbol)].relocations;
         if (!self.indexed_sources.contains(src.symbol)) {
-            try self.indexed_sources.ensureUnusedCapacity(self.graph.allocator, 1);
             try self.source_relocations.ensureUnusedCapacity(self.graph.allocator, @intCast(relocations.len));
+            try self.indexed_sources.put(self.graph.allocator, src.symbol, {});
             for (relocations, 0..) |rel, index| {
                 const entry = self.source_relocations.getOrPutAssumeCapacity(.{ .symbol = src.symbol, .offset = rel.offset });
                 if (entry.found_existing) invariant("frozen symbol had two relocations at one offset");
                 entry.value_ptr.* = @intCast(index);
             }
-            self.indexed_sources.putAssumeCapacity(src.symbol, {});
         }
         const index = self.source_relocations.get(src) orelse return null;
         return relocations[index];
