@@ -19769,6 +19769,22 @@ rediscover the benefit from field reads or uniqueness checks. The base emission
 keeps the borrowed schedule untouched, and the parameter's residual field
 domain is committed only in the emissions that apply its takes, so an emission
 that skips them releases the parameter whole.
+Because that owned variant is mandatory for a dying argument, a direct-call
+argument at a borrowed position whose parameter-benefit bit is set is an owned
+operand for take solving, exactly like an argument at an owned position: a
+field read flowing into it is consuming, so a container holding several
+refcounted fields hands that field over by a take and the call selects the
+owned variant. Without this, `{ list: acc.list, dict: acc.dict.insert(k, v) }`
+would pass the dict borrowed while the dying record still held it, and every
+insert would copy. That demand needs the callee's benefits to be final before
+the caller's takes are solved, so takes are solved one call-graph component at
+a time, callees first, and each component publishes its parameter benefits
+(its parameter containers, projected containers rooted at its parameters,
+complete projections of its parameters, and forwarding to beneficial callee
+positions) before any caller is solved. Procedures sharing statements form one
+node of that graph. A recursive component whose own new benefits demand a
+further argument retracts its committed plans and solves again; demand only
+grows, so this terminates, and a non-recursive component solves once.
 Admission of those mandatory owned variants uses the same definition-sensitive
 ownership-place query as complete payload transfers: scalar shell reads and
 uses after an explicit rebind do not retain the argument's old stored units.
@@ -19864,8 +19880,9 @@ initializations, field-read and ownership-place edges, and direct calls)
 depends only on its own statement. These inputs are gathered
 in fixed-width statement-id ranges as executor tasks and concatenated in range
 order, so the coordinator sees them in ascending statement order. The place
-edge of a read that materialization rewrites into an alias is recomputed from
-the rewritten read.
+edge of a read that materialization will rewrite into an alias is the alias
+edge to its committed representative, derived from the plan before the store
+is rewritten.
 Divergent reads remain separate places. This canonicalization is justified only
 by the committed field or tag-payload operation and explicit CFG dominance; it
 never equates layouts or values heuristically. A borrowed struct produced by
