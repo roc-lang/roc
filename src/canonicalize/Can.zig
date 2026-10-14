@@ -549,6 +549,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .scratch_free_vars = .scratch,
     .scratch_captures = .scratch,
     .scratch_bound_vars = .scratch,
+    .bound_vars_index = .scratch,
     .scratch_defining_bound_vars = .frame_partitioned,
     .scratch_reassign_targets = .scratch,
     .scratch_local_function_patterns = .frame_partitioned,
