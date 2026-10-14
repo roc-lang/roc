@@ -288,7 +288,7 @@ With multiple lines
 						(e-string)))
 				(field (name "e")
 					(e-call (constraint-fn-var 370)
-						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18231") (target-def "18231"))
+						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18273") (target-def "18273"))
 						(e-runtime-error (tag "erroneous_value_expr")))))))
 	(d-let
 		(p-assign (ident "x"))
