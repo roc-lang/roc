@@ -54,7 +54,7 @@ const compile_package = @import("compile_package.zig");
 const compile_build = @import("compile_build.zig");
 const module_discovery = @import("module_discovery.zig");
 const cache_manager_mod = @import("cache_manager.zig");
-const cache_module = @import("cache_module.zig");
+const cache_versioning = @import("cache_versioning.zig");
 const cache_key_mod = @import("cache_key.zig");
 const canonicalized_cache_entry = @import("canonicalized_cache_entry.zig");
 const package_source = @import("package_source.zig");
@@ -217,16 +217,13 @@ fn readStageTimer(io: std.Io, timer: *?StageTimer) u64 {
 }
 
 const checked_module_cache_magic = "roc-mod-cache-v11";
-const checked_module_entry_version: u32 = 13;
-const checked_module_entry_version_hash: [32]u8 = computeCheckedModuleEntryVersionHash();
 
-// Header: magic, composite entry-version hash (32), artifact key (32), env-blob
-// length (u64), artifact-blob length (u64), and pin-validation stamp (32).
-// The two length-prefixed bodies
-// follow the header. The entry-version hash folds the
-// manual entry-envelope version, the artifact `Serialized` layout hash, and the
-// ModuleEnv `Serialized` layout hash, so a stale env or artifact body is rejected
-// by the same single admission check.
+// Header: magic, entry-version hash (32), artifact key (32), env-blob length
+// (u64), artifact-blob length (u64), and pin-validation stamp (32). The two
+// length-prefixed bodies follow the header. Checked-module and platform-pairing
+// entries share this envelope; the entry-version hash is
+// `cache_versioning.entryVersionHash` for the entry's kind, so a stale envelope
+// or body is rejected by one admission check.
 //
 // There is no body checksum: cache entries are written to a temp file and atomically
 // renamed into place (so a torn write never replaces a valid entry), the length fields
@@ -236,42 +233,18 @@ const checked_module_entry_version_hash: [32]u8 = computeCheckedModuleEntryVersi
 // cache does not justify hashing the whole blob on every read and write.
 const checked_module_cache_header_len: usize = checked_module_cache_magic.len + 32 + 32 + 8 + 8 + 32;
 
-fn checkedModuleEntryHashUpdate(state: *u64, bytes: []const u8) void {
-    for (bytes) |byte| {
-        state.* = (state.* ^ byte) *% 0x100000001b3;
+/// The cache entry kinds written in the checked-module envelope.
+const CheckedEnvelopeEntry = enum {
+    checked_module,
+    platform_pairing,
+
+    fn versioned(comptime self: CheckedEnvelopeEntry) cache_versioning.Entry {
+        return switch (self) {
+            .checked_module => .checked_module,
+            .platform_pairing => .platform_pairing,
+        };
     }
-}
-
-fn checkedModuleEntryHashUpdateU32(state: *u64, value: u32) void {
-    inline for (0..4) |i| {
-        state.* = (state.* ^ @as(u8, @truncate(value >> (i * 8)))) *% 0x100000001b3;
-    }
-}
-
-fn checkedModuleEntrySplitmix64(x: u64) u64 {
-    var z = x +% 0x9E3779B97F4A7C15;
-    z = (z ^ (z >> 30)) *% 0xBF58476D1CE4E5B9;
-    z = (z ^ (z >> 27)) *% 0x94D049BB133111EB;
-    return z ^ (z >> 31);
-}
-
-fn computeCheckedModuleEntryVersionHash() [32]u8 {
-    var state: u64 = 0xcbf29ce484222325;
-    checkedModuleEntryHashUpdate(&state, "roc-checked-module-entry-v1");
-    checkedModuleEntryHashUpdateU32(&state, checked_module_entry_version);
-    checkedModuleEntryHashUpdate(&state, &check.CheckedArtifact.CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
-    checkedModuleEntryHashUpdate(&state, &cache_module.MODULE_ENV_VERSION_HASH);
-
-    var result: [32]u8 = undefined;
-    var split_state = state;
-    inline for (0..4) |lane| {
-        split_state = checkedModuleEntrySplitmix64(split_state);
-        inline for (0..8) |byte_i| {
-            result[lane * 8 + byte_i] = @truncate(split_state >> (byte_i * 8));
-        }
-    }
-    return result;
-}
+};
 
 /// A decoded checked-module cache entry's relocatable env and artifact bodies.
 const CheckedModuleCacheBodies = struct {
@@ -284,6 +257,7 @@ const CheckedModuleCacheBodies = struct {
 /// `checked_module_cache_header_len` bytes of `dest`. The caller gathers the
 /// relocatable bodies (env blob then artifact blob) into `dest` after the header.
 fn writeCheckedModuleCacheHeader(
+    comptime entry: CheckedEnvelopeEntry,
     dest: []u8,
     key: check.CheckedArtifact.CheckedModuleArtifactKey,
     env_len: usize,
@@ -293,7 +267,7 @@ fn writeCheckedModuleCacheHeader(
     var offset: usize = 0;
     @memcpy(dest[offset..][0..checked_module_cache_magic.len], checked_module_cache_magic);
     offset += checked_module_cache_magic.len;
-    @memcpy(dest[offset..][0..32], &checked_module_entry_version_hash);
+    @memcpy(dest[offset..][0..32], &cache_versioning.entryVersionHash(entry.versioned()));
     offset += 32;
     @memcpy(dest[offset..][0..32], &key.bytes);
     offset += 32;
@@ -305,6 +279,7 @@ fn writeCheckedModuleCacheHeader(
 }
 
 fn decodeCheckedCacheEnvelope(
+    comptime entry: CheckedEnvelopeEntry,
     key: check.CheckedArtifact.CheckedModuleArtifactKey,
     bytes: []const u8,
 ) ?CheckedModuleCacheBodies {
@@ -312,9 +287,9 @@ fn decodeCheckedCacheEnvelope(
     var offset: usize = 0;
     if (!std.mem.eql(u8, bytes[offset..][0..checked_module_cache_magic.len], checked_module_cache_magic)) return null;
     offset += checked_module_cache_magic.len;
-    // Reject (as a cache miss) an entry whose envelope, ModuleEnv `Serialized`,
-    // or artifact `Serialized` layout differs from this compiler's.
-    if (!std.mem.eql(u8, bytes[offset..][0..32], &checked_module_entry_version_hash)) return null;
+    // Reject (as a cache miss) an entry whose envelope or body layouts differ
+    // from this compiler's.
+    if (!std.mem.eql(u8, bytes[offset..][0..32], &cache_versioning.entryVersionHash(entry.versioned()))) return null;
     offset += 32;
     if (!std.mem.eql(u8, bytes[offset..][0..32], &key.bytes)) return null;
     offset += 32;
@@ -346,7 +321,7 @@ fn decodeCheckedCacheEnvelope(
 }
 
 fn decodeCheckedModuleCacheEntry(key: CheckedArtifact.CheckedModuleArtifactKey, bytes: []const u8) ?CheckedModuleCacheBodies {
-    const bodies = decodeCheckedCacheEnvelope(key, bytes) orelse return null;
+    const bodies = decodeCheckedCacheEnvelope(.checked_module, key, bytes) orelse return null;
     if (bodies.env_body.len < @sizeOf(ModuleEnv.Serialized)) return null;
     if (bodies.artifact_body.len < @sizeOf(CheckedArtifact.CheckedModuleArtifact.Serialized)) return null;
     return bodies;
@@ -368,7 +343,7 @@ test "checked module cache header decodes bodies and rejects corrupt envelope" {
 
     var entry: [total_len]u8 = undefined;
     @memset(&entry, 0);
-    writeCheckedModuleCacheHeader(entry[0..checked_module_cache_header_len], key, env_len, artifact_len, @splat(0));
+    writeCheckedModuleCacheHeader(.checked_module, entry[0..checked_module_cache_header_len], key, env_len, artifact_len, @splat(0));
 
     const bodies = decodeCheckedModuleCacheEntry(key, &entry) orelse return error.TestExpectedEqual;
     try std.testing.expectEqual(@as(usize, env_len), bodies.env_body.len);
@@ -401,17 +376,22 @@ test "checked module cache header decodes bodies and rejects corrupt envelope" {
     @memcpy(extra_byte[0..total_len], &entry);
     extra_byte[total_len] = 0;
     try std.testing.expect(decodeCheckedModuleCacheEntry(key, &extra_byte) == null);
+
+    var pairing_entry = entry;
+    writeCheckedModuleCacheHeader(.platform_pairing, pairing_entry[0..checked_module_cache_header_len], key, env_len, artifact_len, @splat(0));
+    try std.testing.expect(decodeCheckedModuleCacheEntry(key, &pairing_entry) == null);
+    try std.testing.expect(decodeCheckedCacheEnvelope(.platform_pairing, key, &pairing_entry) != null);
+    try std.testing.expect(decodeCheckedCacheEnvelope(.platform_pairing, key, &entry) == null);
 }
 
 const canonicalized_module_cache_magic = "roc-can-cache-v1";
-const canonicalized_module_entry_version: u32 = 3;
-const canonicalized_module_entry_version_hash: [32]u8 = computeCanonicalizedModuleEntryVersionHash();
+const canonicalized_module_entry_version_hash: [32]u8 = cache_versioning.entryVersionHash(.canonicalized_module);
 
 // Header: magic, composite entry-version hash (32), canonicalized-module cache
 // key (32), env-blob length (u64), and parse-stage-record length (u64). The two
-// length-prefixed bodies follow. The entry-version hash folds the manual
-// envelope version, the parse-stage record format version, and the ModuleEnv
-// `Serialized` layout hash, so a stale body is rejected by one admission check.
+// length-prefixed bodies follow. The entry-version hash is
+// `cache_versioning.entryVersionHash(.canonicalized_module)`, so a stale
+// envelope or body is rejected by one admission check.
 //
 // The header's length is a multiple of the 16-byte serialization alignment, so
 // the env blob that follows it is 16-byte aligned wherever the entry itself is,
@@ -422,24 +402,6 @@ comptime {
     if (canonicalized_module_cache_header_len % CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits() != 0) {
         @compileError("canonicalized cache header must keep the env blob serialization-aligned");
     }
-}
-
-fn computeCanonicalizedModuleEntryVersionHash() [32]u8 {
-    var state: u64 = 0xcbf29ce484222325;
-    checkedModuleEntryHashUpdate(&state, "roc-canonicalized-module-entry-v1");
-    checkedModuleEntryHashUpdateU32(&state, canonicalized_module_entry_version);
-    checkedModuleEntryHashUpdateU32(&state, canonicalized_cache_entry.format_version);
-    checkedModuleEntryHashUpdate(&state, &cache_module.MODULE_ENV_VERSION_HASH);
-
-    var result: [32]u8 = undefined;
-    var split_state = state;
-    inline for (0..4) |lane| {
-        split_state = checkedModuleEntrySplitmix64(split_state);
-        inline for (0..8) |byte_i| {
-            result[lane * 8 + byte_i] = @truncate(split_state >> (byte_i * 8));
-        }
-    }
-    return result;
 }
 
 /// A decoded canonicalized-module cache entry's two bodies.
@@ -1272,6 +1234,12 @@ pub const Coordinator = struct {
 
     /// Prevents nested or concurrent use of the shared worker result channel.
     post_check_session_active: std.atomic.Value(bool),
+    /// The work the active post-check session's submitter was doing when the
+    /// session began, if it recorded any. Workers record it while running the
+    /// session's tasks, so a crash on a worker names the stage it was working
+    /// for. Written before any task is sent, so the task channel orders it
+    /// before worker reads.
+    post_check_session_frame: ?base.ice_context.Frame = null,
     /// Set only after the frontend coordinator loop has drained every task and
     /// result. Post-check work shares those channels and cannot start earlier.
     frontend_complete: bool,
@@ -1313,6 +1281,9 @@ pub const Coordinator = struct {
     /// Human release/nightly version for source header pins, separate from
     /// the embedder's cache namespace above.
     source_pin_version: ?[]const u8 = null,
+    /// The user's file for an entry module the CLI compiles from a staged
+    /// copy (a default app), so crash reports name the user's file.
+    staged_entry: ?StagedEntry = null,
 
     /// Optional cache manager for transparent checked-module disk caching.
     cache_manager: ?*CacheManager,
@@ -1427,6 +1398,7 @@ pub const Coordinator = struct {
             .shutting_down = std.atomic.Value(bool).init(false),
             .worker_oom = std.atomic.Value(bool).init(false),
             .post_check_session_active = std.atomic.Value(bool).init(false),
+            .post_check_session_frame = null,
             .frontend_complete = false,
             .total_remaining = 0,
             .app_package_name = null,
@@ -3062,14 +3034,40 @@ pub const Coordinator = struct {
         return self.total_remaining == 0 and self.inflight.load(.acquire) == 0 and self.task_channel.isEmpty();
     }
 
+    /// An entry module compiled from a staged copy of the user's file.
+    pub const StagedEntry = struct {
+        /// The staged copy's absolute path, as module tasks carry it.
+        staged_path: []const u8,
+        /// The user's file.
+        user_path: []const u8,
+    };
+
+    /// The path a crash report names for a module at `path`.
+    fn crashReportPath(self: *const Coordinator, path: []const u8) []const u8 {
+        const staged = self.staged_entry orelse return path;
+        return if (std.mem.eql(u8, path, staged.staged_path)) staged.user_path else path;
+    }
+
     /// Execute a task inline with explicit worker allocators.
     fn executeTaskInline(self: *Coordinator, task: WorkerTask, allocators: WorkerTaskAllocators) Allocator.Error!WorkerResult {
-        return switch (task) {
-            .parse => |t| self.executeParse(t, allocators),
-            .canonicalize => |t| self.executeCanonicalize(t, allocators),
-            .type_check => |t| self.executeTypeCheck(t, allocators),
+        switch (task) {
+            .parse => |t| {
+                const ice = base.ice_context.enter(.{ .phase = .parse, .module_name = t.module_name, .module_path = self.crashReportPath(t.path) });
+                defer ice.leave();
+                return self.executeParse(t, allocators);
+            },
+            .canonicalize => |t| {
+                const ice = base.ice_context.enter(.{ .phase = .canonicalize, .module_name = t.module_name, .module_path = self.crashReportPath(t.path) });
+                defer ice.leave();
+                return self.executeCanonicalize(t, allocators);
+            },
+            .type_check => |t| {
+                const ice = base.ice_context.enter(.{ .phase = .type_check, .module_name = t.module_name, .module_path = self.crashReportPath(t.path) });
+                defer ice.leave();
+                return self.executeTypeCheck(t, allocators);
+            },
             .post_check => unreachable,
-        };
+        }
     }
 
     /// A stage-independent view over the persistent compilation workers.
@@ -3103,6 +3101,7 @@ pub const Coordinator = struct {
             base.invariant("{s}", .{"compiler coordinator started overlapping post-check sessions"});
         }
         std.debug.assert(self.inline_post_check_completion == null);
+        self.post_check_session_frame = base.ice_context.innermost();
     }
 
     fn submitPostCheckTask(context: *anyopaque, task: post_check_executor.Task) Allocator.Error!void {
@@ -3361,7 +3360,7 @@ pub const Coordinator = struct {
         if (!manager.config.enabled) return;
         const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app).?;
         const app = app_root.mod.checkedArtifact().?;
-        const key = CheckedArtifact.PlatformPairing.cacheKey(artifact.key, app.key);
+        const key = cache_key_mod.platformPairingCacheKey(artifact.key, app.key);
         const directory = manager.config.getPlatformPairingCacheDir(manager.allocator) catch {
             manager.recordStoreFailure();
             return;
@@ -3383,7 +3382,7 @@ pub const Coordinator = struct {
             manager.recordStoreFailure();
             return;
         };
-        writeCheckedModuleCacheHeader(bytes[0..checked_module_cache_header_len], key, 0, writer.total_bytes, @splat(0));
+        writeCheckedModuleCacheHeader(.platform_pairing, bytes[0..checked_module_cache_header_len], key, 0, writer.total_bytes, @splat(0));
         _ = writer.writeToBuffer(bytes[checked_module_cache_header_len..]) catch unreachable;
         manager.storeRawBytes(key.bytes, bytes, directory, artifact.moduleEnvConst().module_name);
     }
@@ -3393,10 +3392,10 @@ pub const Coordinator = struct {
         if (!manager.config.enabled) return null;
         const directory = manager.config.getPlatformPairingCacheDir(manager.allocator) catch return null;
         defer manager.allocator.free(directory);
-        const key = CheckedArtifact.PlatformPairing.cacheKey(platform.key, app.key);
+        const key = cache_key_mod.platformPairingCacheKey(platform.key, app.key);
         const data = manager.loadRawBytesMapped(key.bytes, directory) orelse return null;
         defer data.deinit(manager.allocator);
-        const bodies = decodeCheckedCacheEnvelope(key, data.data()) orelse {
+        const bodies = decodeCheckedCacheEnvelope(.platform_pairing, key, data.data()) orelse {
             manager.stats.recordInvalidation();
             return null;
         };
@@ -3456,6 +3455,7 @@ pub const Coordinator = struct {
 
         var header: [checked_module_cache_header_len]u8 = undefined;
         writeCheckedModuleCacheHeader(
+            .checked_module,
             &header,
             artifact.key,
             env_len,
@@ -6028,6 +6028,7 @@ pub const Coordinator = struct {
     /// Worker thread main function
     fn workerThread(self: *Coordinator, worker_id: usize) void {
         _ = base.stack_overflow.installForCurrentThread();
+        base.ice_context.setThreadRole(.{ .name = "compile worker", .index = worker_id });
 
         // Each worker has its own allocators for thread safety.
         // - gpa: smp_allocator for long-lived data (ModuleEnv, source)
@@ -6048,6 +6049,8 @@ pub const Coordinator = struct {
 
             if (t == .post_check) {
                 const task = t.post_check;
+                const ice = if (self.post_check_session_frame) |frame| base.ice_context.enter(frame) else null;
+                defer if (ice) |guard| guard.leave();
                 const completion: WorkerResult = .{ .post_check = .{
                     .id = task.id,
                     .worker_id = worker_id,
@@ -7227,6 +7230,139 @@ test "app artifact records platform requirement solutions from checking" {
         "Model",
         app_artifact.canonical_names.typeNameText(identity_payload.alias.name),
     );
+}
+
+/// The checked nominal declarations one app declares for `type_name`: each
+/// one's identity key, with the module component as content-identity bytes so
+/// keys from different compilations compare.
+const NominalDeclarationIdentity = struct {
+    module_identity: [32]u8,
+    source_decl: u32,
+};
+
+fn checkNominalIdentityFixture(
+    allocator: Allocator,
+    app_source: []const u8,
+    type_name: []const u8,
+    out: []NominalDeclarationIdentity,
+) (CheckedModuleCacheRunError || std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError || std.Io.Dir.RealPathFileAllocError)!usize {
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "app/.roc_nominal_platform");
+    try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "app/main.roc", .data = app_source });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "app/.roc_nominal_platform/main.roc",
+        .data =
+        \\platform ""
+        \\    requires {} { main! : {} -> Try({}, {}) }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_entry": entry }
+        \\
+        \\entry : {} -> Try({}, {})
+        \\entry = |_| main!({})
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        try sharedBuiltinModules(),
+        build_options.compiler_compatibility_id,
+        null,
+        roc_ctx,
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    var arena_impl = base.SingleThreadArena.init(allocator);
+    defer arena_impl.deinit();
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena_impl.allocator(), .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const app = coord.appRootCheckedArtifact();
+    var count: usize = 0;
+    for (app.checked_types.nominal_declarations.items) |declaration| {
+        const name = app.canonical_names.typeNameText(app.checked_types.nominalDeclarationName(declaration));
+        if (!std.mem.eql(u8, name, type_name)) continue;
+        out[count] = .{
+            .module_identity = app.canonical_names.moduleIdentityBytes(declaration.nominal.module).*,
+            .source_decl = declaration.nominal.source_decl,
+        };
+        count += 1;
+    }
+    return count;
+}
+
+test "nominal identity is the declaring module's content identity and statement, never the type name" {
+    const allocator = std.testing.allocator;
+    var color: [1]NominalDeclarationIdentity = undefined;
+    var shade: [1]NominalDeclarationIdentity = undefined;
+
+    // The same declaration, at the same position, under two names.
+    try std.testing.expectEqual(@as(usize, 1), try checkNominalIdentityFixture(allocator,
+        \\app [main!] { pf: platform "./.roc_nominal_platform/main.roc" }
+        \\
+        \\Color := [Red, Green]
+        \\
+        \\main! : {} -> Try({}, {})
+        \\main! = |_| {
+        \\    _color : Color
+        \\    _color = Red
+        \\    Ok({})
+        \\}
+    , "Color", &color));
+    try std.testing.expectEqual(@as(usize, 1), try checkNominalIdentityFixture(allocator,
+        \\app [main!] { pf: platform "./.roc_nominal_platform/main.roc" }
+        \\
+        \\Shade := [Red, Green]
+        \\
+        \\main! : {} -> Try({}, {})
+        \\main! = |_| {
+        \\    _color : Shade
+        \\    _color = Red
+        \\    Ok({})
+        \\}
+    , "Shade", &shade));
+
+    // The rename changes identity only through the module's content identity;
+    // the declaring statement is unchanged.
+    try std.testing.expectEqual(color[0].source_decl, shade[0].source_decl);
+    try std.testing.expect(!std.mem.eql(u8, &color[0].module_identity, &shade[0].module_identity));
+
+    // Two block-local declarations sharing one name are distinct by statement.
+    var locals: [2]NominalDeclarationIdentity = undefined;
+    try std.testing.expectEqual(@as(usize, 2), try checkNominalIdentityFixture(allocator,
+        \\app [main!] { pf: platform "./.roc_nominal_platform/main.roc" }
+        \\
+        \\main! : {} -> Try({}, {})
+        \\main! = |_| {
+        \\    _first = {
+        \\        Local := [A]
+        \\        _value : Local
+        \\        _value = A
+        \\        1
+        \\    }
+        \\    _second = {
+        \\        Local := [B]
+        \\        _value : Local
+        \\        _value = B
+        \\        2
+        \\    }
+        \\    Ok({})
+        \\}
+    , "Local", &locals));
+    try std.testing.expect(std.mem.eql(u8, &locals[0].module_identity, &locals[1].module_identity));
+    try std.testing.expect(locals[0].source_decl != locals[1].source_decl);
 }
 
 fn writeErroneousFunctionRequirementFixture(tmp_dir: *std.testing.TmpDir) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {

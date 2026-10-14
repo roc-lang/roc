@@ -196,10 +196,10 @@ test "every row in the table is structurally valid" {
 }
 
 test "the #10023 row is rejected: a shared-interior result is not a unique allocation" {
-    // `str_drop_prefix` returns a substring of its argument's allocation. PR
-    // roc-lang/roc#10023 (issue #9953) removed `result_unique` from this
-    // constructor family after ARC counted both a fresh birth and a link to
-    // the lender, leaking one reference per call.
+    // `str_drop_prefix` returns a substring of its argument's allocation.
+    // Claiming `result_unique` for this constructor family (roc-lang/roc#10023,
+    // issue #9953) makes ARC count both a fresh birth and a link to the lender,
+    // leaking one reference per call.
     var reintroduced = RcEffect.retainsSharingArgs(1);
     reintroduced.result_unique = true;
 

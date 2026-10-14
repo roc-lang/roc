@@ -14,9 +14,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS is build-only: ci_zig.yml's zig-tests macos-15 leg already
-          # runs snapshots and run-test-zig on this OS, and macOS runners are
-          # the scarce resource PR CI queues on.
+          # macOS is build-only: PR CI already runs MiniCI on macos-15, and
+          # macOS runners are the scarce resource PR CI queues on.
           - os: macos-15
             target_flag: ''
             nix_ci_mode: --build-only
@@ -55,6 +54,14 @@ jobs:
               min-free = 1073741824
               max-free = 5368709120
               # When free space drops below min-free (1 GB), nix GCs until max-free (5 GB) is available. This avoids "No space left on device" on CI.
+
+      # The test leg runs MiniCI (see ci/zig_nix_ci.sh), whose Rust glue
+      # checks call the runner's rustc from inside the dev shell.
+      - name: Install Rust targets
+        if: matrix.nix_ci_mode == ''
+        run: |
+          rustup target add wasm32-unknown-unknown
+          rustup target add ${{ runner.arch == 'ARM64' && 'aarch64-unknown-linux-musl' || 'x86_64-unknown-linux-musl' }}
 
       - name: Build inside a nix dev shell
         uses: ./.github/actions/flaky-retry

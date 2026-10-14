@@ -7,6 +7,8 @@
 const std = @import("std");
 const Sha256 = @import("base").Sha256;
 const can = @import("can");
+const CheckedModuleArtifactKey = @import("check").CheckedArtifact.CheckedModuleArtifactKey;
+const cache_versioning = @import("cache_versioning.zig");
 
 /// Names one module's canonicalization output in the canonicalized-module cache.
 pub const CanonicalizedModuleCacheKey = struct {
@@ -72,6 +74,19 @@ fn hashLengthPrefixed(hasher: *Sha256, bytes: []const u8) void {
     std.mem.writeInt(u64, &len_bytes, bytes.len, .little);
     hasher.update(&len_bytes);
     hasher.update(bytes);
+}
+
+/// Names one exact platform/app composition in the platform-pairing cache: the
+/// two immutable checked-module keys, under the pairing entry's version hash.
+pub fn platformPairingCacheKey(platform: CheckedModuleArtifactKey, app: CheckedModuleArtifactKey) CheckedModuleArtifactKey {
+    var hasher = Sha256.init(.{});
+    hasher.update("roc-platform-pairing");
+    hasher.update(&cache_versioning.entryVersionHash(.platform_pairing));
+    hasher.update(&platform.bytes);
+    hasher.update(&app.bytes);
+    var key = CheckedModuleArtifactKey{};
+    hasher.final(&key.bytes);
+    return key;
 }
 
 fn hashWithByte(byte: u8) [32]u8 {

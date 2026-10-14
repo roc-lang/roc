@@ -1196,6 +1196,102 @@ const OutcomeBitAccum = struct {
     present_on_all_paths: bool,
 };
 
+/// The switch that refines a direct call's outcome, when the result-control
+/// relation is explicit in LIR: starting at `next`, the call result `target`
+/// passes through pure same-value aliases and join declarations (a join
+/// executes only its remainder), then exactly one discriminant read of the
+/// result feeds that switch. Any other statement on the way leaves the call
+/// unrefined. Insertion, field dismantling, and certification all key
+/// restitution on this one statement.
+pub fn findOutcomeRefinement(
+    allocator: Allocator,
+    store: *const LirStore,
+    target: LIR.LocalId,
+    next: LIR.CFStmtId,
+    outcomes: arc_sig.OutcomeSpan,
+) SolveError!?LIR.CFStmtId {
+    if (outcomes.isEmpty()) return null;
+    var aliases = std.ArrayList(LIR.LocalId).empty;
+    defer aliases.deinit(allocator);
+    try aliases.append(allocator, target);
+    var discriminant: ?LIR.LocalId = null;
+    var cursor = next;
+    while (true) {
+        switch (store.getCFStmt(cursor)) {
+            .assign_ref => |assign| switch (assign.op) {
+                .local => |source| {
+                    if (discriminant != null) return null;
+                    if (std.mem.findScalar(LIR.LocalId, aliases.items, source) == null) return null;
+                    if (std.mem.findScalar(LIR.LocalId, aliases.items, assign.target) == null) {
+                        try aliases.append(allocator, assign.target);
+                    }
+                    cursor = assign.next;
+                },
+                .discriminant => |op| {
+                    if (discriminant != null) return null;
+                    if (std.mem.findScalar(LIR.LocalId, aliases.items, op.source) == null) return null;
+                    discriminant = assign.target;
+                    cursor = assign.next;
+                },
+                .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return null,
+            },
+            .join => |join| {
+                // A statement `match` over the result declares its merge join
+                // before reading the discriminant and switches in the join's
+                // remainder.
+                if (discriminant != null) return null;
+                cursor = join.remainder;
+            },
+            .switch_stmt => |switch_stmt| {
+                const refined = discriminant orelse return null;
+                return if (switch_stmt.cond == refined) cursor else null;
+            },
+            .init_uninitialized,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_record_update,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .assign_call_dict,
+            .assign_low_level,
+            .assign_list,
+            .assign_struct,
+            .assign_tag,
+            .set_local,
+            .store_struct,
+            .store_tag,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .comptime_branch_taken,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .boxy_tag_match,
+            .jump,
+            .ret,
+            .crash,
+            => return null,
+        }
+    }
+}
+
 fn outcomeLessThan(_: void, lhs: arc_sig.Outcome, rhs: arc_sig.Outcome) bool {
     return lhs.discriminant < rhs.discriminant;
 }
@@ -7596,4 +7692,33 @@ test "uniqueness gives a tail loop parameter no field origins from its back edge
     // On the first iteration the field is whatever the caller stored, so a
     // take of it is not a unique birth under any seed.
     try std.testing.expect(!solution.unique_born.isSet(@backingInt(taken)));
+}
+
+test "ARC shared predicates have one definition across the ARC stage" {
+    // Solve, dismantle, insertion, and certification must agree on these
+    // predicates exactly, so each has a single owner the others import.
+    const Module = struct { name: []const u8, source: []const u8 };
+    const modules = [_]Module{
+        .{ .name = "arc_sig.zig", .source = @embedFile("arc_sig.zig") },
+        .{ .name = "arc_solve.zig", .source = @embedFile("arc_solve.zig") },
+        .{ .name = "arc_dismantle.zig", .source = @embedFile("arc_dismantle.zig") },
+        .{ .name = "arc.zig", .source = @embedFile("arc.zig") },
+        .{ .name = "arc_certify.zig", .source = @embedFile("arc_certify.zig") },
+    };
+    // Names only: the declaration text is assembled at comptime so this test's
+    // own source never matches it.
+    const Predicate = struct { name: []const u8, owner: []const u8 };
+    const predicates = [_]Predicate{
+        .{ .name = "computeLocalContainsRefcounted", .owner = "arc_solve.zig" },
+        .{ .name = "findOutcomeRefinement", .owner = "arc_solve.zig" },
+        .{ .name = "outcomeMaskForValue", .owner = "arc_sig.zig" },
+        .{ .name = "defaultOutcomeMask", .owner = "arc_sig.zig" },
+    };
+    inline for (predicates) |predicate| {
+        const decl = "fn " ++ predicate.name ++ "(";
+        for (modules) |module| {
+            const expected: usize = if (std.mem.eql(u8, module.name, predicate.owner)) 1 else 0;
+            try std.testing.expectEqual(expected, std.mem.count(u8, module.source, decl));
+        }
+    }
 }

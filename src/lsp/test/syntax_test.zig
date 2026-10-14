@@ -1111,7 +1111,7 @@ fn focusedExpressionDiagnostics() integration_spec.SpecError!void {
             \\    value
             \\}
             ,
-            "type mismatch",
+            "used in an unexpected way",
             "|value|",
         },
         .{
@@ -1121,7 +1121,7 @@ fn focusedExpressionDiagnostics() integration_spec.SpecError!void {
             \\    1
             \\}
             ,
-            "type mismatch",
+            "used in an unexpected way",
             "||",
         },
         .{
@@ -1131,7 +1131,7 @@ fn focusedExpressionDiagnostics() integration_spec.SpecError!void {
             \\    1
             \\}
             ,
-            "type mismatch",
+            "used in an unexpected way",
             "|\"|\"|",
         },
         .{

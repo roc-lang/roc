@@ -2935,7 +2935,7 @@ fn CheckedNominalTypeOf(comptime OwnerModule: type) type {
         /// `origin_module`. A read form aliases the stored id, like its
         /// slice fields alias pools; a build form owns it.
         owner_module: OwnerModule,
-        source_decl: ?u32 = null,
+        source_decl: u32,
         builtin: ?CheckedBuiltinNominal = null,
         is_opaque: bool,
         representation: CheckedNominalRepresentationRef,
@@ -2986,7 +2986,6 @@ fn CheckedNominalTypeOf(comptime OwnerModule: type) type {
 fn checkedNominalTypeKey(nominal: CheckedNominalType) canonical.NominalTypeKey {
     return .{
         .module = nominal.origin_module,
-        .type_name = nominal.name,
         .source_decl = nominal.source_decl,
     };
 }
@@ -3115,7 +3114,7 @@ pub const StoredNominal = struct {
     name: canonical.TypeNameId,
     origin_module: canonical.ModuleIdentityId,
     owner_module: ModuleId,
-    source_decl: ?u32 = null,
+    source_decl: u32,
     builtin: ?CheckedBuiltinNominal = null,
     is_opaque: bool,
     representation: CheckedNominalRepresentationRef,
@@ -4985,6 +4984,20 @@ pub const CheckedTypeStore = struct {
         return null;
     }
 
+    /// The declared name of `declaration`'s type, read from its declaration
+    /// root's nominal payload. Display metadata only: nominal identity
+    /// (`canonical.NominalTypeKey`) never includes it.
+    pub fn nominalDeclarationName(
+        self: *const CheckedTypeStore,
+        declaration: CheckedNominalDeclaration,
+    ) canonical.TypeNameId {
+        const root_payload = self.payload(declaration.declaration_root);
+        if (root_payload != .nominal) {
+            checkedArtifactInvariant("nominal declaration root was not a nominal checked type", .{});
+        }
+        return root_payload.nominal.name;
+    }
+
     pub fn nominalDeclarationById(
         self: *const CheckedTypeStore,
         id: CheckedNominalDeclarationId,
@@ -6729,11 +6742,7 @@ fn appendCheckedNominalDeclarationFromPayload(
     }
     const nominal = root_payload.nominal;
 
-    const nominal_key = canonical.NominalTypeKey{
-        .module = nominal.origin_module,
-        .type_name = nominal.name,
-        .source_decl = nominal.source_decl,
-    };
+    const nominal_key = checkedNominalTypeKey(nominal);
     for (declarations.items) |existing| {
         if (canonicalNominalTypeKeyEql(existing.nominal, nominal_key)) {
             if (existing.backing == backing and
@@ -6766,8 +6775,7 @@ fn appendCheckedNominalDeclarationFromPayload(
     try declarations.append(allocator, .{
         .id = declaration_id,
         .nominal = nominal_key,
-        .source_statement = nominal.source_decl orelse
-            checkedArtifactInvariant("checked nominal declaration payload had no source declaration", .{}),
+        .source_statement = nominal.source_decl,
         .declaration_root = root,
         .backing = backing,
         .fa_start = fa.start,
@@ -7105,14 +7113,12 @@ fn embedReachableImportedNominalDecls(
         const nominal = payload.nominal;
         const origin_module = nominal.origin_module;
         const owner_module = nominal.owner_module;
-        const type_name = nominal.name;
         const source_decl = nominal.source_decl;
         const builtin_nominal = nominal.builtin;
         const representation = nominal.representation;
 
         const key = canonical.NominalTypeKey{
             .module = origin_module,
-            .type_name = type_name,
             .source_decl = source_decl,
         };
         // Already declared locally (this module's own declaration) or already
@@ -8487,13 +8493,13 @@ const CheckedTypePublisher = struct {
                         const name = try names.internTypeIdent(module.identStoreConst(), nominal.ident.ident_idx);
                         const origin_module = try names.internModuleIdentity(module.moduleEnvConst().moduleIdentityHash(nominal.origin_module));
                         const owner_module = try scratch.imported_origins.owner(module.moduleEnvConst(), self.imports, nominal.origin_module);
-                        const representation = try checkedNominalRepresentationForSourceNominal(module, names, self.imports, &scratch.imported_origins, &scratch.local_nominal_declarations, nominal, builtin_nominal);
+                        const representation = try checkedNominalRepresentationForSourceNominal(module, self.imports, &scratch.imported_origins, &scratch.local_nominal_declarations, nominal, builtin_nominal);
                         build.* = .{
                             .nominal = .{
                                 .name = name,
                                 .origin_module = origin_module,
                                 .owner_module = owner_module,
-                                .source_decl = nominal.sourceDeclOptional(),
+                                .source_decl = nominal.statement(),
                                 .builtin = builtin_nominal,
                                 .is_opaque = nominal.isOpaque(),
                                 .representation = representation,
@@ -8954,16 +8960,19 @@ const ImportedOriginIndex = struct {
         return checkedBuiltinNominalForMatchingView(view, source_decl);
     }
 
-    /// The imported declaration of the nominal `type_text` declared at
-    /// `source_decl` in `origin_module`.
+    /// The imported declaration of the nominal declared at `source_decl` in
+    /// `origin_module`: a nominal is identified by its declaring module's
+    /// content identity and its declaring statement. An artifact also embeds
+    /// declarations of nominals other modules declare, so the declaration's
+    /// own module identity is compared.
     fn nominalDeclaration(
         self: *ImportedOriginIndex,
         module_env: *const ModuleEnv,
         imports: CheckedImportViews,
         origin_module: base.ModuleIdentity.Idx,
-        type_text: []const u8,
         source_decl: u32,
     ) Allocator.Error!ImportedNominalDeclarationRef {
+        const origin_hash = module_env.moduleIdentityHash(origin_module);
         const origin = try self.resolve(module_env, imports, origin_module);
         const view = origin.view orelse checkedArtifactInvariant(
             "checked nominal representation referenced a nominal from an origin with no import view {any}",
@@ -8994,7 +9003,7 @@ const ImportedOriginIndex = struct {
         var cursor = origin.first.get(source_decl) orelse no_declaration;
         while (cursor != no_declaration) : (cursor = origin.next[cursor]) {
             const declaration = declarations[cursor];
-            if (!Ident.textEql(view.canonical_names.typeNameText(declaration.nominal.type_name), type_text)) continue;
+            if (!base.ModuleIdentity.eql(view.canonical_names.moduleIdentityBytes(declaration.nominal.module), origin_hash)) continue;
             if (found) |existing| {
                 if (existing != declaration.id) {
                     checkedArtifactInvariant("checked nominal representation import declaration resolution was ambiguous", .{});
@@ -9006,8 +9015,8 @@ const ImportedOriginIndex = struct {
         return .{
             .artifact = view.key,
             .declaration = found orelse checkedArtifactInvariant(
-                "checked nominal representation referenced a missing imported nominal declaration for owner identity {any} type {s} statement {d}",
-                .{ module_env.moduleIdentityHash(origin_module).*, type_text, source_decl },
+                "checked nominal representation referenced a missing imported nominal declaration for owner identity {any} statement {d}",
+                .{ origin_hash.*, source_decl },
             ),
         };
     }
@@ -9016,7 +9025,7 @@ const ImportedOriginIndex = struct {
 fn categorizeBuiltinNominal(module: TypedCIR.Module, imports: CheckedImportViews, nominal: types.NominalType) ?CheckedBuiltinNominal {
     if (!nominal.originIsBuiltin()) return null;
 
-    const source_decl = nominal.sourceDeclOptional() orelse return null;
+    const source_decl = nominal.statement();
     const module_env = module.moduleEnvConst();
     const origin_hash = module_env.moduleIdentityHash(nominal.origin_module);
 
@@ -10300,13 +10309,10 @@ test "imported origin resolution visits each import view and owner declaration o
     const owner_identity_id = try owner_names.internModuleIdentity(&owner_hash);
 
     var declarations: [declaration_count]CheckedNominalDeclaration = undefined;
-    var type_names: [declaration_count]canonical.TypeNameId = undefined;
-    for (&declarations, &type_names, 0..) |*declaration, *type_name, index| {
-        var text_buf: [16]u8 = undefined;
-        type_name.* = try owner_names.internTypeName(try std.fmt.bufPrint(&text_buf, "T{d}", .{index}));
+    for (&declarations, 0..) |*declaration, index| {
         declaration.* = .{
             .id = @fromBackingInt(@intCast(index)),
-            .nominal = .{ .module = owner_identity_id, .type_name = type_name.*, .source_decl = @intCast(index) },
+            .nominal = .{ .module = owner_identity_id, .source_decl = @intCast(index) },
             .source_statement = @intCast(index),
             // Origin resolution reads only the id, nominal key and statement.
             .declaration_root = undefined,
@@ -10335,9 +10341,9 @@ test "imported origin resolution visits each import view and owner declaration o
 
     var index = ImportedOriginIndex.init(allocator);
     defer index.deinit();
-    for (type_names, 0..) |type_name, statement| {
+    for (0..declaration_count) |statement| {
         try testing.expect(CheckedModuleArtifactKey.eql(testCheckedModuleKey(owner_view_index), try index.owner(module_env, imports, origin)));
-        const found = try index.nominalDeclaration(module_env, imports, origin, owner_names.typeNameText(type_name), @intCast(statement));
+        const found = try index.nominalDeclaration(module_env, imports, origin, @intCast(statement));
         try testing.expect(CheckedModuleArtifactKey.eql(testCheckedModuleKey(owner_view_index), found.artifact));
         try testing.expectEqual(declarations[statement].id, found.declaration);
     }
@@ -10352,7 +10358,6 @@ fn moduleEnvIdentityMatches(module_env: *const ModuleEnv, origin_hash: *const [3
 
 fn checkedNominalRepresentationForSourceNominal(
     module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
     imports: CheckedImportViews,
     origins: *ImportedOriginIndex,
     local_nominal_declarations: *const LocalNominalDeclarationIds,
@@ -10362,20 +10367,15 @@ fn checkedNominalRepresentationForSourceNominal(
     if (builtin_nominal) |builtin_id| return .{ .builtin = builtin_id };
 
     const module_env = module.moduleEnvConst();
-    const source_decl = nominal.sourceDeclOptional();
     if (nominal.origin_module == module_env.selfModuleIdentity()) {
-        const statement = source_decl orelse
-            checkedArtifactInvariant("checked local nominal representation had no source declaration", .{});
-        return .{ .local_declaration = local_nominal_declarations.get(@fromBackingInt(@intCast(statement))) };
+        return .{ .local_declaration = local_nominal_declarations.get(@fromBackingInt(@intCast(nominal.statement()))) };
     }
 
-    const type_name = try names.internTypeIdent(module.identStoreConst(), nominal.ident.ident_idx);
     return .{ .imported_declaration = try origins.nominalDeclaration(
         module_env,
         imports,
         nominal.origin_module,
-        names.typeNameText(type_name),
-        source_decl orelse checkedArtifactInvariant("checked imported nominal representation had no source declaration", .{}),
+        nominal.statement(),
     ) };
 }
 
@@ -14131,6 +14131,102 @@ pub fn dispatchDivergenceForEvidence(
         .omit,
     );
     return result;
+}
+
+/// The kind of a checked expression.
+pub const CheckedExprKind = std.meta.Tag(CheckedExprData);
+
+/// How a checked expression of one kind can come to be marked divergent.
+///
+/// This is the one classification shared by the producer of the divergence
+/// columns (`DivergenceScan`) and every consumer that lowers an expression
+/// the columns mark divergent (Monotype's `divergentDataStep`, Boxy's
+/// `divergentStep`). Each consumer's arm for kinds that are never marked
+/// divergent checks this classification at compile time, and the parity
+/// tests below drive the producer over every kind and compare its answer
+/// with this classification, so the producer and the consumers cannot
+/// disagree about a kind without failing the build or the tests.
+pub const CheckedExprDivergence = struct {
+    /// Marked divergent by evaluating it: the kind always terminates, or an
+    /// operand it evaluates is marked divergent.
+    evaluation: bool,
+    /// Marked divergent when its static dispatch plan cannot run (a
+    /// `checked_error` or `unreachable` resolution, for the plan or under one
+    /// specialization's evidence). A consumer lowers such a kind through its
+    /// dispatch's callable-or-crash decision.
+    dispatch_plan: bool,
+
+    /// Whether no expression of this kind is ever marked divergent.
+    pub fn never(self: CheckedExprDivergence) bool {
+        return !self.evaluation and !self.dispatch_plan;
+    }
+};
+
+/// The divergence classification of a checked expression kind.
+pub fn checkedExprDivergence(kind: CheckedExprKind) CheckedExprDivergence {
+    return switch (kind) {
+        .crash,
+        .ellipsis,
+        .break_,
+        .return_,
+        .runtime_error,
+        .expect_err,
+        .str,
+        .list,
+        .tuple,
+        .match_,
+        .if_,
+        .call,
+        .record,
+        .block,
+        .tag,
+        .nominal,
+        .row_coerce,
+        .binop,
+        .unary_minus,
+        .unary_not,
+        .dbg,
+        .expect,
+        .field_access,
+        .structural_eq,
+        .structural_hash,
+        .tuple_access,
+        .for_,
+        .run_low_level,
+        => .{ .evaluation = true, .dispatch_plan = false },
+        .dispatch_call,
+        .method_eq,
+        .type_dispatch_call,
+        .interpolation,
+        => .{ .evaluation = true, .dispatch_plan = true },
+        .numeral,
+        .str_from_quote,
+        => .{ .evaluation = false, .dispatch_plan = true },
+        .pending,
+        .str_segment,
+        .bytes_literal,
+        .lookup_local,
+        .lookup_external,
+        .lookup_required,
+        .empty_list,
+        .empty_record,
+        .zero_argument_tag,
+        .closure,
+        .lambda,
+        .anno_only,
+        .hosted_lambda,
+        => .{ .evaluation = false, .dispatch_plan = false },
+    };
+}
+
+/// Compile-time check for a consumer's never-divergent arm: fails the build,
+/// naming the kind, when the shared classification says an expression of
+/// `kind` can be marked divergent.
+pub fn assertCheckedExprNeverDiverges(comptime kind: CheckedExprKind) void {
+    comptime if (!checkedExprDivergence(kind).never()) {
+        @compileError("checked expression kind ." ++ @tagName(kind) ++
+            " can be marked divergent (checkedExprDivergence) but this consumer lowers it as never divergent");
+    };
 }
 
 /// Decides whether checked expressions and statements always diverge,
@@ -19963,24 +20059,18 @@ const EvidencePass = struct {
                     .nominal_type => |nominal| {
                         if (categorizeBuiltinNominal(self.module, self.import_views, nominal)) |builtin_nominal| {
                             if (builtin_nominal == .try_) {
-                                const idents = self.module.identStoreConst();
                                 const module_identity_id = try self.names.internModuleIdentity(self.module.moduleEnvConst().moduleIdentityHash(nominal.origin_module));
-                                const type_name = try self.names.internTypeIdent(idents, nominal.ident.ident_idx);
                                 return .{ .nominal = .{
                                     .module = module_identity_id,
-                                    .type_name = type_name,
-                                    .source_decl = nominal.sourceDeclOptional(),
+                                    .source_decl = nominal.statement(),
                                 } };
                             }
                             return .{ .builtin = static_dispatch.builtinOwnerForCheckedBuiltin(builtin_nominal) };
                         }
-                        const idents = self.module.identStoreConst();
                         const module_identity_id = try self.names.internModuleIdentity(self.module.moduleEnvConst().moduleIdentityHash(nominal.origin_module));
-                        const type_name = try self.names.internTypeIdent(idents, nominal.ident.ident_idx);
                         return .{ .nominal = .{
                             .module = module_identity_id,
-                            .type_name = type_name,
-                            .source_decl = nominal.sourceDeclOptional(),
+                            .source_decl = nominal.statement(),
                         } };
                     },
                     .record,
@@ -22077,6 +22167,9 @@ pub const ProcTarget = union(enum) {
 /// are explicit so postcheck never recognizes Try by names or backing shape.
 pub const HostedTryAdapterCapability = struct {
     nominal: canonical.NominalTypeKey,
+    /// The nominal's declared name: display metadata for the lowered type
+    /// definition, never identity.
+    type_name: canonical.TypeNameId,
     ok_tag: canonical.TagLabelId,
     err_tag: canonical.TagLabelId,
     ok_type_arg_index: u8,
@@ -22372,6 +22465,7 @@ fn hostedTryAdapterCapabilityForCheckedRoot(
     if (!checkedTypeIsClosedTagRow(checked_types, nominal.args[1])) return null;
     return .{
         .nominal = checkedNominalTypeKey(nominal),
+        .type_name = nominal.name,
         .ok_tag = try names.internTagLabel("Ok"),
         .err_tag = try names.internTagLabel("Err"),
         .ok_type_arg_index = 0,
@@ -26438,19 +26532,11 @@ fn pairingFieldNameEql(comptime a: []const u8, comptime b: []const u8) bool {
 /// Source environments, declarations, and unchanged body and type columns stay
 /// owned by the platform. A hit installs the finished view without evaluation.
 pub const PlatformPairing = struct {
-    // Bump for changes to the borrowed-column mask interpretation as well as
-    // other semantics not visible in the serialized layout fingerprint.
-    const version_hash = artifact_serialize.layoutVersionHash(Serialized, 2);
-
-    pub fn cacheKey(platform: CheckedModuleArtifactKey, app: CheckedModuleArtifactKey) CheckedModuleArtifactKey {
-        var hash = base.Sha256.init(.{});
-        hash.update("roc-platform-pairing");
-        hash.update(&CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
-        hash.update(&version_hash);
-        hash.update(&platform.bytes);
-        hash.update(&app.bytes);
-        return .{ .bytes = hash.finalResult() };
-    }
+    /// Comptime fingerprint of `Serialized`'s layout. The compiler's cache
+    /// versioning folds it into the platform-pairing cache entry's admission hash.
+    // Bump the version for changes to the borrowed-column mask interpretation as
+    // well as other semantics not visible in the serialized layout fingerprint.
+    pub const SERIALIZED_VERSION_HASH: [32]u8 = artifact_serialize.rootLayoutVersionHash(Serialized, 2);
 
     pub const Serialized = extern struct {
         relation: [32]u8,
@@ -26479,6 +26565,63 @@ pub const PlatformPairing = struct {
         exported_const_templates: ExportedConstTemplateTable.Serialized,
         compile_time_debug: CompileTimeDebugStore.Serialized,
         compile_time_root_reads: CompileTimeRootReadTable.Serialized,
+
+        /// Every artifact column is either persisted here, carrying the app
+        /// substitution or the composition's evaluation results, or borrowed
+        /// unchanged from the exact platform the cache key names.
+        pub const root_contract: collections.serde_validation.RootContract = .{
+            .Owner = CheckedModuleArtifact,
+            .owner_only_fields = &.{
+                // Platform identity and source: borrowed from the platform.
+                "key",
+                "module_identity",
+                "direct_import_artifact_keys",
+                "public_api_dependencies",
+                "module_env",
+                "exports",
+                "provides_requires",
+                // Recorded as `relation`; the rest is borrowed from the platform.
+                "checking_context_identity",
+                // Persisted as the `body_*` columns; the rest is borrowed.
+                "checked_bodies",
+                // Persisted as `templates`; the rest is borrowed.
+                "checked_procedure_templates",
+                // Pairing-independent checked metadata: borrowed from the platform.
+                "evaluation_diagnostics",
+                "checked_const_bodies",
+                "exported_procedure_templates",
+                "exported_procedure_bindings",
+                "method_registry",
+                "static_dispatch_plans",
+                "nested_proc_sites",
+                "top_level_procedure_bindings",
+                "callable_eval_templates",
+                "hosted_procs",
+                "hosted_bindings",
+                "platform_required_declarations",
+                "platform_type_inputs",
+                "platform_requirement_solutions",
+                "interface_capabilities",
+                "top_level_values",
+                "hoisted_constants",
+                // Runtime ownership and preparation state, not checked data.
+                "evaluation_state",
+                "serialized_backing",
+                "serialized_backing_is_static",
+                "pairing_arena",
+                "reopened_arena",
+            },
+            .serialized_only_fields = &.{
+                "relation", // `checking_context_identity.platform_app_relation`.
+                "borrowed_types", // Which `checked_types` columns are borrowed.
+                "has_dependent_evaluation", // Whether the evaluation columns are persisted.
+                "templates", // `checked_procedure_templates.templates`.
+                "body_exprs", // `checked_bodies.stored_exprs`.
+                "body_statements", // `checked_bodies.stored_statements`.
+                "body_patterns", // `checked_bodies.stored_patterns`.
+                "body_field_access_segments", // `checked_bodies.field_access_segment_pool`.
+            },
+        };
 
         pub fn serialize(self: *Serialized, artifact: *const CheckedModuleArtifact, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
             std.debug.assert(artifact.pairing_arena != null and artifact.evaluation_state == .finalized);
@@ -27288,11 +27431,7 @@ pub const ModuleInterfaceCapabilities = struct {
             if (nominal.builtin != null) continue;
             if (nominal.origin_module != current_module) continue;
             const source_key = checked_types.roots.items[i].key;
-            const nominal_key = canonical.NominalTypeKey{
-                .module = nominal.origin_module,
-                .type_name = nominal.name,
-                .source_decl = nominal.source_decl,
-            };
+            const nominal_key = checkedNominalTypeKey(nominal);
             const seen_key = NominalCapabilitySeenKey{
                 .source_ty = source_key,
                 .nominal = nominal_key,
@@ -27488,7 +27627,7 @@ fn canonicalTypeKeyEql(a: canonical.CanonicalTypeKey, b: canonical.CanonicalType
 }
 
 fn canonicalNominalTypeKeyEql(a: canonical.NominalTypeKey, b: canonical.NominalTypeKey) bool {
-    return a.module == b.module and a.type_name == b.type_name and a.source_decl == b.source_decl;
+    return a.module == b.module and a.source_decl == b.source_decl;
 }
 
 fn testCanonicalTypeKey(byte: u8) canonical.CanonicalTypeKey {
@@ -32802,23 +32941,19 @@ pub const CheckedModuleArtifact = struct {
         compile_time_debug: CompileTimeDebugStore.Serialized,
         compile_time_root_reads: CompileTimeRootReadTable.Serialized,
 
-        comptime {
-            const owner_only_fields = [_][]const u8{
+        pub const root_contract: collections.serde_validation.RootContract = .{
+            .Owner = CheckedModuleArtifact,
+            .owner_only_fields = &.{
                 "module_env", // Written as the checked-cache env blob and injected during artifact deserialize.
                 "serialized_backing", // Runtime ownership for relocated cache/static bytes, not checked data.
-                "pairing_arena",
+                "pairing_arena", // Runtime ownership of an installed platform pairing's relocated bytes.
                 "reopened_arena", // Runtime ownership for reopened evaluation columns, not checked data.
                 "evaluation_state", // Process-local preparation state; cached output is finalized.
                 "serialized_backing_is_static", // Runtime ownership mode for `serialized_backing`.
-            };
-            collections.serde_validation.assertBidirectionalFieldSet(
-                CheckedModuleArtifact,
-                Serialized,
-                &owner_only_fields,
-                &.{},
-                &.{},
-            );
+            },
+        };
 
+        comptime {
             // The TRUE total relocation fixup count: 1 (`direct_import_artifact_keys`)
             // + the recursive sum of every sub-store, now including the `SafeList`/
             // interner base pointers (`canonical_names` = 22 via its 7 interners +
@@ -32949,15 +33084,15 @@ pub const CheckedModuleArtifact = struct {
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
     const serialized_layout_version: u32 = 109;
 
-    /// Comptime fingerprint of `Serialized`'s layout, mirroring
-    /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
-    /// artifact blob and stored in the on-disk module-cache header, then validated
-    /// on load (`expectSerializedVersion`), so an artifact serialized by a compiler
+    /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
+    /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
+    /// the compiler's cache versioning folds it into the admission hash of every
+    /// cache entry holding an artifact body, so an artifact serialized by a compiler
     /// with a different `Serialized` layout is rejected rather than relocated into a
     /// mismatched struct (a real hazard during development, where
     /// a reported release version can remain unchanged between rebuilds).
     pub const SERIALIZED_VERSION_HASH: [32]u8 =
-        artifact_serialize.layoutVersionHash(Serialized, serialized_layout_version);
+        artifact_serialize.rootLayoutVersionHash(Serialized, serialized_layout_version);
 
     // A-11: validate the entire serialized sub-store tree at compile time—every
     // field must be a relocatable marker or relocation-invariant POD (a raw pointer
@@ -35191,7 +35326,6 @@ const CheckedTypeStoreImportProjector = struct {
         const nominal = source_payload.nominal;
         const target_key = canonical.NominalTypeKey{
             .module = try self.remapModuleIdentity(nominal.origin_module),
-            .type_name = try self.remapTypeName(nominal.name),
             .source_decl = nominal.source_decl,
         };
         if (self.target_store.nominalDeclaration(target_key) != null) return null;
@@ -38157,7 +38291,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     const rf = try store.appendPool(gpa, CheckedNominalRecordField, &.{ .{ .named = field_name }, .{ .padding = a } });
     try store.nominal_declarations.append(gpa, .{
         .id = nominal_declaration_id,
-        .nominal = .{ .module = @as(canonical.ModuleIdentityId, @fromBackingInt(@intCast(15))), .type_name = @as(canonical.TypeNameId, @fromBackingInt(@intCast(14))), .source_decl = 16 },
+        .nominal = .{ .module = @as(canonical.ModuleIdentityId, @fromBackingInt(@intCast(15))), .source_decl = 16 },
         .source_statement = 16,
         .declaration_root = d,
         .backing = c,
@@ -38686,6 +38820,177 @@ test "checked divergence publishes both inline-expect runtime modes" {
     try std.testing.expectEqualSlices(bool, &.{false}, &omit_statements);
 }
 
+/// A minimal expression of `kind` for the divergence parity tests: every
+/// operand it evaluates, branch, and dispatch operand is expression 0, and
+/// its block statement is statement 0, which evaluates expression 0.
+fn divergenceParityFixture(comptime kind: CheckedExprKind) CheckedExprData {
+    const op = testIndexId(CheckedExprId, 0);
+    const ops: []const CheckedExprId = &.{op};
+    const ty = testIndexId(CheckedTypeId, 0);
+    const pattern = testIndexId(CheckedPatternId, 0);
+    const string = testIndexId(CheckedStringLiteralId, 0);
+    const tag_label = testIndexId(canonical.TagLabelId, 0);
+    return switch (kind) {
+        .pending => .pending,
+        .numeral => .{ .numeral = .{ .literal = .{ .node_idx = 0, .digits_start = 0, .before_len = 0, .after_len = 0, .after_decimal_digit_count = 0, .flags = 0 }, .plan = null } },
+        .str_from_quote => .{ .str_from_quote = .{ .plan = null, .literal = string } },
+        .str_segment => .{ .str_segment = string },
+        .str => .{ .str = ops },
+        .bytes_literal => .{ .bytes_literal = string },
+        .lookup_local => .{ .lookup_local = .{ .pattern = pattern, .resolved = null } },
+        .lookup_external => .{ .lookup_external = null },
+        .lookup_required => .{ .lookup_required = null },
+        .list => .{ .list = ops },
+        .empty_list => .empty_list,
+        .tuple => .{ .tuple = ops },
+        .match_ => .{ .match_ = .{
+            .cond = op,
+            .branches = &.{.{ .value = op, .guard = null }},
+            .is_try_suffix = false,
+            .skip_exhaustiveness = false,
+            .comptime_site_kind = .match,
+        } },
+        .if_ => .{ .if_ = .{
+            .branches = &.{.{ .cond = op, .body = op }},
+            .final_else = op,
+            .warn_unused_branches = false,
+        } },
+        .call => .{ .call = .{ .func = op, .args = ops, .called_via = .apply, .source_fn_ty_payload = ty } },
+        .record => .{ .record = .{
+            .fields = &.{.{ .label = testIndexId(canonical.RecordFieldLabelId, 0), .value = op }},
+            .unsets = &.{},
+            .ext = op,
+        } },
+        .empty_record => .empty_record,
+        .block => .{ .block = .{ .statements = &.{testIndexId(CheckedStatementId, 0)}, .final_expr = op } },
+        .tag => .{ .tag = .{ .name = tag_label, .args = ops } },
+        .nominal => .{ .nominal = .{ .backing_expr = op, .backing_type = .tag } },
+        .row_coerce => .{ .row_coerce = .{ .value = op } },
+        .zero_argument_tag => .{ .zero_argument_tag = .{ .closure_name = tag_label, .name = tag_label } },
+        .closure => .{ .closure = .{ .lambda = op, .captures = &.{}, .tag_name = tag_label } },
+        .lambda => .{ .lambda = .{ .args = &.{}, .body = op } },
+        .binop => .{ .binop = .{ .op = .add, .lhs = op, .rhs = op } },
+        .unary_minus => .{ .unary_minus = op },
+        .unary_not => .{ .unary_not = op },
+        .field_access => .{ .field_access = .{ .receiver = op, .segments = &.{} } },
+        .dispatch_call => .{ .dispatch_call = null },
+        .interpolation => .{ .interpolation = .{ .plan = null, .segments = ops, .values = &.{}, .assembler_ty = ty } },
+        .structural_eq => .{ .structural_eq = .{ .lhs = op, .rhs = op, .negated = false } },
+        .structural_hash => .{ .structural_hash = .{ .value = op, .hasher = op } },
+        .method_eq => .{ .method_eq = null },
+        .type_dispatch_call => .{ .type_dispatch_call = null },
+        .tuple_access => .{ .tuple_access = .{ .tuple = op, .elem_index = 0 } },
+        .runtime_error => .{ .runtime_error = .{} },
+        .crash => .{ .crash = string },
+        .dbg => .{ .dbg = op },
+        .expect_err => .{ .expect_err = .{ .expr = op, .snippet = string } },
+        .expect => .{ .expect = op },
+        .ellipsis => .ellipsis,
+        .anno_only => .anno_only,
+        .break_ => .break_,
+        .return_ => .{ .return_ = .{ .expr = op, .lambda = op, .context = .return_expr } },
+        .for_ => .{ .for_ = .{ .pattern = pattern, .expr = op, .body = op, .plan = null } },
+        .hosted_lambda => .{ .hosted_lambda = .{ .symbol_name = testIndexId(canonical.ExternalSymbolNameId, 0), .args = &.{} } },
+        .run_low_level => .{ .run_low_level = .{ .op = .str_is_eq, .args = ops } },
+    };
+}
+
+/// Whether the producer marks the `kind` fixture (expression 1) divergent
+/// when expression 0 has `operand` data and expression 1 has the given
+/// dispatch crash fact.
+fn divergenceParityProducerMarks(
+    comptime kind: CheckedExprKind,
+    operand: CheckedExprData,
+    dispatch_crashes: bool,
+    mode: InlineExpectMode,
+) Allocator.Error!bool {
+    var exprs = [_]CheckedExpr{
+        .{ .id = testIndexId(CheckedExprId, 0), .ty = testIndexId(CheckedTypeId, 0), .source_region = base.Region.zero(), .data = operand },
+        .{ .id = testIndexId(CheckedExprId, 1), .ty = testIndexId(CheckedTypeId, 0), .source_region = base.Region.zero(), .data = comptime divergenceParityFixture(kind) },
+    };
+    var statements = [_]CheckedStatement{.{
+        .id = testIndexId(CheckedStatementId, 0),
+        .source_region = base.Region.zero(),
+        .data = .{ .expr = testIndexId(CheckedExprId, 0) },
+    }};
+    // Only dispatch kinds read their dispatch operands.
+    const dispatch_operand = [_]CheckedExprId{testIndexId(CheckedExprId, 0)};
+    const dispatch_operands = [_][]const CheckedExprId{ &.{}, &dispatch_operand };
+    const crashes = [_]bool{ false, dispatch_crashes };
+    var expr_diverges = @as([exprs.len]bool, @splat(false));
+    var statement_diverges = @as([statements.len]bool, @splat(false));
+    try publishCheckedBodyDivergence(
+        std.testing.allocator,
+        &exprs,
+        &statements,
+        .{ .operands = &dispatch_operands, .crashes = &crashes },
+        &expr_diverges,
+        &statement_diverges,
+        mode,
+    );
+    return expr_diverges[1];
+}
+
+/// Whether a payload type holds a static dispatch plan, the only thing a
+/// dispatch crash fact can be recorded against.
+fn divergenceParityCarriesDispatchPlan(comptime T: type) bool {
+    if (T == StaticDispatchPlanId or T == ?StaticDispatchPlanId) return true;
+    const info = @typeInfo(T);
+    if (info != .@"struct") return false;
+    return inline for (info.@"struct".field_types) |field_type| {
+        if (divergenceParityCarriesDispatchPlan(field_type)) break true;
+    } else false;
+}
+
+test "checked divergence parity: the producer marks exactly the kinds classified as divergent through evaluation" {
+    const crash_data: CheckedExprData = .{ .crash = testIndexId(CheckedStringLiteralId, 0) };
+    inline for (comptime std.enums.values(CheckedExprKind)) |kind| {
+        const classified = checkedExprDivergence(kind).evaluation;
+        const run_marked = try divergenceParityProducerMarks(kind, crash_data, false, .run);
+        if (run_marked != classified) {
+            std.debug.print(
+                "producer drift: checked expression kind .{s} with a divergent operand is marked divergent={} but checkedExprDivergence classifies evaluation={}\n",
+                .{ @tagName(kind), run_marked, classified },
+            );
+            return error.DivergenceClassificationDrift;
+        }
+        // Omitted inline expects evaluate nothing, so an omitted `expect`
+        // never diverges; every consumer lowers it with the omitted column.
+        const omit_marked = try divergenceParityProducerMarks(kind, crash_data, false, .omit);
+        if (omit_marked != (classified and kind != .expect)) {
+            std.debug.print(
+                "producer drift: checked expression kind .{s} with a divergent operand and omitted inline expects is marked divergent={}\n",
+                .{ @tagName(kind), omit_marked },
+            );
+            return error.DivergenceClassificationDrift;
+        }
+    }
+}
+
+test "checked divergence parity: dispatch crash facts reach exactly the kinds classified as dispatch-plan divergent" {
+    const quiet_data: CheckedExprData = .empty_record;
+    inline for (comptime std.enums.values(CheckedExprKind)) |kind| {
+        const classified = checkedExprDivergence(kind).dispatch_plan;
+        const carries_plan = comptime divergenceParityCarriesDispatchPlan(@FieldType(CheckedExprData, @tagName(kind)));
+        if (carries_plan != classified) {
+            std.debug.print(
+                "classification drift: checked expression kind .{s} carries a static dispatch plan={} but checkedExprDivergence classifies dispatch_plan={}\n",
+                .{ @tagName(kind), carries_plan, classified },
+            );
+            return error.DivergenceClassificationDrift;
+        }
+        if (classified) {
+            if (!try divergenceParityProducerMarks(kind, quiet_data, true, .run)) {
+                std.debug.print(
+                    "producer drift: checked expression kind .{s} with a crashing dispatch plan is not marked divergent\n",
+                    .{@tagName(kind)},
+                );
+                return error.DivergenceClassificationDrift;
+            }
+        }
+    }
+}
+
 test "checked diagnostic-error fact propagates through body dependencies and types" {
     const gpa = std.testing.allocator;
 
@@ -38803,8 +39108,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x4E, 0xF1, 0x6F, 0xBE, 0x8A, 0xB2, 0xC9, 0x24, 0x12, 0xF9, 0xEC, 0xC5, 0x85, 0xEE, 0xF0, 0x52,
-        0xDD, 0x70, 0x38, 0xA0, 0xE7, 0x5D, 0x6C, 0x07, 0xA7, 0x78, 0x38, 0xA2, 0xE9, 0x97, 0xFD, 0xB2,
+        0x1D, 0x53, 0xCF, 0x79, 0x0F, 0x53, 0x44, 0x58, 0xF1, 0x22, 0x56, 0x82, 0x7F, 0x8C, 0x5B, 0x2F,
+        0x6B, 0x05, 0xBD, 0x5E, 0x1F, 0x22, 0x14, 0x9E, 0x44, 0x6A, 0x65, 0x83, 0x5E, 0x3C, 0x16, 0xC0,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

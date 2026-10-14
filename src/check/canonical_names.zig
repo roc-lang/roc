@@ -194,15 +194,18 @@ pub const ProcBaseKey = struct {
 /// Public `NominalTypeKey` declaration.
 ///
 /// Identifies a nominal type by (declaring module's deep content identity,
-/// declared module-relative name, declaring statement). The statement is a
-/// within-module discriminator: block-local declarations may share one name
-/// (e.g. two `Local :=` decls in different blocks), and statement indices are
-/// stable across artifacts because equal content identities imply
-/// byte-identical module source. No module name text participates.
+/// declaring statement). One statement declares exactly one type, and
+/// statement indices are stable across artifacts because equal content
+/// identities imply byte-identical module source, so the pair determines the
+/// type. Neither the type's name nor any module name text participates: the
+/// declared name is display metadata carried on the checked nominal payload
+/// and declaration root. Renaming a type changes its module's source, and so
+/// its content identity, which is the only way a rename changes identity; two
+/// block-local declarations that share one name (e.g. two `Local :=` decls in
+/// different blocks) are distinct by statement.
 pub const NominalTypeKey = struct {
     module: ModuleIdentityId,
-    type_name: TypeNameId,
-    source_decl: ?u32 = null,
+    source_decl: u32,
 };
 
 /// Public `CanonicalNameStore` declaration.

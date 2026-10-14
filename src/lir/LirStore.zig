@@ -1074,6 +1074,20 @@ pub fn procDebugName(self: *const Self, id: LirProcSpecId) ?[]const u8 {
     return self.getString(idx);
 }
 
+/// `id` as an ICE-context procedure whose source name resolves through this
+/// store only when a crash report is printed.
+pub fn iceContextProc(self: *const Self, id: LirProcSpecId) base.ice_context.Proc {
+    return .{
+        .id = @backingInt(id),
+        .names = .{ .context = self, .nameFn = iceContextProcName },
+    };
+}
+
+fn iceContextProcName(context: *const anyopaque, id: u32) ?[]const u8 {
+    const self: *const Self = @ptrCast(@alignCast(context));
+    return self.procDebugName(@fromBackingInt(id));
+}
+
 /// Stored debug-name string id for a proc, used when a procedure boundary is
 /// replaced by an explicit virtual inline frame.
 pub fn procDebugNameString(self: *const Self, id: LirProcSpecId) base.StringLiteral.Idx {

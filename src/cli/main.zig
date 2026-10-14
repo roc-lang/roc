@@ -32,6 +32,50 @@ pub const std_options: std.Options = .{
     // signal-safe handler runs and we get stable exit codes (134/136/139).
     .enable_segfault_handler = builtin.os.tag != .windows and std.debug.default_enable_segfault_handler,
 };
+/// Every compiler panic prints what the panicking thread was doing and the
+/// command that reproduces it (see `base.ice_context`), then the panic message
+/// and a stack trace, then aborts.
+pub const panic = std.debug.FullPanic(panicWithIceContext);
+
+threadlocal var panicking_thread = false;
+
+/// The stack trace uses only the unwinding strategies that cannot fault, and
+/// stops at the first frame they cannot unwind. Past that frame the trace is
+/// guesswork from frame pointers, and symbolizing those guesses against the
+/// compiler's debug info can take minutes.
+fn panicWithIceContext(msg: []const u8, first_trace_addr: ?usize) noreturn {
+    @branchHint(.cold);
+    if (comptime builtin.os.tag == .freestanding) @trap();
+    // A panic while reporting a panic aborts without reporting again.
+    if (panicking_thread) std.process.abort();
+    panicking_thread = true;
+
+    std.Options.debug_io.vtable.crashHandler(std.Options.debug_io.userdata);
+    base.ice_context.reportPanicToStderr();
+
+    trace: {
+        const stderr = std.debug.lockStderr(&.{}).terminal();
+        defer std.debug.unlockStderr();
+        const writer = stderr.writer;
+        if (builtin.single_threaded) {
+            writer.print("panic: {s}\n", .{msg}) catch break :trace;
+        } else {
+            writer.print("thread {d} panic: {s}\n", .{ std.Thread.getCurrentId(), msg }) catch break :trace;
+        }
+        if (@errorReturnTrace()) |t| if (t.index > 0) {
+            writer.writeAll("error return context:\n") catch break :trace;
+            std.debug.writeErrorReturnTrace(t, stderr) catch break :trace;
+            writer.writeAll("\nstack trace:\n") catch break :trace;
+        };
+        std.debug.writeCurrentStackTrace(.{
+            .first_address = first_trace_addr orelse @returnAddress(),
+            .allow_unsafe_unwind = false,
+        }, stderr) catch break :trace;
+    }
+
+    std.process.abort();
+}
+
 var debug_threaded_io_instance: std.Io.Threaded = .init_single_threaded;
 /// Override the default debug IO so that `std.Options.debug_io` uses a properly
 /// initialized Threaded instance with a real allocator. Without this, the default
@@ -1138,6 +1182,18 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
         try args_list.append(arena, arg);
     }
     const args = args_list.items;
+
+    base.ice_context.setThreadRole(.{ .name = "main" });
+    base.ice_context.setInvocation(args);
+    defer base.ice_context.clearInvocation();
+    if (comptime base.ice_context.forced_ice_supported) {
+        if (init.environ_map.get(base.ice_context.forced_ice_env_var)) |spec| {
+            if (!base.ice_context.armForcedIce(spec)) {
+                std.debug.print("{s}={s} names no compiler phase\n", .{ base.ice_context.forced_ice_env_var, spec });
+                std.process.exit(1);
+            }
+        }
+    }
 
     mainArgs(gpa, arena, args, init.io) catch |err| {
         // Handle OutOfMemory specially - it may not have been printed
@@ -6470,6 +6526,8 @@ const SyntheticDefaultAppMapping = struct {
 fn applySyntheticDefaultAppMapping(build_env: *BuildEnv, mapping: ?SyntheticDefaultAppMapping) void {
     const m = mapping orelse return;
     build_env.setSyntheticRootSourceMappingWithLineOffset(m.original_path, m.original_source, m.header_len, m.header_lines);
+    // Crash reports name the user's file rather than its staged copy.
+    build_env.setStagedEntryUserPath(m.original_path);
 }
 
 const PlatformEntrypointArtifact = union(enum) {
@@ -16426,15 +16484,17 @@ fn solvedLirParallelCounters(parallel: lir.CheckedPipeline.SolvedLirParallelMetr
     };
 }
 
-const spec_constr_counter_count = 7 + 2 * @typeInfo(lir.CheckedPipeline.SpecConstrPhase).@"enum".field_names.len;
+const spec_constr_counter_count = 9 + 2 * @typeInfo(lir.CheckedPipeline.SpecConstrPhase).@"enum".field_names.len;
 
 fn specConstrParallelCounters(parallel: lir.CheckedPipeline.SpecConstrParallelMetrics) [spec_constr_counter_count]progress.Counter {
     var rows: [spec_constr_counter_count]progress.Counter = undefined;
-    rows[0..7].* = .{
+    rows[0..9].* = .{
         .{ .name = "Tasks submitted", .count = parallel.tasks_submitted },
         .{ .name = "Tasks committed", .count = parallel.tasks_committed },
         .{ .name = "Patterns recorded", .count = parallel.patterns_recorded },
         .{ .name = "Patterns admitted", .count = parallel.patterns_admitted },
+        .{ .name = "Workers written", .count = parallel.workers_written },
+        .{ .name = "Worker budget denials", .count = parallel.spec_count_denials },
         .{ .name = "Bodies committed", .count = parallel.bodies_committed },
         .{ .name = "Expressions committed", .count = parallel.expressions_committed },
         .{ .name = "Peak retained body shards", .count = parallel.peak_retained_shards },
@@ -16445,8 +16505,8 @@ fn specConstrParallelCounters(parallel: lir.CheckedPipeline.SpecConstrParallelMe
             .unused_loop_results => "Loop-result projection",
             .iterator_fusion => "Iterator fusion",
         };
-        rows[7 + 2 * index] = .{ .name = name ++ " tasks", .count = parallel.committed_by_phase[index] };
-        rows[8 + 2 * index] = .{ .name = name ++ " changes", .count = parallel.changed_by_phase[index] };
+        rows[9 + 2 * index] = .{ .name = name ++ " tasks", .count = parallel.committed_by_phase[index] };
+        rows[10 + 2 * index] = .{ .name = name ++ " changes", .count = parallel.changed_by_phase[index] };
     }
     return rows;
 }
@@ -16457,17 +16517,19 @@ test "post-check diagnostics preserve labeled SpecConstr counts" {
         .tasks_committed = 2,
         .patterns_recorded = 3,
         .patterns_admitted = 4,
-        .bodies_committed = 5,
-        .expressions_committed = 6,
-        .peak_retained_shards = 7,
-        .committed_by_phase = .{ 8, 10, 12 },
-        .changed_by_phase = .{ 9, 11, 13 },
+        .workers_written = 5,
+        .spec_count_denials = 6,
+        .bodies_committed = 7,
+        .expressions_committed = 8,
+        .peak_retained_shards = 9,
+        .committed_by_phase = .{ 10, 12, 14 },
+        .changed_by_phase = .{ 11, 13, 15 },
     });
     const names = [_][]const u8{
-        "Tasks submitted",           "Tasks committed",              "Patterns recorded",              "Patterns admitted",
-        "Bodies committed",          "Expressions committed",        "Peak retained body shards",      "Pattern discovery tasks",
-        "Pattern discovery changes", "Loop-result projection tasks", "Loop-result projection changes", "Iterator fusion tasks",
-        "Iterator fusion changes",
+        "Tasks submitted",                "Tasks committed",         "Patterns recorded",         "Patterns admitted",
+        "Workers written",                "Worker budget denials",   "Bodies committed",          "Expressions committed",
+        "Peak retained body shards",      "Pattern discovery tasks", "Pattern discovery changes", "Loop-result projection tasks",
+        "Loop-result projection changes", "Iterator fusion tasks",   "Iterator fusion changes",
     };
     for (rows, names, 1..) |row, name, count| {
         try std.testing.expectEqualStrings(name, row.name);

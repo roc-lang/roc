@@ -141,8 +141,6 @@ If you don&#39;t need this variable, prefix it with an underscore like <span cla
 ~~~
 # LSP
 ~~~text
-duplicate name in pattern
-
 The name from is bound more than once in this pattern.
     (from, from) => True
            ^^^^
@@ -153,7 +151,7 @@ It was first bound here:
 
 Each name in a pattern must be different. To check whether two values are equal, give them different names and compare them in a guard:
 
-  (a, b) if a == b => ...unused variable
+  (a, b) if a == b => ...
 
 Variable from is defined here and then never used.
 If you don't need this variable, prefix it with an underscore like _from to suppress this warning.

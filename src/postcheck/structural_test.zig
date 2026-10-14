@@ -341,6 +341,12 @@ test "Lambda Solved unify does not yield explicit empty tag unions" {
     try expectNotContains(unify_source, "isEmptyTagUnion");
     try expectNotContains(unify_source, "empty tag union");
     try expectNotContains(solve_source, "fn isEmptyTagUnion");
+
+    // No uninhabited shape yields to its peer either: an empty row meets only
+    // an empty row, and every other uninhabited type unifies structurally.
+    const unify_roots = sourceSliceBetween(solve_source, "fn unifyRoots(", "fn joinsTypeRoots(");
+    try expectNotContains(unify_roots, "typeIsProvenUninhabited");
+    try expectContains(unify_roots, "Common.invariant(\"empty tag row failed Lambda Solved unification\")");
 }
 
 test "Monotype lowering does not use unsolved_monos side table" {
@@ -1587,6 +1593,38 @@ test "each primitive mapping has exactly one definition" {
     try std.testing.expect(owner_fn.param_types.len == 1);
     try std.testing.expect(owner_fn.param_types[0].? == check.CheckedModule.CheckedPrimitive);
     try std.testing.expect(owner_fn.return_type.? == check.StaticDispatchRegistry.BuiltinOwner);
+}
+
+test "direct LIR lowering records erased-owner provenance for every assign_ref" {
+    // The representation-transparent edge is defined once, in `lir_core`
+    // (`ErasedOwnerEdge.transparentSource`), and shared with the LIR
+    // consumers that verify and re-resolve owned erased calls. Every
+    // `assign_ref` the direct lowerer emits is built by `addAssignRef`, which
+    // records its target's erased-owner state from that edge. The declaration
+    // text is assembled at comptime so this test's own source never matches it.
+    const direct_lower = @embedFile("solved_lir_lower.zig");
+    const lowerers = [_][]const u8{ direct_lower, @embedFile("boxy/lower.zig") };
+    const forbidden = [_][]const u8{
+        "fn " ++ "transparentSource(",
+        "fn " ++ "transparentErasedOwnershipSource(",
+        "fn " ++ "sameTransparentPointerRepresentation(",
+    };
+    for (lowerers) |source| {
+        for (forbidden) |decl| try std.testing.expectEqual(@as(usize, 0), countDefinitions(source, decl));
+    }
+    try std.testing.expectEqual(@as(usize, 1), countDefinitions(direct_lower, "fn " ++ "noteErasedOwnerDefinition("));
+    try std.testing.expectEqual(@as(usize, 1), countDefinitions(direct_lower, "lir_core.ErasedOwnerEdge.transparentSource("));
+    try std.testing.expectEqual(@as(usize, 1), countDefinitions(direct_lower, ".{ ." ++ "assign_ref = .{"));
+
+    // Erased-owner provenance exists only to choose an owned erased call's
+    // reuse source. Boxy lowering emits no owned erased calls, so it has no
+    // provenance to record; LIR certification still checks every Boxy erased
+    // call's reuse fields.
+    const boxy_lower = @embedFile("boxy/lower.zig");
+    try std.testing.expectEqual(@as(usize, 0), countDefinitions(boxy_lower, ".reuse_closure = " ++ "true"));
+    const erased_calls = countDefinitions(boxy_lower, ".assign_call_erased" ++ " = .{");
+    try std.testing.expectEqual(erased_calls, countDefinitions(boxy_lower, ".reuse_closure = " ++ "false"));
+    try std.testing.expectEqual(erased_calls, countDefinitions(boxy_lower, ".reuse_source = " ++ "null"));
 }
 
 test "boxy representation queries have one definition on the plan" {

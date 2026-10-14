@@ -50583,7 +50583,6 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
     const nominal_module = try checked_module.canonical_names.internModuleIdentity(&(@as([32]u8, @splat(0x31))));
     const nominal_key = names.NominalTypeKey{
         .module = nominal_module,
-        .type_name = @fromBackingInt(@intCast(2)),
         .source_decl = 3,
     };
 
@@ -50603,7 +50602,7 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
     });
     try checked_module.checked_types.payloads.append(gpa, .{
         .nominal = .{
-            .name = nominal_key.type_name,
+            .name = @fromBackingInt(@intCast(2)),
             .origin_module = nominal_key.module,
             .owner_module = checked_module.key,
             .source_decl = nominal_key.source_decl,
@@ -50734,7 +50733,6 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
     const nominal_module = try checked_module.canonical_names.internModuleIdentity(&(@as([32]u8, @splat(0x32))));
     const nominal_key = names.NominalTypeKey{
         .module = nominal_module,
-        .type_name = @fromBackingInt(@intCast(4)),
         .source_decl = 5,
     };
 
@@ -50771,7 +50769,7 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
     });
     try checked_module.checked_types.payloads.append(gpa, .{
         .nominal = .{
-            .name = nominal_key.type_name,
+            .name = @fromBackingInt(@intCast(4)),
             .origin_module = nominal_key.module,
             .owner_module = checked_module.key,
             .source_decl = nominal_key.source_decl,
@@ -50975,7 +50973,6 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
     const nominal_module = try checked_module.canonical_names.internModuleIdentity(&(@as([32]u8, @splat(0x33))));
     const nominal_key = names.NominalTypeKey{
         .module = nominal_module,
-        .type_name = try checked_module.canonical_names.internTypeName("WithPadding"),
         .source_decl = 5,
     };
 
@@ -51012,7 +51009,7 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
     });
     try checked_module.checked_types.payloads.append(gpa, .{
         .nominal = .{
-            .name = nominal_key.type_name,
+            .name = try checked_module.canonical_names.internTypeName("WithPadding"),
             .origin_module = nominal_key.module,
             .owner_module = checked_module.key,
             .source_decl = nominal_key.source_decl,
@@ -51170,7 +51167,6 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
     const nominal_module = try checked_module.canonical_names.internModuleIdentity(&(@as([32]u8, @splat(0x34))));
     const nominal_key = names.NominalTypeKey{
         .module = nominal_module,
-        .type_name = try checked_module.canonical_names.internTypeName("WithPadding"),
         .source_decl = 5,
     };
 
@@ -51207,7 +51203,7 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
     });
     try checked_module.checked_types.payloads.append(gpa, .{
         .nominal = .{
-            .name = nominal_key.type_name,
+            .name = try checked_module.canonical_names.internTypeName("WithPadding"),
             .origin_module = nominal_key.module,
             .owner_module = checked_module.key,
             .source_decl = nominal_key.source_decl,

@@ -10,9 +10,11 @@
 
 const std = @import("std");
 const base = @import("base");
+const collections = @import("collections");
 const core = @import("lir_core");
 
 const LIR = core.LIR;
+const GuardedList = collections.GuardedList;
 
 /// Parameter positions represented in inferred signatures and mode demands.
 /// Later positions follow the exact all-owned schedule.
@@ -54,6 +56,37 @@ pub const OutcomeSpan = extern struct {
         return self.len == 0;
     }
 };
+
+/// Restituted parameters of the outcome row whose discriminant equals an
+/// explicit switch arm's value, or null when no row names that value.
+pub fn outcomeMaskForValue(outcomes: []const Outcome, value: u64) ?ParamMask {
+    if (value > std.math.maxInt(u32)) return null;
+    for (outcomes) |outcome| {
+        if (outcome.discriminant == @as(u32, @intCast(value))) return outcome.restituted_params;
+    }
+    return null;
+}
+
+/// Parameters restituted on a switch's default arm: the intersection over
+/// exactly the outcome rows no explicit arm in `branches` names, or null when
+/// every row is named explicitly.
+pub fn defaultOutcomeMask(outcomes: []const Outcome, branches: anytype) ?ParamMask {
+    var mask: ParamMask = std.math.maxInt(ParamMask);
+    var any = false;
+    for (outcomes) |outcome| {
+        var explicit = false;
+        for (0..GuardedList.borrowLen(branches)) |index| {
+            if (GuardedList.at(branches, index).value == outcome.discriminant) {
+                explicit = true;
+                break;
+            }
+        }
+        if (explicit) continue;
+        any = true;
+        mask &= outcome.restituted_params;
+    }
+    return if (any) mask else null;
+}
 
 /// One conditionally unique part of a proc's returned value
 /// (`LIR.RcRetCondition`, the form a proc spec persists). A part whose

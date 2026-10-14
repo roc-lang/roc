@@ -144,6 +144,20 @@ invisible-character warnings when reviewing Unicode changes. Remove a reported
 control from comments, or explicitly escape it in a literal when it is intended
 as runtime data; `roc fmt` refuses to rewrite affected source.
 
+### Predicates shared across compiler phases
+
+When one phase publishes a classification that a later phase consumes with its
+own hand-enumerated switch (for example, which checked expression kinds can be
+marked divergent), the two must not be kept in agreement by hand. Prefer one
+shared predicate that both phases call, as `pattern_refutability.zig` and
+`exhaustiveness_context.zig` do. When the consumer's switch has to stay
+separate, put the classification in one comptime-callable function next to the
+producer, make the consumer's arms check it at compile time, and add a parity
+test that drives the producer over every variant (enumerated from the type
+itself) and compares its answer with the classification, naming the variant
+that drifted. `checkedExprDivergence` in `src/check/checked_artifact.zig` and
+its "checked divergence parity" tests are the reference example.
+
 ### Debugging tips
 
 If you need to do some debugging, check out [our tips](../devtools/debug_tips.md).

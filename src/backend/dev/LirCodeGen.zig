@@ -18325,6 +18325,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Uses deferred prologue pattern: generates body first to determine which
         /// callee-saved registers are used, then prepends prologue and adjusts relocations.
         fn compileProcSpec(self: *Self, proc_id: lir.LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
+            const ice = base.ice_context.enter(.{ .phase = .codegen, .stage = "dev backend", .proc = self.store.iceContextProc(proc_id) });
+            defer ice.leave();
             const saved_alloca_slots = self.stack_alloca_slots;
             self.stack_alloca_slots = collections.DenseMap(LocalId, i32).init(self.allocator);
             defer {
