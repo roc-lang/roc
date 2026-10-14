@@ -2553,6 +2553,8 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn compileProcBody(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, proc: LirProcSpec) Error!void {
+        const ice = Base.ice_context.enter(.{ .phase = .codegen, .stage = "llvm backend", .proc = self.store.iceContextProc(proc_id) });
+        defer ice.leave();
         const builder = self.builder orelse return error.CompilationFailed;
         const fast_func: ?LlvmBuilder.Function.Index = if (fastAbiEligible(proc)) self.fast_registry.get(@backingInt(proc_id)) else null;
         const func = fast_func orelse self.proc_registry.get(@backingInt(proc_id)) orelse return error.CompilationFailed;
@@ -5788,10 +5790,11 @@ pub const MonoLlvmCodeGen = struct {
             .dec_to_f32_wrap,
             .dec_to_f32_try_unsafe,
             .dec_to_f64,
-            => |tag| {
-                if (comptime numeric_conversion.getConversionSpec(tag) == null) @compileError("unhandled low-level op " ++ @tagName(tag));
-                try self.emitNumericConversion(target, op, arg_locals);
-            },
+            => |conversion_op| try self.emitNumericConversion(
+                comptime numeric_conversion.getConversionSpec(conversion_op).?,
+                target,
+                arg_locals,
+            ),
         }
     }
 
@@ -7364,69 +7367,77 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Lower a scalar numeric conversion. Delegates to a helper for each
     /// (source class, destination class) pair. Each helper switches on the mode.
-    fn emitNumericConversion(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype) Error!void {
-        if (args.len < 1) return error.UnsupportedLowLevel;
+    /// The spec is comptime, so a conversion op this backend has no lowering
+    /// for fails the build.
+    fn emitNumericConversion(self: *MonoLlvmCodeGen, comptime spec: numeric_conversion.Conversion, target: LocalId, args: anytype) Error!void {
         const arg = GuardedList.at(args, 0);
-        const spec = numeric_conversion.getConversionSpec(op) orelse return error.UnsupportedLowLevel;
-        switch (spec.src.class()) {
-            .int => switch (spec.dst.class()) {
+        switch (comptime spec.src.class()) {
+            .int => switch (comptime spec.dst.class()) {
                 .int => try self.lowerIntToInt(spec, target, arg),
                 .float => try self.lowerIntToFloat(spec, target, arg),
                 .dec => try self.lowerIntToDec(spec, target, arg),
             },
-            .float => switch (spec.dst.class()) {
+            .float => switch (comptime spec.dst.class()) {
                 .int => try self.lowerFloatToInt(spec, target, arg),
                 .float => try self.lowerFloatToFloat(spec, target, arg),
-                .dec => return error.UnsupportedLowLevel,
+                .dec => noConversionLowering(spec),
             },
-            .dec => switch (spec.dst.class()) {
+            .dec => switch (comptime spec.dst.class()) {
                 .int => try self.lowerDecToInt(spec, target, arg),
                 .float => try self.lowerDecToFloat(spec, target, arg),
-                .dec => return error.UnsupportedLowLevel,
+                .dec => noConversionLowering(spec),
             },
         }
     }
 
-    fn lowerIntToInt(self: *MonoLlvmCodeGen, spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
+    fn noConversionLowering(comptime spec: numeric_conversion.Conversion) noreturn {
+        @compileError(std.fmt.comptimePrint("the LLVM backend has no lowering for the {s} to {s} conversion in {s} mode", .{
+            @tagName(spec.src),
+            @tagName(spec.dst),
+            @tagName(spec.mode),
+        }));
+    }
+
+    fn lowerIntToInt(self: *MonoLlvmCodeGen, comptime spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
         switch (spec.mode) {
             .exact, .wrap => try self.emitScalarCoercion(target, arg),
             .@"try" => try self.emitIntTryConversion(target, arg),
-            .trunc, .try_unsafe => return error.UnsupportedLowLevel,
+            .trunc, .try_unsafe => noConversionLowering(spec),
         }
     }
 
-    fn lowerIntToFloat(self: *MonoLlvmCodeGen, spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
+    fn lowerIntToFloat(self: *MonoLlvmCodeGen, comptime spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
         switch (spec.mode) {
-            .exact => if (spec.src.bits() == 128)
+            .exact => if (comptime spec.src.bits() == 128)
                 try self.emitInt128ToFloatConversion(target, arg, spec.src.isSigned(), spec.dst == .f32)
             else
                 try self.emitScalarCoercion(target, arg),
-            .wrap, .trunc, .@"try", .try_unsafe => return error.UnsupportedLowLevel,
+            .wrap, .trunc, .@"try", .try_unsafe => noConversionLowering(spec),
         }
     }
 
-    fn lowerIntToDec(self: *MonoLlvmCodeGen, spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
+    fn lowerIntToDec(self: *MonoLlvmCodeGen, comptime spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
         switch (spec.mode) {
             .exact => try self.emitIntToDec(target, arg),
             // The builtin takes the source as two 64-bit halves, so a narrower
             // source has no lowering here.
-            .try_unsafe => if (spec.src.bits() == 128)
+            .try_unsafe => if (comptime spec.src.bits() == 128)
                 try self.emitInt128ToDecTryUnsafeConversion(target, arg, spec.src.isSigned())
             else
-                return error.UnsupportedLowLevel,
-            .wrap, .trunc, .@"try" => return error.UnsupportedLowLevel,
+                noConversionLowering(spec),
+            .wrap, .trunc, .@"try" => noConversionLowering(spec),
         }
     }
 
-    fn lowerFloatToInt(self: *MonoLlvmCodeGen, spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
+    fn lowerFloatToInt(self: *MonoLlvmCodeGen, comptime spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
         switch (spec.mode) {
             .trunc => try self.emitFloatToIntTruncConversion(spec, target, arg),
             .try_unsafe => try self.emitFloatToIntTryUnsafeConversion(target, arg),
-            .exact, .wrap, .@"try" => return error.UnsupportedLowLevel,
+            .exact, .wrap, .@"try" => noConversionLowering(spec),
         }
     }
 
-    fn lowerFloatToFloat(self: *MonoLlvmCodeGen, spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
+    fn lowerFloatToFloat(self: *MonoLlvmCodeGen, comptime spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
         switch (spec.mode) {
             .exact, .wrap => try self.emitScalarCoercion(target, arg),
             // The builtin is the f64 to f32 one, so the other direction has no
@@ -7434,20 +7445,20 @@ pub const MonoLlvmCodeGen = struct {
             .try_unsafe => if (spec.src == .f64 and spec.dst == .f32)
                 try self.emitF64ToF32TryUnsafeConversion(target, arg)
             else
-                return error.UnsupportedLowLevel,
-            .trunc, .@"try" => return error.UnsupportedLowLevel,
+                noConversionLowering(spec),
+            .trunc, .@"try" => noConversionLowering(spec),
         }
     }
 
-    fn lowerDecToInt(self: *MonoLlvmCodeGen, spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
+    fn lowerDecToInt(self: *MonoLlvmCodeGen, comptime spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
         switch (spec.mode) {
             .trunc => try self.emitDecToIntTruncConversion(target, arg),
             .try_unsafe => try self.emitDecToIntTryUnsafeConversion(target, arg),
-            .exact, .wrap, .@"try" => return error.UnsupportedLowLevel,
+            .exact, .wrap, .@"try" => noConversionLowering(spec),
         }
     }
 
-    fn lowerDecToFloat(self: *MonoLlvmCodeGen, spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
+    fn lowerDecToFloat(self: *MonoLlvmCodeGen, comptime spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
         switch (spec.mode) {
             .exact, .wrap => try self.emitDecToFloatConversion(target, arg, spec.dst == .f32),
             // The builtin is the Dec to f32 one, so a wider destination has no
@@ -7455,8 +7466,8 @@ pub const MonoLlvmCodeGen = struct {
             .try_unsafe => if (spec.dst == .f32)
                 try self.emitDecToF32TryUnsafeConversion(target, arg)
             else
-                return error.UnsupportedLowLevel,
-            .trunc, .@"try" => return error.UnsupportedLowLevel,
+                noConversionLowering(spec),
+            .trunc, .@"try" => noConversionLowering(spec),
         }
     }
 

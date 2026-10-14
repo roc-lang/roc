@@ -2458,8 +2458,7 @@ const LiteralPlanner = struct {
                 const names = view.canonical_names orelse boxyPlanInvariant("literal nominal type omitted its checked name table");
                 try key.appendSlice(allocator, names.moduleIdentityBytes(nominal.origin_module));
                 try self.appendName(&key, names.typeNameText(nominal.name));
-                try self.appendWord(&key, @intFromBool(nominal.source_decl != null));
-                if (nominal.source_decl) |decl| try self.appendWord(&key, decl);
+                try self.appendWord(&key, nominal.source_decl);
                 for (nominal.args) |arg| try children.append(allocator, typeRef(view, arg));
             },
             .record => |record| {
@@ -21445,11 +21444,7 @@ pub fn divergentStep(view: anytype, expr_id: checked.CheckedExprId) DivergentSte
             boxyPlanInvariant("checked expression was marked divergent but no divergent child was found");
         }
         fn interpolation(b: @TypeOf(bodies), value: checked.CheckedInterpolation) DivergentStep {
-            if (b.exprDiverges(value.segments[0], .run)) return .{ .operand = value.segments[0] };
-            for (value.values, value.segments[1..]) |part, segment| {
-                if (b.exprDiverges(part, .run)) return .{ .operand = part };
-                if (b.exprDiverges(segment, .run)) return .{ .operand = segment };
-            }
+            if (firstDivergentInterpolationOperand(b, value)) |operand| return .{ .operand = operand };
             boxyPlanInvariant("checked interpolation was marked divergent but no divergent child was found");
         }
     };
@@ -21500,11 +21495,16 @@ pub fn divergentStep(view: anytype, expr_id: checked.CheckedExprId) DivergentSte
             }
             break :blk .normal;
         },
-        .interpolation => |interpolation| Scan.interpolation(bodies, interpolation),
+        // A custom interpolation's conversion is a dispatch, which can crash
+        // once its operands, the segments and values, have evaluated.
+        .interpolation => |interpolation| if (interpolation.plan) |plan|
+            divergentDispatchStep(view, plan)
+        else
+            Scan.interpolation(bodies, interpolation),
         .dispatch_call, .method_eq, .type_dispatch_call => |plan| divergentDispatchStep(view, plan),
         .numeral => |numeral| divergentDispatchStep(view, numeral.plan),
         .str_from_quote => |quote| divergentDispatchStep(view, quote.plan),
-        .pending,
+        inline .pending,
         .str_segment,
         .bytes_literal,
         .lookup_local,
@@ -21517,8 +21517,22 @@ pub fn divergentStep(view: anytype, expr_id: checked.CheckedExprId) DivergentSte
         .lambda,
         .anno_only,
         .hosted_lambda,
-        => boxyPlanInvariant("non-divergent checked expression form was marked divergent"),
+        => |_, kind| {
+            checked.assertCheckedExprNeverDiverges(kind);
+            boxyPlanInvariant("non-divergent checked expression form was marked divergent");
+        },
     };
+}
+
+/// The first of an interpolation's operands, its segments and values in
+/// evaluation order, that the checker marked divergent.
+fn firstDivergentInterpolationOperand(bodies: anytype, value: checked.CheckedInterpolation) ?checked.CheckedExprId {
+    if (bodies.exprDiverges(value.segments[0], .run)) return value.segments[0];
+    for (value.values, value.segments[1..]) |part, segment| {
+        if (bodies.exprDiverges(part, .run)) return part;
+        if (bodies.exprDiverges(segment, .run)) return segment;
+    }
+    return null;
 }
 
 /// The operands a divergent expression evaluates before `divergent`, the
@@ -21592,7 +21606,11 @@ fn divergentDispatchStep(view: anytype, maybe_plan: ?static_dispatch.StaticDispa
     const bodies = view.checked_bodies;
     for (plan.argsSlice(view.static_dispatch_plans)) |operand| switch (operand) {
         .checked_expr => |expr| if (bodies.exprDiverges(expr, .run)) return .{ .operand = expr },
-        .generated_interpolation_segments, .generated_numeral, .generated_quote => {},
+        .generated_interpolation_segments => |expr| switch (bodies.expr(expr).data) {
+            .interpolation => |value| if (firstDivergentInterpolationOperand(bodies, value)) |divergent| return .{ .operand = divergent },
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .row_coerce => boxyPlanInvariant("dispatch interpolation segments referenced a non-interpolation expression"),
+        },
+        .generated_numeral, .generated_quote => {},
     };
     boxyPlanInvariant("checked dispatch expression was marked divergent but no divergent operand was found");
 }
@@ -22351,7 +22369,6 @@ pub fn methodOwnerForCheckedPayload(payload: checked.CheckedTypePayload) ?static
     const nominal = payload.nominal;
     const nominal_owner: static_dispatch.MethodOwner = .{ .nominal = .{
         .module = nominal.origin_module,
-        .type_name = nominal.name,
         .source_decl = nominal.source_decl,
     } };
     const builtin = nominal.builtin orelse return nominal_owner;
@@ -22360,7 +22377,7 @@ pub fn methodOwnerForCheckedPayload(payload: checked.CheckedTypePayload) ?static
 }
 
 /// `owner` re-expressed in `target_names`, or null when the target module
-/// does not name the owner's module or type.
+/// does not name the owner's module.
 pub fn methodOwnerInNames(
     source_names: *const checked_names.CanonicalNameStore,
     target_names: *const checked_names.CanonicalNameStore,
@@ -22370,7 +22387,6 @@ pub fn methodOwnerInNames(
         .builtin => |builtin| .{ .builtin = builtin },
         .nominal => |nominal| .{ .nominal = .{
             .module = target_names.lookupModuleIdentity(source_names.moduleIdentityBytes(nominal.module)) orelse return null,
-            .type_name = target_names.lookupTypeName(source_names.typeNameText(nominal.type_name)) orelse return null,
             .source_decl = nominal.source_decl,
         } },
     };
@@ -24736,7 +24752,7 @@ test "boxy planner records nominal declared field order from checked payloads" {
     };
     const nominal_declarations = [_]checked.CheckedNominalDeclaration{.{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .nominal = .{ .module = @fromBackingInt(@intCast(4)), .type_name = @fromBackingInt(@intCast(3)), .source_decl = null },
+        .nominal = .{ .module = @fromBackingInt(@intCast(4)), .source_decl = 0 },
         .source_statement = 0,
         .declaration_root = @fromBackingInt(@intCast(4)),
         .backing = @fromBackingInt(@intCast(3)),
@@ -24754,6 +24770,7 @@ test "boxy planner records nominal declared field order from checked payloads" {
             .name = @fromBackingInt(@intCast(3)),
             .origin_module = @fromBackingInt(@intCast(4)),
             .owner_module = .{},
+            .source_decl = 0,
             .is_opaque = false,
             .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
             .padding_field_types = .{ .start = 0, .len = 1 },
@@ -24791,7 +24808,6 @@ test "boxy planner resolves local nominal declared order from box payload capabi
     const field_b: RecordFieldLabelId = @fromBackingInt(@intCast(2));
     const nominal_key = checked_names.NominalTypeKey{
         .module = @fromBackingInt(@intCast(4)),
-        .type_name = @fromBackingInt(@intCast(3)),
         .source_decl = 9,
     };
     const type_pool = [_]checked.CheckedTypeId{@fromBackingInt(@intCast(fixtureTableIndex(0)))};
@@ -24823,7 +24839,7 @@ test "boxy planner resolves local nominal declared order from box payload capabi
         .{ .empty_record = {} },
         .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
         .{ .nominal = .{
-            .name = nominal_key.type_name,
+            .name = @fromBackingInt(@intCast(3)),
             .origin_module = nominal_key.module,
             .owner_module = root_key,
             .source_decl = nominal_key.source_decl,
@@ -24906,7 +24922,6 @@ test "boxy planner records imported box payload capability source modules" {
     try std.testing.expectEqual(nominal_module, source_nominal_module);
     const nominal_key = checked_names.NominalTypeKey{
         .module = nominal_module,
-        .type_name = @fromBackingInt(@intCast(3)),
         .source_decl = 9,
     };
 
@@ -24920,7 +24935,7 @@ test "boxy planner records imported box payload capability source modules" {
         .{ .empty_record = {} },
         .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
         .{ .nominal = .{
-            .name = nominal_key.type_name,
+            .name = @fromBackingInt(@intCast(3)),
             .origin_module = nominal_key.module,
             .owner_module = source_key,
             .source_decl = nominal_key.source_decl,
@@ -24973,7 +24988,7 @@ test "boxy planner records imported box payload capability source modules" {
         .{ .empty_record = {} },
         .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
         .{ .nominal = .{
-            .name = nominal_key.type_name,
+            .name = @fromBackingInt(@intCast(3)),
             .origin_module = nominal_key.module,
             .owner_module = source_key,
             .source_decl = nominal_key.source_decl,
@@ -25074,7 +25089,6 @@ test "boxy nominal substitutions share formals independently of runtime demand a
     const key = moduleKey(1);
     const nominal_key = checked_names.NominalTypeKey{
         .module = @fromBackingInt(@intCast(4)),
-        .type_name = @fromBackingInt(@intCast(3)),
         .source_decl = 9,
     };
     var payloads: [9 + use_count]checked.StoredCheckedTypePayload = undefined;
@@ -25117,7 +25131,7 @@ test "boxy nominal substitutions share formals independently of runtime demand a
     });
     for (payloads[9..], 0..) |*payload, index| {
         payload.* = .{ .nominal = .{
-            .name = nominal_key.type_name,
+            .name = @fromBackingInt(@intCast(3)),
             .origin_module = nominal_key.module,
             .owner_module = key,
             .source_decl = nominal_key.source_decl,

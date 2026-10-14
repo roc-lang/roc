@@ -597,6 +597,65 @@ sub check_iterator_lowering_uses_explicit_ids {
 
 check_iterator_lowering_uses_explicit_ids();
 
+# Lift capture analysis has exactly one free-variable walk: `CaptureWalk` in
+# lift.zig. The capture dependency graph and the Lifter's inline-lambda and
+# operand fill-in collection supply only its actions, so binder scoping, the
+# traversal, and which locals count as free-variable occurrences cannot drift
+# between the initial lift and the post-lift re-solve. Any of those concerns
+# appearing outside `CaptureWalk` is a second walk.
+sub check_single_lift_capture_walk {
+    my $rel = 'src/postcheck/monotype_lifted/lift.zig';
+    my $path = File::Spec->catfile($ROOT, $rel);
+    open my $fh, '<', $path or die "failed to read $rel: $!\n";
+
+    my $top_level = '';
+    my $line_no = 0;
+    while (my $line = <$fh>) {
+        ++$line_no;
+        chomp $line;
+        my $code = zig_code_line($line);
+        if ($code =~ /^(?:pub\s+)?(?:fn|const|var)\s+([A-Za-z0-9_]+)\b/ || $code =~ /^test\b/) {
+            $top_level = defined $1 ? $1 : 'test';
+        }
+        next if $top_level eq 'CaptureWalk' || $top_level eq 'test';
+        if ($code =~ /\bforEachBoundLocal\b/ ||
+            $code =~ /\bjoin_point\.retained\b/ ||
+            $code =~ /\bpayload_switch\.payload\b/ ||
+            $code =~ /\bfn\s+push(?:Expr|Stmt)Work\b/) {
+            push @violations, "$rel:$line_no: second-lift-capture-walk: $line";
+        }
+    }
+
+    close $fh or die "failed to close $rel: $!\n";
+}
+
+check_single_lift_capture_walk();
+
+# A Monotype type-equality check whose only consequence is an invariant is a
+# debug-only assertion: `assertSameType`, or a condition gated on a debug
+# build. Computing the comparison in a release build would be a release-build
+# runtime check for a compiler invariant.
+sub check_monotype_same_type_assertions_debug_only {
+    my $rel = 'src/postcheck/monotype/lower.zig';
+    my $path = File::Spec->catfile($ROOT, $rel);
+    open my $fh, '<', $path or die "failed to read $rel: $!\n";
+    my @lines = <$fh>;
+    close $fh or die "failed to close $rel: $!\n";
+    chomp @lines;
+
+    for my $index (0 .. $#lines) {
+        my $code = zig_code_line($lines[$index]);
+        next unless $code =~ /\bif\s*\(!(?:try\s+)?[A-Za-z0-9_.()]*\b(?:sameType|typeEql)\(/;
+        next if $code =~ /\bmode\s*==\s*\.debug\s+and\b/;
+        my $next = $index < $#lines ? zig_code_line($lines[$index + 1]) : '';
+        if ($code =~ /\bCommon\.(?:invariant|compilerBug)\b/ || ($code =~ /\{\s*$/ && $next =~ /^\s*Common\.(?:invariant|compilerBug)\b/)) {
+            push @violations, "$rel:" . ($index + 1) . ": release-computed-type-equality-invariant: $lines[$index]";
+        }
+    }
+}
+
+check_monotype_same_type_assertions_debug_only();
+
 if (@violations) {
     print "Post-check architecture violations found:\n";
     print "$_\n" for @violations;

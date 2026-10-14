@@ -287,6 +287,9 @@ pub const BuildEnv = struct {
     synthetic_root_header_lines: u32 = 0,
     synthetic_root_identity: bool = false,
     synthetic_root_platform_identity: bool = false,
+    /// The user's file when the root is a staged copy of it, so crash reports
+    /// name the user's file. Borrowed like the source mapping above.
+    staged_entry_user_path: ?[]const u8 = null,
 
     /// The bundle URL the root itself came from, when the build was launched
     /// from a URL or installed source. The URL—never the extracted path—
@@ -549,6 +552,7 @@ pub const BuildEnv = struct {
     ) void {
         self.synthetic_root_original_path = original_path;
         self.synthetic_root_original_source = original_source;
+        self.setStagedEntryUserPath(original_path);
         self.synthetic_root_header_len = header_len;
         self.synthetic_root_header_lines = 0;
         self.setSyntheticRootPackageIdentity();
@@ -564,6 +568,12 @@ pub const BuildEnv = struct {
     ) void {
         self.setSyntheticRootSourceMapping(original_path, original_source, header_len);
         self.synthetic_root_header_lines = header_lines;
+    }
+
+    /// Declare that the root is a staged copy of the user's file at
+    /// `user_path`; see the `staged_entry_user_path` field.
+    pub fn setStagedEntryUserPath(self: *BuildEnv, user_path: []const u8) void {
+        self.staged_entry_user_path = user_path;
     }
 
     pub fn setSyntheticRootPackageIdentity(self: *BuildEnv) void {
@@ -827,6 +837,9 @@ pub const BuildEnv = struct {
             self.filesystem,
         );
         coord.source_pin_version = self.source_pin_version;
+        if (self.staged_entry_user_path) |user_path| {
+            if (self.discovered_root_abs) |staged_path| coord.staged_entry = .{ .staged_path = staged_path, .user_path = user_path };
+        }
         // Enable hosted transform for platform modules - converts e_anno_only to e_hosted_lambda
         // This is required for roc build so that hosted functions can be called at runtime
         coord.enable_hosted_transform = true;

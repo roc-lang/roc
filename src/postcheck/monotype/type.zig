@@ -583,6 +583,10 @@ pub const Store = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
+    /// Append a record field span exactly as given. Digests and equality
+    /// compare field spans positionally, so a span that becomes record
+    /// content must already be sorted and duplicate-free by label text; only
+    /// `verify` catches one that is not. `addRecordFields` normalizes.
     pub fn addFields(self: *Store, values: []const Field) std.mem.Allocator.Error!Span {
         self.assertMutable();
         if (values.len == 0) return .empty();
@@ -612,6 +616,10 @@ pub const Store = struct {
         return try self.addFields(normalized);
     }
 
+    /// Append a tag span exactly as given. Digests and equality compare tag
+    /// spans positionally, so a span that becomes tag-union content must
+    /// already be sorted and duplicate-free by label text; only `verify`
+    /// catches one that is not. `addTagVariants` normalizes.
     pub fn addTags(self: *Store, values: []const Tag) std.mem.Allocator.Error!Span {
         self.assertMutable();
         if (values.len == 0) return .empty();
@@ -646,6 +654,9 @@ pub const Store = struct {
         return try self.addTags(values);
     }
 
+    /// Append one type node. The store trusts `content`'s record and tag
+    /// spans to be sorted by label text (see `addFields` and `addTags`): an
+    /// unsorted row would digest and compare unequal to its sorted twin.
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeId {
         self.assertMutable();
         const index = self.types.len();
@@ -2324,7 +2335,12 @@ pub const Store = struct {
     ///
     /// Full digests answer "is this the same stored type?": every field that
     /// deep structural comparison observes participates, and aliases digest
-    /// as opaque nodes rather than as their backing.
+    /// as opaque nodes rather than as their backing. Equal full digests imply
+    /// `typeEql`, but `typeEql`-equal types can digest differently (a plain
+    /// nominal's backing and checked provenance participate here), so a key
+    /// made of this digest alone can split equal types into separate entries,
+    /// never merge unequal ones. A key that must share across equal types
+    /// uses `equalityDigest`.
     pub fn typeDigest(self: *Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
         return self.typeDigestCached(name_store, ty, null);
     }
@@ -6422,6 +6438,61 @@ test "monotype digest folds a recursive knot beyond depth 300 into its unrolling
     // Every position of the long cycle is equivalent to every other.
     const mid_digest = store.typeDigest(&name_store, chain[137]);
     try std.testing.expectEqualSlices(u8, chain_digest.bytes[0..], mid_digest.bytes[0..]);
+}
+
+test "monotype digest and equality agree on 300-level nesting built twice" {
+    // Two separately built chains of nested records and single-tag unions
+    // share no TypeId below the leaf, so only a structural walk through all
+    // 300 levels can give them one digest and equal them.
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const field_name = try name_store.internRecordFieldLabel("inner");
+    const tag_name = try name_store.internTagLabel("Wrap");
+    const depth = 300;
+    var tops: [2]TypeId = undefined;
+    for (&tops) |*top| {
+        var current = try store.add(.{ .primitive = .i64 });
+        for (0..depth) |level| {
+            current = if (level % 2 == 0)
+                try store.add(.{ .record = try store.addRecordFields(&name_store, &.{
+                    .{ .name = field_name, .ty = current, .default = null },
+                }) })
+            else
+                try store.add(.{ .tag_union = try store.addTagVariants(&name_store, &.{
+                    .{ .name = tag_name, .checked_name = tag_name, .payloads = try store.addSpan(&.{current}) },
+                }) });
+        }
+        top.* = current;
+    }
+    try std.testing.expect(tops[0] != tops[1]);
+
+    for ([_]Store.NamedDigestMode{ .full, .identity_only, .equality, .representation }) |mode| {
+        const first = try store.computeDigest(&name_store, tops[0], mode, null);
+        const second = try store.computeDigest(&name_store, tops[1], mode, null);
+        try std.testing.expectEqualSlices(u8, first.bytes[0..], second.bytes[0..]);
+    }
+    try std.testing.expect(try store.typeEql(&name_store, tops[0], tops[1]));
+
+    // A difference at the innermost leaf still separates the chains.
+    var other = try store.add(.{ .primitive = .str });
+    for (0..depth) |level| {
+        other = if (level % 2 == 0)
+            try store.add(.{ .record = try store.addRecordFields(&name_store, &.{
+                .{ .name = field_name, .ty = other, .default = null },
+            }) })
+        else
+            try store.add(.{ .tag_union = try store.addTagVariants(&name_store, &.{
+                .{ .name = tag_name, .checked_name = tag_name, .payloads = try store.addSpan(&.{other}) },
+            }) });
+    }
+    const top_digest = store.typeDigest(&name_store, tops[0]);
+    const other_digest = store.typeDigest(&name_store, other);
+    try std.testing.expect(!std.mem.eql(u8, top_digest.bytes[0..], other_digest.bytes[0..]));
+    try std.testing.expect(!try store.typeEql(&name_store, tops[0], other));
 }
 
 test "monotype digest equates bisimilar recursive graphs of different sizes" {

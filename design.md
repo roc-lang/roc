@@ -170,6 +170,12 @@ user-facing failure (malformed source, a type error, a missing or unreadable
 file, allocation failure, a corrupt cache entry) is not a compiler invariant:
 it is reported or propagated as described for that failure, never asserted.
 
+A test pins that an invariant fires with `base.death_test.expectPanic`, which
+re-runs the calling test in a child copy of the test binary, calls the
+violating trigger there, and passes when the child panics with the expected
+message. Death tests skip in builds without runtime safety, where invariants
+are `unreachable`.
+
 Checked identity and runtime encoding are separate data. A stable id, checked
 id, symbol, type variable, procedure reference, callable member, or source row
 id may identify what a value means. It must not also be treated as the integer
@@ -1302,6 +1308,42 @@ constructs must not be independently selected, because that would change source
 behavior by running compile-time observables that the program would not
 evaluate.
 
+### Frame-Partitioned Phase State
+
+An entry recorded while one lambda, declaration, or binding group is being
+canonicalized or checked belongs to that frame, and no other frame may consume
+it. Shared storage that each consumer filters to find its own entries is
+forbidden: one consumer that forgets the filter resolves the entry against the
+wrong frame (a nested lambda's return constraint unified in an enclosing
+lambda's rank, a declaration satisfying its own right-hand-side lookup).
+
+Every field of `Can` and `Check` declares exactly one discipline in a
+`state_inventory` built with `base.state_discipline`. The inventory is
+exhaustive over the struct's fields, so an unclassified field or a stale name is
+a compile error. The disciplines are:
+
+- `input`: borrowed inputs, configuration, and result stores.
+- `scratch`: buffers used above a saved length and truncated back to it.
+- `frame_stack`: explicit stacks of open frames. A pop names the frame it
+  closes and asserts it is the innermost one, reporting both frames otherwise.
+- `frame_partitioned`: storage owned by one frame by construction. The frame
+  records where its entries start, or keys them by its identity, and consumes
+  exactly its own entries when it closes.
+- `lexical`: in-flight flags and current-item slots, saved and restored around
+  the construct that sets them.
+- `boundary`: work judged at each generalization boundary. Rank is the frame
+  owner: a boundary judges the entries at the rank it generalizes and leaves
+  entries at enclosing ranks to the boundary that owns them.
+- `settled`: work judged once against the final solved state. The field's doc
+  comment states why judging it any earlier would be wrong.
+- `keyed`: memos, indices, and output keyed by stable identities, meaning
+  the same thing to every frame.
+
+When canonicalizing a file or checking a module returns successfully, every
+`frame_stack` and `frame_partitioned` field must be empty. This is a debug
+assertion that names the field still holding entries, so a leaked frame is
+caught where the phase finishes rather than where a later frame misreads it.
+
 ### Type Declaration Template Validity
 
 Checking records type-declaration template validity while generating annotation
@@ -1619,7 +1661,13 @@ contents, and both the evaluation's image and the runtime program's
 transcoded image merge such nodes to a fixed point (`mergeIdenticalNodes`),
 so a program's static data does not depend on whether its values were
 completed by this compilation or restored from the constant store, which
-already names one value once. A build that restores its compile-time values from a checked
+already names one value once. Each merge pass compares a node only with the
+earlier kept nodes of the same content hash, relocation targets included,
+and transcoding resolves a source pointer through a per-symbol index of its
+relocations, as linking the evaluation image resolves a data name through an
+index of its items; a frozen list of a million string pointers therefore
+costs work proportional to the image at every one of these steps, never a
+scan per pointer. A build that restores its compile-time values from a checked
 module's const store rather than from a completed host program, as every
 build after the first does, reaches the same constructions: the const
 store keeps an empty list's evaluated capacity and restores it as the
@@ -3844,6 +3892,14 @@ hash in the candidate env, or the self marker when the candidate is the owner
 env); it never spells an owner module's name and looks the text up in another
 env's ident store.
 
+Checked nominal identity (`NominalTypeKey`, and so the checked `MethodOwner`)
+is the declaring module's content identity plus the declaring statement. One
+statement declares exactly one type, and equal content identities imply
+byte-identical source, so the pair determines the type; the declared name is
+display metadata on the nominal payload and is read from a declaration's root
+payload when a consumer renders it. Renaming a type changes its module's source
+and so its content identity, which is the only way a rename changes identity.
+
 The package-qualified display identity of a module (`app.main`, `pf.Stdout`)
 is workspace information. The coordinator owns it on the module's state and
 records it on every env it installs for that module, canonicalized or checked,
@@ -4009,6 +4065,28 @@ Runtime static string layout is generated later by the target-specific static
 data emitter. The checked cache must not store native pointer-width padding,
 static refcount words, allocation headers, or any other runtime `RocStr` layout
 bytes.
+
+### Cache Admission Versioning
+
+A serialization root is a `Serialized` type whose bytes are admitted from outside
+the running compiler: `ModuleEnv.Serialized`, the checked module's `Serialized`
+layout, and `PlatformPairing.Serialized`. Each root declares a `root_contract`
+(`collections.serde_validation.RootContract`) naming its owner type and every
+owner field it deliberately does not persist, every serialized field with no
+owner field, and every rename. A root's layout fingerprint
+(`check.rootLayoutVersionHash`) exists only for a type that declares the
+contract, and computing it runs the owner/serialized field-set audit, so a field
+added to an owner without a persistence decision is a compile error for every
+root that could silently drop it. There is no way to fingerprint an unregistered
+type, and an unfingerprinted type is admitted by no cache entry.
+
+`compile/cache_versioning.zig` is the only place fingerprints are composed. Each
+cache entry kind (checked module, platform pairing, canonicalized module) has one
+entry-version hash folding the kind's domain tag, its envelope and record format
+versions, and the fingerprint of every root its bodies hold. Entry headers carry
+that hash, and admission compares it and nothing else, so a fingerprint not folded
+there guards no entry. The builtin blob's trailer is the single fingerprint of
+the checked module's `Serialized` layout, compared directly.
 
 ### Fully Defined Persisted Bytes
 
@@ -8186,6 +8264,38 @@ A separate value index exposes only known structure and loop-carried state to
 specialization decisions. Consequently an opaque binder use still resolves to
 its active cloned local, but that lexical resolution cannot authorize inlining
 or constructor specialization.
+
+Worker admission is a code-generation budget with a structural termination
+proof. Each original source function admits call-pattern workers only while
+its sealed source body is within the body-size threshold and it holds fewer
+than `spec_constr_specialization_count` (three) workers. Every path that
+records a pattern (syntactic collection, coordinator admission of discovery
+requests, and patterns found while cloning a worker) first deduplicates
+against the exact recorded patterns and then consults that one admission
+rule, in deterministic coordinator order. A refused pattern leaves the call as
+its ordinary direct call, which is always a correct lowering. Cloning a worker
+can discover new patterns (a body that rebuilds its argument one constructor
+deeper on each recursive call yields a strictly deeper pattern every round,
+and the active inline stack that stops infinite inlining sends exactly that
+call down the residual path), so the specialization drain terminates because
+the total number of workers is at most three per original function, not
+because the shape lattice is finite. The budget is not a limit on
+compile-time evaluation in the sense of "Release builds of the compiler must
+never impose artificial resource limits": it never decides whether a program
+compiles or what it computes, only how many specialized copies of a function
+are emitted, and it is the same constant in every build mode.
+`ParallelMetrics.spec_count_denials` counts refusals by the worker budget and
+`workers_written` counts emitted workers, so the `--timings` breakdown shows
+how often the budget binds.
+
+When several admitted workers accept a call's argument values, the call binds
+to the most specific: workers are tried in descending order of their pattern's
+constructor-node count, ties in admission order. All patterns that accept one
+call's values generalize a common value, so a pattern that refines another
+always has strictly more constructor nodes, and the selected worker is never
+strictly less specialized than another accepting worker. Both the clone-time
+call decision and the in-place redirection of calls in emitted workers use
+this order.
 
 Analysis exhaustion is explicit. A bounded query returns `proven`,
 `disproven`, or `unknown_budget_exhausted`; only `proven` authorizes a rewrite.
@@ -14614,15 +14724,16 @@ reuse one specialization, while different callable shapes remain distinct.
 
 The identity is immutable: it is written once when the record is reserved and
 never rewritten, so no structure that indexes by identity ever needs a rekey or
-a second synchronized entry. Later refinements are data on the record. The
-request view may be refined while the record is still `reserved`—once per
-deferring graph that seals its view of the request; the solved view records the
-body's solved type when the record becomes `ready`. Each refinement registers
-an *alias* lookup entry (the new digest also reaches the same record), so a
-request shaped like the current request reuses the record even after the body
-solved a more specific type—the record is never widened (the one-way snapshot
-rule above). Status transitions (`reserved → lowering → ready`) and both
-refinements happen only through the specialization store's API.
+a second synchronized entry. The identity's requested type is the record's
+request view, and it never changes: a requester that matched a record while it
+was `reserved` matched the same view every later requester sees. The solved
+view is data on the record: it records the body's solved type when the record
+becomes `ready` and registers an *alias* lookup entry (the solved digest also
+reaches the same record), so a request shaped like the original request reuses
+the record even after the body solved a more specific type—the record is never
+widened (the one-way snapshot rule above). Status transitions
+(`reserved → lowering → ready`) and the solved refinement happen only through
+the specialization store's API.
 
 The in-memory builder owns a transient hash table from lookup keys to
 `SpecId`, plus the append-only `SpecRecord` array. The output program owns the
@@ -14991,6 +15102,18 @@ operand the divergence column marks divergent, and nothing after it
 (`dbg`, effects, an earlier crash) and evaluate exactly as Boxy evaluates them.
 Only the divergent path does this work: a value that does not diverge lowers
 through the ordinary operand lowering.
+
+Which expression kinds can be marked divergent is one classification,
+`checkedExprDivergence`, defined with the checked expression kinds: a kind
+diverges through its evaluation (it terminates, or an operand it evaluates
+diverges), through its static dispatch plan (the kinds that carry one: method
+and type dispatch, method equality, custom interpolation, and numeral and
+quote conversion), or never. Monotype's and Boxy's divergent lowerings check
+their never-divergent arms against it at compile time, and parity tests beside
+it drive `DivergenceScan` over every kind and compare its answer with it. A
+dispatch-plan kind lowers through its dispatch's callable-or-crash decision,
+so a custom interpolation whose conversion cannot run evaluates its segments
+and values and then crashes, like any other dispatch that cannot run.
 
 Record fields evaluate in source order in every lowering mode. A record
 literal evaluates its supplied field values in the order they are written; a
@@ -15749,10 +15872,29 @@ The solver:
 - treats references to lifted function symbols as singleton lambda sets
 - unifies callable slots through value flow and calls
 - propagates erased callable requirements through the same type graph
-- generalizes and instantiates polymorphic definitions
-- solves recursive groups as groups, not by accidental declaration order
 - verifies each lifted jump is lexically scoped and unifies its arguments with
   the corresponding join-point parameter types
+
+Solving is monomorphic. Every lifted function's type is registered before any
+body is solved, and all of a function's call sites unify with those same type
+nodes; there is no generalization, per-use instantiation, or recursive-group
+ordering, and definitions are output in `FnId` order because consumers
+reach functions only through explicit references. Monotype specialization
+shares one `FnId` among every call site that reaches a callable at the same
+closed type, so those sites' lambda sets become their union. The union is
+sound: a finite callable value carries the tag of the member it was built
+from, and a call dispatches on that tag. Lambda sets key members by lambda
+symbol, so every lifted function must have its own symbol.
+
+A lambda-set member is born only when a lifted function's type is registered,
+with that function's one capture span. Every member naming a lambda therefore
+carries the same span, and merging two sets never relates capture lists; a
+lambda that reaches a merge with two different spans is a compiler invariant
+violation. Merges append new members in encounter order so a growing set can
+extend in place at the end of the member pool. When solving ends, every
+lambda set and erased callable is rewritten with its members in ascending
+lambda-symbol order, so every consumer that numbers callable variants by
+position sees one order for a given member set.
 
 Explicit return boundaries preserve the source value's tag rows and the
 function's destination rows independently. Lambda Solved infers the returned
@@ -15795,6 +15937,17 @@ operand once, schedules that working variable against the backing, and defers
 its link action. Nested backing relations reuse the isolated variable instead
 of recursively entering the unifier or cloning it again at each nominal layer.
 
+Being uninhabited grants no exemption from unification. Both sides of a pair
+were lowered from one closed Monotype, and a slot Monotype sealed to the empty
+tag union is the same type as a source-level `[]`, so neither yields to a
+different peer. An empty tag row unifies only with another empty row; an empty
+row meeting a populated one is a compiler invariant violation. Every other
+uninhabited type, such as a record with an empty-row field, unifies
+structurally and joins the callable slots it contains. The one
+uninhabitedness-specific relation is a checked-public nominal backing: a
+proven-uninhabited structural type joins a nominal or opaque type whose
+inspectable public backing it stands for.
+
 Monotype Lifted types enter the solved store as lazy leaves that materialize one
 level when unification or a shape read touches them. A leaf that has never
 expanded stands for a fresh clone of its Monotype whose callable slots nothing
@@ -15819,9 +15972,9 @@ step function's type reaches the next step function's type through
 `Iter`'s step field. The deferred link is written only when both endpoints are
 still the roots the pair was processed with. Otherwise the pair unifies again
 with the current roots of both sides. Merged lambda sets, erased callables,
-and tag unions are written when their pair is processed, before their capture
-or payload pairs, so a nested unification extends the merged content instead
-of being overwritten by a merge computed from earlier contents. Lambda Mono
+and tag unions are written when their pair is processed, before their payload
+pairs, so a nested unification extends the merged content instead of being
+overwritten by a merge computed from earlier contents. Lambda Mono
 specializes each member of a lambda set once per solved function-type class,
 so a split class multiplies specializations: N generated step functions
 sharing one lambda set across N classes produce N² specializations.
@@ -15867,6 +16020,14 @@ The producers are:
   or glue, when that metadata explicitly names erased callable slots
 - a Monotype iterator type explicitly marked `forced_dynamic`, whose recursive
   step callable crosses the dynamic representation boundary
+
+Inside Lambda Solved, the boundaries that mark every callable they reach as
+erased are hosted function signatures and platform or hosted root signatures,
+layout requests (including constants the const store materializes), runtime
+schema requests, `Box.box` and `Box.unbox` operands, and forced-dynamic
+iterator types. After solving, debug builds walk every one of those boundaries
+again and assert that each function value reached has an erased callable
+slot.
 
 Monotype lowering carries boundary requirements as typed annotations into
 Lambda Solved IR. Lambda solving also consumes the explicit iterator
@@ -20847,10 +21008,13 @@ be an outer nominal or zero-discriminant tag wrapper only when the emitted
 `assign_ref` chain proves exact pointer representation at every edge. Debug LIR
 certification derives that exact allocation identity from those explicit
 producer operations and rejects a call that would pass one allocation to the
-machine ABI while consuming another in ARC. That resolution lives in
-`lir/erased_owner.zig`; a LIR transform that rewrites the definitions on such a
-chain, as join scalarization does when it turns field reads into aliases,
-re-resolves the reuse sources of the procedures it changes with it.
+machine ABI while consuming another in ARC. The representation-transparent
+`assign_ref` edge has one definition, `lir_core`'s `ErasedOwnerEdge`: the direct
+LIR lowerer records each emitted `assign_ref` target's provenance from it, and
+the resolution in `lir/erased_owner.zig` follows it. A LIR transform that
+rewrites the definitions on such a chain, as join scalarization does when it
+turns field reads into aliases, re-resolves the reuse sources of the procedures
+it changes with that resolution. Boxy lowering emits no owned erased calls.
 
 The erased ABI's capture pointer addresses the interior of the callable passed
 as the reuse ownership input. LLVM must not mark either parameter `noalias`:
@@ -22370,18 +22534,19 @@ takes a descriptor argument. A variable slot is never given a stand-in type
 such as `{}`: converting a value to a stand-in would discard it on the way to
 the host.
 
-Monotype lowering holds that boundary where extern specializations are
-produced: emitting a hosted procedure at any other type stops the build with a
-compiler-bug report naming the symbol (`requireHostedExternAtDeclaredAbi`,
-src/postcheck/monotype/lower.zig). The comparison is structural type equality—
-the declared lowering and the request build their graphs separately, so a
-recursive nominal is the same type through either graph—with the declaration's
-variable slots open when it has any. The check runs in release builds too,
-because what it prevents is silent: the host returns `Ok`, the app reads those
-bytes as `Err`, and no diagnostic or crash marks the difference. No checker
-behavior can therefore produce a wrongly typed extern. A checker rule that
-adjusts a hosted call's type at a use site is judged purely as a typing decision
-(see Solver-Mutating Rewrites); it is not what keeps the ABI intact.
+Monotype lowering asserts that boundary where extern specializations are
+produced: emitting a hosted procedure at any other type is a compiler
+invariant violation, reported in debug builds with a message naming the symbol
+(`requireHostedExternAtDeclaredAbi`, src/postcheck/monotype/lower.zig). The
+comparison is structural type equality—the declared lowering and the request
+build their graphs separately, so a recursive nominal is the same type through
+either graph—with the declaration's variable slots open when it has any. Like
+every compiler invariant it is a debug-only assertion; it exists because the
+failure it catches is otherwise silent: the host returns `Ok`, the app reads
+those bytes as `Err`, and nothing downstream marks the difference. A checker
+rule that adjusts a hosted call's type at a use site is judged purely as a
+typing decision (see Solver-Mutating Rewrites); it is not what keeps the ABI
+intact.
 
 Weak linkage exists to break the app/host reference cycle without imposing
 link order; COFF has no equivalent weak external, and needs none: the app
@@ -22816,6 +22981,34 @@ layouts, entrypoint ABI digests, and root metadata. This equivalence check is a
 test requirement, not a release-build compiler pass.
 
 If a boundary check fails, the compiler stops as a compiler bug.
+
+### Crash Reports
+
+When the compiler stops as a compiler bug, its report says what it was doing.
+`src/base/ice_context.zig` keeps a fixed-depth, thread-local stack of frames;
+each phase pushes one frame at its unit-of-work boundary and pops it with a
+guard whose `leave` asserts LIFO balance:
+
+- the coordinator's parse, canonicalize and type-check task for one module
+  (module name and path);
+- each post-check stage in `checked_pipeline.zig` (stage name). A worker
+  running a post-check executor task pushes a copy of the submitting thread's
+  innermost frame, captured when the session begins, when it has one;
+- each backend's per-procedure code generation (backend and procedure id);
+- each interpreter `eval` in the compiler's in-process host (root procedure
+  id). Platform builds of the interpreter touch no thread-local storage, so
+  they push nothing.
+
+Frames borrow their strings and resolve procedure names through the LIR store
+only while a report is printed, so a push is a small struct copy with no
+allocation, locking or cross-thread traffic. The CLI's `pub const panic`
+prints the panicking thread's frames, its role (main or compile worker) and
+the process's command line as the reproducing command, then delegates to the
+default panic handler for the message and stack trace. The compiler's
+fatal-signal handlers embed the same context without resolving names. A Debug
+compiler started with `ROC_DEBUG_FORCE_ICE=<phase>[:<module or stage>]`
+panics on purpose when a matching frame is pushed; CLI tests use it to pin
+each phase's report.
 
 
 ## Integer SIMD Builtins

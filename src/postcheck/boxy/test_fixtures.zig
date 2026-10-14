@@ -26,6 +26,7 @@ pub fn builtinNominal(
         .name = @fromBackingInt(@intCast(tableIndex(0))),
         .origin_module = @fromBackingInt(@intCast(tableIndex(0))),
         .owner_module = .{},
+        .source_decl = @backingInt(builtin),
         .builtin = builtin,
         .is_opaque = false,
         .representation = .{ .builtin = builtin },
@@ -56,7 +57,7 @@ pub fn addBoolDeclaration(
     const declaration_index: u32 = @intCast(types.nominal_declarations.items.len);
     try types.nominal_declarations.append(allocator, .{
         .id = @fromBackingInt(@intCast(declaration_index)),
-        .nominal = .{ .module = nominal.origin_module, .type_name = nominal.name, .source_decl = nominal.source_decl },
+        .nominal = .{ .module = nominal.origin_module, .source_decl = nominal.source_decl },
         .source_statement = 0,
         .declaration_root = bool_ty,
         .backing = backing,

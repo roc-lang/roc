@@ -3924,30 +3924,27 @@ pub const Serialized = extern struct {
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
 
-    comptime {
-        const renamed_fields = [_]collections.serde_validation.FieldRename{
-            .{ .owner = "display_module_name_idx", .serialized = "display_module_name_idx_reserved" },
-            .{ .owner = "self_module_identity", .serialized = "self_module_identity_reserved" },
-            .{ .owner = "evaluation_order", .serialized = "evaluation_order_reserved" },
-            .{ .owner = "import_mapping", .serialized = "import_mapping_reserved" },
-        };
-        const serialized_only_fields = [_][]const u8{
+    pub const root_contract: collections.serde_validation.RootContract = .{
+        .Owner = Self,
+        .owner_only_fields = &.{
+            "qualified_module_name", // Workspace information, recorded by the coordinator.
+        },
+        .serialized_only_fields = &.{
             "display_module_name_idx_padding", // Fixed-width padding after the display name slot.
             "self_module_identity_padding", // Fixed-width padding for the reserved identity slot.
             "runtime_prepared_padding", // Fixed-width padding for the serialized bool.
             "_reserved_flags", // Format-reserved bytes for fields removed from ModuleEnv.
             "_padding", // Tail padding kept explicit and zeroed for deterministic bytes.
-        };
-        const owner_only_fields = [_][]const u8{
-            "qualified_module_name", // Workspace information, recorded by the coordinator.
-        };
-        collections.serde_validation.assertBidirectionalFieldSet(
-            Self,
-            Serialized,
-            &owner_only_fields,
-            &serialized_only_fields,
-            &renamed_fields,
-        );
+        },
+        .renames = &.{
+            .{ .owner = "display_module_name_idx", .serialized = "display_module_name_idx_reserved" },
+            .{ .owner = "self_module_identity", .serialized = "self_module_identity_reserved" },
+            .{ .owner = "evaluation_order", .serialized = "evaluation_order_reserved" },
+            .{ .owner = "import_mapping", .serialized = "import_mapping_reserved" },
+        },
+    };
+
+    comptime {
         collections.serde_validation.assertSerializedRelocatable(Serialized);
     }
 

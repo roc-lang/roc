@@ -2,6 +2,7 @@
 //! Symbol relocations are the only pointer authority; source bytes are never
 //! interpreted as addresses and no initializer is evaluated.
 const std = @import("std");
+const collections = @import("collections");
 const compilerInvariant = @import("base").invariant;
 const builtins = @import("builtins");
 const layout = @import("layout");
@@ -64,6 +65,10 @@ const Builder = struct {
     source_program: *const Program.Result,
     source_exports: []const static_data.StaticDataExport,
     jobs: std.ArrayList(Job) = .empty,
+    /// Index into the source symbol's relocations, keyed by symbol and offset.
+    source_relocations: std.AutoHashMapUnmanaged(Destination, u32) = .empty,
+    /// Source symbols whose relocations `source_relocations` already indexes.
+    indexed_sources: collections.DenseMapUnmanaged(SymbolId, void) = .empty,
     fn sourceWord(self: *const Builder) usize {
         return self.source_program.layouts.targetUsize().size();
     }
@@ -80,12 +85,25 @@ const Builder = struct {
             else => invariant("unsupported source pointer width"),
         };
     }
-    fn sourceRelocation(self: *Builder, src: Destination) ?static_data.StaticDataRelocation {
-        for (self.source_exports[@backingInt(src.symbol)].relocations) |rel| if (rel.offset == src.offset) return rel;
-        return null;
+    /// The relocation patching the source word at `src`, found through a
+    /// per-symbol offset index built on the symbol's first read, so a symbol
+    /// holding n pointers costs O(n) to transcode rather than O(n^2).
+    fn sourceRelocation(self: *Builder, src: Destination) Allocator.Error!?static_data.StaticDataRelocation {
+        const relocations = self.source_exports[@backingInt(src.symbol)].relocations;
+        if (!self.indexed_sources.contains(src.symbol)) {
+            try self.source_relocations.ensureUnusedCapacity(self.graph.allocator, @intCast(relocations.len));
+            try self.indexed_sources.put(self.graph.allocator, src.symbol, {});
+            for (relocations, 0..) |rel, index| {
+                const entry = self.source_relocations.getOrPutAssumeCapacity(.{ .symbol = src.symbol, .offset = rel.offset });
+                if (entry.found_existing) invariant("frozen symbol had two relocations at one offset");
+                entry.value_ptr.* = @intCast(index);
+            }
+        }
+        const index = self.source_relocations.get(src) orelse return null;
+        return relocations[index];
     }
-    fn pointer(self: *Builder, src: Destination) Destination {
-        const rel = self.sourceRelocation(src) orelse invariant("frozen pointer lacked a relocation");
+    fn pointer(self: *Builder, src: Destination) Allocator.Error!Destination {
+        const rel = try self.sourceRelocation(src) orelse invariant("frozen pointer lacked a relocation");
         return switch (rel.target) {
             .data_symbol => |symbol| .{ .symbol = symbol, .offset = @intCast(@as(i64, self.source_exports[@backingInt(symbol)].symbol_offset) + rel.addend) },
             .named => invariant("frozen data pointer lacked symbolic graph identity"),
@@ -95,7 +113,7 @@ const Builder = struct {
         try self.jobs.append(self.graph.allocator, .{ .source_plan = sp, .source_layout = sl, .plan = tp, .layout_idx = tl, .source = src, .dest = dest, .source_storage = ss, .storage = ts });
     }
     fn boxed(self: *Builder, job: Job, sp: Program.ConstPlanId, sl: layout.Idx, tp: Program.ConstPlanId, tl: layout.Idx) Allocator.Error!void {
-        const src = self.pointer(job.source);
+        const src = try self.pointer(job.source);
         const allocation = try self.graph.reserveAllocation(.{ .source = src, .plan = tp, .layout_idx = tl, .count = 1, .kind = .value }, self.graph.size(tl), self.graph.alignment(tl), self.graph.program.layouts.layoutContainsRefcounted(self.graph.program.layouts.getLayout(tl)), null);
         try self.graph.relocate(job.dest, allocation.dest);
         if (allocation.fresh) try self.enqueue(sp, sl, tp, tl, src, allocation.dest, .value, .value);
@@ -106,7 +124,7 @@ const Builder = struct {
     /// neither side boxes it.
     fn recursionBoxed(self: *Builder, job: Job, source_boxed: bool, source_inner: layout.Idx, target_boxed: bool, target_inner: layout.Idx) Allocator.Error!bool {
         if (!source_boxed and !target_boxed) return false;
-        const src = if (source_boxed) self.pointer(job.source) else job.source;
+        const src = if (source_boxed) try self.pointer(job.source) else job.source;
         const sl = if (source_boxed) source_inner else job.source_layout;
         if (!target_boxed) {
             try self.enqueue(job.source_plan, sl, job.plan, job.layout_idx, src, job.dest, .value, .value);
@@ -194,7 +212,7 @@ const Builder = struct {
         const raw = self.sourceBytes(source, 3 * self.sourceWord());
         const small = raw[raw.len - 1] & builtins.str.RocStr.small_str_flag != 0;
         const count = if (small) raw[raw.len - 1] & ~builtins.str.RocStr.small_str_flag else self.readWord(source.offsetBy(2 * self.sourceWord()));
-        const src = if (small) source else self.pointer(source);
+        const src = if (small) source else try self.pointer(source);
         const text = self.sourceBytes(src, count);
         if (count < 3 * self.graph.word()) {
             @memcpy(self.graph.bytes(dest, count), text);
@@ -215,7 +233,7 @@ const Builder = struct {
         if (count == 0 or physical.tag == .list_of_zst) return;
         const sl = self.source_program.layouts.getLayout(job.source_layout).getIdx();
         const tl = physical.getIdx();
-        const src = self.pointer(job.source);
+        const src = try self.pointer(job.source);
         const result = try self.graph.reserveAllocation(.{ .source = src, .plan = tp, .layout_idx = tl, .count = count, .kind = .list }, count * self.graph.size(tl), self.graph.alignment(tl), self.graph.program.layouts.layoutContainsRefcounted(self.graph.program.layouts.getLayout(tl)), count);
         try self.graph.relocate(job.dest, result.dest);
         if (result.fresh) for (0..count) |i| try self.enqueue(sp, sl, tp, tl, src.offsetBy(i * self.sourceSize(sl)), result.dest.offsetBy(i * self.graph.size(tl)), .value, .value);
@@ -267,8 +285,8 @@ const Builder = struct {
         }
     }
     fn erased(self: *Builder, job: Job, source_set: Program.ErasedFnsId, target_set: Program.ErasedFnsId) Allocator.Error!void {
-        const src = self.pointer(job.source);
-        const code = self.sourceRelocation(src) orelse invariant("erased code lacked relocation");
+        const src = try self.pointer(job.source);
+        const code = try self.sourceRelocation(src) orelse invariant("erased code lacked relocation");
         const source_proc = code.procedure orelse invariant("erased code lacked procedure identity");
         const source_entries = self.source_program.erased_fns.items[@backingInt(source_set)].entries;
         const source_entry = if (code.boxy_recipe) |index| source_entries[index] else for (source_entries) |entry| {
@@ -391,6 +409,42 @@ test "frozen root transcode preserves shared list strings across pointer widths"
     try std.testing.expectEqual(list_export.relocations[0].target.data_symbol, list_export.relocations[1].target.data_symbol);
     const str_rel = list_export.relocations[0];
     try std.testing.expectEqualStrings(text, converted[@backingInt(str_rel.target.data_symbol)].bytes[@intCast(str_rel.addend)..]);
+}
+
+test "frozen root transcode of a list of many string pointers stays proportional to the list" {
+    // Each element is a pointer the transcoder resolves through its source
+    // relocation; a lookup that scans the symbol's relocations makes this
+    // list quadratic, which at this length runs for minutes.
+    const allocator = std.testing.allocator;
+    const TargetUsize = @import("base").target.TargetUsize;
+    var source = try Program.Result.init(allocator, TargetUsize.native);
+    defer source.deinit();
+    var target = try Program.Result.init(allocator, .u32);
+    defer target.deinit();
+    const str_plan: Program.ConstPlanId = @fromBackingInt(@intCast(source.const_plans.items.len));
+    try source.const_plans.append(allocator, .str);
+    const list_plan: Program.ConstPlanId = @fromBackingInt(@intCast(source.const_plans.items.len));
+    try source.const_plans.append(allocator, .{ .list = str_plan });
+    try target.const_plans.append(allocator, .str);
+    try target.const_plans.append(allocator, .{ .list = str_plan });
+    const source_list = try source.layouts.insertList(.str);
+    const target_list = try target.layouts.insertList(.str);
+    const text = "one heap string every element of the list points at";
+    const string = builtins.str.RocStr{ .bytes = @constCast(text.ptr), .length = text.len, .capacity_or_alloc_ptr = builtins.str.RocStr.encodeCapacity(text.len) };
+    const count = 200_000;
+    const items = try allocator.alloc(builtins.str.RocStr, count);
+    defer allocator.free(items);
+    @memset(items, string);
+    var list_value = builtins.list.RocList{ .bytes = @ptrCast(items.ptr), .length = count, .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(count) };
+    const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, try testSlot(&source, source_list), testRoot(list_plan, source_list), .{ .ptr = @ptrCast(&list_value) }, .{});
+    defer static_data.deinitStaticData(allocator, native);
+    const converted = try transcodeRoot(allocator, &source, testRoot(list_plan, source_list), native, testRootSymbol(native), &target, testRoot(list_plan, target_list), try testSlot(&target, target_list));
+    defer static_data.deinitStaticData(allocator, converted);
+    try std.testing.expectEqual(@as(usize, 3), converted.len);
+    const list_export = converted[@backingInt(converted[0].relocations[0].target.data_symbol)];
+    try std.testing.expectEqual(@as(usize, count), list_export.relocations.len);
+    const backing = list_export.relocations[0].target.data_symbol;
+    for (list_export.relocations) |relocation| try std.testing.expectEqual(backing, relocation.target.data_symbol);
 }
 
 test "frozen root transcode promotes inline strings when target width shrinks" {

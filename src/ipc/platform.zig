@@ -498,6 +498,12 @@ fn mapMemoryWithLogging(
                 }
                 return error.MmapFailed;
             }
+            // The mapping is a large lazy reservation. A core dump would fault
+            // in every page of it, so a crash would take minutes and many
+            // gigabytes of memory to dump. Leave it out of core dumps.
+            // `madvise` fails only for a range that is not mapped.
+            const advise_rc = linux.madvise(@ptrFromInt(rc), size, linux.MADV.DONTDUMP);
+            std.debug.assert(linux.errno(advise_rc) == .SUCCESS);
             return @ptrFromInt(rc);
         },
         .macos, .freebsd, .openbsd, .netbsd => {

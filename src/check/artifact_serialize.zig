@@ -422,13 +422,26 @@ fn splitmix64(x: u64) u64 {
     return z ^ (z >> 31);
 }
 
+/// 256-bit layout fingerprint of a registered serialization root (see
+/// `collections.serde_validation.RootContract`). Validated on load, through the
+/// cache-entry admission hash or the baked builtin blob's trailer, so a blob whose
+/// layout differs from the running compiler's is rejected rather than relocated
+/// into a mismatched struct.
+///
+/// Only a type that declares a `root_contract` has a fingerprint, so every type
+/// whose bytes are admitted from outside the running compiler has had its
+/// owner/serialized field set audited at compile time. Bump `version` for a change
+/// in how persisted bytes are interpreted that the structural fingerprint can't see.
+pub fn rootLayoutVersionHash(comptime Root: type, comptime version: u32) [32]u8 {
+    comptime collections.serde_validation.assertRegisteredRoot(Root);
+    return layoutVersionHash(Root, version);
+}
+
 /// 256-bit layout-version digest of a `Serialized` type: a manual `version`
 /// discriminant + the total relocatable-pointer count + the full recursive layout
-/// fingerprint, folded with FNV-1a and expanded to 32 bytes via splitmix64. Same
-/// role as `cache_module.MODULE_ENV_VERSION_HASH`; validated on load so a blob whose
-/// layout differs from the running compiler's is rejected, not relocated into a
-/// mismatched struct. Bump `version` for a semantic change the fingerprint can't see.
-pub fn layoutVersionHash(comptime T: type, comptime version: u32) [32]u8 {
+/// fingerprint, folded with FNV-1a and expanded to 32 bytes via splitmix64. Bump
+/// `version` for a semantic change the fingerprint can't see.
+fn layoutVersionHash(comptime T: type, comptime version: u32) [32]u8 {
     @setEvalBranchQuota(20_000_000);
     comptime assertPortableSerialized(T);
     var hasher = LayoutHasher{};

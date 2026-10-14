@@ -50,7 +50,8 @@ pub const HostSplice = struct {
     allocator: Allocator,
     /// The carried data items in placement order, one per name.
     data: std.ArrayList(ProcArtifact.DataItem) = .empty,
-    data_names: std.StringHashMap(void),
+    /// Each carried data item's index in `data`, by name.
+    data_names: std.StringHashMap(u32),
     /// Each data item's offset in the mapping once `link` has laid it out.
     data_offsets: std.StringHashMap(usize),
     /// Hosted functions spliced code calls, by name, with the stub's code
@@ -68,7 +69,7 @@ pub const HostSplice = struct {
     pub fn init(allocator: Allocator) HostSplice {
         return .{
             .allocator = allocator,
-            .data_names = std.StringHashMap(void).init(allocator),
+            .data_names = std.StringHashMap(u32).init(allocator),
             .data_offsets = std.StringHashMap(usize).init(allocator),
             .hosted_stubs = std.StringHashMap(usize).init(allocator),
         };
@@ -135,6 +136,7 @@ pub const HostSplice = struct {
             const gop = try self.data_names.getOrPut(item.name);
             if (gop.found_existing) continue;
             errdefer _ = self.data_names.remove(item.name);
+            gop.value_ptr.* = @intCast(self.data.items.len);
             try self.data.append(self.allocator, item);
         }
     }
@@ -369,9 +371,8 @@ const Binder = struct {
         if (self.splice.hosted_stubs.get(name)) |offset| return self.image_base + offset;
         if (self.code_symbols.get(name)) |offset| return self.image_base + offset;
         if (self.splice.data_offsets.get(name)) |offset| {
-            for (self.splice.data.items) |item| {
-                if (std.mem.eql(u8, item.name, name)) return self.image_base + offset + item.symbol_offset;
-            }
+            const index = self.splice.data_names.get(name) orelse unreachable;
+            return self.image_base + offset + self.splice.data.items[index].symbol_offset;
         }
         return null;
     }
@@ -645,4 +646,54 @@ test "static bindings link pointer cells without copying mutable slots" {
     try std.testing.expectEqual(@as(u64, 42), std.mem.readInt(u64, slots.allocation[8..16], .little));
     // Linking must not bake the process address into retained source data.
     try std.testing.expectEqual(@as(usize, 0), std.mem.readInt(usize, splice.data.items[0].bytes[0..@sizeOf(usize)], .little));
+}
+
+test "linking many data items resolves each pointer through its target's own symbol offset" {
+    // Every item points at the next one. Finding a target by scanning all
+    // items makes linking quadratic, which at this count runs for minutes.
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try @import("layout").Store.init(allocator, @import("base").target.TargetUsize.native);
+    defer layouts.deinit();
+    var codegen = try HostLirCodeGen.init(allocator, &store, &layouts, .{}, &.{}, .default);
+    defer codegen.deinit();
+    _ = try codegen.generateHostedStub("test_unused_entry");
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const count = 100_000;
+    const items = try arena.allocator().alloc(ProcArtifact.DataItem, count);
+    const names = try arena.allocator().alloc([]const u8, count);
+    for (names, 0..) |*name, index| name.* = try std.fmt.allocPrint(arena.allocator(), "test_item_{d}", .{index});
+    for (items, 0..) |*item, index| {
+        const bytes = try arena.allocator().alloc(u8, 2 * @sizeOf(usize));
+        @memset(bytes, 0);
+        const relocations = try arena.allocator().alloc(ProcArtifact.DataRelocation, 1);
+        relocations[0] = .{ .offset = @sizeOf(usize), .name = names[(index + 1) % count], .addend = 0, .function = false };
+        item.* = .{
+            .name = names[index],
+            .bytes = bytes,
+            .alignment = @alignOf(usize),
+            .symbol_offset = @sizeOf(usize),
+            .relocations = relocations,
+        };
+    }
+    var splice = HostSplice.init(allocator);
+    defer splice.deinit();
+    try splice.addDataItems(items);
+    var table: BoxyNativeFnTable = undefined;
+    @memset(&table, 0);
+    try splice.generateHostedStubs(&codegen, &table);
+    try codegen.finishImage();
+    var executable = try splice.link(&codegen, &table);
+    defer executable.deinit();
+    const base_address = @intFromPtr(executable.memory.ptr);
+    for (names, 0..) |name, index| {
+        const offset = splice.data_offsets.get(name).?;
+        const pointer = std.mem.readInt(usize, executable.memory[offset + @sizeOf(usize) ..][0..@sizeOf(usize)], .little);
+        const target = splice.data_offsets.get(names[(index + 1) % count]).?;
+        try std.testing.expectEqual(base_address + target + @sizeOf(usize), pointer);
+    }
 }
