@@ -66084,10 +66084,54 @@ test "draft specialization candidates retain insertion order across overflow gro
         }
     };
     try Scenario.run(std.testing.allocator);
-    std.testing.checkAllAllocationFailures(std.testing.allocator, Scenario.run, .{}) catch |err| {
-        std.debug.print("allocation-failure check failed: {t}\n", .{err});
-        return err;
+    // Diagnostic: record the size of every allocation so a run whose
+    // allocations diverge from the first run reports where they diverge.
+    const Recorder = struct {
+        backing: Allocator,
+        sizes: std.ArrayList(usize) = .empty,
+        fn alloc(ctx: *anyopaque, len: usize, a: std.mem.Alignment, ra: usize) ?[*]u8 {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.sizes.append(std.heap.page_allocator, len) catch @panic("recorder OOM");
+            return self.backing.rawAlloc(len, a, ra);
+        }
+        fn resize(ctx: *anyopaque, m: []u8, a: std.mem.Alignment, n: usize, ra: usize) bool {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            return self.backing.rawResize(m, a, n, ra);
+        }
+        fn remap(ctx: *anyopaque, m: []u8, a: std.mem.Alignment, n: usize, ra: usize) ?[*]u8 {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            return self.backing.rawRemap(m, a, n, ra);
+        }
+        fn free(ctx: *anyopaque, m: []u8, a: std.mem.Alignment, ra: usize) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.backing.rawFree(m, a, ra);
+        }
+        fn allocator(self: *@This()) Allocator {
+            return .{ .ptr = self, .vtable = &.{ .alloc = alloc, .resize = resize, .remap = remap, .free = free } };
+        }
     };
+    var first_failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    var first: Recorder = .{ .backing = first_failing.allocator() };
+    defer first.sizes.deinit(std.heap.page_allocator);
+    try Scenario.run(first.allocator());
+    const needed = first_failing.alloc_index;
+    for (0..needed) |fail_index| {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = fail_index });
+        var recorder: Recorder = .{ .backing = failing.allocator() };
+        defer recorder.sizes.deinit(std.heap.page_allocator);
+        if (Scenario.run(recorder.allocator())) |_| {
+            var diverge: usize = 0;
+            while (diverge < recorder.sizes.items.len and diverge < first.sizes.items.len and recorder.sizes.items[diverge] == first.sizes.items[diverge]) diverge += 1;
+            std.debug.print("DIAG fail_index={d} needed={d} this_run_allocs={d} induced={} first_divergence={d}\n", .{ fail_index, needed, failing.alloc_index, failing.has_induced_failure, diverge });
+            const lo = diverge -| 5;
+            std.debug.print("DIAG first run sizes [{d}..]: {any}\n", .{ lo, first.sizes.items[lo..@min(first.sizes.items.len, diverge + 10)] });
+            std.debug.print("DIAG this run sizes [{d}..]: {any}\n", .{ lo, recorder.sizes.items[lo..@min(recorder.sizes.items.len, diverge + 10)] });
+            return error.NondeterministicMemoryUsage;
+        } else |err| switch (err) {
+            error.OutOfMemory => {},
+            else => return err,
+        }
+    }
 }
 
 test "draft specialization open lookup follows unions within its prefix" {
