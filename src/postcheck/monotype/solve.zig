@@ -236,6 +236,12 @@ pub const ClosedCheckedKey = struct {
     ty: checked.CheckedTypeId,
 };
 
+/// A store type and a type that may be one of its components at any depth.
+const TypeContainmentKey = struct {
+    root: Type.TypeId,
+    target: Type.TypeId,
+};
+
 /// A closed checked type a measuring instantiation built, and its node.
 pub const ClosedTypeBuild = struct {
     checked_ty: checked.CheckedTypeId,
@@ -2108,6 +2114,9 @@ pub const InstGraph = struct {
     /// instantiates to, in this graph's cumulative type store. Store types
     /// are immutable, so entries outlive every graph reset.
     closed_checked_monos: std.AutoHashMapUnmanaged(ClosedCheckedKey, Type.TypeId) = .empty,
+    /// Whether a store type contains another at any depth. Store types are
+    /// immutable, so entries outlive every graph reset.
+    type_containment: std.AutoHashMapUnmanaged(TypeContainmentKey, bool) = .empty,
     /// Exact immutable Monotype snapshot imported at each permanent node.
     /// Unlike `node_snapshots`, these are producer-owned representation
     /// witnesses. Keeping the direct node association lets consumers of an
@@ -2442,6 +2451,7 @@ pub const InstGraph = struct {
         while (alias_lists.next()) |list| list.deinit(self.allocator);
         self.leaf_alias_origins.deinit();
         self.closed_checked_monos.deinit(self.allocator);
+        self.type_containment.deinit(self.allocator);
         self.related_named_backings.deinit();
         self.related_named_instances.deinit();
         self.class_member_tail.deinit(allocator);
@@ -4015,6 +4025,168 @@ pub const InstGraph = struct {
         if (std.meta.eql(own, origin)) return;
         for (aliases.items) |existing| if (std.meta.eql(existing, origin)) return;
         try aliases.append(self.allocator, origin);
+    }
+
+    /// Join every cell of `scope` to the cells an unread joined class of
+    /// `scope` would join it to once read. Such a class relates its origins'
+    /// components only when read (see `expandLeaf`), yet below its root each
+    /// origin's component of a type is that origin's memo cell of the type,
+    /// whatever the path to it, except where it is a nominal's own backing.
+    /// So for each type of a cell of `scope` that the class holds below its
+    /// root, every origin's memo cell of that type is one class with the
+    /// cell, exactly as relating eager instantiations would have made it,
+    /// and joining them needs no read. Afterward the class identity of the
+    /// scope's cells no longer depends on whether a class was read.
+    pub fn settleLeafScope(self: *InstGraph, scope: LeafScopeId) Allocator.Error!void {
+        var cells = std.ArrayList(LeafScopeCell).empty;
+        defer cells.deinit(self.allocator);
+        var candidates = std.ArrayList(NodeId).empty;
+        defer candidates.deinit(self.allocator);
+        var origins = std.ArrayList(LeafOrigin).empty;
+        defer origins.deinit(self.allocator);
+        var joined_any = true;
+        while (joined_any) {
+            joined_any = false;
+            cells.clearRetainingCapacity();
+            candidates.clearRetainingCapacity();
+            // Joining can read a class and add cells to the memo, so each
+            // round works from a copy of it.
+            var memo = self.leaf_scopes.items[@backingInt(scope)].iterator();
+            while (memo.next()) |cell| {
+                try cells.append(self.allocator, .{ .ty = cell.key_ptr.*, .node = cell.value_ptr.* });
+                // Every leaf of `scope` is a cell of its memo or the owned
+                // backing of a nominal cell of it.
+                const root = self.find(cell.value_ptr.*);
+                try candidates.append(self.allocator, root);
+                switch (self.nodes.items[@backingInt(root)]) {
+                    .named => |named| if (named.backing) |backing| try candidates.append(self.allocator, backing.node),
+                    .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+                }
+            }
+            for (candidates.items) |candidate| {
+                const root = self.find(candidate);
+                const leaf = switch (self.nodes.items[@backingInt(root)]) {
+                    .leaf => |leaf| leaf,
+                    .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => continue,
+                };
+                const aliases = self.leaf_alias_origins.get(root) orelse continue;
+                // Joining can read the class, which consumes its aliases.
+                origins.clearRetainingCapacity();
+                try origins.append(self.allocator, leaf.origin);
+                try origins.appendSlice(self.allocator, aliases.items);
+                for (cells.items) |cell| {
+                    if (cell.ty == leaf.ty or !try self.typeHoldsMemoComponent(leaf.ty, cell.ty)) continue;
+                    for (origins.items) |origin| joined_any = try self.joinOriginMemoCell(origin, cell) or joined_any;
+                }
+            }
+        }
+        if (@import("builtin").mode == .debug) try self.debugAssertLeafScopeSettled(scope);
+    }
+
+    const LeafScopeCell = struct {
+        ty: Type.TypeId,
+        node: NodeId,
+    };
+
+    /// Join `cell` to `origin`'s memo cell of its type, creating that cell
+    /// as reading a class of the origin would. Returns whether the two were
+    /// separate classes.
+    fn joinOriginMemoCell(self: *InstGraph, origin: LeafOrigin, cell: LeafScopeCell) Allocator.Error!bool {
+        const memo_node = try self.originMemoNode(origin, cell.ty);
+        if (self.sameClass(memo_node, cell.node)) return false;
+        try self.unifyKnownEqual(memo_node, cell.node);
+        return true;
+    }
+
+    /// The memo cell `origin` gives a component of type `ty` that is not a
+    /// nominal's own backing.
+    fn originMemoNode(self: *InstGraph, origin: LeafOrigin, ty: Type.TypeId) Allocator.Error!NodeId {
+        switch (origin) {
+            .import => {
+                if (self.imported_type_nodes.get(ty)) |existing| return self.find(existing);
+                return try self.newMemoLeaf(ty);
+            },
+            .checked => |scope| return try self.checkedLeaf(scope, ty),
+        }
+    }
+
+    /// Debug check of `settleLeafScope`'s postcondition over every unread
+    /// joined class of `scope`, not only those reachable from its memo: each
+    /// cell of `scope` such a class holds below its root is one class with
+    /// every origin's memo cell of its type.
+    fn debugAssertLeafScopeSettled(self: *InstGraph, scope: LeafScopeId) Allocator.Error!void {
+        const memo = &self.leaf_scopes.items[@backingInt(scope)];
+        var joined = self.leaf_alias_origins.iterator();
+        while (joined.next()) |entry| {
+            const leaf = self.nodes.items[@backingInt(entry.key_ptr.*)].leaf;
+            const involves_scope = for (entry.value_ptr.items) |origin| {
+                if (std.meta.eql(origin, LeafOrigin{ .checked = scope })) break true;
+            } else std.meta.eql(leaf.origin, LeafOrigin{ .checked = scope });
+            if (!involves_scope) continue;
+            var cells = memo.iterator();
+            while (cells.next()) |cell| {
+                if (cell.key_ptr.* == leaf.ty or !try self.typeHoldsMemoComponent(leaf.ty, cell.key_ptr.*)) continue;
+                const own_separate = !self.debugOriginMemoJoined(leaf.origin, cell.key_ptr.*, cell.value_ptr.*);
+                const alias_separate = for (entry.value_ptr.items) |origin| {
+                    if (!self.debugOriginMemoJoined(origin, cell.key_ptr.*, cell.value_ptr.*)) break true;
+                } else false;
+                if (own_separate or alias_separate) {
+                    base.invariant(
+                        "postcheck invariant violated: leaf scope cell {} was separate from a memo cell of unread joined class {}",
+                        .{ cell.value_ptr.*, entry.key_ptr.* },
+                    );
+                }
+            }
+        }
+    }
+
+    fn debugOriginMemoJoined(self: *InstGraph, origin: LeafOrigin, ty: Type.TypeId, node: NodeId) bool {
+        const memo_node = switch (origin) {
+            .import => self.imported_type_nodes.get(ty),
+            .checked => |other| self.leaf_scopes.items[@backingInt(other)].get(ty),
+        } orelse return false;
+        return self.sameClass(memo_node, node);
+    }
+
+    /// Whether `target` is a component of `root` below its root other than
+    /// as a nominal's own backing, where an instantiation of `root` reads
+    /// it through its origin's memo. Store types are immutable, so answers
+    /// outlive graph resets. The search goes breadth first, so a shallow
+    /// component is found without walking deep ones; a search that misses
+    /// records the miss for every type it visited, since each of their
+    /// components was visited too.
+    fn typeHoldsMemoComponent(self: *InstGraph, root: Type.TypeId, target: Type.TypeId) Allocator.Error!bool {
+        if (self.type_containment.get(.{ .root = root, .target = target })) |known| return known;
+        var visited = collections.DenseMap(Type.TypeId, void).init(self.allocator);
+        defer visited.deinit();
+        var queue = std.ArrayList(Type.TypeId).empty;
+        defer queue.deinit(self.allocator);
+        var components = std.ArrayList(ImportComponent).empty;
+        defer components.deinit(self.allocator);
+        try queue.append(self.allocator, root);
+        try visited.put(root, {});
+        var next: usize = 0;
+        const found = search: while (next < queue.items.len) : (next += 1) {
+            components.clearRetainingCapacity();
+            try self.importComponents(&components, queue.items[next]);
+            for (components.items) |component| {
+                if (component.ty == target and !component.owned_backing) break :search true;
+                if ((try visited.getOrPut(component.ty)).found_existing) continue;
+                if (self.type_containment.get(.{ .root = component.ty, .target = target })) |known| {
+                    if (known) break :search true;
+                    continue;
+                }
+                try queue.append(self.allocator, component.ty);
+            }
+        } else false;
+        if (found) {
+            try self.type_containment.put(self.allocator, .{ .root = root, .target = target }, true);
+        } else {
+            try self.type_containment.ensureUnusedCapacity(self.allocator, @intCast(visited.count()));
+            var misses = visited.keyIterator();
+            while (misses.next()) |ty| self.type_containment.putAssumeCapacity(.{ .root = ty.*, .target = target }, false);
+        }
+        return found;
     }
 
     /// `newLeaf` for an occurrence of the current ownership scope, which

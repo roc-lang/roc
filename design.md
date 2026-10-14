@@ -6686,14 +6686,11 @@ through the context's leaf scope, which a bound role names its boundary cell
 in, so a leaf read later reaches that cell exactly as the eager
 instantiation's memo would have. A contract relating a nested shape to its
 boundary therefore reads only the levels that differ, not the whole shape.
-Generated-call roles are selected by their subject's class, and a closed
-subject joins the boundary component it denotes only when a class holding
-both is read, so instantiating a contract reads its boundary shape down to
-its nested codec boundaries: every subject is then one class with its
-occurrence, however the derived body later reaches that occurrence. The
-read stops at an occurrence a nested boundary call names, since that
-boundary's components are the subjects of the contract it activates. A
-graph instantiates a contract at boundary classes it has already
+Generated-call roles are selected by their subject's class, so once a
+contract or structural-evidence context has related its boundary, it
+settles its leaf scope (see the leaf rules below): every subject is then one
+class with its occurrence, however the derived body later reaches that
+occurrence. A graph instantiates a contract at boundary classes it has already
 instantiated it at once: nested bodies of one derived codec share that
 instantiation unless it consulted enclosing evidence.
 Queued specialization contexts retain both the constructor and the explicit
@@ -14064,7 +14061,18 @@ root, and every other component reconnects through the ownership-scope memo.
 The class denotes the same type before and after, so expansion changes no
 snapshot or resolvedness stamp, and it may happen after relations freeze.
 Two unread leaves of one type join without being read; a leaf joined to a
-variable stays unread. Sealing an unread leaf yields its type, and
+variable stays unread. Such a join relates the two origins' components only
+when the class is read, but a leaf scope also hands out cells for closed
+types directly, and its cell for a type the joined class holds below its root
+is that class's component in the scope. Below a joined class's root, every
+origin's component of a type, except a nominal's own backing, is that
+origin's memo cell for the type, whatever the path to it. So a context that
+hands out cells settles its leaf scope before its cells reach any consumer of
+class identity: it joins each cell, for every unread joined class of the
+scope holding its type below the root, with each of that class's origins'
+memo cells for the type. That is the join an eager relation would have made,
+and it reads nothing, so class identity never depends on whether a class was
+read. Sealing an unread leaf yields its type, and
 containment, resolvedness and uninhabitedness questions about one are
 answered from per-type answers that outlive graph resets, because store types
 are immutable. A specialization therefore pays only for the parts of its
