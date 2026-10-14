@@ -66084,7 +66084,10 @@ test "draft specialization candidates retain insertion order across overflow gro
         }
     };
     try Scenario.run(std.testing.allocator);
-    std.testing.checkAllAllocationFailures(std.testing.allocator, Scenario.run, .{}) catch |err| {
+    // In-place growth depends on the testing allocator's heap state, which
+    // carries over between runs, so growth goes through fresh allocations.
+    var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
+    std.testing.checkAllAllocationFailures(deterministic.allocator(), Scenario.run, .{}) catch |err| {
         std.debug.print("allocation-failure check failed: {t}\n", .{err});
         return err;
     };
