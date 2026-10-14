@@ -463,12 +463,12 @@ fn hasSelfCall(allocator: Allocator, store: *const LirStore, proc_id: LIR.LirPro
     var visited = collections.DenseMap(CFStmtId, void).init(allocator);
     defer visited.deinit();
 
-    const body = store.getProcSpec(proc_id).body orelse return false;
+    const body = store.getProcSpecImmediate(proc_id).body orelse return false;
     try work.append(allocator, body);
     while (work.pop()) |stmt_id| {
         const entry = try visited.getOrPut(stmt_id);
         if (entry.found_existing) continue;
-        switch (store.getCFStmt(stmt_id)) {
+        switch (store.getCFStmtImmediate(stmt_id).*) {
             .assign_call => |s| {
                 if (s.proc == proc_id) return true;
                 try work.append(allocator, s.next);
@@ -556,7 +556,7 @@ test "trmc transforms the canonical repeat shape and builds correct structure" {
 
     try lir.Trmc.run(&store, &layouts);
 
-    try std.testing.expectEqual(LIR.TailTransform.trmc, store.getProcSpec(repeat).tail_transform);
+    try std.testing.expectEqual(LIR.TailTransform.trmc, store.getProcSpecImmediate(repeat).tail_transform);
     try std.testing.expect(!(try hasSelfCall(allocator, &store, repeat)));
 
     try lir.Arc.insert(&store, &layouts, .{});
@@ -678,8 +678,8 @@ test "trmc'd repeat is leak-free and allocation-exact when consumed" {
     store.getProcSpecPtr(root).frame_locals = try store.addLocalSpan(&.{ root_n, list, root_zero });
 
     try lir.Trmc.run(&store, &layouts);
-    try std.testing.expectEqual(LIR.TailTransform.trmc, store.getProcSpec(repeat).tail_transform);
-    try std.testing.expectEqual(LIR.TailTransform.none, store.getProcSpec(root).tail_transform);
+    try std.testing.expectEqual(LIR.TailTransform.trmc, store.getProcSpecImmediate(repeat).tail_transform);
+    try std.testing.expectEqual(LIR.TailTransform.none, store.getProcSpecImmediate(root).tail_transform);
     try lir.Arc.insert(&store, &layouts, .{});
 
     const n: u64 = 50;
@@ -763,7 +763,7 @@ test "tce transforms the countdown shape and escapes the call-depth cap" {
     const count = try buildCountdownProc(allocator, &b, &store);
 
     try lir.Trmc.run(&store, &layouts);
-    try std.testing.expectEqual(LIR.TailTransform.tce, store.getProcSpec(count).tail_transform);
+    try std.testing.expectEqual(LIR.TailTransform.tce, store.getProcSpecImmediate(count).tail_transform);
     try std.testing.expect(!(try hasSelfCall(allocator, &store, count)));
     try lir.Arc.insert(&store, &layouts, .{});
 
@@ -840,7 +840,7 @@ test "tce loop-back copies swapped params through temps" {
     store.getProcSpecPtr(proc).tail_calls = tail_sites;
     store.tail_call_builder = null;
     try lir.Trmc.run(&store, &layouts);
-    try std.testing.expectEqual(LIR.TailTransform.tce, store.getProcSpec(proc).tail_transform);
+    try std.testing.expectEqual(LIR.TailTransform.tce, store.getProcSpecImmediate(proc).tail_transform);
     try lir.Arc.insert(&store, &layouts, .{});
 
     // Odd swap count returns the second argument; even returns the first.
@@ -992,7 +992,7 @@ test "mixed construct and plain-tail branches both become jumps" {
     store.getProcSpecPtr(proc).tail_calls = tail_sites;
     store.tail_call_builder = null;
     try lir.Trmc.run(&store, &layouts);
-    try std.testing.expectEqual(LIR.TailTransform.trmc, store.getProcSpec(proc).tail_transform);
+    try std.testing.expectEqual(LIR.TailTransform.trmc, store.getProcSpecImmediate(proc).tail_transform);
     try std.testing.expect(!(try hasSelfCall(allocator, &store, proc)));
     try lir.Arc.insert(&store, &layouts, .{});
 
@@ -1238,13 +1238,13 @@ test "tail eligibility distinguishes result uses and mutual recursion from share
 
     try lir.Trmc.run(&store, &layouts);
 
-    try std.testing.expectEqual(LIR.TailTransform.none, store.getProcSpec(used_twice).tail_transform);
+    try std.testing.expectEqual(LIR.TailTransform.none, store.getProcSpecImmediate(used_twice).tail_transform);
     try std.testing.expect(try hasSelfCall(allocator, &store, used_twice));
-    try std.testing.expectEqual(LIR.TailTransform.none, store.getProcSpec(not_returned).tail_transform);
-    try std.testing.expectEqual(LIR.TailTransform.none, store.getProcSpec(fib_like).tail_transform);
-    try std.testing.expectEqual(LIR.TailTransform.none, store.getProcSpec(mutual_a).tail_transform);
-    try std.testing.expectEqual(LIR.TailTransform.none, store.getProcSpec(mutual_b).tail_transform);
-    try std.testing.expectEqual(LIR.TailTransform.tce, store.getProcSpec(shared_tail).tail_transform);
+    try std.testing.expectEqual(LIR.TailTransform.none, store.getProcSpecImmediate(not_returned).tail_transform);
+    try std.testing.expectEqual(LIR.TailTransform.none, store.getProcSpecImmediate(fib_like).tail_transform);
+    try std.testing.expectEqual(LIR.TailTransform.none, store.getProcSpecImmediate(mutual_a).tail_transform);
+    try std.testing.expectEqual(LIR.TailTransform.none, store.getProcSpecImmediate(mutual_b).tail_transform);
+    try std.testing.expectEqual(LIR.TailTransform.tce, store.getProcSpecImmediate(shared_tail).tail_transform);
     try std.testing.expect(!(try hasSelfCall(allocator, &store, shared_tail)));
 }
 
@@ -1321,16 +1321,16 @@ test "tce has no site or forwarding-depth cap and preserves a shared base return
     const sites = try builder.finish(&store);
     store.getProcSpecPtr(proc).tail_calls = sites;
     store.tail_call_builder = null;
-    const frame_before = store.getProcSpec(proc).frame_locals;
+    const frame_before = store.getProcSpecImmediate(proc).frame_locals;
     const stmts_before = store.cfStmtCount();
     try lir.Trmc.run(&store, &layouts);
-    try std.testing.expectEqualDeep(frame_before, store.getProcSpec(proc).frame_locals);
+    try std.testing.expectEqualDeep(frame_before, store.getProcSpecImmediate(proc).frame_locals);
     // Each call row becomes a parameter write and needs only a fresh jump.
     // The loop entry adds one join and one jump, with no orphan heads.
     try std.testing.expectEqual(branches.len + 2, store.cfStmtCount() - stmts_before);
-    try std.testing.expectEqual(LIR.TailTransform.tce, store.getProcSpec(proc).tail_transform);
+    try std.testing.expectEqual(LIR.TailTransform.tce, store.getProcSpecImmediate(proc).tail_transform);
     try std.testing.expect(!(try hasSelfCall(allocator, &store, proc)));
-    try std.testing.expect(store.getCFStmt(ret) == .ret);
+    try std.testing.expect(store.getCFStmtImmediate(ret).* == .ret);
     try lir.Arc.insert(&store, &layouts, .{});
     try std.testing.expectEqual(@as(u64, 0), try runProcU64Args(allocator, &store, &layouts, proc, &runtime_env, &.{96}));
     try runtime_env.checkForLeaks();
@@ -1382,7 +1382,7 @@ test "tail-call proof rejects an intervening effect and a forwarding cycle" {
         try std.testing.expect(sites == null);
         store.tail_call_builder = null;
         try lir.Trmc.run(&store, &layouts);
-        try std.testing.expectEqual(LIR.TailTransform.none, store.getProcSpec(proc).tail_transform);
+        try std.testing.expectEqual(LIR.TailTransform.none, store.getProcSpecImmediate(proc).tail_transform);
         try std.testing.expect(try hasSelfCall(allocator, &store, proc));
     }
 }
@@ -1520,7 +1520,7 @@ test "tce parallel transfers preserve every small source graph" {
         const sites = try builder.finish(&store);
         store.getProcSpecPtr(proc).tail_calls = sites;
         store.tail_call_builder = null;
-        const frame_before = store.getProcSpec(proc).frame_locals;
+        const frame_before = store.getProcSpecImmediate(proc).frame_locals;
         const locals_before = store.localCount();
         try lir.Trmc.run(&store, &layouts);
         const has_cycle = (sources[0] == 1 and sources[1] == 0) or
@@ -1529,7 +1529,7 @@ test "tce parallel transfers preserve every small source graph" {
             (sources[0] == 1 and sources[1] == 2 and sources[2] == 0) or
             (sources[0] == 2 and sources[2] == 1 and sources[1] == 0);
         try std.testing.expectEqual(@as(usize, @intFromBool(has_cycle)), store.localCount() - locals_before);
-        const frame_after = store.getProcSpec(proc).frame_locals;
+        const frame_after = store.getProcSpecImmediate(proc).frame_locals;
         if (has_cycle) {
             const frame = store.getLocalSpan(frame_after);
             try std.testing.expectEqual(b.locals.items.len + 1, frame.len);
@@ -1676,8 +1676,8 @@ test "tce emits an identity loop directly into the original call" {
     try lir.Trmc.run(&store, &layouts);
     try std.testing.expectEqual(stmts_before + 2, store.cfStmtCount());
     try std.testing.expectEqualDeep(loc, store.stmtLoc(call));
-    const join = store.getCFStmt(store.getProcSpec(proc).body.?).join;
+    const join = store.getCFStmtImmediate(store.getProcSpecImmediate(proc).body.?).join;
     try std.testing.expectEqual(call, join.body);
-    try std.testing.expectEqual(join.id, store.getCFStmt(call).jump.target);
-    try std.testing.expect(store.getCFStmt(ret) == .ret);
+    try std.testing.expectEqual(join.id, store.getCFStmtImmediate(call).jump.target);
+    try std.testing.expect(store.getCFStmtImmediate(ret).* == .ret);
 }

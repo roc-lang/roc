@@ -65,6 +65,9 @@ const RowIdContext = struct {
 const RewriteKeys = struct {
     indices: std.HashMap(u32, u32, RowIdContext, std.hash_map.default_max_load_percentage),
     ids: std.ArrayList(u32) = .empty,
+    /// Whether `ids` is sorted, so a lookup is a binary search over it
+    /// rather than a hash probe. Set by `finish`, cleared by `prepare`.
+    sorted: bool = false,
 
     fn init(allocator: Allocator) RewriteKeys {
         return .{ .indices = std.HashMap(u32, u32, RowIdContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}) };
@@ -80,6 +83,7 @@ const RewriteKeys = struct {
         if (entry.found_existing) return false;
         entry.value_ptr.* = 0;
         try self.ids.append(allocator, id);
+        self.sorted = false;
         return true;
     }
 
@@ -88,10 +92,25 @@ const RewriteKeys = struct {
         for (self.ids.items, 0..) |id, dense_index| {
             self.indices.getPtr(id).?.* = @intCast(dense_index);
         }
+        self.sorted = true;
+    }
+
+    /// The dense position of `id` among the prepared ids, if prepared.
+    fn lookup(self: *const RewriteKeys, id: u32) ?u32 {
+        if (!self.sorted) return self.indices.get(id);
+        var low: usize = 0;
+        var high: usize = self.ids.items.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const candidate = self.ids.items[mid];
+            if (candidate == id) return @intCast(mid);
+            if (candidate < id) low = mid + 1 else high = mid;
+        }
+        return null;
     }
 
     fn index(self: *const RewriteKeys, start: u32, len: u32) ?u32 {
-        const first = self.indices.get(start) orelse return null;
+        const first = self.lookup(start) orelse return null;
         if (len > 1) {
             // Sorted unique IDs make endpoint equality sufficient to prove
             // every row of this span was prepared, without scanning it.
@@ -761,20 +780,18 @@ pub fn appendBodyShardWithJoinRelocation(
         self.string_builder.registerExistingAssumeCapacity(&self.strings, destination_id);
     }
     for (source.inline_scopes.unsafeRawItemsForView()[source_prefix.inline_scopes..]) |item| {
-        try self.inline_scopes.append(
-            self.allocator,
+        self.inline_scopes.appendAssumeCapacity(
             relocateBodyValue(InlineScope, item, prefix, bases),
         );
     }
     const local_ids = source.local_ids.unsafeRawItemsForView();
-    for (local_ids[source_prefix.local_ids..]) |item| try self.local_ids.append(self.allocator, relocateBodyValue(LocalId, item, prefix, bases));
-    try self.u64s.appendSlice(self.allocator, source.u64s.unsafeRawItemsForView()[source_prefix.u64s..]);
-    try self.u32s.appendSlice(self.allocator, source.u32s.unsafeRawItemsForView()[source_prefix.u32s..]);
-    for (source.erased_call_arg_plans.unsafeRawItemsForView()[source_prefix.erased_call_arg_plans..]) |item| try self.erased_call_arg_plans.append(self.allocator, relocateBodyValue(ErasedCallArgsPlan, item, prefix, bases));
-    for (source.locals.unsafeRawItemsForView()[source_prefix.locals..]) |item| try self.locals.append(self.allocator, relocateBodyValue(Local, item, prefix, bases));
+    for (local_ids[source_prefix.local_ids..]) |item| self.local_ids.appendAssumeCapacity(relocateBodyValue(LocalId, item, prefix, bases));
+    self.u64s.appendSliceAssumeCapacity(source.u64s.unsafeRawItemsForView()[source_prefix.u64s..]);
+    self.u32s.appendSliceAssumeCapacity(source.u32s.unsafeRawItemsForView()[source_prefix.u32s..]);
+    for (source.erased_call_arg_plans.unsafeRawItemsForView()[source_prefix.erased_call_arg_plans..]) |item| self.erased_call_arg_plans.appendAssumeCapacity(relocateBodyValue(ErasedCallArgsPlan, item, prefix, bases));
+    for (source.locals.unsafeRawItemsForView()[source_prefix.locals..]) |item| self.locals.appendAssumeCapacity(relocateBodyValue(Local, item, prefix, bases));
     for (source.local_names.unsafeRawItemsForView()[source_prefix.locals..]) |name| {
-        try self.local_names.append(
-            self.allocator,
+        self.local_names.appendAssumeCapacity(
             if (name == no_local_name)
                 no_local_name
             else
@@ -786,22 +803,20 @@ pub fn appendBodyShardWithJoinRelocation(
                 )),
         );
     }
-    for (source.cf_switch_branches.unsafeRawItemsForView()[source_prefix.cf_switch_branches..]) |item| try self.cf_switch_branches.append(self.allocator, relocateBodyValue(CFSwitchBranch, item, prefix, bases));
-    for (source.str_match_steps.unsafeRawItemsForView()[source_prefix.str_match_steps..]) |item| try self.str_match_steps.append(self.allocator, relocateBodyValue(StrMatchStep, item, prefix, bases));
-    for (source.str_match_arms.unsafeRawItemsForView()[source_prefix.str_match_arms..]) |item| try self.str_match_arms.append(self.allocator, relocateBodyValue(StrMatchArm, item, prefix, bases));
-    for (source.join_points.unsafeRawItemsForView()[source_prefix.join_points..]) |item| try self.join_points.append(self.allocator, relocateBodyValue(JoinPoint, item, prefix, bases));
-    for (source.cf_stmts.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |item| try self.cf_stmts.append(self.allocator, relocateBodyValue(CFStmt, item, prefix, bases));
-    try self.cf_stmt_locs.appendSlice(self.allocator, source.cf_stmt_locs.unsafeRawItemsForView()[source_prefix.cf_stmts..]);
-    try self.cf_stmt_regions.appendSlice(self.allocator, source.cf_stmt_regions.unsafeRawItemsForView()[source_prefix.cf_stmts..]);
+    for (source.cf_switch_branches.unsafeRawItemsForView()[source_prefix.cf_switch_branches..]) |item| self.cf_switch_branches.appendAssumeCapacity(relocateBodyValue(CFSwitchBranch, item, prefix, bases));
+    for (source.str_match_steps.unsafeRawItemsForView()[source_prefix.str_match_steps..]) |item| self.str_match_steps.appendAssumeCapacity(relocateBodyValue(StrMatchStep, item, prefix, bases));
+    for (source.str_match_arms.unsafeRawItemsForView()[source_prefix.str_match_arms..]) |item| self.str_match_arms.appendAssumeCapacity(relocateBodyValue(StrMatchArm, item, prefix, bases));
+    for (source.join_points.unsafeRawItemsForView()[source_prefix.join_points..]) |item| self.join_points.appendAssumeCapacity(relocateBodyValue(JoinPoint, item, prefix, bases));
+    for (source.cf_stmts.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |item| self.cf_stmts.appendAssumeCapacity(relocateBodyValue(CFStmt, item, prefix, bases));
+    self.cf_stmt_locs.appendSliceAssumeCapacity(source.cf_stmt_locs.unsafeRawItemsForView()[source_prefix.cf_stmts..]);
+    self.cf_stmt_regions.appendSliceAssumeCapacity(source.cf_stmt_regions.unsafeRawItemsForView()[source_prefix.cf_stmts..]);
     for (source.cf_stmt_inline_scopes.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |scope| {
-        try self.cf_stmt_inline_scopes.append(
-            self.allocator,
+        self.cf_stmt_inline_scopes.appendAssumeCapacity(
             relocateBodyValue(InlineScopeId, scope, prefix, bases),
         );
     }
     for (source.cf_stmt_origin_kinds.unsafeRawItemsForView()[source_prefix.cf_stmts..]) |kind| {
-        try self.cf_stmt_origin_kinds.append(
-            self.allocator,
+        self.cf_stmt_origin_kinds.appendAssumeCapacity(
             relocateBodyValue(OriginKind, kind, prefix, bases),
         );
     }
@@ -1144,7 +1159,7 @@ pub fn sourceFileModuleIdentity(self: *const Self, file: u32) [32]u8 {
 pub fn stmtLoc(self: *const Self, id: CFStmtId) base.SourceLoc {
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.keys.indices.get(index)) |private| {
+        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
             if (rewrite.cf_stmt_locs.owned(private)) return rewrite.cf_stmt_locs.rows.get(private);
         }
     }
@@ -1159,7 +1174,7 @@ pub fn stmtLoc(self: *const Self, id: CFStmtId) base.SourceLoc {
 pub fn stmtInlineScope(self: *const Self, id: CFStmtId) InlineScopeId {
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.keys.indices.get(index)) |private| {
+        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
             if (rewrite.cf_stmt_inline_scopes.owned(private)) return rewrite.cf_stmt_inline_scopes.rows.get(private);
         }
     }
@@ -1198,7 +1213,7 @@ pub fn addInlineScope(self: *Self, scope: InlineScope) Allocator.Error!InlineSco
 pub fn stmtRegion(self: *const Self, id: CFStmtId) base.Region {
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.keys.indices.get(index)) |private| {
+        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
             if (rewrite.cf_stmt_regions.owned(private)) return rewrite.cf_stmt_regions.rows.get(private);
         }
     }
@@ -1213,7 +1228,7 @@ pub fn stmtRegion(self: *const Self, id: CFStmtId) base.Region {
 pub fn stmtOriginKind(self: *const Self, id: CFStmtId) OriginKind {
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.keys.indices.get(index)) |private| {
+        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
             if (rewrite.cf_stmt_origin_kinds.owned(private)) return rewrite.cf_stmt_origin_kinds.rows.get(private);
         }
     }
@@ -1587,11 +1602,11 @@ pub fn addCFStmt(self: *Self, stmt: CFStmt, origin: StmtOrigin) Allocator.Error!
     try self.cf_stmt_regions.ensureUnusedCapacity(self.allocator, 1);
     try self.cf_stmt_inline_scopes.ensureUnusedCapacity(self.allocator, 1);
     try self.cf_stmt_origin_kinds.ensureUnusedCapacity(self.allocator, 1);
-    try self.cf_stmts.append(self.allocator, stmt);
-    try self.cf_stmt_locs.append(self.allocator, origin.loc);
-    try self.cf_stmt_regions.append(self.allocator, origin.region);
-    try self.cf_stmt_inline_scopes.append(self.allocator, origin.inline_scope);
-    try self.cf_stmt_origin_kinds.append(self.allocator, origin.kind);
+    self.cf_stmts.appendAssumeCapacity(stmt);
+    self.cf_stmt_locs.appendAssumeCapacity(origin.loc);
+    self.cf_stmt_regions.appendAssumeCapacity(origin.region);
+    self.cf_stmt_inline_scopes.appendAssumeCapacity(origin.inline_scope);
+    self.cf_stmt_origin_kinds.appendAssumeCapacity(origin.kind);
     self.noteStmtShapes(stmt);
     const id: CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(idx))));
     if (self.tail_call_builder) |builder| try builder.record(id, stmt);
@@ -1638,7 +1653,7 @@ pub fn getCFStmt(self: *const Self, id: CFStmtId) CFStmt {
     self.verifyCFStmtId(id);
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.keys.indices.get(index)) |private| {
+        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
             if (rewrite.cf_stmts.owned(private)) return rewrite.cf_stmts.data.rows.get(private);
         }
     }
@@ -1647,6 +1662,25 @@ pub fn getCFStmt(self: *const Self, id: CFStmtId) CFStmt {
         return self.cf_stmts.get(index - self.body_prefix.cf_stmts);
     }
     return self.cf_stmts.get(index);
+}
+
+/// A read-only pointer to the stored statement for the given id, which stays
+/// valid until a statement is next added or a rewrite next materializes. A
+/// caller that only switches on the statement reads it through this instead of
+/// copying the whole statement union out with `getCFStmt`.
+pub fn getCFStmtImmediate(self: *const Self, id: CFStmtId) *const CFStmt {
+    self.verifyCFStmtId(id);
+    const index = @backingInt(id);
+    if (self.proc_rewrite) |*rewrite| {
+        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
+            if (rewrite.cf_stmts.owned(private)) return rewrite.cf_stmts.data.rows.getPtrConstImmediate(private);
+        }
+    }
+    if (self.body_coordinator) |coordinator| {
+        if (index < self.body_prefix.cf_stmts) return coordinator.getCFStmtImmediate(id);
+        return self.cf_stmts.getPtrConstImmediate(index - self.body_prefix.cf_stmts);
+    }
+    return self.cf_stmts.getPtrConstImmediate(index);
 }
 
 /// Returns a mutable pointer to the stored statement for the given id.
@@ -1874,6 +1908,18 @@ pub fn setProcSpecBodyAndJoinPoints(self: *Self, idx: LirProcSpecId, body: ?CFSt
     proc.body = body;
     proc.join_points = join_points;
     proc.shapes = proc.shapes.merged(self.shapes);
+}
+
+/// A read-only pointer to the stored procedure specification, valid until a
+/// procedure is next added or a rewrite next materializes. A caller that reads
+/// a field or two goes through this instead of copying the whole
+/// specification out with `getProcSpec`.
+pub fn getProcSpecImmediate(self: *const Self, idx: LirProcSpecId) *const LirProcSpec {
+    if (self.proc_rewrite) |*rewrite| {
+        if (idx == rewrite.proc_id) return &rewrite.proc;
+    }
+    if (self.body_coordinator) |coordinator| return coordinator.getProcSpecImmediate(idx);
+    return self.proc_specs.getPtrConstImmediate(@backingInt(idx));
 }
 
 /// Returns a mutable pointer to the stored proc specification for the given id.

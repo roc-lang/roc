@@ -2425,6 +2425,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/backend/llvm/MonoLlvmCodeGen.zig"),
     });
     llvm_codegen_module.addImport("base", roc_modules.base);
+    llvm_codegen_module.addImport("collections", roc_modules.collections);
     llvm_codegen_module.addImport("layout", roc_modules.layout);
     llvm_codegen_module.addImport("backend", roc_modules.backend);
     llvm_codegen_module.addImport("lir", roc_modules.lir);
@@ -4160,6 +4161,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
             .imports = &.{
                 .{ .name = "base", .module = roc_modules.base },
+                .{ .name = "collections", .module = roc_modules.collections },
                 .{ .name = "backend", .module = roc_modules.backend },
                 .{ .name = "layout", .module = roc_modules.layout },
                 .{ .name = "lir", .module = roc_modules.lir },
@@ -5206,6 +5208,7 @@ fn buildBoxyRuntimeObject(
     boxy_eval_module.addImport("base", roc_modules.base);
     boxy_eval_module.addImport("layout", roc_modules.layout);
     boxy_eval_module.addImport("lir", roc_modules.lir);
+    boxy_eval_module.addImport("collections", roc_modules.collections);
     boxy_eval_module.addImport("builtins", roc_modules.builtins);
     boxy_eval_module.addImport("build_options", roc_modules.build_options);
 

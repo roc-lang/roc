@@ -711,7 +711,7 @@ test "ExportTable: serialize/deserialize round-trip preserves defs" {
     const defs = [_]CIR.Def.Idx{ @fromBackingInt(@intCast(3)), @fromBackingInt(@intCast(9)), @fromBackingInt(@intCast(17)), @fromBackingInt(@intCast(42)) };
     const table = ExportTable{ .defs = @constCast(&defs) };
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = base.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
     var writer = CompactWriter.init();
@@ -2823,19 +2823,56 @@ pub fn builtinRuntimeEncoding(builtin_nominal: CheckedBuiltinNominal) CheckedBui
 }
 
 /// Public `CheckedAliasType` declaration.
-pub const CheckedAliasType = struct {
-    name: canonical.TypeNameId,
-    /// Deep content identity of the declaring module (dense id into this
-    /// artifact's `canonical_names.module_identities`).
-    origin_module: canonical.ModuleIdentityId,
-    /// Checked module id of the artifact that owns this named type's checked
-    /// declaration data. This is intentionally separate from `origin_module`.
-    owner_module: ModuleId,
-    source_decl: ?u32 = null,
-    builtin_origin: bool = false,
-    backing: CheckedTypeId,
-    args: []const CheckedTypeId = &.{},
-};
+pub const CheckedAliasType = CheckedAliasTypeOf(*const ModuleId);
+
+/// The build form of `CheckedAliasType`, which owns its owner module id.
+pub const CheckedAliasTypeBuild = CheckedAliasTypeOf(ModuleId);
+
+fn CheckedAliasTypeOf(comptime OwnerModule: type) type {
+    return struct {
+        const Self = @This();
+
+        name: canonical.TypeNameId,
+        /// Deep content identity of the declaring module (dense id into this
+        /// artifact's `canonical_names.module_identities`).
+        origin_module: canonical.ModuleIdentityId,
+        /// Checked module id of the artifact that owns this named type's
+        /// checked declaration data. This is intentionally separate from
+        /// `origin_module`. A read form aliases the stored id, like its
+        /// slice fields alias pools; a build form owns it.
+        owner_module: OwnerModule,
+        source_decl: ?u32 = null,
+        builtin_origin: bool = false,
+        backing: CheckedTypeId,
+        args: []const CheckedTypeId = &.{},
+
+        /// A read form over this build form, aliasing its owner module id.
+        pub fn asRead(self: *const Self) CheckedAliasType {
+            return .{
+                .name = self.name,
+                .origin_module = self.origin_module,
+                .owner_module = &self.owner_module,
+                .source_decl = self.source_decl,
+                .builtin_origin = self.builtin_origin,
+                .backing = self.backing,
+                .args = self.args,
+            };
+        }
+
+        /// A build form holding this read form's fields.
+        pub fn toBuild(self: Self) CheckedAliasTypeBuild {
+            return .{
+                .name = self.name,
+                .origin_module = self.origin_module,
+                .owner_module = self.owner_module.*,
+                .source_decl = self.source_decl,
+                .builtin_origin = self.builtin_origin,
+                .backing = self.backing,
+                .args = self.args,
+            };
+        }
+    };
+}
 
 /// Public `CheckedNominalDeclarationId` declaration.
 pub const CheckedNominalDeclarationId = enum(u32) { _ };
@@ -2880,28 +2917,71 @@ pub const CheckedNominalRepresentationRef = union(enum) {
 };
 
 /// Public `CheckedNominalType` declaration.
-pub const CheckedNominalType = struct {
-    name: canonical.TypeNameId,
-    /// Deep content identity of the declaring module (dense id into this
-    /// artifact's `canonical_names.module_identities`).
-    origin_module: canonical.ModuleIdentityId,
-    /// Checked module id of the artifact that owns this named type's checked
-    /// declaration data. This is intentionally separate from `origin_module`.
-    owner_module: ModuleId,
-    source_decl: u32,
-    builtin: ?CheckedBuiltinNominal = null,
-    is_opaque: bool,
-    representation: CheckedNominalRepresentationRef,
-    args: []const CheckedTypeId = &.{},
-    /// Resolved types of the declaration's unnamed (`_` / `_name`) fields, in
-    /// declared order. These are layout padding, excluded from the backing row;
-    /// layout selection reserves `sizeof` of each. Empty for the common case of
-    /// a nominal with no unnamed fields.
-    padding_field_types: []const CheckedTypeId = &.{},
-    /// Source-declared field order for nominal record layout. Empty for
-    /// non-record nominal backings and for builtin nominals.
-    declared_fields: []const CheckedDeclaredField = &.{},
-};
+pub const CheckedNominalType = CheckedNominalTypeOf(*const ModuleId);
+
+/// The build form of `CheckedNominalType`, which owns its owner module id.
+pub const CheckedNominalTypeBuild = CheckedNominalTypeOf(ModuleId);
+
+fn CheckedNominalTypeOf(comptime OwnerModule: type) type {
+    return struct {
+        const Self = @This();
+
+        name: canonical.TypeNameId,
+        /// Deep content identity of the declaring module (dense id into this
+        /// artifact's `canonical_names.module_identities`).
+        origin_module: canonical.ModuleIdentityId,
+        /// Checked module id of the artifact that owns this named type's
+        /// checked declaration data. This is intentionally separate from
+        /// `origin_module`. A read form aliases the stored id, like its
+        /// slice fields alias pools; a build form owns it.
+        owner_module: OwnerModule,
+        source_decl: u32,
+        builtin: ?CheckedBuiltinNominal = null,
+        is_opaque: bool,
+        representation: CheckedNominalRepresentationRef,
+        args: []const CheckedTypeId = &.{},
+        /// Resolved types of the declaration's unnamed (`_` / `_name`)
+        /// fields, in declared order. These are layout padding, excluded from
+        /// the backing row; layout selection reserves `sizeof` of each. Empty
+        /// for the common case of a nominal with no unnamed fields.
+        padding_field_types: []const CheckedTypeId = &.{},
+        /// Source-declared field order for nominal record layout. Empty for
+        /// non-record nominal backings and for builtin nominals.
+        declared_fields: []const CheckedDeclaredField = &.{},
+
+        /// A read form over this build form, aliasing its owner module id.
+        pub fn asRead(self: *const Self) CheckedNominalType {
+            return .{
+                .name = self.name,
+                .origin_module = self.origin_module,
+                .owner_module = &self.owner_module,
+                .source_decl = self.source_decl,
+                .builtin = self.builtin,
+                .is_opaque = self.is_opaque,
+                .representation = self.representation,
+                .args = self.args,
+                .padding_field_types = self.padding_field_types,
+                .declared_fields = self.declared_fields,
+            };
+        }
+
+        /// A build form holding this read form's fields.
+        pub fn toBuild(self: Self) CheckedNominalTypeBuild {
+            return .{
+                .name = self.name,
+                .origin_module = self.origin_module,
+                .owner_module = self.owner_module.*,
+                .source_decl = self.source_decl,
+                .builtin = self.builtin,
+                .is_opaque = self.is_opaque,
+                .representation = self.representation,
+                .args = self.args,
+                .padding_field_types = self.padding_field_types,
+                .declared_fields = self.declared_fields,
+            };
+        }
+    };
+}
 
 fn checkedNominalTypeKey(nominal: CheckedNominalType) canonical.NominalTypeKey {
     return .{
@@ -2996,10 +3076,10 @@ pub const CheckedTypePayloadBuild = union(enum) {
     err,
     flex: CheckedTypeVariable,
     rigid: CheckedTypeVariable,
-    alias: CheckedAliasType,
+    alias: CheckedAliasTypeBuild,
     record: CheckedRecordType,
     tuple: []const CheckedTypeId,
-    nominal: CheckedNominalType,
+    nominal: CheckedNominalTypeBuild,
     function: CheckedFunctionType,
     empty_record,
     tag_union: CheckedTagUnionTypeBuild,
@@ -3096,25 +3176,28 @@ pub const StoredCheckedTypePayload = union(enum) {
 /// or `dupe` first (as `cloneCheckedTypeRootSubstituting` and `instantiateNominalBacking`
 /// do). `appendPool` asserts `!serialized` to mark that growth boundary.
 fn reconstructTypeData(comptime Live: type, pool_owner: anytype, stored: anytype) Live {
-    const Stored = @TypeOf(stored);
+    const Stored = @typeInfo(@TypeOf(stored)).pointer.child;
     const info = @typeInfo(Live);
     if (comptime Stored == Live) {
+        return stored.*;
+    } else if (comptime info == .pointer and info.pointer.size == .one and info.pointer.child == Stored) {
+        // A read form aliases the stored value rather than copying it.
         return stored;
     } else if (comptime Stored == CheckedTypeRange) {
         return storePool(pool_owner, info.pointer.child)[stored.start .. stored.start + stored.len];
     } else if (comptime Stored == OptionalVarNameId) {
-        return pool_owner.varName(stored);
+        return pool_owner.varName(stored.*);
     } else if (comptime info == .@"struct") {
         var live: Live = undefined;
         inline for (info.@"struct".field_names, info.@"struct".field_types) |name, FieldType| {
-            @field(live, name) = reconstructTypeData(FieldType, pool_owner, @field(stored, name));
+            @field(live, name) = reconstructTypeData(FieldType, pool_owner, &@field(stored.*, name));
         }
         return live;
     } else {
         inline for (comptime std.enums.values(std.meta.Tag(Live))) |tag| {
             const name = @tagName(tag);
-            if (stored == @field(std.meta.Tag(Stored), name)) {
-                return @unionInit(Live, name, reconstructTypeData(@FieldType(Live, name), pool_owner, @field(stored, name)));
+            if (stored.* == @field(std.meta.Tag(Stored), name)) {
+                return @unionInit(Live, name, reconstructTypeData(@FieldType(Live, name), pool_owner, &@field(stored.*, name)));
             }
         }
         unreachable;
@@ -3188,7 +3271,7 @@ pub const CheckedTypeStoreView = struct {
         if (index >= self.stored_payloads.len) {
             checkedArtifactInvariant("checked type payload id is out of range", .{});
         }
-        return reconstructTypeData(CheckedTypePayload, self, self.stored_payloads[index]);
+        return reconstructTypeData(CheckedTypePayload, self, &self.stored_payloads[index]);
     }
 
     /// Looks up a published checked type root by canonical source type key.
@@ -3621,7 +3704,7 @@ fn checkedTypePairEqlStep(
             const right_alias = right_payload.alias;
             if (left_alias.name != right_alias.name or
                 left_alias.origin_module != right_alias.origin_module or
-                !std.meta.eql(left_alias.owner_module, right_alias.owner_module) or
+                !std.meta.eql(left_alias.owner_module.*, right_alias.owner_module.*) or
                 left_alias.source_decl != right_alias.source_decl or
                 left_alias.builtin_origin != right_alias.builtin_origin or
                 !try appendCheckedTypePairs(allocator, pending, left_alias.args, right_alias.args))
@@ -3660,7 +3743,7 @@ fn checkedTypePairEqlStep(
             const right_nominal = right_payload.nominal;
             return left_nominal.name == right_nominal.name and
                 left_nominal.origin_module == right_nominal.origin_module and
-                std.meta.eql(left_nominal.owner_module, right_nominal.owner_module) and
+                std.meta.eql(left_nominal.owner_module.*, right_nominal.owner_module.*) and
                 left_nominal.source_decl == right_nominal.source_decl and
                 left_nominal.builtin == right_nominal.builtin and
                 left_nominal.is_opaque == right_nominal.is_opaque and
@@ -3965,11 +4048,11 @@ pub const CheckedTypeStore = struct {
     /// leaves unsubstituted (`reserveDistinctSyntheticTypeRoot`), so a
     /// consumer relating an instantiated callable's variables back to the
     /// scheme that quantifies them reads through `identityOrigin`.
-    identity_origins: std.AutoHashMapUnmanaged(CheckedTypeId, CheckedTypeId) = .empty,
+    identity_origins: collections.DenseMapUnmanaged(CheckedTypeId, CheckedTypeId) = .empty,
     /// Build-only set of every variable root filled through the synthetic
     /// path (`fillSyntheticTypeRoot`). Each must declare its origin in
     /// `identity_origins`; `identityOrigin` refuses one that has not.
-    synthetic_variable_roots: std.AutoHashMapUnmanaged(CheckedTypeId, void) = .empty,
+    synthetic_variable_roots: collections.DenseMapUnmanaged(CheckedTypeId, void) = .empty,
     roots: std.ArrayList(CheckedTypeRoot) = .empty,
     schemes: std.ArrayList(CheckedTypeScheme) = .empty,
     /// Serialized probing buckets contain scheme IDs, with zero denoting an
@@ -4064,7 +4147,7 @@ pub const CheckedTypeStore = struct {
         if (index >= self.payloads.items.len) {
             checkedArtifactInvariant("checked type payload id is out of range", .{});
         }
-        return reconstructTypeData(CheckedTypePayload, self, self.payloads.items[index]);
+        return reconstructTypeData(CheckedTypePayload, self, &self.payloads.items[index]);
     }
 
     /// Append `items` to the pool holding `T`, returning their range.
@@ -5242,17 +5325,18 @@ pub const CheckedTypeStore = struct {
         allocator: Allocator,
         stored: StoredCheckedTypePayload,
     ) Allocator.Error!CheckedTypePayloadBuild {
-        const read = reconstructTypeData(CheckedTypePayload, self, stored);
+        const read = reconstructTypeData(CheckedTypePayload, self, &stored);
         const tu = switch (read) {
             .tag_union => |tu| tu,
+            // Read forms alias their owner module id; the build form owns it.
+            .alias => |a| return .{ .alias = try dupeOwned(allocator, a.toBuild()) },
+            .nominal => |n| return .{ .nominal = try dupeOwned(allocator, n.toBuild()) },
             inline .pending,
             .err,
             .flex,
             .rigid,
-            .alias,
             .record,
             .tuple,
-            .nominal,
             .function,
             .empty_record,
             .empty_tag_union,
@@ -5852,7 +5936,7 @@ const DeclarationAnnoWalk = struct {
     const AliasBody = struct {
         statement: CIR.Statement.Idx,
         formals: []DeclarationFormal,
-        alias: CheckedAliasType,
+        alias: CheckedAliasTypeBuild,
     };
 
     fn deinit(self: *DeclarationAnnoWalk) void {
@@ -6259,7 +6343,7 @@ const DeclarationAnnoWalk = struct {
                 .alias = .{
                     .name = generic_alias.name,
                     .origin_module = generic_alias.origin_module,
-                    .owner_module = generic_alias.owner_module,
+                    .owner_module = generic_alias.owner_module.*,
                     .source_decl = generic_alias.source_decl,
                     .builtin_origin = generic_alias.builtin_origin,
                     .backing = undefined,
@@ -6277,7 +6361,7 @@ const DeclarationAnnoWalk = struct {
 
     /// Publish a walked alias expansion, which owns `alias.args`, and record
     /// it for every later reference at the same argument roots.
-    fn publishAliasExpansion(self: *DeclarationAnnoWalk, statement_idx: CIR.Statement.Idx, alias: CheckedAliasType) Allocator.Error!CheckedTypeId {
+    fn publishAliasExpansion(self: *DeclarationAnnoWalk, statement_idx: CIR.Statement.Idx, alias: CheckedAliasTypeBuild) Allocator.Error!CheckedTypeId {
         const scratch = &self.active.scratch.?;
         const key_args: []const CheckedTypeId = if (alias.args.len == 0) &.{} else scratch.allocator.dupe(CheckedTypeId, alias.args) catch |err| {
             self.allocator.free(alias.args);
@@ -6317,7 +6401,7 @@ fn appendInstantiatedNamedApplicationFromTemplate(
             break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .alias = .{
                 .name = alias.name,
                 .origin_module = alias.origin_module,
-                .owner_module = alias.owner_module,
+                .owner_module = alias.owner_module.*,
                 .source_decl = alias.source_decl,
                 .builtin_origin = alias.builtin_origin,
                 .backing = backing,
@@ -6349,7 +6433,7 @@ fn appendInstantiatedNamedApplicationFromTemplate(
             break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .nominal = .{
                 .name = nominal.name,
                 .origin_module = nominal.origin_module,
-                .owner_module = nominal.owner_module,
+                .owner_module = nominal.owner_module.*,
                 .source_decl = nominal.source_decl,
                 .builtin = nominal.builtin,
                 .is_opaque = nominal.is_opaque,
@@ -6870,7 +6954,7 @@ fn checkedTypePayloadBuildEqlStored(
             const right = stored.alias;
             break :blk left.name == right.name and
                 left.origin_module == right.origin_module and
-                CheckedModuleArtifactKey.eql(left.owner_module, right.owner_module) and
+                CheckedModuleArtifactKey.eql(left.owner_module, right.owner_module.*) and
                 left.source_decl == right.source_decl and
                 left.builtin_origin == right.builtin_origin and
                 left.backing == right.backing and
@@ -6890,7 +6974,7 @@ fn checkedTypePayloadBuildEqlStored(
             const right = stored.nominal;
             break :blk left.name == right.name and
                 left.origin_module == right.origin_module and
-                CheckedModuleArtifactKey.eql(left.owner_module, right.owner_module) and
+                CheckedModuleArtifactKey.eql(left.owner_module, right.owner_module.*) and
                 left.source_decl == right.source_decl and
                 left.builtin == right.builtin and
                 left.is_opaque == right.is_opaque and
@@ -7345,11 +7429,11 @@ const CheckedTypeKeyAdapter = struct {
                 }
                 try self.describeTagUnion(sink, null, tag_union.ext);
             },
+            .alias => |*alias| return try self.describeContent(sink, .{ .alias = alias.asRead() }),
+            .nominal => |*nominal| return try self.describeContent(sink, .{ .nominal = nominal.asRead() }),
             inline .pending,
             .err,
-            .alias,
             .tuple,
-            .nominal,
             .function,
             .empty_record,
             .empty_tag_union,
@@ -18242,7 +18326,7 @@ const EvidencePass = struct {
     /// Stable copies of enumerated semantic paths. Evidence resolution may
     /// recursively enumerate another scheme before finishing the current
     /// vector, so consumers cannot retain aliases into `enum_scratch`.
-    enumerated_path_arena: std.heap.ArenaAllocator,
+    enumerated_path_arena: base.SingleThreadArena,
     /// Scratch backing for the chain currently being resolved against.
     chain_scratch: std.ArrayList(ChainLevel),
     /// Per-plan / per-iterator-plan visited flags: a plan reachable from two
@@ -18333,7 +18417,7 @@ const EvidencePass = struct {
             .scheme_vars_pool = .empty,
             .site_substitutions = .empty,
             .enum_scratch = .{},
-            .enumerated_path_arena = std.heap.ArenaAllocator.init(allocator),
+            .enumerated_path_arena = base.SingleThreadArena.init(allocator),
             .chain_scratch = .empty,
         };
     }
@@ -23487,7 +23571,7 @@ const NestedProcSiteBuilder = struct {
     /// its own body does not bind.
     fn publishRuntimeCaptures(self: *NestedProcSiteBuilder, sites: []NestedProcSite) Allocator.Error![]CheckedCapture {
         const allocator = self.allocator;
-        var site_by_expr = std.AutoHashMapUnmanaged(CheckedExprId, u32){};
+        var site_by_expr = collections.DenseMapUnmanaged(CheckedExprId, u32){};
         defer site_by_expr.deinit(allocator);
         for (sites, 0..) |site, index| {
             const expr_id = site.checked_expr orelse continue;
@@ -26006,7 +26090,7 @@ fn dispatchSubstitutionStep(
             };
             if (target_nominal.name != plan_nominal.name or
                 target_nominal.origin_module != plan_nominal.origin_module or
-                !CheckedModuleArtifactKey.eql(target_nominal.owner_module, plan_nominal.owner_module) or
+                !CheckedModuleArtifactKey.eql(target_nominal.owner_module.*, plan_nominal.owner_module.*) or
                 target_nominal.source_decl != plan_nominal.source_decl or
                 target_nominal.builtin != plan_nominal.builtin or
                 target_nominal.args.len != plan_nominal.args.len)
@@ -26589,7 +26673,7 @@ pub const PlatformPairing = struct {
         }
 
         /// The arena owns the relocated buffer; the platform outlives this view.
-        pub fn install(self: *const Serialized, platform: *const CheckedModuleArtifact, arena: *std.heap.ArenaAllocator) CheckedModuleArtifact {
+        pub fn install(self: *const Serialized, platform: *const CheckedModuleArtifact, arena: *base.SingleThreadArena) CheckedModuleArtifact {
             const address = @intFromPtr(self);
             const allocator = arena.allocator();
             var result = platform.*;
@@ -26642,8 +26726,8 @@ pub fn pairCheckedPlatform(
 ) Allocator.Error!CheckedModuleArtifact {
     std.debug.assert(platform.evaluation_state == .finalized);
     std.debug.assert(platform.checking_context_identity.platform_app_relation == null);
-    const arena = try allocator.create(std.heap.ArenaAllocator);
-    arena.* = std.heap.ArenaAllocator.init(allocator);
+    const arena = try allocator.create(base.SingleThreadArena);
+    arena.* = base.SingleThreadArena.init(allocator);
     errdefer {
         arena.deinit();
         allocator.destroy(arena);
@@ -30451,7 +30535,7 @@ fn appendPublicApiTypeDependencies(
                 try appendPublicApiOwnerDependency(
                     allocator,
                     artifact_key,
-                    alias.owner_module,
+                    alias.owner_module.*,
                     imports,
                     available_artifacts,
                     keys,
@@ -30464,7 +30548,7 @@ fn appendPublicApiTypeDependencies(
                 try appendPublicApiOwnerDependency(
                     allocator,
                     artifact_key,
-                    nominal.owner_module,
+                    nominal.owner_module.*,
                     imports,
                     available_artifacts,
                     keys,
@@ -30994,12 +31078,12 @@ const LoweringVisibilityBuilder = struct {
             .err, .empty_record, .empty_tag_union => {},
             .flex, .rigid => |variable| for (variable.constraints) |constraint| try pending.append(gpa, constraint.fn_ty),
             .alias => |alias| {
-                try self.appendKey(alias.owner_module);
+                try self.appendKey(alias.owner_module.*);
                 try pending.append(gpa, alias.backing);
                 try pending.appendSlice(gpa, alias.args);
             },
             .nominal => |nominal| {
-                try self.appendKey(nominal.owner_module);
+                try self.appendKey(nominal.owner_module.*);
                 if (store.nominalBackingTemplateForPayload(nominal)) |backing| {
                     try pending.append(gpa, backing);
                 }
@@ -32656,7 +32740,7 @@ pub const CheckedModuleArtifact = struct {
     serialized_backing: ?[]align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 = null,
     serialized_backing_is_static: bool = false,
     /// Session-owned metadata overlay borrowing an immutable platform artifact.
-    pairing_arena: ?*std.heap.ArenaAllocator = null,
+    pairing_arena: ?*base.SingleThreadArena = null,
 
     pub fn owningAllocator(self: *const CheckedModuleArtifact) Allocator {
         return if (self.pairing_arena) |arena| arena.child_allocator else self.canonical_names.allocator;
@@ -35273,7 +35357,7 @@ const CheckedTypeStoreImportProjector = struct {
                 break :blk .{ .alias = .{
                     .name = name,
                     .origin_module = origin_module,
-                    .owner_module = alias.owner_module,
+                    .owner_module = alias.owner_module.*,
                     .source_decl = alias.source_decl,
                     .builtin_origin = alias.builtin_origin,
                     .backing = backing,
@@ -35323,7 +35407,7 @@ const CheckedTypeStoreImportProjector = struct {
                 break :blk .{ .nominal = .{
                     .name = name,
                     .origin_module = origin_module,
-                    .owner_module = nominal.owner_module,
+                    .owner_module = nominal.owner_module.*,
                     .source_decl = nominal.source_decl,
                     .builtin = nominal.builtin,
                     .is_opaque = nominal.is_opaque,
@@ -38221,7 +38305,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     });
 
     // Serialize → aligned buffer → deserialize.
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = base.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
     var writer = CW.init();
@@ -38356,7 +38440,7 @@ test "loop mutation plans preserve expect mode, dispatch operands, nesting, cond
     const operands = [_][]const CheckedExprId{ &.{}, &.{}, &.{}, &.{}, &.{}, &.{}, &.{}, &.{@fromBackingInt(@intCast(4))}, &.{}, &.{}, &.{}, &.{} };
     try CheckedLoopMutationPublisher.publish(gpa, &store, &operands);
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = base.SingleThreadArena.init(gpa);
     defer arena.deinit();
     var writer = CompactWriter.init();
     const header = try writer.appendAlloc(arena.allocator(), CheckedBodyStore.Serialized);
@@ -38451,7 +38535,7 @@ test "CheckedBodyStore: POD round-trip preserves exprs, paths, match branches, s
     try store.commitStringLiterals(gpa, &.{ "boom", "second" });
     store.stored_exprs.items[@backingInt(e0)].contains_diagnostic_error = true;
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = base.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
     var writer = CW.init();
@@ -38581,7 +38665,7 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
         .const_store = const_store_src,
     };
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = base.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
 
@@ -39704,7 +39788,7 @@ test "pairing type columns borrow frozen storage until written" {
     const duplicate = try source.reserveDistinctSyntheticTypeRoot(allocator, source.roots.items[0].key, false);
     try source.fillSyntheticTypeRoot(allocator, duplicate, .empty_record);
     try std.testing.expectEqual(root, source.rootForKey(source.roots.items[0].key).?);
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     var writer = CompactWriter.init();
     const header = try writer.appendAlloc(arena.allocator(), CheckedTypeStore.Serialized);

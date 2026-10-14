@@ -938,9 +938,9 @@ test "Monotype runtime demands snapshot pass-local compositional impossibility p
         "fn addExpr(self: *BodyContext",
         "fn addFieldExprSpan(",
     );
-    try expectContains(producers, "expr_impossibility_proofs.items[@backingInt(id)] = try self.exprDataImpossibilityProof");
-    try expectContains(producers, "pat_impossibility_proofs.items[@backingInt(id)] = try self.patDataImpossibilityProof");
-    try expectContains(producers, "stmt_impossibility_proofs.items[@backingInt(id)] = try self.stmtDataImpossibilityProof(stmt)");
+    try expectContains(producers, "expr_impossibility_proofs.set(@backingInt(id), try self.exprDataImpossibilityProof");
+    try expectContains(producers, "pat_impossibility_proofs.set(@backingInt(id), try self.patDataImpossibilityProof");
+    try expectContains(producers, "stmt_impossibility_proofs.set(@backingInt(id), try self.stmtDataImpossibilityProof(stmt))");
 
     const statement_frames = sourceSliceBetween(
         lower_source,

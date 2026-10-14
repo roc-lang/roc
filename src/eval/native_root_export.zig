@@ -6,6 +6,7 @@
 //! returns; the returned exports then own every reachable byte independently.
 
 const std = @import("std");
+const collections = @import("collections");
 const compilerInvariant = @import("base").invariant;
 const builtins = @import("builtins");
 const layout = @import("layout");
@@ -127,7 +128,7 @@ const Builder = struct {
     graph: frozen_graph.Graph(AllocationKey),
     callables: CallableResolver,
     jobs: std.ArrayList(Job) = .empty,
-    frozen_descriptors: std.AutoHashMapUnmanaged(Program.BoxyTypeDescId, Destination) = .empty,
+    frozen_descriptors: collections.DenseMapUnmanaged(Program.BoxyTypeDescId, Destination) = .empty,
 
     fn enqueue(self: *Builder, plan: Program.ConstPlanId, idx: layout.Idx, source: Value, dest: Destination, storage: Program.CaptureSlotStorage) Allocator.Error!void {
         try self.jobs.append(self.graph.allocator, .{ .plan = plan, .layout_idx = idx, .source = source, .dest = dest, .storage = storage });

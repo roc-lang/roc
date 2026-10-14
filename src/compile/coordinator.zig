@@ -3366,7 +3366,7 @@ pub const Coordinator = struct {
             return;
         };
         defer manager.allocator.free(directory);
-        var arena = std.heap.ArenaAllocator.init(manager.allocator);
+        var arena = base.SingleThreadArena.init(manager.allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
         var writer = CompactWriter.init();
@@ -3403,8 +3403,8 @@ pub const Coordinator = struct {
             manager.stats.recordInvalidation();
             return null;
         }
-        const arena = self.gpa.create(std.heap.ArenaAllocator) catch return null;
-        arena.* = std.heap.ArenaAllocator.init(self.gpa);
+        const arena = self.gpa.create(base.SingleThreadArena) catch return null;
+        arena.* = base.SingleThreadArena.init(self.gpa);
         var installed = false;
         defer if (!installed) {
             arena.deinit();
@@ -4933,7 +4933,7 @@ pub const Coordinator = struct {
     ) Allocator.Error![]const check.CheckedArtifact.PublishImportArtifact {
         var imports = std.ArrayList(check.CheckedArtifact.PublishImportArtifact).empty;
         errdefer imports.deinit(allocator);
-        var added_module_indices = std.AutoHashMap(u32, void).init(allocator);
+        var added_module_indices = collections.DenseMap(u32, void).init(allocator);
         defer added_module_indices.deinit();
 
         // buildTypecheckImportedEnvs always installs the compiler-owned Builtin
@@ -5310,21 +5310,22 @@ pub const Coordinator = struct {
 
     /// Resolve a module name to a path using a specific allocator
     fn resolveModulePathWithAllocator(_: *Coordinator, root_dir: []const u8, mod_name: []const u8, alloc: Allocator) Allocator.Error![]const u8 {
-        var buffer = std.ArrayList(u8).empty;
-        defer buffer.deinit(alloc);
+        // The relative path is a temporary of the join, so it starts on the stack.
+        var rel_buffer: [256]u8 = undefined;
+        var rel_state = std.heap.BufferFirstAllocator.init(&rel_buffer, alloc);
+        const rel_alloc = rel_state.allocator();
+        var rel = std.ArrayList(u8).empty;
+        defer rel.deinit(rel_alloc);
 
         var it = std.mem.splitScalar(u8, mod_name, '/');
         var first = true;
         while (it.next()) |part| {
-            if (!first) try buffer.appendSlice(alloc, std.fs.path.sep_str) else first = false;
-            try buffer.appendSlice(alloc, part);
+            if (!first) try rel.appendSlice(rel_alloc, std.fs.path.sep_str) else first = false;
+            try rel.appendSlice(rel_alloc, part);
         }
-        try buffer.appendSlice(alloc, ".roc");
+        try rel.appendSlice(rel_alloc, ".roc");
 
-        const rel = try buffer.toOwnedSlice(alloc);
-        defer alloc.free(rel);
-
-        return try std.fs.path.join(alloc, &.{ root_dir, rel });
+        return try std.fs.path.join(alloc, &.{ root_dir, rel.items });
     }
 
     /// Execute a parse task (pure function)
@@ -7710,7 +7711,7 @@ test "requires signature naming a for-clause alias resolves to the app declarati
         "Model",
         app_artifact.canonical_names.typeNameText(identity_payload.alias.name),
     );
-    try std.testing.expect(Coordinator.checkedArtifactKeyEql(identity_payload.alias.owner_module, app_artifact.key));
+    try std.testing.expect(Coordinator.checkedArtifactKeyEql(identity_payload.alias.owner_module.*, app_artifact.key));
 
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());

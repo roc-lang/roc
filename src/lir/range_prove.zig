@@ -182,16 +182,16 @@ test "range prove ordered procedure runs match whole-store constant arithmetic a
         }, .none);
         if (procedure_local) {
             for (0..store.procSpecCount()) |index| {
-                var scratch = std.heap.ArenaAllocator.init(testing.allocator);
+                var scratch = collections.SingleThreadArena.init(testing.allocator);
                 defer scratch.deinit();
                 try runProc(&store, &layouts, @fromBackingInt(@intCast(index)), scratch.allocator());
             }
         } else {
             try run(&store, &layouts);
         }
-        try testing.expectEqual(.num_int_add_proven_cannot_overflow, store.getCFStmt(add).assign_low_level.op);
-        try testing.expectEqual(noop_body, store.getProcSpec(noop).body.?);
-        try testing.expectEqual(arg, store.getCFStmt(noop_body).ret.value);
+        try testing.expectEqual(.num_int_add_proven_cannot_overflow, store.getCFStmtImmediate(add).assign_low_level.op);
+        try testing.expectEqual(noop_body, store.getProcSpecImmediate(noop).body.?);
+        try testing.expectEqual(arg, store.getCFStmtImmediate(noop_body).ret.value);
     }
 }
 
@@ -244,7 +244,7 @@ test "range prove retargets jumps inside unreached join bodies when threading a 
         .ret_layout = .u64,
     }, .none);
 
-    var scratch = std.heap.ArenaAllocator.init(testing.allocator);
+    var scratch = collections.SingleThreadArena.init(testing.allocator);
     defer scratch.deinit();
     try runProc(&store, &layouts, proc, scratch.allocator());
 
@@ -252,7 +252,7 @@ test "range prove retargets jumps inside unreached join bodies when threading a 
     defer join_ids.deinit();
     var jump_targets = std.ArrayList(LIR.JoinPointId).empty;
     defer jump_targets.deinit(testing.allocator);
-    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpec(proc).body.?, testing.allocator);
+    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpecImmediate(proc).body.?, testing.allocator);
     defer walk.deinit();
     while (try walk.next()) |stmt| {
         const cf = store.getCFStmt(stmt);
@@ -2154,7 +2154,7 @@ const Pass = struct {
                     // already known by the time the first jump appears.
                     if (count.value_ptr.* == 1) {
                         if (self.join_stmts.get(s.target)) |join_stmt| {
-                            const body = self.store.getCFStmt(join_stmt).join.body;
+                            const body = self.store.getCFStmtImmediate(join_stmt).join.body;
                             try self.body_joins.put(body, s.target);
                             if (!seen.contains(body)) try self.scratch.append(self.allocator, body);
                         }
@@ -2313,7 +2313,7 @@ const Pass = struct {
             if (seen.contains(item.stmt)) continue;
             try seen.put(item.stmt, {});
             if (item.join) |join_id| try self.enclosing_join.put(item.stmt, join_id);
-            switch (self.store.getCFStmt(item.stmt)) {
+            switch (self.store.getCFStmtImmediate(item.stmt).*) {
                 .join => |s| {
                     if (item.join) |outer| try self.join_parent.put(s.id, outer);
                     try stack.append(self.allocator, .{ .stmt = s.body, .join = s.id });
@@ -2463,13 +2463,13 @@ const Pass = struct {
         while (cursor < scan.stmts.items.len) : (cursor += 1) {
             const stmt = scan.stmts.items[cursor];
             successors.clearRetainingCapacity();
-            switch (self.store.getCFStmt(stmt)) {
+            switch (self.store.getCFStmtImmediate(stmt).*) {
                 .jump => |j| {
                     const target_stmt = self.join_stmts.get(j.target) orelse continue;
                     const entry = try scan.jumps_to.getOrPut(j.target);
                     if (!entry.found_existing) entry.value_ptr.* = .empty;
                     try entry.value_ptr.append(gpa, cursor);
-                    try successors.append(gpa, self.store.getCFStmt(target_stmt).join.body);
+                    try successors.append(gpa, self.store.getCFStmtImmediate(target_stmt).join.body);
                 },
                 .join => |j| try successors.append(gpa, j.remainder),
                 .init_uninitialized,
@@ -3148,7 +3148,7 @@ const Pass = struct {
             if (captures != self.jumpCount(join_id)) {
                 try self.seedMergeEnv(head);
                 if (self.join_stmts.get(join_id)) |join_stmt| {
-                    const join = self.store.getCFStmt(join_stmt).join;
+                    const join = self.store.getCFStmtImmediate(join_stmt).join;
                     const params = self.store.getLocalSpan(join.params);
                     for (0..GuardedList.borrowLen(params)) |i| {
                         const param = GuardedList.at(params, i);
@@ -3653,7 +3653,7 @@ const Pass = struct {
             // would sit pending, never assumed, and its admission would
             // ask for another round for nothing.
             const join_stmt = self.join_stmts.get(join_id) orelse continue;
-            const params = self.store.getLocalSpan(self.store.getCFStmt(join_stmt).join.params);
+            const params = self.store.getLocalSpan(self.store.getCFStmtImmediate(join_stmt).join.params);
             for (state.env.items) |meet| {
                 if (meet.field != null) continue;
                 var is_param = false;
@@ -4153,7 +4153,7 @@ const Pass = struct {
         defer structural_jumps.deinit(self.allocator);
         var structural_jumps_ready = false;
         for (self.joins_in_order.items) |join_stmt| {
-            const join = switch (self.store.getCFStmt(join_stmt)) {
+            const join = switch (self.store.getCFStmtImmediate(join_stmt).*) {
                 .join => |j| j,
                 .init_uninitialized,
                 .assign_ref,
@@ -4206,7 +4206,7 @@ const Pass = struct {
             const param = GuardedList.at(params, 0);
             if (self.localLayout(param) != .bool) continue;
 
-            const body_switch = switch (self.store.getCFStmt(join.body)) {
+            const body_switch = switch (self.store.getCFStmtImmediate(join.body).*) {
                 .switch_stmt => |sw| sw,
                 .init_uninitialized,
                 .assign_ref,
@@ -4306,7 +4306,7 @@ const Pass = struct {
                 if (record.target != join.id) continue;
                 // A site already rewritten for an earlier join no longer
                 // holds a jump; skip anything that changed shape.
-                switch (self.store.getCFStmt(record.stmt)) {
+                switch (self.store.getCFStmtImmediate(record.stmt).*) {
                     .jump => |jump| if (jump.target != join.id) continue,
                     .init_uninitialized,
                     .assign_ref,
@@ -4542,7 +4542,7 @@ const Pass = struct {
                 }
                 if (self.visited.contains(current)) break :walk;
 
-                switch (self.store.getCFStmt(current)) {
+                switch (self.store.getCFStmtImmediate(current).*) {
                     .assign_ref => |s| {
                         try self.visited.put(current, {});
                         switch (s.op) {
@@ -4685,7 +4685,7 @@ const Pass = struct {
                     .jump => |s| {
                         try self.visited.put(current, {});
                         if (self.join_stmts.get(s.target)) |join_stmt| {
-                            const join = self.store.getCFStmt(join_stmt).join;
+                            const join = self.store.getCFStmtImmediate(join_stmt).join;
                             if (self.jumpCount(s.target) == 1) {
                                 if (!self.visited.contains(join.body)) {
                                     // Sole entry into the join body: bindings
@@ -6219,14 +6219,14 @@ const RangeProveCertify = struct {
     /// Verify that the recorded edge is the False arm of the recorded
     /// overflow predicate's Bool switch.
     fn isFalseOverflowEdge(store: *const LirStore, fact: NoOverflowFact) bool {
-        const predicate_stmt = store.getCFStmt(fact.predicate.predicate_stmt);
-        if (std.meta.activeTag(predicate_stmt) != .assign_low_level) return false;
+        const predicate_stmt = store.getCFStmtImmediate(fact.predicate.predicate_stmt);
+        if (std.meta.activeTag(predicate_stmt.*) != .assign_low_level) return false;
         const predicate = predicate_stmt.assign_low_level;
         const entry = CheckedArithmetic.classify(predicate.op) orelse return false;
         if (entry.mode != .overflows or entry.operation != fact.predicate.operation) return false;
 
-        const switch_stmt = store.getCFStmt(fact.switch_stmt);
-        if (std.meta.activeTag(switch_stmt) != .switch_stmt) return false;
+        const switch_stmt = store.getCFStmtImmediate(fact.switch_stmt);
+        if (std.meta.activeTag(switch_stmt.*) != .switch_stmt) return false;
         const bool_switch = switch_stmt.switch_stmt;
         if (bool_switch.cond != predicate.target) return false;
 

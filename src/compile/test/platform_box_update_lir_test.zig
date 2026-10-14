@@ -188,7 +188,7 @@ fn countProc(
     unbox_proc: ?lir.LIR.LirProcSpecId,
     called_procs: ?*std.ArrayList(lir.LIR.LirProcSpecId),
 ) harness.LowerToLirHarnessError!Counts {
-    const body = store.getProcSpec(proc_id).body orelse return .{};
+    const body = store.getProcSpecImmediate(proc_id).body orelse return .{};
     var counts = Counts{};
     var work = std.ArrayList(lir.LIR.CFStmtId).empty;
     defer work.deinit(std.testing.allocator);

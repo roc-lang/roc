@@ -1348,7 +1348,7 @@ test "CanonicalNameStore: serialize/deserialize round-trip preserves names, ids,
     }));
 
     // Serialize via CompactWriter into a 16-byte-aligned buffer, then deserialize.
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = base.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
     var writer = collections.CompactWriter.init();

@@ -199,20 +199,12 @@ collapse two externally-bound identities into one.
 
 ### Representation Capacity
 
-A program that passes checking builds. No stage after parsing rejects or
-crashes on a program because it exceeds a width the compiler chose
-internally. Every count, index, position, offset, and value that grows with
-the size of the program is at least 32 bits wide in every stage: tag variant
-indices and discriminant values, discriminant offsets, record and tuple field
-indices, tag payload indices, span lengths, stack argument offsets and sizes,
-and refcount counts. Discriminant locals are `U32`, which holds every
-discriminant width a layout commits.
-
-Converting a host-sized count into one of these widths is checked, and a
-count past the 32-bit range returns `error.OutOfMemory`. Reaching that range
-takes billions of stored entries, so the compiler has exhausted the memory
-it can represent, which is the same failure as an allocation returning null.
-The identifier store's 29-bit ids follow the same rule.
+Every count, index, position, offset, and value that grows with the size of
+the program is wide enough that real programs do not reach its limit; each
+field's width is chosen for that field. Converting a host-sized count into one
+of these widths is checked, and a count past the field's range returns
+`error.OutOfMemory`, the same failure as an allocation returning null. No
+stage narrows such a count unchecked.
 
 A walk along a chain in a store (alias and wrapper chains, row extensions,
 descriptor extensions) is bounded by that store's entry count: a longer walk
@@ -2077,6 +2069,25 @@ lexical scope. Candidate views are scoped to the specialization pass and keep
 only source-owned identities, so speculative output rewinds cannot invalidate
 them. This avoids cloning a shared initializer at each use while preserving
 constructor evidence for field reads and specialization.
+
+A candidate's parts are candidates too. While Monotype restores a candidate
+whose value is a record, tuple, tag, or nominal, every non-empty list or box
+reachable from it through constructor edges alone restores as its own
+candidate nested in the enclosing candidate's runtime expression
+(`restoredStaticDataPart`), identified by its own stored node under the
+enclosing candidate's checked type. The constructor view reaches such a part
+as a candidate, so a field read, tuple read, or pattern binding that
+SpecConstr resolves through the enclosing value materializes the part's static
+data rather than its runtime construction, which would rebuild a non-empty
+list or a box on the heap at the read. The enclosing candidate's initializer
+lowers the nested candidate as its runtime expression, so the frozen bytes of
+the whole value are unchanged. Items of a list and the payload of a box are
+not parts: no constructor view reaches into them. A part reads no binding of a
+node enclosing it, because the enclosing candidate's stable representation
+leaves its node graph acyclic. A build that restores a constant from the
+const store therefore allocates for a read of a constant's part exactly as a
+build continuing its host's frozen image does, where the part is a read of
+the frozen value.
 
 Compile-time evaluation is allowed to fail with user diagnostics only during
 checking. After checking, stored constant data is ordinary checked output. A
@@ -6753,6 +6764,16 @@ through the context's leaf scope, which a bound role names its boundary cell
 in, so a leaf read later reaches that cell exactly as the eager
 instantiation's memo would have. A contract relating a nested shape to its
 boundary therefore reads only the levels that differ, not the whole shape.
+Generated-call roles are selected by their subject's class, and a closed
+subject joins the boundary component it denotes only when a class holding
+both is read, so instantiating a contract reads its boundary shape down to
+its nested codec boundaries: every subject is then one class with its
+occurrence, however the derived body later reaches that occurrence. The
+read stops at an occurrence a nested boundary call names, since that
+boundary's components are the subjects of the contract it activates. A
+graph instantiates a contract at boundary classes it has already
+instantiated it at once: nested bodies of one derived codec share that
+instantiation unless it consulted enclosing evidence.
 Queued specialization contexts retain both the constructor and the explicit
 public value shape. Both participate in specialization identity. A constructor
 may use the structural generated-body representation, so restoring the contract
@@ -10326,7 +10347,7 @@ Constraint creation records the innermost prospective scheme root as the exact
 owner. The owner belongs to the relation, keyed by its constraint callable
 where the relation is minted or copied: resolving it (selecting and
 instantiating its method target, or deriving a structural comparison's
-component obligations) runs under that owner, whichever later unification
+component requirements) runs under that owner, whichever later unification
 grounds its receiver and whichever boundary's checking drains its queue entry.
 Work a relation causes after its owner's boundary has captured belongs to the
 innermost enclosing root still prospective, or to none. At the owner's
@@ -20000,7 +20021,7 @@ order of its structural depth-first walk. The classification scan visits those
 lists, last procedure first, skipping statements it has already classified,
 which is exactly the order of one depth-first walk from every procedure body.
 Every per-statement input of the whole-store passes (explicit join-cell
-initializations, projection and ownership-place edges, and direct calls)
+initializations, field-read and ownership-place edges, and direct calls)
 depends only on its own statement. These inputs are gathered
 in fixed-width statement-id ranges as executor tasks and concatenated in range
 order, so the coordinator sees them in ascending statement order. The place

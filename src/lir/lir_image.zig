@@ -65,7 +65,9 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v43: Boxy type descriptors record rejected `is_eq` and `to_hash` declarations.
 /// v44: LowLevel ops, `CFStmt` kinds, Boxy descriptor references, and Boxy
 ///      side tables carry only what lowering produces.
-pub const FORMAT_VERSION: u32 = 44;
+/// v45: layout representation fields are sized for practice, and resolved list
+///      layouts are plain layout indices.
+pub const FORMAT_VERSION: u32 = 45;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -353,7 +355,7 @@ pub const LayoutStoreImage = extern struct {
         return .{
             .allocator = allocator,
             .layouts = try safeListFromRef(layout_mod.Layout, base_ptr, image_size, self.layouts),
-            .resolved_list_layouts = try arrayListFromRef(?layout_mod.Idx, base_ptr, image_size, self.resolved_list_layouts),
+            .resolved_list_layouts = try arrayListFromRef(layout_mod.Idx, base_ptr, image_size, self.resolved_list_layouts),
             .tuple_elems = try safeListFromRef(layout_mod.Idx, base_ptr, image_size, self.tuple_elems),
             .struct_fields = struct_fields,
             .struct_field_offsets = try safeListFromRef(layout_mod.WidthValues(u32), base_ptr, image_size, self.struct_field_offsets),
@@ -361,7 +363,8 @@ pub const LayoutStoreImage = extern struct {
             .struct_data = try safeListFromRef(layout_mod.StructData, base_ptr, image_size, self.struct_data),
             .tag_union_variants = tag_union_variants,
             .tag_union_data = try safeListFromRef(layout_mod.TagUnionData, base_ptr, image_size, self.tag_union_data),
-            .interned_layouts = std.StringHashMap(layout_mod.Idx).init(allocator),
+            .interned_layouts = .empty,
+            .interned_key_bytes = .empty,
             .scratch_intern_key = .empty,
             .interned_recursive_graphs = layout_mod.Store.RecursiveGraphMap.init(allocator),
             .recursive_unfoldings = .empty,
@@ -698,7 +701,7 @@ fn serializeSidecarInto(
     const layouts: layout_mod.Store = .{
         .allocator = gpa,
         .layouts = try cloneSafeList(layout_mod.Layout, gpa, lowered.layouts.layouts),
-        .resolved_list_layouts = try cloneStdArrayList(?layout_mod.Idx, gpa, lowered.layouts.resolved_list_layouts),
+        .resolved_list_layouts = try cloneStdArrayList(layout_mod.Idx, gpa, lowered.layouts.resolved_list_layouts),
         .tuple_elems = try cloneSafeList(layout_mod.Idx, gpa, lowered.layouts.tuple_elems),
         .struct_fields = try cloneStructFields(gpa, &lowered.layouts.struct_fields),
         .struct_field_offsets = try cloneSafeList(layout_mod.WidthValues(u32), gpa, lowered.layouts.struct_field_offsets),
@@ -706,7 +709,8 @@ fn serializeSidecarInto(
         .struct_data = try cloneSafeList(layout_mod.StructData, gpa, lowered.layouts.struct_data),
         .tag_union_variants = try cloneTagUnionVariants(gpa, &lowered.layouts.tag_union_variants),
         .tag_union_data = try cloneSafeList(layout_mod.TagUnionData, gpa, lowered.layouts.tag_union_data),
-        .interned_layouts = std.StringHashMap(layout_mod.Idx).init(gpa),
+        .interned_layouts = .empty,
+        .interned_key_bytes = .empty,
         .scratch_intern_key = .empty,
         .interned_recursive_graphs = layout_mod.Store.RecursiveGraphMap.init(gpa),
         .recursive_unfoldings = .empty,
@@ -796,7 +800,7 @@ comptime {
     // null or empty in views. The layout store's `digest_cache` is a memo
     // each view starts empty.
     std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 35);
-    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 16);
+    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 17);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".field_names.len == 1);
 
     // The header is authored field by field in image storage and is part of a
@@ -998,7 +1002,8 @@ pub fn viewMappedImageWithAllocator(
 fn deinitViewedLayouts(layouts: *layout_mod.Store, allocator: std.mem.Allocator) void {
     layouts.struct_fields.deinit(allocator);
     layouts.tag_union_variants.deinit(allocator);
-    layouts.interned_layouts.deinit();
+    layouts.interned_layouts.deinit(allocator);
+    layouts.interned_key_bytes.deinit(allocator);
     layouts.digest_cache.destroy(allocator);
 }
 
@@ -1285,8 +1290,8 @@ test "LIR image views empty and populated boxy tables" {
     try std.testing.expectEqual(layout_mod.Idx.str, populated_view.layouts.struct_fields.fieldItem(.layout, struct_field_idx));
     try std.testing.expect(populated_view.layouts.struct_fields.fieldItem(.is_padding, struct_field_idx));
     try std.testing.expectEqual(layout_mod.Idx.u64, populated_view.layouts.tag_union_variants.fieldItem(.payload_layout, tag_variant_idx));
-    try std.testing.expectEqual(LIR.BoxyDescRef{ .local = ret_desc_local }, populated_view.store.getProcSpec(proc_id).ret_desc.?);
-    try std.testing.expectEqual(@as(u64, 7), populated_view.store.getProcSpec(proc_id).native_code_revision);
+    try std.testing.expectEqual(LIR.BoxyDescRef{ .local = ret_desc_local }, populated_view.store.getProcSpecImmediate(proc_id).ret_desc.?);
+    try std.testing.expectEqual(@as(u64, 7), populated_view.store.getProcSpecImmediate(proc_id).native_code_revision);
 }
 
 // Regression for issue #11153: folded scalar lists share the literal store,
@@ -1451,11 +1456,11 @@ test "persisted image bytes do not depend on what store memory held before" {
         // The canonical image still holds the values the store holds.
         var view = try viewMappedImageWithAllocator(header, buffer.ptr, fba.end_index, .u64, gpa);
         defer view.deinit();
-        try std.testing.expectEqual(local, view.store.getCFStmt(ret).ret.value);
+        try std.testing.expectEqual(local, view.store.getCFStmtImmediate(ret).ret.value);
         try std.testing.expectEqual(layout_mod.Idx.u64, view.store.getLocal(local).layout_idx);
         try std.testing.expectEqual(@as(?LIR.BoxyDescRef, null), view.store.getLocal(local).boxy_desc);
-        try std.testing.expectEqual(@as(?LIR.CFStmtId, ret), view.store.getProcSpec(proc).body);
-        try std.testing.expectEqual(name, view.store.getProcSpec(proc).name);
+        try std.testing.expectEqual(@as(?LIR.CFStmtId, ret), view.store.getProcSpecImmediate(proc).body);
+        try std.testing.expectEqual(name, view.store.getProcSpecImmediate(proc).name);
         try std.testing.expectEqual(proc, view.root_procs[0]);
 
         images[built] = try gpa.alignedAlloc(u8, .@"16", fba.end_index);
@@ -1533,7 +1538,7 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
         try worker.setLocalName(local, name);
         const string = try worker.insertString(name);
         const inline_scope = try worker.addInlineScope(.{
-            .source_symbol = store.getProcSpec(procs[0]).name,
+            .source_symbol = store.getProcSpecImmediate(procs[0]).name,
             .source_name = string,
             .source_loc = shard_loc,
             .call_site = .{ .file = 1, .line = 4, .column = 5 },
@@ -1556,10 +1561,10 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
     try std.testing.expectEqual(prefix.locals + 2, store.captureBodyPrefix().locals);
     try std.testing.expectEqual(prefix.cf_stmts + 2, store.captureBodyPrefix().cf_stmts);
     for (roots, 0..) |root, index| {
-        const assign = store.getCFStmt(root).assign_ref;
+        const assign = store.getCFStmtImmediate(root).assign_ref;
         try std.testing.expectEqual(prefix.locals + index, @backingInt(assign.target));
         try std.testing.expectEqual(prefix.cf_stmts + index, @backingInt(assign.next));
-        try std.testing.expectEqual(assign.target, store.getCFStmt(assign.next).ret.value);
+        try std.testing.expectEqual(assign.target, store.getCFStmtImmediate(assign.next).ret.value);
     }
 
     const buffer = try gpa.alignedAlloc(u8, .@"16", 1 << 20);
@@ -1583,7 +1588,7 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
     try std.testing.expectEqual(lowered.layouts.layoutCount(), view.layouts.layoutCount());
     try std.testing.expectEqualSlices(u8, std.mem.sliceAsBytes(lowered.layouts.layouts.items.items), std.mem.sliceAsBytes(view.layouts.layouts.items.items));
     for (roots, [_][]const u8{ "first", "second" }) |root, name| {
-        const assign = view.store.getCFStmt(root).assign_ref;
+        const assign = view.store.getCFStmtImmediate(root).assign_ref;
         try std.testing.expectEqual(pointer_layout, view.store.getLocal(assign.target).layout_idx);
         try std.testing.expectEqualDeep(lowered.layouts.getLayout(pointer_layout), view.layouts.getLayout(pointer_layout));
         const scope = view.store.inlineScope(view.store.stmtInlineScope(assign.next));
@@ -1598,7 +1603,7 @@ test "LIR image copies and round-trips every populated store field" {
     // Build the compiler result outside the image buffer so this test proves
     // copying transfers every mapped field instead of retaining source
     // pointers.
-    var source_arena = std.heap.ArenaAllocator.init(gpa);
+    var source_arena = base.SingleThreadArena.init(gpa);
     defer source_arena.deinit();
     const source_allocator = source_arena.allocator();
 
@@ -1691,7 +1696,7 @@ test "LIR image copies and round-trips every populated store field" {
     var layouts = layout_mod.Store{
         .allocator = gpa,
         .layouts = try h.safeList(layout_mod.Layout, source_allocator, 3, 0x40),
-        .resolved_list_layouts = .{ .items = try h.distinct(?layout_mod.Idx, source_allocator, 4, 0x50), .capacity = 4, .pointer_stability = .{} },
+        .resolved_list_layouts = .{ .items = try h.distinct(layout_mod.Idx, source_allocator, 4, 0x50), .capacity = 4, .pointer_stability = .{} },
         .tuple_elems = try h.safeList(layout_mod.Idx, source_allocator, 5, 0x60),
         .struct_fields = try h.multiList(layout_mod.StructField, source_allocator, 6, 0x70),
         .struct_field_offsets = try h.safeList(layout_mod.WidthValues(u32), source_allocator, 6, 0x74),
@@ -1700,6 +1705,7 @@ test "LIR image copies and round-trips every populated store field" {
         .tag_union_variants = try h.multiList(layout_mod.TagUnionVariant, source_allocator, 8, 0x88),
         .tag_union_data = try h.safeList(layout_mod.TagUnionData, source_allocator, 9, 0xa0),
         .interned_layouts = undefined,
+        .interned_key_bytes = undefined,
         .scratch_intern_key = undefined,
         .interned_recursive_graphs = undefined,
         .recursive_unfoldings = undefined,

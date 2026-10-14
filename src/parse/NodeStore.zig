@@ -173,8 +173,6 @@ const Slot = enum {
     rhs,
     /// A span: its start in `lhs` and its length in `rhs`.
     span,
-    /// The field's word is appended to extra_data and its index stored in `main_token`.
-    main_token_extra,
     /// A span appended to extra_data as start then length, with its index stored in `rhs`.
     rhs_extra_span,
 };
@@ -193,10 +191,6 @@ fn slotNode(store: *NodeStore, comptime shape: anytype, value: anytype) std.mem.
             .lhs => node.data.lhs = try store.encodeSlotWord(field),
             .rhs => node.data.rhs = try store.encodeSlotWord(field),
             .span => node.data = .{ .lhs = field.span.start, .rhs = field.span.len },
-            .main_token_extra => {
-                node.main_token = @intCast(store.extra_data.items.len);
-                try store.extra_data.append(store.gpa, try store.encodeSlotWord(field));
-            },
             .rhs_extra_span => {
                 node.data.rhs = @intCast(store.extra_data.items.len);
                 try store.extra_data.appendSlice(store.gpa, &.{ field.span.start, field.span.len });
@@ -231,7 +225,6 @@ fn slotStruct(store: *const NodeStore, comptime V: type, comptime slots: anytype
                 .lhs => store.decodeSlotWord(T, node.data.lhs),
                 .rhs => store.decodeSlotWord(T, node.data.rhs),
                 .span => .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
-                .main_token_extra => store.decodeSlotWord(T, store.extra_data.items[node.main_token]),
                 .rhs_extra_span => .{ .span = .{
                     .start = store.extra_data.items[node.data.rhs],
                     .len = store.extra_data.items[node.data.rhs + 1],
@@ -542,8 +535,13 @@ pub fn addNumericLiteral(
     text: []const u8,
     kind: NumericLiteral.Kind,
 ) std.mem.Allocator.Error!NumericLiteral.Idx {
-    const parsed = try NumericLiteral.parse(store.gpa, text, kind);
-    defer parsed.deinit(store.gpa);
+    // The parse's digit buffers die here once copied into the store, so the
+    // usual literal parses entirely on this frame.
+    var parse_buffer: [1024]u8 align(@alignOf(usize)) = undefined;
+    var parse_state = std.heap.BufferFirstAllocator.init(&parse_buffer, store.gpa);
+    const parse_allocator = parse_state.allocator();
+    const parsed = try NumericLiteral.parse(parse_allocator, text, kind);
+    defer parsed.deinit(parse_allocator);
 
     const digits_start: u32 = @intCast(store.numeric_literal_bytes.items.len);
     try store.numeric_literal_bytes.appendSlice(store.gpa, parsed.before);
@@ -921,9 +919,10 @@ pub fn addPattern(store: *NodeStore, pattern: AST.Pattern) std.mem.Allocator.Err
             try store.extra_data.append(store.gpa, t.args.span.len);
             try store.extra_data.append(store.gpa, t.qualifiers.span.start);
             try store.extra_data.append(store.gpa, t.qualifiers.span.len);
-            try store.extra_data.append(store.gpa, @intFromBool(t.backing_value));
-            try store.extra_data.append(store.gpa, @intFromBool(t.has_args));
-            try store.extra_data.append(store.gpa, @intFromBool(t.record_shorthand));
+            // One word of flags: backing value, has args, record shorthand.
+            try store.extra_data.append(store.gpa, @as(u32, @intFromBool(t.backing_value)) |
+                (@as(u32, @intFromBool(t.has_args)) << 1) |
+                (@as(u32, @intFromBool(t.record_shorthand)) << 2));
 
             node.tag = .tag_patt;
             node.region = t.region;
@@ -975,8 +974,8 @@ const expr_shapes = .{
     .typed_multiline_string = .{ .typed_multiline_string, .{ .token = .main_token, .type_suffix = .lhs, .parts = .rhs_extra_span } },
     .list = .{ .list, .{ .items = .span } },
     .tuple = .{ .tuple, .{ .items = .span } },
-    .lambda = .{ .lambda, .{ .args = .span, .body = .main_token_extra } },
-    .apply = .{ .apply, .{ .args = .span, .@"fn" = .main_token_extra } },
+    .lambda = .{ .lambda, .{ .args = .span, .body = .main_token } },
+    .apply = .{ .apply, .{ .args = .span, .@"fn" = .main_token } },
     .record_updater = .{ .record_update, .{ .token = .main_token } },
     .method_call = .{ .method_call, .{ .receiver = .lhs, .method_token = .main_token, .args = .rhs_extra_span } },
     .tuple_access = .{ .tuple_access, .{ .expr = .lhs, .elem_token = .main_token } },
@@ -984,7 +983,7 @@ const expr_shapes = .{
     .suffix_single_question = .{ .suffix_single_question, .{ .operator = .main_token, .expr = .lhs } },
     .unary_op = .{ .unary_op, .{ .operator = .main_token, .expr = .lhs } },
     .if_without_else = .{ .if_without_else, .{ .condition = .lhs, .then = .rhs } },
-    .match = .{ .match, .{ .expr = .main_token_extra, .branches = .span } },
+    .match = .{ .match, .{ .expr = .main_token, .branches = .span } },
     .dbg = .{ .dbg, .{ .expr = .lhs } },
     .crash = .{ .crash, .{ .expr = .lhs } },
     .nominal_record = .{ .nominal_record, .{ .mapper = .lhs, .backing = .rhs } },
@@ -1433,21 +1432,23 @@ pub fn addOrExtendFieldAccess(
     region: AST.TokenizedRegion,
 ) std.mem.Allocator.Error!AST.Expr.Idx {
     const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(receiver)));
-    var receiver_node = store.nodes.get(node_idx);
+    const node_index = @backingInt(node_idx);
 
-    if (receiver_node.tag == .field_access) {
-        const segment_start: usize = receiver_node.data.rhs;
-        const segment_len: usize = receiver_node.main_token;
+    if (store.nodes.fieldItem(.tag, node_idx) == .field_access) {
+        // Extending the open tail updates only the segment count and the end.
+        const main_tokens = store.nodes.field(.main_token);
+        const regions = store.nodes.field(.region);
+        const segment_start: usize = store.nodes.fieldItem(.data, node_idx).rhs;
+        const segment_len: usize = main_tokens[node_index];
         const path_is_open_tail = segment_len <= store.field_access_segments.items.len and
             segment_start == store.field_access_segments.items.len - segment_len and
-            receiver_node.region.start == region.start;
+            regions[node_index].start == region.start;
 
         if (path_is_open_tail) {
-            if (receiver_node.main_token == std.math.maxInt(u32)) return error.OutOfMemory;
+            if (main_tokens[node_index] == std.math.maxInt(u32)) return error.OutOfMemory;
             try store.field_access_segments.append(store.gpa, segment);
-            receiver_node.main_token += 1;
-            receiver_node.region.end = region.end;
-            store.nodes.set(node_idx, receiver_node);
+            main_tokens[node_index] += 1;
+            regions[node_index].end = region.end;
             return receiver;
         }
     }
@@ -1735,6 +1736,22 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
     }
 }
 
+/// The identifier token of an identifier pattern, or null for any other
+/// pattern, read without rebuilding the pattern.
+pub fn patternIdentToken(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) ?Token.Idx {
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(pattern_idx)));
+    if (store.nodes.fieldItem(.tag, node_idx) != .ident_patt) return null;
+    return store.nodes.fieldItem(.main_token, node_idx);
+}
+
+/// The argument count of a lambda expression, or null for any other
+/// expression, read without rebuilding the expression.
+pub fn exprLambdaArity(store: *const NodeStore, expr_idx: AST.Expr.Idx) ?u32 {
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
+    if (store.nodes.fieldItem(.tag, node_idx) != .lambda) return null;
+    return store.nodes.fieldItem(.data, node_idx).rhs;
+}
+
 /// Retrieves pattern data from a stored pattern node, reconstructing the appropriate pattern type.
 pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pattern {
     const node = store.nodes.get(@fromBackingInt(@intCast(@backingInt(pattern_idx))));
@@ -1749,9 +1766,10 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: AST.Pattern.Idx) AST.Pat
             const args_len = store.extra_data.items[ed_start];
             const qualifiers_start = store.extra_data.items[ed_start + 1];
             const qualifiers_len = store.extra_data.items[ed_start + 2];
-            const backing_value = store.extra_data.items[ed_start + 3] != 0;
-            const has_args = store.extra_data.items[ed_start + 4] != 0;
-            const record_shorthand = store.extra_data.items[ed_start + 5] != 0;
+            const flags = store.extra_data.items[ed_start + 3];
+            const backing_value = flags & 1 != 0;
+            const has_args = flags & 2 != 0;
+            const record_shorthand = flags & 4 != 0;
 
             return .{ .tag = .{
                 .tag_tok = node.main_token,
@@ -2111,8 +2129,10 @@ fn dataSpanFrom(store: *NodeStore, comptime Kind: type, start: u32) std.mem.Allo
     defer scratch.clearFrom(start);
     std.debug.assert(end >= start);
     const ed_start = @as(u32, @intCast(store.extra_data.items.len));
-    for (scratch.items.items[start..end]) |item| {
-        try store.extra_data.append(store.gpa, if (Kind.Idx == u32) item else @backingInt(item));
+    const items = scratch.items.items[start..end];
+    try store.extra_data.ensureUnusedCapacity(store.gpa, items.len);
+    for (items) |item| {
+        store.extra_data.appendAssumeCapacity(if (Kind.Idx == u32) item else @backingInt(item));
     }
     return .{ .start = ed_start, .len = end - start };
 }
@@ -2520,10 +2540,9 @@ pub fn collectRedundantReturns(store: *const NodeStore) Allocator.Error!std.Dyna
     var pending: std.ArrayList(AST.Expr.Idx) = .empty;
     defer pending.deinit(store.gpa);
 
-    for (store.nodes.items.items(.tag), 0..) |tag, idx| {
-        if (tag == .lambda) {
-            try pending.append(store.gpa, store.getExpr(@fromBackingInt(@intCast(idx))).lambda.body);
-        }
+    // A lambda node keeps its body's index in `main_token`.
+    for (store.nodes.items.items(.tag), store.nodes.items.items(.main_token)) |tag, body| {
+        if (tag == .lambda) try pending.append(store.gpa, @fromBackingInt(body));
     }
     while (pending.pop()) |idx| {
         switch (store.getExpr(idx)) {

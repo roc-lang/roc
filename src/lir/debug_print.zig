@@ -58,7 +58,7 @@ const Printer = struct {
     // multiple predecessors. This prints each shared tail once (later arrivals
     // get an <<already printed>> marker) and guards malformed (cyclic) input
     // from looping forever.
-    visited: std.AutoHashMapUnmanaged(LIR.CFStmtId, void) = .{},
+    visited: collections.DenseMapUnmanaged(LIR.CFStmtId, void) = .{},
 
     fn writeChainInner(self: *Printer, gpa: std.mem.Allocator, start: LIR.CFStmtId, indent: usize, writer: *std.Io.Writer) Error!void {
         var current = start;
@@ -793,7 +793,7 @@ fn canonicalReference(
         if (end > start + 1 and (end == source.len or !isIdentByte(source[end]))) {
             const value = std.fmt.parseInt(u64, source[start + 1 .. end], 10) catch return null;
             if (letter == 'p') {
-                const identity = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(value))))).identity;
+                const identity = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(value))))).identity;
                 try writer.print("p{s}", .{&identity.symbolHex()});
             } else {
                 try writer.print("{c}{d}", .{ letter, try canonicalId(gpa, names, source[start .. start + 1], value) });

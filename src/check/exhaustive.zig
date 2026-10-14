@@ -1019,7 +1019,7 @@ fn buildUnionFromTagUnion(
     var current_ext = tag_union.ext;
 
     // Track seen extension variables to detect cycles
-    var seen_exts = std.AutoHashMap(Var, void).init(allocator);
+    var seen_exts = collections.DenseMap(Var, void).init(allocator);
     defer seen_exts.deinit();
 
     // Follow extension chain to collect all tags
@@ -1215,16 +1215,23 @@ const InhabitedGraph = struct {
     idents: BuiltinIdents,
     mode: InhabitedMode,
     nodes: std.ArrayList(Node) = .empty,
-    roots: std.AutoHashMapUnmanaged(Var, usize) = .empty,
-    rows: std.AutoHashMapUnmanaged(RowKey, RowEntry) = .empty,
-    known_empty: std.AutoHashMapUnmanaged(Var, void) = .empty,
+    /// Graph nodes, rows, and assumed-empty roots, direct-indexed by root var.
+    roots: collections.DenseMap(Var, usize),
+    rows: collections.DenseMap(Var, RowSlots),
+    known_empty: collections.DenseMap(Var, void),
     pending: std.ArrayList(struct { root: Var, index: usize }) = .empty,
     false_nodes: std.ArrayList(usize) = .empty,
+    /// Every node's parent edges, each node's chained from its
+    /// `first_parent`, so recording an edge appends to one list rather than
+    /// growing a list per node.
+    parent_links: std.ArrayList(ParentLink) = .empty,
     stats: if (builtin.is_test) Stats else void = if (builtin.is_test) .{} else {},
 
     const Stats = struct { expanded: usize = 0, rows: usize = 0, edges: usize = 0, propagated: usize = 0 };
     const RowKey = struct { root: Var, role: enum { union_row, union_shape, record_row } };
     const RowEntry = struct { index: usize, position: ?usize };
+    /// A root's row entries, one per row role.
+    const RowSlots = struct { entries: [3]?RowEntry = .{ null, null, null } };
     const RowItem = struct {
         key: RowKey,
         index: usize,
@@ -1239,15 +1246,45 @@ const InhabitedGraph = struct {
         /// An unconditional construction proof, never the solver's initial true.
         proven_true: bool = false,
         remaining: usize = 0,
-        parents: std.ArrayList(usize) = .empty,
+        first_parent: u32 = ParentLink.none,
+    };
+    const ParentLink = struct {
+        parent: usize,
+        next: u32,
+
+        const none = std.math.maxInt(u32);
     };
 
+    fn init(gpa: Allocator, store: *TypeStore, idents: BuiltinIdents, mode: InhabitedMode) InhabitedGraph {
+        return .{
+            .gpa = gpa,
+            .store = store,
+            .idents = idents,
+            .mode = mode,
+            .roots = collections.DenseMap(Var, usize).init(gpa),
+            .rows = collections.DenseMap(Var, RowSlots).init(gpa),
+            .known_empty = collections.DenseMap(Var, void).init(gpa),
+        };
+    }
+
+    fn rowEntry(self: *InhabitedGraph, key: RowKey) ?*RowEntry {
+        const slots = self.rows.getPtr(key.root) orelse return null;
+        if (slots.entries[@backingInt(key.role)]) |*entry| return entry;
+        return null;
+    }
+
+    fn putRowEntry(self: *InhabitedGraph, key: RowKey, entry: RowEntry) Allocator.Error!void {
+        const slots = try self.rows.getOrPut(key.root);
+        if (!slots.found_existing) slots.value_ptr.* = .{};
+        slots.value_ptr.entries[@backingInt(key.role)] = entry;
+    }
+
     fn deinit(self: *InhabitedGraph) void {
-        for (self.nodes.items) |*entry| entry.parents.deinit(self.gpa);
+        self.parent_links.deinit(self.gpa);
         self.nodes.deinit(self.gpa);
-        self.roots.deinit(self.gpa);
-        self.rows.deinit(self.gpa);
-        self.known_empty.deinit(self.gpa);
+        self.roots.deinit();
+        self.rows.deinit();
+        self.known_empty.deinit();
         self.pending.deinit(self.gpa);
         self.false_nodes.deinit(self.gpa);
     }
@@ -1262,13 +1299,15 @@ const InhabitedGraph = struct {
         const root = resolveRoot(self.store, var_);
         if (self.roots.get(root)) |index| return index;
         const index = try self.node();
-        try self.roots.put(self.gpa, root, index);
+        try self.roots.put(root, index);
         try self.pending.append(self.gpa, .{ .root = root, .index = index });
         return index;
     }
 
     fn edge(self: *InhabitedGraph, parent: usize, child: usize) Allocator.Error!void {
-        try self.nodes.items[child].parents.append(self.gpa, parent);
+        const link: u32 = @intCast(self.parent_links.items.len);
+        try self.parent_links.append(self.gpa, .{ .parent = parent, .next = self.nodes.items[child].first_parent });
+        self.nodes.items[child].first_parent = link;
         self.nodes.items[parent].remaining += 1;
         if (comptime builtin.is_test) self.stats.edges += 1;
     }
@@ -1320,13 +1359,13 @@ const InhabitedGraph = struct {
         var cycle_start: ?usize = null;
         while (true) {
             key.root = resolveRoot(self.store, key.root);
-            if (self.rows.get(key)) |existing| {
+            if (self.rowEntry(key)) |existing| {
                 tail = existing.index;
                 cycle_start = existing.position;
                 break;
             }
             const index = try self.node();
-            try self.rows.put(self.gpa, key, .{ .index = index, .position = path.items.len });
+            try self.putRowEntry(key, .{ .index = index, .position = path.items.len });
             var item: RowItem = .{ .key = key, .index = index };
             if (comptime builtin.is_test) self.stats.rows += 1;
             if (self.known_empty.contains(key.root)) {
@@ -1399,7 +1438,7 @@ const InhabitedGraph = struct {
                 (item.witness or (if (successor) |index| self.nodes.items[index].proven_true else false)))
             {
                 self.nodes.items[target].proven_true = true;
-                self.rows.getPtr(item.key).?.position = null;
+                self.rowEntry(item.key).?.position = null;
                 continue;
             }
             if (in_cycle) {
@@ -1425,7 +1464,7 @@ const InhabitedGraph = struct {
                 }
             }
             if (!conjunction and !in_cycle) try self.finishUnion(target, item.open);
-            self.rows.getPtr(item.key).?.position = null;
+            self.rowEntry(item.key).?.position = null;
         }
         if (!conjunction) {
             if (component) |index| try self.finishUnion(index, false);
@@ -1476,7 +1515,7 @@ const InhabitedGraph = struct {
 
     fn solve(self: *InhabitedGraph, root: Var, assumptions: []const Var) Allocator.Error!bool {
         std.debug.assert(self.nodes.items.len == 0);
-        for (assumptions) |var_| try self.known_empty.put(self.gpa, resolveRoot(self.store, var_), {});
+        for (assumptions) |var_| try self.known_empty.put(resolveRoot(self.store, var_), {});
         const result = try self.typeNode(root);
         while (self.pending.pop()) |next| try self.expand(next.root, next.index);
         try self.settle();
@@ -1487,7 +1526,10 @@ const InhabitedGraph = struct {
     /// to construction. No provisional traversal answer enters this phase.
     fn settle(self: *InhabitedGraph) Allocator.Error!void {
         while (self.false_nodes.pop()) |child| {
-            for (self.nodes.items[child].parents.items) |parent| {
+            var link = self.nodes.items[child].first_parent;
+            while (link != ParentLink.none) {
+                const parent = self.parent_links.items[link].parent;
+                link = self.parent_links.items[link].next;
                 if (comptime builtin.is_test) self.stats.propagated += 1;
                 const state = &self.nodes.items[parent];
                 if (!state.value) continue;
@@ -1507,7 +1549,7 @@ fn solveInhabitedGraph(store: *TypeStore, idents: BuiltinIdents, root: Var, mode
     defer arena.deinit();
     // Only the final Boolean escapes. Explicit graph cleanup also supports
     // allocation-debug mode, where this scratch arena becomes pass-through.
-    var graph: InhabitedGraph = .{ .gpa = arena.allocator(), .store = store, .idents = idents, .mode = mode };
+    var graph: InhabitedGraph = .init(arena.allocator(), store, idents, mode);
     defer graph.deinit();
     return graph.solve(root, assumptions);
 }
@@ -1682,7 +1724,7 @@ fn collectCtorPayloadTagUnionBlockers(
     out: *std.ArrayList(Var),
     seen: *std.AutoHashMapUnmanaged(Var, void),
 ) error{OutOfMemory}!void {
-    var seen_exts: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    var seen_exts: collections.DenseMapUnmanaged(Var, void) = .empty;
     defer seen_exts.deinit(type_store.gpa);
 
     var current_tags = initial_tag_union.tags;
@@ -2011,14 +2053,14 @@ fn findTagId(union_info: Union, tag_name: Ident.Idx) ?TagId {
 
 /// Constructor ids of a union by constructor name, so a constructor pattern
 /// resolves its id in constant time however wide the union is.
-const TagIdsByName = std.AutoHashMapUnmanaged(u29, TagId);
+const TagIdsByName = collections.DenseMapUnmanaged(u29, TagId);
 
 fn tagIdsByName(allocator: std.mem.Allocator, union_info: Union) error{OutOfMemory}!TagIdsByName {
     var tag_ids: TagIdsByName = .empty;
     try tag_ids.ensureTotalCapacity(allocator, @intCast(union_info.alternatives.len));
     for (union_info.alternatives) |alt| {
         const alt_ident = ctorNameIdent(alt.name) orelse continue;
-        const gop = tag_ids.getOrPutAssumeCapacity(alt_ident.idx);
+        const gop = try tag_ids.getOrPut(allocator, alt_ident.idx);
         if (!gop.found_existing) gop.value_ptr.* = alt.tag_id;
     }
     return tag_ids;
@@ -2029,7 +2071,7 @@ fn tagIdsByName(allocator: std.mem.Allocator, union_info: Union) error{OutOfMemo
 const RecordFieldUnion = struct {
     names: std.ArrayList(Ident.Idx) = .empty,
     types: std.ArrayList(Var) = .empty,
-    seen: std.AutoHashMapUnmanaged(u29, void) = .empty,
+    seen: collections.DenseMapUnmanaged(u29, void) = .empty,
 
     fn add(self: *RecordFieldUnion, allocator: std.mem.Allocator, name: Ident.Idx, ty: Var) error{OutOfMemory}!void {
         const gop = try self.seen.getOrPut(allocator, name.idx);
@@ -2143,7 +2185,7 @@ fn getCtorArgTypes(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
             const target_idx = @backingInt(tag_id);
 
             // Track seen extension variables to detect cycles
-            var seen_exts = std.AutoHashMap(Var, void).init(type_store.gpa);
+            var seen_exts = collections.DenseMap(Var, void).init(type_store.gpa);
             defer seen_exts.deinit();
 
             while (true) {
@@ -2703,11 +2745,11 @@ fn specializeByConstructorSketched(
                         // Build the new row with fields aligned to target order
                         const new_row = try allocator.alloc(UnresolvedPattern, arity + rest.len);
 
-                        var pat_positions: std.AutoHashMapUnmanaged(u29, usize) = .empty;
+                        var pat_positions: collections.DenseMapUnmanaged(u29, usize) = .empty;
                         defer pat_positions.deinit(allocator);
                         try pat_positions.ensureTotalCapacity(allocator, @intCast(pat_fields.len));
                         for (pat_fields, 0..) |pat_field, j| {
-                            const gop = pat_positions.getOrPutAssumeCapacity(pat_field.idx);
+                            const gop = try pat_positions.getOrPut(allocator, pat_field.idx);
                             if (!gop.found_existing) gop.value_ptr.* = j;
                         }
                         for (targets, 0..) |target_field, i| {
@@ -3899,10 +3941,10 @@ pub fn checkRedundancySketched(
 //
 // These functions provide a simpler interface for the type checker to call.
 
-/// Result of exhaustiveness and redundancy checking
+/// Result of exhaustiveness and redundancy checking. Every slice below, and
+/// every pattern the missing patterns nest, lives in the arena `checkMatch`
+/// was given.
 pub const CheckResult = struct {
-    /// Owns every slice below, and every pattern the missing patterns nest.
-    arena: base.SingleThreadArena,
     /// Whether the match is exhaustive
     is_exhaustive: bool,
     /// Diagnostic-only missing patterns. Analysis type
@@ -3924,11 +3966,6 @@ pub const CheckResult = struct {
     /// empty_tag_union. Exhaustiveness relied on these payloads being
     /// unconstructible.
     payload_vars_to_close: []const Var,
-
-    /// Free all allocated memory in the result
-    pub fn deinit(self: CheckResult) void {
-        self.arena.deinit();
-    }
 };
 
 /// Perform full exhaustiveness and redundancy checking on a match expression.
@@ -3941,7 +3978,7 @@ pub const CheckResult = struct {
 /// (e.g., polymorphic types, type mismatches). The caller should handle this by
 /// skipping exhaustiveness error reporting for that match expression.
 pub fn checkMatch(
-    allocator: std.mem.Allocator,
+    arena: *base.SingleThreadArena,
     source_store: *types.Store,
     module_env: *const Can.ModuleEnv,
     node_store: *const NodeStore,
@@ -3954,10 +3991,7 @@ pub fn checkMatch(
 ) PatternResolveError!CheckResult {
     const type_store = builtin_idents.open_cache.reader(source_store);
     defer builtin_idents.open_cache.finishRead();
-    // Every allocation, results included, lives in one arena that the result
-    // owns.
-    var arena = base.SingleThreadArena.init(allocator);
-    errdefer arena.deinit();
+    // Every allocation, results included, lives in the caller's arena.
     const arena_alloc = arena.allocator();
 
     // Phase 1: Convert CIR patterns to sketched (unresolved) patterns
@@ -4034,7 +4068,6 @@ pub fn checkMatch(
     exportBlockers(type_store, &payload_vars_to_close);
     for (@constCast(missing)) |*pattern| try pattern.detachAnalysisTypes(arena_alloc);
     return .{
-        .arena = arena,
         .is_exhaustive = missing.len == 0,
         .missing_patterns = missing,
         .redundant_indices = redundancy.redundant_indices,
@@ -4051,7 +4084,7 @@ pub fn checkMatch(
 /// This uses the same matrix algorithm as match expressions, with a single row
 /// corresponding to the destructure pattern.
 pub fn checkDestructure(
-    allocator: std.mem.Allocator,
+    arena: *base.SingleThreadArena,
     source_store: *types.Store,
     module_env: *const Can.ModuleEnv,
     node_store: *const NodeStore,
@@ -4063,8 +4096,7 @@ pub fn checkDestructure(
 ) PatternResolveError!CheckResult {
     const type_store = builtin_idents.open_cache.reader(source_store);
     defer builtin_idents.open_cache.finishRead();
-    var arena = base.SingleThreadArena.init(allocator);
-    errdefer arena.deinit();
+    // Every allocation, results included, lives in the caller's arena.
     const arena_alloc = arena.allocator();
 
     var numeral_keys = NumeralKeyInterner{ .module_env = module_env };
@@ -4136,7 +4168,6 @@ pub fn checkDestructure(
     exportBlockers(type_store, &payload_vars_to_close);
     for (@constCast(missing)) |*pattern| try pattern.detachAnalysisTypes(arena_alloc);
     return .{
-        .arena = arena,
         .is_exhaustive = missing.len == 0,
         .missing_patterns = missing,
         .redundant_indices = redundancy.redundant_indices,
@@ -4367,8 +4398,7 @@ fn resultAllocationFailureCase(gpa: Allocator) (Allocator.Error || Ident.Error |
     const name = try idents.insert(std.testing.allocator, try Ident.from_bytes("field"));
     const vars = [_]Var{@fromBackingInt(1)};
     var arena = base.SingleThreadArena.init(gpa);
-    var transferred = false;
-    defer if (!transferred) arena.deinit();
+    defer arena.deinit();
     const arena_alloc = arena.allocator();
     const args = try arena_alloc.dupe(Pattern, &.{.{ .anything = vars[0] }});
     const alternatives = [_]CtorInfo{.{ .name = .{ .tag = name }, .tag_id = .only, .arity = 1 }};
@@ -4381,8 +4411,7 @@ fn resultAllocationFailureCase(gpa: Allocator) (Allocator.Error || Ident.Error |
         .args = args,
     } }});
     for (missing) |*pattern| try pattern.detachAnalysisTypes(arena_alloc);
-    var result: CheckResult = .{
-        .arena = undefined,
+    const result: CheckResult = .{
         .is_exhaustive = false,
         .missing_patterns = missing,
         .redundant_indices = try arena_alloc.dupe(u32, &.{1}),
@@ -4392,9 +4421,6 @@ fn resultAllocationFailureCase(gpa: Allocator) (Allocator.Error || Ident.Error |
         .ext_vars_to_close = try arena_alloc.dupe(Var, &vars),
         .payload_vars_to_close = try arena_alloc.dupe(Var, &vars),
     };
-    result.arena = arena;
-    transferred = true;
-    defer result.deinit();
     try std.testing.expectEqual(@as(?Var, null), result.missing_patterns[0].ctor.args[0].anything);
     try std.testing.expectEqual(@as(usize, 0), result.missing_patterns[0].ctor.union_info.render_as.record.types.len);
 }
@@ -4457,10 +4483,10 @@ fn inhabitedGraphDiamondCase(graph_allocator: Allocator, depth: usize, recursive
     }
     const reader = cache.reader(&store);
     // Baseline union descriptions belong to the caller's scratch allocator.
-    var query_arena = std.heap.ArenaAllocator.init(gpa);
+    var query_arena = base.SingleThreadArena.init(gpa);
     defer query_arena.deinit();
     for ([_]InhabitedMode{ .general, .payload, .known_absent }) |mode| {
-        var graph: InhabitedGraph = .{ .gpa = graph_allocator, .store = reader, .idents = test_idents, .mode = mode };
+        var graph: InhabitedGraph = .init(graph_allocator, reader, test_idents, mode);
         defer graph.deinit();
         try std.testing.expect(try graph.solve(inhabited[depth], &.{}));
         try std.testing.expectEqual(depth + 1, graph.stats.expanded);
@@ -4469,7 +4495,7 @@ fn inhabitedGraphDiamondCase(graph_allocator: Allocator, depth: usize, recursive
         try std.testing.expectEqual(2 * depth + 1, graph.stats.edges);
         try std.testing.expectEqual(@as(usize, 0), graph.stats.propagated);
 
-        var empty_graph: InhabitedGraph = .{ .gpa = graph_allocator, .store = reader, .idents = test_idents, .mode = mode };
+        var empty_graph: InhabitedGraph = .init(graph_allocator, reader, test_idents, mode);
         defer empty_graph.deinit();
         try std.testing.expect(!try empty_graph.solve(empty[depth], &.{}));
         try std.testing.expectEqual(depth + 2, empty_graph.stats.expanded);
@@ -4478,7 +4504,7 @@ fn inhabitedGraphDiamondCase(graph_allocator: Allocator, depth: usize, recursive
         try std.testing.expectEqual(empty_graph.stats.edges, empty_graph.stats.propagated);
         // No finite witness: the coinductive SCC must remain true, and repeated
         // DAG children must still build only one node per exact type identity.
-        var recursive_graph: InhabitedGraph = .{ .gpa = graph_allocator, .store = reader, .idents = test_idents, .mode = mode };
+        var recursive_graph: InhabitedGraph = .init(graph_allocator, reader, test_idents, mode);
         defer recursive_graph.deinit();
         try std.testing.expect(try recursive_graph.solve(recursive[depth], &.{}));
         try std.testing.expectEqual(depth + 1, recursive_graph.stats.expanded);
@@ -4561,7 +4587,7 @@ fn inhabitedWitnessCase(graph_allocator: Allocator) (Allocator.Error || Ident.Er
     const reader = cache.reader(&store);
     for ([_]InhabitedMode{ .general, .payload, .known_absent }) |mode| {
         for (witnesses) |root| {
-            var graph: InhabitedGraph = .{ .gpa = graph_allocator, .store = reader, .idents = test_idents, .mode = mode };
+            var graph: InhabitedGraph = .init(graph_allocator, reader, test_idents, mode);
             defer graph.deinit();
             try std.testing.expect(try graph.solve(root, &.{recursive}));
             try std.testing.expectEqual(@as(usize, 1), graph.stats.expanded);
@@ -4569,7 +4595,7 @@ fn inhabitedWitnessCase(graph_allocator: Allocator) (Allocator.Error || Ident.Er
             try std.testing.expectEqual(@as(usize, 1), graph.stats.edges);
             try std.testing.expect(!try solveInhabitedGraph(reader, test_idents, root, mode, &.{root}));
         }
-        var graph: InhabitedGraph = .{ .gpa = graph_allocator, .store = reader, .idents = test_idents, .mode = mode };
+        var graph: InhabitedGraph = .init(graph_allocator, reader, test_idents, mode);
         defer graph.deinit();
         try std.testing.expect(try graph.solve(prefix, &.{recursive}));
         try std.testing.expectEqual(@as(usize, 1), graph.stats.expanded);
@@ -4580,7 +4606,7 @@ fn inhabitedWitnessCase(graph_allocator: Allocator) (Allocator.Error || Ident.Er
         try std.testing.expect(!try solveInhabitedGraph(reader, test_idents, alias, mode, &.{witnesses[0]}));
         // A known-empty tail cannot remove the independent local constructor.
         try std.testing.expect(try solveInhabitedGraph(reader, test_idents, local, mode, &.{alias}));
-        var open_graph: InhabitedGraph = .{ .gpa = graph_allocator, .store = reader, .idents = test_idents, .mode = mode };
+        var open_graph: InhabitedGraph = .init(graph_allocator, reader, test_idents, mode);
         defer open_graph.deinit();
         try std.testing.expectEqual(mode != .known_absent, try open_graph.solve(open_union, &.{}));
         if (mode != .known_absent) try std.testing.expectEqual(@as(usize, 1), open_graph.stats.expanded);
@@ -4692,7 +4718,7 @@ test "nominal views inhabitedness modes preserve leaf and row-cycle policies" {
     };
     for (cases) |case| {
         for ([_]InhabitedMode{ .general, .payload, .known_absent }, case.expected) |mode, expected| {
-            var graph: InhabitedGraph = .{ .gpa = gpa, .store = reader, .idents = test_idents, .mode = mode };
+            var graph: InhabitedGraph = .init(gpa, reader, test_idents, mode);
             defer graph.deinit();
             try std.testing.expectEqual(expected, try graph.solve(case.root, &.{}));
             try std.testing.expectEqual(@as(usize, graph.roots.count()), graph.stats.expanded);
@@ -4736,7 +4762,7 @@ test "nominal views shared row tails expand once in either traversal order" {
     const reader = cache.reader(&store);
     for ([_]InhabitedMode{ .general, .payload, .known_absent }) |mode| {
         for ([_]Var{ forward, backward }) |root| {
-            var graph: InhabitedGraph = .{ .gpa = gpa, .store = reader, .idents = test_idents, .mode = mode };
+            var graph: InhabitedGraph = .init(gpa, reader, test_idents, mode);
             defer graph.deinit();
             try std.testing.expect(try graph.solve(root, &.{}));
             try std.testing.expectEqual(@as(usize, 130), graph.stats.expanded);
@@ -4749,7 +4775,11 @@ test "nominal views shared row tails expand once in either traversal order" {
 }
 
 test "nominal views inhabitedness graph cleans up every allocation failure" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, inhabitedGraphAllocationCase, .{});
+    // The graph grows retained buffers, whose in-place growth under the
+    // testing allocator depends on the heap's layout, so the failure check
+    // runs over an allocator that refuses in-place growth.
+    var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), inhabitedGraphAllocationCase, .{});
 }
 
 /// Constructed Store regressions, not a claim that source checking preserves
@@ -4815,11 +4845,11 @@ fn inhabitedRecordRowsCase(graph_allocator: Allocator, depth: usize) (Allocator.
     std.mem.reverse(Var, tails.items);
     const backward = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(tails.items) } } });
     const reader = cache.reader(&store);
-    var query_arena = std.heap.ArenaAllocator.init(gpa);
+    var query_arena = base.SingleThreadArena.init(gpa);
     defer query_arena.deinit();
     for ([_]InhabitedMode{ .general, .payload, .known_absent }) |mode| {
         for (wrappers, [_]bool{ false, false, true, true, true, false, true }) |root, expected| {
-            var graph: InhabitedGraph = .{ .gpa = graph_allocator, .store = reader, .idents = test_idents, .mode = mode };
+            var graph: InhabitedGraph = .init(graph_allocator, reader, test_idents, mode);
             defer graph.deinit();
             try std.testing.expectEqual(expected, try graph.solve(root, &.{}));
             try std.testing.expect(graph.stats.propagated <= graph.stats.edges);
@@ -4832,7 +4862,7 @@ fn inhabitedRecordRowsCase(graph_allocator: Allocator, depth: usize) (Allocator.
             try std.testing.expectEqual(expected, answer);
         }
         for ([_]Var{ forward, backward }) |root| {
-            var graph: InhabitedGraph = .{ .gpa = graph_allocator, .store = reader, .idents = test_idents, .mode = mode };
+            var graph: InhabitedGraph = .init(graph_allocator, reader, test_idents, mode);
             defer graph.deinit();
             try std.testing.expect(!try graph.solve(root, &.{}));
             try std.testing.expectEqual(depth + 3, graph.stats.expanded);
@@ -4842,7 +4872,7 @@ fn inhabitedRecordRowsCase(graph_allocator: Allocator, depth: usize) (Allocator.
         }
         // Assumptions apply to row and alias identities, not only payloads.
         for ([_]Var{ flex, cycle_a, cycle_b }, [_]Var{ wrappers[3], wrappers[4], wrappers[4] }) |assumption, root| {
-            var graph: InhabitedGraph = .{ .gpa = graph_allocator, .store = reader, .idents = test_idents, .mode = mode };
+            var graph: InhabitedGraph = .init(graph_allocator, reader, test_idents, mode);
             defer graph.deinit();
             try std.testing.expect(!try graph.solve(root, &.{assumption}));
         }
@@ -4910,7 +4940,7 @@ fn recordTailBlockersCase(analysis_allocator: Allocator, depth: usize) (Allocato
         }),
         .ext = empty_union,
     } } });
-    var query_arena = std.heap.ArenaAllocator.init(analysis_allocator);
+    var query_arena = base.SingleThreadArena.init(analysis_allocator);
     defer query_arena.deinit();
     const reader = cache.reader(&store);
     for ([_]Var{ root, shared, cycle }) |payload| {
@@ -4994,7 +5024,7 @@ test "nominal views inhabitedness graph publishes final recursive answers" {
     try store.setVarContent(b, .{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{a}) } } });
     const reader = cache.reader(&store);
     for ([_]InhabitedMode{ .general, .payload, .known_absent }) |mode| {
-        var graph: InhabitedGraph = .{ .gpa = gpa, .store = reader, .idents = test_idents, .mode = mode };
+        var graph: InhabitedGraph = .init(gpa, reader, test_idents, mode);
         defer graph.deinit();
         try std.testing.expect(!try graph.solve(a, &.{}));
         try std.testing.expect(!graph.nodes.items[graph.roots.get(b).?].value);

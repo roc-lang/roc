@@ -197,7 +197,7 @@ fn emit(
         .metrics_out = &metrics,
     });
     errdefer retained.deinit();
-    const result = try cg.generateCode(root, program.store.getProcSpec(root).ret_layout);
+    const result = try cg.generateCode(root, program.store.getProcSpecImmediate(root).ret_layout);
     errdefer allocator.free(result.code);
     var splice = backend.HostSplice.init(allocator);
     defer splice.deinit();

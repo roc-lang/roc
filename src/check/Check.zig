@@ -188,7 +188,7 @@ try_row_fixpoints: std.ArrayListUnmanaged(TryRowFixpoint) = .empty,
 try_row_fixpoint_scratch: TryRowFixpointScratch = .{},
 /// Scratch: residual tail root of every row open below some fixpoint limit,
 /// to the outermost fixpoint it is open in (`collectOpenTryRowTails`).
-try_row_open_tails: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+try_row_open_tails: collections.DenseMapUnmanaged(Var, u32) = .empty,
 /// A map from one var to another. Used in instantiation and var copying
 var_map: collections.DenseMap(Var, Var),
 /// Pristine copies of ground expected types, by structural hash.
@@ -206,7 +206,7 @@ polarized_instance_subtrees: std.AutoHashMapUnmanaged(PolarizedInstanceKey, []In
 /// share it instead of copying the type again, and later row closing stops
 /// at it. Valid while the type store's ground epoch equals
 /// `snapshot_ground_epoch`. See `recordGeneratedCodecDerivationSnapshot`.
-snapshot_ground_copies: std.AutoHashMapUnmanaged(Var, ?Var) = .empty,
+snapshot_ground_copies: collections.DenseMapUnmanaged(Var, ?Var) = .empty,
 snapshot_ground_epoch: u64 = 0,
 /// A map from one var to another. Used in instantiation and var copying
 var_set: collections.DenseMap(Var, void),
@@ -214,12 +214,21 @@ var_set: collections.DenseMap(Var, void),
 /// to `Str.inspect`. Each value is a bitset of occurrence positions because
 /// the same type variable can appear both as a row tail and as an ordinary
 /// value.
-inspect_type_visits: std.AutoHashMap(Var, u8),
+inspect_type_visits: collections.DenseMap(Var, u8),
 /// Explicit visit stack for `varContainsError`'s heap-worklist type-graph
 /// walk. Entries are base-relative: each entry point operates only on the
 /// slots it pushed and drains back to its entry length, so the walk may nest
 /// freely.
 type_visit_stack: std.ArrayListUnmanaged(Var) = .empty,
+/// Scratch for `groundTypeHash`: its worklist and the visit order of every
+/// resolved var, direct-indexed by var. Both are cleared per call, in
+/// proportion to what the last call visited.
+ground_hash_pending: std.ArrayListUnmanaged(Var) = .empty,
+ground_hash_seen: collections.DenseMap(Var, u32),
+/// Scratch for `groundTypesIdentical`: its worklist of var pairs and the pairs
+/// already compared.
+ground_identical_pending: std.ArrayListUnmanaged(GroundVarPair) = .empty,
+ground_identical_seen: std.AutoHashMapUnmanaged(GroundVarPair, void) = .empty,
 /// Explicit worklist for alias row validation, carrying both pending nodes and
 /// in-flight row frames so the whole walk—spines and rows alike—descends on
 /// the heap rather than the native stack. Base-relative, like the stack above.
@@ -230,6 +239,18 @@ alias_row_names: std.ArrayListUnmanaged(AliasRowName) = .empty,
 /// The entries of `alias_row_names` that belong to long runs, so a long
 /// row's duplicate-name check is one lookup rather than a scan of its run.
 alias_row_name_set: std.AutoHashMapUnmanaged(AliasRowName, void) = .empty,
+/// Finished expression-kernel activities kept for reuse, each with its task
+/// stack's capacity retained, so checking a body does not pay a heap
+/// allocation and a task stack grown from empty per `checkExpr`.
+expr_kernel_pool: std.ArrayList(*ExprKernelActivity) = .empty,
+/// Activity stacks of finished `runCheckActivities` calls, kept with their
+/// capacity for the next run. Each run takes its own stack, so a nested run
+/// never moves the activity an outer step is still working on.
+check_activity_pool: std.ArrayList(std.ArrayList(CheckActivity)) = .empty,
+/// Frame stacks of finished `checkPattern` calls, kept with their capacity
+/// for the next call. Each call takes its own stack, so a nested call never
+/// moves a frame an outer step is still working on.
+pattern_frame_pool: std.ArrayList(std.ArrayList(PatternCheckFrame)) = .empty,
 /// A map from one var to another. Used to apply type arguments in instantiation
 rigid_var_substitutions: std.AutoHashMapUnmanaged(Ident.Idx, Var) = .empty,
 /// Header rigid vars for the currently-processed type declaration.
@@ -286,7 +307,7 @@ pending_record_updates: std.ArrayList(PendingRecordUpdate) = .empty,
 /// whose kind is still flex at a boundary that does not own its rank is
 /// retained for the scope that does (see `judgeRecordDestructBinds`).
 pending_record_destructs: std.ArrayList(PendingRecordDestruct) = .empty,
-pending_default_seen: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
+pending_default_seen: collections.DenseMapUnmanaged(CIR.Expr.Idx, void) = .{},
 /// True while `predeclareAnnotationScheme` materializes an annotation ahead
 /// of all body checking: a defaulted field's kind (identity) is minted as
 /// usual, but its default EXPRESSION is not checked—the body-pass
@@ -308,6 +329,12 @@ type_decl_dependencies: std.ArrayListUnmanaged(TypeDeclDependency) = .empty,
 /// declarations are poisoned, so an annotation generated from here on
 /// resolves each reference to one as the error type.
 type_decl_validity_final: bool = false,
+/// Holds one match's exhaustiveness analysis and result; reset after each
+/// match, keeping a bounded chunk for the next one.
+exhaustiveness_arena: base.SingleThreadArena,
+/// Whether a check's result still lives in `exhaustiveness_arena`; checks
+/// never nest, so a second one never starts while it is set.
+exhaustiveness_arena_in_use: bool = false,
 /// scratch vars used to build up intermediate lists, used for various things
 scratch_vars: base.Scratch(Var),
 /// scratch (parameter name, instantiated flex copy) pairs for the default
@@ -331,11 +358,11 @@ scratch_deferred_static_dispatch_constraints: base.Scratch(DeferredConstraintChe
 /// later definitions are checked, so validating them earlier would publish a
 /// derivation for a shape that is no longer the call's final type.
 final_codec_dispatch_constraints: std.ArrayListUnmanaged(FinalCodecDispatchConstraint) = .empty,
-final_codec_dispatch_constraint_fns: std.AutoHashMapUnmanaged(Var, CodecConstraintPhase) = .empty,
+final_codec_dispatch_constraint_fns: collections.DenseMapUnmanaged(Var, CodecConstraintPhase) = .empty,
 /// Generic generated-codec relations captured by their owning type scheme.
 /// Their definition-side worklist entries must retire without being treated as
 /// settled: each scheme instantiation copies and validates the exact relation.
-scheme_deferred_codec_constraint_fns: std.AutoHashMapUnmanaged(Var, void) = .empty,
+scheme_deferred_codec_constraint_fns: collections.DenseMapUnmanaged(Var, void) = .empty,
 checking_final_codec_dispatch_constraints: bool = false,
 /// Boundary validation produces constraints once; the exact calls and live
 /// contract roots freeze only after the module's error rows have settled.
@@ -403,7 +430,7 @@ platform_requirements: ?PlatformRequirementInput = null,
 /// here. See `can.Can.Validation`.
 validation: can.Can.Validation = .checking,
 /// App defs constrained by platform requirements before their bodies are checked.
-platform_required_defs: std.AutoHashMapUnmanaged(CIR.Def.Idx, PlatformRequiredDef) = .{},
+platform_required_defs: collections.DenseMapUnmanaged(CIR.Def.Idx, PlatformRequiredDef) = .empty,
 /// One row per platform requirement that resolved to an exported app def, in
 /// requires-clause order. The solved correspondence (requirement type and its
 /// identity bindings, as vars in this module's store) that publication
@@ -426,7 +453,7 @@ platform_requirement_solutions: std.ArrayListUnmanaged(requirement_solution.Solu
 /// enclosing in-flight one: forward references to a *later* sibling, and local
 /// mutual recursion, are rejected during canonicalization (local defs are
 /// sequentially scoped), so this is always a single self/enclosing chain.
-local_processing_ptrns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, LocalDefProcessed) = .{},
+local_processing_ptrns: collections.DenseMapUnmanaged(CIR.Pattern.Idx, LocalDefProcessed) = .{},
 
 /// Binder patterns of local block-statement (`s_decl`) value declarations
 /// whose RHS is currently being type-checked. Canonicalization rejects an eager
@@ -434,7 +461,7 @@ local_processing_ptrns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, LocalDefProces
 /// through a function in the value's own RHS. Checking records each such
 /// lookup as a recursive value reference, which publication turns into the
 /// declaration's explicit recursive-binding fact.
-local_value_processing_ptrns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void) = .{},
+local_value_processing_ptrns: collections.DenseMapUnmanaged(CIR.Pattern.Idx, void) = .{},
 
 /// Every local binding root (`x = ..` / `var $x = ..` statement pattern)
 /// encountered while checking, in solve order. The settled-state occurs sweep
@@ -520,16 +547,16 @@ type_scheme_by_var: std.AutoHashMapUnmanaged(Var, u32) = .empty,
 binding_scheme_nodes: std.DynamicBitSetUnmanaged,
 /// Scheme identities without a source node, currently pristine annotation
 /// schemes created by the annotated-definition pre-pass.
-synthetic_binding_schemes: std.AutoHashMapUnmanaged(Var, void) = .empty,
+synthetic_binding_schemes: collections.DenseMapUnmanaged(Var, void) = .empty,
 /// Reused exact graph walk for classifying a freshly generalized binding.
 /// Classification happens once at the producer boundary, never on lookup.
-binding_scheme_classification_seen: std.AutoHashMapUnmanaged(Var, void) = .empty,
+binding_scheme_classification_seen: collections.DenseMapUnmanaged(Var, void) = .empty,
 binding_scheme_classification_stack: std.ArrayListUnmanaged(Var) = .empty,
 /// Constraint function vars whose deferred relation was actually consumed by
 /// static-dispatch checking (success or rejection). Receiver shape alone is not
 /// evidence of discharge: an unrelated error can poison the receiver, and a
 /// relation may be concrete before its place in the worklist is visited.
-settled_static_dispatch_constraint_fns: std.AutoHashMapUnmanaged(Var, void) = .empty,
+settled_static_dispatch_constraint_fns: collections.DenseMapUnmanaged(Var, void) = .empty,
 /// The context each waiting obligation was last re-deferred in (see
 /// `waitingObligationUnchanged`).
 waiting_obligations: std.AutoHashMapUnmanaged(WaitingObligationKey, WaitingObligationContext) = .empty,
@@ -551,7 +578,7 @@ waiting_trigger_generation: u64 = 0,
 /// The failure expression of the queued entry that first consumed each
 /// relation in `settled_static_dispatch_constraint_fns`: the use a failure of
 /// that relation was attributed to.
-settled_static_dispatch_failure_exprs: std.AutoHashMapUnmanaged(Var, StaticDispatchConstraint.Provenance.OptExprIdx) = .empty,
+settled_static_dispatch_failure_exprs: collections.DenseMapUnmanaged(Var, StaticDispatchConstraint.Provenance.OptExprIdx) = .empty,
 /// Constraint function vars of generated codec relations that a numeric-default
 /// drain left unresolved, stacked per visited deferred relation. Such a
 /// relation belongs to its owning definition's scheme, so the drain did not
@@ -562,7 +589,7 @@ scratch_scheme_owned_codec_fns: std.ArrayListUnmanaged(Var) = .empty,
 /// active, and the owner index lets each generalization boundary visit only its
 /// own entries. Probe rollback removes speculative tail entries from both.
 scheme_requirement_candidates: std.ArrayListUnmanaged(SchemeRequirementCandidate) = .empty,
-scheme_requirement_candidate_indices_by_owner: std.AutoHashMapUnmanaged(Var, std.ArrayListUnmanaged(u32)) = .empty,
+scheme_requirement_candidate_indices_by_owner: collections.DenseMapUnmanaged(Var, std.ArrayListUnmanaged(u32)) = .empty,
 /// The innermost expression whose type is the scheme currently being built.
 /// Constraint creation and transitive scheme instantiation stamp requirements
 /// with this exact owner instead of reconstructing ownership at a boundary.
@@ -580,7 +607,7 @@ predeclared_scheme_vars: std.ArrayListUnmanaged(?Var) = .empty,
 /// keyed by the annotation. A use of a predeclared scheme is recorded against
 /// the annotated binding's own scheme by composing through these slots; see
 /// `PredeclaredSlots`.
-predeclared_slots: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, PredeclaredSlots) = .empty,
+predeclared_slots: collections.DenseMapUnmanaged(CIR.Annotation.Idx, PredeclaredSlots) = .empty,
 /// Backing storage for `PredeclaredSlots` ranges.
 predeclared_slot_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// Backing storage for `PendingPredeclaredSchemeUse.fresh` and
@@ -604,7 +631,7 @@ predeclared_relation_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// pattern and live only while the local def is in flight (entries are
 /// removed when the statement finishes). The value is the def's annotation,
 /// whose `predeclared_slots` entry holds the scheme.
-predeclared_local_annotations: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Annotation.Idx) = .empty,
+predeclared_local_annotations: collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Annotation.Idx) = .empty,
 /// Hole-sharing predeclared schemes (annotations with `_` inference holes,
 /// predeclared at their recursive group's start), keyed by the scheme var:
 /// each value lists the scheme's hole copies paired with the live annotation
@@ -612,7 +639,7 @@ predeclared_local_annotations: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Ann
 /// body's inference and the uses' constraints stay monomorphically consistent
 /// until the group's boundary generalizes the holes; see
 /// `predeclareAnnotationSchemeKeepingHolesShared` and `reunifySharedSchemeHoles`.
-hole_shared_schemes: std.AutoHashMapUnmanaged(Var, []const Var) = .empty,
+hole_shared_schemes: collections.DenseMapUnmanaged(Var, []const Var) = .empty,
 /// The one expression (a recursive group member's top-level RHS) whose
 /// generalization is suppressed because it lives in its group's shared rank
 /// frame and generalizes at the group boundary instead. Consume-once, like
@@ -676,14 +703,14 @@ value_lookup_tracking: std.ArrayListUnmanaged(ValueLookupEntry) = .empty,
 nonlocal_value_lookups: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
 /// Tracks expressions whose checked type contains an error, even if annotation
 /// preservation later gives their raw expr var a non-error type.
-erroneous_value_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .empty,
+erroneous_value_exprs: collections.DenseMapUnmanaged(CIR.Expr.Idx, void) = .empty,
 /// Rejected statements, each with its poisoned value expression if it has one:
 /// declarations and reassignments whose pattern/RHS relation was rejected,
 /// expression statements whose expression is erroneous, and uninitialized
 /// `var` declarations whose annotation is erroneous. The whole statement must
 /// become an explicit runtime error before checked-body construction, because
 /// its interface is erroneous independently of any value expression.
-erroneous_statements: std.AutoHashMapUnmanaged(CIR.Statement.Idx, ?CIR.Expr.Idx) = .empty,
+erroneous_statements: collections.DenseMapUnmanaged(CIR.Statement.Idx, ?CIR.Expr.Idx) = .empty,
 /// `for` loops whose iterable was not erroneous when the loop was checked.
 /// The iterable's rejection can be decided later (a literal bound converts
 /// only once the loop body relates the item type), and the erroneous-value
@@ -694,7 +721,7 @@ late_rejectable_for_loops: std.ArrayListUnmanaged(LateRejectableForLoop) = .empt
 /// Top-level destructuring definitions whose pattern a judgment made after
 /// the pattern was checked rejected (see `rejectPatternFailureOwner`). The
 /// erroneous-value sweep retires each through `rejectTopLevelDestructure`.
-rejected_destructure_defs: std.AutoHashMapUnmanaged(CIR.Def.Idx, void) = .empty,
+rejected_destructure_defs: collections.DenseMapUnmanaged(CIR.Def.Idx, void) = .empty,
 /// Tracks unannotated expression identities whose checked value type contains
 /// an error and therefore cannot be used to introduce a parent call relation.
 call_operand_type_error_exprs: std.ArrayListUnmanaged(bool),
@@ -703,13 +730,13 @@ call_operand_type_error_exprs: std.ArrayListUnmanaged(bool),
 /// `retired_operand_pool`: every operand before the first erroneous one, in
 /// evaluation order, then that erroneous operand. The erroneous-value sweep
 /// publishes them as the runtime error's `evaluated` operands.
-retired_operand_sequences: std.AutoHashMapUnmanaged(CIR.Expr.Idx, RetiredOperandSequence) = .empty,
+retired_operand_sequences: collections.DenseMap(CIR.Expr.Idx, RetiredOperandSequence),
 retired_operand_pool: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
 /// Annotations that describe host-boundary values (hosted lambdas and
 /// `provides` defs). Their rows are generated as written—implicit polarity
 /// opening does not apply across the host boundary. Populated once per check
 /// from the module's defs and provides entries.
-host_boundary_annotations: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, void) = .empty,
+host_boundary_annotations: collections.DenseMapUnmanaged(CIR.Annotation.Idx, void) = .empty,
 /// Every implicitly opened tag-union extension minted while generating an
 /// annotation—implicit output-position openness, an anonymous `..` in an
 /// output position, and alias markers resolved open—in generation order.
@@ -753,7 +780,7 @@ bounded_row_marks: std.ArrayListUnmanaged(BoundedRowMark) = .empty,
 /// Scoped sink owned by the alias declaration currently being constructed.
 alias_hidden_exts: ?*std.ArrayListUnmanaged(Var) = null,
 nominal_positions: std.AutoHashMapUnmanaged(NominalPositionKey, ?[]annotation_positions.Positions) = .empty,
-annotation_implicit_open_exts: std.AutoHashMapUnmanaged(CIR.Annotation.Idx, ImplicitOpenExtRange) = .empty,
+annotation_implicit_open_exts: collections.DenseMapUnmanaged(CIR.Annotation.Idx, ImplicitOpenExtRange) = .empty,
 /// The `implicit_open_exts` ranges of top-level VALUE bindings that do not
 /// generalize (a weak shared row; design.md "Polarity"). Grounded to `[]`
 /// after the module solves (`closeWeakValueImplicitOpenExts`), so the
@@ -790,7 +817,7 @@ implicit_parse_mode: ImplicitParseMode = .validate,
 implicit_parse_requests: std.ArrayListUnmanaged(ImplicitParseRequest) = .empty,
 /// Tracks bindings whose defining expression is known erroneous and whose
 /// subsequent local lookups must therefore become explicit runtime errors.
-erroneous_value_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void) = .empty,
+erroneous_value_patterns: collections.DenseMapUnmanaged(CIR.Pattern.Idx, void) = .empty,
 /// The value each name was bound from, for the names that bind nothing when
 /// that value is erroneous: an unannotated local assignment's own name, every
 /// name a local destructure binds, every name a `match` branch pattern binds
@@ -798,7 +825,7 @@ erroneous_value_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void) = .emp
 /// iterable). A value can be rejected after the names bound from it were
 /// checked (a literal whose conversion a later relation decides), and
 /// `valueIsErroneous` follows these links to find that out.
-binder_source_exprs: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
+binder_source_exprs: collections.DenseMap(CIR.Pattern.Idx, CIR.Expr.Idx),
 /// Scratch for the binders `valueIsErroneous` walks through.
 binder_source_path: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
 /// The relation being checked (`problem.RelationOwner`). Every problem
@@ -829,7 +856,7 @@ problem_owners: std.ArrayListUnmanaged(problem.RelationOwner) = .empty,
 /// The values each relation-owning expression reads, captured when its
 /// checking begins (`recordRelationOperands`), since a rejected expression is
 /// later replaced by a runtime error. Ranges into `relation_operand_pool`.
-relation_operands: std.AutoHashMapUnmanaged(CIR.Expr.Idx, RelationOperands) = .empty,
+relation_operands: collections.DenseMapUnmanaged(CIR.Expr.Idx, RelationOperands) = .empty,
 relation_operand_pool: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
 /// The relation under which each erroneous value expression or binder in
 /// `erroneous_value_exprs` and `erroneous_value_patterns` was made
@@ -839,7 +866,7 @@ erroneous_causes: std.AutoHashMapUnmanaged(u32, ErroneousCause) = .empty,
 /// binding cannot quantify (design.md "Value Bindings Generalize By
 /// Expression"). The annotation is reported and not applied, so the binding
 /// is checked as an unannotated one, and its right-hand side is retired.
-rejected_value_annotations: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void) = .empty,
+rejected_value_annotations: collections.DenseMapUnmanaged(CIR.Pattern.Idx, void) = .empty,
 /// Default expressions rejected by a finalize judgment (effectful,
 /// parameter-constraining) with the problem already reported. Explicit
 /// evidence for `checkDefaultRestrictions`: the residue walk skips them and
@@ -849,7 +876,7 @@ rejected_value_annotations: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void) = .e
 /// constraint-carrying flex) is SUPPRESSED by the unifier, and marking the
 /// var's solved class erroneous directly would leak the poison into a
 /// shared monomorphic callee's scheme.
-rejected_default_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .empty,
+rejected_default_exprs: collections.DenseMapUnmanaged(CIR.Expr.Idx, void) = .empty,
 /// Every accepted explicit nominal constructor backing relation, for the
 /// settled-state re-decision in `recheckNominalConstructorBackings`.
 accepted_nominal_constructor_backings: std.ArrayListUnmanaged(AcceptedNominalConstructorBacking) = .empty,
@@ -872,7 +899,7 @@ hoist_deferred_roots: std.ArrayListUnmanaged(HoistDeferredRoot) = .empty,
 /// Immutable local binding RHS expressions that were proven hoistable when the
 /// binding was checked. A candidate becomes a selected root only when a later
 /// lookup actually references the binding.
-hoist_binding_candidates: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .{},
+hoist_binding_candidates: collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
 /// Block-scope stack for hoist binding candidates. Candidate entries are scoped
 /// like their source locals; selected roots survive because they are already
 /// tied to an in-scope use.
@@ -880,12 +907,12 @@ hoist_binding_scope_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
 /// Temporary checker-only provenance for local binders known to be available
 /// during compile-time finalization. This is scoped lexically and never
 /// published as checked-artifact metadata.
-hoist_known_values: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, HoistKnownValue) = .{},
+hoist_known_values: collections.DenseMapUnmanaged(CIR.Pattern.Idx, HoistKnownValue) = .empty,
 /// Lexical scope stack for `hoist_known_values`.
 hoist_known_value_scope_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
 /// Branch-local binders known only inside the enclosing match expression root.
 /// These are temporary checker facts, not checked-artifact metadata.
-hoist_contextual_bindings: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, usize) = .{},
+hoist_contextual_bindings: collections.DenseMapUnmanaged(CIR.Pattern.Idx, usize) = .empty,
 /// Lexical scope stack for `hoist_contextual_bindings`.
 hoist_contextual_binding_scope_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
 /// Selected local binding roots, keyed by their binding pattern. The value is
@@ -901,18 +928,18 @@ hoist_selected_pattern_validations: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u3
 /// Expressions whose original subtrees were replaced with explicit runtime
 /// errors after hoist selection had already seen them. Selected roots and
 /// dependencies inside these subtrees must be pruned before publication.
-hoist_invalidated_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
+hoist_invalidated_exprs: collections.DenseMapUnmanaged(CIR.Expr.Idx, void) = .empty,
 /// Binder patterns of statements replaced with explicit runtime errors after
 /// hoist selection had already seen them. Publication has no checked pattern
 /// for these binders, so a selected root that names one must be pruned even
 /// when its expression stays evaluated.
-hoist_retired_binders: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void) = .{},
+hoist_retired_binders: collections.DenseMapUnmanaged(CIR.Pattern.Idx, void) = .empty,
 /// Expressions that instantiated a scheme whose instantiated requirement
 /// another expression rejected (`rejectedRequirementInstantiatedElsewhere`).
 /// Evaluating one reaches a dispatch that cannot run, so no hoisted root
 /// containing one is kept: the expression evaluates at runtime, in source
 /// order, and crashes where the rejected dispatch runs.
-rejected_instantiation_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
+rejected_instantiation_exprs: collections.DenseMapUnmanaged(CIR.Expr.Idx, void) = .empty,
 /// Top-level-equivalent expressions checked in a guarded hoist position. A
 /// root whose expression is in this set is published as a guarded root.
 hoist_guarded_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
@@ -931,14 +958,14 @@ local_procedure_candidate_stack: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empt
 /// The candidate-stack depth at which each rigid type variable was introduced
 /// by an annotation. A rigid-variable lookup from a deeper candidate names a
 /// type variable of an enclosing function.
-rigid_var_candidate_depths: std.AutoHashMapUnmanaged(CIR.TypeAnno.Idx, u32) = .{},
+rigid_var_candidate_depths: collections.DenseMapUnmanaged(CIR.TypeAnno.Idx, u32) = .empty,
 /// Module-level type declarations; a type declaration outside this set is
 /// declared inside a function body.
-module_type_decls: std.AutoHashMapUnmanaged(CIR.Statement.Idx, void) = .{},
+module_type_decls: collections.DenseMapUnmanaged(CIR.Statement.Idx, void) = .empty,
 /// The candidate-stack depth at which each pattern checked inside a
 /// candidate was bound. A pattern checked outside every candidate has no
 /// entry, which is depth zero.
-local_pattern_candidate_depths: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32) = .{},
+local_pattern_candidate_depths: collections.DenseMapUnmanaged(CIR.Pattern.Idx, u32) = .empty,
 /// Local names a candidate's lambda refers to that are bound outside it. A
 /// candidate is promoted only when each of these is a top-level binding or a
 /// promoted candidate itself.
@@ -947,15 +974,15 @@ local_procedure_outer_refs: std.ArrayListUnmanaged(LocalProcedureOuterRef) = .em
 /// declaration order. Publication consumes this slice.
 promoted_local_procedures: std.ArrayListUnmanaged(hoist_roots.PromotedLocalProcedure) = .empty,
 /// Binding patterns of `promoted_local_procedures`.
-promoted_local_procedure_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void) = .{},
+promoted_local_procedure_patterns: collections.DenseMapUnmanaged(CIR.Pattern.Idx, void) = .empty,
 /// Constraint callables of dispatch edges whose selected target, or the
 /// target of a dispatch derived from them, is a local procedure that was not
 /// promoted. Settled with `promoted_local_procedure_patterns`.
-contextual_local_dispatch_fn_vars: std.AutoHashMapUnmanaged(Var, void) = .{},
+contextual_local_dispatch_fn_vars: collections.DenseMapUnmanaged(Var, void) = .empty,
 /// Expressions whose evaluation dispatches an edge in
 /// `contextual_local_dispatch_fn_vars`: each edge's introducing expression,
 /// and each lookup that instantiated a scheme requirement it resolves.
-contextual_local_dispatch_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
+contextual_local_dispatch_exprs: collections.DenseMapUnmanaged(CIR.Expr.Idx, void) = .empty,
 /// Top-level defs whose zero-arg function result will be observed as an
 /// executable/eval root. Ordinary thunks may stay polymorphic; these roots may
 /// not leave static-dispatch obligations in their immediate result.
@@ -1073,7 +1100,7 @@ dispatch_replay_sources: std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(Di
 dispatch_replay_shapes: std.ArrayListUnmanaged(u8) = .empty,
 dispatch_replay_frozen_pairs: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty,
 dispatch_replay_trees: std.ArrayListUnmanaged(u8) = .empty,
-scratch_freeze_map: std.AutoHashMapUnmanaged(Var, Var) = .empty,
+scratch_freeze_map: collections.DenseMapUnmanaged(Var, Var) = .empty,
 scratch_freeze_order: std.ArrayListUnmanaged(Var) = .empty,
 scratch_freeze_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// Bindings one of whose eligible edges has settled to a ground instance.
@@ -1088,9 +1115,9 @@ pending_replay_shape_hash: u64 = 0,
 pending_replay_scheme_use: ?u32 = null,
 /// Unsettled root edges whose instantiation resolved nested requirements:
 /// the only edges whose settling can make a binding replayable.
-dispatch_replay_candidates: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+dispatch_replay_candidates: collections.DenseMapUnmanaged(Var, u32) = .empty,
 scratch_replay_shape: std.ArrayListUnmanaged(u8) = .empty,
-scratch_replay_shape_vars: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+scratch_replay_shape_vars: collections.DenseMapUnmanaged(Var, u32) = .empty,
 /// Replay sources whose whole nested requirement tree has settled.
 dispatch_replay_ready: std.AutoHashMapUnmanaged(u32, void) = .empty,
 /// Edges whose target concrete dispatch replay selected.
@@ -1125,7 +1152,7 @@ probe_links: std.ArrayListUnmanaged(ProbeLink) = .empty,
 probe_link_copies: std.ArrayListUnmanaged(SavedCopy) = .empty,
 /// Schemes one of whose uses settled as a replay source would: only their
 /// uses encode a shape.
-use_replayable_schemes: std.AutoHashMapUnmanaged(Var, void) = .empty,
+use_replayable_schemes: collections.DenseMapUnmanaged(Var, void) = .empty,
 /// Per whole-use shape hash, the settled uses that are replay sources.
 use_replay_sources: std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(UseReplaySource)) = .empty,
 use_replay_shapes: std.ArrayListUnmanaged(u8) = .empty,
@@ -1136,10 +1163,10 @@ use_settled_entries: std.AutoHashMapUnmanaged(usize, void) = .empty,
 settling_use: ?u32 = null,
 scratch_use_owned: std.ArrayListUnmanaged(Var) = .empty,
 scratch_ground_vars: std.ArrayListUnmanaged(Var) = .empty,
-scratch_ground_seen: std.AutoHashMapUnmanaged(Var, void) = .empty,
+scratch_ground_seen: collections.DenseMapUnmanaged(Var, void) = .empty,
 scratch_replay_sources: std.ArrayListUnmanaged(u32) = .empty,
 scratch_replay_pairs: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty,
-scratch_replay_nodes: std.AutoHashMapUnmanaged(Var, Var) = .empty,
+scratch_replay_nodes: collections.DenseMapUnmanaged(Var, Var) = .empty,
 scratch_replay_grafts: std.ArrayListUnmanaged(DispatchReplayPair) = .empty,
 scratch_replay_kind_grafts: std.ArrayListUnmanaged(DispatchReplayPair) = .empty,
 scratch_replay_walk: std.ArrayListUnmanaged(DispatchReplayPair) = .empty,
@@ -1153,7 +1180,7 @@ where_method_use_record_by_fn_var: std.AutoHashMapUnmanaged(Var, u32) = .empty,
 /// obligations from unrelated caller constraints merely grounded by the same
 /// unification.
 dispatch_derivations: std.ArrayListUnmanaged(DispatchDerivation) = .empty,
-dispatch_derivation_by_child_fn_var: std.AutoHashMapUnmanaged(Var, Var) = .empty,
+dispatch_derivation_by_child_fn_var: collections.DenseMapUnmanaged(Var, Var) = .empty,
 /// Per method name, the constraint names that instantiating any binding of
 /// that name can mint as child dispatch relations. A name is summarized once
 /// every binding's scheme is final, which it then stays. Keys and names are
@@ -1163,13 +1190,17 @@ method_name_mints: collections.DenseMap(MethodNameId, []const MethodNameId),
 /// can mint (see `appendLocalSchemeMintNames`). A scheme is final once its
 /// binding is checked outside any still-open recursive group, or when it was
 /// imported, and it then stays unchanged.
-scheme_mint_names: std.AutoHashMapUnmanaged(Var, []const MethodNameId) = .empty,
+scheme_mint_names: collections.DenseMapUnmanaged(Var, []const MethodNameId) = .empty,
 /// Shared method-name identity domain for the reachability walk.
 method_mint_names: canonical_names.CanonicalNameStore,
 /// Every other module whose method bindings a dispatch lookup can select,
 /// collected on first use.
 method_binding_envs: ?[]const *const ModuleEnv = null,
 scratch_method_mint_evidence: dispatch_evidence.Scratch = .{},
+/// Scratch for `schemeHasEvidenceParams`, which reads its parameters only
+/// to count them and calls nothing that re-enters it.
+scratch_evidence_probe: dispatch_evidence.Scratch = .{},
+scratch_evidence_probe_params: std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam) = .empty,
 scratch_method_mint_params: std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam) = .empty,
 scratch_method_mint_requirements: std.ArrayListUnmanaged(dispatch_evidence.SchemeRequirement) = .empty,
 scratch_scheme_mint_names: std.ArrayListUnmanaged(MethodNameId) = .empty,
@@ -1178,7 +1209,7 @@ scratch_scheme_mint_names: std.ArrayListUnmanaged(MethodNameId) = .empty,
 /// that operation evaluates the component's dispatch. Kept apart from
 /// `dispatch_derivations`, whose lineage is a dispatch target's own.
 component_derivations: std.ArrayListUnmanaged(DispatchDerivation) = .empty,
-component_derivation_by_child_fn_var: std.AutoHashMapUnmanaged(Var, Var) = .empty,
+component_derivation_by_child_fn_var: collections.DenseMapUnmanaged(Var, Var) = .empty,
 /// The constraint callables of the structural comparisons and hashes whose
 /// component obligations have been derived, in derivation order. A relation's
 /// components are derived exactly once, however many queue entries carry it.
@@ -1208,16 +1239,16 @@ local_method_names: std.ArrayListUnmanaged(Ident.Idx) = .empty,
 /// The candidate stack where each dispatch constraint was created, keyed by
 /// its constraint callable. Recorded only in a module that declares a method
 /// in a function body, as the sites a promotion dependency is read from.
-dispatch_candidate_frames: std.AutoHashMapUnmanaged(Var, CandidateFrames) = .empty,
+dispatch_candidate_frames: collections.DenseMapUnmanaged(Var, CandidateFrames) = .empty,
 dispatch_candidate_frame_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
 /// For each type declared in a function body that names a type variable of an
 /// enclosing function, the shallowest candidate depth of such a variable.
-local_type_context_depths: std.AutoHashMapUnmanaged(CIR.Statement.Idx, u32) = .empty,
+local_type_context_depths: collections.DenseMapUnmanaged(CIR.Statement.Idx, u32) = .empty,
 /// Type declarations being generated, innermost last.
 type_decl_generation_frames: std.ArrayListUnmanaged(TypeDeclGenerationFrame) = .empty,
 /// The right-hand side of each local declaration, by binding pattern. Built on
 /// first use by local method resolution or diagnostic provenance tracing.
-local_decl_expr_by_pattern: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
+local_decl_expr_by_pattern: collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
 /// Whether the declaration index has been built, including an empty index.
 local_decl_exprs_indexed: bool = false,
 /// Reusable scratch for the receiver-embedding walk of recursive-dispatch
@@ -1306,7 +1337,7 @@ default_decided_records: std.ArrayListUnmanaged(DefaultDecidedRecord) = .empty,
 /// Records (by recorded var) whose undetermined-type diagnostic was already
 /// reported: a defaulted type is reported once, however many of its
 /// requirements fail.
-undetermined_type_reported: std.AutoHashMapUnmanaged(Var, void) = .empty,
+undetermined_type_reported: collections.DenseMapUnmanaged(Var, void) = .empty,
 /// Tuple field accesses whose receiver was still unresolved when checked.
 /// A later call-site or annotation may resolve the receiver to a concrete tuple;
 /// otherwise the final sweep reports that the tuple arity needs an annotation.
@@ -1362,7 +1393,7 @@ literal_defaulting_open_roots: std.ArrayListUnmanaged(Var) = .empty,
 literal_defaulting_seen_roots: collections.DenseMap(Var, void),
 literal_defaulting_component_parent: std.ArrayListUnmanaged(usize) = .empty,
 literal_defaulting_is_driver: std.ArrayListUnmanaged(bool) = .empty,
-literal_defaulting_footprint_owner: std.AutoHashMap(Var, usize),
+literal_defaulting_footprint_owner: collections.DenseMap(Var, usize),
 literal_defaulting_footprint: collections.DenseMap(Var, void),
 literal_defaulting_group_drivers: std.ArrayListUnmanaged(Var) = .empty,
 literal_defaulting_group_warnings: std.ArrayListUnmanaged(PendingBoundaryWarning) = .empty,
@@ -1399,7 +1430,7 @@ checked_lambda_params: std.ArrayListUnmanaged(CIR.Pattern.Span) = .empty,
 /// Lambdas whose bodies actually perform effects. This records direct checker
 /// output so binding-name diagnostics do not infer effectfulness from
 /// annotations that only make a pure body have an effectful function type.
-effectful_lambda_bodies: std.AutoHashMap(CIR.Expr.Idx, void),
+effectful_lambda_bodies: collections.DenseMap(CIR.Expr.Idx, void),
 /// Directed function-effect dependencies accumulated for the lambda body
 /// currently being checked. Each active lambda owns the suffix beginning at
 /// its matching frame start; nested lambda dependencies are copied into the
@@ -3123,9 +3154,9 @@ const HoistSelectionAction = enum {
 const HoistSelectionTransaction = struct {
     checker: *Self,
     staged_roots: std.ArrayListUnmanaged(hoist_roots.SelectedHoistedRoot) = .empty,
-    staged_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, u32) = .{},
-    staged_bindings: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32) = .{},
-    staged_pattern_validations: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32) = .{},
+    staged_exprs: collections.DenseMapUnmanaged(CIR.Expr.Idx, u32) = .{},
+    staged_bindings: collections.DenseMapUnmanaged(CIR.Pattern.Idx, u32) = .{},
+    staged_pattern_validations: collections.DenseMapUnmanaged(CIR.Pattern.Idx, u32) = .{},
     known_updates: std.ArrayListUnmanaged(HoistKnownUpdate) = .empty,
     committed: bool = false,
 
@@ -3592,9 +3623,9 @@ const HoistSelectionTransaction = struct {
         std.debug.assert(!self.committed);
 
         try self.checker.selected_hoisted_roots.ensureUnusedCapacity(self.checker.gpa, self.staged_roots.items.len);
-        try self.checker.hoist_selected_exprs.ensureUnusedCapacity(self.checker.gpa, self.staged_exprs.count());
-        try self.checker.hoist_selected_bindings.ensureUnusedCapacity(self.checker.gpa, self.staged_bindings.count());
-        try self.checker.hoist_selected_pattern_validations.ensureUnusedCapacity(self.checker.gpa, self.staged_pattern_validations.count());
+        try self.checker.hoist_selected_exprs.ensureUnusedCapacity(self.checker.gpa, @intCast(self.staged_exprs.count()));
+        try self.checker.hoist_selected_bindings.ensureUnusedCapacity(self.checker.gpa, @intCast(self.staged_bindings.count()));
+        try self.checker.hoist_selected_pattern_validations.ensureUnusedCapacity(self.checker.gpa, @intCast(self.staged_pattern_validations.count()));
 
         const selected_start = self.checker.selected_hoisted_roots.items.len;
         for (self.staged_roots.items, 0..) |root, offset| {
@@ -3823,7 +3854,7 @@ const TryRowFixpointScratch = struct {
     edge_nodes: std.ArrayListUnmanaged(u32) = .empty,
     edge_targets: std.ArrayListUnmanaged(u32) = .empty,
     /// Destination residual tail root to node.
-    node_keys: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+    node_keys: collections.DenseMapUnmanaged(Var, u32) = .empty,
     /// Owned edges grouped by destination node (`out_start` is per node).
     out_start: std.ArrayListUnmanaged(u32) = .empty,
     out_edges: std.ArrayListUnmanaged(u32) = .empty,
@@ -4061,7 +4092,7 @@ fn initAssumePrepared(
     // A checked environment can be deserialized and checked again. Initialize
     // its checker-local TypeScheme index from the producer-authored codec table
     // before any source checking or finalization can consume it.
-    var synthetic_binding_schemes: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    var synthetic_binding_schemes: collections.DenseMapUnmanaged(Var, void) = .empty;
     errdefer synthetic_binding_schemes.deinit(gpa);
     var rehydrated_type_schemes: std.ArrayListUnmanaged(TypeScheme) = .empty;
     errdefer {
@@ -4173,9 +4204,11 @@ fn initAssumePrepared(
         .try_lambda_host_origins = collections.DenseMap(CIR.Expr.Idx, Ident.Idx).init(gpa),
         .try_return_rows = TryReturnRows.init(gpa),
         .var_set = collections.DenseMap(Var, void).init(gpa),
-        .inspect_type_visits = std.AutoHashMap(Var, u8).init(gpa),
+        .inspect_type_visits = collections.DenseMap(Var, u8).init(gpa),
+        .ground_hash_seen = collections.DenseMap(Var, u32).init(gpa),
         .type_decl_generation_states = try initNodeSlots(TypeDeclGenerationState, gpa, node_count, .not_generated),
         .type_decl_dense_indices = try initNodeSlots(u32, gpa, node_count, no_type_decl_dense_index),
+        .exhaustiveness_arena = base.SingleThreadArena.init(gpa),
         .scratch_vars = try base.Scratch(types_mod.Var).init(gpa),
         .scratch_tags = try base.Scratch(types_mod.Tag).init(gpa),
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
@@ -4197,6 +4230,8 @@ fn initAssumePrepared(
         .binding_scheme_nodes = binding_scheme_nodes,
         .synthetic_binding_schemes = synthetic_binding_schemes,
         .call_operand_type_error_exprs = try initNodeSlots(bool, gpa, node_count, false),
+        .retired_operand_sequences = collections.DenseMap(CIR.Expr.Idx, RetiredOperandSequence).init(gpa),
+        .binder_source_exprs = collections.DenseMap(CIR.Pattern.Idx, CIR.Expr.Idx).init(gpa),
         .has_can_diagnostics = if (cir.store.scratch) |scratch| scratch.diagnostics.top() > 0 else false,
         .pinnable_vars = collections.DenseMap(Var, void).init(gpa),
         .use_instance_by_fn_var = collections.DenseMap(Var, u32).init(gpa),
@@ -4213,11 +4248,11 @@ fn initAssumePrepared(
         .boundary_reachable_vars = collections.DenseMap(Var, void).init(gpa),
         .boundary_leak_vars = collections.DenseMap(Var, void).init(gpa),
         .literal_defaulting_seen_roots = collections.DenseMap(Var, void).init(gpa),
-        .literal_defaulting_footprint_owner = std.AutoHashMap(Var, usize).init(gpa),
+        .literal_defaulting_footprint_owner = collections.DenseMap(Var, usize).init(gpa),
         .literal_defaulting_footprint = collections.DenseMap(Var, void).init(gpa),
         .alt_pattern_baseline = std.AutoHashMap(u32, MatchAltBaselineEntry).init(gpa),
         .alt_pattern_current = std.AutoHashMap(u32, CIR.Pattern.Idx).init(gpa),
-        .effectful_lambda_bodies = std.AutoHashMap(CIR.Expr.Idx, void).init(gpa),
+        .effectful_lambda_bodies = collections.DenseMap(CIR.Expr.Idx, void).init(gpa),
         .function_effect_resolution = effect_solver.Solver.init(gpa),
         .where_method_use_record_by_fn_var = rehydrated_where_method_uses,
     };
@@ -4274,6 +4309,12 @@ pub fn deinit(self: *Self) void {
     var scheme_names = self.scheme_mint_names.valueIterator();
     while (scheme_names.next()) |names| self.gpa.free(names.*);
     if (self.method_binding_envs) |envs| self.gpa.free(envs);
+    for (self.expr_kernel_pool.items) |state| {
+        state.tasks.deinit(self.gpa);
+        self.gpa.destroy(state);
+    }
+    for (self.check_activity_pool.items) |*activities| activities.deinit(self.gpa);
+    for (self.pattern_frame_pool.items) |*frames| frames.deinit(self.gpa);
     const fields = @typeInfo(Self).@"struct";
     inline for (fields.field_names, fields.field_types) |name, T| {
         const info = @typeInfo(T);
@@ -4562,7 +4603,7 @@ fn rejectCapturingMethods(self: *Self) Allocator.Error!void {
 
     var scope: LexicalScope = .{};
     defer scope.deinit(self.gpa);
-    var reported: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void) = .empty;
+    var reported: collections.DenseMapUnmanaged(CIR.Pattern.Idx, void) = .empty;
     defer reported.deinit(self.gpa);
     for (methods.keys(), methods.values()) |pattern, method| {
         if (self.cir.store.getExpr(method.expr) == .e_runtime_error) {
@@ -4613,7 +4654,7 @@ const LocalFunctionCaptures = struct {
     /// Bindings whose outer references are not collected yet.
     pending: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
     /// The value each function-like binding reaches, once settled.
-    reached: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Pattern.Idx) = .empty,
+    reached: collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Pattern.Idx) = .empty,
     scope: LexicalScope = .{},
 
     fn deinit(self: *LocalFunctionCaptures) void {
@@ -4695,7 +4736,7 @@ const LocalFunctionCaptures = struct {
 /// The expressions of one expression's lexical subtree, in pre-order, and the
 /// patterns bound inside it.
 const LexicalScope = struct {
-    patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void) = .empty,
+    patterns: collections.DenseMapUnmanaged(CIR.Pattern.Idx, void) = .empty,
     order: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
 
     fn deinit(self: *LexicalScope, gpa: Allocator) void {
@@ -4723,7 +4764,7 @@ fn collectLexicalScope(self: *Self, root: CIR.Expr.Idx, scope: *LexicalScope) Al
 const LexicalScopePusher = struct {
     checker: *Self,
     stack: *std.ArrayListUnmanaged(CIR.Expr.Idx),
-    patterns: *std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
+    patterns: *collections.DenseMapUnmanaged(CIR.Pattern.Idx, void),
 
     fn expr(p: LexicalScopePusher, child: CIR.Expr.Idx) Allocator.Error!void {
         try p.stack.append(p.checker.gpa, child);
@@ -4738,7 +4779,7 @@ const LexicalScopePusher = struct {
     fn returnTarget(_: LexicalScopePusher, _: CIR.Expr.Idx) Allocator.Error!void {}
 };
 
-fn collectPatternSubtree(self: *Self, root: CIR.Pattern.Idx, out: *std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void)) Allocator.Error!void {
+fn collectPatternSubtree(self: *Self, root: CIR.Pattern.Idx, out: *collections.DenseMapUnmanaged(CIR.Pattern.Idx, void)) Allocator.Error!void {
     var pending: std.ArrayList(CIR.Pattern.Idx) = .empty;
     defer pending.deinit(self.gpa);
     try pending.append(self.gpa, root);
@@ -6705,8 +6746,19 @@ const Env = struct {
     /// env's clean prefix has accounted for.
     clean_log_cursor: usize = 0,
     clean_generation: u64 = 0,
-    /// Clean-prefix positions by the triggers that may change their entries.
-    clean_index: std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(u32)) = .empty,
+    /// Clean-prefix positions by the triggers that may change their entries:
+    /// `clean_index` holds the first link of each trigger's chain through
+    /// `clean_links`, so forgetting the prefix clears two flat tables rather
+    /// than one list per trigger ever seen.
+    clean_index: std.AutoHashMapUnmanaged(u64, u32) = .empty,
+    clean_links: std.ArrayListUnmanaged(CleanLink) = .empty,
+
+    const CleanLink = struct {
+        position: u32,
+        next: u32,
+
+        const none = std.math.maxInt(u32);
+    };
 
     fn init(
         gpa: std.mem.Allocator,
@@ -6725,16 +6777,15 @@ const Env = struct {
     fn deinit(self: *Env, gpa: std.mem.Allocator) void {
         self.var_pool.deinit();
         self.deferred_static_dispatch_constraints.deinit(gpa);
-        var lists = self.clean_index.valueIterator();
-        while (lists.next()) |list| list.deinit(gpa);
         self.clean_index.deinit(gpa);
+        self.clean_links.deinit(gpa);
     }
 
     /// Forget the clean prefix.
     fn clearClean(self: *Env) void {
         self.clean_len = 0;
-        var lists = self.clean_index.valueIterator();
-        while (lists.next()) |list| list.clearRetainingCapacity();
+        if (self.clean_index.count() != 0) self.clean_index.clearRetainingCapacity();
+        self.clean_links.clearRetainingCapacity();
     }
 
     /// Entries at `len` and beyond moved or left the queue.
@@ -7191,7 +7242,7 @@ fn settledRowThroughAliases(self: *Self, start: Var) ?Var {
 /// Record `var_`'s row root, keeping the first published root that reached it.
 fn recordSettledRowRoot(
     self: *Self,
-    roots: *std.AutoHashMapUnmanaged(Var, Var),
+    roots: *collections.DenseMapUnmanaged(Var, Var),
     var_: Var,
     origin: Var,
 ) std.mem.Allocator.Error!void {
@@ -7236,8 +7287,8 @@ fn walkSettledRoot(
     self: *Self,
     origin: Var,
     walk_stack: *std.ArrayListUnmanaged(SettledTypeReach),
-    semantic_row_roots: *std.AutoHashMapUnmanaged(Var, Var),
-    visited: *std.AutoHashMap(Var, void),
+    semantic_row_roots: *collections.DenseMapUnmanaged(Var, Var),
+    visited: *collections.DenseMap(Var, void),
 ) std.mem.Allocator.Error!void {
     try walk_stack.append(self.gpa, .{ .var_ = origin, .starts_row = true });
     while (walk_stack.pop()) |entry| {
@@ -7296,11 +7347,11 @@ test "settled row reachability uses caller-owned scratch across all seeds" {
     const checker = &test_env.checker;
     const store = checker.types;
     const shared_capacity = checker.var_set.capacity();
-    var visited = std.AutoHashMap(Var, void).init(std.testing.allocator);
+    var visited = collections.DenseMap(Var, void).init(std.testing.allocator);
     defer visited.deinit();
     var stack: std.ArrayListUnmanaged(SettledTypeReach) = .empty;
     defer stack.deinit(std.testing.allocator);
-    var owners: std.AutoHashMapUnmanaged(Var, Var) = .empty;
+    var owners: collections.DenseMapUnmanaged(Var, Var) = .empty;
     defer owners.deinit(std.testing.allocator);
     var root = try store.fresh();
     for (0..256) |_| {
@@ -7447,13 +7498,13 @@ fn validateSettledValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void
     // This once-per-check walk can reach the entire published graph. Retaining
     // that capacity in the common walk set makes every subsequent tiny walk
     // clear a module-sized hash table. Reuse it across seeds, then release it.
-    var settled_visited = std.AutoHashMap(Var, void).init(self.gpa);
+    var settled_visited = collections.DenseMap(Var, void).init(self.gpa);
     defer settled_visited.deinit();
     const visited = &settled_visited;
 
     // Each row root maps to the first published root that reached it, which a
     // conflict report shows as the value whose type holds the row.
-    var semantic_row_roots: std.AutoHashMapUnmanaged(Var, Var) = .empty;
+    var semantic_row_roots: collections.DenseMapUnmanaged(Var, Var) = .empty;
     defer semantic_row_roots.deinit(self.gpa);
     var walk_stack: std.ArrayListUnmanaged(SettledTypeReach) = .empty;
     defer walk_stack.deinit(self.gpa);
@@ -7505,7 +7556,7 @@ fn validateSettledValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void
 
     var seen_names: std.AutoHashMapUnmanaged(Ident.Idx, void) = .empty;
     defer seen_names.deinit(self.gpa);
-    var seen_parts: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    var seen_parts: collections.DenseMapUnmanaged(Var, void) = .empty;
     defer seen_parts.deinit(self.gpa);
     var invalid_rows: std.ArrayListUnmanaged(Var) = .empty;
     defer invalid_rows.deinit(self.gpa);
@@ -8011,9 +8062,9 @@ fn expressionErrorAlreadyEncloses(self: *const Self, region: Region, reported: [
     for (reported) |outer| {
         if (outer.start.offset <= region.start.offset and region.end.offset <= outer.end.offset) return true;
     }
-    var queued = self.erroneous_value_exprs.keyIterator();
+    var queued = self.erroneous_value_exprs.constKeyIterator();
     while (queued.next()) |expr_idx| {
-        const outer = self.cir.store.getExprRegion(expr_idx.*);
+        const outer = self.cir.store.getExprRegion(expr_idx);
         if (outer.start.offset <= region.start.offset and region.end.offset <= outer.end.offset) return true;
     }
     return false;
@@ -9241,7 +9292,7 @@ const GroundMarks = struct {
     /// Resolved vars in discovery order.
     order: std.ArrayListUnmanaged(Var) = .empty,
     /// Index into `order` by resolved var.
-    index_of: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+    index_of: collections.DenseMapUnmanaged(Var, u32) = .empty,
     /// Parent indexes of each var.
     parents: std.ArrayListUnmanaged(std.ArrayListUnmanaged(u32)) = .empty,
     ground: std.ArrayListUnmanaged(bool) = .empty,
@@ -9278,7 +9329,7 @@ const KnownGroundStop = enum {
 fn computeGroundMarksKnowing(
     self: *Self,
     roots: []const Var,
-    known_ground: ?*const std.AutoHashMapUnmanaged(Var, ?Var),
+    known_ground: ?*const collections.DenseMapUnmanaged(Var, ?Var),
     stop: KnownGroundStop,
 ) Allocator.Error!GroundMarks {
     var marks: GroundMarks = .{};
@@ -9527,10 +9578,10 @@ fn expectedTypeBackup(self: *Self, expected_var: Var, env: *Env) std.mem.Allocat
 /// decides equality.
 fn groundTypeHash(self: *Self, var_: Var) std.mem.Allocator.Error!?u64 {
     var hasher = std.hash.Wyhash.init(0);
-    var pending: std.ArrayListUnmanaged(Var) = .empty;
-    defer pending.deinit(self.gpa);
-    var seen = std.AutoHashMap(Var, u32).init(self.gpa);
-    defer seen.deinit();
+    const pending = &self.ground_hash_pending;
+    const seen = &self.ground_hash_seen;
+    pending.clearRetainingCapacity();
+    seen.clearRetainingCapacity();
     try pending.append(self.gpa, var_);
     while (pending.pop()) |raw| {
         const resolved = self.types.resolveVar(raw);
@@ -9603,21 +9654,23 @@ fn groundTypeHash(self: *Self, var_: Var) std.mem.Allocator.Error!?u64 {
     return hasher.final();
 }
 
+/// A pair of vars compared by `groundTypesIdentical`.
+const GroundVarPair = struct { left: Var, right: Var };
+
 /// Whether `left` and `right` are ground types with identical structure and
 /// copied descriptor flags (`DescriptorFlags.copied`), compared node by node,
 /// so a type equals the copy `expectedTypeBackup` takes of it. Any variable
 /// leaf makes the answer false.
 fn groundTypesIdentical(self: *Self, left: Var, right: Var) std.mem.Allocator.Error!bool {
-    const Pair = struct { left: Var, right: Var };
-    var pending: std.ArrayListUnmanaged(Pair) = .empty;
-    defer pending.deinit(self.gpa);
-    var seen = std.AutoHashMap(Pair, void).init(self.gpa);
-    defer seen.deinit();
+    const pending = &self.ground_identical_pending;
+    const seen = &self.ground_identical_seen;
+    pending.clearRetainingCapacity();
+    if (seen.count() != 0) seen.clearRetainingCapacity();
     try pending.append(self.gpa, .{ .left = left, .right = right });
     while (pending.pop()) |pair| {
         const l = self.types.resolveVar(pair.left);
         const r = self.types.resolveVar(pair.right);
-        if ((try seen.getOrPut(.{ .left = l.var_, .right = r.var_ })).found_existing) continue;
+        if ((try seen.getOrPut(self.gpa, .{ .left = l.var_, .right = r.var_ })).found_existing) continue;
         if (@as(u8, @bitCast(l.desc.flags.copied())) != @as(u8, @bitCast(r.desc.flags.copied()))) return false;
         switch (l.desc.content) {
             .flex, .rigid, .field_presence, .err => return false,
@@ -10298,11 +10351,9 @@ fn enqueueLocalSchemeRequirements(self: *Self, root: Var, env: *Env) Allocator.E
 
 fn schemeHasEvidenceParams(self: *Self, root: Var) std.mem.Allocator.Error!bool {
     if (self.schemeHasExplicitRequirements(root)) return true;
-    var scratch: dispatch_evidence.Scratch = .{};
-    defer scratch.deinit(self.gpa);
-    var params = std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam).empty;
-    defer params.deinit(self.gpa);
-    try dispatch_evidence.enumerateEvidenceParams(self.gpa, self.types, root, &scratch, &params);
+    const params = &self.scratch_evidence_probe_params;
+    params.clearRetainingCapacity();
+    try dispatch_evidence.enumerateEvidenceParams(self.gpa, self.types, root, &self.scratch_evidence_probe, params);
     return params.items.len != 0;
 }
 
@@ -12174,7 +12225,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 /// it depends only on the settled state.
 fn withdrawSupersededLiteralDefaultWarnings(self: *Self) Allocator.Error!void {
     if (self.undetermined_type_reported.count() == 0) return;
-    var undetermined_roots = std.AutoHashMap(Var, void).init(self.gpa);
+    var undetermined_roots = collections.DenseMap(Var, void).init(self.gpa);
     defer undetermined_roots.deinit();
     var reported = self.undetermined_type_reported.keyIterator();
     while (reported.next()) |var_| {
@@ -12314,7 +12365,7 @@ fn poisonCheckedStrictDemandCycles(
             }
         }.lessThan);
 
-        var poisoned_defs: std.AutoHashMapUnmanaged(CIR.Def.Idx, void) = .{};
+        var poisoned_defs: collections.DenseMapUnmanaged(CIR.Def.Idx, void) = .{};
         defer poisoned_defs.deinit(self.gpa);
         for (defs_to_poison.items) |def_to_poison| {
             _ = try self.problems.appendProblem(.{ .circular_value_definition = .{
@@ -12793,7 +12844,7 @@ const HoistedDependencyContext = struct {
     bindings: std.ArrayListUnmanaged(HoistedDependencyBinding) = .empty,
     callable_stability: std.AutoHashMapUnmanaged(HoistedCallableKey, HoistedCallableState) = .{},
     /// Stability of promoted local procedures, keyed by their lambda.
-    local_procedure_stability: std.AutoHashMapUnmanaged(CIR.Expr.Idx, HoistedCallableState) = .{},
+    local_procedure_stability: collections.DenseMapUnmanaged(CIR.Expr.Idx, HoistedCallableState) = .{},
 
     fn deinit(self: *@This(), allocator: Allocator) void {
         self.bindings.deinit(allocator);
@@ -15345,7 +15396,7 @@ fn checkInstantiatedStaticDispatchConstraints(
     // then retains its own recorded use expression for failure poisoning. The
     // ordinary invocation leaves these empty; they belong only to the one
     // settled compatibility invocation and its complete-to-quiescence loop.
-    var default_materialization_roots = std.AutoHashMap(Var, literal_defaulting.DefaultTarget).init(self.gpa);
+    var default_materialization_roots = collections.DenseMap(Var, literal_defaulting.DefaultTarget).init(self.gpa);
     defer default_materialization_roots.deinit();
     var instantiated_fns = collections.DenseMap(Var, void).init(self.gpa);
     defer instantiated_fns.deinit();
@@ -16169,7 +16220,7 @@ fn varHasUnresolvedInspectContent(
     self: *Self,
     var_: Var,
     position: InspectTypePosition,
-    visited: *std.AutoHashMap(Var, u8),
+    visited: *collections.DenseMap(Var, u8),
 ) std.mem.Allocator.Error!bool {
     var scan = UnresolvedInspectScan{ .check = self, .visited = visited };
     return UnresolvedInspectScan.Eval.run(self.gpa, &scan, .{ .var_ = var_, .position = position });
@@ -16180,7 +16231,7 @@ fn varHasUnresolvedInspectContent(
 /// reaches it.
 const UnresolvedInspectScan = struct {
     check: *Self,
-    visited: *std.AutoHashMap(Var, u8),
+    visited: *collections.DenseMap(Var, u8),
 
     const Leaf = struct { var_: Var, position: InspectTypePosition };
     const Eval = collections.AnyAll.Evaluation(Leaf, UnresolvedInspectScan);
@@ -16710,7 +16761,7 @@ fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Erro
     defer alias_bindings.deinit(self.gpa);
     try self.collectForClauseAliasBindings(input, env, &alias_bindings);
 
-    var alias_var_substitutions = std.AutoHashMap(Var, Var).init(self.gpa);
+    var alias_var_substitutions = collections.DenseMap(Var, Var).init(self.gpa);
     defer alias_var_substitutions.deinit();
     var alias_source_substitutions = std.AutoHashMap(copy_import.AliasSource, Var).init(self.gpa);
     defer alias_source_substitutions.deinit();
@@ -16797,7 +16848,7 @@ fn instantiatePlatformRequiredType(
     required_type: ModuleEnv.RequiredType,
     env: *Env,
     bindings: []const ForClauseAliasBinding,
-    alias_var_substitutions: *const std.AutoHashMap(Var, Var),
+    alias_var_substitutions: *const collections.DenseMap(Var, Var),
     alias_source_substitutions: *const std.AutoHashMap(copy_import.AliasSource, Var),
 ) std.mem.Allocator.Error!?InstantiatedRequirement {
     const declared_aliases = input.env.for_clause_aliases.sliceRange(required_type.type_aliases);
@@ -18208,7 +18259,7 @@ fn relatePredeclaredUse(
     const body_range = self.predeclaredSlotsPtr(annotation_idx).body orelse
         base.invariant("type checker invariant violated: predeclared scheme use related before its body generated the annotation", .{});
     const body = body_range.slice(self.predeclared_slot_vars.items);
-    var images = std.AutoHashMap(Var, Var).init(self.gpa);
+    var images = collections.DenseMap(Var, Var).init(self.gpa);
     defer images.deinit();
     for (body, use_copies[0..body.len]) |body_var, use_copy| {
         const image = (try self.predeclaredSlotImage(body_var, use_copy, quantified_from, &images, site.region, env)) orelse continue;
@@ -18228,7 +18279,7 @@ fn predeclaredSlotImage(
     body_var: Var,
     use_copy: Var,
     quantified_from: ?Rank,
-    images: *std.AutoHashMap(Var, Var),
+    images: *collections.DenseMap(Var, Var),
     region: Region,
     env: *Env,
 ) Allocator.Error!?Var {
@@ -18545,8 +18596,11 @@ fn checkActivityDone(result: CheckActivityResult) CheckActivityStep {
 
 /// Run a checking activity, and every activity it suspends on, to completion.
 fn runCheckActivities(self: *Self, root: CheckActivity, env: *Env) Allocator.Error!CheckActivityResult {
-    var activities: std.ArrayList(CheckActivity) = .empty;
-    defer activities.deinit(self.gpa);
+    var activities = self.check_activity_pool.pop() orelse std.ArrayList(CheckActivity).empty;
+    defer {
+        activities.clearRetainingCapacity();
+        self.check_activity_pool.append(self.gpa, activities) catch activities.deinit(self.gpa);
+    }
     errdefer while (activities.pop()) |activity| {
         var owned = activity;
         self.abortCheckActivity(&owned, env);
@@ -18560,7 +18614,7 @@ fn runCheckActivities(self: *Self, root: CheckActivity, env: *Env) Allocator.Err
             .push => try self.pushCheckActivity(&activities, step.push, env),
             .done => {
                 switch (activity.*) {
-                    .expr => |state| self.gpa.destroy(state),
+                    .expr => |state| self.releaseExprKernelActivity(state),
                     .ensure_group, .group, .def, .boundary, .pending_targets, .predeclared_uses => {},
                 }
                 activities.items.len -= 1;
@@ -18606,11 +18660,9 @@ fn abortCheckActivity(self: *Self, activity: *CheckActivity, env: *Env) void {
                 var owned_task = task;
                 self.abortExprTask(&owned_task, env);
             }
-            state.tasks.deinit(self.gpa);
-            self.gpa.destroy(state);
+            self.releaseExprKernelActivity(state);
         },
-        .boundary => |*state| if (state.owns_roots) self.gpa.free(state.roots),
-        .ensure_group, .pending_targets, .predeclared_uses => {},
+        .boundary, .ensure_group, .pending_targets, .predeclared_uses => {},
     }
 }
 
@@ -18961,9 +19013,9 @@ fn finishGroup(self: *Self, state: *GroupActivity, env: *Env) std.mem.Allocator.
 /// defaulting to a fixpoint, since a defaulting round can pin a receiver and
 /// surface a new obligation.
 const BoundaryActivity = struct {
+    /// Borrowed from the activity that pushed this one, which stays
+    /// suspended until this one completes.
     roots: []const BoundaryRoot,
-    /// Whether `roots` is owned by this activity.
-    owns_roots: bool = false,
     stage: enum { start, targets_resolved, replayed_before_capture, replayed_after_capture } = .start,
     owns_fixpoint: bool = false,
     pending_before: usize = 0,
@@ -19011,7 +19063,6 @@ fn stepBoundary(self: *Self, state: *BoundaryActivity, input: ?CheckActivityResu
                 // checked def, an annotated scheme, or a still-flex receiver.
                 std.debug.assert(self.pending_dispatch_targets.items.len == self.currentFramePendingTargetsTop());
                 std.debug.assert(self.pending_predeclared_scheme_uses.items.len == self.currentFramePendingPredeclaredUsesTop());
-                if (state.owns_roots) self.gpa.free(state.roots);
                 state.roots = &.{};
                 return checkActivityDone(.none);
             }
@@ -22531,7 +22582,7 @@ fn finishAliasDeclarationParameters(self: *Self, decl_var: Var, hidden: []const 
     try args.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
     // Instantiation records each newly copied marker once. A source argument
     // shared by several nested aliases still contributes just one parameter.
-    var seen: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    var seen: collections.DenseMapUnmanaged(Var, void) = .empty;
     defer seen.deinit(self.gpa);
     for (hidden) |var_| {
         const root = self.types.resolveVar(var_).var_;
@@ -24471,8 +24522,11 @@ fn checkPattern(
     defer trace.end();
 
     var valid = true;
-    var frames: std.ArrayList(PatternCheckFrame) = .empty;
-    defer frames.deinit(self.gpa);
+    var frames = self.pattern_frame_pool.pop() orelse std.ArrayList(PatternCheckFrame).empty;
+    defer {
+        frames.clearRetainingCapacity();
+        self.pattern_frame_pool.append(self.gpa, frames) catch frames.deinit(self.gpa);
+    }
     const records_top = self.scratch_record_fields.top();
     errdefer self.scratch_record_fields.clearFrom(records_top);
 
@@ -25493,14 +25547,24 @@ fn projectExpectedTagPayload(
     const fresh_start = self.types.len();
     self.var_map.clearRetainingCapacity();
     var copier = self.expectedShapeCopier(env);
-    var substitutions: std.AutoHashMapUnmanaged(Ident.Idx, Var) = .empty;
-    defer substitutions.deinit(self.gpa);
+    // Declarations have a handful of formals; their substitutions live on
+    // the stack when they fit.
+    var inline_substitutions: [16]Instantiator.RigidSub = undefined;
+    var heap_substitutions: []Instantiator.RigidSub = &.{};
+    defer self.gpa.free(heap_substitutions);
     const scratch_top = self.scratch_vars.top();
     defer self.scratch_vars.clearFrom(scratch_top);
     if (payload.nominal) |nominal| {
         const decl = self.types.getNominalDecl(self.types.lookupNominalDecl(nominal).?);
         const actuals = types_mod.Store.getNominalArgsRange(nominal);
         std.debug.assert(decl.formals.len() == actuals.len());
+        const substitutions = if (decl.formals.len() <= inline_substitutions.len)
+            inline_substitutions[0..decl.formals.len()]
+        else blk: {
+            heap_substitutions = try self.gpa.alloc(Instantiator.RigidSub, decl.formals.len());
+            break :blk heap_substitutions;
+        };
+        var substitution_count: usize = 0;
         // Copy all actuals before seeding template roots: actual arguments
         // belong to the caller's scope, not the declaration's rigid namespace.
         for (0..actuals.len()) |index| {
@@ -25512,11 +25576,12 @@ fn projectExpectedTagPayload(
             const actual = self.scratch_vars.sliceFromStart(scratch_top)[index];
             try self.var_map.put(formal.var_, actual);
             if (formal.desc.content == .rigid) {
-                try substitutions.put(self.gpa, formal.desc.content.rigid.name, actual);
+                substitutions[substitution_count] = .{ .name = formal.desc.content.rigid.name, .var_ = actual };
+                substitution_count += 1;
             }
         }
         self.scratch_vars.clearFrom(scratch_top);
-        copier.rigid_behavior = .{ .substitute_rigids_flex = &substitutions };
+        copier.rigid_behavior = .{ .substitute_rigids_flex = substitutions[0..substitution_count] };
     }
     for (0..arity) |index| {
         const slot = self.types.getVarAt(payload.args, @intCast(index));
@@ -26135,6 +26200,9 @@ const ExprKernelActivity = struct {
     child_does_fx: ?bool = null,
     /// A finished frame suspended at its group's generalization boundary.
     finishing: ?struct { frame: ExprCheckFrame, does_fx: bool } = null,
+    /// The suspended frame's boundary root. The boundary activity borrows it;
+    /// this kernel stays suspended until that activity completes.
+    boundary_root: BoundaryRoot = undefined,
 };
 
 fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected, function_owner: CIR.Expr.Idx) std.mem.Allocator.Error!bool {
@@ -26148,9 +26216,25 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
 }
 
 fn newExprKernelActivity(self: *Self, next: ExprChildRequest) Allocator.Error!*ExprKernelActivity {
+    if (self.expr_kernel_pool.pop()) |state| {
+        var tasks = state.tasks;
+        tasks.clearRetainingCapacity();
+        state.* = .{ .next = next, .tasks = tasks };
+        return state;
+    }
     const state = try self.gpa.create(ExprKernelActivity);
     state.* = .{ .next = next };
     return state;
+}
+
+/// Return a finished or aborted kernel activity to the pool. Its task stack
+/// is empty; its capacity is kept for the next activity.
+fn releaseExprKernelActivity(self: *Self, state: *ExprKernelActivity) void {
+    std.debug.assert(state.tasks.items.len == 0);
+    self.expr_kernel_pool.append(self.gpa, state) catch {
+        state.tasks.deinit(self.gpa);
+        self.gpa.destroy(state);
+    };
 }
 
 fn stepExprKernel(self: *Self, state: *ExprKernelActivity, env: *Env) std.mem.Allocator.Error!CheckActivityStep {
@@ -26193,7 +26277,6 @@ fn stepExprKernel(self: *Self, state: *ExprKernelActivity, env: *Env) std.mem.Al
         }
 
         if (state.tasks.items.len == 0) {
-            state.tasks.deinit(self.gpa);
             return checkActivityDone(.{ .does_fx = state.child_does_fx.? });
         }
         const task = &state.tasks.items[state.tasks.items.len - 1];
@@ -26225,13 +26308,12 @@ fn finishExprFrame(self: *Self, state: *ExprKernelActivity, frame: *ExprCheckFra
         .boundary => {
             state.finishing = .{ .frame = frame.*, .does_fx = does_fx };
             frame.active = false;
-            const roots = try self.gpa.alloc(BoundaryRoot, 1);
-            roots[0] = .{
+            state.boundary_root = .{
                 .owner = state.finishing.?.frame.expr_var_raw,
                 .interface = state.finishing.?.frame.expr_var,
                 .annotation = state.finishing.?.frame.annotation,
             };
-            return .{ .push = .{ .boundary = .{ .roots = roots, .owns_roots = true } } };
+            return .{ .push = .{ .boundary = .{ .roots = (&state.boundary_root)[0..1] } } };
         },
     }
 }
@@ -30897,8 +30979,10 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
 
         var open_cache = exhaustive.NominalOpenCache.init(self.gpa);
         defer open_cache.deinit();
+        self.beginExhaustivenessArena();
+        defer self.endExhaustivenessArena();
         const result_or_err = exhaustive.checkMatch(
-            self.cir.gpa,
+            &self.exhaustiveness_arena,
             self.types,
             self.cir,
             &self.cir.store,
@@ -30919,7 +31003,6 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
                 return .done;
             },
         };
-        defer result.deinit();
 
         try self.closeExhaustiveVars(result, env, match_region);
 
@@ -31157,7 +31240,7 @@ fn recordRetiredOperandSequence(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.E
         return;
     };
     self.retired_operand_pool.shrinkRetainingCapacity(start + index + 1);
-    try self.retired_operand_sequences.put(self.gpa, expr_idx, .{ .start = start, .len = @intCast(index + 1) });
+    try self.retired_operand_sequences.put(expr_idx, .{ .start = start, .len = @intCast(index + 1) });
 }
 
 /// Whether an operand is an erroneous value, by the rule call-operand
@@ -31895,29 +31978,30 @@ const ErroneousValueCrashes = enum { erroneous_values_crash, only_explicit_crash
 fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx, erroneous_values: ErroneousValueCrashes) Allocator.Error!bool {
     // Every result position must crash: a block's final expression, and
     // each branch of an `if`.
+    // A block continues at its final expression and an `if` at its `else`,
+    // so only the other branches of an `if` wait on the list.
     var pending: std.ArrayList(CIR.Expr.Idx) = .empty;
     defer pending.deinit(self.gpa);
-    try pending.append(self.gpa, expr_idx);
-    while (pending.pop()) |current| {
+    var current = expr_idx;
+    while (true) {
         const expr = self.cir.store.getExpr(current);
-        if (expr == .e_crash or expr == .e_ellipsis or expr == .e_expect_err or expr == .e_break) continue;
-        if (erroneous_values == .erroneous_values_crash and self.branchValueIsErroneous(current)) continue;
-        if (expr == .e_run_low_level and expr.e_run_low_level.op == .crash) continue;
-        if (expr == .e_block) {
-            try pending.append(self.gpa, expr.e_block.final_expr);
-            continue;
-        }
-        if (expr == .e_if) {
-            const if_expr = expr.e_if;
-            try pending.append(self.gpa, if_expr.final_else);
-            for (self.cir.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+        const crashes = expr == .e_crash or expr == .e_ellipsis or expr == .e_expect_err or expr == .e_break or
+            (erroneous_values == .erroneous_values_crash and self.branchValueIsErroneous(current)) or
+            (expr == .e_run_low_level and expr.e_run_low_level.op == .crash);
+        if (!crashes) {
+            if (expr == .e_block) {
+                current = expr.e_block.final_expr;
+                continue;
+            }
+            if (expr != .e_if) return false;
+            for (self.cir.store.sliceIfBranches(expr.e_if.branches)) |branch_idx| {
                 try pending.append(self.gpa, self.cir.store.getIfBranch(branch_idx).body);
             }
+            current = expr.e_if.final_else;
             continue;
         }
-        return false;
+        current = pending.pop() orelse return true;
     }
-    return true;
 }
 
 fn exprIsAllCrashConditional(self: *const Self, expr_idx: CIR.Expr.Idx) Allocator.Error!bool {
@@ -31967,6 +32051,20 @@ fn exhaustiveBuiltinIdents(self: *const Self, open_cache: *exhaustive.NominalOpe
         .list = self.cir.idents.list,
         .builtin_list = self.cir.idents.builtin_list,
     };
+}
+
+/// Claim the exhaustiveness arena for one check's analysis and result.
+fn beginExhaustivenessArena(self: *Self) void {
+    if (self.exhaustiveness_arena_in_use) base.invariant("check invariant violated: an exhaustiveness check started inside another", .{});
+    self.exhaustiveness_arena_in_use = true;
+}
+
+/// Release the exhaustiveness arena once a check's result is consumed. Analysis
+/// memory past a bounded chunk goes back to the allocator instead of staying
+/// with the checker.
+fn endExhaustivenessArena(self: *Self) void {
+    self.exhaustiveness_arena_in_use = false;
+    _ = self.exhaustiveness_arena.reset(.{ .retain_with_limit = 1 << 20 });
 }
 
 fn closeExhaustiveVars(
@@ -32055,7 +32153,7 @@ fn collectAbsentCtorPayloadBlockers(
     constructed_tags: []const Ident.Idx,
     out: *std.ArrayList(Var),
 ) Allocator.Error!void {
-    var arena = std.heap.ArenaAllocator.init(self.gpa);
+    var arena = base.SingleThreadArena.init(self.gpa);
     defer arena.deinit();
 
     var open_cache = exhaustive.NominalOpenCache.init(self.gpa);
@@ -32209,8 +32307,10 @@ fn checkPatternExhaustiveness(
 
     var open_cache = exhaustive.NominalOpenCache.init(self.gpa);
     defer open_cache.deinit();
+    self.beginExhaustivenessArena();
+    defer self.endExhaustivenessArena();
     const result_or_err = exhaustive.checkDestructure(
-        self.cir.gpa,
+        &self.exhaustiveness_arena,
         self.types,
         self.cir,
         &self.cir.store,
@@ -32225,7 +32325,6 @@ fn checkPatternExhaustiveness(
         error.OutOfMemory => return error.OutOfMemory,
         error.TypeError => return false,
     };
-    defer result.deinit();
 
     try self.closeExhaustiveVars(result, env, region);
 
@@ -34163,7 +34262,7 @@ fn copyVarWithSourceSubstitutions(
     other_module_var: Var,
     other_module_env: *const ModuleEnv,
     mb_region: ?Region,
-    source_var_substitutions: ?*const std.AutoHashMap(Var, Var),
+    source_var_substitutions: ?*const collections.DenseMap(Var, Var),
     source_alias_substitutions: ?*const std.AutoHashMap(copy_import.AliasSource, Var),
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
@@ -34172,7 +34271,7 @@ fn copyVarWithSourceSubstitutions(
     // First, reset state
     self.var_map.clearRetainingCapacity();
     if (source_var_substitutions) |substitutions| {
-        var iterator = substitutions.iterator();
+        var iterator = substitutions.constIterator();
         while (iterator.next()) |entry| {
             try self.var_map.put(entry.key_ptr.*, entry.value_ptr.*);
         }
@@ -35095,10 +35194,10 @@ fn recordRelationOperands(self: *Self, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) A
 
 /// The settled-state facts `settledValueCause` reads.
 const SettledValueCauses = struct {
-    causes: std.AutoHashMapUnmanaged(CIR.Expr.Idx, SettledValueCause) = .empty,
+    causes: collections.DenseMapUnmanaged(CIR.Expr.Idx, SettledValueCause) = .empty,
     /// Each use of a local name, with the binder it reads; a use can since
     /// have been replaced by a runtime error.
-    lookup_patterns: std.AutoHashMapUnmanaged(CIR.Expr.Idx, CIR.Pattern.Idx) = .empty,
+    lookup_patterns: collections.DenseMapUnmanaged(CIR.Expr.Idx, CIR.Pattern.Idx) = .empty,
 
     fn deinit(self: *SettledValueCauses, gpa: Allocator) void {
         self.causes.deinit(gpa);
@@ -35257,7 +35356,7 @@ fn settledCauseSources(self: *const Self, expr_idx: CIR.Expr.Idx, settled: *cons
         break :lookup if (expr == .e_lookup_local) expr.e_lookup_local.pattern_idx else null;
     };
     if (pattern) |binder| {
-        if (self.binder_source_exprs.getPtr(binder)) |source| {
+        if (self.binder_source_exprs.getPtrConst(binder)) |source| {
             return .{ .values = @as(*const [1]CIR.Expr.Idx, source), .is_name = true, .unlinked_pattern = null };
         }
         return .{ .values = &.{}, .is_name = true, .unlinked_pattern = binder };
@@ -35285,7 +35384,7 @@ fn markPatternBindingsErroneous(self: *Self, pattern_idx: CIR.Pattern.Idx) Alloc
 /// unannotated assignment's own name, and every name a destructure binds.
 fn recordBinderSources(self: *Self, pattern: CIR.Pattern.Idx, source: CIR.Expr.Idx, annotated: bool) Allocator.Error!void {
     if (self.cir.store.getPattern(pattern) == .assign) {
-        if (!annotated) try self.binder_source_exprs.put(self.gpa, pattern, source);
+        if (!annotated) try self.binder_source_exprs.put(pattern, source);
         return;
     }
     try self.recordPatternBinderSources(pattern, source);
@@ -35299,7 +35398,7 @@ fn recordPatternBinderSources(self: *Self, pattern: CIR.Pattern.Idx, source: CIR
     try self.collectPatternBindings(pattern, &bindings);
     for (bindings.items) |binding| {
         if (self.cir.store.getPattern(binding.pattern_idx) == .var_assign) continue;
-        try self.binder_source_exprs.put(self.gpa, binding.pattern_idx, source);
+        try self.binder_source_exprs.put(binding.pattern_idx, source);
     }
 }
 
@@ -36665,7 +36764,7 @@ const DefaultWalkEvidence = struct {
     /// Built once so cycle walks consume exact omission evidence in O(fields).
     omitted_defaults_by_expr: collections.DenseMap(CIR.Expr.Idx, u32),
     next_omitted_default: []?u32,
-    pattern_to_def_expr: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
+    pattern_to_def_expr: collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
     /// Local instantiating node -> scheme-use record indices
     /// (`value_use`/`nested_function_use` slots only).
     node_to_scheme_uses: std.AutoHashMapUnmanaged(u32, std.ArrayListUnmanaged(u32)) = .empty,
@@ -36673,7 +36772,7 @@ const DefaultWalkEvidence = struct {
     /// scheme-use record index.
     dispatch_scheme_uses: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     /// Resolved constraint fn var -> `dispatch_target_instantiations` indices.
-    instantiations_by_var: std.AutoHashMapUnmanaged(Var, std.ArrayListUnmanaged(u32)) = .empty,
+    instantiations_by_var: collections.DenseMapUnmanaged(Var, std.ArrayListUnmanaged(u32)) = .empty,
 
     fn deinit(evidence: *DefaultWalkEvidence, gpa: std.mem.Allocator) void {
         evidence.omitted_defaults_by_expr.deinit();
@@ -36718,11 +36817,11 @@ fn defaultMaterializationIsRecursive(
 
     var visited_defaults: std.AutoHashMapUnmanaged(u32, void) = .empty;
     defer visited_defaults.deinit(self.gpa);
-    var visited_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .empty;
+    var visited_exprs: collections.DenseMapUnmanaged(CIR.Expr.Idx, void) = .empty;
     defer visited_exprs.deinit(self.gpa);
     var seed_work: std.ArrayList(Var) = .empty;
     defer seed_work.deinit(self.gpa);
-    var visited_seed_vars: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    var visited_seed_vars: collections.DenseMapUnmanaged(Var, void) = .empty;
     defer visited_seed_vars.deinit(self.gpa);
     var visited_instantiations: std.AutoHashMapUnmanaged(u32, void) = .empty;
     defer visited_instantiations.deinit(self.gpa);
@@ -36739,7 +36838,7 @@ fn defaultMaterializationIsRecursive(
     // terminate.
     var invoked_work: std.ArrayList(CIR.Expr.Idx) = .empty;
     defer invoked_work.deinit(self.gpa);
-    var visited_invoked: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .empty;
+    var visited_invoked: collections.DenseMapUnmanaged(CIR.Expr.Idx, void) = .empty;
     defer visited_invoked.deinit(self.gpa);
     // Local pattern bindings encountered during THIS walk: a block statement
     // binding a pattern to an expression records the edge, so a lookup that
@@ -36749,7 +36848,7 @@ fn defaultMaterializationIsRecursive(
     // it, and a local lookup is only reachable from inside its binding block,
     // so every consulted binding has been recorded by the time its lookup
     // pops.
-    var local_pattern_to_expr: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty;
+    var local_pattern_to_expr: collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty;
     defer local_pattern_to_expr.deinit(self.gpa);
 
     while (true) {
@@ -37146,7 +37245,7 @@ fn appendArgsInvoked(
 fn recordDefaultWalkStmtBindings(
     self: *Self,
     stmt_idx: CIR.Statement.Idx,
-    local_pattern_to_expr: *std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx),
+    local_pattern_to_expr: *collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx),
 ) std.mem.Allocator.Error!void {
     switch (self.cir.store.getStatement(stmt_idx)) {
         .s_decl => |decl| {
@@ -37194,7 +37293,7 @@ fn appendDefaultWalkStmtExprs(
     self: *Self,
     stmt_idx: CIR.Statement.Idx,
     expr_work: *std.ArrayList(CIR.Expr.Idx),
-    local_pattern_to_expr: *std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx),
+    local_pattern_to_expr: *collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx),
 ) std.mem.Allocator.Error!void {
     try self.recordDefaultWalkStmtBindings(stmt_idx, local_pattern_to_expr);
     switch (self.cir.store.getStatement(stmt_idx)) {
@@ -37425,7 +37524,7 @@ const InstanceRequirement = struct {
 /// Collect every constrained type variable `root` reaches, through its
 /// structure and through the callables its requirements name.
 fn collectInstanceRequirements(self: *Self, root: Var, out: *std.ArrayListUnmanaged(InstanceRequirement)) Allocator.Error!void {
-    var visited: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    var visited: collections.DenseMapUnmanaged(Var, void) = .empty;
     defer visited.deinit(self.gpa);
     var pending: std.ArrayListUnmanaged(Var) = .empty;
     defer pending.deinit(self.gpa);
@@ -38349,8 +38448,8 @@ const GeneralizedAttachedConstraintKey = struct {
 
 fn generalizedCallableShape(
     self: *Self,
-    anchors: *const std.AutoHashMap(Var, void),
-    cache: *std.AutoHashMap(Var, [32]u8),
+    anchors: *const collections.DenseMap(Var, void),
+    cache: *collections.DenseMap(Var, [32]u8),
     fn_var: Var,
     value: ?Var,
     env: *Env,
@@ -38502,14 +38601,14 @@ fn deduplicateGeneralizedDispatchRequirements(
         false;
     if (!has_receiver_candidates and !has_scheme_candidates) return;
 
-    var anchors = std.AutoHashMap(Var, void).init(self.gpa);
+    var anchors = collections.DenseMap(Var, void).init(self.gpa);
     defer anchors.deinit();
-    try anchors.ensureTotalCapacity(@intCast(identity_vars.len));
+    try anchors.ensureTotalCapacity(identity_vars.len);
     for (identity_vars) |identity_var| {
-        anchors.putAssumeCapacity(self.types.resolveVar(identity_var).var_, {});
+        try anchors.put(self.types.resolveVar(identity_var).var_, {});
     }
 
-    var callable_shapes = std.AutoHashMap(Var, [32]u8).init(self.gpa);
+    var callable_shapes = collections.DenseMap(Var, [32]u8).init(self.gpa);
     defer callable_shapes.deinit();
     // Callables share most of what they reach, so their shapes are keyed with
     // one retained engine; every store change below invalidates it.
@@ -40589,7 +40688,7 @@ fn rowDefaultDischargesConstraints(self: *Self, range: StaticDispatchConstraint.
 fn closeValueRowTailsCarryingDerivations(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     var tails = std.ArrayList(RowTail).empty;
     defer tails.deinit(self.gpa);
-    var visited = std.AutoHashMap(Var, void).init(self.gpa);
+    var visited = collections.DenseMap(Var, void).init(self.gpa);
     defer visited.deinit();
     for (0..self.cir.all_defs.span.len) |def_offset| {
         const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
@@ -40624,7 +40723,7 @@ const RowTail = struct { var_: Var, kind: enum { tag, record } };
 /// parameters or results), each with the kind of row it ends. Walks an
 /// explicit stack, since data types nest as deeply as the source; children
 /// are pushed in reverse so tails are found in depth-first source order.
-fn collectDataRowTails(self: *Self, var_: Var, visited: *std.AutoHashMap(Var, void), out: *std.ArrayList(RowTail)) std.mem.Allocator.Error!void {
+fn collectDataRowTails(self: *Self, var_: Var, visited: *collections.DenseMap(Var, void), out: *std.ArrayList(RowTail)) std.mem.Allocator.Error!void {
     var stack = std.ArrayList(DataRowItem).empty;
     defer stack.deinit(self.gpa);
     try stack.append(self.gpa, .{ .data = var_ });
@@ -41865,7 +41964,7 @@ fn relateTryRowFixpoint(self: *Self, env: *Env) Allocator.Error!bool {
         const source_tail = self.types.resolveVar(self.tagRowTail(edge.plan.err)).var_;
         try scratch.edge_targets.append(self.gpa, scratch.node_keys.get(source_tail) orelse TryRowFixpointScratch.no_node);
     }
-    const node_count: u32 = scratch.node_keys.count();
+    const node_count: u32 = @intCast(scratch.node_keys.count());
     try scratch.out_start.appendNTimes(self.gpa, 0, node_count + 1);
     for (scratch.edge_nodes.items) |node| scratch.out_start.items[node + 1] += 1;
     for (1..scratch.out_start.items.len) |i| scratch.out_start.items[i] += scratch.out_start.items[i - 1];
@@ -43623,7 +43722,7 @@ fn appendReplayShapeWalk(self: *Self) Allocator.Error!?void {
             try appendReplayWord(out, self.gpa, seen.value_ptr.*);
             continue;
         }
-        seen.value_ptr.* = self.scratch_replay_shape_vars.count() - 1;
+        seen.value_ptr.* = @intCast(self.scratch_replay_shape_vars.count() - 1);
         try out.append(self.gpa, @bitCast(resolved.desc.flags.relational()));
         // Children are pushed in reverse, so they are encoded in order.
         switch (resolved.desc.content) {
@@ -44016,7 +44115,7 @@ fn varIsStructure(self: *const Self, var_: Var, comptime tag: std.meta.Tag(types
 }
 
 /// `content` with each child replaced by its frozen copy.
-fn frozenContent(self: *Self, copies: *const std.AutoHashMapUnmanaged(Var, Var), content: types_mod.Content) Allocator.Error!types_mod.Content {
+fn frozenContent(self: *Self, copies: *const collections.DenseMapUnmanaged(Var, Var), content: types_mod.Content) Allocator.Error!types_mod.Content {
     return switch (content) {
         .flex, .rigid, .err => unreachable,
         .field_presence => content,
@@ -44068,19 +44167,19 @@ fn frozenContent(self: *Self, copies: *const std.AutoHashMapUnmanaged(Var, Var),
     };
 }
 
-fn frozenFunc(self: *Self, copies: *const std.AutoHashMapUnmanaged(Var, Var), func: types_mod.Func) Allocator.Error!types_mod.Func {
+fn frozenFunc(self: *Self, copies: *const collections.DenseMapUnmanaged(Var, Var), func: types_mod.Func) Allocator.Error!types_mod.Func {
     const args = try self.types.appendVars(try self.frozenCopies(copies, self.types.sliceVars(func.args)));
     const effect_deps = try self.types.appendVars(try self.frozenCopies(copies, self.types.sliceVars(func.effect_deps)));
     return .{ .args = args, .ret = self.frozenCopy(copies, func.ret), .effect_deps = effect_deps };
 }
 
-fn frozenCopy(self: *const Self, copies: *const std.AutoHashMapUnmanaged(Var, Var), var_: Var) Var {
+fn frozenCopy(self: *const Self, copies: *const collections.DenseMapUnmanaged(Var, Var), var_: Var) Var {
     return copies.get(self.types.resolveVar(var_).var_).?;
 }
 
 /// The frozen copies of `vars`, in `scratch_freeze_vars`, which the next call
 /// overwrites.
-fn frozenCopies(self: *Self, copies: *const std.AutoHashMapUnmanaged(Var, Var), vars: []const Var) Allocator.Error![]const Var {
+fn frozenCopies(self: *Self, copies: *const collections.DenseMapUnmanaged(Var, Var), vars: []const Var) Allocator.Error![]const Var {
     self.scratch_freeze_vars.clearRetainingCapacity();
     for (vars) |var_| try self.scratch_freeze_vars.append(self.gpa, self.frozenCopy(copies, var_));
     return self.scratch_freeze_vars.items;
@@ -44764,7 +44863,7 @@ fn freezeUseReplaySource(self: *Self, source: *UseReplaySource, env: *Env) Alloc
     // A dispatch-target record is found by its edge's own callable variable,
     // and two edges' callables can share a class, so each restated edge gets
     // a variable of its own in the frozen class of its callable.
-    var frozen_edges: std.AutoHashMapUnmanaged(Var, Var) = .empty;
+    var frozen_edges: collections.DenseMapUnmanaged(Var, Var) = .empty;
     defer frozen_edges.deinit(self.gpa);
     record_idx = use.record + 1;
     while (record_idx < use.records_end) : (record_idx += 1) {
@@ -44826,7 +44925,7 @@ fn freezeUseReplaySource(self: *Self, source: *UseReplaySource, env: *Env) Alloc
 /// The frozen variable standing for `var_` in a use replay source's frozen
 /// instance: an edge's own variable for a dispatch edge's callable, or else
 /// the frozen copy of its class. Null when `var_` is outside the instance.
-fn frozenUseVar(self: *const Self, frozen_edges: *const std.AutoHashMapUnmanaged(Var, Var), var_: Var) ?Var {
+fn frozenUseVar(self: *const Self, frozen_edges: *const collections.DenseMapUnmanaged(Var, Var), var_: Var) ?Var {
     if (frozen_edges.get(var_)) |edge_var| return edge_var;
     return self.scratch_freeze_map.get(self.types.resolveVar(var_).var_);
 }
@@ -45162,7 +45261,7 @@ fn verifyDispatchReplayAgainstFresh(
 /// its generalized classes are copied, as instantiation copies them, without
 /// registering anything with a solver environment, and the rest is shared.
 fn copySchemeForReplayCheck(self: *Self, root: Var) Allocator.Error!Var {
-    var copies: std.AutoHashMapUnmanaged(Var, Var) = .empty;
+    var copies: collections.DenseMapUnmanaged(Var, Var) = .empty;
     defer copies.deinit(self.gpa);
     var order: std.ArrayListUnmanaged(Var) = .empty;
     defer order.deinit(self.gpa);
@@ -45891,9 +45990,14 @@ fn syncCleanDeferredPrefix(self: *Self, env: *Env) void {
     const log = self.waiting_trigger_log.items;
     if (env.clean_len != 0) {
         for (log[env.clean_log_cursor..]) |key| {
-            const positions = env.clean_index.getPtr(key) orelse continue;
-            for (positions.items) |position| env.truncateClean(position);
-            positions.clearRetainingCapacity();
+            const head = env.clean_index.getPtr(key) orelse continue;
+            var link = head.*;
+            while (link != Env.CleanLink.none) {
+                const entry = env.clean_links.items[link];
+                env.truncateClean(entry.position);
+                link = entry.next;
+            }
+            head.* = Env.CleanLink.none;
             if (env.clean_len == 0) break;
         }
     }
@@ -45928,8 +46032,10 @@ fn extendCleanDeferredPrefix(self: *Self, env: *Env, rebuilt_from: usize) Alloca
 
 fn indexCleanDeferredEntry(self: *Self, env: *Env, key: u64, position: u32) Allocator.Error!void {
     const gop = try env.clean_index.getOrPut(self.gpa, key);
-    if (!gop.found_existing) gop.value_ptr.* = .empty;
-    try gop.value_ptr.append(self.gpa, position);
+    if (!gop.found_existing) gop.value_ptr.* = Env.CleanLink.none;
+    const link: u32 = @intCast(env.clean_links.items.len);
+    try env.clean_links.append(self.gpa, .{ .position = position, .next = gop.value_ptr.* });
+    gop.value_ptr.* = link;
 }
 
 fn beginStaticDispatchDrain(self: *Self, is_numeric_default_pass: bool, start: usize) StaticDispatchDrain {
@@ -45978,6 +46084,18 @@ fn resumeStaticDispatchDrain(
             drain.start = env.clean_len;
             drain.index = env.clean_len;
         }
+    }
+    // A fresh drain with no relation past its start and nothing held for a
+    // later pass processes nothing: the queue, the clean prefix, and the
+    // settled set are left exactly as they are. Problems recorded so far are
+    // still attributed to the relation the caller is in, as entering the
+    // drain's relation would.
+    if (drain.index == drain.start and drain.stopped_children == null and
+        drain.start >= env.deferred_static_dispatch_constraints.items.items.len and
+        self.scratch_deferred_static_dispatch_constraints.top() == drain.scratch_top)
+    {
+        try self.claimRecordedProblems();
+        return .done;
     }
     const start = drain.start;
     const scratch_deferred_top = drain.scratch_top;
@@ -46062,8 +46180,6 @@ fn resumeStaticDispatchDrain(
             },
         }
     }
-    try self.leaveRelation(drain_relation);
-
     try self.leaveRelation(drain_relation);
 
     // Preserve the enclosing drain's prefix, if this is a method-local drain.
@@ -49435,7 +49551,7 @@ fn publishDispatchRelationMerges(self: *Self) Allocator.Error!void {
 
     var stack: std.ArrayListUnmanaged(Var) = .empty;
     defer stack.deinit(self.gpa);
-    var visited: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    var visited: collections.DenseMapUnmanaged(Var, void) = .empty;
     defer visited.deinit(self.gpa);
 
     try self.cir.dispatch_relation_merges.items.ensureUnusedCapacity(self.gpa, first_fold.count());
@@ -51010,7 +51126,7 @@ fn analyzeDerivedMap(
 
     var all_type_vars = collections.DenseMap(Var, void).init(self.gpa);
     defer all_type_vars.deinit();
-    var type_var_payload = std.AutoHashMap(Var, u32).init(self.gpa);
+    var type_var_payload = collections.DenseMap(Var, u32).init(self.gpa);
     defer type_var_payload.deinit();
 
     var non_zst_count: u32 = 0;
@@ -51639,7 +51755,7 @@ fn recordGeneratedCodecDerivationSnapshot(
     self.syncSnapshotGroundEpoch();
     var ground_marks = try self.computeGroundMarksKnowing(roots.items, &self.snapshot_ground_copies, .copied);
     defer ground_marks.deinit(self.gpa);
-    var shared_copies = std.AutoHashMapUnmanaged(Var, void).empty;
+    var shared_copies = collections.DenseMapUnmanaged(Var, void).empty;
     defer shared_copies.deinit(self.gpa);
     for (ground_marks.order.items) |source| {
         const copy = (self.snapshot_ground_copies.get(source) orelse continue) orelse continue;

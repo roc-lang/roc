@@ -49,7 +49,7 @@ pub const ScalarizeError = std.mem.Allocator.Error;
 
 /// Internal aggregates can be scalarized under any procedure calling convention.
 pub fn rewritableProcBody(store: *const LirStore, proc_id: LIR.LirProcSpecId) ?LIR.CFStmtId {
-    return store.getProcSpec(proc_id).body;
+    return store.getProcSpecImmediate(proc_id).body;
 }
 
 /// Maximum scalarized field count per parameter; wider wrappers keep their
@@ -616,7 +616,7 @@ const Pass = struct {
         // a view into the store's local-id buffer, which `tryScalarize`
         // reallocates when it scalarizes, so it must not be read across that
         // call.
-        const proc_args = try GuardedList.dupe(self.allocator, LIR.LocalId, self.store.getLocalSpan(self.store.getProcSpec(proc_id).args));
+        const proc_args = try GuardedList.dupe(self.allocator, LIR.LocalId, self.store.getLocalSpan(self.store.getProcSpecImmediate(proc_id).args));
         defer self.allocator.free(proc_args);
 
         // Ordinary constructor candidates have disjoint definitions and
@@ -785,7 +785,7 @@ const Pass = struct {
         var closure = try self.aliasClosureOf(local);
         defer closure.deinit(self.allocator);
         for (inherited) |alias_stmt| {
-            const alias = self.store.getCFStmt(alias_stmt).assign_ref.target;
+            const alias = self.store.getCFStmtImmediate(alias_stmt).assign_ref.target;
             if (!self.inheritedAliasIsTransparent(alias)) return false;
             try closure.stmts.append(self.allocator, alias_stmt);
             if (self.field_reads.getPtr(alias)) |reads| try closure.reads.appendSlice(self.allocator, reads.items);
@@ -806,10 +806,10 @@ const Pass = struct {
         const direct_reads: []const LIR.CFStmtId = if (self.field_reads.getPtr(local)) |reads| reads.items else &.{};
         if (direct_reads.len == 0 and closure.reads.items.len == 0) return false;
         for (direct_reads) |read_stmt| {
-            if (self.store.getCFStmt(read_stmt).assign_ref.op.field.field_idx >= operands.len) return false;
+            if (self.store.getCFStmtImmediate(read_stmt).assign_ref.op.field.field_idx >= operands.len) return false;
         }
         for (closure.reads.items) |read_stmt| {
-            if (self.store.getCFStmt(read_stmt).assign_ref.op.field.field_idx >= operands.len) return false;
+            if (self.store.getCFStmtImmediate(read_stmt).assign_ref.op.field.field_idx >= operands.len) return false;
         }
 
         // Group this build's reads by operand before rewriting them, so each
@@ -832,7 +832,7 @@ const Pass = struct {
             var item: StructCascade = .{ .local = operand, .operand_uses = occurrences, .inherited = .empty };
             errdefer item.inherited.deinit(self.allocator);
             for ([_][]const LIR.CFStmtId{ direct_reads, closure.reads.items }) |reads| for (reads) |read_stmt| {
-                const field = self.store.getCFStmt(read_stmt).assign_ref.op.field.field_idx;
+                const field = self.store.getCFStmtImmediate(read_stmt).assign_ref.op.field.field_idx;
                 if (GuardedList.at(operands, field) == operand) try item.inherited.append(self.allocator, read_stmt);
             };
             try self.struct_cascade.append(self.allocator, item);
@@ -849,10 +849,10 @@ const Pass = struct {
             read.assign_ref.op = .{ .local = operand };
         }
         for (closure.stmts.items) |alias_stmt| {
-            const alias = self.store.getCFStmt(alias_stmt).assign_ref;
+            const alias = self.store.getCFStmtImmediate(alias_stmt).assign_ref;
             try self.removed.put(alias_stmt, alias.next);
         }
-        try self.removed.put(site.stmt, self.store.getCFStmt(site.stmt).assign_struct.next);
+        try self.removed.put(site.stmt, self.store.getCFStmtImmediate(site.stmt).assign_struct.next);
         return true;
     }
 
@@ -892,7 +892,7 @@ const Pass = struct {
     /// Replaces a single-variant tag read with a direct read of `payload`.
     /// The replacement is a `join_scalarize` statement at the read's origin.
     fn rewriteSingleVariantRead(self: *Pass, stmt_id: LIR.CFStmtId, payload: LIR.LocalId, payload_layout: layout_mod.Idx) ScalarizeError!void {
-        const assign = self.store.getCFStmt(stmt_id).assign_ref;
+        const assign = self.store.getCFStmtImmediate(stmt_id).assign_ref;
         const replacement: LIR.CFStmt = switch (assign.op) {
             .discriminant => .{ .assign_literal = .{
                 .target = assign.target,
@@ -944,7 +944,7 @@ const Pass = struct {
 
     fn removeAliasClosure(self: *Pass, closure: *const AliasClosure) ScalarizeError!void {
         for (closure.stmts.items) |alias_stmt| {
-            const alias = self.store.getCFStmt(alias_stmt).assign_ref;
+            const alias = self.store.getCFStmtImmediate(alias_stmt).assign_ref;
             try self.removed.put(alias_stmt, alias.next);
         }
     }
@@ -1027,8 +1027,8 @@ const Pass = struct {
     ) ScalarizeError!void {
         try out.append(self.allocator, param);
         try out.appendSlice(self.allocator, closure.locals.items);
-        for (writes) |write_stmt| try out.append(self.allocator, self.store.getCFStmt(write_stmt).set_local.value);
-        for (alias_writes) |write_stmt| try out.append(self.allocator, self.store.getCFStmt(write_stmt).assign_ref.op.local);
+        for (writes) |write_stmt| try out.append(self.allocator, self.store.getCFStmtImmediate(write_stmt).set_local.value);
+        for (alias_writes) |write_stmt| try out.append(self.allocator, self.store.getCFStmtImmediate(write_stmt).assign_ref.op.local);
     }
 
     fn anyRoundLocal(self: *Pass, locals: []const LIR.LocalId) bool {
@@ -1078,13 +1078,13 @@ const Pass = struct {
         if (self.removed.contains(site.stmt)) return false;
         const payload = site.payload orelse return false;
         if (site.variant_index != 0 or site.discriminant != 0) return false;
-        const assign = self.store.getCFStmt(site.stmt).assign_tag;
+        const assign = self.store.getCFStmtImmediate(site.stmt).assign_tag;
         if (assign.target_desc != null or self.store.getLocal(payload).layout_idx != payload_layout) return false;
 
         var closure = try self.aliasClosureOf(local);
         defer closure.deinit(self.allocator);
         for (inherited) |alias_stmt| {
-            const alias = self.store.getCFStmt(alias_stmt).assign_ref.target;
+            const alias = self.store.getCFStmtImmediate(alias_stmt).assign_ref.target;
             if (!self.inheritedTagAliasIsTransparent(alias)) return false;
             try closure.stmts.append(self.allocator, alias_stmt);
             if (self.field_reads.getPtr(alias)) |reads| try closure.reads.appendSlice(self.allocator, reads.items);
@@ -1114,7 +1114,7 @@ const Pass = struct {
             var item: TagCascade = .{ .local = payload, .payload_uses = 1, .inherited = .empty };
             errdefer item.inherited.deinit(self.allocator);
             for ([_][]const LIR.CFStmtId{ direct_reads, closure.tag_reads.items }) |reads| for (reads) |read_stmt| {
-                switch (self.store.getCFStmt(read_stmt).assign_ref.op) {
+                switch (self.store.getCFStmtImmediate(read_stmt).assign_ref.op) {
                     .tag_payload, .tag_payload_struct => try item.inherited.append(self.allocator, read_stmt),
                     .discriminant, .local, .field, .list_reinterpret, .nominal => {},
                 }
@@ -1172,7 +1172,7 @@ const Pass = struct {
         if (param_is_proc_arg and listing_joins.len != 1) return false;
         if (self.anyRoundClaimed(&.{listing_joins})) return false;
         for (listing_joins) |listing_id| {
-            const listing = self.store.getCFStmt(listing_id).join;
+            const listing = self.store.getCFStmtImmediate(listing_id).join;
             const maybe_uninitialized = self.store.getLocalSpan(listing.maybe_uninitialized_params);
             for (0..GuardedList.borrowLen(maybe_uninitialized)) |index| {
                 if (GuardedList.at(maybe_uninitialized, index) == param) return false;
@@ -1196,17 +1196,17 @@ const Pass = struct {
         if (!self.validateSingleVariantReads(direct_reads, closure.tag_reads.items, payload_layout)) return false;
 
         for (writes) |write_stmt| {
-            const write = self.store.getCFStmt(write_stmt).set_local;
+            const write = self.store.getCFStmtImmediate(write_stmt).set_local;
             if (write.value == param or self.singleVariantPayloadLayout(write.value) != payload_layout) return false;
         }
         for (alias_writes) |write_stmt| {
-            const write = self.store.getCFStmt(write_stmt).assign_ref;
+            const write = self.store.getCFStmtImmediate(write_stmt).assign_ref;
             if (write.op.local == param or self.singleVariantPayloadLayout(write.op.local) != payload_layout) return false;
         }
         for (direct_builds) |site| {
             const payload = site.payload orelse return false;
             if (site.variant_index != 0 or site.discriminant != 0) return false;
-            const assign = self.store.getCFStmt(site.stmt).assign_tag;
+            const assign = self.store.getCFStmtImmediate(site.stmt).assign_tag;
             if (assign.target_desc != null or self.store.getLocal(payload).layout_idx != payload_layout) return false;
         }
 
@@ -1232,7 +1232,7 @@ const Pass = struct {
         const payload_param = try self.store.addLocal(.{ .layout_idx = payload_layout });
         try self.new_locals.append(self.allocator, payload_param);
         for (listing_joins) |listing_id| {
-            const old_params = self.store.getLocalSpan(self.store.getCFStmt(listing_id).join.params);
+            const old_params = self.store.getLocalSpan(self.store.getCFStmtImmediate(listing_id).join.params);
             var new_params = std.ArrayList(LIR.LocalId).empty;
             defer new_params.deinit(self.allocator);
             for (0..GuardedList.borrowLen(old_params)) |index| {
@@ -1249,15 +1249,15 @@ const Pass = struct {
         try self.removeAliasClosure(&closure);
 
         for (writes) |write_stmt| {
-            const write = self.store.getCFStmt(write_stmt).set_local;
+            const write = self.store.getCFStmtImmediate(write_stmt).set_local;
             try self.seedTagWrite(write_stmt, write.value, write.next, payload_param, payload_layout);
         }
         for (alias_writes) |write_stmt| {
-            const write = self.store.getCFStmt(write_stmt).assign_ref;
+            const write = self.store.getCFStmtImmediate(write_stmt).assign_ref;
             try self.seedTagWrite(write_stmt, write.op.local, write.next, payload_param, payload_layout);
         }
         for (direct_builds) |site| {
-            const assign = self.store.getCFStmt(site.stmt).assign_tag;
+            const assign = self.store.getCFStmtImmediate(site.stmt).assign_tag;
             try self.store.replaceCFStmt(site.stmt, .{ .set_local = .{
                 .target = payload_param,
                 .value = site.payload.?,
@@ -1357,7 +1357,7 @@ const Pass = struct {
         const origin = scalarizeOrigin(self.store.stmtOrigin(join_stmt_id));
         const tmp = try self.store.addLocal(.{ .layout_idx = payload_layout });
         try self.new_locals.append(self.allocator, tmp);
-        const old_remainder = self.store.getCFStmt(join_stmt_id).join.remainder;
+        const old_remainder = self.store.getCFStmtImmediate(join_stmt_id).join.remainder;
         const set_stmt = try self.store.addCFStmt(.{ .set_local = .{
             .target = payload_param,
             .value = tmp,
@@ -1412,7 +1412,7 @@ const Pass = struct {
         // A conditionally initialized parameter's metadata names the whole
         // local; splitting it is not modeled.
         for (listing_joins) |listing_id| {
-            const listing = self.store.getCFStmt(listing_id).join;
+            const listing = self.store.getCFStmtImmediate(listing_id).join;
             const maybe_uninitialized = self.store.getLocalSpan(listing.maybe_uninitialized_params);
             for (0..GuardedList.borrowLen(maybe_uninitialized)) |i| {
                 if (GuardedList.at(maybe_uninitialized, i) == param) return false;
@@ -1448,7 +1448,7 @@ const Pass = struct {
         // literal splats its operands onto the field parameters; any other
         // initializer value is seeded by reading its fields at the write.
         for (writes) |write_stmt| {
-            const write = self.store.getCFStmt(write_stmt).set_local;
+            const write = self.store.getCFStmtImmediate(write_stmt).set_local;
             if (write.value == param) return false;
             const build = self.struct_builds.get(write.value) orelse continue;
             if (build.builds.items.len != 1 or build.uses != 0 or build.init_uses != 1) continue;
@@ -1457,11 +1457,11 @@ const Pass = struct {
             if (self.store.getLocalSpan(build.builds.items[0].fields).len != field_count) return false;
         }
         for (direct_reads) |read_stmt| {
-            const read = self.store.getCFStmt(read_stmt).assign_ref;
+            const read = self.store.getCFStmtImmediate(read_stmt).assign_ref;
             if (read.op.field.field_idx >= field_count) return false;
         }
         for (closure.reads.items) |read_stmt| {
-            const read = self.store.getCFStmt(read_stmt).assign_ref;
+            const read = self.store.getCFStmtImmediate(read_stmt).assign_ref;
             if (read.op.field.field_idx >= field_count) return false;
         }
 
@@ -1483,7 +1483,7 @@ const Pass = struct {
         defer extra.deinit(self.allocator);
         try extra.append(self.allocator, join_id);
         for (writes) |write_stmt| {
-            const write = self.store.getCFStmt(write_stmt).set_local;
+            const write = self.store.getCFStmtImmediate(write_stmt).set_local;
             const build = self.struct_builds.get(write.value) orelse continue;
             if (build.builds.items.len != 1 or build.uses != 0 or build.init_uses != 1) continue;
             if (self.write_other.contains(write.value)) continue;
@@ -1511,7 +1511,7 @@ const Pass = struct {
         // Every listing join's parameter span gets the fields in the
         // parameter's place.
         for (listing_joins) |listing_id| {
-            const old_params = self.store.getLocalSpan(self.store.getCFStmt(listing_id).join.params);
+            const old_params = self.store.getLocalSpan(self.store.getCFStmtImmediate(listing_id).join.params);
             var new_params = std.ArrayList(LIR.LocalId).empty;
             defer new_params.deinit(self.allocator);
             for (0..GuardedList.borrowLen(old_params)) |old_position| {
@@ -1555,7 +1555,7 @@ const Pass = struct {
         // qualifying struct literal supplies its operands and its build is
         // deleted; any other initializer is read field-by-field at the write.
         for (writes) |write_stmt| {
-            const write = self.store.getCFStmt(write_stmt).set_local;
+            const write = self.store.getCFStmtImmediate(write_stmt).set_local;
             const qualifying: ?StructBuild = qualifying: {
                 const build = self.struct_builds.get(write.value) orelse break :qualifying null;
                 if (build.builds.items.len != 1 or build.uses != 0 or build.init_uses != 1) break :qualifying null;
@@ -1586,7 +1586,7 @@ const Pass = struct {
         // Edge initializers seed the same way: the whole-value assignment
         // becomes per-field reads of its source.
         for (alias_writes) |write_stmt| {
-            const write = self.store.getCFStmt(write_stmt).assign_ref;
+            const write = self.store.getCFStmtImmediate(write_stmt).assign_ref;
             try self.seedWrite(write_stmt, write.op.local, write.next, field_locals);
         }
 
@@ -1896,7 +1896,7 @@ const Pass = struct {
             if (self.visited.contains(current)) continue;
             try self.visited.put(current, {});
             if (self.metrics) |metrics| metrics.collected_statements += 1;
-            switch (self.store.getCFStmt(current)) {
+            switch (self.store.getCFStmtImmediate(current).*) {
                 .assign_struct => |assign| try self.noteStructBuild(assign.target, current, assign.fields),
                 .assign_tag => |assign| try self.noteTagBuild(assign.target, current, assign),
                 .join => |join_stmt| {
@@ -1960,7 +1960,7 @@ const Pass = struct {
             if (self.visited.contains(current)) continue;
             try self.visited.put(current, {});
             if (self.metrics) |metrics| metrics.collected_statements += 1;
-            switch (self.store.getCFStmt(current)) {
+            switch (self.store.getCFStmtImmediate(current).*) {
                 .assign_ref => |assign| ref: {
                     switch (assign.op) {
                         .field => |op| try self.noteFieldRead(op.source, current),
@@ -2339,42 +2339,42 @@ fn testLiteralInitializedStruct(procedure_local: bool) (Allocator.Error || error
     }, .none);
     if (procedure_local) {
         for (0..store.procSpecCount()) |index| {
-            var scratch = std.heap.ArenaAllocator.init(testing.allocator);
+            var scratch = collections.SingleThreadArena.init(testing.allocator);
             defer scratch.deinit();
             try runProc(store, &f.layouts, @fromBackingInt(@intCast(index)), scratch.allocator());
         }
     } else {
         try run(store, &f.layouts);
     }
-    try testing.expectEqual(noop_body, store.getProcSpec(noop).body.?);
-    try testing.expectEqual(noop_arg, store.getCFStmt(noop_body).ret.value);
+    try testing.expectEqual(noop_body, store.getProcSpecImmediate(noop).body.?);
+    try testing.expectEqual(noop_arg, store.getCFStmtImmediate(noop_body).ret.value);
 
     // The join now carries two parameters, the field reads are aliases of
     // them, the jump site snapshots both operands before writing either
     // parameter, and the wrapper's build is unreachable.
-    const new_join = store.getCFStmt(join).join;
+    const new_join = store.getCFStmtImmediate(join).join;
     const params = store.getLocalSpan(new_join.params);
     try testing.expectEqual(@as(usize, 2), params.len);
 
-    const new_read_n = store.getCFStmt(read_n).assign_ref;
+    const new_read_n = store.getCFStmtImmediate(read_n).assign_ref;
     try testing.expectEqual(GuardedList.at(params, 0), new_read_n.op.local);
-    const new_read_s = store.getCFStmt(read_s).assign_ref;
+    const new_read_s = store.getCFStmtImmediate(read_s).assign_ref;
     try testing.expectEqual(GuardedList.at(params, 1), new_read_s.op.local);
 
-    const first_snapshot = store.getCFStmt(set_state).assign_ref;
+    const first_snapshot = store.getCFStmtImmediate(set_state).assign_ref;
     try testing.expectEqual(num, first_snapshot.op.local);
-    const second_snapshot = store.getCFStmt(first_snapshot.next).assign_ref;
+    const second_snapshot = store.getCFStmtImmediate(first_snapshot.next).assign_ref;
     try testing.expectEqual(text, second_snapshot.op.local);
-    const first_set = store.getCFStmt(second_snapshot.next).set_local;
+    const first_set = store.getCFStmtImmediate(second_snapshot.next).set_local;
     try testing.expectEqual(GuardedList.at(params, 0), first_set.target);
     try testing.expectEqual(first_snapshot.target, first_set.value);
-    const second_set = store.getCFStmt(first_set.next).set_local;
+    const second_set = store.getCFStmtImmediate(first_set.next).set_local;
     try testing.expectEqual(GuardedList.at(params, 1), second_set.target);
     try testing.expectEqual(second_snapshot.target, second_set.value);
     try testing.expectEqual(jump, second_set.next);
 
     // The text literal now flows straight to the first snapshot.
-    const new_text_assign = store.getCFStmt(text_assign).assign_literal;
+    const new_text_assign = store.getCFStmtImmediate(text_assign).assign_literal;
     try testing.expectEqual(set_state, new_text_assign.next);
 }
 
@@ -2442,11 +2442,11 @@ test "scalarize keeps descriptor-bearing struct join parameters" {
 
     try run(store, &f.layouts);
 
-    const params = store.getLocalSpan(store.getCFStmt(join).join.params);
+    const params = store.getLocalSpan(store.getCFStmtImmediate(join).join.params);
     try testing.expectEqual(@as(usize, 1), params.len);
     try testing.expectEqual(state, GuardedList.at(params, 0));
-    try testing.expectEqual(state, store.getCFStmt(read_n).assign_ref.op.field.source);
-    try testing.expectEqual(state, store.getCFStmt(read_s).assign_ref.op.field.source);
+    try testing.expectEqual(state, store.getCFStmtImmediate(read_n).assign_ref.op.field.source);
+    try testing.expectEqual(state, store.getCFStmtImmediate(read_s).assign_ref.op.field.source);
 }
 
 test "scalarize keeps parameters with whole-value uses" {
@@ -2513,9 +2513,9 @@ test "scalarize keeps parameters with whole-value uses" {
 
     try run(store, &f.layouts);
 
-    const unchanged_join = store.getCFStmt(join).join;
+    const unchanged_join = store.getCFStmtImmediate(join).join;
     try testing.expectEqual(@as(usize, 1), store.getLocalSpan(unchanged_join.params).len);
-    const unchanged_set = store.getCFStmt(set_state).set_local;
+    const unchanged_set = store.getCFStmtImmediate(set_state).set_local;
     try testing.expectEqual(state, unchanged_set.target);
     try testing.expectEqual(wrapper, unchanged_set.value);
 }
@@ -2581,24 +2581,24 @@ test "scalarize splits a parameter built directly by a struct literal" {
 
     // The join now carries two parameters, the field reads are aliases of
     // them, and the build became snapshots followed by per-field writes.
-    const new_join = store.getCFStmt(join).join;
+    const new_join = store.getCFStmtImmediate(join).join;
     const params = store.getLocalSpan(new_join.params);
     try testing.expectEqual(@as(usize, 2), params.len);
 
-    const new_read_n = store.getCFStmt(read_n).assign_ref;
+    const new_read_n = store.getCFStmtImmediate(read_n).assign_ref;
     try testing.expectEqual(GuardedList.at(params, 0), new_read_n.op.local);
-    const new_read_s = store.getCFStmt(read_s).assign_ref;
+    const new_read_s = store.getCFStmtImmediate(read_s).assign_ref;
     try testing.expectEqual(GuardedList.at(params, 1), new_read_s.op.local);
 
-    const first_snapshot = store.getCFStmt(build).assign_ref;
+    const first_snapshot = store.getCFStmtImmediate(build).assign_ref;
     try testing.expectEqual(num, first_snapshot.op.local);
-    const second_snapshot = store.getCFStmt(first_snapshot.next).assign_ref;
+    const second_snapshot = store.getCFStmtImmediate(first_snapshot.next).assign_ref;
     try testing.expectEqual(text, second_snapshot.op.local);
-    const first_set = store.getCFStmt(second_snapshot.next).set_local;
+    const first_set = store.getCFStmtImmediate(second_snapshot.next).set_local;
     try testing.expectEqual(GuardedList.at(params, 0), first_set.target);
     try testing.expectEqual(first_snapshot.target, first_set.value);
     try testing.expectEqual(LIR.SetLocalWriteMode.initialize_join_param, first_set.mode);
-    const second_set = store.getCFStmt(first_set.next).set_local;
+    const second_set = store.getCFStmtImmediate(first_set.next).set_local;
     try testing.expectEqual(GuardedList.at(params, 1), second_set.target);
     try testing.expectEqual(second_snapshot.target, second_set.value);
     try testing.expectEqual(jump, second_set.next);
@@ -2680,18 +2680,18 @@ test "scalarize sees through pure aliases to field reads" {
 
     try run(store, &f.layouts);
 
-    const new_join = store.getCFStmt(join).join;
+    const new_join = store.getCFStmtImmediate(join).join;
     const params = store.getLocalSpan(new_join.params);
     try testing.expectEqual(@as(usize, 2), params.len);
 
     // Both reads now alias the field parameters, and the alias's definition
     // is gone: the join body starts at the first read.
-    const new_read_n = store.getCFStmt(read_n).assign_ref;
+    const new_read_n = store.getCFStmtImmediate(read_n).assign_ref;
     try testing.expectEqual(GuardedList.at(params, 0), new_read_n.op.local);
-    const new_read_s = store.getCFStmt(read_s).assign_ref;
+    const new_read_s = store.getCFStmtImmediate(read_s).assign_ref;
     try testing.expectEqual(GuardedList.at(params, 1), new_read_s.op.local);
-    try testing.expectEqual(read_n, store.getCFStmt(join).join.body);
-    try testing.expectEqual(join, store.getProcSpec(proc).body);
+    try testing.expectEqual(read_n, store.getCFStmtImmediate(join).join.body);
+    try testing.expectEqual(join, store.getProcSpecImmediate(proc).body);
 }
 
 test "scalarize keeps parameters whose alias escapes whole" {
@@ -2759,7 +2759,7 @@ test "scalarize keeps parameters whose alias escapes whole" {
 
     try run(store, &f.layouts);
 
-    const new_join = store.getCFStmt(join).join;
+    const new_join = store.getCFStmtImmediate(join).join;
     const params = store.getLocalSpan(new_join.params);
     try testing.expectEqual(@as(usize, 1), params.len);
     try testing.expectEqual(state, GuardedList.at(params, 0));
@@ -2823,28 +2823,28 @@ test "scalarize seeds field parameters from a non-literal initializer" {
 
     try run(store, &f.layouts);
 
-    const new_join = store.getCFStmt(join).join;
+    const new_join = store.getCFStmtImmediate(join).join;
     const params = store.getLocalSpan(new_join.params);
     try testing.expectEqual(@as(usize, 2), params.len);
 
     // The write became: read init.0; read init.1; set P0; set P1; jump.
-    const first_read = store.getCFStmt(set_state).assign_ref;
+    const first_read = store.getCFStmtImmediate(set_state).assign_ref;
     try testing.expectEqual(init_value, first_read.op.field.source);
     try testing.expectEqual(@as(u32, 0), first_read.op.field.field_idx);
-    const second_read = store.getCFStmt(first_read.next).assign_ref;
+    const second_read = store.getCFStmtImmediate(first_read.next).assign_ref;
     try testing.expectEqual(init_value, second_read.op.field.source);
     try testing.expectEqual(@as(u32, 1), second_read.op.field.field_idx);
-    const first_set = store.getCFStmt(second_read.next).set_local;
+    const first_set = store.getCFStmtImmediate(second_read.next).set_local;
     try testing.expectEqual(GuardedList.at(params, 0), first_set.target);
     try testing.expectEqual(first_read.target, first_set.value);
-    const second_set = store.getCFStmt(first_set.next).set_local;
+    const second_set = store.getCFStmtImmediate(first_set.next).set_local;
     try testing.expectEqual(GuardedList.at(params, 1), second_set.target);
     try testing.expectEqual(jump, second_set.next);
 
     // The field reads alias the new parameters.
-    const new_read_n = store.getCFStmt(read_n).assign_ref;
+    const new_read_n = store.getCFStmtImmediate(read_n).assign_ref;
     try testing.expectEqual(GuardedList.at(params, 0), new_read_n.op.local);
-    const new_read_s = store.getCFStmt(read_s).assign_ref;
+    const new_read_s = store.getCFStmtImmediate(read_s).assign_ref;
     try testing.expectEqual(GuardedList.at(params, 1), new_read_s.op.local);
 }
 
@@ -2926,31 +2926,31 @@ test "scalarize splits a parameter shared by two joins" {
     try run(store, &f.layouts);
 
     // Both spans carry the same field parameters in the struct's place.
-    const outer_params = store.getLocalSpan(store.getCFStmt(outer).join.params);
+    const outer_params = store.getLocalSpan(store.getCFStmtImmediate(outer).join.params);
     try testing.expectEqual(@as(usize, 2), outer_params.len);
-    const inner_params = store.getLocalSpan(store.getCFStmt(inner).join.params);
+    const inner_params = store.getLocalSpan(store.getCFStmtImmediate(inner).join.params);
     try testing.expectEqual(@as(usize, 2), inner_params.len);
     try testing.expectEqual(GuardedList.at(outer_params, 0), GuardedList.at(inner_params, 0));
     try testing.expectEqual(GuardedList.at(outer_params, 1), GuardedList.at(inner_params, 1));
 
     // The build became snapshot reads of its operands feeding per-field
     // writes.
-    const first_snap = store.getCFStmt(build).assign_ref;
+    const first_snap = store.getCFStmtImmediate(build).assign_ref;
     try testing.expectEqual(num, first_snap.op.local);
-    const second_snap = store.getCFStmt(first_snap.next).assign_ref;
+    const second_snap = store.getCFStmtImmediate(first_snap.next).assign_ref;
     try testing.expectEqual(text, second_snap.op.local);
-    const first_write = store.getCFStmt(second_snap.next).set_local;
+    const first_write = store.getCFStmtImmediate(second_snap.next).set_local;
     try testing.expectEqual(GuardedList.at(inner_params, 0), first_write.target);
     try testing.expectEqual(first_snap.target, first_write.value);
-    const second_write = store.getCFStmt(first_write.next).set_local;
+    const second_write = store.getCFStmtImmediate(first_write.next).set_local;
     try testing.expectEqual(GuardedList.at(inner_params, 1), second_write.target);
     try testing.expectEqual(second_snap.target, second_write.value);
     try testing.expectEqual(jump_inner, second_write.next);
 
     // Each join's field reads alias the shared field parameters.
-    const new_read_n = store.getCFStmt(read_n).assign_ref;
+    const new_read_n = store.getCFStmtImmediate(read_n).assign_ref;
     try testing.expectEqual(GuardedList.at(outer_params, 0), new_read_n.op.local);
-    const new_read_s = store.getCFStmt(read_s).assign_ref;
+    const new_read_s = store.getCFStmtImmediate(read_s).assign_ref;
     try testing.expectEqual(GuardedList.at(inner_params, 1), new_read_s.op.local);
 }
 
@@ -3033,7 +3033,7 @@ test "scalarize dissolves nested wrappers in one round" {
     // One eliminating round and one confirming round, each collecting the
     // proc's statements twice.
     try testing.expect(metrics.collected_statements <= 4 * (2 * depth + 1));
-    const final_body = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, 0)))).body.?;
+    const final_body = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, 0)))).body.?;
     const first = store.getCFStmt(final_body);
     try testing.expect(first == .assign_ref);
     try testing.expectEqual(reads[0], first.assign_ref.target);
@@ -3066,7 +3066,7 @@ test "scalarize propagates escaping alias chains in linear work" {
     var metrics = Metrics{};
     try runMeasured(store, &fixture.layouts, &metrics);
     try testing.expect(metrics.alias_edges <= aliases.len);
-    try testing.expectEqual(body, store.getProcSpec(@fromBackingInt(@intCast(@as(u32, 0)))).body.?);
+    try testing.expectEqual(body, store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, 0)))).body.?);
 }
 
 test "scalarize keeps a constructor with an alias definition and its source" {
@@ -3108,9 +3108,9 @@ test "scalarize keeps a constructor with an alias definition and its source" {
         .ret_layout = .i64,
     }, .none);
     try run(store, &fixture.layouts);
-    try testing.expectEqual(original, store.getProcSpec(proc).body.?);
-    try testing.expect(store.getCFStmt(read).assign_ref.op == .field);
-    try testing.expectEqual(alias, store.getCFStmt(read).assign_ref.op.field.source);
+    try testing.expectEqual(original, store.getProcSpecImmediate(proc).body.?);
+    try testing.expect(store.getCFStmtImmediate(read).assign_ref.op == .field);
+    try testing.expectEqual(alias, store.getCFStmtImmediate(read).assign_ref.op.field.source);
 }
 
 test "scalarize propagates an escaping whole value through a long alias chain" {
@@ -3142,9 +3142,9 @@ test "scalarize propagates an escaping whole value through a long alias chain" {
     try run(store, &f.layouts);
     // The field read does not justify deleting the constructor: the last
     // alias returns the entire record, so that use must reach its producer.
-    try testing.expectEqual(build, store.getProcSpec(proc_id).body.?);
-    try testing.expect(store.getCFStmt(build) == .assign_struct);
-    try testing.expectEqual(result, store.getCFStmt(ret).ret.value);
+    try testing.expectEqual(build, store.getProcSpecImmediate(proc_id).body.?);
+    try testing.expect(store.getCFStmtImmediate(build).* == .assign_struct);
+    try testing.expectEqual(result, store.getCFStmtImmediate(ret).ret.value);
 }
 
 test "scalarize alias roots share resolved tails and identify cycles explicitly" {

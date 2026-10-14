@@ -35,6 +35,8 @@ pub const IndexedStack = @import("IndexedStack.zig").IndexedStack;
 pub const WorkStacks = @import("WorkStacks.zig").WorkStacks;
 
 pub const DenseMap = @import("DenseMap.zig").DenseMap;
+/// A direct-indexed map over dense IDs that takes its allocator per call.
+pub const DenseMapUnmanaged = @import("DenseMap.zig").DenseMapUnmanaged;
 pub const RingQueue = @import("RingQueue.zig").RingQueue;
 pub const VersionedDenseMap = @import("VersionedMap.zig").VersionedDenseMap;
 pub const VersionedHashMap = @import("VersionedMap.zig").VersionedHashMap;
@@ -63,6 +65,10 @@ pub const validateSerializedRelocations = serde_validation.validateSerializedRel
 /// Single-threaded arena allocator; the non-atomic counterpart to
 /// `std.heap.ArenaAllocator`.
 pub const SingleThreadArena = @import("SingleThreadArena.zig");
+
+/// Allocator that refuses in-place growth, so allocation-failure tests count
+/// the same allocations on every run.
+pub const DeterministicAllocator = @import("DeterministicAllocator.zig");
 
 /// Serialization format definitions for embedded module data.
 pub const serialization = @import("serialization.zig");
@@ -100,6 +106,7 @@ test "collections tests" {
     std.testing.refAllDecls(@import("serialization.zig"));
     std.testing.refAllDecls(@import("SortedArrayBuilder.zig"));
     std.testing.refAllDecls(@import("SingleThreadArena.zig"));
+    std.testing.refAllDecls(@import("DeterministicAllocator.zig"));
     std.testing.refAllDecls(@import("DenseMap.zig"));
     std.testing.refAllDecls(@import("RingQueue.zig"));
     std.testing.refAllDecls(@import("any_all.zig"));

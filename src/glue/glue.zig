@@ -2467,7 +2467,7 @@ const TypeTable = struct {
         artifact: *const CheckedArtifact.CheckedModuleArtifact,
         abi_layouts: lir.CheckedPipeline.CheckedAbiLayouts,
         /// Committed layout per requested root checked type.
-        root_layouts: std.AutoHashMapUnmanaged(CheckedArtifact.CheckedTypeId, layout.Idx),
+        root_layouts: collections.DenseMapUnmanaged(CheckedArtifact.CheckedTypeId, layout.Idx),
 
         fn deinit(self: *ArtifactLowering, gpa: Allocator) void {
             self.root_layouts.deinit(gpa);
@@ -2536,7 +2536,7 @@ const TypeTable = struct {
     ) (Allocator.Error || lir.CheckedPipeline.HostedBindingError)!void {
         var requests = std.ArrayList(CheckedArtifact.CheckedTypeId).empty;
         defer requests.deinit(self.gpa);
-        var root_layouts: std.AutoHashMapUnmanaged(CheckedArtifact.CheckedTypeId, layout.Idx) = .empty;
+        var root_layouts: collections.DenseMapUnmanaged(CheckedArtifact.CheckedTypeId, layout.Idx) = .empty;
         errdefer root_layouts.deinit(self.gpa);
         for (self.roots.values()) |root| {
             if (root.artifact != artifact) continue;

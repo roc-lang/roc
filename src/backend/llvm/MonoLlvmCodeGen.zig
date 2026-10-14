@@ -19,6 +19,7 @@ const std = @import("std");
 const invariant = @import("base").invariant;
 
 const Base = @import("base");
+const collections = @import("collections");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const SourceLoc = lir.SourceLoc;
@@ -290,12 +291,12 @@ pub const MonoLlvmCodeGen = struct {
     /// Default-platform crash lowering consumes its explicit inline-scope chain.
     current_source_stmt: ?CFStmtId = null,
 
-    proc_registry: std.AutoHashMap(u32, LlvmBuilder.Function.Index),
+    proc_registry: collections.DenseMap(u32, LlvmBuilder.Function.Index),
     /// Per procedure, the function direct Roc calls target: parameters and
     /// small results classified into registers under `fastCallConv`. The packed
     /// `(ret_ptr, args_ptr)` function in `proc_registry` adapts to it for
     /// every caller that needs the uniform shape.
-    fast_registry: std.AutoHashMap(u32, LlvmBuilder.Function.Index),
+    fast_registry: collections.DenseMap(u32, LlvmBuilder.Function.Index),
     /// Register placement of the current fast body's result, when it
     /// returns by value rather than through a result pointer.
     fast_ret_registers: ?layout.abi.RegisterPlacement = null,
@@ -335,7 +336,7 @@ pub const MonoLlvmCodeGen = struct {
     /// under. Non-zero routes builtin calls through preserve_most shims.
     cold_depth: u32 = 0,
     static_bytes: std.StringHashMap(LlvmBuilder.Value),
-    static_refcounted_backings: std.AutoHashMap(u32, LlvmBuilder.Value),
+    static_refcounted_backings: collections.DenseMap(u32, LlvmBuilder.Value),
     static_data_globals: std.AutoHashMap(u32, LlvmBuilder.Value),
     /// In-process consumers supply a relocated image that outlives execution.
     /// Object emission leaves this null and uses linker-visible data symbols.
@@ -364,11 +365,11 @@ pub const MonoLlvmCodeGen = struct {
     /// LLVM pipeline can see every call site and specialize across them.
     static_data_procs: []const LirProcSpecId = &.{},
     boxy_capture_drop_helpers: std.AutoHashMap(u64, BoxyCaptureDropHelper),
-    boxy_dict_thunks: std.AutoHashMap(u32, LlvmBuilder.Function.Index),
-    join_points: std.AutoHashMap(u32, JoinInfo),
-    compiled_joins: std.AutoHashMap(u32, void),
-    stmt_incoming_counts: std.AutoHashMap(u32, u32),
-    stmt_entry_blocks: std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index),
+    boxy_dict_thunks: collections.DenseMap(u32, LlvmBuilder.Function.Index),
+    join_points: collections.DenseMap(u32, JoinInfo),
+    compiled_joins: collections.DenseMap(u32, void),
+    stmt_incoming_counts: collections.DenseMap(u32, u32),
+    stmt_entry_blocks: collections.DenseMap(u32, LlvmBuilder.Function.Block.Index),
     /// Reusable store-indexed columns. Only a procedure's explicit inventory
     /// is invalidated at its end; growing the store initializes only new rows.
     local_slot_storage: std.ArrayList(LocalSlot) = .empty,
@@ -575,22 +576,22 @@ pub const MonoLlvmCodeGen = struct {
             .erased_arg_desc_offsets = erased_arg_desc_offsets,
             .erased_arg_desc_params = erased_arg_desc_params,
             .boxy_worker_procs = boxy_worker_procs,
-            .proc_registry = std.AutoHashMap(u32, LlvmBuilder.Function.Index).init(allocator),
-            .fast_registry = std.AutoHashMap(u32, LlvmBuilder.Function.Index).init(allocator),
+            .proc_registry = collections.DenseMap(u32, LlvmBuilder.Function.Index).init(allocator),
+            .fast_registry = collections.DenseMap(u32, LlvmBuilder.Function.Index).init(allocator),
             .builtin_functions = std.StringHashMap(LlvmBuilder.Function.Index).init(allocator),
             .cold_shims = std.StringHashMap(ColdShim).init(allocator),
             .static_bytes = std.StringHashMap(LlvmBuilder.Value).init(allocator),
-            .static_refcounted_backings = std.AutoHashMap(u32, LlvmBuilder.Value).init(allocator),
+            .static_refcounted_backings = collections.DenseMap(u32, LlvmBuilder.Value).init(allocator),
             .static_data_globals = std.AutoHashMap(u32, LlvmBuilder.Value).init(allocator),
             .static_data_export_rows = std.AutoHashMap(u32, u32).init(allocator),
             .static_data_symbols = std.StringHashMap(LlvmBuilder.Constant).init(allocator),
             .rc_helpers = std.AutoHashMap(u64, RcHelperEntry).init(allocator),
             .boxy_capture_drop_helpers = std.AutoHashMap(u64, BoxyCaptureDropHelper).init(allocator),
-            .boxy_dict_thunks = std.AutoHashMap(u32, LlvmBuilder.Function.Index).init(allocator),
-            .join_points = std.AutoHashMap(u32, JoinInfo).init(allocator),
-            .compiled_joins = std.AutoHashMap(u32, void).init(allocator),
-            .stmt_incoming_counts = std.AutoHashMap(u32, u32).init(allocator),
-            .stmt_entry_blocks = std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index).init(allocator),
+            .boxy_dict_thunks = collections.DenseMap(u32, LlvmBuilder.Function.Index).init(allocator),
+            .join_points = collections.DenseMap(u32, JoinInfo).init(allocator),
+            .compiled_joins = collections.DenseMap(u32, void).init(allocator),
+            .stmt_incoming_counts = collections.DenseMap(u32, u32).init(allocator),
+            .stmt_entry_blocks = collections.DenseMap(u32, LlvmBuilder.Function.Block.Index).init(allocator),
             .debug_inline_subprograms = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
             .debug_inline_callsites = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
             .debug_types = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
@@ -1974,7 +1975,7 @@ pub const MonoLlvmCodeGen = struct {
         const needs_storage = self.allocator.alloc(bool, group_count) catch return error.OutOfMemory;
         defer self.allocator.free(needs_storage);
         @memset(needs_storage, false);
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        var arena_state = Base.SingleThreadArena.init(self.allocator);
         defer arena_state.deinit();
         for ([_]bool{ false, true }) |group_storage| {
             for (procs) |proc| {
@@ -2148,7 +2149,7 @@ pub const MonoLlvmCodeGen = struct {
             wip.cursor = .{ .block = block };
             const proc = self.store.getProcSpec(member);
             const fast = self.fast_registry.get(@backingInt(member)) orelse return error.CompilationFailed;
-            var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+            var arena_state = Base.SingleThreadArena.init(self.allocator);
             defer arena_state.deinit();
             const sig = try self.fastSignature(arena_state.allocator(), proc);
             const offsets = try self.allocator.alloc(u32, sig.arg_layouts.len);
@@ -2335,7 +2336,7 @@ pub const MonoLlvmCodeGen = struct {
     fn declareFastProcSpec(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, proc: LirProcSpec) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const ptr_ty = builder.ptrType(.default) catch return error.OutOfMemory;
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        var arena_state = Base.SingleThreadArena.init(self.allocator);
         defer arena_state.deinit();
         const sig = try self.fastSignature(arena_state.allocator(), proc);
 
@@ -2450,7 +2451,7 @@ pub const MonoLlvmCodeGen = struct {
         const entry = wip.block(0, "entry") catch return error.OutOfMemory;
         wip.cursor = .{ .block = entry };
 
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        var arena_state = Base.SingleThreadArena.init(self.allocator);
         defer arena_state.deinit();
         const sig = try self.fastSignature(arena_state.allocator(), proc);
         const offsets = try self.computeArgOffsets(sig.arg_layouts, true);
@@ -2557,7 +2558,7 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const fast_func: ?LlvmBuilder.Function.Index = if (fastAbiEligible(proc)) self.fast_registry.get(@backingInt(proc_id)) else null;
         const func = fast_func orelse self.proc_registry.get(@backingInt(proc_id)) orelse return error.CompilationFailed;
-        var fast_arena = std.heap.ArenaAllocator.init(self.allocator);
+        var fast_arena = Base.SingleThreadArena.init(self.allocator);
         defer fast_arena.deinit();
         const fast_sig: ?FastSignature = if (fast_func != null) try self.fastSignature(fast_arena.allocator(), proc) else null;
 
@@ -2777,7 +2778,7 @@ pub const MonoLlvmCodeGen = struct {
             null;
         const ptr_ty = builder.ptrType(.default) catch return error.OutOfMemory;
 
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        var arena_state = Base.SingleThreadArena.init(self.allocator);
         defer arena_state.deinit();
         const arena = arena_state.allocator();
 
@@ -3547,7 +3548,7 @@ pub const MonoLlvmCodeGen = struct {
             if (visited.contains(key)) continue;
             try visited.put(key, {});
 
-            switch (self.store.getCFStmt(stmt_id)) {
+            switch (self.store.getCFStmtImmediate(stmt_id).*) {
                 inline .assign_ref,
                 .assign_literal,
                 .init_uninitialized,
@@ -4583,7 +4584,7 @@ pub const MonoLlvmCodeGen = struct {
         is_cold: bool,
     ) Error!void {
         const builder, const wip = try self.builderAndWip();
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        var arena_state = Base.SingleThreadArena.init(self.allocator);
         defer arena_state.deinit();
         const sig = try self.fastSignature(arena_state.allocator(), proc);
         if (sig.arg_layouts.len != arg_locals.len) return error.CompilationFailed;
@@ -4658,7 +4659,7 @@ pub const MonoLlvmCodeGen = struct {
         const arg_locals = self.store.getLocalSpan(args);
         try self.materializeLocalSpanIfDeferred(arg_locals);
 
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        var arena_state = Base.SingleThreadArena.init(self.allocator);
         defer arena_state.deinit();
         const sig = try self.fastSignature(arena_state.allocator(), proc);
         if (sig.arg_layouts.len != arg_locals.len) return error.CompilationFailed;
@@ -13228,7 +13229,7 @@ pub const MonoLlvmCodeGen = struct {
         const builder, const wip = try self.builderAndWip();
         const ptr_ty = try self.ptrType();
 
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        var arena_state = Base.SingleThreadArena.init(self.allocator);
         defer arena_state.deinit();
         const arena = arena_state.allocator();
 

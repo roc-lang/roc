@@ -72,7 +72,7 @@ pub fn collectProcDemand(
     var demanded = std.ArrayList(LIR.LirProcSpecId).empty;
     errdefer demanded.deinit(allocator);
     for (pass.reachable, 0..) |reachable, index| {
-        if (reachable and !result.store.getProcSpec(@fromBackingInt(@intCast(index))).is_static_initializer)
+        if (reachable and !result.store.getProcSpecImmediate(@fromBackingInt(@intCast(index))).is_static_initializer)
             try demanded.append(allocator, @fromBackingInt(@intCast(index)));
     }
     return try demanded.toOwnedSlice(allocator);
@@ -761,7 +761,7 @@ const Pass = struct {
         for (self.result.requested_layouts.items) |request| {
             if (request.initializer) |initializer| {
                 self.verifyProcRef(initializer, proc_count);
-                if (!self.store.getProcSpec(initializer).is_static_initializer) {
+                if (!self.store.getProcSpecImmediate(initializer).is_static_initializer) {
                     reachableProcInvariant("requested static initializer was marked as a runtime proc");
                 }
                 if (self.result.const_plans.items[@backingInt(request.plan)] != .layout_only) {
@@ -772,7 +772,7 @@ const Pass = struct {
         for (self.result.static_data_values.items) |value| {
             if (value.initializer) |initializer| {
                 self.verifyProcRef(initializer, proc_count);
-                if (!self.store.getProcSpec(initializer).is_static_initializer) {
+                if (!self.store.getProcSpecImmediate(initializer).is_static_initializer) {
                     reachableProcInvariant("internal static initializer was marked as a runtime proc");
                 }
             }
@@ -976,7 +976,7 @@ test "reachable proc pass compacts proc specs and remaps root ids" {
     try std.testing.expectEqual(@as(usize, 3), result.store.cfStmtCount());
     try std.testing.expectEqual(@as(u32, 1), @backingInt(result.root_procs.items[0]));
     const compact_root = result.store.getProcSpec(result.root_procs.items[0]);
-    const call = result.store.getCFStmt(compact_root.body.?).assign_call;
+    const call = result.store.getCFStmtImmediate(compact_root.body.?).assign_call;
     try std.testing.expectEqual(@as(u32, 0), @backingInt(call.proc));
 }
 
@@ -1038,7 +1038,7 @@ test "reachable proc pass follows static initializer proc refs" {
     try std.testing.expectEqual(@as(u32, 2), @backingInt(result.root_procs.items[0]));
     const compact_initializer = result.store.getProcSpec(result.static_data_values.items[0].initializer.?);
     try std.testing.expect(compact_initializer.is_static_initializer);
-    const initializer_proc_ref = result.store.getCFStmt(compact_initializer.body.?).assign_literal.value.proc_ref;
+    const initializer_proc_ref = result.store.getCFStmtImmediate(compact_initializer.body.?).assign_literal.value.proc_ref;
     try std.testing.expectEqual(@as(u32, 0), @backingInt(initializer_proc_ref));
 }
 
@@ -1103,7 +1103,7 @@ test "reachable proc pass follows packed erased callable refs in static initiali
     try std.testing.expectEqual(@as(u32, 2), @backingInt(result.root_procs.items[0]));
     const compact_initializer = result.store.getProcSpec(result.static_data_values.items[0].initializer.?);
     try std.testing.expect(compact_initializer.is_static_initializer);
-    const packed_erased_proc = result.store.getCFStmt(compact_initializer.body.?).assign_packed_erased_fn.proc;
+    const packed_erased_proc = result.store.getCFStmtImmediate(compact_initializer.body.?).assign_packed_erased_fn.proc;
     try std.testing.expectEqual(@as(u32, 0), @backingInt(packed_erased_proc));
 }
 
@@ -1256,8 +1256,8 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
     try std.testing.expectEqual(@as(u32, 0), @backingInt(frozen.exports[1].relocations[0].procedure.?));
     try std.testing.expectEqualStrings("callable", frozen.exports[1].relocations[0].target_symbol_name);
     try std.testing.expect(frozen.exports[1].relocations[0].owns_target_symbol_name);
-    try std.testing.expectEqual(@as(u64, 7), result.store.getProcSpec(frozen.exports[1].relocations[0].procedure.?).native_code_revision);
-    try std.testing.expectEqual(@as(u64, 11), result.store.getProcSpec(result.root_procs.items[0]).native_code_revision);
+    try std.testing.expectEqual(@as(u64, 7), result.store.getProcSpecImmediate(frozen.exports[1].relocations[0].procedure.?).native_code_revision);
+    try std.testing.expectEqual(@as(u64, 11), result.store.getProcSpecImmediate(result.root_procs.items[0]).native_code_revision);
     try std.testing.expectEqual(@as(u64, 17), frozen.exports[0].empty_list_capacities[0].capacity);
     try std.testing.expectEqual(@as(u64, 18), frozen.exports[1].empty_list_capacities[0].capacity);
 }

@@ -84,7 +84,7 @@ fn measureLiteralList(literal_count: usize) TestError!Measurement {
         defer walk.deinit();
         while (try walk.next()) |stmt| {
             result.statements += 1;
-            switch (store.getCFStmt(stmt)) {
+            switch (store.getCFStmtImmediate(stmt).*) {
                 .decref, .decref_if_initialized, .free => result.releases += 1,
                 .init_uninitialized,
                 .assign_ref,

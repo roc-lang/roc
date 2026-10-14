@@ -144,6 +144,12 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
             return &self.__guarded_backing.items[index];
         }
 
+        /// A read-only pointer to one element, for a caller that reads through
+        /// it before anything can append to the list.
+        pub fn getPtrConstImmediate(self: *const Self, index: usize) *const T {
+            return &self.__guarded_backing.items[index];
+        }
+
         pub fn set(self: *Self, index: usize, value: T) void {
             self.__guarded_backing.items[index] = value;
         }

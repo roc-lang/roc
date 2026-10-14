@@ -329,7 +329,7 @@ fn runInterpreter(allocator: Allocator, program: Program, execution_host: Execut
         error.UnsupportedHostedFunction,
         => return err,
     };
-    const ret_layout = program.store.getProcSpec(program.main_proc).ret_layout;
+    const ret_layout = program.store.getProcSpecImmediate(program.main_proc).ret_layout;
     return returnedResult(allocator, &runtime_env, try copyReturnedRocStr(
         allocator,
         program.layouts,

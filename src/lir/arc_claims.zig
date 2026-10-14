@@ -1,6 +1,7 @@
 //! Exact persistent sets of committed struct-field identities for certification.
 
 const std = @import("std");
+const collections = @import("collections");
 const Snapshot = @import("arc_state.zig").Snapshot;
 
 /// Ordinary records use one inline word. Higher semantic field indices use
@@ -91,7 +92,7 @@ pub const Set = struct {
 };
 
 test "field claims preserve inline and wide identities across forks" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
     const fields = [_]u32{ 0, 63, 64, 128, std.math.maxInt(u16), std.math.maxInt(u32) - 1 };

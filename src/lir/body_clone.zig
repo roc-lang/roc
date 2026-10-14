@@ -124,8 +124,8 @@ pub const AnalysisScratch = struct {
 pub fn firstFreshJoinPoint(store: *const LirStore) u32 {
     var next: u32 = 0;
     for (0..store.cfStmtCount()) |index| {
-        const stmt = store.getCFStmt(@fromBackingInt(@intCast(index)));
-        if (stmt != .join) continue;
+        const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(index)));
+        if (stmt.* != .join) continue;
         const raw = @backingInt(stmt.join.id);
         if (raw == std.math.maxInt(u32)) base.invariant("{s}", .{"join-point id space exhausted"});
         next = @max(next, raw + 1);
@@ -217,8 +217,8 @@ fn forwardLocalAliasChainImpl(
     var value = source;
     var current = first_stmt;
     while (true) {
-        const stmt_node = store.getCFStmt(current);
-        if (stmt_node != .assign_ref) return .{ .value = value, .next = current };
+        const stmt_node = store.getCFStmtImmediate(current);
+        if (stmt_node.* != .assign_ref) return .{ .value = value, .next = current };
         const stmt = stmt_node.assign_ref;
         if (stmt.op == .local) {
             const local = stmt.op.local;
@@ -1102,7 +1102,7 @@ fn noteDefinition(defined: anytype, local: LocalId) void {
 /// including the maybe-uninitialized ones, and string-match captures. A
 /// `set_local` rebinds an existing local and is not a binder.
 pub fn visitStmtDefinitions(store: *const LirStore, defined: anytype, stmt_id: CFStmtId) void {
-    switch (store.getCFStmt(stmt_id)) {
+    switch (store.getCFStmtImmediate(stmt_id).*) {
         inline .init_uninitialized,
         .assign_ref,
         .assign_literal,
@@ -2105,7 +2105,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     else => {
                         frame.built.join.remainder = returned.?;
                         const cloned = try self.store.addCFStmt(frame.built, frame.origin);
-                        if (self.join_params) |params| try params.record(self.store.getCFStmt(cloned).join);
+                        if (self.join_params) |params| try params.record(self.store.getCFStmtImmediate(cloned).join);
                         return .{ .finished = cloned };
                     },
                 },
@@ -2614,18 +2614,18 @@ test "subtree clone bridges renamed parameters before an external join" {
     var cloner = try BodyCloner(TestRetRewriter).initWithFreshDeclaredJoinsAndAllocator(&store, .{}, internal_stmt, &join_params, testing.allocator);
     defer cloner.deinit();
     const cloned_stmt = try cloner.cloneStmt(internal_stmt);
-    const cloned = store.getCFStmt(cloned_stmt).join;
+    const cloned = store.getCFStmtImmediate(cloned_stmt).join;
     const cloned_param = GuardedList.at(store.getLocalSpan(cloned.params), 0);
 
     try testing.expect(cloned.id != internal_id);
     try testing.expect(cloned_param != shared_param);
-    try testing.expectEqual(cloned.id, store.getCFStmt(cloned.remainder).jump.target);
+    try testing.expectEqual(cloned.id, store.getCFStmtImmediate(cloned.remainder).jump.target);
 
-    const bridge = store.getCFStmt(cloned.body).set_local;
+    const bridge = store.getCFStmtImmediate(cloned.body).set_local;
     try testing.expectEqual(shared_param, bridge.target);
     try testing.expectEqual(cloned_param, bridge.value);
     try testing.expectEqual(LIR.SetLocalWriteMode.initialize_join_param, bridge.mode);
-    try testing.expectEqual(external_id, store.getCFStmt(bridge.next).jump.target);
+    try testing.expectEqual(external_id, store.getCFStmtImmediate(bridge.next).jump.target);
 }
 
 test "chainIsSingleUse rejects an extra read of any link" {
@@ -2830,12 +2830,12 @@ test "body_clone sparse maps preserve loop back jumps and local reuse" {
     } }, .test_fixture);
     var cloner = try BodyCloner(TestRetRewriter).init(&store, .{});
     defer cloner.deinit();
-    const cloned = store.getCFStmt(try cloner.cloneStmt(body)).join;
+    const cloned = store.getCFStmtImmediate(try cloner.cloneStmt(body)).join;
     try testing.expectEqual(cloned.body, cloned.remainder);
-    const cloned_write = store.getCFStmt(cloned.body).set_local;
+    const cloned_write = store.getCFStmtImmediate(cloned.body).set_local;
     try testing.expectEqual(cloned_write.target, cloned_write.value);
     try testing.expectEqual(cloned_write.target, GuardedList.at(store.getLocalSpan(cloned.params), 0));
-    try testing.expectEqual(cloned.id, store.getCFStmt(cloned_write.next).jump.target);
+    try testing.expectEqual(cloned.id, store.getCFStmtImmediate(cloned_write.next).jump.target);
     try testing.expectEqual(@as(usize, 1), cloner.local_map.count());
 }
 
@@ -2865,9 +2865,9 @@ test "body_clone join allocation belongs to the destination procedure" {
     } }, .test_fixture);
     var inliner = try BodyCloner(TestRetRewriter).initWithInlineScopeOuter(&store, .{}, .none, destination);
     defer inliner.deinit();
-    const cloned = store.getCFStmt(try inliner.cloneStmt(source)).join;
+    const cloned = store.getCFStmtImmediate(try inliner.cloneStmt(source)).join;
     try testing.expectEqual(@as(u32, 41), @backingInt(cloned.id));
-    try testing.expectEqual(cloned.id, store.getCFStmt(cloned.body).jump.target);
+    try testing.expectEqual(cloned.id, store.getCFStmtImmediate(cloned.body).jump.target);
 
     var index = JoinParamIndex.init(testing.allocator);
     defer index.deinit();
@@ -2875,7 +2875,7 @@ test "body_clone join allocation belongs to the destination procedure" {
     for (41..43) |expected| {
         var subtree = try BodyCloner(TestRetRewriter).initWithFreshDeclaredJoinsAndAllocator(&store, .{}, source, &index, testing.allocator);
         defer subtree.deinit();
-        const clone = store.getCFStmt(try subtree.cloneStmt(source)).join;
+        const clone = store.getCFStmtImmediate(try subtree.cloneStmt(source)).join;
         try testing.expectEqual(@as(u32, @intCast(expected)), @backingInt(clone.id));
     }
 }

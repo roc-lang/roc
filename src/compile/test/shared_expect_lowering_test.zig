@@ -1,5 +1,6 @@
 //! One specialization must preserve both expect execution and its omission.
 const std = @import("std");
+const base = @import("base");
 const eval = @import("eval");
 const lir = @import("lir");
 const harness = @import("lower_to_lir_harness.zig");
@@ -167,7 +168,11 @@ test "a consumed producer program is released whether its continuation succeeds 
 /// Solving consumes the producer program, so an allocation failure at any
 /// point in preparation must release every byte exactly once.
 fn inspectSolvedPreparationOwnership(prepared: *const lir.CheckedPipeline.PreparedMonotype) harness.LowerToLirHarnessError!void {
-    var counting = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    // Preparation grows retained buffers, whose in-place growth under the
+    // testing allocator depends on the heap's layout, so every run counts
+    // allocations over an allocator that refuses in-place growth.
+    var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
+    var counting = std.testing.FailingAllocator.init(deterministic.allocator(), .{});
     const counted_copy = try preparedCopy(counting.allocator(), prepared);
     const copy_allocations = counting.alloc_index;
     var complete = try lir.CheckedPipeline.prepareMonotypeToSolved(counted_copy);
@@ -176,7 +181,7 @@ fn inspectSolvedPreparationOwnership(prepared: *const lir.CheckedPipeline.Prepar
 
     var fail_offset: usize = 0;
     while (fail_offset < preparation_allocations) : (fail_offset += 1) {
-        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+        var failing = std.testing.FailingAllocator.init(deterministic.allocator(), .{});
         const copy = try preparedCopy(failing.allocator(), prepared);
         failing.fail_index = failing.alloc_index + fail_offset;
         if (lir.CheckedPipeline.prepareMonotypeToSolved(copy)) |solved| {

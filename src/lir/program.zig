@@ -2,6 +2,7 @@
 //! interpreter consumers.
 
 const std = @import("std");
+const collections = @import("collections");
 const base = @import("base");
 const check = @import("check");
 const layout = @import("layout");
@@ -680,7 +681,7 @@ pub const Result = struct {
     boxy_dicts: std.ArrayList(BoxyDict) = .empty,
     /// Selected implementation behind each Boxy dictionary boundary adapter.
     /// Compiler-only evidence used when freezing captured dictionaries.
-    boxy_frozen_method_origins: std.AutoHashMapUnmanaged(LIR.LirProcSpecId, BoxyFrozenMethodOrigin) = .empty,
+    boxy_frozen_method_origins: collections.DenseMapUnmanaged(LIR.LirProcSpecId, BoxyFrozenMethodOrigin) = .empty,
     boxy_adapters: std.ArrayList(BoxyAdapter) = .empty,
     boxy_desc_refs: std.ArrayList(BoxyDescRef) = .empty,
     boxy_dict_refs: std.ArrayList(BoxyDictRef) = .empty,

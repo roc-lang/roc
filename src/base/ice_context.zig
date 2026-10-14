@@ -334,23 +334,21 @@ pub fn currentThreadReport(cwd_buf: []u8, resolve_names: bool) Report {
 }
 
 /// Print the calling thread's report to stderr, for a panic handler to call
-/// before the default handler prints the panic message and stack trace.
+/// before it prints the panic message and stack trace.
 ///
-/// Stderr stays locked by this thread afterwards, so a concurrent panic on
-/// another thread cannot interleave its report with this one. The default
-/// panic handler's own stderr lock is recursive, and the process then aborts.
+/// The report is written under the stderr lock, so a concurrent panic on
+/// another thread cannot interleave its report with this one.
 pub fn reportPanicToStderr() void {
     if (comptime builtin.os.tag == .freestanding) return;
-    // A panic while reporting skips straight to the default handler.
+    // A panic while reporting skips the report.
     if (reporting) return;
     reporting = true;
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
     const report = currentThreadReport(&cwd_buf, true);
     var buffer: [512]u8 = undefined;
     const stderr = std.debug.lockStderr(&buffer);
-    // Another thread panicking at the same time reports through this lock
-    // too, and the default handler waits for that thread to abort, so the
-    // lock is released before the default handler runs.
+    // The panic handler takes the lock again to print the trace, and another
+    // thread panicking at the same time reports through this lock too.
     defer std.debug.unlockStderr();
     const w = &stderr.file_writer.interface;
     writeReport(w, report) catch return;

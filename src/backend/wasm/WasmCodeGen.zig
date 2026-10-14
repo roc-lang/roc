@@ -15,6 +15,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const base = @import("base");
+const collections = @import("collections");
 const numeric_conversion = base.numeric_conversion;
 const builtins = @import("builtins");
 const layout = @import("layout");
@@ -228,7 +229,7 @@ erased_arg_desc_params: []const LIR.ErasedArgDescParam,
 /// Exact dense LIR proc ids reachable through Boxy method slots.
 boxy_worker_procs: []const LIR.LirProcSpecId,
 module: WasmModule,
-pending_bodies: std.AutoHashMap(LocalFunctionIndex, CodeBuilder),
+pending_bodies: collections.DenseMap(LocalFunctionIndex, CodeBuilder),
 active_fn_stack: std.ArrayList(LocalFunctionIndex),
 storage: Storage,
 /// Accumulated stack frame size for the current function (for stack memory values).
@@ -238,7 +239,7 @@ uses_stack_memory: bool = false,
 /// Local index of the frame pointer ($fp) - only valid when uses_stack_memory is true.
 fp_local: u32 = 0,
 /// Map from proc spec id → compiled wasm function index.
-registered_procs: std.AutoHashMap(u32, u32),
+registered_procs: collections.DenseMap(u32, u32),
 /// Hosted platform functions resolved to linker symbols, keyed by dispatch
 /// index. Populated before proc compilation so imports never shift function
 /// indices mid-codegen.
@@ -264,7 +265,7 @@ boxy_capture_drop_table_indices: std.AutoHashMap(u64, u32),
 /// Atomic helpers explicitly named by static-data relocations.
 static_data_rc_helpers: []const RcHelperKey = &.{},
 /// Map from proc spec id → wasm table index (for proc_ref literals).
-proc_table_indices: std.AutoHashMap(u32, u32),
+proc_table_indices: collections.DenseMap(u32, u32),
 /// Map from LIR string backing id → wasm data offset for the backing bytes.
 static_str_offsets: std.AutoHashMap(u32, DataAddress),
 /// Map from LIR static-data id -> undefined/defined wasm data symbol.
@@ -306,20 +307,20 @@ in_proc: bool = false,
 /// Current proc being compiled (debugging/tracing).
 current_proc_id: ?LIR.LirProcSpecId = null,
 /// Map from JoinPointId → loop depth (for jump → br targeting).
-join_point_depths: std.AutoHashMap(u32, u32),
+join_point_depths: collections.DenseMap(u32, u32),
 /// Map from JoinPointId → param local indices.
-join_point_param_locals: std.AutoHashMap(u32, []u32),
+join_point_param_locals: collections.DenseMap(u32, []u32),
 /// Map from JoinPointId → state local selecting remainder or join body.
-join_point_state_locals: std.AutoHashMap(u32, u32),
+join_point_state_locals: collections.DenseMap(u32, u32),
 /// Debug-only guard for recursive statement generation.
-active_stmt_generations: std.AutoHashMap(u32, void),
+active_stmt_generations: collections.DenseMap(u32, void),
 /// Debug-only count of how many times a statement has been generated.
-stmt_generation_counts: std.AutoHashMap(u32, u32),
+stmt_generation_counts: collections.DenseMap(u32, u32),
 /// Arithmetic result target retained while emitting an overflow predicate.
 pending_overflow_result_target: ?ProcLocalId = null,
 /// Arithmetic assignments whose result was emitted with their matching
 /// overflow predicate and must not be emitted a second time.
-precomputed_overflow_results: std.AutoHashMap(u32, void),
+precomputed_overflow_results: collections.DenseMap(u32, void),
 /// Configurable wasm stack size in bytes (default 1MB).
 wasm_stack_bytes: u32 = 1024 * 1024,
 /// Configurable wasm memory pages (0 = auto-compute from stack size).
@@ -357,13 +358,13 @@ pub fn init(
         .erased_arg_desc_params = erased_arg_desc_params,
         .boxy_worker_procs = boxy_worker_procs,
         .module = WasmModule.init(allocator),
-        .pending_bodies = std.AutoHashMap(LocalFunctionIndex, CodeBuilder).init(allocator),
+        .pending_bodies = collections.DenseMap(LocalFunctionIndex, CodeBuilder).init(allocator),
         .active_fn_stack = .empty,
         .storage = Storage.init(allocator),
         .stack_frame_size = 0,
         .uses_stack_memory = false,
         .fp_local = 0,
-        .registered_procs = std.AutoHashMap(u32, u32).init(allocator),
+        .registered_procs = collections.DenseMap(u32, u32).init(allocator),
         .hosted_symbol_targets = std.AutoHashMap(u32, HostedSymbolTarget).init(allocator),
         .function_symbols_by_index = std.AutoHashMap(u32, SymbolIndex).init(allocator),
         .boxy_symbol_targets = std.StringHashMap(HostedSymbolTarget).init(allocator),
@@ -372,18 +373,18 @@ pub fn init(
         .rc_helper_funcs = std.AutoHashMap(u64, u32).init(allocator),
         .rc_helper_table_indices = std.AutoHashMap(u64, u32).init(allocator),
         .boxy_capture_drop_table_indices = std.AutoHashMap(u64, u32).init(allocator),
-        .proc_table_indices = std.AutoHashMap(u32, u32).init(allocator),
+        .proc_table_indices = collections.DenseMap(u32, u32).init(allocator),
         .static_str_offsets = std.AutoHashMap(u32, DataAddress).init(allocator),
         .static_data_symbols = std.AutoHashMap(u32, SymbolIndex).init(allocator),
         .static_data_names = .empty,
         .func_type_cache = std.StringHashMap(u32).init(allocator),
         .func_type_key_scratch = .empty,
-        .join_point_depths = std.AutoHashMap(u32, u32).init(allocator),
-        .join_point_param_locals = std.AutoHashMap(u32, []u32).init(allocator),
-        .join_point_state_locals = std.AutoHashMap(u32, u32).init(allocator),
-        .active_stmt_generations = std.AutoHashMap(u32, void).init(allocator),
-        .stmt_generation_counts = std.AutoHashMap(u32, u32).init(allocator),
-        .precomputed_overflow_results = std.AutoHashMap(u32, void).init(allocator),
+        .join_point_depths = collections.DenseMap(u32, u32).init(allocator),
+        .join_point_param_locals = collections.DenseMap(u32, []u32).init(allocator),
+        .join_point_state_locals = collections.DenseMap(u32, u32).init(allocator),
+        .active_stmt_generations = collections.DenseMap(u32, void).init(allocator),
+        .stmt_generation_counts = collections.DenseMap(u32, u32).init(allocator),
+        .precomputed_overflow_results = collections.DenseMap(u32, void).init(allocator),
     };
 }
 
@@ -1519,7 +1520,7 @@ pub fn generateEntrypointWrapper(
     };
 
     // Classify the natural C-ABI wasm signature for this entrypoint.
-    var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+    var arena_state = base.SingleThreadArena.init(self.allocator);
     defer arena_state.deinit();
     const lowered = layout.abi.lower(arena_state.allocator(), self.getLayoutStore(), if (self.cpu_level == .v1) .wasm32v1 else .wasm32, arg_layouts, ret_layout, false) catch return error.OutOfMemory;
 
@@ -5930,7 +5931,7 @@ fn emitReturnIfCallPending(self: *Self, pending: LIR.PendingReturn) Allocator.Er
     const proc_id = self.current_proc_id orelse
         wasmInvariantFmt("WASM/codegen invariant violated: a pending-call return outside a procedure", .{});
     if (pending.result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
-    try self.emitI32Const(@intCast(@backingInt(self.runtimeRepresentationLayoutIdx(self.store.getProcSpec(proc_id).ret_layout))));
+    try self.emitI32Const(@intCast(@backingInt(self.runtimeRepresentationLayoutIdx(self.store.getProcSpecImmediate(proc_id).ret_layout))));
     try self.emitI32Const(@intFromBool(pending.keeps_own_desc));
     try self.emitBoxyCall("roc_boxy_return_pending");
     self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
@@ -6822,7 +6823,7 @@ pub fn registerHostedSymbolTargets(self: *Self, proc_specs: []const LIR.LirProcS
             hosted_arg_layouts[i] = self.procLocalLayoutIdx(param);
         }
 
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        var arena_state = base.SingleThreadArena.init(self.allocator);
         defer arena_state.deinit();
         const lowered = layout.abi.lower(arena_state.allocator(), self.getLayoutStore(), if (self.cpu_level == .v1) .wasm32v1 else .wasm32, hosted_arg_layouts, spec.ret_layout, false) catch return error.OutOfMemory;
 
@@ -6907,7 +6908,7 @@ fn emitHostedCall(
     }
 
     // Lower the call to the wasm C ABI (shared classifier, same as the other backends).
-    var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+    var arena_state = base.SingleThreadArena.init(self.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const lowered = layout.abi.lower(arena, self.getLayoutStore(), if (self.cpu_level == .v1) .wasm32v1 else .wasm32, arg_layouts, ret_layout, false) catch return error.OutOfMemory;

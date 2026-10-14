@@ -838,7 +838,7 @@ pub fn roundTripForTest(gpa: Allocator, comptime Store: type, store: *const Stor
     buffer: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
     loaded: Store,
 } {
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
 
@@ -1020,7 +1020,7 @@ test "SerializedSlice: round-trips a POD slice via CompactWriter" {
 
     const src = [_]Elem{ @fromBackingInt(@intCast(7)), @fromBackingInt(@intCast(5)), @fromBackingInt(@intCast(4242)), @fromBackingInt(@intCast(1)) };
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
 
@@ -1072,7 +1072,7 @@ test "SerializedSlice.serialize zeroes element padding (deterministic bytes)" {
 
 test "SerializedSlice.serialize: padding-free elements are iovec'd verbatim (no copy buffer)" {
     const gpa = testing.allocator;
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
 
@@ -1105,7 +1105,7 @@ fn serializeHolderToBuffer(
     comptime Holder: type,
     items: anytype,
 ) TestError![]align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 {
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
     var writer = CompactWriter.init();
@@ -1127,7 +1127,7 @@ test "SerializedOptional: present and absent round-trip" {
     const present: ?Key = Key{ .bytes = .{ 1, 2, 3, 4, 5, 6, 7, 8 } };
     const absent: ?Key = null;
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
     var writer = CompactWriter.init();
@@ -1151,7 +1151,7 @@ test "SerializedSlice: empty slice round-trips to empty (no spurious offset)" {
     const Holder = extern struct {
         items: SerializedSlice(u64),
     };
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
 

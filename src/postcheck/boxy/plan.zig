@@ -119,7 +119,7 @@ pub const LiteralFreezeContext = struct {
     /// A literal initializer's own frame: callables it builds are frozen
     /// under its bindings rather than any instantiation of its site's worker.
     literal_initializer: ?u32 = null,
-    callable_types: std.AutoHashMapUnmanaged(TypeRepId, u32) = .empty,
+    callable_types: collections.DenseMapUnmanaged(TypeRepId, u32) = .empty,
 };
 
 /// Everything Boxy planned for compile-time literal values: the literal read
@@ -129,7 +129,7 @@ pub const LiteralEvidencePlan = struct {
     freeze_contexts: std.ArrayList(LiteralFreezeContext) = .empty,
     /// Interned callable type identities in this plan's type-term domain. Only
     /// equality survives planning; no consumer retains the term graph.
-    callable_types: std.AutoHashMapUnmanaged(TypeRepId, u32) = .empty,
+    callable_types: collections.DenseMapUnmanaged(TypeRepId, u32) = .empty,
     sites: std.AutoHashMapUnmanaged(LiteralSiteKey, LiteralRequirements.Argument) = .empty,
     generated_captures: std.AutoHashMapUnmanaged(GeneratedCallableKey, []const LiteralRequirements.Argument) = .empty,
     initializers: std.ArrayList(LiteralInitializer) = .empty,
@@ -1334,7 +1334,7 @@ pub const ProgramPlan = struct {
     derived_component_decisions: std.AutoHashMap(DerivedComponentKey, DerivedComponentDecision),
     /// The closed representation of a variable nothing binds where it is read
     /// (or of an open row whose extension is one), at its checked default.
-    shared_closed_reps: std.AutoHashMapUnmanaged(TypeRepId, TypeRepId) = .empty,
+    shared_closed_reps: collections.DenseMapUnmanaged(TypeRepId, TypeRepId) = .empty,
     /// Ordered derived-method formal environments: env `n` is
     /// `derived_envs.items[n - 1]`, a span of `derived_env_bindings`; env 0 is
     /// empty.
@@ -2274,19 +2274,19 @@ const LiteralPlanner = struct {
     site_sources: std.ArrayList(LiteralRequirements.Source) = .empty,
     site_identities: std.ArrayList(CheckedExprIdentity) = .empty,
     call_edges: std.AutoHashMapUnmanaged(LiteralCallEdge, LiteralRequirements.EdgeId) = .empty,
-    closed_reps: std.AutoHashMapUnmanaged(LiteralRequirements.TermId, TypeRepId) = .empty,
+    closed_reps: collections.DenseMapUnmanaged(LiteralRequirements.TermId, TypeRepId) = .empty,
     type_terms: std.AutoHashMapUnmanaged(CheckedTypeIdentity, LiteralRequirements.TermId) = .empty,
-    rep_terms: std.AutoHashMapUnmanaged(TypeRepId, LiteralRequirements.TermId) = .empty,
+    rep_terms: collections.DenseMapUnmanaged(TypeRepId, LiteralRequirements.TermId) = .empty,
     constructor_ids: std.StringHashMapUnmanaged(u32) = .empty,
     site_ids: std.AutoHashMapUnmanaged(CheckedExprIdentity, LiteralRequirements.SiteId) = .empty,
     edge_bindings: std.ArrayList(struct { descriptors: Span, dictionaries: Span, scheme: Span }) = .empty,
-    expanded_args: std.AutoHashMapUnmanaged(LiteralRequirements.EdgeId, Span) = .empty,
+    expanded_args: collections.DenseMapUnmanaged(LiteralRequirements.EdgeId, Span) = .empty,
     method_recipes: std.ArrayList(MethodRecipe) = .empty,
     method_terms: std.AutoHashMapUnmanaged(u32, LiteralRequirements.TermId) = .empty,
-    materialized_methods: std.AutoHashMapUnmanaged(LiteralRequirements.TermId, u32) = .empty,
+    materialized_methods: collections.DenseMapUnmanaged(LiteralRequirements.TermId, u32) = .empty,
     closed_method_schemes: std.AutoHashMapUnmanaged(u32, Span) = .empty,
     freeze_edges: std.ArrayList(LiteralRequirements.EdgeId) = .empty,
-    freeze_sites: std.AutoHashMapUnmanaged(LiteralRequirements.SiteId, struct { worker: WorkerPlanId, ty: LiteralRequirements.TermId }) = .empty,
+    freeze_sites: collections.DenseMapUnmanaged(LiteralRequirements.SiteId, struct { worker: WorkerPlanId, ty: LiteralRequirements.TermId }) = .empty,
 
     fn init(builder: *Builder) LiteralPlanner {
         return .{ .builder = builder, .graph = LiteralRequirements.Graph.init(builder.allocator) };
@@ -2783,7 +2783,7 @@ const LiteralPlanner = struct {
 
     fn literalResultsContainCallables(self: *LiteralPlanner) Allocator.Error!bool {
         const plan = &self.builder.plan;
-        var seen = std.AutoHashMapUnmanaged(TypeRepId, void).empty;
+        var seen = collections.DenseMapUnmanaged(TypeRepId, void).empty;
         defer seen.deinit(self.builder.allocator);
         var pending = std.ArrayList(TypeRepId).empty;
         defer pending.deinit(self.builder.allocator);
@@ -2932,7 +2932,7 @@ const LiteralPlanner = struct {
             defer term_bindings.deinit(allocator);
             var binding_entries = bindings.iterator();
             while (binding_entries.next()) |entry| try term_bindings.append(allocator, .{ .variable = entry.key_ptr.*, .term = entry.value_ptr.* });
-            var memo = std.AutoHashMapUnmanaged(LiteralRequirements.TermId, LiteralRequirements.TermId).empty;
+            var memo = collections.DenseMapUnmanaged(LiteralRequirements.TermId, LiteralRequirements.TermId).empty;
             defer memo.deinit(allocator);
             const target_term = try self.typeTerm(typeRef(view, literalSiteValueType(view.checked_bodies, site.source.expr)));
             const closed_target = try self.graph.terms.substitute(target_term, term_bindings.items, &memo);
@@ -3138,7 +3138,7 @@ const LiteralPlanner = struct {
 
     fn finishMethodTerm(self: *LiteralPlanner, frame: *MethodTermFrame) Allocator.Error!LiteralRequirements.TermId {
         const allocator = self.builder.allocator;
-        var memo = std.AutoHashMapUnmanaged(LiteralRequirements.TermId, LiteralRequirements.TermId).empty;
+        var memo = collections.DenseMapUnmanaged(LiteralRequirements.TermId, LiteralRequirements.TermId).empty;
         defer memo.deinit(allocator);
         for (frame.args.items) |*arg| arg.* = try self.graph.terms.substitute(arg.*, frame.bindings.items, &memo);
         const recipe: u32 = @intCast(self.method_recipes.items.len);
@@ -3543,7 +3543,7 @@ const LiteralPlanner = struct {
             });
         }
         try bindings.appendSlice(allocator, scheme_bindings.items);
-        var memo = std.AutoHashMapUnmanaged(LiteralRequirements.TermId, LiteralRequirements.TermId).empty;
+        var memo = collections.DenseMapUnmanaged(LiteralRequirements.TermId, LiteralRequirements.TermId).empty;
         defer memo.deinit(allocator);
         for (self.builder.plan.directCallHiddenDescriptorArgSlice(source.descriptors)) |descriptor| {
             const from = try self.typeTerm(self.builder.plan.representations.items[@backingInt(descriptor.worker_rep)].source_type);
@@ -3738,7 +3738,7 @@ const LiteralPlanner = struct {
             var bindings = std.ArrayList(LiteralRequirements.Binding).empty;
             defer bindings.deinit(self.builder.allocator);
             for (self.result.bindings.items[context.bindings.start..][0..context.bindings.len]) |pair| try bindings.append(self.builder.allocator, .{ .variable = @backingInt(pair.scheme_rep), .term = try self.repTerm(pair.site_rep) });
-            var memo = std.AutoHashMapUnmanaged(LiteralRequirements.TermId, LiteralRequirements.TermId).empty;
+            var memo = collections.DenseMapUnmanaged(LiteralRequirements.TermId, LiteralRequirements.TermId).empty;
             defer memo.deinit(self.builder.allocator);
             var keys = self.result.callable_types.iterator();
             while (keys.next()) |key| {
@@ -10399,7 +10399,7 @@ const Builder = struct {
         constraints: []const checked.CheckedStaticDispatchConstraint,
     ) Allocator.Error!Span {
         const start: u32 = @intCast(self.plan.dictionaries.items.len);
-        var methods = std.AutoHashMapUnmanaged(checked_names.MethodNameId, void).empty;
+        var methods = collections.DenseMapUnmanaged(checked_names.MethodNameId, void).empty;
         defer methods.deinit(self.allocator);
         for (constraints, 0..) |constraint, index| {
             if (self.constraintIsOwnerlessStructuralEquality(source_type, constraint)) continue;
@@ -10904,13 +10904,13 @@ const Builder = struct {
             }
             // Each backing field by label, so every declared field resolves in
             // constant time.
-            var backing_fields: std.AutoHashMapUnmanaged(RecordFieldLabelId, DeclaredField) = .empty;
+            var backing_fields: collections.DenseMapUnmanaged(RecordFieldLabelId, DeclaredField) = .empty;
             defer backing_fields.deinit(self.allocator);
             try backing_fields.ensureTotalCapacity(self.allocator, @intCast(backing_field_count));
             var field_index: u32 = 0;
             for (backing_children) |child| {
                 if (child.role != .record_field) continue;
-                const entry = backing_fields.getOrPutAssumeCapacity(child.role.record_field);
+                const entry = try backing_fields.getOrPut(self.allocator, child.role.record_field);
                 if (entry.found_existing) boxyPlanInvariant("stored nominal backing had a duplicate declared field");
                 entry.value_ptr.* = .{
                     .index = field_index,
@@ -12083,10 +12083,10 @@ const Builder = struct {
         // signature appears in no type the caller's body mentions, so the
         // substitution is the only place it is named. The images depend only
         // on the edge, so they are computed once.
-        var image_arena = std.heap.ArenaAllocator.init(self.allocator);
+        var image_arena = base.SingleThreadArena.init(self.allocator);
         defer image_arena.deinit();
         const image_allocator = image_arena.allocator();
-        const edge_images = try image_allocator.alloc(std.AutoHashMapUnmanaged(TypeRepId, []const TypeRepId), edges.items.len);
+        const edge_images = try image_allocator.alloc(collections.DenseMapUnmanaged(TypeRepId, []const TypeRepId), edges.items.len);
         var image_leaves = WorkerDescriptorLeaves{ .set = collections.DenseMap(TypeRepId, void).init(self.allocator) };
         defer image_leaves.deinit(self.allocator);
         var caller_images = std.ArrayList(TypeRepId).empty;
@@ -14635,7 +14635,7 @@ const Builder = struct {
     /// nothing and is at its checked default, as a root's monomorphic request
     /// makes it; plan that default for each one.
     fn materializeRootSharedVariableDefaults(self: *Builder) Allocator.Error!void {
-        var visited = std.AutoHashMapUnmanaged(TypeRepId, void).empty;
+        var visited = collections.DenseMapUnmanaged(TypeRepId, void).empty;
         defer visited.deinit(self.allocator);
         var pending = std.ArrayList(TypeRepId).empty;
         defer pending.deinit(self.allocator);
@@ -16581,9 +16581,9 @@ const Builder = struct {
     fn bindRequirementVariables(self: *Builder, state: *DictionaryCallArgs) Allocator.Error!void {
         const worker = self.plan.workers.items[@backingInt(state.worker_id)];
         const scheme = self.workerSchemeVars(worker.source) orelse return;
-        var bound = std.AutoHashMapUnmanaged(TypeRepId, TypeRepId).empty;
+        var bound = collections.DenseMapUnmanaged(TypeRepId, TypeRepId).empty;
         defer bound.deinit(self.allocator);
-        var scheme_reps = std.AutoHashMapUnmanaged(TypeRepId, void).empty;
+        var scheme_reps = collections.DenseMapUnmanaged(TypeRepId, void).empty;
         defer scheme_reps.deinit(self.allocator);
         for (scheme.vars) |scheme_var| {
             const rep = self.plan.repForSourceType(typeRef(scheme.view, scheme_var)) orelse continue;
@@ -19018,7 +19018,7 @@ const Builder = struct {
         try key.appendSlice(self.allocator, &.{ 0, @backingInt(rep_id) });
         var pending = std.ArrayList(TypeRepId).empty;
         defer pending.deinit(self.allocator);
-        var seen = std.AutoHashMapUnmanaged(TypeRepId, void).empty;
+        var seen = collections.DenseMapUnmanaged(TypeRepId, void).empty;
         defer seen.deinit(self.allocator);
         try pending.append(self.allocator, rep_id);
         while (pending.pop()) |current| {
@@ -19040,7 +19040,7 @@ const Builder = struct {
         }
         if (self.static_method_call_reps.get(key.items)) |existing| return existing;
 
-        var bindings = std.AutoHashMapUnmanaged(TypeRepId, TypeRepId).empty;
+        var bindings = collections.DenseMapUnmanaged(TypeRepId, TypeRepId).empty;
         defer bindings.deinit(self.allocator);
         var binding_index: usize = 2;
         while (binding_index < key.items.len) : (binding_index += 2) {
@@ -19059,11 +19059,11 @@ const Builder = struct {
     fn substitutedRep(
         self: *Builder,
         root: TypeRepId,
-        bindings: *const std.AutoHashMapUnmanaged(TypeRepId, TypeRepId),
+        bindings: *const collections.DenseMapUnmanaged(TypeRepId, TypeRepId),
     ) Allocator.Error!TypeRepId {
-        var replaced = std.AutoHashMapUnmanaged(TypeRepId, TypeRepId).empty;
+        var replaced = collections.DenseMapUnmanaged(TypeRepId, TypeRepId).empty;
         defer replaced.deinit(self.allocator);
-        var expanding = std.AutoHashMapUnmanaged(TypeRepId, void).empty;
+        var expanding = collections.DenseMapUnmanaged(TypeRepId, void).empty;
         defer expanding.deinit(self.allocator);
         const Frame = struct { rep: TypeRepId, expanded: bool };
         var frames = std.ArrayList(Frame).empty;

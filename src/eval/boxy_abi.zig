@@ -754,6 +754,14 @@ const AbiHooks = struct {
     }
 
     pub fn allocValue(self: AbiHooks, layout_idx: layout_mod.Idx) Error!Value {
+        const value = try self.allocValueUninit(layout_idx);
+        if (!value.isZst()) @memset(value.ptr[0..self.g.runtime.helper.sizeOf(layout_idx)], 0);
+        return value;
+    }
+
+    /// Storage for a value of `layout_idx` whose every byte the caller writes
+    /// before reading, so it is not zeroed first.
+    pub fn allocValueUninit(self: AbiHooks, layout_idx: layout_mod.Idx) Error!Value {
         const sa = self.g.runtime.helper.sizeAlignOf(layout_idx);
         if (sa.size == 0) return Value.zst;
         const scratch = self.g.value_scratch.allocator();
@@ -765,7 +773,6 @@ const AbiHooks = struct {
             .@"16" => scratch.alignedAlloc(u8, .@"16", sa.size),
             _ => unreachable,
         } catch return error.OutOfMemory;
-        @memset(slice, 0);
         return Value.fromSlice(slice);
     }
 
