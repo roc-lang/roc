@@ -540,7 +540,7 @@ test "hoisted list constants lower to internal static data in request order" {
     // order must then determine their body order.
     if (@backingInt(first_body) >= @backingInt(second_body)) return error.StaticDataInitializerRequestOrderMismatch;
     for (lowered.lir_result.root_procs.items) |root_proc| {
-        const root_body = lowered.lir_result.store.getProcSpec(root_proc).body orelse return error.StaticDataLiteralNotFound;
+        const root_body = lowered.lir_result.store.getProcSpecImmediate(root_proc).body orelse return error.StaticDataLiteralNotFound;
         if (@backingInt(root_body) >= @backingInt(first_body)) return error.StaticDataInitializerPrecededRootBody;
     }
     try expectStaticDataLiteralPresent(&lowered.lir_result);
@@ -2672,7 +2672,6 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -2699,8 +2698,6 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .ret,
@@ -2717,7 +2714,7 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
 
 fn expectStaticInitializersMaterializationOnly(result: *const lir.Program.Result) HoistedConstantsTestError!void {
     for (result.static_data_values.items) |value| {
-        try std.testing.expect(result.store.getProcSpec(value.initializer.?).is_static_initializer);
+        try std.testing.expect(result.store.getProcSpecImmediate(value.initializer.?).is_static_initializer);
     }
 }
 
@@ -2731,6 +2728,7 @@ fn storedI64(
     const node_from_root = switch (root.payload) {
         .const_node => |node| node,
         .pending,
+        .unevaluated,
         .fn_value,
         .discarded,
         .expect,
@@ -2757,6 +2755,7 @@ fn rootStoredI64(
     const node = switch (root.payload) {
         .const_node => |const_node| const_node,
         .pending,
+        .unevaluated,
         .fn_value,
         .discarded,
         .expect,

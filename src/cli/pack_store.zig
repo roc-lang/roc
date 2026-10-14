@@ -50,11 +50,8 @@ pub const Store = struct {
     }
 
     fn packPath(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8) Allocator.Error![]u8 {
-        const dir = try self.identityDir(origin, identity);
-        defer self.allocator.free(dir);
-        const name = try std.fmt.allocPrint(self.allocator, "{s}.rpk", .{&std.fmt.bytesToHex(key, .lower)});
-        defer self.allocator.free(name);
-        return std.fs.path.join(self.allocator, &.{ dir, name });
+        const name = std.fmt.bytesToHex(key, .lower) ++ ".rpk".*;
+        return std.fs.path.join(self.allocator, &.{ self.root, @tagName(origin), &std.fmt.bytesToHex(identity, .lower), &name });
     }
 
     /// Whether the pack for `key` is already in the store.
@@ -111,7 +108,7 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
     const identity = lir.ProcIdentity.forTest(43);
     const key = @as([32]u8, @splat(41));
     const set = backend.dev.ProcArtifact.Set{
-        .arena = std.heap.ArenaAllocator.init(allocator),
+        .arena = @import("base").SingleThreadArena.init(allocator),
         .artifacts = &.{.{
             .kind = .{ .proc = identity },
             .code = "\xc3",
@@ -209,7 +206,7 @@ test "object cache semantic offers select compatible relations in either order" 
                 };
                 const identity = lir.ProcIdentity.forTest(@intCast(51 + index));
                 const set = backend.dev.ProcArtifact.Set{
-                    .arena = std.heap.ArenaAllocator.init(allocator),
+                    .arena = @import("base").SingleThreadArena.init(allocator),
                     .artifacts = &.{.{
                         .kind = .{ .proc = identity },
                         .code = "\xc3",
@@ -504,6 +501,7 @@ pub const LoadedPacks = struct {
                 if (!gop.found_existing) gop.value_ptr.* = .{
                     .identity = identity.bytes,
                     .platform_requirement_relation = spec.platform_requirement_relation,
+                    .comptime_root_reads = spec.comptime_root_reads,
                     .rc_borrowed_params = spec.rc_borrowed_params,
                     .rc_ret_borrowed = spec.rc_ret_borrowed,
                     .rc_ret_lenders = spec.rc_ret_lenders,

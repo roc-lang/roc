@@ -182,16 +182,16 @@ test "range prove ordered procedure runs match whole-store constant arithmetic a
         }, .none);
         if (procedure_local) {
             for (0..store.procSpecCount()) |index| {
-                var scratch = std.heap.ArenaAllocator.init(testing.allocator);
+                var scratch = collections.SingleThreadArena.init(testing.allocator);
                 defer scratch.deinit();
                 try runProc(&store, &layouts, @fromBackingInt(@intCast(index)), scratch.allocator());
             }
         } else {
             try run(&store, &layouts);
         }
-        try testing.expectEqual(.num_int_add_proven_cannot_overflow, store.getCFStmt(add).assign_low_level.op);
-        try testing.expectEqual(noop_body, store.getProcSpec(noop).body.?);
-        try testing.expectEqual(arg, store.getCFStmt(noop_body).ret.value);
+        try testing.expectEqual(.num_int_add_proven_cannot_overflow, store.getCFStmtImmediate(add).assign_low_level.op);
+        try testing.expectEqual(noop_body, store.getProcSpecImmediate(noop).body.?);
+        try testing.expectEqual(arg, store.getCFStmtImmediate(noop_body).ret.value);
     }
 }
 
@@ -244,7 +244,7 @@ test "range prove retargets jumps inside unreached join bodies when threading a 
         .ret_layout = .u64,
     }, .none);
 
-    var scratch = std.heap.ArenaAllocator.init(testing.allocator);
+    var scratch = collections.SingleThreadArena.init(testing.allocator);
     defer scratch.deinit();
     try runProc(&store, &layouts, proc, scratch.allocator());
 
@@ -252,7 +252,7 @@ test "range prove retargets jumps inside unreached join bodies when threading a 
     defer join_ids.deinit();
     var jump_targets = std.ArrayList(LIR.JoinPointId).empty;
     defer jump_targets.deinit(testing.allocator);
-    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpec(proc).body.?, testing.allocator);
+    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpecImmediate(proc).body.?, testing.allocator);
     defer walk.deinit();
     while (try walk.next()) |stmt| {
         const cf = store.getCFStmt(stmt);
@@ -2133,79 +2133,13 @@ const Pass = struct {
         while (self.scratch.pop()) |current| {
             if (seen.contains(current)) continue;
             try seen.put(current, {});
-            switch (self.store.getCFStmt(current)) {
-                inline .init_uninitialized,
-                .assign_literal,
-                .assign_call,
-                .assign_call_erased,
-                .assign_packed_erased_fn,
-                .assign_low_level,
-                .assign_list,
-                .assign_struct,
-                .assign_tag,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .assign_call_dict,
-                .set_local,
-                => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_ref => |s| {
-                    try self.bumpAssign(s.target);
-                    if (s.op == .local) try self.alias_of.put(s.target, s.op.local);
-                    try self.edgeTo(s.next);
-                },
-                inline .store_struct, .store_tag => |s| {
-                    try self.bumpAssign(s.dest);
-                    try self.edgeTo(s.next);
-                },
-                .debug => |s| try self.edgeTo(s.next),
-                .expect => |s| try self.edgeTo(s.next),
-                .comptime_branch_taken => |s| try self.edgeTo(s.next),
-                .incref => |s| try self.edgeTo(s.next),
-                .decref => |s| try self.edgeTo(s.next),
-                .decref_if_initialized => |s| try self.edgeTo(s.next),
-                .free => |s| try self.edgeTo(s.next),
-                .switch_stmt => |s| {
-                    const branches = self.store.getCFSwitchBranches(s.branches);
-                    for (0..GuardedList.borrowLen(branches)) |i| {
-                        try self.edgeTo(GuardedList.at(branches, i).body);
-                    }
-                    try self.edgeTo(s.default_branch);
-                    // The continuation is release-placement metadata, not a
-                    // control edge: the arms flow into it through their own
-                    // chains, which are the edges counted here.
-                },
-                .switch_initialized_payload => |s| {
-                    try self.edgeTo(s.initialized_branch);
-                    try self.edgeTo(s.uninitialized_branch);
-                },
-                inline .str_match, .boxy_tag_match => |s| {
-                    try self.edgeTo(s.on_match);
-                    try self.edgeTo(s.on_miss);
-                },
-                .str_match_set => |s| {
-                    const arms = self.store.getStrMatchArms(s.arms);
-                    for (0..GuardedList.borrowLen(arms)) |i| {
-                        try self.edgeTo(GuardedList.at(arms, i).on_match);
-                    }
-                    try self.edgeTo(s.on_miss);
-                },
+            const stmt = self.store.getCFStmt(current);
+            switch (stmt) {
+                .assign_ref => |s| if (s.op == .local) try self.alias_of.put(s.target, s.op.local),
+                inline .store_struct, .store_tag => |s| try self.bumpAssign(s.dest),
                 .join => |s| {
                     try self.join_stmts.put(s.id, current);
                     try self.joins_in_order.append(self.allocator, current);
-                    try self.edgeTo(s.remainder);
                     // The body is only entered through jumps, so it is only
                     // scanned once a reachable jump to it appears. Scanning it
                     // eagerly would let jumps inside dead arms inflate the
@@ -2220,14 +2154,55 @@ const Pass = struct {
                     // already known by the time the first jump appears.
                     if (count.value_ptr.* == 1) {
                         if (self.join_stmts.get(s.target)) |join_stmt| {
-                            const body = self.store.getCFStmt(join_stmt).join.body;
+                            const body = self.store.getCFStmtImmediate(join_stmt).join.body;
                             try self.body_joins.put(body, s.target);
                             if (!seen.contains(body)) try self.scratch.append(self.allocator, body);
                         }
                     }
                 },
-                .ret, .crash, .runtime_error, .expect_err, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+                .init_uninitialized,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .ret,
+                .crash,
+                => {},
             }
+            if (BodyClone.definedTarget(stmt)) |target| try self.bumpAssign(target);
+            try BodyClone.forEachFlowSuccessor(self.store, stmt, self, edgeTo);
         }
         try self.scanJoinNesting(proc.body.?);
         if (self.body_joins.count() != 0) try self.buildLoopScan(proc.body.?);
@@ -2338,13 +2313,13 @@ const Pass = struct {
             if (seen.contains(item.stmt)) continue;
             try seen.put(item.stmt, {});
             if (item.join) |join_id| try self.enclosing_join.put(item.stmt, join_id);
-            switch (self.store.getCFStmt(item.stmt)) {
+            switch (self.store.getCFStmtImmediate(item.stmt).*) {
                 .join => |s| {
                     if (item.join) |outer| try self.join_parent.put(s.id, outer);
                     try stack.append(self.allocator, .{ .stmt = s.body, .join = s.id });
                     try stack.append(self.allocator, .{ .stmt = s.remainder, .join = item.join });
                 },
-                .jump => {},
+                // A jump's target is not followed: it has no structural successor.
                 .init_uninitialized,
                 .assign_ref,
                 .assign_literal,
@@ -2355,7 +2330,6 @@ const Pass = struct {
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -2363,6 +2337,7 @@ const Pass = struct {
                 .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
+                .boxy_tag_match,
                 .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
@@ -2385,9 +2360,7 @@ const Pass = struct {
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .boxy_tag_match,
-                .loop_continue,
-                .loop_break,
+                .jump,
                 .ret,
                 .crash,
                 => {
@@ -2490,13 +2463,13 @@ const Pass = struct {
         while (cursor < scan.stmts.items.len) : (cursor += 1) {
             const stmt = scan.stmts.items[cursor];
             successors.clearRetainingCapacity();
-            switch (self.store.getCFStmt(stmt)) {
+            switch (self.store.getCFStmtImmediate(stmt).*) {
                 .jump => |j| {
                     const target_stmt = self.join_stmts.get(j.target) orelse continue;
                     const entry = try scan.jumps_to.getOrPut(j.target);
                     if (!entry.found_existing) entry.value_ptr.* = .empty;
                     try entry.value_ptr.append(gpa, cursor);
-                    try successors.append(gpa, self.store.getCFStmt(target_stmt).join.body);
+                    try successors.append(gpa, self.store.getCFStmtImmediate(target_stmt).join.body);
                 },
                 .join => |j| try successors.append(gpa, j.remainder),
                 .init_uninitialized,
@@ -2509,7 +2482,6 @@ const Pass = struct {
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -2517,6 +2489,7 @@ const Pass = struct {
                 .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
+                .boxy_tag_match,
                 .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
@@ -2539,9 +2512,6 @@ const Pass = struct {
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .boxy_tag_match,
-                .loop_continue,
-                .loop_break,
                 .ret,
                 .crash,
                 => try BodyClone.appendSuccessors(self.store, successors, stmt, gpa),
@@ -2655,12 +2625,11 @@ const Pass = struct {
         }
         var back: u32 = 0;
         for (scan.cycle.items) |node| {
-            const stmt = scan.stmts.items[node];
-            switch (self.store.getCFStmt(stmt)) {
-                .jump => |j| {
-                    if (j.target == join_id) back += 1;
+            const stmt = self.store.getCFStmt(scan.stmts.items[node]);
+            switch (stmt) {
+                .jump => |j| if (j.target == join_id) {
+                    back += 1;
                 },
-                .join,
                 .init_uninitialized,
                 .assign_ref,
                 .assign_literal,
@@ -2671,7 +2640,6 @@ const Pass = struct {
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -2679,6 +2647,7 @@ const Pass = struct {
                 .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
+                .boxy_tag_match,
                 .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
@@ -2701,14 +2670,12 @@ const Pass = struct {
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .boxy_tag_match,
-                .loop_continue,
-                .loop_break,
+                .join,
                 .ret,
                 .crash,
                 => {},
             }
-            if (assignedLocalOf(self.store.getCFStmt(stmt))) |local| {
+            if (BodyClone.definedTarget(stmt)) |local| {
                 try self.join_assigned.put(joinAssignedKey(join_id, local), {});
             }
         }
@@ -2731,61 +2698,6 @@ const Pass = struct {
 
     fn joinAssignedKey(join_id: JoinPointId, local: LocalId) u64 {
         return (@as(u64, @backingInt(join_id)) << 32) | @as(u64, @backingInt(local));
-    }
-
-    /// The local a statement writes, if any.
-    fn assignedLocalOf(stmt: LIR.CFStmt) ?LocalId {
-        return switch (stmt) {
-            inline .init_uninitialized,
-            .assign_ref,
-            .assign_literal,
-            .assign_call,
-            .assign_call_erased,
-            .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .assign_call_dict,
-            .assign_low_level,
-            .assign_list,
-            .assign_struct,
-            .assign_tag,
-            .set_local,
-            => |s| s.target,
-            .join,
-            .jump,
-            .store_struct,
-            .store_tag,
-            .debug,
-            .expect,
-            .expect_err,
-            .runtime_error,
-            .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
-            .incref,
-            .decref,
-            .decref_if_initialized,
-            .free,
-            .switch_stmt,
-            .switch_initialized_payload,
-            .str_match,
-            .str_match_set,
-            .boxy_tag_match,
-            .loop_continue,
-            .loop_break,
-            .ret,
-            .crash,
-            => null,
-        };
     }
 
     fn stabilizeLoopTerm(self: *const Pass, root: NodeId, join_id: JoinPointId) ?StableTerm {
@@ -3236,7 +3148,7 @@ const Pass = struct {
             if (captures != self.jumpCount(join_id)) {
                 try self.seedMergeEnv(head);
                 if (self.join_stmts.get(join_id)) |join_stmt| {
-                    const join = self.store.getCFStmt(join_stmt).join;
+                    const join = self.store.getCFStmtImmediate(join_stmt).join;
                     const params = self.store.getLocalSpan(join.params);
                     for (0..GuardedList.borrowLen(params)) |i| {
                         const param = GuardedList.at(params, i);
@@ -3741,7 +3653,7 @@ const Pass = struct {
             // would sit pending, never assumed, and its admission would
             // ask for another round for nothing.
             const join_stmt = self.join_stmts.get(join_id) orelse continue;
-            const params = self.store.getLocalSpan(self.store.getCFStmt(join_stmt).join.params);
+            const params = self.store.getLocalSpan(self.store.getCFStmtImmediate(join_stmt).join.params);
             for (state.env.items) |meet| {
                 if (meet.field != null) continue;
                 var is_param = false;
@@ -4241,7 +4153,7 @@ const Pass = struct {
         defer structural_jumps.deinit(self.allocator);
         var structural_jumps_ready = false;
         for (self.joins_in_order.items) |join_stmt| {
-            const join = switch (self.store.getCFStmt(join_stmt)) {
+            const join = switch (self.store.getCFStmtImmediate(join_stmt).*) {
                 .join => |j| j,
                 .init_uninitialized,
                 .assign_ref,
@@ -4249,6 +4161,19 @@ const Pass = struct {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -4270,16 +4195,29 @@ const Pass = struct {
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .loop_continue,
-                .loop_break,
                 .jump,
                 .ret,
                 .crash,
+                => continue,
+            };
+            const params = self.store.getLocalSpan(join.params);
+            if (GuardedList.borrowLen(params) != 1) continue;
+            if (!join.maybe_uninitialized_params.isEmpty()) continue;
+            const param = GuardedList.at(params, 0);
+            if (self.localLayout(param) != .bool) continue;
+
+            const body_switch = switch (self.store.getCFStmtImmediate(join.body).*) {
+                .switch_stmt => |sw| sw,
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -4289,22 +4227,6 @@ const Pass = struct {
                 .assign_boxy_tag_payload,
                 .boxy_tag_match,
                 .assign_call_dict,
-                => continue,
-            };
-            const params = self.store.getLocalSpan(join.params);
-            if (GuardedList.borrowLen(params) != 1) continue;
-            if (!join.maybe_uninitialized_params.isEmpty()) continue;
-            const param = GuardedList.at(params, 0);
-            if (self.localLayout(param) != .bool) continue;
-
-            const body_switch = switch (self.store.getCFStmt(join.body)) {
-                .switch_stmt => |sw| sw,
-                .init_uninitialized,
-                .assign_ref,
-                .assign_literal,
-                .assign_call,
-                .assign_call_erased,
-                .assign_packed_erased_fn,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -4325,26 +4247,10 @@ const Pass = struct {
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .loop_continue,
-                .loop_break,
                 .join,
                 .jump,
                 .ret,
                 .crash,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
                 => continue,
             };
             if (body_switch.cond != param) continue;
@@ -4400,7 +4306,7 @@ const Pass = struct {
                 if (record.target != join.id) continue;
                 // A site already rewritten for an earlier join no longer
                 // holds a jump; skip anything that changed shape.
-                switch (self.store.getCFStmt(record.stmt)) {
+                switch (self.store.getCFStmtImmediate(record.stmt).*) {
                     .jump => |jump| if (jump.target != join.id) continue,
                     .init_uninitialized,
                     .assign_ref,
@@ -4408,6 +4314,19 @@ const Pass = struct {
                     .assign_call,
                     .assign_call_erased,
                     .assign_packed_erased_fn,
+                    .assign_boxy_desc_ref,
+                    .assign_boxy_dict_ref,
+                    .assign_boxy_box,
+                    .assign_boxy_record_update,
+                    .assign_boxy_unbox,
+                    .assign_boxy_adapt,
+                    .assign_boxy_inspect,
+                    .assign_boxy_eq,
+                    .assign_boxy_hash,
+                    .assign_boxy_tag,
+                    .assign_boxy_tag_payload,
+                    .boxy_tag_match,
+                    .assign_call_dict,
                     .assign_low_level,
                     .assign_list,
                     .assign_struct,
@@ -4429,25 +4348,9 @@ const Pass = struct {
                     .switch_initialized_payload,
                     .str_match,
                     .str_match_set,
-                    .loop_continue,
-                    .loop_break,
                     .join,
                     .ret,
                     .crash,
-                    .assign_boxy_desc_ref,
-                    .assign_boxy_dict_ref,
-                    .assign_boxy_box,
-                    .assign_boxy_record_update,
-                    .assign_boxy_reuse_box,
-                    .assign_boxy_unbox,
-                    .assign_boxy_adapt,
-                    .assign_boxy_inspect,
-                    .assign_boxy_eq,
-                    .assign_boxy_hash,
-                    .assign_boxy_tag,
-                    .assign_boxy_tag_payload,
-                    .boxy_tag_match,
-                    .assign_call_dict,
                     => continue,
                 }
                 const site_origin = self.store.stmtOrigin(record.stmt);
@@ -4639,7 +4542,7 @@ const Pass = struct {
                 }
                 if (self.visited.contains(current)) break :walk;
 
-                switch (self.store.getCFStmt(current)) {
+                switch (self.store.getCFStmtImmediate(current).*) {
                     .assign_ref => |s| {
                         try self.visited.put(current, {});
                         switch (s.op) {
@@ -4713,7 +4616,6 @@ const Pass = struct {
                     .assign_boxy_dict_ref,
                     .assign_boxy_box,
                     .assign_boxy_record_update,
-                    .assign_boxy_reuse_box,
                     .assign_boxy_unbox,
                     .assign_boxy_adapt,
                     .assign_boxy_inspect,
@@ -4783,7 +4685,7 @@ const Pass = struct {
                     .jump => |s| {
                         try self.visited.put(current, {});
                         if (self.join_stmts.get(s.target)) |join_stmt| {
-                            const join = self.store.getCFStmt(join_stmt).join;
+                            const join = self.store.getCFStmtImmediate(join_stmt).join;
                             if (self.jumpCount(s.target) == 1) {
                                 if (!self.visited.contains(join.body)) {
                                     // Sole entry into the join body: bindings
@@ -4798,7 +4700,7 @@ const Pass = struct {
                         }
                         break :walk;
                     },
-                    .ret, .crash, .runtime_error, .expect_err, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {
+                    .ret, .crash, .runtime_error, .expect_err, .comptime_exhaustiveness_failed => {
                         try self.visited.put(current, {});
                         break :walk;
                     },
@@ -5355,10 +5257,6 @@ const Pass = struct {
             .list_replace_unsafe,
             .list_swap,
             .list_prepend,
-            .list_first,
-            .list_last,
-            .list_drop_first,
-            .list_drop_last,
             .list_take_first,
             .list_take_last,
             .list_reverse,
@@ -5418,10 +5316,8 @@ const Pass = struct {
             .num_asin,
             .num_acos,
             .num_atan,
-            .num_log,
             .num_floor,
             .num_ceiling,
-            .num_to_str,
             .f32_to_bits,
             .f32_from_bits,
             .f64_to_bits,
@@ -6250,77 +6146,69 @@ const RangeProveCertify = struct {
         var list = std.ArrayList(CFStmtId).empty;
         defer list.deinit(allocator);
 
+        const Edges = struct {
+            list: *std.ArrayList(CFStmtId),
+            allocator: Allocator,
+
+            fn push(edges: *@This(), succ: CFStmtId) Allocator.Error!void {
+                try edges.list.append(edges.allocator, succ);
+            }
+        };
+        var edges: Edges = .{ .list = &list, .allocator = allocator };
+
         try stack.append(allocator, body);
         while (stack.pop()) |current| {
             if (graph.succs.contains(current)) continue;
             list.clearRetainingCapacity();
-            switch (store.getCFStmt(current)) {
-                .init_uninitialized => |t| try list.append(allocator, t.next),
-                .assign_ref => |t| try list.append(allocator, t.next),
-                .assign_literal => |t| try list.append(allocator, t.next),
-                .assign_call => |t| try list.append(allocator, t.next),
-                .assign_call_erased => |t| try list.append(allocator, t.next),
-                .assign_packed_erased_fn => |t| try list.append(allocator, t.next),
-                .assign_low_level => |t| try list.append(allocator, t.next),
-                .assign_list => |t| try list.append(allocator, t.next),
-                .assign_struct => |t| try list.append(allocator, t.next),
-                .assign_tag => |t| try list.append(allocator, t.next),
-                .assign_boxy_desc_ref => |t| try list.append(allocator, t.next),
-                .assign_boxy_dict_ref => |t| try list.append(allocator, t.next),
-                .assign_boxy_box => |t| try list.append(allocator, t.next),
-                .assign_boxy_record_update => |t| try list.append(allocator, t.next),
-                .assign_boxy_reuse_box => |t| try list.append(allocator, t.next),
-                .assign_boxy_unbox => |t| try list.append(allocator, t.next),
-                .assign_boxy_adapt => |t| try list.append(allocator, t.next),
-                .assign_boxy_inspect => |t| try list.append(allocator, t.next),
-                .assign_boxy_eq => |t| try list.append(allocator, t.next),
-                .assign_boxy_hash => |t| try list.append(allocator, t.next),
-                .assign_boxy_tag => |t| try list.append(allocator, t.next),
-                .assign_boxy_tag_payload => |t| try list.append(allocator, t.next),
-                .assign_call_dict => |t| try list.append(allocator, t.next),
-                .store_struct => |t| try list.append(allocator, t.next),
-                .store_tag => |t| try list.append(allocator, t.next),
-                .set_local => |t| try list.append(allocator, t.next),
-                .debug => |t| try list.append(allocator, t.next),
-                .expect => |t| try list.append(allocator, t.next),
-                .comptime_branch_taken => |t| try list.append(allocator, t.next),
-                .incref => |t| try list.append(allocator, t.next),
-                .decref => |t| try list.append(allocator, t.next),
-                .decref_if_initialized => |t| try list.append(allocator, t.next),
-                .free => |t| try list.append(allocator, t.next),
-                .switch_stmt => |t| {
-                    const branches = store.getCFSwitchBranches(t.branches);
-                    for (0..GuardedList.borrowLen(branches)) |i| {
-                        try list.append(allocator, GuardedList.at(branches, i).body);
-                    }
-                    try list.append(allocator, t.default_branch);
-                },
-                .switch_initialized_payload => |t| {
-                    try list.append(allocator, t.initialized_branch);
-                    try list.append(allocator, t.uninitialized_branch);
-                },
-                inline .str_match, .boxy_tag_match => |t| {
-                    try list.append(allocator, t.on_match);
-                    try list.append(allocator, t.on_miss);
-                },
-                .str_match_set => |t| {
-                    const arms = store.getStrMatchArms(t.arms);
-                    for (0..GuardedList.borrowLen(arms)) |i| {
-                        try list.append(allocator, GuardedList.at(arms, i).on_match);
-                    }
-                    try list.append(allocator, t.on_miss);
-                },
-                .join => |t| {
-                    try join_bodies.put(t.id, t.body);
-                    try list.append(allocator, t.remainder);
-                },
-                .jump => |t| {
-                    if (join_bodies.get(t.target)) |target_body| {
-                        try list.append(allocator, target_body);
-                    }
-                },
-                .ret, .crash, .runtime_error, .expect_err, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+            const stmt = store.getCFStmt(current);
+            switch (stmt) {
+                .join => |t| try join_bodies.put(t.id, t.body),
+                .jump => |t| if (join_bodies.get(t.target)) |target_body| try list.append(allocator, target_body),
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .ret,
+                .crash,
+                => {},
             }
+            try BodyClone.forEachFlowSuccessor(store, stmt, &edges, Edges.push);
             const owned = try allocator.dupe(CFStmtId, list.items);
             try graph.succs.put(current, owned);
             for (owned) |succ| try stack.append(allocator, succ);
@@ -6331,14 +6219,14 @@ const RangeProveCertify = struct {
     /// Verify that the recorded edge is the False arm of the recorded
     /// overflow predicate's Bool switch.
     fn isFalseOverflowEdge(store: *const LirStore, fact: NoOverflowFact) bool {
-        const predicate_stmt = store.getCFStmt(fact.predicate.predicate_stmt);
-        if (std.meta.activeTag(predicate_stmt) != .assign_low_level) return false;
+        const predicate_stmt = store.getCFStmtImmediate(fact.predicate.predicate_stmt);
+        if (std.meta.activeTag(predicate_stmt.*) != .assign_low_level) return false;
         const predicate = predicate_stmt.assign_low_level;
         const entry = CheckedArithmetic.classify(predicate.op) orelse return false;
         if (entry.mode != .overflows or entry.operation != fact.predicate.operation) return false;
 
-        const switch_stmt = store.getCFStmt(fact.switch_stmt);
-        if (std.meta.activeTag(switch_stmt) != .switch_stmt) return false;
+        const switch_stmt = store.getCFStmtImmediate(fact.switch_stmt);
+        if (std.meta.activeTag(switch_stmt.*) != .switch_stmt) return false;
         const bool_switch = switch_stmt.switch_stmt;
         if (bool_switch.cond != predicate.target) return false;
 

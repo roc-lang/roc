@@ -22,6 +22,18 @@ pub const std_options: std.Options = options: {
     break :options options;
 };
 
+/// The name of the test function currently running, for death tests
+/// (`src/base/death_test.zig`).
+pub fn currentTestName() []const u8 {
+    return default_test_runner.current_test_name;
+}
+
+/// Whether this process is a death-test child started by
+/// `src/base/death_test.zig`.
+pub fn isDeathTestChild() bool {
+    return default_test_runner.isDeathTestChild();
+}
+
 /// Delegate test discovery, execution, and reporting to Zig's stock runner.
 pub fn main(init: std.process.Init.Minimal) void {
     default_test_runner.main(init);

@@ -18,6 +18,8 @@ pub const Program = @import("program.zig");
 pub const CheckedArithmetic = @import("checked_arithmetic.zig");
 /// Producer-owned proofs of self-tail return continuations.
 pub const TailCallBuilder = @import("tail_call_builder.zig");
+/// The representation-transparent `assign_ref` edge erased ownership follows.
+pub const ErasedOwnerEdge = @import("erased_owner_edge.zig");
 
 test "lir core declarations are referenced" {
     std.testing.refAllDecls(@This());
@@ -28,6 +30,7 @@ test "lir core declarations are referenced" {
     std.testing.refAllDecls(Hosted);
     std.testing.refAllDecls(Program);
     std.testing.refAllDecls(CheckedArithmetic);
+    std.testing.refAllDecls(ErasedOwnerEdge);
 }
 
 /// Canonical packed product data and committed-layout copy plans.

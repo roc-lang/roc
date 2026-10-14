@@ -63,8 +63,6 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     writer.clearRetainingCapacity();
     try reporting.renderReportToLsp(&r, &writer.writer, @import("config.zig").ReportingConfig.initLsp());
     const expected_lsp =
-        \\syntax problem
-        \\
         \\Using more than one + like this requires parentheses, to clarify how things should be grouped.
         \\example.roc
         \\         ^^^^^^^^^^
@@ -79,6 +77,28 @@ test "SYNTAX_PROBLEM report along with all four render types" {
     try testing.expect(std.mem.find(u8, plain_out, "── ✗ syntax problem ") != null);
     try testing.expect(std.mem.find(u8, plain_out, "example.roc:1:10") != null);
     try testing.expect(std.mem.find(u8, plain_out, "^^") != null);
+}
+
+test "LSP diagnostics begin with the description instead of the error category" {
+    const gpa = testing.allocator;
+    var writer = std.Io.Writer.Allocating.init(gpa);
+    defer writer.deinit();
+
+    var plain = try Report.init(gpa, "Type Mismatch", "This value has an incompatible type.", .runtime_error);
+    defer plain.deinit();
+    try plain.document.addText("Expected U8, but found Str.");
+    try reporting.renderReportToLsp(&plain, &writer.writer, ReportingConfig.initLsp());
+    try testing.expectEqualStrings("This value has an incompatible type.\nExpected U8, but found Str.", writer.written());
+
+    writer.clearRetainingCapacity();
+    var rich = try Report.init(gpa, "Trailing `?`", "", .warning);
+    defer rich.deinit();
+    try rich.headline.addText("This ");
+    try rich.headline.addBinaryOperator("?");
+    try rich.headline.addText(" is applied to the value this function returns.");
+    try rich.document.addText("Remove the trailing question mark.");
+    try reporting.renderReport(&rich, &writer.writer, .language_server);
+    try testing.expectEqualStrings("This ? is applied to the value this function returns.\nRemove the trailing question mark.", writer.written());
 }
 
 fn buildSyntaxProblemReport(allocator: Allocator) Allocator.Error!Document {
@@ -108,7 +128,7 @@ fn buildDuplicateDefinitionReport(allocator: Allocator) Allocator.Error!Report {
 
     try report.headline.addReflowingText("The name ");
     try report.headline.addUnqualifiedSymbol("c");
-    try report.headline.addReflowingText(" is being redeclared here:");
+    try report.headline.addReflowingText(" is being redeclared here.");
 
     try report.document.addSourceRegion(
         .{ .start_line_idx = 1, .start_col_idx = 0, .end_line_idx = 1, .end_col_idx = 1 },
@@ -125,7 +145,7 @@ fn buildDuplicateDefinitionReport(allocator: Allocator) Allocator.Error!Report {
         .{ .start_line_idx = 0, .start_col_idx = 0, .end_line_idx = 0, .end_col_idx = 1 },
         "example.roc",
     );
-    try report.document.addReflowingText(":");
+    try report.document.addReflowingText(".");
     try report.document.addLineBreak();
     try report.document.addSourceRegion(
         .{ .start_line_idx = 0, .start_col_idx = 0, .end_line_idx = 0, .end_col_idx = 1 },
@@ -158,12 +178,12 @@ test "terminal diagnostic layout has exact plain and ANSI output" {
     try testing.expectEqualStrings(
         "── ● duplicate definition " ++ rule ++ " example.roc:2:1\n" ++
             "\n" ++
-            "The name c is being redeclared here:\n" ++
+            "The name c is being redeclared here.\n" ++
             "\n" ++
             "c = 5\n" ++
             "^\n" ++
             "\n" ++
-            "In this scope, c was already defined in example.roc:1:1:\n" ++
+            "In this scope, c was already defined in example.roc:1:1.\n" ++
             "\n" ++
             "c = if args.len() < 20 { \"a\" } else { 23 }\n" ++
             "^\n" ++
@@ -180,12 +200,12 @@ test "terminal diagnostic layout has exact plain and ANSI output" {
     try testing.expectEqualStrings(
         gray ++ "── " ++ yellow ++ "● duplicate definition " ++ gray ++ rule ++ " " ++ cyan ++ "example.roc" ++ gray ++ ":2:1" ++ reset ++ "\n" ++
             "\n" ++
-            "The name " ++ cyan ++ "c" ++ reset ++ " is being redeclared here:\n" ++
+            "The name " ++ cyan ++ "c" ++ reset ++ " is being redeclared here.\n" ++
             "\n" ++
             "c = 5\n" ++
             yellow ++ "^" ++ reset ++ "\n" ++
             "\n" ++
-            "In this scope, " ++ cyan ++ "c" ++ reset ++ " was already defined in " ++ cyan ++ "example.roc" ++ gray ++ ":1:1" ++ reset ++ ":\n" ++
+            "In this scope, " ++ cyan ++ "c" ++ reset ++ " was already defined in " ++ cyan ++ "example.roc" ++ gray ++ ":1:1" ++ reset ++ ".\n" ++
             "\n" ++
             "c = if args.len() < 20 { \"a\" } else { 23 }\n" ++
             yellow ++ "^" ++ reset ++ "\n" ++

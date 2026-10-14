@@ -7,6 +7,15 @@ const Allocator = std.mem.Allocator;
 
 const CompactWriter = @import("CompactWriter.zig");
 
+/// The most elements a safe list holds, so every index and range count is a
+/// `u32`.
+const max_len: usize = std.math.maxInt(u32);
+
+/// Rejects a length past the 32-bit index range as allocation failure.
+fn checkLen(new_len: usize) Allocator.Error!void {
+    if (new_len > max_len) return error.OutOfMemory;
+}
+
 /// L-10 bounds check: reject an `(offset)`+`span_bytes` extent that would reach
 /// outside the `backing_len`-byte relocated buffer (truncated/corrupt blob), with
 /// overflow-safe arithmetic. An empty span is always valid. The single primitive
@@ -21,6 +30,22 @@ pub fn validateRelocatedSpan(elem_align: u64, offset: i64, span_bytes: u64, back
     if (elem_align != 0 and off % elem_align != 0) return error.CorruptArtifact;
     const end = std.math.add(u64, off, span_bytes) catch return error.CorruptArtifact;
     if (end > backing_len) return error.CorruptArtifact;
+}
+
+/// An iterator over consecutive indices of type `Idx` in `[current, end)`.
+pub fn IndexIterator(comptime Idx: type) type {
+    return struct {
+        end: u32,
+        current: u32,
+
+        /// Get the next index from this iterator, or `null` if the iterator is finished.
+        pub fn next(iter: *@This()) ?Idx {
+            if (iter.end == iter.current) return null;
+            const curr = iter.current;
+            iter.current += 1;
+            return @fromBackingInt(@intCast(curr));
+        }
+    };
 }
 
 /// Represents a type safe range in a list; [start, end)
@@ -64,32 +89,13 @@ pub fn SafeRange(comptime Idx: type) type {
             return self.count == 0;
         }
 
-        /// Get the length of a range slice
-        pub fn iterIndices(self: @This()) IndexIterator {
-            return IndexIterator{
+        /// Iterate over the indices in this range.
+        pub fn iterIndices(self: @This()) IndexIterator(Idx) {
+            return .{
                 .end = @backingInt(self.start) + self.count,
                 .current = @backingInt(self.start),
             };
         }
-
-        /// An iterator over the indices of all elements in a list.
-        pub const IndexIterator = struct {
-            end: u32,
-            current: u32,
-
-            /// Get the next index from this iterator, or `null` if the iterator is finished.
-            pub fn next(iter: *IndexIterator) ?Idx {
-                if (iter.end == iter.current) {
-                    return null;
-                }
-
-                const curr = iter.current;
-                iter.current += 1;
-
-                const idx: u32 = @truncate(curr);
-                return @fromBackingInt(@intCast(idx));
-            }
-        };
     };
 }
 
@@ -234,6 +240,7 @@ pub fn SafeList(comptime T: type) type {
 
         /// Initialize the `SafeList` with the specified capacity.
         pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!SafeList(T) {
+            try checkLen(capacity);
             return .{
                 .items = try std.ArrayList(T).initCapacity(gpa, capacity),
             };
@@ -260,6 +267,7 @@ pub fn SafeList(comptime T: type) type {
         /// Add an item to the end of this list.
         pub fn append(self: *SafeList(T), gpa: Allocator, item: T) std.mem.Allocator.Error!Idx {
             const length = self.len();
+            try checkLen(self.items.items.len + 1);
             try self.items.append(gpa, item);
 
             return @fromBackingInt(@intCast(@as(u32, @intCast(length))));
@@ -283,6 +291,7 @@ pub fn SafeList(comptime T: type) type {
         /// Add all the items in a slice to the end of this list.
         pub fn appendSlice(self: *SafeList(T), gpa: Allocator, items: []const T) std.mem.Allocator.Error!Range {
             const start_length = self.len();
+            try checkLen(self.items.items.len + items.len);
             try self.items.appendSlice(gpa, items);
             const end_length = self.len();
             return Range{ .start = @fromBackingInt(@intCast(start_length)), .count = @intCast(end_length - start_length) };
@@ -314,30 +323,9 @@ pub fn SafeList(comptime T: type) type {
             self.items.items[@as(usize, @backingInt(id))] = value;
         }
 
-        /// An iterator over all the indices in this list.
-        pub const IndexIterator = struct {
-            len: usize,
-            current: usize,
-
-            pub fn next(self: *IndexIterator) ?Idx {
-                if (self.len == self.current) {
-                    return null;
-                }
-
-                const curr = self.current;
-                self.current += 1;
-
-                const idx: u32 = @truncate(curr);
-                return @fromBackingInt(@intCast(idx));
-            }
-        };
-
         /// Iterate over all the indices of the items in this list.
-        pub fn iterIndices(self: *const SafeList(T)) IndexIterator {
-            return IndexIterator{
-                .len = @intCast(self.len()),
-                .current = 0,
-            };
+        pub fn iterIndices(self: *const SafeList(T)) IndexIterator(Idx) {
+            return .{ .end = @intCast(self.len()), .current = 0 };
         }
 
         /// An iterator over all the indices in this list.
@@ -564,6 +552,7 @@ pub fn SafeMultiList(comptime T: type) type {
 
         /// Initialize the `SafeMultiList` with the specified capacity.
         pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!SafeMultiList(T) {
+            try checkLen(capacity);
             var items = std.MultiArrayList(T){};
             try items.ensureTotalCapacity(gpa, capacity);
             return .{
@@ -611,6 +600,7 @@ pub fn SafeMultiList(comptime T: type) type {
         /// Add a new item to the end of this list.
         pub fn append(self: *SafeMultiList(T), gpa: Allocator, item: T) std.mem.Allocator.Error!Idx {
             const length = self.len();
+            try checkLen(self.items.len + 1);
             try self.items.append(gpa, item);
 
             return @fromBackingInt(@intCast(@as(u32, @intCast(length))));
@@ -629,6 +619,7 @@ pub fn SafeMultiList(comptime T: type) type {
                 return .{ .start = .first, .count = 0 };
             }
             const start_length = self.len();
+            try checkLen(self.items.len + elems.len);
             try self.items.ensureUnusedCapacity(gpa, elems.len);
             for (elems) |elem| {
                 self.items.appendAssumeCapacity(elem);
@@ -661,6 +652,7 @@ pub fn SafeMultiList(comptime T: type) type {
 
         /// Make sure that the backing array has at least capacity for the specified number of elements.
         pub fn ensureTotalCapacity(self: *SafeMultiList(T), gpa: Allocator, capacity: usize) std.mem.Allocator.Error!void {
+            try checkLen(capacity);
             try self.items.ensureTotalCapacity(gpa, capacity);
         }
 
@@ -694,40 +686,9 @@ pub fn SafeMultiList(comptime T: type) type {
             };
         }
 
-        /// An iterator over the indices of all elements in a list.
-        pub const IndexIterator = struct {
-            len: usize,
-            current: usize,
-
-            /// Get the next index from this iterator, or `null` if the iterator is finished.
-            pub fn next(iter: *IndexIterator) ?Idx {
-                if (iter.len == iter.current) {
-                    return null;
-                }
-
-                const curr = iter.current;
-                iter.current += 1;
-
-                const idx: u32 = @truncate(curr);
-                return @fromBackingInt(@intCast(idx));
-            }
-        };
-
-        /// Iterate over the indices of the elements in a span
-        pub fn iterRangeIndices(self: *const SafeMultiList(T), range: Range) IndexIterator {
-            std.debug.assert(@backingInt(range.start) + range.count <= self.len());
-            return IndexIterator{
-                .len = @backingInt(range.start) + range.count,
-                .current = @backingInt(range.start),
-            };
-        }
-
         /// Iterator over all indices in this list.
-        pub fn iterIndices(self: *const SafeMultiList(T)) IndexIterator {
-            return IndexIterator{
-                .len = self.len(),
-                .current = 0,
-            };
+        pub fn iterIndices(self: *const SafeMultiList(T)) IndexIterator(Idx) {
+            return .{ .end = @intCast(self.len()), .current = 0 };
         }
 
         /// Serialized representation of a SafeMultiList
@@ -2003,43 +1964,6 @@ test "SafeMultiList(T) iterRange count decreases as next consumes" {
     // Draining past the end keeps count at 0.
     try testing.expectEqual(@as(?Struct, null), iter.next());
     try testing.expectEqual(@as(u32, 0), iter.count());
-}
-
-test "SafeMultiList(T) iterRangeIndices yields span indices matching get" {
-    const gpa = testing.allocator;
-
-    const Struct = struct { num: u32, char: u8 };
-    const StructMultiList = SafeMultiList(Struct);
-
-    var multilist = try StructMultiList.initCapacity(gpa, 6);
-    defer multilist.deinit(gpa);
-
-    _ = try multilist.appendSlice(gpa, &[_]Struct{
-        .{ .num = 100, .char = 'a' },
-        .{ .num = 200, .char = 'b' },
-        .{ .num = 300, .char = 'c' },
-        .{ .num = 400, .char = 'd' },
-        .{ .num = 500, .char = 'e' },
-        .{ .num = 600, .char = 'f' },
-    });
-
-    // Mid-list span [2, 5): indices 2, 3, 4.
-    const range = StructMultiList.Range{ .start = @fromBackingInt(@intCast(2)), .count = 3 };
-    var idx_iter = multilist.iterRangeIndices(range);
-
-    const idx_a = idx_iter.next().?;
-    try testing.expectEqual(@as(u32, 2), @backingInt(idx_a));
-    try testing.expectEqual(@as(u32, 300), multilist.get(idx_a).num);
-
-    const idx_b = idx_iter.next().?;
-    try testing.expectEqual(@as(u32, 3), @backingInt(idx_b));
-    try testing.expectEqual(@as(u32, 400), multilist.get(idx_b).num);
-
-    const idx_c = idx_iter.next().?;
-    try testing.expectEqual(@as(u32, 4), @backingInt(idx_c));
-    try testing.expectEqual(@as(u32, 500), multilist.get(idx_c).num);
-
-    try testing.expectEqual(@as(?StructMultiList.Idx, null), idx_iter.next());
 }
 
 test "SafeMultiList(T) iterRange from index zero vs mid-list (len = start + count encoding)" {

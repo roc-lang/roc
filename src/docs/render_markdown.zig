@@ -20,6 +20,7 @@
 //! through the `DocCommentRefs` hook their caller supplies.
 
 const std = @import("std");
+const reporting = @import("reporting");
 const Allocator = std.mem.Allocator;
 
 const Writer = *std.Io.Writer;
@@ -555,7 +556,7 @@ fn renderHeading(rctx: *RenderCtx, level: u8, text: []const u8, explicit_id: ?[]
         };
 
         try w.writeAll(" id=\"");
-        try writeEscaped(w, id);
+        try reporting.writeEscapedHtml(w, id);
         try w.writeAll("\"");
     }
     try w.writeAll(">");
@@ -570,7 +571,7 @@ fn renderCodeBlock(rctx: *RenderCtx, lines: []const []const u8) RenderError!void
     try rctx.indent("<pre><code>");
     for (lines, 0..) |ln, idx| {
         if (idx > 0) try w.writeAll("\n");
-        try writeEscaped(w, ln);
+        try reporting.writeEscapedHtml(w, ln);
     }
     try w.writeAll("</code></pre>\n");
 }
@@ -734,8 +735,8 @@ fn renderInline(rctx: *RenderCtx, text: []const u8) RenderError!void {
             '\\' => {
                 // Backslash escapes the next ASCII punctuation char.
                 if (i + 1 < text.len and isAsciiPunct(text[i + 1])) {
-                    try writeEscaped(w, text[plain_start..i]);
-                    try writeEscaped(w, text[i + 1 .. i + 2]);
+                    try reporting.writeEscapedHtml(w, text[plain_start..i]);
+                    try reporting.writeEscapedHtml(w, text[i + 1 .. i + 2]);
                     i += 2;
                     plain_start = i;
                 } else {
@@ -744,9 +745,9 @@ fn renderInline(rctx: *RenderCtx, text: []const u8) RenderError!void {
             },
             '`' => {
                 if (parseCodeSpan(text, i)) |span| {
-                    try writeEscaped(w, text[plain_start..i]);
+                    try reporting.writeEscapedHtml(w, text[plain_start..i]);
                     try w.writeAll("<code>");
-                    try writeEscaped(w, span.content);
+                    try reporting.writeEscapedHtml(w, span.content);
                     try w.writeAll("</code>");
                     i = span.end;
                     plain_start = i;
@@ -756,7 +757,7 @@ fn renderInline(rctx: *RenderCtx, text: []const u8) RenderError!void {
             },
             '[' => {
                 if (parseLink(text, i)) |link| {
-                    try writeEscaped(w, text[plain_start..i]);
+                    try reporting.writeEscapedHtml(w, text[plain_start..i]);
                     try w.writeAll("<a href=\"");
                     try writeLinkHref(rctx, link.url);
                     try w.writeAll("\">");
@@ -768,7 +769,7 @@ fn renderInline(rctx: *RenderCtx, text: []const u8) RenderError!void {
                     // The hook writes as it goes, so flush the pending plain
                     // text first. Resuming from `plain_start = i` leaves the
                     // `[` itself for the next flush when the hook declines.
-                    try writeEscaped(w, text[plain_start..i]);
+                    try reporting.writeEscapedHtml(w, text[plain_start..i]);
                     plain_start = i;
                     if (try refs.render(refs.ctx, w, text, i)) |end| {
                         i = end;
@@ -782,7 +783,7 @@ fn renderInline(rctx: *RenderCtx, text: []const u8) RenderError!void {
             },
             '*', '_' => {
                 if (parseEmphasis(text, i)) |emph| {
-                    try writeEscaped(w, text[plain_start..i]);
+                    try reporting.writeEscapedHtml(w, text[plain_start..i]);
                     try w.writeAll(if (emph.strong) "<strong>" else "<em>");
                     try renderInline(rctx, emph.content);
                     try w.writeAll(if (emph.strong) "</strong>" else "</em>");
@@ -795,7 +796,7 @@ fn renderInline(rctx: *RenderCtx, text: []const u8) RenderError!void {
             else => i += 1,
         }
     }
-    try writeEscaped(w, text[plain_start..]);
+    try reporting.writeEscapedHtml(w, text[plain_start..]);
 }
 
 const CodeSpan = struct { content: []const u8, end: usize };
@@ -920,17 +921,17 @@ fn writeLinkHref(rctx: *RenderCtx, url: []const u8) RenderError!void {
     // Only langref articles have sibling pages to resolve against; a doc
     // comment's URLs are written to be used as-is.
     if (rctx.doc_comment != null) {
-        try writeEscaped(w, url);
+        try reporting.writeEscapedHtml(w, url);
         return;
     }
 
     // Anchors, absolute paths, and external/scheme URLs pass through unchanged.
     if (url[0] == '#' or url[0] == '/') {
-        try writeEscaped(w, url);
+        try reporting.writeEscapedHtml(w, url);
         return;
     }
     if (std.mem.find(u8, url, "://") != null or std.mem.startsWith(u8, url, "mailto:")) {
-        try writeEscaped(w, url);
+        try reporting.writeEscapedHtml(w, url);
         return;
     }
 
@@ -944,7 +945,7 @@ fn writeLinkHref(rctx: *RenderCtx, url: []const u8) RenderError!void {
 
     if (path.len == 0) {
         // Same-page anchor (e.g. "#section" written as a bare fragment).
-        try writeEscaped(w, anchor);
+        try reporting.writeEscapedHtml(w, anchor);
         return;
     }
 
@@ -967,13 +968,13 @@ fn writeLinkHref(rctx: *RenderCtx, url: []const u8) RenderError!void {
     // `/langref/statements/` it correctly lands on `/langref/pattern-matching`.
     // The README case already ends in a slash ("./" or `langref_base`).
     if (std.ascii.eqlIgnoreCase(path, "README")) {
-        try writeEscaped(w, if (rctx.langref_base.len == 0) "./" else rctx.langref_base);
+        try reporting.writeEscapedHtml(w, if (rctx.langref_base.len == 0) "./" else rctx.langref_base);
     } else {
-        try writeEscaped(w, rctx.langref_base);
-        try writeEscaped(w, path);
-        if (!std.mem.endsWith(u8, path, "/")) try writeEscaped(w, "/");
+        try reporting.writeEscapedHtml(w, rctx.langref_base);
+        try reporting.writeEscapedHtml(w, path);
+        if (!std.mem.endsWith(u8, path, "/")) try reporting.writeEscapedHtml(w, "/");
     }
-    try writeEscaped(w, anchor);
+    try reporting.writeEscapedHtml(w, anchor);
 }
 
 /// Maps a link's slug to another article's slug. Used where the langref refers
@@ -1237,26 +1238,6 @@ fn slugify(gpa: Allocator, plain: []const u8) Allocator.Error![]u8 {
 
 // Small helpers
 
-fn writeEscaped(w: Writer, text: []const u8) error{WriteFailed}!void {
-    var i: usize = 0;
-    while (i < text.len) : (i += 1) {
-        if (@import("base").bidi.at(text[i..])) |control| {
-            try writeEscaped(w, control.visible);
-            i += control.utf8.len - 1;
-            continue;
-        }
-        const c = text[i];
-        switch (c) {
-            '<' => try w.writeAll("&lt;"),
-            '>' => try w.writeAll("&gt;"),
-            '&' => try w.writeAll("&amp;"),
-            '"' => try w.writeAll("&quot;"),
-            '\'' => try w.writeAll("&#39;"),
-            else => try w.writeAll(&[_]u8{c}),
-        }
-    }
-}
-
 fn isSpace(c: u8) bool {
     return c == ' ' or c == '\t' or c == '\n' or c == '\r';
 }
@@ -1508,9 +1489,9 @@ fn testShorthandRef(_: *const anyopaque, w: Writer, text: []const u8, start: usi
     const label = text[start + 1 .. close];
     if (label.len == 0 or std.mem.findScalar(u8, label, ' ') != null) return null;
     try w.writeAll("<a href=\"#");
-    try writeEscaped(w, label);
+    try reporting.writeEscapedHtml(w, label);
     try w.writeAll("\"><code>");
-    try writeEscaped(w, label);
+    try reporting.writeEscapedHtml(w, label);
     try w.writeAll("</code></a>");
     return close + 1;
 }
@@ -1592,12 +1573,12 @@ test "bidi controls render as visible text in documentation" {
     var output = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer output.deinit();
     for (@import("base").bidi.controls) |control| {
-        try writeEscaped(&output.writer, control.utf8);
+        try reporting.writeEscapedHtml(&output.writer, control.utf8);
     }
     var iter = @import("base").bidi.Iterator{ .bytes = output.written() };
     try std.testing.expect(iter.next() == null);
     try std.testing.expect(std.mem.find(u8, output.written(), "&lt;U+202E RLO&gt;") != null);
     const start = output.written().len;
-    try writeEscaped(&output.writer, "שלום مرحبا");
+    try reporting.writeEscapedHtml(&output.writer, "שלום مرحبا");
     try std.testing.expectEqualStrings("שלום مرحبا", output.written()[start..]);
 }

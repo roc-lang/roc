@@ -11,10 +11,9 @@
 //! instantiation context, so two call sites reaching the same callable at the
 //! same closed type reuse one record even when their checked source types
 //! differ (one annotated with a transparent alias of the other's type, for
-//! instance). Refinements produced later (a deferred
-//! request type sealed by its requester's graph, or the solved type produced
-//! by lowering the body) are data on the `SpecRecord` and become *alias*
-//! lookup entries pointing at the same record, never a rekey. A request whose
+//! instance). The solved type produced by lowering the body is data on the
+//! `SpecRecord` and becomes an *alias* lookup entry pointing at the same
+//! record, never a rekey. A request whose
 //! type is less specific than a record's solved type therefore reuses the
 //! record through the request-shaped alias; it never widens the record
 //! (`design.md`'s one-way snapshot rule).
@@ -272,19 +271,10 @@ pub const SpecLookupAddress = struct {
     }
 };
 
-/// Track creation-time identities and refinement history in debug builds so
-/// the validator can prove no record's identity was rewritten after `reserve`
-/// and that every lookup entry belongs to some record's identity history.
+/// Track creation-time identities in debug builds so the validator can prove
+/// no record's identity was rewritten after `reserve` and that every lookup
+/// entry belongs to some record's request or solved view.
 const identity_shadow_enabled = builtin.mode == .debug;
-
-/// One request-view refinement remembered by the debug shadow. A record can
-/// be refined more than once while `.reserved` (each deferring graph seals its
-/// own view of the request), and each refinement's alias entry stays in the
-/// lookup map, so the validator needs the full digest history.
-const RefinedDigestShadow = struct {
-    spec: Ast.SpecId,
-    digest: names.TypeDigest,
-};
 
 /// Direct specialization reservation table keyed by callable identity, its
 /// dispatch context, and the closed requested (or solved-alias) type digest.
@@ -306,7 +296,6 @@ pub const SpecBuilder = struct {
     lookup: std.AutoHashMap(SpecLookupAddress, std.ArrayList(Ast.SpecId)),
     counters: ?*Counters,
     reserved_identities: if (identity_shadow_enabled) std.ArrayList(Ast.SpecIdentity) else void,
-    refined_digest_shadow: if (identity_shadow_enabled) std.ArrayList(RefinedDigestShadow) else void,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -326,13 +315,11 @@ pub const SpecBuilder = struct {
             .lookup = std.AutoHashMap(SpecLookupAddress, std.ArrayList(Ast.SpecId)).init(allocator),
             .counters = null,
             .reserved_identities = if (identity_shadow_enabled) .empty else {},
-            .refined_digest_shadow = if (identity_shadow_enabled) .empty else {},
         };
     }
 
     pub fn deinit(self: *SpecBuilder) void {
         if (identity_shadow_enabled) {
-            self.refined_digest_shadow.deinit(self.allocator);
             self.reserved_identities.deinit(self.allocator);
         }
         var lists = self.lookup.valueIterator();
@@ -375,8 +362,6 @@ pub const SpecBuilder = struct {
         const owned_index = try self.ownedEvidenceIndex(evidence);
         try self.records.append(self.allocator, .{
             .identity = identity,
-            .request_fn_ty = identity.request_fn_ty,
-            .request_fn_ty_digest = identity.request_fn_ty_digest,
             .solved_fn_ty = identity.request_fn_ty,
             .solved_fn_ty_digest = identity.request_fn_ty_digest,
             .fn_id = fn_id,
@@ -441,8 +426,8 @@ pub const SpecBuilder = struct {
             const record = self.recordPtr(local_spec);
             if (!self.localEvidenceEql(local_spec, evidence, known)) continue;
             if (!try self.localCodecContractMatches(record.identity, identity)) continue;
-            if (!try self.localViewMatches(record.request_fn_ty, record.request_fn_ty_digest, identity)) continue;
-            return localResult(local_spec, record, record.request_fn_ty);
+            if (!try self.localViewMatches(record.identity.request_fn_ty, record.identity.request_fn_ty_digest, identity)) continue;
+            return localResult(local_spec, record, record.identity.request_fn_ty);
         }
         for (entries) |local_spec| {
             const record = self.recordPtr(local_spec);
@@ -500,43 +485,6 @@ pub const SpecBuilder = struct {
         return try self.types.typeEql(self.names, view_ty, identity.request_fn_ty);
     }
 
-    /// Refine a still-`.reserved` record's request view after a requester's
-    /// graph sealed the deferred request type. The identity keeps the
-    /// creation-time request; the sealed shape becomes the record's current
-    /// request view plus an alias lookup entry. This can happen more than
-    /// once while the record stays `.reserved`—each graph that deferred a
-    /// request against the record seals its own view—and each superseded
-    /// shape's entry stays inert in the map: it no longer matches (only the
-    /// owning graphs could produce those shapes), and a later independent
-    /// request at a superseded shape reserves its own record.
-    pub fn refineRequest(
-        self: *SpecBuilder,
-        spec: Ast.SpecId,
-        request_fn_ty: Type.TypeId,
-        request_fn_ty_digest: names.TypeDigest,
-    ) std.mem.Allocator.Error!void {
-        const record = self.recordPtr(spec);
-        if (record.status != .reserved) {
-            invariant("Monotype specialization request was refined after lowering began");
-        }
-        if (digestEql(record.request_fn_ty_digest, request_fn_ty_digest) and
-            record.request_fn_ty == request_fn_ty)
-        {
-            return;
-        }
-        const digest_changed = !digestEql(record.request_fn_ty_digest, request_fn_ty_digest);
-        record.request_fn_ty = request_fn_ty;
-        record.request_fn_ty_digest = request_fn_ty_digest;
-        record.solved_fn_ty = request_fn_ty;
-        record.solved_fn_ty_digest = request_fn_ty_digest;
-        if (digest_changed) {
-            if (identity_shadow_enabled) {
-                try self.refined_digest_shadow.append(self.allocator, .{ .spec = spec, .digest = request_fn_ty_digest });
-            }
-            try self.appendAliasEntry(record.identity.callable, record.identity.method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, request_fn_ty_digest, spec);
-        }
-    }
-
     /// Current lifecycle status of a record. The scheduler consults this at
     /// dispatch to skip queued bodies an immediate caller already completed.
     pub fn recordStatus(self: *const SpecBuilder, spec: Ast.SpecId) Ast.SpecStatus {
@@ -570,7 +518,7 @@ pub const SpecBuilder = struct {
         record.solved_fn_ty = solved_fn_ty;
         record.solved_fn_ty_digest = solved_fn_ty_digest;
         record.status = .ready;
-        if (!digestEql(solved_fn_ty_digest, record.request_fn_ty_digest)) {
+        if (!digestEql(solved_fn_ty_digest, record.identity.request_fn_ty_digest)) {
             try self.appendAliasEntry(record.identity.callable, record.identity.method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, solved_fn_ty_digest, spec);
         }
     }
@@ -656,7 +604,7 @@ pub const SpecBuilder = struct {
     };
 
     /// Debug-only integrity validator: every local record must be reachable
-    /// from exactly the keys its immutable identity and refinement history
+    /// from exactly the keys its immutable identity and solved view
     /// produce, from no others, and its identity must equal the identity
     /// captured when it was reserved. Compiled out of release builds.
     pub fn validateLookupIntegrity(self: *const SpecBuilder) void {
@@ -689,25 +637,16 @@ pub const SpecBuilder = struct {
         }
 
         // Forward: every record must be reachable from each address its
-        // history requires (creation identity, every refinement, the current
-        // request view, and the solved view once ready).
+        // history requires (the creation identity, and the solved view once
+        // ready).
         for (0..self.records.len()) |index| {
             const record = self.records.get(index);
             const spec: Ast.SpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             if (!self.recordReachableAt(spec, record, record.identity.request_fn_ty_digest)) {
                 return .record_missing_expected_key;
             }
-            if (!self.recordReachableAt(spec, record, record.request_fn_ty_digest)) {
-                return .record_missing_expected_key;
-            }
             if (record.status == .ready and !self.recordReachableAt(spec, record, record.solved_fn_ty_digest)) {
                 return .record_missing_expected_key;
-            }
-            for (self.refined_digest_shadow.items) |refined| {
-                if (refined.spec != spec) continue;
-                if (!self.recordReachableAt(spec, record, refined.digest)) {
-                    return .record_missing_expected_key;
-                }
             }
         }
 
@@ -717,7 +656,7 @@ pub const SpecBuilder = struct {
         while (iterator.next()) |entry| {
             for (entry.value_ptr.items, 0..) |spec_id, entry_index| {
                 const record = self.records.get(@backingInt(spec_id));
-                if (!self.addressInRecordHistory(spec_id, record, entry.key_ptr.*)) {
+                if (!addressInRecordHistory(record, entry.key_ptr.*)) {
                     return .record_reachable_from_foreign_key;
                 }
                 for (entry.value_ptr.items[entry_index + 1 ..]) |later_spec| if (later_spec == spec_id) return .record_reachable_from_foreign_key;
@@ -733,16 +672,11 @@ pub const SpecBuilder = struct {
         return false;
     }
 
-    fn addressInRecordHistory(self: *const SpecBuilder, spec: Ast.SpecId, record: Ast.SpecRecord, address: SpecLookupAddress) bool {
+    fn addressInRecordHistory(record: Ast.SpecRecord, address: SpecLookupAddress) bool {
         const callable = record.identity.callable;
         const method_scope = record.identity.method_scope;
         if (std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, record.identity.request_fn_ty_digest))) return true;
-        if (std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, record.request_fn_ty_digest))) return true;
         if (record.status == .ready and std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, record.solved_fn_ty_digest))) return true;
-        for (self.refined_digest_shadow.items) |refined| {
-            if (refined.spec != spec) continue;
-            if (std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, refined.digest))) return true;
-        }
         return false;
     }
 };
@@ -929,49 +863,6 @@ test "monotype spec builder keeps identity immutable and aliases the solved type
     try std.testing.expectEqual(solved_ty, request_found.local.solved_fn_ty);
 
     const repeated = try builder.reserve(solved_shaped_identity, testEvidenceView(), @fromBackingInt(@intCast(2)));
-    try std.testing.expect(!repeated.created);
-    try std.testing.expectEqual(@as(?Ast.SpecId, spec), repeated.spec);
-    try std.testing.expectEqual(@as(usize, 1), records.len());
-    builder.validateLookupIntegrity();
-}
-
-test "monotype spec builder refines a reserved request through an alias entry" {
-    var name_store = names.NameStore.init(std.testing.allocator);
-    defer name_store.deinit();
-
-    var type_store = Type.Store.init(std.testing.allocator);
-    defer type_store.deinit();
-
-    const request_ty = try type_store.add(.zst);
-    const sealed_ty = try type_store.add(.{ .primitive = .str });
-    const request_identity = testSpecIdentity(request_ty, digestWithFirstByte(2));
-    const sealed_digest = digestWithFirstByte(3);
-    const sealed_identity = testSpecIdentity(sealed_ty, sealed_digest);
-
-    var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
-    defer records.deinit(std.testing.allocator);
-
-    var builder = SpecBuilder.init(std.testing.allocator, &name_store, &type_store, &records);
-    defer builder.deinit();
-
-    const reserved = try builder.reserve(request_identity, testEvidenceView(), @fromBackingInt(@intCast(1)));
-    const spec = reserved.spec orelse return error.TestUnexpectedResult;
-
-    try builder.refineRequest(spec, sealed_ty, sealed_digest);
-
-    // The identity still records the creation-time request; the record's
-    // request view carries the sealed shape.
-    const record = builder.records.get(@backingInt(spec));
-    try std.testing.expectEqual(request_ty, record.identity.request_fn_ty);
-    try std.testing.expectEqual(sealed_ty, record.request_fn_ty);
-    try std.testing.expectEqual(Ast.SpecStatus.reserved, record.status);
-
-    // The sealed shape finds the record; the pre-seal shape's entry is inert.
-    const sealed_found = (try builder.find(sealed_identity, testEvidenceView())) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(spec, sealed_found.local.spec);
-    try std.testing.expectEqual(@as(?LookupResult, null), try builder.find(request_identity, testEvidenceView()));
-
-    const repeated = try builder.reserve(sealed_identity, testEvidenceView(), @fromBackingInt(@intCast(2)));
     try std.testing.expect(!repeated.created);
     try std.testing.expectEqual(@as(?Ast.SpecId, spec), repeated.spec);
     try std.testing.expectEqual(@as(usize, 1), records.len());
@@ -1252,11 +1143,14 @@ test "monotype spec builder validator catches a hand-corrupted identity" {
         builder.lookupIntegrityError(),
     );
 
-    // Restore the identity but corrupt the request view instead: the record
+    // Restore the identity but corrupt the solved view instead: the record
     // is no longer reachable from the key its history requires.
     records.getPtrImmediate(@backingInt(spec)).identity.request_fn_ty = identity.request_fn_ty;
     records.getPtrImmediate(@backingInt(spec)).identity.request_fn_ty_digest = identity.request_fn_ty_digest;
-    records.getPtrImmediate(@backingInt(spec)).request_fn_ty_digest = digestWithFirstByte(4);
+    builder.markLowering(spec);
+    try builder.markReady(spec, str_ty, digestWithFirstByte(3));
+    try std.testing.expectEqual(@as(?SpecBuilder.IntegrityError, null), builder.lookupIntegrityError());
+    records.getPtrImmediate(@backingInt(spec)).solved_fn_ty_digest = digestWithFirstByte(4);
     try std.testing.expectEqual(
         @as(?SpecBuilder.IntegrityError, .record_missing_expected_key),
         builder.lookupIntegrityError(),

@@ -309,7 +309,7 @@ const StaticInitializerMachine = struct {
     /// The first static value an initializer reads whose own initializer has
     /// not run yet.
     fn unevaluatedStaticRead(self: *StaticInitializerMachine, proc_id: lir.LIR.LirProcSpecId) MaterializationError!?lir.LIR.StaticDataId {
-        var current = self.store().getProcSpec(proc_id).body orelse staticDataInvariant("static initializer procedure had no body");
+        var current = self.store().getProcSpecImmediate(proc_id).body orelse staticDataInvariant("static initializer procedure had no body");
         while (true) {
             current = switch (self.store().getCFStmt(current)) {
                 .assign_literal => |assign| blk: {
@@ -339,7 +339,6 @@ const StaticInitializerMachine = struct {
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -361,8 +360,6 @@ const StaticInitializerMachine = struct {
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .loop_continue,
-                .loop_break,
                 .join,
                 .jump,
                 .crash,
@@ -481,7 +478,6 @@ const StaticInitializerMachine = struct {
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -503,8 +499,6 @@ const StaticInitializerMachine = struct {
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .loop_continue,
-                .loop_break,
                 .join,
                 .jump,
                 .crash,
@@ -541,7 +535,7 @@ const StaticInitializerMachine = struct {
         const value = try self.newValue(target_layout);
         switch (literal) {
             .i64_literal => |int| self.writeSigned(value.bytes, int.value),
-            .i128_literal => |int| self.writeSigned128(value.bytes, int.value),
+            .i128_literal => |int| self.writeSigned(value.bytes, int.value),
             .f64_literal => |float| std.mem.writeInt(u64, value.bytes[0..8], @bitCast(float), .little),
             .f32_literal => |float| std.mem.writeInt(u32, value.bytes[0..4], @bitCast(float), .little),
             .dec_literal => |dec| std.mem.writeInt(i128, value.bytes[0..16], dec, .little),
@@ -560,28 +554,20 @@ const StaticInitializerMachine = struct {
         return value;
     }
 
-    fn writeSigned(_: *StaticInitializerMachine, bytes: []u8, value: i64) void {
-        const bits: u64 = @bitCast(value);
-        switch (bytes.len) {
-            0 => {},
-            1 => std.mem.writeInt(u8, bytes[0..1], @truncate(bits), .little),
-            2 => std.mem.writeInt(u16, bytes[0..2], @truncate(bits), .little),
-            4 => std.mem.writeInt(u32, bytes[0..4], @truncate(bits), .little),
-            8 => std.mem.writeInt(u64, bytes[0..8], bits, .little),
-            else => staticDataInvariant("i64 static initializer literal had unsupported layout size"),
-        }
-    }
-
-    fn writeSigned128(_: *StaticInitializerMachine, bytes: []u8, value: i128) void {
-        const bits: u128 = @bitCast(value);
+    fn writeSigned(_: *StaticInitializerMachine, bytes: []u8, value: anytype) void {
+        const Bits = @Int(.unsigned, @bitSizeOf(@TypeOf(value)));
+        const bits: Bits = @bitCast(value);
         switch (bytes.len) {
             0 => {},
             1 => std.mem.writeInt(u8, bytes[0..1], @truncate(bits), .little),
             2 => std.mem.writeInt(u16, bytes[0..2], @truncate(bits), .little),
             4 => std.mem.writeInt(u32, bytes[0..4], @truncate(bits), .little),
             8 => std.mem.writeInt(u64, bytes[0..8], @truncate(bits), .little),
-            16 => std.mem.writeInt(u128, bytes[0..16], bits, .little),
-            else => staticDataInvariant("i128 static initializer literal had unsupported layout size"),
+            16 => if (Bits == u128)
+                std.mem.writeInt(u128, bytes[0..16], bits, .little)
+            else
+                staticDataInvariant(@typeName(@TypeOf(value)) ++ " static initializer literal had unsupported layout size"),
+            else => staticDataInvariant(@typeName(@TypeOf(value)) ++ " static initializer literal had unsupported layout size"),
         }
     }
 
@@ -1164,20 +1150,33 @@ pub fn mergeIdenticalNodes(allocator: Allocator, exports: []StaticDataExport) Al
     for (canonical, 0..) |*kept, index| kept.* = @intCast(index);
     const hashes = try allocator.alloc(u64, exports.len);
     defer allocator.free(hashes);
-    for (exports, hashes) |item, *hash| hash.* = nodeContentHash(item);
+    // Each pass compares a node only with the earlier kept nodes that share
+    // its hash, so a pass costs time proportional to the image rather than
+    // to the square of its node count.
+    var buckets: std.AutoHashMapUnmanaged(u64, std.ArrayList(u32)) = .empty;
+    defer {
+        var values = buckets.valueIterator();
+        while (values.next()) |bucket| bucket.deinit(allocator);
+        buckets.deinit(allocator);
+    }
 
     var merged_any = true;
     while (merged_any) {
         merged_any = false;
+        for (exports, hashes) |item, *hash| hash.* = nodeContentHash(item);
+        var values = buckets.valueIterator();
+        while (values.next()) |bucket| bucket.clearRetainingCapacity();
         for (exports, 0..) |item, index| {
             if (canonical[index] != index or !isMergeableNode(item)) continue;
-            for (exports[0..index], 0..) |other, candidate| {
-                if (canonical[candidate] != candidate or !isMergeableNode(other)) continue;
-                if (hashes[index] != hashes[candidate] or !nodesIdentical(item, other, canonical)) continue;
-                canonical[index] = @intCast(candidate);
+            const bucket = try buckets.getOrPut(allocator, hashes[index]);
+            if (!bucket.found_existing) bucket.value_ptr.* = .empty;
+            const merged_into = for (bucket.value_ptr.items) |candidate| {
+                if (nodesIdentical(item, exports[candidate], canonical)) break candidate;
+            } else null;
+            if (merged_into) |candidate| {
+                canonical[index] = candidate;
                 merged_any = true;
-                break;
-            }
+            } else try bucket.value_ptr.append(allocator, @intCast(index));
         }
         if (!merged_any) break;
         for (exports) |*item| for (@constCast(item.relocations)) |*relocation| {
@@ -1233,8 +1232,9 @@ fn resolveCanonical(canonical: []const u32, index: u32) u32 {
     return current;
 }
 
-/// A hash of everything `nodesIdentical` compares except relocation
-/// targets, which change as nodes merge.
+/// A hash of what `nodesIdentical` compares, relocation targets included as
+/// the symbols they name; a merge pass recomputes it after relocations are
+/// redirected to the nodes they resolve to.
 fn nodeContentHash(item: StaticDataExport) u64 {
     var hasher = std.hash.Wyhash.init(0);
     hasher.update(item.bytes);
@@ -1247,6 +1247,13 @@ fn nodeContentHash(item: StaticDataExport) u64 {
     for (item.relocations) |relocation| {
         hasher.update(std.mem.asBytes(&relocation.offset));
         hasher.update(std.mem.asBytes(&relocation.addend));
+        switch (relocation.target) {
+            .named => hasher.update(relocation.target_symbol_name),
+            .data_symbol => |symbol| {
+                const index: u32 = @backingInt(symbol);
+                hasher.update(std.mem.asBytes(&index));
+            },
+        }
     }
     return hasher.final();
 }
@@ -1330,6 +1337,37 @@ test "frozen nodes with different contents or different targets stay separate" {
     try std.testing.expectEqual(@as(usize, 7), merged.len);
     try std.testing.expectEqual(@as(u32, 4), @backingInt(merged[2].relocations[0].target.data_symbol));
     try std.testing.expectEqual(@as(u32, 5), @backingInt(merged[3].relocations[0].target.data_symbol));
+}
+
+test "merging a large image keeps distinct nodes and folds every copy into its first" {
+    // Each pass compares a node only with earlier nodes of its hash; a pass
+    // comparing every pair of nodes is quadratic, which at this size runs
+    // for minutes.
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const distinct = 100_000;
+    const nodes = try arena.allocator().alloc(StaticDataExport, 2 * distinct + 1);
+    // A root whose pointers name the copies, then distinct nodes, then one
+    // copy of each distinct node.
+    const root_relocations = try arena.allocator().alloc(StaticDataRelocation, distinct);
+    for (root_relocations, 0..) |*relocation, index| {
+        relocation.* = .{ .offset = index * 8, .target_symbol_name = "copy", .target = .{ .data_symbol = @fromBackingInt(@intCast(1 + distinct + index)) } };
+    }
+    nodes[0] = .{ .symbol_name = "root", .bytes = try arena.allocator().alloc(u8, distinct * 8), .alignment = 8, .is_exported = true, .relocations = root_relocations };
+    @memset(@constCast(nodes[0].bytes), 0);
+    for (0..distinct) |index| {
+        const bytes = try std.fmt.allocPrint(arena.allocator(), "{d}", .{index});
+        nodes[1 + index] = .{ .symbol_name = try std.fmt.allocPrint(arena.allocator(), "node_{d}", .{index}), .bytes = bytes, .alignment = 1, .is_exported = false };
+        nodes[1 + distinct + index] = .{ .symbol_name = try std.fmt.allocPrint(arena.allocator(), "copy_{d}", .{index}), .bytes = bytes, .alignment = 1, .is_exported = false };
+    }
+    const owned = try cloneStaticData(allocator, nodes);
+    const merged = try mergeIdenticalNodes(allocator, owned);
+    defer deinitStaticData(allocator, merged);
+    try std.testing.expectEqual(@as(usize, 1 + distinct), merged.len);
+    for (merged[0].relocations, 0..) |relocation, index| {
+        try std.testing.expectEqual(@as(u32, @intCast(1 + index)), @backingInt(relocation.target.data_symbol));
+    }
 }
 
 const StaticDataBuilder = struct {
@@ -1646,7 +1684,7 @@ const StaticDataBuilder = struct {
             },
             .procedure => |proc_id| {
                 const cached_name = self.procedure_names.get(proc_id);
-                const name = cached_name orelse try procSymbolName(self.allocator, self.lowered.lir_result.store.getProcSpec(proc_id).identity);
+                const name = cached_name orelse try procSymbolName(self.allocator, self.lowered.lir_result.store.getProcSpecImmediate(proc_id).identity);
                 errdefer if (cached_name == null) self.allocator.free(name);
                 if (cached_name == null) try self.procedure_names.put(proc_id, name);
                 dest.* = .{

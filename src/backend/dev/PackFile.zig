@@ -11,6 +11,7 @@
 //! consumer must bind that domain explicitly or omit lines from debug emission.
 
 const std = @import("std");
+const collections = @import("collections");
 const lir = @import("lir");
 const ProcArtifact = @import("ProcArtifact.zig");
 const RelocationMod = @import("Relocation.zig");
@@ -19,7 +20,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 6;
+pub const format_version: u32 = 7;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// artifact holding its procedure, and the ownership signature and
@@ -30,6 +31,9 @@ pub const SpecEntry = struct {
     artifact: u32,
     /// Null is an authoritative independent summary, not missing metadata.
     platform_requirement_relation: ?[32]u8 = null,
+    /// The compile-time roots the procedure's code reads, which a linking
+    /// program demands (`Common.SpecCacheHit.comptime_root_reads`).
+    comptime_root_reads: []const lir.CheckedPipeline.ComptimeRootRead = &.{},
     rc_borrowed_params: u64,
     rc_ret_borrowed: bool,
     rc_ret_lenders: u64,
@@ -186,6 +190,11 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
         try writer.word(spec.artifact);
         try writer.byte(@intFromBool(spec.platform_requirement_relation != null));
         if (spec.platform_requirement_relation) |relation| try writer.raw(&relation);
+        try writer.word(@intCast(spec.comptime_root_reads.len));
+        for (spec.comptime_root_reads) |root_read| {
+            try writer.raw(&root_read.module);
+            try writer.word(root_read.root);
+        }
         try writer.wide(spec.rc_borrowed_params);
         try writer.byte(@intFromBool(spec.rc_ret_borrowed));
         try writer.wide(spec.rc_ret_lenders);
@@ -201,7 +210,7 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
 
 /// Decode a pack. Every slice in the result is owned by the pack's arena.
 pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     errdefer arena.deinit();
     const arena_allocator = arena.allocator();
     var reader = Reader{ .bytes = bytes };
@@ -368,6 +377,11 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
                 1 => (try reader.raw(32))[0..32].*,
                 else => return error.MalformedPack,
             },
+            .comptime_root_reads = reads: {
+                const reads = try arena_allocator.alloc(lir.CheckedPipeline.ComptimeRootRead, try reader.word());
+                for (reads) |*root_read| root_read.* = .{ .module = (try reader.raw(32))[0..32].*, .root = try reader.word() };
+                break :reads reads;
+            },
             .rc_borrowed_params = try reader.wide(),
             .rc_ret_borrowed = switch (try reader.byte()) {
                 0 => false,
@@ -462,7 +476,7 @@ test "pack ownership survives input destruction and allocation failure" {
 
 fn testOwnedPack(allocator: Allocator) (ReadError || error{TestExpectedEqual})!void {
     const set = ProcArtifact.Set{
-        .arena = std.heap.ArenaAllocator.init(allocator),
+        .arena = collections.SingleThreadArena.init(allocator),
         .artifacts = &.{.{
             .kind = .{ .rc_helper = "helper" },
             .code = "code",
@@ -493,7 +507,7 @@ fn testOwnedPack(allocator: Allocator) (ReadError || error{TestExpectedEqual})!v
 
 test "pack bytes round-trip every artifact field and spec entry" {
     const testing = std.testing;
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = collections.SingleThreadArena.init(testing.allocator);
     const a = arena.allocator();
     const refs = try a.dupe(ProcArtifact.Reference, &.{
         .{ .site = 5, .form = .call, .target = 1, .delta = 8 },
@@ -558,6 +572,10 @@ test "pack bytes round-trip every artifact field and spec entry" {
             .rc_ret_unique = true,
             .rc_ret_unique_fields = 0b10,
             .rc_ret_conditions = &.{ 0x0001_02ff, 0x0000_0403 },
+            .comptime_root_reads = &.{
+                .{ .module = @as([32]u8, @splat(0x11)), .root = 3 },
+                .{ .module = @as([32]u8, @splat(0x22)), .root = 0 },
+            },
         },
     };
 
@@ -578,6 +596,7 @@ test "pack bytes round-trip every artifact field and spec entry" {
     try testing.expect(pack.specs[0].rc_ret_unique);
     try testing.expectEqual(specs[0].rc_ret_unique_fields, pack.specs[0].rc_ret_unique_fields);
     try testing.expectEqualSlices(u32, specs[0].rc_ret_conditions, pack.specs[0].rc_ret_conditions);
+    try testing.expectEqualDeep(specs[0].comptime_root_reads, pack.specs[0].comptime_root_reads);
     const proc = pack.set.artifacts[0];
     try testing.expectEqualSlices(u8, &lir.ProcIdentity.forTest(7).bytes, &proc.kind.proc.bytes);
     try testing.expectEqualSlices(u8, artifacts[0].code, proc.code);
@@ -619,7 +638,7 @@ test "pack preserves independent and relation-dependent semantic summaries" {
     const Attempt = struct {
         fn run(allocator: Allocator, relation: ?[32]u8) (ReadError || error{ TestExpectedEqual, TestExpectedError, TestUnexpectedError })!void {
             const set = ProcArtifact.Set{
-                .arena = std.heap.ArenaAllocator.init(allocator),
+                .arena = collections.SingleThreadArena.init(allocator),
                 .artifacts = &.{.{
                     .kind = .{ .proc = lir.ProcIdentity.forTest(1) },
                     .code = "code",
@@ -666,11 +685,11 @@ test "pack writes program-local constants and every reference to them under cont
     // Two programs gave one program-local name to different constants.
     const names = [_][]const u8{ "first", "second" };
     var packed_names: [names.len][]const u8 = undefined;
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
     for (names, 0..) |bytes, index| {
         const set = ProcArtifact.Set{
-            .arena = std.heap.ArenaAllocator.init(testing.allocator),
+            .arena = collections.SingleThreadArena.init(testing.allocator),
             .artifacts = &.{.{
                 .kind = .{ .proc = lir.ProcIdentity.forTest(1) },
                 .code = "code",

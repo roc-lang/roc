@@ -31,7 +31,7 @@ fn procReachesListSet(store: *const lir.LirStore, start: lir.LIR.LirProcSpecId) 
             const index = @backingInt(proc_id);
             if (seen_procs[index]) continue;
             seen_procs[index] = true;
-            if (store.getProcSpec(proc_id).body) |body| {
+            if (store.getProcSpecImmediate(proc_id).body) |body| {
                 try stack.append(allocator, .{ .stmt = body });
             }
         },
@@ -39,7 +39,7 @@ fn procReachesListSet(store: *const lir.LirStore, start: lir.LIR.LirProcSpecId) 
             const index = @backingInt(stmt_id);
             if (seen_stmts[index]) continue;
             seen_stmts[index] = true;
-            switch (store.getCFStmt(stmt_id)) {
+            switch (store.getCFStmtImmediate(stmt_id).*) {
                 .assign_low_level => |assign| {
                     if (assign.op == .list_set) return true;
                     try stack.append(allocator, .{ .stmt = assign.next });
@@ -90,7 +90,6 @@ fn procReachesListSet(store: *const lir.LirStore, start: lir.LIR.LirProcSpecId) 
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -119,8 +118,6 @@ fn procReachesListSet(store: *const lir.LirStore, start: lir.LIR.LirProcSpecId) 
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .loop_continue,
-                .loop_break,
                 => {},
             }
         },
@@ -144,7 +141,7 @@ fn retainReachesListSetCall(
     var current = start;
     var remaining = store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
-        switch (store.getCFStmt(current)) {
+        switch (store.getCFStmtImmediate(current).*) {
             .assign_call => |assign| {
                 if (spanContainsLocal(store, assign.args, retained) and
                     try procReachesListSet(store, assign.proc))
@@ -176,7 +173,6 @@ fn retainReachesListSetCall(
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -209,8 +205,6 @@ fn retainReachesListSetCall(
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .loop_continue,
-            .loop_break,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,

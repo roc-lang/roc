@@ -5,6 +5,7 @@ const builtin = @import("builtin");
 const posix = if (builtin.os.tag != .windows and builtin.os.tag != .freestanding) std.posix else undefined;
 const memory_fault = @import("memory_fault.zig");
 const signal_handler = @import("signal_handler.zig");
+const ice_context = @import("ice_context.zig");
 
 /// Error message to display on stack overflow
 const COMPILER_STACK_OVERFLOW_MESSAGE = "\nThe Roc compiler overflowed its stack memory and had to exit.\n\n";
@@ -17,6 +18,33 @@ const PROGRAM_STACK_OVERFLOW_MESSAGE = "\nThis Roc program overflowed its stack 
 /// interpreter runs each Roc call on the native stack, so an overflow on such
 /// a thread is the program's recursion, not a defect in the compiler.
 pub threadlocal var interpreting_roc_program: bool = false;
+
+/// Write `bytes` to stderr with signal-safe output.
+fn writeStderr(bytes: []const u8) void {
+    if (comptime builtin.os.tag == .windows) {
+        const DWORD = u32;
+        const HANDLE = ?*anyopaque;
+        const STD_ERROR_HANDLE: DWORD = @bitCast(@as(i32, -12));
+        const kernel32 = struct {
+            extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) HANDLE;
+            extern "kernel32" fn WriteFile(hFile: HANDLE, lpBuffer: [*]const u8, nNumberOfBytesToWrite: DWORD, lpNumberOfBytesWritten: ?*DWORD, lpOverlapped: ?*anyopaque) callconv(.winapi) i32;
+        };
+        var bytes_written: DWORD = 0;
+        _ = kernel32.WriteFile(kernel32.GetStdHandle(STD_ERROR_HANDLE), bytes.ptr, @intCast(bytes.len), &bytes_written, null);
+    } else if (comptime builtin.os.tag != .freestanding) {
+        _ = std.c.write(posix.STDERR_FILENO, bytes.ptr, bytes.len);
+    }
+}
+
+/// Write what the crashing thread was doing and the command that reproduces
+/// the crash, followed by a blank line.
+fn writeIceContext() void {
+    var buffer: [4096]u8 = undefined;
+    const context = ice_context.renderSignalContext(&buffer);
+    if (context.len == 0) return;
+    writeStderr(context);
+    writeStderr("\n");
+}
 
 /// Callback for stack overflow in the compiler
 fn handleStackOverflow() noreturn {
@@ -47,6 +75,7 @@ fn handleStackOverflow() noreturn {
     } else if (comptime builtin.os.tag != .freestanding) {
         // POSIX: use raw write for signal-safety
         _ = std.c.write(posix.STDERR_FILENO, message.ptr, message.len);
+        if (!interpreting_roc_program) writeIceContext();
         std.process.exit(134);
     } else {
         // WASI fallback
@@ -73,9 +102,11 @@ fn handleArithmeticError() noreturn {
         const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
         var bytes_written: DWORD = 0;
         _ = kernel32.WriteFile(stderr_handle, ARITHMETIC_ERROR_MESSAGE.ptr, ARITHMETIC_ERROR_MESSAGE.len, &bytes_written, null);
+        writeIceContext();
         kernel32.ExitProcess(136);
     } else if (comptime builtin.os.tag != .freestanding) {
         _ = std.c.write(posix.STDERR_FILENO, ARITHMETIC_ERROR_MESSAGE.ptr, ARITHMETIC_ERROR_MESSAGE.len);
+        writeIceContext();
         std.process.exit(136); // 128 + 8 (SIGFPE)
     } else {
         std.process.exit(136);
@@ -99,11 +130,13 @@ fn handleAccessViolation(fault_addr: usize, context: signal_handler.AccessViolat
         const addr_str = memory_fault.formatHex(fault_addr, &addr_buf);
 
         const msg1 = "\nAccess violation in the Roc compiler.\nFault address: ";
-        const msg2 = "\n\nPlease report this issue at: https://github.com/roc-lang/roc/issues\n\n";
+        const msg2 = "Please report this issue at: https://github.com/roc-lang/roc/issues\n\n";
         const stderr_handle = kernel32.GetStdHandle(STD_ERROR_HANDLE);
         var bytes_written: DWORD = 0;
         _ = kernel32.WriteFile(stderr_handle, msg1.ptr, msg1.len, &bytes_written, null);
         _ = kernel32.WriteFile(stderr_handle, addr_str.ptr, @intCast(addr_str.len), &bytes_written, null);
+        _ = kernel32.WriteFile(stderr_handle, "\n\n", 2, &bytes_written, null);
+        writeIceContext();
         _ = kernel32.WriteFile(stderr_handle, msg2.ptr, msg2.len, &bytes_written, null);
         kernel32.ExitProcess(139);
     } else {
@@ -115,7 +148,9 @@ fn handleAccessViolation(fault_addr: usize, context: signal_handler.AccessViolat
         var addr_buf: [18]u8 = undefined;
         const addr_str = memory_fault.formatHex(fault_addr, &addr_buf);
         _ = std.c.write(posix.STDERR_FILENO, addr_str.ptr, addr_str.len);
-        const stack_msg = "\n\nStack trace:\n";
+        writeStderr("\n\n");
+        writeIceContext();
+        const stack_msg = "Stack trace:\n";
         _ = std.c.write(posix.STDERR_FILENO, stack_msg.ptr, stack_msg.len);
         if (comptime signal_handler.AccessViolationContext != void) {
             if (context) |cpu_context| {

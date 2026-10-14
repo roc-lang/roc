@@ -102,7 +102,7 @@ test "nominal views exhaustive boundary returns actual blockers only and permits
     defer cache.deinit();
     const idents = try builtinIdents(&f, &cache);
     const before = f.store.len();
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = base.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
     var blockers: std.ArrayList(Var) = .empty;
     defer blockers.deinit(testing.allocator);

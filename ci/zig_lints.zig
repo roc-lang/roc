@@ -503,11 +503,24 @@ fn checkDenseIdHashMaps(allocator: Allocator, io: std.Io, file_path: []const u8)
     var errors: std.ArrayList(u8) = .empty;
     errdefer errors.deinit(allocator);
 
+    try appendDenseIdHashMapErrors(allocator, &errors, file_path, source, "HashMap(");
+    try appendDenseIdHashMapErrors(allocator, &errors, file_path, source, "HashMapUnmanaged(");
+
+    return errors.toOwnedSlice(allocator);
+}
+
+fn appendDenseIdHashMapErrors(
+    allocator: Allocator,
+    errors: *std.ArrayList(u8),
+    file_path: []const u8,
+    source: []const u8,
+    comptime marker: []const u8,
+) !void {
     var rest = source[0..];
     var base: usize = 0;
-    while (std.mem.find(u8, rest, "HashMap(")) |relative_index| {
+    while (std.mem.find(u8, rest, marker)) |relative_index| {
         const absolute_index = base + relative_index;
-        const key_start = absolute_index + "HashMap(".len;
+        const key_start = absolute_index + marker.len;
         defer {
             base = key_start;
             rest = source[key_start..];
@@ -515,7 +528,7 @@ fn checkDenseIdHashMaps(allocator: Allocator, io: std.Io, file_path: []const u8)
 
         if (isLineComment(source, absolute_index)) continue;
 
-        const key = denseIdHashMapKey(source, absolute_index) orelse continue;
+        const key = denseIdHashMapKey(source, key_start) orelse continue;
 
         const msg = try std.fmt.allocPrint(
             allocator,
@@ -525,14 +538,13 @@ fn checkDenseIdHashMaps(allocator: Allocator, io: std.Io, file_path: []const u8)
         defer allocator.free(msg);
         try errors.appendSlice(allocator, msg);
     }
-
-    return errors.toOwnedSlice(allocator);
 }
 
-fn denseIdHashMapKey(source: []const u8, hash_map_start: usize) ?[]const u8 {
-    const key_start = hash_map_start + "HashMap(".len;
+fn denseIdHashMapKey(source: []const u8, key_start: usize) ?[]const u8 {
     const comma = std.mem.findScalarPos(u8, source, key_start, ',') orelse return null;
     const key = std.mem.trim(u8, source[key_start..comma], " \t\r\n");
+    // An anonymous struct key is structural, whatever its first field is.
+    if (std.mem.startsWith(u8, key, "struct")) return null;
     return if (std.mem.endsWith(u8, key, "Id")) key else null;
 }
 

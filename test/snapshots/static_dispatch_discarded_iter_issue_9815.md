@@ -25,7 +25,7 @@ TYPE NOT DETERMINED - static_dispatch_discarded_iter_issue_9815.md:3:9:3:53
 			(reflow " ")
 			(annotated code "from_iter")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "method is called on."))
 		(document
 			(source-region (file "static_dispatch_discarded_iter_issue_9815.md") (start 3 9) (end 3 53) (annotation error) (line-text "    _ = Iter.collect(Iter.custom(0.U64, Unknown, f))"))
 			(line-break)

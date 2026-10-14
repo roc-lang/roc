@@ -3,7 +3,6 @@
 const std = @import("std");
 const TypeDigestHasher = @import("base").TypeDigestHasher;
 const Allocator = std.mem.Allocator;
-const builtin = @import("builtin");
 const tracy = @import("tracy");
 const base = @import("base");
 const collections = @import("collections");
@@ -74,12 +73,12 @@ const GraphChildren = struct {
 };
 pub const ModuleVarKey = work_mod.ModuleVarKey;
 
-fn assertAppendIdx(expected: usize, idx: anytype) void {
-    if (comptime builtin.mode == .debug) {
-        std.debug.assert(@backingInt(idx) == expected);
-    } else if (@backingInt(idx) != expected) {
-        unreachable;
-    }
+/// The position the next row of a table gets, as the field type `Position`
+/// that names it. A table that has already filled every position reports
+/// allocation failure rather than narrowing past the field.
+fn nextRowPosition(comptime Position: type, len: u64) std.mem.Allocator.Error!Position {
+    if (len > std.math.maxInt(Position)) return error.OutOfMemory;
+    return @intCast(len);
 }
 
 /// Errors that can occur during layout computation
@@ -111,7 +110,8 @@ pub const Store = struct {
     allocator: std.mem.Allocator,
 
     layouts: collections.SafeList(Layout),
-    resolved_list_layouts: std.ArrayList(?Idx),
+    /// The list layout each layout resolves to through boxes, or `Idx.none`.
+    resolved_list_layouts: std.ArrayList(Idx),
     tuple_elems: collections.SafeList(Idx),
     struct_fields: StructField.SafeMultiList,
     /// Each committed struct field's byte offset for both pointer widths,
@@ -126,7 +126,10 @@ pub const Store = struct {
 
     // Structural interning cache for non-scalar layouts. Keys are canonical
     // binary encodings of layout shape.
-    interned_layouts: std.StringHashMap(Idx),
+    interned_layouts: InternedLayouts,
+    /// Every interned layout's key bytes, one after another; the intern map
+    /// holds each key as a span of this buffer.
+    interned_key_bytes: std.ArrayList(u8),
     scratch_intern_key: std.ArrayList(u8),
 
     // Recursive layout graphs need a representation-complete key because their
@@ -179,7 +182,8 @@ pub const Store = struct {
             .struct_data = .{},
             .tag_union_variants = .{},
             .tag_union_data = .{},
-            .interned_layouts = std.StringHashMap(Idx).init(allocator),
+            .interned_layouts = .empty,
+            .interned_key_bytes = .empty,
             .scratch_intern_key = .empty,
             .interned_recursive_graphs = RecursiveGraphMap.init(allocator),
             .recursive_unfoldings = .empty,
@@ -199,12 +203,12 @@ pub const Store = struct {
         {
             const expected_idx = tag_union_variants.len();
             const idx = try tag_union_variants.append(allocator, .{ .payload_layout = .zst });
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = tag_union_variants.len();
             const idx = try tag_union_variants.append(allocator, .{ .payload_layout = .zst });
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = tag_union_data.items.items.len;
@@ -220,7 +224,7 @@ pub const Store = struct {
                 // two-nullary enum contains no refcounted data.
                 .contains_refcounted = false,
             });
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
 
         // Pre-populate primitive type layouts in order matching the Idx enum.
@@ -228,92 +232,92 @@ pub const Store = struct {
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.boolType());
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.str());
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.u8));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.i8));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.u16));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.i16));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.u32));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.i32));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.u64));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.i64));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.u128));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.i128));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.frac(.f32));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.frac(.f64));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.frac(.dec));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.opaquePtr());
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.zst());
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         inline for (std.enums.values(layout_mod.Vector)) |vector| {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.vector(vector));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
 
         std.debug.assert(layouts.len() == num_primitives);
@@ -328,7 +332,7 @@ pub const Store = struct {
         try self.rememberScratchInternKey(.bool);
         try self.resolved_list_layouts.ensureTotalCapacity(allocator, num_primitives);
         for (0..num_primitives) |_| {
-            self.resolved_list_layouts.appendAssumeCapacity(null);
+            self.resolved_list_layouts.appendAssumeCapacity(.none);
         }
         return self;
     }
@@ -360,11 +364,8 @@ pub const Store = struct {
         self.struct_data.deinit(self.allocator);
         self.tag_union_variants.deinit(self.allocator);
         self.tag_union_data.deinit(self.allocator);
-        var interned_keys = self.interned_layouts.keyIterator();
-        while (interned_keys.next()) |key_ptr| {
-            self.allocator.free(key_ptr.*);
-        }
-        self.interned_layouts.deinit();
+        self.interned_layouts.deinit(self.allocator);
+        self.interned_key_bytes.deinit(self.allocator);
         self.scratch_intern_key.deinit(self.allocator);
         self.interned_recursive_graphs.deinit();
         self.recursive_unfoldings.deinit(self.allocator);
@@ -392,19 +393,68 @@ pub const Store = struct {
         try self.appendInternKeyValue(raw_tag);
     }
 
+    /// An interned layout key: a span of `interned_key_bytes`.
+    pub const InternKey = struct { start: u32, len: u32 };
+
+    /// Interned layouts by key, hashed and compared by their key bytes.
+    pub const InternedLayouts = std.HashMapUnmanaged(InternKey, Idx, InternKeyContext, std.hash_map.default_max_load_percentage);
+
+    /// Hashes and compares stored keys by the bytes they span.
+    pub const InternKeyContext = struct {
+        bytes: []const u8,
+
+        pub fn hash(ctx: InternKeyContext, key: InternKey) u64 {
+            return std.hash.Wyhash.hash(0, ctx.bytes[key.start..][0..key.len]);
+        }
+
+        pub fn eql(ctx: InternKeyContext, a: InternKey, b: InternKey) bool {
+            return keyBytesEqual(ctx.bytes[a.start..][0..a.len], ctx.bytes[b.start..][0..b.len]);
+        }
+    };
+
+    /// Looks a stored key up by bytes not yet stored.
+    const InternKeyAdapter = struct {
+        bytes: []const u8,
+
+        pub fn hash(_: InternKeyAdapter, key: []const u8) u64 {
+            return std.hash.Wyhash.hash(0, key);
+        }
+
+        pub fn eql(ctx: InternKeyAdapter, key: []const u8, stored: InternKey) bool {
+            return keyBytesEqual(key, ctx.bytes[stored.start..][0..stored.len]);
+        }
+    };
+
+    /// Intern keys are encoded layout fields, compared byte for byte.
+    fn keyBytesEqual(a: []const u8, b: []const u8) bool {
+        if (a.len != b.len) return false;
+        for (a, b) |left, right| if (left != right) return false;
+        return true;
+    }
+
+    fn internKeyContext(self: *const Self) InternKeyContext {
+        return .{ .bytes = self.interned_key_bytes.items };
+    }
+
+    fn internedLayout(self: *const Self, key: []const u8) ?Idx {
+        return self.interned_layouts.getAdapted(key, InternKeyAdapter{ .bytes = self.interned_key_bytes.items });
+    }
+
     fn lookupInternedScratchKey(self: *Self) ?Idx {
-        return self.interned_layouts.get(self.scratch_intern_key.items);
+        return self.internedLayout(self.scratch_intern_key.items);
     }
 
     fn rememberScratchInternKey(self: *Self, idx: Idx) std.mem.Allocator.Error!void {
-        const owned_key = try self.allocator.dupe(u8, self.scratch_intern_key.items);
-        errdefer self.allocator.free(owned_key);
-        try self.interned_layouts.put(owned_key, idx);
+        const start = self.interned_key_bytes.items.len;
+        try self.interned_key_bytes.appendSlice(self.allocator, self.scratch_intern_key.items);
+        errdefer self.interned_key_bytes.shrinkRetainingCapacity(start);
+        const key = InternKey{ .start = @intCast(start), .len = @intCast(self.scratch_intern_key.items.len) };
+        try self.interned_layouts.putContext(self.allocator, key, idx, self.internKeyContext());
     }
 
     fn publishExistingLayoutInternKey(self: *Self, idx: Idx) std.mem.Allocator.Error!void {
         try self.buildExistingLayoutInternKey(self.getLayout(idx));
-        if (self.interned_layouts.getPtr(self.scratch_intern_key.items)) |existing| {
+        if (self.interned_layouts.getPtrAdapted(@as([]const u8, self.scratch_intern_key.items), InternKeyAdapter{ .bytes = self.interned_key_bytes.items })) |existing| {
             existing.* = idx;
             return;
         }
@@ -495,9 +545,11 @@ pub const Store = struct {
     }
 
     pub fn reserveLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
+        // The top position is `Idx.none`, so it is never a layout's.
+        if (self.layouts.len() >= @backingInt(Idx.none)) return error.OutOfMemory;
         const safe_list_idx = try self.layouts.append(self.allocator, layout);
         const idx: Idx = @fromBackingInt(@intCast(@backingInt(safe_list_idx)));
-        try self.resolved_list_layouts.append(self.allocator, self.computeResolvedListLayoutIdx(idx));
+        try self.resolved_list_layouts.append(self.allocator, self.computeResolvedListLayoutIdx(idx) orelse .none);
         return idx;
     }
 
@@ -514,12 +566,12 @@ pub const Store = struct {
         for (fields) |field| {
             const expected_idx = self.struct_fields.items.len;
             const idx = try self.struct_fields.append(self.allocator, field);
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         try self.appendStructFieldPlacement(fields);
 
         const contains_refcounted = self.computeStructContainsRefcounted(fields);
-        const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
+        const struct_idx = StructIdx{ .int_idx = try nextRowPosition(@FieldType(StructIdx, "int_idx"), self.struct_data.len()) };
         const expected_idx = self.struct_data.items.items.len;
         const struct_data_idx = try self.struct_data.append(self.allocator, .{
             .size = sizes,
@@ -529,7 +581,7 @@ pub const Store = struct {
             },
             .contains_refcounted = contains_refcounted,
         });
-        assertAppendIdx(expected_idx, struct_data_idx);
+        std.debug.assert(@backingInt(struct_data_idx) == expected_idx);
 
         const layout_idx = try self.reserveLayout(Layout.struct_(sort_key, struct_idx));
         try self.rememberScratchInternKey(layout_idx);
@@ -557,11 +609,11 @@ pub const Store = struct {
             const idx = try self.tag_union_variants.append(self.allocator, .{
                 .payload_layout = variant_layout_idx,
             });
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
 
         const contains_refcounted = self.computeTagUnionContainsRefcounted(variant_layouts);
-        const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
+        const tag_union_data_idx: u32 = try nextRowPosition(@FieldType(TagUnionIdx, "int_idx"), self.tag_union_data.len());
         {
             const expected_idx = self.tag_union_data.items.items.len;
             const idx = try self.tag_union_data.append(self.allocator, .{
@@ -574,7 +626,7 @@ pub const Store = struct {
                 },
                 .contains_refcounted = contains_refcounted,
             });
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
 
         const layout_idx = try self.reserveLayout(Layout.tagUnion(sort_key, .{ .int_idx = @intCast(tag_union_data_idx) }));
@@ -612,7 +664,7 @@ pub const Store = struct {
         key[0] = @intCast(@backingInt(LayoutTag.ptr));
         const raw_idx: u32 = @intCast(@backingInt(elem_idx));
         @memcpy(key[1..], std.mem.asBytes(&raw_idx));
-        return self.interned_layouts.get(&key);
+        return self.internedLayout(&key);
     }
 
     test "getPtr reads prepared layouts without changing intern scratch" {
@@ -664,13 +716,17 @@ pub const Store = struct {
         defer trace.end();
 
         if (fields.len == 0) {
-            return self.getEmptyStructLayout();
+            return self.ensureZstLayout();
         }
 
+        // Most records have a handful of fields; those stay on the stack.
+        var temp_buffer: [16 * @sizeOf(StructField)]u8 align(@alignOf(StructField)) = undefined;
+        var temp_storage = std.heap.BufferFirstAllocator.init(&temp_buffer, self.allocator);
+        const temp_allocator = temp_storage.allocator();
         var temp_fields = std.ArrayList(StructField).empty;
-        defer temp_fields.deinit(self.allocator);
-        try temp_fields.appendSlice(self.allocator, fields);
-        self.sortStructFields(temp_fields.items);
+        defer temp_fields.deinit(temp_allocator);
+        try temp_fields.appendSlice(temp_allocator, fields);
+        try self.sortStructFields(temp_fields.items);
 
         const sizes = self.structSizes(temp_fields.items);
         if (sizes.get(.u64) == 0) {
@@ -691,7 +747,7 @@ pub const Store = struct {
     /// slice order is the source declaration order.
     pub fn putNominalStructFields(self: *Self, fields: []const StructField) std.mem.Allocator.Error!Idx {
         if (fields.len == 0) {
-            return self.getEmptyStructLayout();
+            return self.ensureZstLayout();
         }
 
         const sizes = self.structSizes(fields);
@@ -708,12 +764,16 @@ pub const Store = struct {
     /// Insert a tuple layout from concrete element layouts. The shared layout
     /// commit sorts by descending sort key, then original tuple index.
     pub fn putTuple(self: *Self, element_layouts: []const Layout) std.mem.Allocator.Error!Idx {
+        // Most records have a handful of fields; those stay on the stack.
+        var temp_buffer: [16 * @sizeOf(StructField)]u8 align(@alignOf(StructField)) = undefined;
+        var temp_storage = std.heap.BufferFirstAllocator.init(&temp_buffer, self.allocator);
+        const temp_allocator = temp_storage.allocator();
         var temp_fields = std.ArrayList(StructField).empty;
-        defer temp_fields.deinit(self.allocator);
+        defer temp_fields.deinit(temp_allocator);
 
         for (element_layouts, 0..) |elem_layout, i| {
             const elem_idx = try self.insertLayout(elem_layout);
-            try temp_fields.append(self.allocator, .{ .index = @intCast(i), .layout = elem_idx });
+            try temp_fields.append(temp_allocator, .{ .index = @intCast(i), .layout = elem_idx });
         }
 
         return self.putStructFields(temp_fields.items);
@@ -722,28 +782,29 @@ pub const Store = struct {
     /// Sort structural-record / tuple fields by the total canonical key:
     /// descending target-independent sort key, then ascending semantic index.
     /// This is independent of the order in which callers present the fields.
-    fn sortStructFields(self: *Self, fields: []StructField) void {
+    fn sortStructFields(self: *Self, fields: []StructField) std.mem.Allocator.Error!void {
         if (fields.len <= 1) return;
 
-        const SortContext = struct {
-            store: *const Self,
-
-            fn key(ctx: @This(), field: StructField) field_order.StructuralField {
-                return .{
-                    .sort_key = if (field.is_padding)
-                        .align_1
-                    else
-                        ctx.store.getLayout(field.layout).sortKey(),
-                    .semantic_index = field.index,
-                };
-            }
-
-            fn lessThan(ctx: @This(), a: StructField, b: StructField) bool {
-                return field_order.comesBefore(ctx.key(a), ctx.key(b));
-            }
+        // Each field's key reads its layout once, not once per comparison.
+        const Keyed = struct { key: field_order.StructuralField, field: StructField };
+        var keyed_buffer: [16 * @sizeOf(Keyed)]u8 align(@alignOf(Keyed)) = undefined;
+        var keyed_storage = std.heap.BufferFirstAllocator.init(&keyed_buffer, self.allocator);
+        const keyed_allocator = keyed_storage.allocator();
+        const keyed = try keyed_allocator.alloc(Keyed, fields.len);
+        defer keyed_allocator.free(keyed);
+        for (fields, keyed) |field, *entry| entry.* = .{
+            .key = .{
+                .sort_key = if (field.is_padding) .align_1 else self.getLayout(field.layout).sortKey(),
+                .semantic_index = field.index,
+            },
+            .field = field,
         };
-
-        std.sort.pdq(StructField, fields, SortContext{ .store = self }, SortContext.lessThan);
+        std.sort.pdq(Keyed, keyed, {}, struct {
+            fn lessThan(_: void, a: Keyed, b: Keyed) bool {
+                return field_order.comesBefore(a.key, b.key);
+            }
+        }.lessThan);
+        for (keyed, fields) |entry, *field| field.* = entry.field;
     }
 
     /// Create a tag union layout from pre-computed variant payload layouts.
@@ -778,10 +839,14 @@ pub const Store = struct {
     ) std.mem.Allocator.Error!Layout {
         std.debug.assert(input_fields.len >= 1);
 
+        // Most records have a handful of fields; those stay on the stack.
+        var temp_buffer: [16 * @sizeOf(StructField)]u8 align(@alignOf(StructField)) = undefined;
+        var temp_storage = std.heap.BufferFirstAllocator.init(&temp_buffer, self.allocator);
+        const temp_allocator = temp_storage.allocator();
         var temp_fields = std.ArrayList(StructField).empty;
-        defer temp_fields.deinit(self.allocator);
-        try temp_fields.appendSlice(self.allocator, input_fields);
-        if (order == .structural) self.sortStructFields(temp_fields.items);
+        defer temp_fields.deinit(temp_allocator);
+        try temp_fields.appendSlice(temp_allocator, input_fields);
+        if (order == .structural) try self.sortStructFields(temp_fields.items);
 
         const sizes = self.structSizes(temp_fields.items);
         if (sizes.get(.u64) == 0) {
@@ -792,12 +857,12 @@ pub const Store = struct {
         for (temp_fields.items) |field| {
             const expected_idx = self.struct_fields.items.len;
             const idx = try self.struct_fields.append(self.allocator, field);
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         try self.appendStructFieldPlacement(temp_fields.items);
 
         const contains_refcounted = self.computeStructContainsRefcounted(temp_fields.items);
-        const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
+        const struct_idx = StructIdx{ .int_idx = try nextRowPosition(@FieldType(StructIdx, "int_idx"), self.struct_data.len()) };
         const expected_idx = self.struct_data.items.items.len;
         const struct_data_idx = try self.struct_data.append(self.allocator, .{
             .size = sizes,
@@ -807,7 +872,7 @@ pub const Store = struct {
             },
             .contains_refcounted = contains_refcounted,
         });
-        assertAppendIdx(expected_idx, struct_data_idx);
+        std.debug.assert(@backingInt(struct_data_idx) == expected_idx);
 
         return Layout.struct_(self.structFieldsSortKey(temp_fields.items), struct_idx);
     }
@@ -830,11 +895,11 @@ pub const Store = struct {
             const idx = try self.tag_union_variants.append(self.allocator, .{
                 .payload_layout = variant_layout_idx,
             });
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
 
         const contains_refcounted = self.computeTagUnionContainsRefcounted(variant_layouts);
-        const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
+        const tag_union_data_idx: u32 = try nextRowPosition(@FieldType(TagUnionIdx, "int_idx"), self.tag_union_data.len());
         {
             const expected_idx = self.tag_union_data.items.items.len;
             const idx = try self.tag_union_data.append(self.allocator, .{
@@ -847,7 +912,7 @@ pub const Store = struct {
                 },
                 .contains_refcounted = contains_refcounted,
             });
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
 
         return Layout.tagUnion(self.tagUnionVariantsSortKey(variant_layouts, discriminant_size), .{ .int_idx = @intCast(tag_union_data_idx) });
@@ -1327,6 +1392,10 @@ pub const Store = struct {
 
             fn resolveCyclicComponent(self_engine: *Engine, component_id: u32) Allocator.Error!void {
                 const allocator = self_engine.allocator;
+                // Temporaries of this component, freed together when it resolves.
+                var scratch_arena = collections.SingleThreadArena.init(allocator);
+                defer scratch_arena.deinit();
+                const scratch = scratch_arena.allocator();
                 const members = self_engine.members.items;
                 const member_count = members.len;
 
@@ -1338,12 +1407,9 @@ pub const Store = struct {
                 // member's unfolding, so bisimilar members carry equal labels
                 // and the labels are the same for bisimilar positions of any
                 // two graphs whatever their node counts or allocation order.
-                var labels = try allocator.alloc(RecursiveKey, member_count);
-                defer allocator.free(labels);
-                var next_labels = try allocator.alloc(RecursiveKey, member_count);
-                defer allocator.free(next_labels);
-                var distinct_labels = std.AutoHashMap(RecursiveKey, u32).init(allocator);
-                defer distinct_labels.deinit();
+                var labels = try scratch.alloc(RecursiveKey, member_count);
+                var next_labels = try scratch.alloc(RecursiveKey, member_count);
+                var distinct_labels = std.AutoHashMap(RecursiveKey, u32).init(scratch);
                 for (members, 0..) |member, pos| {
                     var hasher = TypeDigestHasher.init();
                     try encodeNode(self_engine.graph, member, LabelSink{
@@ -1378,8 +1444,7 @@ pub const Store = struct {
 
                 // Canonical order: the reduced positions sorted by label.
                 const block_count = label_count;
-                const sorted_labels = try allocator.alloc(RecursiveKey, block_count);
-                defer allocator.free(sorted_labels);
+                const sorted_labels = try scratch.alloc(RecursiveKey, block_count);
                 {
                     var it = distinct_labels.keyIterator();
                     var next: usize = 0;
@@ -1393,10 +1458,8 @@ pub const Store = struct {
                     const slot = distinct_labels.getPtr(label) orelse unreachable;
                     slot.* = @intCast(rank);
                 }
-                const rank_of_member = try allocator.alloc(u32, member_count);
-                defer allocator.free(rank_of_member);
-                const block_rep = try allocator.alloc(u32, block_count);
-                defer allocator.free(block_rep);
+                const rank_of_member = try scratch.alloc(u32, member_count);
+                const block_rep = try scratch.alloc(u32, block_count);
                 @memset(block_rep, no_component);
                 for (members, 0..) |member, pos| {
                     const rank = distinct_labels.get(labels[pos]) orelse unreachable;
@@ -1419,8 +1482,7 @@ pub const Store = struct {
                 var group_hasher = TypeDigestHasher.init();
                 group_hasher.update(self_engine.render_buf.items);
                 const group_digest = group_hasher.finalResult();
-                const block_digest = try allocator.alloc(RecursiveKey, block_count);
-                defer allocator.free(block_digest);
+                const block_digest = try scratch.alloc(RecursiveKey, block_count);
                 for (0..block_count) |rank| {
                     var hasher = TypeDigestHasher.init();
                     hasher.update("recursive-member");
@@ -1454,8 +1516,8 @@ pub const Store = struct {
         switch (root) {
             .canonical => |layout_idx| return .{
                 .root_idx = layout_idx,
-                .raw_layouts = try self.allocator.alloc(Idx, 0),
-                .value_layouts = try self.allocator.alloc(Idx, 0),
+                .raw_layouts = &.{},
+                .value_layouts = &.{},
             },
             .local => {},
         }
@@ -1578,11 +1640,7 @@ pub const Store = struct {
         for (analysis.keys, 0..) |maybe_key, i| {
             const key = maybe_key orelse continue;
             if (self.interned_recursive_graphs.get(key)) |existing| {
-                if (comptime builtin.mode == .debug) {
-                    std.debug.assert(existing == value_layouts[i]);
-                } else if (existing != value_layouts[i]) {
-                    unreachable;
-                }
+                std.debug.assert(existing == value_layouts[i]);
             } else {
                 try self.interned_recursive_graphs.put(key, value_layouts[i]);
             }
@@ -1604,8 +1662,8 @@ pub const Store = struct {
         switch (root) {
             .canonical => |layout_idx| return .{
                 .root_idx = layout_idx,
-                .raw_layouts = try self.allocator.alloc(Idx, 0),
-                .value_layouts = try self.allocator.alloc(Idx, 0),
+                .raw_layouts = &.{},
+                .value_layouts = &.{},
             },
             .local => {},
         }
@@ -1614,28 +1672,26 @@ pub const Store = struct {
         errdefer self.allocator.free(raw_layouts);
         const value_layouts = try self.allocator.alloc(Idx, graph.nodes.items.len);
         errdefer self.allocator.free(value_layouts);
-        const resolved = try self.allocator.alloc(bool, graph.nodes.items.len);
-        defer self.allocator.free(resolved);
-        const recursive_nodes = try self.allocator.alloc(bool, graph.nodes.items.len);
-        defer self.allocator.free(recursive_nodes);
-        const component_ids = try self.allocator.alloc(u32, graph.nodes.items.len);
-        defer self.allocator.free(component_ids);
+
+        // Scratch columns of this commit, freed together when it returns.
+        var scratch_arena = collections.SingleThreadArena.init(self.allocator);
+        defer scratch_arena.deinit();
+        const scratch = scratch_arena.allocator();
+        const resolved = try scratch.alloc(bool, graph.nodes.items.len);
+        const recursive_nodes = try scratch.alloc(bool, graph.nodes.items.len);
+        const component_ids = try scratch.alloc(u32, graph.nodes.items.len);
         @memset(resolved, false);
         @memset(recursive_nodes, false);
         @memset(component_ids, std.math.maxInt(u32));
 
-        const visit_index = try self.allocator.alloc(i32, graph.nodes.items.len);
-        defer self.allocator.free(visit_index);
-        const lowlink = try self.allocator.alloc(i32, graph.nodes.items.len);
-        defer self.allocator.free(lowlink);
-        const on_stack = try self.allocator.alloc(bool, graph.nodes.items.len);
-        defer self.allocator.free(on_stack);
+        const visit_index = try scratch.alloc(i32, graph.nodes.items.len);
+        const lowlink = try scratch.alloc(i32, graph.nodes.items.len);
+        const on_stack = try scratch.alloc(bool, graph.nodes.items.len);
         @memset(visit_index, -1);
         @memset(lowlink, 0);
         @memset(on_stack, false);
 
         var tarjan_stack = std.ArrayList(GraphNodeId).empty;
-        defer tarjan_stack.deinit(self.allocator);
 
         const CycleFinder = struct {
             allocator: std.mem.Allocator,
@@ -1843,7 +1899,7 @@ pub const Store = struct {
         };
 
         var cycle_finder = CycleFinder{
-            .allocator = self.allocator,
+            .allocator = scratch,
             .graph = graph,
             .visit_index = visit_index,
             .lowlink = lowlink,
@@ -2103,18 +2159,15 @@ pub const Store = struct {
         // tried once and then again only when one of its children resolves.
         // The parents of each node, as one flat list indexed by `parent_starts`.
         const node_count = graph.nodes.items.len;
-        const parent_starts = try self.allocator.alloc(u32, node_count + 1);
-        defer self.allocator.free(parent_starts);
+        const parent_starts = try scratch.alloc(u32, node_count + 1);
         @memset(parent_starts, 0);
         for (graph.nodes.items) |node| {
             var children = GraphChildren.init(graph, node);
             while (children.next()) |child| parent_starts[@backingInt(child) + 1] += 1;
         }
         for (1..parent_starts.len) |i| parent_starts[i] += parent_starts[i - 1];
-        const parents = try self.allocator.alloc(GraphNodeId, parent_starts[node_count]);
-        defer self.allocator.free(parents);
-        const parent_fill = try self.allocator.dupe(u32, parent_starts[0..node_count]);
-        defer self.allocator.free(parent_fill);
+        const parents = try scratch.alloc(GraphNodeId, parent_starts[node_count]);
+        const parent_fill = try scratch.dupe(u32, parent_starts[0..node_count]);
         for (graph.nodes.items, 0..) |node, i| {
             var children = GraphChildren.init(graph, node);
             while (children.next()) |child| {
@@ -2124,8 +2177,7 @@ pub const Store = struct {
             }
         }
 
-        var pending = try std.ArrayList(GraphNodeId).initCapacity(self.allocator, node_count);
-        defer pending.deinit(self.allocator);
+        var pending = try std.ArrayList(GraphNodeId).initCapacity(scratch, node_count);
         // Children are reserved after their parents, so trying the
         // highest ids first resolves most nodes on their first try.
         for (0..node_count) |i| pending.appendAssumeCapacity(@fromBackingInt(@intCast(i)));
@@ -2133,7 +2185,7 @@ pub const Store = struct {
             if (!try resolver.tryResolveNode(node_id)) continue;
             const index = @backingInt(node_id);
             for (parents[parent_starts[index]..parent_starts[index + 1]]) |parent| {
-                if (!resolved[@backingInt(parent)]) try pending.append(self.allocator, parent);
+                if (!resolved[@backingInt(parent)]) try pending.append(scratch, parent);
             }
         }
 
@@ -2147,11 +2199,9 @@ pub const Store = struct {
         }
 
         const FinalizeState = enum(u2) { unseen, active, done };
-        const finalize_state = try self.allocator.alloc(FinalizeState, graph.nodes.items.len);
-        defer self.allocator.free(finalize_state);
+        const finalize_state = try scratch.alloc(FinalizeState, graph.nodes.items.len);
         @memset(finalize_state, .unseen);
-        const raw_used = try self.allocator.alloc(bool, graph.nodes.items.len);
-        defer self.allocator.free(raw_used);
+        const raw_used = try scratch.alloc(bool, graph.nodes.items.len);
         @memset(raw_used, false);
 
         const Finalizer = struct {
@@ -2391,11 +2441,7 @@ pub const Store = struct {
 
         for (graph.nodes.items, 0..) |_, i| {
             const finalized = try finalizer.finalizeNode(@fromBackingInt(@intCast(i)));
-            if (comptime builtin.mode == .debug) {
-                std.debug.assert(finalized == value_layouts[i]);
-            } else if (finalized != value_layouts[i]) {
-                unreachable;
-            }
+            std.debug.assert(finalized == value_layouts[i]);
         }
 
         for (graph.nodes.items, 0..) |_, i| {
@@ -2778,26 +2824,11 @@ pub const Store = struct {
         return self.target_usize;
     }
 
-    /// Get or create an empty struct layout (for closures with no captures, empty records, etc.)
-    fn getEmptyStructLayout(self: *Self) Allocator.Error!Idx {
-        return self.ensureZstLayout();
-    }
-
-    /// Get or create a zero-sized type layout
+    /// The zero-sized type layout, which every store holds at a fixed index.
     pub fn ensureZstLayout(self: *Self) Allocator.Error!Idx {
-        // Check if we already have a ZST layout
-        const len: u32 = @intCast(self.layouts.len());
-        for (0..len) |i| {
-            const idx: Idx = @fromBackingInt(@intCast(i));
-            const layout = self.getLayout(idx);
-            if (layout.tag == .zst) {
-                return idx;
-            }
-        }
-
-        // Create new ZST layout
-        const zst_layout = Layout.zst();
-        return try self.insertLayout(zst_layout);
+        // The store is created holding the zero-sized layout at its fixed index.
+        std.debug.assert(self.getLayout(.zst).tag == .zst);
+        return .zst;
     }
 
     /// Get both the size and alignment of a layout in a single call.
@@ -2855,13 +2886,10 @@ pub const Store = struct {
         var max_alignment: u32 = 1;
         var current_offset: u32 = 0;
         for (fields) |field| {
-            const field_align: u32 = if (field.is_padding)
-                1
-            else
-                @intCast(self.getLayout(field.layout).alignment(target_usize).toByteUnits());
+            const size_align = self.layoutSizeAlignAt(self.getLayout(field.layout), target_usize);
+            const field_align = structFieldAlignmentBytes(field, size_align);
             max_alignment = @max(max_alignment, field_align);
-            current_offset = @intCast(std.mem.alignForward(u32, current_offset, field_align));
-            current_offset += self.sizeAt(self.getLayout(field.layout), target_usize);
+            current_offset = std.mem.alignForward(u32, current_offset, field_align) + size_align.size;
         }
         return @intCast(std.mem.alignForward(u32, current_offset, max_alignment));
     }
@@ -3028,8 +3056,8 @@ pub const Store = struct {
     pub fn updateLayout(self: *Self, idx: Idx, layout: Layout) void {
         const ptr = self.layouts.get(@fromBackingInt(@intCast(@backingInt(idx))));
         ptr.* = layout;
-        self.digest_cache.invalidate();
-        self.resolved_list_layouts.items[@backingInt(idx)] = self.computeResolvedListLayoutIdx(idx);
+        self.digest_cache.invalidateLayout(idx);
+        self.resolved_list_layouts.items[@backingInt(idx)] = self.computeResolvedListLayoutIdx(idx) orelse .none;
     }
 
     fn computeResolvedListLayoutIdx(self: *const Self, start: Idx) ?Idx {
@@ -3051,7 +3079,8 @@ pub const Store = struct {
     }
 
     pub fn resolvedListLayoutIdx(self: *const Self, layout_idx: Idx) ?Idx {
-        return self.resolved_list_layouts.items[@backingInt(layout_idx)];
+        const resolved = self.resolved_list_layouts.items[@backingInt(layout_idx)];
+        return if (resolved == Idx.none) null else resolved;
     }
 };
 

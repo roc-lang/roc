@@ -38,21 +38,9 @@ pub const Idx = enum(u32) {
     _,
 };
 
-fn assertAppendIndex(expected: usize, idx: collections.SafeList(u8).Idx) void {
-    if (comptime builtin.mode == .debug) {
-        std.debug.assert(@backingInt(idx) == expected);
-    } else if (@backingInt(idx) != expected) {
-        unreachable;
-    }
-}
-
 fn assertAppendRange(expected_start: usize, expected_len: u32, range: collections.SafeList(u8).Range) void {
-    if (comptime builtin.mode == .debug) {
-        std.debug.assert(@backingInt(range.start) == expected_start);
-        std.debug.assert(range.count == expected_len);
-    } else if (@backingInt(range.start) != expected_start or range.count != expected_len) {
-        unreachable;
-    }
+    std.debug.assert(@backingInt(range.start) == expected_start);
+    std.debug.assert(range.count == expected_len);
 }
 
 /// Initialize a `SmallStringInterner` with the specified capacity.
@@ -79,7 +67,7 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
     {
         const expected_idx = self.bytes.items.items.len;
         const idx = try self.bytes.append(gpa, 0);
-        assertAppendIndex(expected_idx, idx);
+        std.debug.assert(@backingInt(idx) == expected_idx);
     }
 
     // Initialize hash table with all zeros (Idx.unused)
@@ -118,6 +106,18 @@ const Policy = struct {
     pub fn textForId(self: *const SmallStringInterner, id: Id) []const u8 {
         return std.mem.sliceTo(self.bytes.items.items[@backingInt(id)..], 0);
     }
+    /// Whether the entry at `id` is exactly `text`. Entries are
+    /// null-terminated, so comparing `text.len` bytes and then the terminator
+    /// decides it without first scanning the entry for its length. An entry
+    /// ends at its first zero byte, so a `text` holding a zero byte equals no
+    /// entry; that is checked only once the bytes already match.
+    pub fn textEql(self: *const SmallStringInterner, id: Id, text: []const u8) bool {
+        const stored = self.bytes.items.items[@backingInt(id)..];
+        if (stored.len <= text.len) return false;
+        if (stored[text.len] != 0) return false;
+        if (!std.mem.eql(u8, stored[0..text.len], text)) return false;
+        return std.mem.findScalar(u8, text, 0) == null;
+    }
     pub fn appendEntry(self: *SmallStringInterner, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Id {
         assertSupportsInserts(self.supports_inserts);
         const new_offset: Idx = @fromBackingInt(@intCast(self.bytes.len()));
@@ -129,7 +129,7 @@ const Policy = struct {
         {
             const expected_idx = self.bytes.items.items.len;
             const idx = try self.bytes.append(gpa, 0);
-            assertAppendIndex(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         self.entry_count += 1;
         return new_offset;

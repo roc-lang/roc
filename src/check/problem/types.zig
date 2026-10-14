@@ -29,8 +29,10 @@ pub const ExtraStringIdx = ByteListRange;
 pub const MissingPatternsRange = struct { start: usize, count: usize };
 
 /// The checker relation that recorded a problem, or whose unification queued
-/// a dispatch obligation whose problems then belong to it (design.md "Every
-/// Rejection Is Explicit Recovery"). A relation is void at the settled state
+/// a dispatch obligation whose problems then belong to it, unless the
+/// obligation is an expression's own dispatch, which that expression's
+/// relation owns wherever it is queued (design.md "Every Rejection Is
+/// Explicit Recovery"). A relation is void at the settled state
 /// when it read an erroneous value, and a void relation's problems are
 /// withdrawn: an erroneous value relates to nothing. `kind` says which
 /// values the relation read.
@@ -132,6 +134,7 @@ pub const Problem = union(enum) {
     unmatchable_pattern: UnmatchablePattern,
     match_alt_binder_missing: MatchAltBinderMissing,
     unreachable_code: UnreachableCode,
+    discarded_var_update: DiscardedVarUpdate,
     comptime_unused_branch: ComptimeUnusedBranch,
     comptime_condition: ComptimeCondition,
     derived_parser_error_row: DerivedParserErrorRow,
@@ -754,6 +757,15 @@ pub const MatchAltBinderMissing = struct {
 /// Code that appears after an expression or statement that never returns.
 pub const UnreachableCode = struct {
     region: base.Region,
+};
+
+/// A statement that calls a method on a `var` and discards the result, which
+/// could have been assigned back to that `var` (e.g. `$acc.append(e)`).
+pub const DiscardedVarUpdate = struct {
+    /// The discarded method call.
+    expr_region: base.Region,
+    /// The `var` the method was called on.
+    var_ident: Ident.Idx,
 };
 
 // static dispatch //

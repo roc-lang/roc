@@ -206,8 +206,8 @@ pub fn parse(allocator: std.mem.Allocator, raw_text: []const u8, kind: Kind) std
         error.InvalidNumeral => return .{
             .kind = kind,
             .compact = .invalid,
-            .before = try allocator.alloc(u8, 0),
-            .after = try allocator.alloc(u8, 0),
+            .before = &.{},
+            .after = &.{},
             .after_decimal_digit_count = 0,
             .is_negative = false,
             .had_decimal_point = kind == .frac,
@@ -388,7 +388,7 @@ fn parseExactInteger(allocator: std.mem.Allocator, text: []const u8) (Allocator.
         allocator.free(before);
         return unmaterializedExact(allocator, is_negative, false, 0);
     }
-    const after = try allocator.alloc(u8, 0);
+    const after: []u8 = &.{};
 
     return .{
         .before = before,
@@ -514,7 +514,7 @@ fn decimalParts(allocator: std.mem.Allocator, unsigned_text: []const u8) (Alloca
             zeros_count,
         ) orelse return unmaterializedDecimalParts(allocator, 0);
         errdefer allocator.free(before);
-        const after = try allocator.alloc(u8, 0);
+        const after: []u8 = &.{};
         errdefer allocator.free(after);
         return .{
             .before = before,
@@ -547,7 +547,7 @@ fn decimalParts(allocator: std.mem.Allocator, unsigned_text: []const u8) (Alloca
         };
     }
 
-    const before = try allocator.alloc(u8, 0);
+    const before: []u8 = &.{};
     errdefer allocator.free(before);
     const after = try materializedJoinedDecimalDigits(allocator, before_raw.items, after_raw.items, 0) orelse {
         allocator.free(before);
@@ -568,9 +568,9 @@ fn unmaterializedExact(
     had_decimal_point: bool,
     after_decimal_digit_count: u64,
 ) std.mem.Allocator.Error!Exact {
-    const before = try allocator.alloc(u8, 0);
+    const before: []u8 = &.{};
     errdefer allocator.free(before);
-    const after = try allocator.alloc(u8, 0);
+    const after: []u8 = &.{};
     return .{
         .before = before,
         .after = after,
@@ -598,9 +598,9 @@ fn unmaterializedDecimalParts(
     allocator: std.mem.Allocator,
     after_decimal_digit_count: u64,
 ) std.mem.Allocator.Error!DecimalParts {
-    const before = try allocator.alloc(u8, 0);
+    const before: []u8 = &.{};
     errdefer allocator.free(before);
-    const after = try allocator.alloc(u8, 0);
+    const after: []u8 = &.{};
     return .{
         .before = before,
         .after = after,
@@ -616,7 +616,7 @@ fn materializedJoinedDecimalDigits(
     trailing_zero_count: u64,
 ) std.mem.Allocator.Error!?[]u8 {
     const first_nonzero = firstNonZeroJoined(first, second) orelse {
-        return try allocator.alloc(u8, 0);
+        return &.{};
     };
     const source_tail_len = first.len + second.len - first_nonzero;
     const total_len_u64 = checkedAddU64(
@@ -884,7 +884,7 @@ fn intDigitsToBase256(allocator: std.mem.Allocator, digits: []const u8, radix: u
 }
 
 fn decimalDigitsToBase256(allocator: std.mem.Allocator, digits: []const u8) (Allocator.Error || error{InvalidNumeral})![]u8 {
-    if (digits.len == 0) return allocator.alloc(u8, 0);
+    if (digits.len == 0) return &.{};
 
     var limbs_le = std.ArrayList(u32).empty;
     defer limbs_le.deinit(allocator);

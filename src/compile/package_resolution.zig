@@ -226,7 +226,7 @@ pub const Diagnostic = struct {
 /// with each package's shorthand aliases resolved to package indices.
 /// Owns all of its strings via an internal arena.
 pub const Resolved = struct {
-    arena: *std.heap.ArenaAllocator,
+    arena: *base.SingleThreadArena,
     /// Index 0 is always the root package.
     packages: []Package,
     /// The one platform selected by the complete dependency graph, or null
@@ -464,7 +464,7 @@ const WalkResult = struct {
 /// `resolve` once, read diagnostics if it failed, then deinit.
 pub const Resolver = struct {
     gpa: Allocator,
-    arena_state: std.heap.ArenaAllocator,
+    arena_state: base.SingleThreadArena,
     fetcher: Fetcher,
     config: Config,
 
@@ -506,7 +506,7 @@ pub const Resolver = struct {
     pub fn init(gpa: Allocator, fetcher: Fetcher, config: Config) Resolver {
         return .{
             .gpa = gpa,
-            .arena_state = std.heap.ArenaAllocator.init(gpa),
+            .arena_state = base.SingleThreadArena.init(gpa),
             .fetcher = fetcher,
             .config = config,
             .url_nodes = .{},
@@ -1159,7 +1159,7 @@ pub const Resolver = struct {
             fetcher: Fetcher,
             missing: Missing,
             max_expanded_bytes: ?u64,
-            task_arena: std.heap.ArenaAllocator,
+            task_arena: base.SingleThreadArena,
             result: FetchError!FetchedPackage,
 
             fn run(task: *@This()) void {
@@ -1180,7 +1180,7 @@ pub const Resolver = struct {
                 .fetcher = self.fetcher,
                 .missing = missing,
                 .max_expanded_bytes = if (missing.is_platform) self.config.max_platform_transitive_expanded_bytes else self.config.max_package_expanded_bytes,
-                .task_arena = std.heap.ArenaAllocator.init(self.gpa),
+                .task_arena = base.SingleThreadArena.init(self.gpa),
                 .result = error.DownloadFailed,
             };
         }
@@ -1493,8 +1493,8 @@ pub const Resolver = struct {
 
         // Build the Resolved structure with its own arena so it can outlive
         // the resolver.
-        const result_arena = try self.gpa.create(std.heap.ArenaAllocator);
-        result_arena.* = std.heap.ArenaAllocator.init(self.gpa);
+        const result_arena = try self.gpa.create(base.SingleThreadArena);
+        result_arena.* = base.SingleThreadArena.init(self.gpa);
         errdefer {
             result_arena.deinit();
             self.gpa.destroy(result_arena);
@@ -1941,25 +1941,7 @@ pub fn scanParsedHeader(
             // An app header with no platform entry names the built-in Echo
             // platform, which the default-app staging supplies; there is no
             // platform edge to scan here.
-            if (a.platform_idx) |platform_idx| {
-                const platform_field = ast.store.getRecordField(platform_idx);
-                if (platform_field.value.asSupplied()) |value_expr| {
-                    const platform_expr = ast.store.getExpr(value_expr);
-                    if (platform_expr == .string) {
-                        const spec = (try stringFromExpr(allocator, ast, value_expr)) orelse return error.HeaderParseFailed;
-                        try appendScannedDep(allocator, &deps, ast.resolve(platform_field.name), spec, true);
-                    } else if (platform_expr == .ident) {
-                        const ident = platform_expr.ident;
-                        if (ident.qualifiers.span.len != 0) return error.HeaderParseFailed;
-                        const platform = compiler_platforms.fromHeaderIdent(ast.resolve(ident.token)) orelse return error.HeaderParseFailed;
-                        try appendCompilerOwnedScannedDep(allocator, &deps, ast.resolve(platform_field.name), platform);
-                    } else {
-                        return error.HeaderParseFailed;
-                    }
-                } else {
-                    return error.HeaderParseFailed;
-                }
-            }
+            if (a.platform_idx) |platform_idx| try appendPlatformDep(allocator, ast, platform_idx, &deps);
             // The packages collection includes the platform field, which is
             // already recorded above as the platform edge, and the compiler
             // version pin, which is not a dependency at all.
@@ -1967,21 +1949,7 @@ pub fn scanParsedHeader(
             break :blk .app;
         },
         .package => |p| blk: {
-            if (p.platform_idx) |platform_idx| {
-                const platform_field = ast.store.getRecordField(platform_idx);
-                if (platform_field.value.asSupplied()) |value_expr| {
-                    const platform_expr = ast.store.getExpr(value_expr);
-                    if (platform_expr == .string) {
-                        const spec = (try stringFromExpr(allocator, ast, value_expr)) orelse return error.HeaderParseFailed;
-                        try appendScannedDep(allocator, &deps, ast.resolve(platform_field.name), spec, true);
-                    } else if (platform_expr == .ident) {
-                        const ident = platform_expr.ident;
-                        if (ident.qualifiers.span.len != 0) return error.HeaderParseFailed;
-                        const platform = compiler_platforms.fromHeaderIdent(ast.resolve(ident.token)) orelse return error.HeaderParseFailed;
-                        try appendCompilerOwnedScannedDep(allocator, &deps, ast.resolve(platform_field.name), platform);
-                    } else return error.HeaderParseFailed;
-                } else return error.HeaderParseFailed;
-            }
+            if (p.platform_idx) |platform_idx| try appendPlatformDep(allocator, ast, platform_idx, &deps);
             try appendPackagesCollection(allocator, ast, p.packages, p.platform_idx, p.roc_version, &deps);
             break :blk .package;
         },
@@ -2019,6 +1987,30 @@ fn headerEndOffset(ast: *const parse.AST, header: parse.AST.Header) u32 {
 
     const last_token = @min(region.end - 1, token_count - 1);
     return ast.tokens.resolve(last_token).end.offset;
+}
+
+/// Record a header's platform field as its platform edge: a path or URL
+/// string, or a compiler-owned platform ident.
+fn appendPlatformDep(
+    allocator: Allocator,
+    ast: *parse.AST,
+    platform_idx: parse.AST.RecordField.Idx,
+    deps: *std.ArrayListUnmanaged(ScannedDep),
+) error{ OutOfMemory, HeaderParseFailed }!void {
+    const platform_field = ast.store.getRecordField(platform_idx);
+    const value_expr = platform_field.value.asSupplied() orelse return error.HeaderParseFailed;
+    const platform_expr = ast.store.getExpr(value_expr);
+    if (platform_expr == .string) {
+        const spec = (try stringFromExpr(allocator, ast, value_expr)) orelse return error.HeaderParseFailed;
+        try appendScannedDep(allocator, deps, ast.resolve(platform_field.name), spec, true);
+    } else if (platform_expr == .ident) {
+        const ident = platform_expr.ident;
+        if (ident.qualifiers.span.len != 0) return error.HeaderParseFailed;
+        const platform = compiler_platforms.fromHeaderIdent(ast.resolve(ident.token)) orelse return error.HeaderParseFailed;
+        try appendCompilerOwnedScannedDep(allocator, deps, ast.resolve(platform_field.name), platform);
+    } else {
+        return error.HeaderParseFailed;
+    }
 }
 
 fn appendPackagesCollection(
@@ -2098,6 +2090,87 @@ fn stringFromExpr(allocator: Allocator, ast: *parse.AST, expr_idx: parse.AST.Exp
         return null;
     }
     return try buf.toOwnedSlice(allocator);
+}
+
+/// Move a finished staging directory into its final slot in the package
+/// cache. Returns false when the package turned out to be there already, in
+/// which case the staging copy has been discarded. The error is the final
+/// rename's, when the slot could not be filled at all.
+pub fn publishStagedPackage(
+    fs: CoreCtx,
+    allocator: Allocator,
+    staging_dir: []const u8,
+    package_dir: []const u8,
+    root_file: []const u8,
+) (Allocator.Error || CoreCtx.RenameError)!bool {
+    fs.rename(staging_dir, package_dir) catch {
+        // Losing this rename means another process published the same
+        // hash first, which costs nothing: bundles are content-addressed
+        // and the hash is verified while extracting, so their bytes are
+        // our bytes.
+        if (fs.fileExists(root_file)) {
+            fs.deleteTree(staging_dir) catch {};
+            return false;
+        }
+
+        // Otherwise the slot holds a directory with no entry point in it,
+        // left by an interrupted extraction or by a compiler old enough
+        // to have extracted in place. Nothing can ever resolve against
+        // it, so replace it rather than leave the cache poisoned until
+        // someone deletes it by hand.
+        //
+        // Replace it by moving it aside, not by deleting it in place. A
+        // concurrent process may publish a good copy between the check
+        // above and here, and deleting that copy would tear it out from
+        // under whoever is already reading it, file by file. With two
+        // renames the slot is only ever empty for the instant between
+        // them.
+        const trash_dir = try packageStagingDirPath(fs.std_io, allocator, package_dir);
+        fs.rename(package_dir, trash_dir) catch {};
+        defer fs.deleteTree(trash_dir) catch {};
+        fs.rename(staging_dir, package_dir) catch |rename_err| {
+            fs.deleteTree(staging_dir) catch {};
+            // Someone published in the gap between that move and this
+            // retry. Their copy is as good as ours.
+            if (fs.fileExists(root_file)) return false;
+            return rename_err;
+        };
+    };
+    return true;
+}
+
+/// How old a package staging directory must be before a sweep may delete it.
+/// Far longer than any download lives, so age alone proves abandonment.
+const stale_staging_ns: i128 = 24 * std.time.ns_per_hour;
+
+/// Delete package staging directories left behind by processes that died
+/// before publishing or cleaning up. Nothing ever reads them again, they only
+/// cost disk. Only directories older than `stale_staging_ns` go, since a
+/// younger one may belong to a download still in flight. Best effort: a
+/// sweep that fails costs nothing but the disk it would have freed.
+pub fn sweepStalePackageStaging(fs: CoreCtx, allocator: Allocator, cache_dir: []const u8) void {
+    // Staging directories only ever sit directly under the cache directory,
+    // so the sweep never needs to walk into the cached packages themselves.
+    const entries = fs.listDirTop(cache_dir, allocator) catch return;
+    const now = fs.timestampNow();
+    for (entries) |entry| {
+        if (entry.kind != .directory) continue;
+        if (!std.mem.endsWith(u8, entry.path, ".tmp")) continue;
+        const info = fs.stat(entry.path) catch continue;
+        const mtime = info.mtime_ns orelse continue;
+        if (now - mtime <= stale_staging_ns) continue;
+        fs.deleteTree(entry.path) catch {};
+    }
+}
+
+/// A staging path next to the final package directory, so publishing is a
+/// rename within a single directory rather than a copy across filesystems.
+/// The random component keeps concurrent downloads of the same package out
+/// of each other's way, and the `.tmp` suffix is what the stale sweep matches.
+pub fn packageStagingDirPath(std_io: std.Io, allocator: Allocator, package_dir: []const u8) Allocator.Error![]u8 {
+    var suffix: [8]u8 = undefined;
+    std_io.random(&suffix);
+    return std.fmt.allocPrint(allocator, "{s}.{s}.tmp", .{ package_dir, std.fmt.bytesToHex(suffix, .lower) });
 }
 
 /// The production fetcher: downloads bundles through the CoreCtx vtable into
@@ -2209,9 +2282,9 @@ pub const CtxFetcher = struct {
         max_expanded_bytes: ?u64,
     ) FetchError!?u64 {
         self.fs.makePath(cache_dir) catch return error.DownloadFailed;
-        self.sweepStaleStaging(allocator, cache_dir);
+        sweepStalePackageStaging(self.fs, allocator, cache_dir);
 
-        const staging_dir = try self.stagingDirPath(allocator, package_dir);
+        const staging_dir = try packageStagingDirPath(self.fs.std_io, allocator, package_dir);
         self.fs.createDir(staging_dir) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return error.DownloadFailed,
@@ -2226,83 +2299,11 @@ pub const CtxFetcher = struct {
             };
         };
 
-        const published = try self.publish(allocator, staging_dir, package_dir, root_file);
-        return if (published) expanded_bytes else null;
-    }
-
-    /// Move a finished staging directory into its final slot in the cache.
-    /// Returns false when the package turned out to be there already, in
-    /// which case the staging copy has been discarded.
-    fn publish(self: *CtxFetcher, allocator: Allocator, staging_dir: []const u8, package_dir: []const u8, root_file: []const u8) FetchError!bool {
-        self.fs.rename(staging_dir, package_dir) catch {
-            // Losing this rename means another process published the same
-            // hash first, which costs nothing: bundles are content-addressed
-            // and the hash is verified while extracting, so their bytes are
-            // our bytes.
-            if (self.fs.fileExists(root_file)) {
-                self.fs.deleteTree(staging_dir) catch {};
-                return false;
-            }
-
-            // Otherwise the slot holds a directory with no entry point in it,
-            // left by an interrupted extraction or by a compiler old enough
-            // to have extracted in place. Nothing can ever resolve against
-            // it, so replace it rather than leave the cache poisoned until
-            // someone deletes it by hand.
-            //
-            // Replace it by moving it aside, not by deleting it in place. A
-            // concurrent process may publish a good copy between the check
-            // above and here, and deleting that copy would tear it out from
-            // under whoever is already reading it, file by file. With two
-            // renames the slot is only ever empty for the instant between
-            // them.
-            const trash_dir = try self.stagingDirPath(allocator, package_dir);
-            self.fs.rename(package_dir, trash_dir) catch {};
-            defer self.fs.deleteTree(trash_dir) catch {};
-            self.fs.rename(staging_dir, package_dir) catch {
-                self.fs.deleteTree(staging_dir) catch {};
-                // Someone published in the gap between that move and this
-                // retry. Their copy is as good as ours.
-                if (self.fs.fileExists(root_file)) return false;
-                return error.DownloadFailed;
-            };
+        const published = publishStagedPackage(self.fs, allocator, staging_dir, package_dir, root_file) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.DownloadFailed,
         };
-        return true;
-    }
-
-    /// How old a staging directory must be before a sweep may delete it.
-    /// Far longer than any download lives, so age alone proves abandonment.
-    const stale_staging_ns: i128 = 24 * std.time.ns_per_hour;
-
-    /// Delete staging directories left behind by processes that died before
-    /// publishing or cleaning up. Nothing ever reads them again, they only
-    /// cost disk. Only directories older than `stale_staging_ns` go, since a
-    /// younger one may belong to a download still in flight. Best effort:
-    /// a sweep that fails costs nothing but the disk it would have freed.
-    fn sweepStaleStaging(self: *CtxFetcher, allocator: Allocator, cache_dir: []const u8) void {
-        // Staging directories only ever sit directly under the cache
-        // directory, so the sweep never needs to walk into the cached
-        // packages themselves.
-        const entries = self.fs.listDirTop(cache_dir, allocator) catch return;
-        const now = self.fs.timestampNow();
-        for (entries) |entry| {
-            if (entry.kind != .directory) continue;
-            if (!std.mem.endsWith(u8, entry.path, ".tmp")) continue;
-            const info = self.fs.stat(entry.path) catch continue;
-            const mtime = info.mtime_ns orelse continue;
-            if (now - mtime <= stale_staging_ns) continue;
-            self.fs.deleteTree(entry.path) catch {};
-        }
-    }
-
-    /// A staging path next to the final one, so publishing is a rename within
-    /// a single directory rather than a copy across filesystems. The random
-    /// component keeps concurrent downloads of the same package out of each
-    /// other's way.
-    fn stagingDirPath(self: *CtxFetcher, allocator: Allocator, package_dir: []const u8) Allocator.Error![]u8 {
-        var suffix: [8]u8 = undefined;
-        self.fs.std_io.random(&suffix);
-        return std.fmt.allocPrint(allocator, "{s}.{s}.tmp", .{ package_dir, std.fmt.bytesToHex(suffix, .lower) });
+        return if (published) expanded_bytes else null;
     }
 
     fn loadLocalImpl(ctx: ?*anyopaque, allocator: Allocator, root_file_abs: []const u8) FetchError!FetchedPackage {
@@ -2434,7 +2435,7 @@ pub const CtxFetcher = struct {
 // --- Tests ---
 
 test "scanHeaderSource ignores tokenizer diagnostics after the header" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -2455,7 +2456,7 @@ test "scanHeaderSource ignores tokenizer diagnostics after the header" {
 }
 
 test "scanHeaderSource accepts compiler-owned glue platform" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -2474,7 +2475,7 @@ test "scanHeaderSource accepts compiler-owned glue platform" {
 }
 
 test "scanHeaderSource accepts a package platform dependency" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -2494,7 +2495,7 @@ test "scanHeaderSource accepts a package platform dependency" {
 }
 
 test "scanHeaderSource rejects multiple package platform dependencies" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -2510,7 +2511,7 @@ test "scanHeaderSource rejects multiple package platform dependencies" {
 }
 
 test "scanHeaderSource rejects malformed package headers" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -2522,7 +2523,7 @@ test "scanHeaderSource rejects malformed package headers" {
 }
 
 test "scanHeaderSource rejects tokenizer diagnostics inside the header" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -3739,7 +3740,7 @@ test "versionBumpNotes reports packages compiled against undeclared versions" {
 
     // The root declared a 1.2.3 but the build uses 1.3.1; b declared the
     // winner, so only the root gets a note.
-    var note_arena = std.heap.ArenaAllocator.init(gpa);
+    var note_arena = base.SingleThreadArena.init(gpa);
     defer note_arena.deinit();
     const identities = try note_arena.allocator().alloc([]const u8, resolved.packages.len);
     for (resolved.packages, identities) |package, *identity| identity.* = package.identity;
@@ -4536,7 +4537,7 @@ const StubDownload = struct {
 test "bundle links - rejected archives leave warm cache slots unchanged and no staging directories" {
     const unbundle = @import("unbundle");
     const test_support = unbundle.test_support;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
     var harness = try CacheTestHarness.init(gpa);
@@ -4692,7 +4693,7 @@ const CacheTestHarness = struct {
 };
 
 test "a downloaded package is published under its hash" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -4712,7 +4713,7 @@ test "a downloaded package is published under its hash" {
 }
 
 test "a package directory does not appear until the download is complete" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -4733,7 +4734,7 @@ test "a package directory does not appear until the download is complete" {
 }
 
 test "a failed download leaves no package directory behind" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -4752,7 +4753,7 @@ test "a failed download leaves no package directory behind" {
 }
 
 test "a package another process published first is used as-is" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -4774,7 +4775,7 @@ test "a package another process published first is used as-is" {
 }
 
 test "a package directory with no entry point is replaced" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -4803,7 +4804,7 @@ test "a package directory with no entry point is replaced" {
 }
 
 test "a staging directory abandoned by a dead process is swept after a day" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
@@ -4824,7 +4825,7 @@ test "a staging directory abandoned by a dead process is swept after a day" {
 }
 
 test "a staging directory younger than a day is not swept" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 

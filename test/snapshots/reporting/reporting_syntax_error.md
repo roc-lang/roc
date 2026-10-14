@@ -93,8 +93,6 @@ I reached the end of the file before this construct was complete.<br>
 ~~~
 # LSP
 ~~~text
-expected tuple separator
-
 I was parsing a parenthesized expression or tuple, and I expected `,` or `)`.
 Separate tuple elements with commas and close the tuple or parenthesized expression with ).
 

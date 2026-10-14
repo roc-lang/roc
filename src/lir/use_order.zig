@@ -82,9 +82,9 @@ pub const UseOrder = struct {
             for (lists) |list| for (list) |id| {
                 if (self.stmts.contains(id)) continue;
                 try self.stmts.put(id, @intCast(self.stmts.count()));
-                const stmt = store.getCFStmt(id);
-                body_clone.forEachStmtRead(store, stmt, &locals, Locals.note);
-                body_clone.forEachStmtDef(store, stmt, &locals, Locals.note);
+                const stmt = store.getCFStmtImmediate(id);
+                body_clone.forEachStmtRead(store, stmt.*, &locals, Locals.note);
+                body_clone.forEachStmtDef(store, stmt.*, &locals, Locals.note);
                 if (locals.err) |err| return err;
             };
             return self;
@@ -385,12 +385,12 @@ pub const UseOrder = struct {
         for (lists) |list| {
             joins.clearRetainingCapacity();
             for (list) |stmt_id| {
-                const stmt = store.getCFStmt(stmt_id);
-                if (stmt == .join) try joins.put(stmt.join.id, @backingInt(stmt_id));
+                const stmt = store.getCFStmtImmediate(stmt_id);
+                if (stmt.* == .join) try joins.put(stmt.join.id, @backingInt(stmt_id));
             }
             for (list) |stmt_id| {
-                const stmt = store.getCFStmt(stmt_id);
-                if (stmt != .jump) continue;
+                const stmt = store.getCFStmtImmediate(stmt_id);
+                if (stmt.* != .jump) continue;
                 if (joins.get(stmt.jump.target)) |join_stmt| {
                     tables.jump_join[tables.stmtIndex(@backingInt(stmt_id))] = join_stmt;
                 }
@@ -447,7 +447,7 @@ pub const UseOrder = struct {
     /// join parameter) and no other edge reaches the successor.
     fn blockContinuation(store: *const LirStore, tables: *const Scratch, preds: *const Rows, stmt: u32) ?u32 {
         if (tables.unresolved.isSet(tables.stmtIndex(stmt))) return null;
-        if (store.getCFStmt(@fromBackingInt(@intCast(stmt))) == .jump) return null;
+        if (store.getCFStmtImmediate(@fromBackingInt(@intCast(stmt))).* == .jump) return null;
         const Single = struct {
             count: u32 = 0,
             succ: u32 = no_local,
@@ -515,7 +515,6 @@ pub const UseOrder = struct {
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -542,8 +541,6 @@ pub const UseOrder = struct {
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .jump,
             .ret,
             .crash,
@@ -622,21 +619,21 @@ pub const UseOrder = struct {
         var builder = Builder{ .allocator = allocator, .index = index };
         errdefer builder.abandon();
         for (members) |raw| {
-            const stmt = store.getCFStmt(@fromBackingInt(@intCast(raw)));
-            if (!rowsInclude(stmt, kind)) continue;
+            const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(raw)));
+            if (!rowsInclude(stmt.*, kind)) continue;
             switch (kind) {
-                .reads => body_clone.forEachStmtRead(store, stmt, &builder, Builder.count),
-                .defs => body_clone.forEachStmtDef(store, stmt, &builder, Builder.count),
+                .reads => body_clone.forEachStmtRead(store, stmt.*, &builder, Builder.count),
+                .defs => body_clone.forEachStmtDef(store, stmt.*, &builder, Builder.count),
             }
         }
         try builder.place();
         for (members) |raw| {
-            const stmt = store.getCFStmt(@fromBackingInt(@intCast(raw)));
-            if (!rowsInclude(stmt, kind)) continue;
+            const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(raw)));
+            if (!rowsInclude(stmt.*, kind)) continue;
             builder.stmt = raw;
             switch (kind) {
-                .reads => body_clone.forEachStmtRead(store, stmt, &builder, Builder.fill),
-                .defs => body_clone.forEachStmtDef(store, stmt, &builder, Builder.fill),
+                .reads => body_clone.forEachStmtRead(store, stmt.*, &builder, Builder.fill),
+                .defs => body_clone.forEachStmtDef(store, stmt.*, &builder, Builder.fill),
             }
         }
         return try builder.finish();
@@ -694,7 +691,7 @@ pub const UseOrder = struct {
                 if (seen.contains(current)) continue;
                 try seen.put(current, {});
                 try list.append(allocator, current);
-                try appendStructuralSuccessors(allocator, store, &stack, store.getCFStmt(current));
+                try body_clone.appendSuccessorsInOrder(store, &stack, current, allocator, .{ .switch_edges = .arms_first });
             }
             try lists.ensureUnusedCapacity(allocator, 1);
             lists.appendAssumeCapacity(try list.toOwnedSlice(allocator));
@@ -893,11 +890,11 @@ pub const UseOrder = struct {
     /// A jump into a join that declares `local` as a parameter redefines
     /// it, so that edge carries no use of the previous value.
     fn cutEdge(self: *const UseOrder, from: u32, to: u32, local: LIR.LocalId) bool {
-        const node = self.topology.store.getCFStmt(@fromBackingInt(@intCast(from)));
-        if (node != .jump) return false;
+        const node = self.topology.store.getCFStmtImmediate(@fromBackingInt(@intCast(from)));
+        if (node.* != .jump) return false;
         const join_stmt = self.topology.jump_join[self.topology.tables.stmtIndex(from)];
         if (join_stmt == no_local) return false;
-        const join = self.topology.store.getCFStmt(@fromBackingInt(@intCast(join_stmt))).join;
+        const join = self.topology.store.getCFStmtImmediate(@fromBackingInt(@intCast(join_stmt))).join;
         if (@backingInt(join.body) != to) return false;
         const params = self.topology.store.getLocalSpan(join.params);
         for (0..GuardedList.borrowLen(params)) |index| {
@@ -909,8 +906,23 @@ pub const UseOrder = struct {
     /// Calls `note(ctx, successor)` for each control-flow successor of
     /// `stmt`; returns true when an edge cannot be resolved.
     fn forEachSuccessor(store: *const LirStore, tables: *const Scratch, stmt: u32, ctx: anytype, comptime note: fn (@TypeOf(ctx), u32) void) bool {
-        switch (store.getCFStmt(@fromBackingInt(@intCast(stmt)))) {
-            inline .init_uninitialized,
+        const Visitor = struct {
+            ctx: @TypeOf(ctx),
+
+            fn call(self: @This(), successor: LIR.CFStmtId) void {
+                note(self.ctx, @backingInt(successor));
+            }
+        };
+        const node = store.getCFStmt(@fromBackingInt(@intCast(stmt)));
+        switch (node) {
+            .jump => {
+                const join_stmt = tables.jump_join[tables.stmtIndex(stmt)];
+                if (join_stmt == no_local) return true;
+                note(ctx, @backingInt(store.getCFStmt(@fromBackingInt(@intCast(join_stmt))).join.body));
+            },
+            // A join's body runs only when jumped to; declaring the join
+            // continues with its remainder.
+            .init_uninitialized,
             .assign_ref,
             .assign_literal,
             .assign_call,
@@ -920,7 +932,6 @@ pub const UseOrder = struct {
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -928,6 +939,7 @@ pub const UseOrder = struct {
             .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
+            .boxy_tag_match,
             .assign_call_dict,
             .assign_low_level,
             .assign_list,
@@ -938,139 +950,26 @@ pub const UseOrder = struct {
             .set_local,
             .debug,
             .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
             .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,
             .free,
-            => |node| note(ctx, @backingInt(node.next)),
-            .switch_stmt => |node| {
-                if (node.continuation) |continuation| note(ctx, @backingInt(continuation));
-                note(ctx, @backingInt(node.default_branch));
-                const branches = store.getCFSwitchBranches(node.branches);
-                for (0..GuardedList.borrowLen(branches)) |index| {
-                    note(ctx, @backingInt(GuardedList.at(branches, index).body));
-                }
-            },
-            .switch_initialized_payload => |node| {
-                note(ctx, @backingInt(node.initialized_branch));
-                note(ctx, @backingInt(node.uninitialized_branch));
-            },
-            inline .str_match, .boxy_tag_match => |node| {
-                note(ctx, @backingInt(node.on_match));
-                note(ctx, @backingInt(node.on_miss));
-            },
-            .str_match_set => |node| {
-                const arms = store.getStrMatchArms(node.arms);
-                for (0..GuardedList.borrowLen(arms)) |index| {
-                    note(ctx, @backingInt(GuardedList.at(arms, index).on_match));
-                }
-                note(ctx, @backingInt(node.on_miss));
-            },
-            // A join's body runs only when jumped to; declaring the join
-            // continues with its remainder.
-            .join => |node| note(ctx, @backingInt(node.remainder)),
-            .jump => {
-                const join_stmt = tables.jump_join[tables.stmtIndex(stmt)];
-                if (join_stmt == no_local) return true;
-                note(ctx, @backingInt(store.getCFStmt(@fromBackingInt(@intCast(join_stmt))).join.body));
-            },
-            .loop_continue, .loop_break => return true,
-            .runtime_error,
-            .comptime_exhaustiveness_failed,
-            .expect_err,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .join,
             .ret,
             .crash,
-            => {},
+            => body_clone.forEachSuccessor(store, node, .{ .join_body = false }, Visitor{ .ctx = ctx }, Visitor.call),
         }
         return false;
     }
 };
-
-/// Append every structurally owned child, including join bodies and remainders.
-pub fn appendStructuralSuccessors(
-    allocator: Allocator,
-    store: *const LirStore,
-    stack: *std.ArrayList(LIR.CFStmtId),
-    stmt: LIR.CFStmt,
-) Allocator.Error!void {
-    switch (stmt) {
-        .switch_stmt => |switch_stmt| {
-            const branches = store.getCFSwitchBranches(switch_stmt.branches);
-            for (0..GuardedList.borrowLen(branches)) |branch_index| {
-                try stack.append(allocator, GuardedList.at(branches, branch_index).body);
-            }
-            try stack.append(allocator, switch_stmt.default_branch);
-            if (switch_stmt.continuation) |continuation| try stack.append(allocator, continuation);
-        },
-        .switch_initialized_payload => |switch_stmt| {
-            try stack.append(allocator, switch_stmt.initialized_branch);
-            try stack.append(allocator, switch_stmt.uninitialized_branch);
-        },
-        .str_match => |str_match| {
-            try stack.append(allocator, str_match.on_match);
-            try stack.append(allocator, str_match.on_miss);
-        },
-        .str_match_set => |str_match_set| {
-            const arms = store.getStrMatchArms(str_match_set.arms);
-            for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                try stack.append(allocator, GuardedList.at(arms, arm_index).on_match);
-            }
-            try stack.append(allocator, str_match_set.on_miss);
-        },
-        .boxy_tag_match => |tag_match| {
-            try stack.append(allocator, tag_match.on_match);
-            try stack.append(allocator, tag_match.on_miss);
-        },
-        .join => |join_stmt| {
-            try stack.append(allocator, join_stmt.body);
-            try stack.append(allocator, join_stmt.remainder);
-        },
-        inline .assign_ref,
-        .assign_literal,
-        .init_uninitialized,
-        .assign_call,
-        .assign_call_erased,
-        .assign_packed_erased_fn,
-        .assign_boxy_desc_ref,
-        .assign_boxy_dict_ref,
-        .assign_boxy_box,
-        .assign_boxy_record_update,
-        .assign_boxy_reuse_box,
-        .assign_boxy_unbox,
-        .assign_boxy_adapt,
-        .assign_boxy_inspect,
-        .assign_boxy_eq,
-        .assign_boxy_hash,
-        .assign_boxy_tag,
-        .assign_boxy_tag_payload,
-        .assign_call_dict,
-        .assign_low_level,
-        .assign_list,
-        .assign_struct,
-        .assign_tag,
-        .store_struct,
-        .store_tag,
-        .set_local,
-        .debug,
-        .expect,
-        .comptime_branch_taken,
-        .incref,
-        .decref,
-        .decref_if_initialized,
-        .free,
-        => |linear| try stack.append(allocator, linear.next),
-        .jump,
-        .ret,
-        .crash,
-        .expect_err,
-        .runtime_error,
-        .comptime_exhaustiveness_failed,
-        .loop_continue,
-        .loop_break,
-        => {},
-    }
-}
 
 test "use order compact procedure domain matches dense queries and excludes unrelated rows" {
     const testing = std.testing;

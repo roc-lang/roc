@@ -1,4 +1,36 @@
 //! Lambda solving over lifted Monotype IR.
+//!
+//! Solving is monomorphic: every lifted function's type is registered once,
+//! before any body is solved, and all of that function's call sites unify
+//! with the same type nodes. There is no generalization, per-use
+//! instantiation, or recursive-group ordering. The stage is sound because of
+//! these properties, each checked where it is consumed:
+//!
+//! - Monotype specialization shares one `FnId` among every call site that
+//!   reaches a callable at the same closed type, so those sites' lambda sets
+//!   become their union. A union is a sound over-approximation: a finite
+//!   callable value carries the tag of the member it was built from, and a
+//!   call dispatches on that tag, never on which call site the value reached.
+//!   Lambda sets key members by lambda symbol, so the stage requires every
+//!   lifted function to have its own symbol (`verifyDistinctFnSymbols`).
+//! - `functionType` is the only producer of lambda-set members, and it gives
+//!   each function one capture span. Every member naming a lambda therefore
+//!   carries that lambda's one span, and a merge never relates two capture
+//!   lists (`mergeLambdaSets`).
+//! - Merges append members in encounter order so a growing set extends in
+//!   place, and `canonicalizeCallableMemberOrder` then sorts every output
+//!   set by lambda symbol. Consumers that number variants by position read one
+//!   order for a given member set, whatever order unification met it in.
+//! - Erasure comes from explicit boundaries: hosted and platform function
+//!   signatures, layout and runtime-schema requests (including constants the
+//!   const store materializes), box and unbox operations, and forced-dynamic
+//!   iterators. Debug builds re-walk every boundary after solving
+//!   (`verifyErasedBoundaries`) and require each callable it reaches to be
+//!   erased.
+//!
+//! Definitions are output in `FnId` order. No consumer reads them in
+//! dependency order: Lambda Mono and LIR lowering reach functions only through
+//! explicit `FnId` and symbol references.
 
 const std = @import("std");
 const invariant = @import("base").invariant;
@@ -137,6 +169,9 @@ const Solver = struct {
     loop_params: std.ArrayList(Type.Span),
     join_points: std.ArrayList(ActiveJoinPoint),
     return_contexts: std.ArrayList(ReturnContext),
+    /// Debug builds only: the operand types of every box and unbox
+    /// operation, which `verifyErasedBoundaries` re-walks after solving.
+    box_boundaries: std.ArrayList(Type.TypeVarId),
     active_unifications: UnifyPairSet,
     unify_stack: std.ArrayList(UnifyFrame),
     active_private_evidence_relations: UnifyPairSet,
@@ -242,8 +277,6 @@ const Solver = struct {
         list_sublist,
         list_take_first,
         list_take_last,
-        list_drop_first,
-        list_drop_last,
         list_release_excess_capacity,
         list_clear,
         list_reverse,
@@ -335,6 +368,7 @@ const Solver = struct {
             .loop_params = .empty,
             .join_points = .empty,
             .return_contexts = .empty,
+            .box_boundaries = .empty,
             .active_unifications = UnifyPairSet.init(allocator),
             .unify_stack = .empty,
             .active_private_evidence_relations = UnifyPairSet.init(allocator),
@@ -360,13 +394,13 @@ const Solver = struct {
 
     fn deinit(self: *Solver) void {
         var row_indexes = self.tag_row_indexes.valueIterator();
-        while (row_indexes.next()) |row_index| row_index.by_name.deinit(self.allocator);
+        while (row_indexes.next()) |row_index| row_index.deinit(self.allocator);
         self.tag_row_indexes.deinit(self.allocator);
         var set_indexes = self.lambda_set_indexes.valueIterator();
         while (set_indexes.next()) |set_index| set_index.by_lambda.deinit(self.allocator);
         self.lambda_set_indexes.deinit(self.allocator);
         var record_indexes = self.record_row_indexes.valueIterator();
-        while (record_indexes.next()) |row_index| row_index.by_name.deinit(self.allocator);
+        while (record_indexes.next()) |row_index| row_index.deinit(self.allocator);
         self.record_row_indexes.deinit(self.allocator);
         self.clone_map_pool.deinit();
         for (self.spare_clone_stacks.items) |*stack| stack.deinit(self.allocator);
@@ -397,6 +431,7 @@ const Solver = struct {
         self.unify_stack.deinit(self.allocator);
         self.active_unifications.deinit();
         self.return_contexts.deinit(self.allocator);
+        self.box_boundaries.deinit(self.allocator);
         self.join_points.deinit(self.allocator);
         self.loop_params.deinit(self.allocator);
         self.loop_results.deinit(self.allocator);
@@ -409,6 +444,8 @@ const Solver = struct {
     }
 
     fn solve(self: *Solver) Allocator.Error!void {
+        if (@import("builtin").mode == .debug) try self.verifyDistinctFnSymbols();
+
         for (self.lifted.locals, 0..) |local, index| {
             self.local_tys[index] = try self.lowerTypeFresh(local.ty);
         }
@@ -492,6 +529,140 @@ const Solver = struct {
         // After finalization so the materialized clones' callable slots close
         // exactly as their eager counterparts always did.
         try self.closeUnfilledCallableSlots();
+        try self.canonicalizeCallableMemberOrder();
+        if (@import("builtin").mode == .debug) try self.verifyErasedBoundaries();
+    }
+
+    /// Lambda sets key their members by lambda symbol, so two lifted
+    /// functions sharing a symbol would silently become one member.
+    fn verifyDistinctFnSymbols(self: *Solver) Allocator.Error!void {
+        var seen = std.AutoHashMap(Common.Symbol, void).init(self.allocator);
+        defer seen.deinit();
+        try seen.ensureTotalCapacity(@intCast(self.lifted.fns.len));
+        for (self.lifted.fns) |fn_| {
+            if (seen.getOrPutAssumeCapacity(fn_.symbol).found_existing) {
+                Common.invariant("two lifted functions reached Lambda Solved with the same symbol");
+            }
+        }
+    }
+
+    /// Give every lambda set and erased callable its members in ascending
+    /// lambda-symbol order. Merges append members in encounter order so a
+    /// growing set extends in place; sorting once here keeps that linear while
+    /// giving every member set one member order.
+    fn canonicalizeCallableMemberOrder(self: *Solver) Allocator.Error!void {
+        var sorted: std.ArrayList(Type.FnMember) = .empty;
+        defer sorted.deinit(self.allocator);
+        for (0..self.program.types.vars.items.len) |index| {
+            const ty: Type.TypeVarId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+            switch (self.program.types.get(ty)) {
+                .lambda_set => |members| if (try self.canonicalMemberSpan(members, &sorted)) |span| {
+                    self.program.types.set(ty, .{ .lambda_set = span });
+                },
+                .erased => |erased| if (try self.canonicalMemberSpan(erased.members, &sorted)) |span| {
+                    var sorted_erased = erased;
+                    sorted_erased.members = span;
+                    self.program.types.set(ty, .{ .erased = sorted_erased });
+                },
+                .link, .unbound, .forall, .primitive, .zst, .func, .list, .box, .tuple, .record, .tag_union, .named, .mono => {},
+            }
+        }
+    }
+
+    /// `members` sorted by lambda symbol in a new span, or null when it is
+    /// already sorted. Sets sharing a start are prefixes of one another, so a
+    /// set is never sorted in place.
+    fn canonicalMemberSpan(self: *Solver, members: Type.Span, sorted: *std.ArrayList(Type.FnMember)) Allocator.Error!?Type.Span {
+        if (members.count() < 2) return null;
+        const types = &self.program.types;
+        const ascending = for (1..members.count()) |index| {
+            if (@backingInt(types.memberItem(members, index - 1).lambda) >= @backingInt(types.memberItem(members, index).lambda)) break false;
+        } else true;
+        if (ascending) return null;
+
+        sorted.clearRetainingCapacity();
+        try sorted.ensureTotalCapacity(self.allocator, members.count());
+        for (0..members.count()) |index| sorted.appendAssumeCapacity(types.memberItem(members, index));
+        std.mem.sort(Type.FnMember, sorted.items, {}, memberLambdaLessThan);
+        for (1..sorted.items.len) |index| {
+            if (sorted.items[index - 1].lambda == sorted.items[index].lambda) Common.invariant("lambda set repeated a member");
+        }
+        return try types.addMembers(sorted.items);
+    }
+
+    fn memberLambdaLessThan(_: void, lhs: Type.FnMember, rhs: Type.FnMember) bool {
+        return @backingInt(lhs.lambda) < @backingInt(rhs.lambda);
+    }
+
+    /// Every function value a boundary commits must be erased once solving
+    /// ends. The walk is the one `markErasedCallablesReachedByType` makes from
+    /// each boundary, so a callable it reaches with a finite lambda set is
+    /// one an erasure trigger, leaf expansion, or finalization missed.
+    fn verifyErasedBoundaries(self: *Solver) Allocator.Error!void {
+        var visited = collections.DenseMap(Type.TypeVarId, void).init(self.allocator);
+        defer visited.deinit();
+        var pending: std.ArrayList(Type.TypeVarId) = .empty;
+        defer pending.deinit(self.allocator);
+
+        for (self.program.layout_requests.items) |request| try pending.append(self.allocator, request.ty);
+        for (self.program.runtime_schema_requests.items) |request| try pending.append(self.allocator, request.ty);
+        try pending.appendSlice(self.allocator, self.box_boundaries.items);
+        for (self.lifted.fns, 0..) |fn_, index| {
+            if (fn_.body == .hosted) try self.appendFunctionBoundary(self.program.fn_tys.items[index], &pending);
+        }
+        for (self.lifted.roots) |root| switch (root.request.abi) {
+            .platform, .hosted => try self.appendFunctionBoundary(self.program.fn_tys.items[@backingInt(root.fn_id)], &pending),
+            .roc, .test_expect, .compile_time => {},
+        };
+        for (0..self.program.types.vars.items.len) |index| {
+            const ty: Type.TypeVarId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+            const content = self.program.types.get(ty);
+            if (content == .named and content.named.def.iterator_representation == .forced_dynamic) try pending.append(self.allocator, ty);
+        }
+
+        const types = &self.program.types;
+        while (pending.pop()) |next| {
+            const root = types.rootCompressed(next);
+            if ((try visited.getOrPut(root)).found_existing) continue;
+            switch (types.get(root)) {
+                .mono => |leaf| if (self.contains_callable[@backingInt(leaf.id)]) {
+                    Common.invariant("callable-bearing Monotype leaf survived Lambda Solved unexpanded at an erasure boundary");
+                },
+                .link => Common.invariant("Lambda Solved root returned a link"),
+                .unbound, .forall, .primitive, .zst => {},
+                .erased => |erased| try self.appendCallableCaptureTypes(erased.members, &pending),
+                .lambda_set => |members| try self.appendCallableCaptureTypes(members, &pending),
+                .func => |func| {
+                    if (types.get(types.rootCompressed(func.callable)) != .erased) {
+                        Common.invariant("erasure boundary reached a function value with a finite lambda set");
+                    }
+                    for (0..func.args.count()) |index| try pending.append(self.allocator, types.spanItem(func.args, index));
+                    try pending.append(self.allocator, func.ret);
+                },
+                .list, .box => |elem| try pending.append(self.allocator, elem),
+                .tuple => |items| for (0..items.count()) |index| try pending.append(self.allocator, types.spanItem(items, index)),
+                .record => |fields| for (0..fields.count()) |index| {
+                    const field = types.fieldItem(fields, index);
+                    try pending.append(self.allocator, field.ty);
+                    if (field.value_ty) |value_ty| try pending.append(self.allocator, value_ty);
+                },
+                .tag_union => |tags| for (0..tags.count()) |tag_index| {
+                    const tag = types.tagItem(tags, tag_index);
+                    for (0..tag.payloads.count()) |payload_index| try pending.append(self.allocator, types.spanItem(tag.payloads, payload_index));
+                },
+                .named => |named| {
+                    for (0..named.args.count()) |index| try pending.append(self.allocator, types.spanItem(named.args, index));
+                    if (named.backing) |backing| try pending.append(self.allocator, backing.ty);
+                },
+            }
+        }
+    }
+
+    fn appendFunctionBoundary(self: *Solver, fn_ty: Type.TypeVarId, pending: *std.ArrayList(Type.TypeVarId)) Allocator.Error!void {
+        const content = self.program.types.get(self.program.types.rootCompressed(fn_ty));
+        if (content != .func) Common.invariant("Lambda Solved ABI boundary referenced a non-function");
+        for (0..content.func.args.count()) |index| try pending.append(self.allocator, self.program.types.spanItem(content.func.args, index));
+        try pending.append(self.allocator, content.func.ret);
     }
 
     fn functionType(self: *Solver, fn_: Lifted.Fn) Allocator.Error!Type.TypeVarId {
@@ -1207,7 +1378,7 @@ const Solver = struct {
             const target_index = try self.tagRowIndex(target_content.tag_union);
             for (0..source_content.tag_union.count()) |source_index| {
                 const source_tag = self.program.types.tagItem(source_content.tag_union, source_index);
-                const target_position = target_index.by_name.get(source_tag.name) orelse
+                const target_position = target_index.get(source_tag.name) orelse
                     Common.invariant("return source tag was absent from its destination row");
                 const target_payloads = self.program.types.tagItem(target_content.tag_union, target_position).payloads;
                 if (source_tag.payloads.count() != target_payloads.count()) Common.invariant("return tag payload arity differed");
@@ -1249,7 +1420,7 @@ const Solver = struct {
                     const target_index = try self.tagRowIndex(target_tags);
                     for (0..source_tags.count()) |source_index| {
                         const source_tag = self.program.types.tagItem(source_tags, source_index);
-                        const target_position = target_index.by_name.get(source_tag.name) orelse
+                        const target_position = target_index.get(source_tag.name) orelse
                             Common.invariant("row coercion reached differing tag rows outside tag payloads and named backings");
                         const target_payloads = self.program.types.tagItem(target_tags, target_position).payloads;
                         if (source_tag.payloads.count() != target_payloads.count()) {
@@ -1562,10 +1733,13 @@ const Solver = struct {
         return self.local_tys[@backingInt(local)] orelse Common.invariant("Lambda Solved local reached solver without a type slot");
     }
 
+    /// The enclosing function's solved return slot, carried from where its
+    /// return context was entered. The return's own Monotype target only
+    /// cross-checks it in debug builds.
     fn returnTargetTy(self: *Solver, target: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
         if (self.return_contexts.items.len == 0) Common.invariant("return expression reached Lambda Solved outside a function");
         const context = self.return_contexts.items[self.return_contexts.items.len - 1];
-        if (!try self.sameMonoType(target, context.mono_ret)) {
+        if (@import("builtin").mode == .debug and !try self.sameMonoType(target, context.mono_ret)) {
             Common.invariant("return target type differed from enclosing function return type");
         }
         return context.solved_ret;
@@ -1911,7 +2085,7 @@ const Solver = struct {
     fn recordField(self: *Solver, ty: Type.TypeVarId, name: Type.names.RecordFieldNameId) Allocator.Error!Type.TypeVarId {
         const content = try self.shapeContent(ty);
         if (std.meta.activeTag(content) != .record) Common.invariant("record field operation had a non-record checked type");
-        const index = (try self.recordRowIndex(content.record)).by_name.get(name) orelse
+        const index = (try self.recordRowIndex(content.record)).get(name) orelse
             Common.invariant("record field was absent from checked record type");
         return self.program.types.fieldItem(content.record, index).ty;
     }
@@ -1929,7 +2103,7 @@ const Solver = struct {
     fn tagPayloadsSpan(self: *Solver, ty: Type.TypeVarId, name: Type.names.TagNameId) Allocator.Error!Type.Span {
         const content = try self.shapeContent(ty);
         if (std.meta.activeTag(content) != .tag_union) Common.invariant("tag operation had a non-tag-union checked type");
-        const index = (try self.tagRowIndex(content.tag_union)).by_name.get(name) orelse
+        const index = (try self.tagRowIndex(content.tag_union)).get(name) orelse
             Common.invariant("tag was absent from checked tag-union type");
         return self.program.types.tagItem(content.tag_union, index).payloads;
     }
@@ -1958,11 +2132,13 @@ const Solver = struct {
                 expectLowLevelArity(op, args, 1);
                 try self.unify(args[0], try self.boxElem(expected));
                 try self.markErasedCallablesReachedByType(args[0]);
+                if (@import("builtin").mode == .debug) try self.box_boundaries.append(self.allocator, args[0]);
             },
             .box_unbox => {
                 expectLowLevelArity(op, args, 1);
                 try self.unify(expected, try self.boxElem(args[0]));
                 try self.markErasedCallablesReachedByType(expected);
+                if (@import("builtin").mode == .debug) try self.box_boundaries.append(self.allocator, expected);
             },
             .list_get_unsafe => {
                 expectLowLevelArity(op, args, 2);
@@ -1984,8 +2160,6 @@ const Solver = struct {
             .list_sublist,
             .list_take_first,
             .list_take_last,
-            .list_drop_first,
-            .list_drop_last,
             => {
                 expectLowLevelArity(op, args, 2);
                 try self.unify(expected, args[0]);
@@ -2345,14 +2519,6 @@ const Solver = struct {
             try self.pushUnifyPair(stack, a, backing);
             return;
         }
-        if (try self.typeIsProvenUninhabited(a)) {
-            self.program.types.set(a, .{ .link = b });
-            return;
-        }
-        if (try self.typeIsProvenUninhabited(b)) {
-            self.program.types.set(b, .{ .link = a });
-            return;
-        }
         if (try self.unifyInspectableNamedBacking(stack, finish_index, a, b, left, right, structural_isolated)) return;
         if (try self.unifyInspectableNamedBacking(stack, finish_index, b, a, right, left, structural_isolated)) return;
         if (try self.unifyPublicNamedBacking(a, b, right)) return;
@@ -2377,26 +2543,20 @@ const Solver = struct {
                     if (!std.mem.eql(u8, left_erased.source_fn_ty.bytes[0..], right_erased.source_fn_ty.bytes[0..])) {
                         Common.invariant("erased callable source function types failed Lambda Solved unification");
                     }
-                    var capture_pairs = std.ArrayList(DeferredSpanPair).empty;
-                    defer capture_pairs.deinit(self.allocator);
-                    const merged = try self.mergeLambdaSets(left_erased.members, right_erased.members, &capture_pairs);
+                    const merged = try self.mergeLambdaSets(left_erased.members, right_erased.members);
                     self.setMergedLinkRight(a, b, .{ .erased = .{
                         .source_fn_ty = left_erased.source_fn_ty,
                         .members = merged,
                         .abi_fn = left_erased.abi_fn orelse right_erased.abi_fn,
                     } });
-                    try self.pushCaptureSpanPairs(stack, capture_pairs.items);
                 } else if (right == .lambda_set) {
                     const right_members = right.lambda_set;
-                    var capture_pairs = std.ArrayList(DeferredSpanPair).empty;
-                    defer capture_pairs.deinit(self.allocator);
-                    const merged = try self.mergeLambdaSets(left_erased.members, right_members, &capture_pairs);
+                    const merged = try self.mergeLambdaSets(left_erased.members, right_members);
                     self.setMergedLinkRight(a, b, .{ .erased = .{
                         .source_fn_ty = left_erased.source_fn_ty,
                         .members = merged,
                         .abi_fn = left_erased.abi_fn,
                     } });
-                    try self.pushCaptureSpanPairs(stack, capture_pairs.items);
                 } else {
                     Common.invariant("erased callable type failed Lambda Solved unification");
                 }
@@ -2404,22 +2564,16 @@ const Solver = struct {
             .lambda_set => |left_members| {
                 if (right == .erased) {
                     const right_erased = right.erased;
-                    var capture_pairs = std.ArrayList(DeferredSpanPair).empty;
-                    defer capture_pairs.deinit(self.allocator);
-                    const merged = try self.mergeLambdaSets(left_members, right_erased.members, &capture_pairs);
+                    const merged = try self.mergeLambdaSets(left_members, right_erased.members);
                     self.setMergedLinkRight(a, b, .{ .erased = .{
                         .source_fn_ty = right_erased.source_fn_ty,
                         .members = merged,
                         .abi_fn = right_erased.abi_fn,
                     } });
-                    try self.pushCaptureSpanPairs(stack, capture_pairs.items);
                 } else if (right == .lambda_set) {
                     const right_members = right.lambda_set;
-                    var capture_pairs = std.ArrayList(DeferredSpanPair).empty;
-                    defer capture_pairs.deinit(self.allocator);
-                    const merged = try self.mergeLambdaSets(left_members, right_members, &capture_pairs);
+                    const merged = try self.mergeLambdaSets(left_members, right_members);
                     self.setMergedLinkRight(a, b, .{ .lambda_set = merged });
-                    try self.pushCaptureSpanPairs(stack, capture_pairs.items);
                 } else {
                     Common.invariant("lambda set failed Lambda Solved unification");
                 }
@@ -2455,11 +2609,14 @@ const Solver = struct {
             .tag_union => |left_tags| {
                 if (right != .tag_union) Common.invariant("tag-union type failed Lambda Solved unification");
                 const right_tags = right.tag_union;
-                if (left_tags.count() == 0) {
-                    self.program.types.set(a, .{ .link = b });
-                    return;
-                }
-                if (right_tags.count() == 0) {
+                // Both sides were lowered from one closed Monotype, so an
+                // empty row meets only another empty row. It never yields to
+                // a populated peer: that would silently retype a slot an
+                // earlier stage got wrong.
+                if (left_tags.count() == 0 or right_tags.count() == 0) {
+                    if (left_tags.count() != right_tags.count()) {
+                        Common.invariant("empty tag row failed Lambda Solved unification");
+                    }
                     self.program.types.set(b, .{ .link = a });
                     return;
                 }
@@ -3166,67 +3323,95 @@ const Solver = struct {
         }
     }
 
-    fn pushCaptureSpanPairs(self: *Solver, stack: *std.ArrayList(UnifyFrame), pairs: []const DeferredSpanPair) Allocator.Error!void {
-        var i = pairs.len;
-        while (i > 0) {
-            i -= 1;
-            try self.pushCapturePairs(stack, pairs[i].lhs, pairs[i].rhs);
-        }
-    }
-
-    fn pushCapturePairs(self: *Solver, stack: *std.ArrayList(UnifyFrame), lhs: Type.Span, rhs: Type.Span) Allocator.Error!void {
-        if (lhs.count() != rhs.count()) Common.invariant("capture count failed Lambda Solved unification");
-        var i = lhs.count();
-        while (i > 0) {
-            i -= 1;
-            const left_capture = self.program.types.captureItem(lhs, i);
-            const right_capture = self.program.types.captureItem(rhs, i);
-            if (left_capture.capture_id != right_capture.capture_id) {
-                Common.invariant("capture identity failed Lambda Solved unification");
-            }
-            try self.pushUnifyPair(stack, left_capture.ty, right_capture.ty);
-        }
-    }
-
     /// Merge two tag unions, collecting the shared tags' payload spans for the
     /// caller to unify once the merged span has been recorded.
     /// Positions of a stored tag row's tags by name; the first position wins
     /// for a repeated name.
-    const TagRowIndex = struct {
-        len: u32,
-        by_name: std.AutoHashMapUnmanaged(Type.names.TagNameId, usize),
-    };
+    /// Positions of a stored row's labels by name, sorted by name for binary
+    /// search; the first position wins for a repeated name. A row is short
+    /// and its label ids are spread over the whole name table, so a sorted
+    /// slice holds it more compactly than a direct-indexed map.
+    fn RowNameIndex(comptime Name: type) type {
+        return struct {
+            const Self = @This();
+            const Entry = struct { name: Name, position: u32 };
+
+            len: u32,
+            entries: std.ArrayList(Entry) = .empty,
+
+            fn get(self: *const Self, name: Name) ?usize {
+                const key = @backingInt(name);
+                var low: usize = 0;
+                var high: usize = self.entries.items.len;
+                while (low < high) {
+                    const mid = low + (high - low) / 2;
+                    const mid_key = @backingInt(self.entries.items[mid].name);
+                    if (mid_key < key) low = mid + 1 else high = mid;
+                }
+                if (low < self.entries.items.len and self.entries.items[low].name == name) return self.entries.items[low].position;
+                return null;
+            }
+
+            fn lessThan(_: void, lhs: Entry, rhs: Entry) bool {
+                const lhs_key = @backingInt(lhs.name);
+                const rhs_key = @backingInt(rhs.name);
+                return lhs_key < rhs_key or (lhs_key == rhs_key and lhs.position < rhs.position);
+            }
+
+            /// Index `labels`, which lists the row's labels in row order.
+            fn rebuild(self: *Self, allocator: Allocator, len: u32, labels: anytype) Allocator.Error!void {
+                self.len = len;
+                self.entries.clearRetainingCapacity();
+                try self.entries.ensureTotalCapacity(allocator, len);
+                for (0..len) |position| self.entries.appendAssumeCapacity(.{ .name = labels.at(position), .position = @intCast(position) });
+                std.sort.pdq(Entry, self.entries.items, {}, lessThan);
+                var kept: usize = 0;
+                for (self.entries.items) |entry| {
+                    if (kept != 0 and self.entries.items[kept - 1].name == entry.name) continue;
+                    self.entries.items[kept] = entry;
+                    kept += 1;
+                }
+                self.entries.shrinkRetainingCapacity(kept);
+            }
+
+            fn deinit(self: *Self, allocator: Allocator) void {
+                self.entries.deinit(allocator);
+            }
+        };
+    }
+
+    const TagRowIndex = RowNameIndex(Type.names.TagNameId);
+    const RecordRowIndex = RowNameIndex(Type.names.RecordFieldNameId);
 
     fn tagRowIndex(self: *Solver, span: Type.Span) Allocator.Error!*const TagRowIndex {
         const gop = try self.tag_row_indexes.getOrPut(self.allocator, span.start);
         if (gop.found_existing and gop.value_ptr.len == span.len) return gop.value_ptr;
-        if (!gop.found_existing) gop.value_ptr.* = .{ .len = span.len, .by_name = .empty };
+        if (!gop.found_existing) gop.value_ptr.* = .{ .len = span.len };
+        const Labels = struct {
+            solver: *Solver,
+            span: Type.Span,
+            fn at(row: @This(), position: usize) Type.names.TagNameId {
+                return row.solver.program.types.tagItem(row.span, position).name;
+            }
+        };
+        try gop.value_ptr.rebuild(self.allocator, @intCast(span.count()), Labels{ .solver = self, .span = span });
         gop.value_ptr.len = span.len;
-        gop.value_ptr.by_name.clearRetainingCapacity();
-        try gop.value_ptr.by_name.ensureTotalCapacity(self.allocator, span.len);
-        for (0..span.count()) |index| {
-            const entry = gop.value_ptr.by_name.getOrPutAssumeCapacity(self.program.types.tagItem(span, index).name);
-            if (!entry.found_existing) entry.value_ptr.* = index;
-        }
         return gop.value_ptr;
     }
-
-    const RecordRowIndex = struct {
-        len: u32,
-        by_name: std.AutoHashMapUnmanaged(Type.names.RecordFieldNameId, usize),
-    };
 
     fn recordRowIndex(self: *Solver, span: Type.Span) Allocator.Error!*const RecordRowIndex {
         const gop = try self.record_row_indexes.getOrPut(self.allocator, span.start);
         if (gop.found_existing and gop.value_ptr.len == span.len) return gop.value_ptr;
-        if (!gop.found_existing) gop.value_ptr.* = .{ .len = span.len, .by_name = .empty };
+        if (!gop.found_existing) gop.value_ptr.* = .{ .len = span.len };
+        const Labels = struct {
+            solver: *Solver,
+            span: Type.Span,
+            fn at(row: @This(), position: usize) Type.names.RecordFieldNameId {
+                return row.solver.program.types.fieldItem(row.span, position).name;
+            }
+        };
+        try gop.value_ptr.rebuild(self.allocator, @intCast(span.count()), Labels{ .solver = self, .span = span });
         gop.value_ptr.len = span.len;
-        gop.value_ptr.by_name.clearRetainingCapacity();
-        try gop.value_ptr.by_name.ensureTotalCapacity(self.allocator, span.len);
-        for (0..span.count()) |index| {
-            const entry = gop.value_ptr.by_name.getOrPutAssumeCapacity(self.program.types.fieldItem(span, index).name);
-            if (!entry.found_existing) entry.value_ptr.* = index;
-        }
         return gop.value_ptr;
     }
 
@@ -3241,7 +3426,7 @@ const Solver = struct {
         var every_left_in_right = true;
         for (0..lhs.count()) |left_index| {
             const left_tag = self.program.types.tagItem(lhs, left_index);
-            if (right_index.by_name.get(left_tag.name)) |right_position| {
+            if (right_index.get(left_tag.name)) |right_position| {
                 try payload_pairs.append(self.allocator, .{
                     .lhs = left_tag.payloads,
                     .rhs = self.program.types.tagItem(rhs, right_position).payloads,
@@ -3260,13 +3445,13 @@ const Solver = struct {
 
         var merged = std.ArrayList(Type.Tag).empty;
         defer merged.deinit(self.allocator);
-        var left_names = std.AutoHashMapUnmanaged(Type.names.TagNameId, void).empty;
+        var left_names = collections.DenseMapUnmanaged(Type.names.TagNameId, void).empty;
         defer left_names.deinit(self.allocator);
         try left_names.ensureTotalCapacity(self.allocator, @intCast(lhs.count()));
         for (0..lhs.count()) |left_index| {
             const left_tag = self.program.types.tagItem(lhs, left_index);
             try merged.append(self.allocator, left_tag);
-            left_names.putAssumeCapacity(left_tag.name, {});
+            try left_names.put(self.allocator, left_tag.name, {});
         }
         for (0..rhs.count()) |right_position| {
             const right_tag = self.program.types.tagItem(rhs, right_position);
@@ -3279,14 +3464,11 @@ const Solver = struct {
         return try self.program.types.addTags(merged.items);
     }
 
-    /// Merge two lambda sets, collecting the shared members' capture spans for
-    /// the caller to unify once the merged span has been recorded.
-    fn mergeLambdaSets(
-        self: *Solver,
-        lhs: Type.Span,
-        rhs: Type.Span,
-        capture_pairs: *std.ArrayList(DeferredSpanPair),
-    ) Allocator.Error!Type.Span {
+    /// Merge two lambda sets. Every member naming a lambda carries the one
+    /// capture span `functionType` gave that lambda's function, so a lambda in
+    /// both sets already agrees on its captures and the merge only adds the
+    /// members one set lacks.
+    fn mergeLambdaSets(self: *Solver, lhs: Type.Span, rhs: Type.Span) Allocator.Error!Type.Span {
         // The merge keeps one set's members in order and appends the other's
         // missing members. The kept set is one that can grow in place at the
         // end of the member pool, so growing a long set by a few members never
@@ -3297,27 +3479,17 @@ const Solver = struct {
         const kept_index = try self.lambdaSetIndex(kept);
         var added = std.ArrayList(Type.FnMember).empty;
         defer added.deinit(self.allocator);
-        var added_positions = std.AutoHashMapUnmanaged(Common.Symbol, usize).empty;
-        defer added_positions.deinit(self.allocator);
 
         for (0..other.count()) |i| {
             const other_member = self.program.types.memberItem(other, i);
-            const kept_captures = if (kept_index.position(other_member.lambda, kept)) |position|
-                self.program.types.memberItem(kept, position).captures
-            else if (added_positions.get(other_member.lambda)) |position|
-                added.items[position].captures
-            else {
-                try added_positions.put(self.allocator, other_member.lambda, added.items.len);
-                try added.append(self.allocator, other_member);
+            if (kept_index.position(other_member.lambda, kept)) |position| {
+                const kept_member = self.program.types.memberItem(kept, position);
+                if (!std.meta.eql(kept_member.captures, other_member.captures)) {
+                    Common.invariant("one lambda reached Lambda Solved unification with two capture spans");
+                }
                 continue;
-            };
-            try capture_pairs.append(self.allocator, if (keep_rhs) .{
-                .lhs = other_member.captures,
-                .rhs = kept_captures,
-            } else .{
-                .lhs = kept_captures,
-                .rhs = other_member.captures,
-            });
+            }
+            try added.append(self.allocator, other_member);
         }
 
         // Every other member already sits in the kept set: the merge is the
@@ -3641,7 +3813,8 @@ fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Erro
         }
     };
 
-    for (types.types) |content| {
+    for (0..types.types.len) |content_index| {
+        const content = types.get(@fromBackingInt(@intCast(content_index)));
         const Counter = struct {
             counts: []u32,
             fn child(self: @This(), ty: MonoType.TypeId) void {
@@ -3661,7 +3834,8 @@ fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Erro
     defer allocator.free(parents);
     const parent_writes = try allocator.dupe(u32, parent_starts[0..count]);
     defer allocator.free(parent_writes);
-    for (types.types, 0..) |content, parent_index| {
+    for (0..types.types.len) |parent_index| {
+        const content = types.get(@fromBackingInt(@intCast(parent_index)));
         const Filler = struct {
             parents: []u32,
             writes: []u32,
@@ -3677,7 +3851,8 @@ fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Erro
 
     var work = std.ArrayList(u32).empty;
     defer work.deinit(allocator);
-    for (types.types, 0..) |content, index| {
+    for (0..types.types.len) |index| {
+        const content = types.get(@fromBackingInt(@intCast(index)));
         const tag = std.meta.activeTag(content);
         if (tag == .func or tag == .erased) {
             flags[index] = true;
@@ -3691,7 +3866,8 @@ fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Erro
             try work.append(allocator, parent);
         }
     }
-    for (types.types, 0..) |content, index| {
+    for (0..types.types.len) |index| {
+        const content = types.get(@fromBackingInt(@intCast(index)));
         if (std.meta.activeTag(content) == .named) {
             if (content.named.def.iterator_representation == .forced_dynamic) {
                 forced[index] = true;
@@ -4793,57 +4969,164 @@ test "unifying a cyclic function type keeps a class its endpoint joined during t
     try std.testing.expectEqual(record_root, program.types.root(x_record));
 }
 
-/// Unification compares a capture's identity and unifies its type; it never
-/// reads the capture's local, symbol, or binder.
-fn captureForTest(ty: Type.TypeVarId) Type.Capture {
-    return .{ .local = undefined, .symbol = undefined, .binder = null, .ty = ty };
-}
-
-test "lambda set unification keeps members its captures merged in" {
+test "lambda sets merged in opposite encounter orders publish one member order" {
     const allocator = std.testing.allocator;
     var program = Ast.Program.init(allocator, emptyLiftedProgramForTest(allocator));
     defer program.deinit();
 
-    const shared_lambda: Common.Symbol = @fromBackingInt(1);
-    const other_lambda: Common.Symbol = @fromBackingInt(2);
-    const ret_ty = try program.types.add(.zst);
+    const first_lambda: Common.Symbol = @fromBackingInt(1);
+    const second_lambda: Common.Symbol = @fromBackingInt(2);
+    const third_lambda: Common.Symbol = @fromBackingInt(3);
+    const captured_ty = try program.types.add(.zst);
+    // `functionType` gives each lambda one capture span, which every member
+    // naming that lambda carries.
+    const first_captures = try program.types.addCaptures(&.{.{ .local = undefined, .symbol = undefined, .binder = null, .ty = captured_ty }});
 
-    // `shared_lambda` captures a function in both sets. In `left` that
-    // function's callable is `left` itself; in `right` it is `other`, so
-    // unifying the captures merges `other`'s member into `left` while `left`
-    // and `right` are being unified.
-    const other = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{
-        .lambda = other_lambda,
-        .captures = .empty(),
-    }}) });
-    const left = try program.types.add(.unbound);
-    const left_capture_fn = try program.types.add(.{ .func = .{ .args = .empty(), .callable = left, .ret = ret_ty } });
-    const right_capture_fn = try program.types.add(.{ .func = .{ .args = .empty(), .callable = other, .ret = ret_ty } });
-    program.types.set(left, .{ .lambda_set = try program.types.addMembers(&.{.{
-        .lambda = shared_lambda,
-        .captures = try program.types.addCaptures(&.{captureForTest(left_capture_fn)}),
-    }}) });
-    const right = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{
-        .lambda = shared_lambda,
-        .captures = try program.types.addCaptures(&.{captureForTest(right_capture_fn)}),
-    }}) });
+    const forward_first = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{ .lambda = first_lambda, .captures = first_captures }}) });
+    const forward_rest = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{
+        .{ .lambda = second_lambda, .captures = .empty() },
+        .{ .lambda = third_lambda, .captures = .empty() },
+    }) });
+    const backward_rest = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{
+        .{ .lambda = third_lambda, .captures = .empty() },
+        .{ .lambda = second_lambda, .captures = .empty() },
+    }) });
+    const backward_first = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{ .lambda = first_lambda, .captures = first_captures }}) });
+
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+    try solver.unify(forward_first, forward_rest);
+    try solver.unify(backward_rest, backward_first);
+    try solver.canonicalizeCallableMemberOrder();
+
+    for ([_]Type.TypeVarId{ forward_first, backward_rest }) |set| {
+        const members = program.types.view().memberSpan(program.types.rootContent(set).lambda_set);
+        try std.testing.expectEqual(@as(usize, 3), members.len);
+        try std.testing.expectEqual(first_lambda, members[0].lambda);
+        try std.testing.expectEqual(second_lambda, members[1].lambda);
+        try std.testing.expectEqual(third_lambda, members[2].lambda);
+        try std.testing.expectEqual(first_captures, members[0].captures);
+    }
+}
+
+test "a merge of sets sharing a lambda keeps that lambda's one capture span" {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator, emptyLiftedProgramForTest(allocator));
+    defer program.deinit();
+
+    const shared_lambda: Common.Symbol = @fromBackingInt(4);
+    const other_lambda: Common.Symbol = @fromBackingInt(2);
+    const captured_ty = try program.types.add(.zst);
+    const shared_captures = try program.types.addCaptures(&.{.{ .local = undefined, .symbol = undefined, .binder = null, .ty = captured_ty }});
+
+    const left = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{ .lambda = shared_lambda, .captures = shared_captures }}) });
+    const right = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{
+        .{ .lambda = shared_lambda, .captures = shared_captures },
+        .{ .lambda = other_lambda, .captures = .empty() },
+    }) });
 
     var solver = try Solver.init(allocator, &program);
     defer solver.deinit();
     try solver.unify(left, right);
+    try std.testing.expectEqual(program.types.root(left), program.types.root(right));
+    try solver.canonicalizeCallableMemberOrder();
 
-    const set_root = program.types.root(left);
-    try std.testing.expectEqual(set_root, program.types.root(right));
-    try std.testing.expectEqual(set_root, program.types.root(other));
     const members = program.types.view().memberSpan(program.types.rootContent(left).lambda_set);
     try std.testing.expectEqual(@as(usize, 2), members.len);
-    var saw_shared = false;
-    var saw_other = false;
-    for (members) |member| {
-        if (member.lambda == shared_lambda) saw_shared = true;
-        if (member.lambda == other_lambda) saw_other = true;
-    }
-    try std.testing.expect(saw_shared and saw_other);
+    try std.testing.expectEqual(other_lambda, members[0].lambda);
+    try std.testing.expectEqual(shared_lambda, members[1].lambda);
+    try std.testing.expectEqual(shared_captures, members[1].captures);
+}
+
+fn unifyOneLambdaWithTwoCaptureSpans() Allocator.Error!void {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator, emptyLiftedProgramForTest(allocator));
+    defer program.deinit();
+
+    const lambda: Common.Symbol = @fromBackingInt(4);
+    const captured_ty = try program.types.add(.zst);
+    const left_captures = try program.types.addCaptures(&.{.{ .local = undefined, .symbol = undefined, .binder = null, .ty = captured_ty }});
+    const right_captures = try program.types.addCaptures(&.{.{ .local = undefined, .symbol = undefined, .binder = null, .ty = captured_ty }});
+    const left = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{ .lambda = lambda, .captures = left_captures }}) });
+    const right = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{ .lambda = lambda, .captures = right_captures }}) });
+
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+    try solver.unify(left, right);
+}
+
+test "unifying one lambda carrying two capture spans fails its invariant" {
+    try @import("base").death_test.expectPanic("one lambda reached Lambda Solved unification with two capture spans", unifyOneLambdaWithTwoCaptureSpans, .{});
+}
+
+fn canonicalizeLambdaSetWithRepeatedMember() Allocator.Error!void {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator, emptyLiftedProgramForTest(allocator));
+    defer program.deinit();
+
+    const repeated: Common.Symbol = @fromBackingInt(4);
+    const other: Common.Symbol = @fromBackingInt(2);
+    _ = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{
+        .{ .lambda = repeated, .captures = .empty() },
+        .{ .lambda = other, .captures = .empty() },
+        .{ .lambda = repeated, .captures = .empty() },
+    }) });
+
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+    try solver.canonicalizeCallableMemberOrder();
+}
+
+test "a lambda set that repeats a member fails canonicalization's invariant" {
+    try @import("base").death_test.expectPanic("lambda set repeated a member", canonicalizeLambdaSetWithRepeatedMember, .{});
+}
+
+test "uninhabited types unify structurally and join their callable slots" {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator, emptyLiftedProgramForTest(allocator));
+    defer program.deinit();
+
+    const run_field = try program.lifted.names.internRecordFieldLabel("run");
+    const never_field = try program.lifted.names.internRecordFieldLabel("never");
+    const left_lambda: Common.Symbol = @fromBackingInt(1);
+    const right_lambda: Common.Symbol = @fromBackingInt(2);
+    const ret_ty = try program.types.add(.zst);
+
+    // `{ never : [], run : () -> {} }` has no values, but its function field
+    // still carries callable flow; each side names a different lambda.
+    const left_callable = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{
+        .lambda = left_lambda,
+        .captures = .empty(),
+    }}) });
+    const right_callable = try program.types.add(.{ .lambda_set = try program.types.addMembers(&.{.{
+        .lambda = right_lambda,
+        .captures = .empty(),
+    }}) });
+    const left_fn = try program.types.add(.{ .func = .{ .args = .empty(), .callable = left_callable, .ret = ret_ty } });
+    const right_fn = try program.types.add(.{ .func = .{ .args = .empty(), .callable = right_callable, .ret = ret_ty } });
+    const left_never = try program.types.add(.{ .tag_union = .empty() });
+    const right_never = try program.types.add(.{ .tag_union = .empty() });
+    const left = try program.types.add(.{ .record = try program.types.addFields(&.{
+        .{ .name = never_field, .ty = left_never, .default = null },
+        .{ .name = run_field, .ty = left_fn, .default = null },
+    }) });
+    const right = try program.types.add(.{ .record = try program.types.addFields(&.{
+        .{ .name = never_field, .ty = right_never, .default = null },
+        .{ .name = run_field, .ty = right_fn, .default = null },
+    }) });
+
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+    try std.testing.expect(try solver.typeIsProvenUninhabited(left));
+    try solver.unify(left, right);
+
+    // Being uninhabited never lets one side absorb the other unexamined: the
+    // records, their empty rows, and their callable slots all join.
+    try std.testing.expectEqual(program.types.root(left), program.types.root(right));
+    try std.testing.expectEqual(program.types.root(left_never), program.types.root(right_never));
+    try std.testing.expectEqual(program.types.root(left_callable), program.types.root(right_callable));
+    const members = program.types.view().memberSpan(program.types.rootContent(left_callable).lambda_set);
+    try std.testing.expectEqual(@as(usize, 2), members.len);
 }
 
 test "root-slot read unification shares callables without joining a lifted pair" {

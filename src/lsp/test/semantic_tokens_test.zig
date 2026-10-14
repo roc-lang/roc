@@ -17,12 +17,7 @@ test "semantic tokens do not read file imports" {
     const info = try LineOffsets.init(allocator, source);
     defer info.deinit();
 
-    const tokens = try semantic_tokens.extractSemanticTokensWithImports(
-        allocator,
-        source,
-        &info,
-        null,
-    );
+    const tokens = try semantic_tokens.extractSemanticTokens(allocator, source, &info);
     defer allocator.free(tokens);
 
     try std.testing.expect(tokens.len > 0);
@@ -425,12 +420,7 @@ test "semantic tokens survive invalid utf8 in the source" {
     const info = try LineOffsets.init(allocator, source);
     defer info.deinit();
 
-    const tokens = try semantic_tokens.extractSemanticTokensWithImports(
-        allocator,
-        source,
-        &info,
-        null,
-    );
+    const tokens = try semantic_tokens.extractSemanticTokens(allocator, source, &info);
     defer allocator.free(tokens);
 
     try std.testing.expect(tokens.len > 0);

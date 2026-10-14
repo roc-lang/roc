@@ -9,6 +9,7 @@ const base = @import("base");
 const types_store = @import("store.zig");
 const types_mod = @import("types.zig");
 const DenseMap = @import("collections").DenseMap;
+const DenseMapPool = @import("collections").DenseMapPool;
 
 const TypesStore = types_store.Store;
 const Var = types_mod.Var;
@@ -94,15 +95,25 @@ pub fn instantiateNominalBacking(
     // always rebound such rigids by name, and the opening operation must
     // agree with it).
     var_map.clearRetainingCapacity();
-    var rigid_subs = std.AutoHashMapUnmanaged(Ident.Idx, Var){};
-    defer rigid_subs.deinit(store.gpa);
+    // Declarations have a handful of formals; their names are searched
+    // linearly, from a stack buffer when they fit.
+    var inline_rigid_subs: [16]Instantiator.RigidSub = undefined;
+    const rigid_sub_buffer = if (formals.len <= inline_rigid_subs.len)
+        inline_rigid_subs[0..formals.len]
+    else
+        try store.gpa.alloc(Instantiator.RigidSub, formals.len);
+    defer if (formals.len > inline_rigid_subs.len) store.gpa.free(rigid_sub_buffer);
+    var rigid_sub_count: usize = 0;
     for (formals, args) |formal, arg| {
         const formal_resolved = store.resolveVar(formal);
         try var_map.put(formal_resolved.var_, arg);
         // A malformed header arg (underscore/malformed anno) is err, not
         // rigid; the template cannot reference it by name.
         switch (formal_resolved.desc.content) {
-            .rigid => |rigid| try rigid_subs.put(store.gpa, rigid.name, arg),
+            .rigid => |rigid| {
+                rigid_sub_buffer[rigid_sub_count] = .{ .name = rigid.name, .var_ = arg };
+                rigid_sub_count += 1;
+            },
             .flex, .alias, .field_presence, .structure, .err => {},
         }
     }
@@ -116,7 +127,7 @@ pub fn instantiateNominalBacking(
         // Rigids naming a formal take that formal's arg; any other rigid
         // (impossible in a well-formed template) stays rigid rather than
         // silently flexing.
-        .rigid_behavior = .{ .substitute_rigids_fresh = &rigid_subs },
+        .rigid_behavior = .{ .substitute_rigids_fresh = rigid_sub_buffer[0..rigid_sub_count] },
     };
     const minted_start: u32 = @intCast(store.len());
     const opened = try instantiator.instantiateVar(decl.backing);
@@ -146,6 +157,15 @@ pub const Scratch = struct {
     reach_heads: ?DenseMap(Var, u32) = null,
     reach_stack: std.ArrayListUnmanaged(Var) = .empty,
     reach_state: ?DenseMap(Var, bool) = null,
+    /// Buffers for the marker pre-walk (`collectMarkerChoices`): its
+    /// worklist, the declaration binders it collects, and a pool of visited
+    /// sets holding one bit per polarity/reach pair for each visited root.
+    /// A walk takes the lists out of the scratch while it runs, so a nested
+    /// instantiation reached through a placement provider starts from empty
+    /// buffers of its own and the outer walk's contents are untouched.
+    marker_pending: std.ArrayListUnmanaged(MarkerItem) = .empty,
+    marker_binders: std.ArrayListUnmanaged(Var) = .empty,
+    marker_visited: ?DenseMapPool(Var, u8) = null,
 
     pub fn deinit(self: *Scratch, gpa: std.mem.Allocator) void {
         self.frames.deinit(gpa);
@@ -158,6 +178,14 @@ pub const Scratch = struct {
         if (self.reach_heads) |*heads| heads.deinit();
         self.reach_stack.deinit(gpa);
         if (self.reach_state) |*state| state.deinit();
+        self.marker_pending.deinit(gpa);
+        self.marker_binders.deinit(gpa);
+        if (self.marker_visited) |*pool| pool.deinit();
+    }
+
+    fn markerVisited(self: *Scratch, gpa: std.mem.Allocator) *DenseMapPool(Var, u8) {
+        if (self.marker_visited == null) self.marker_visited = .init(gpa);
+        return &self.marker_visited.?;
     }
 
     fn reachHeads(self: *Scratch, gpa: std.mem.Allocator) *DenseMap(Var, u32) {
@@ -170,6 +198,10 @@ pub const Scratch = struct {
         return &self.reach_state.?;
     }
 };
+
+/// One pending occurrence of the marker pre-walk: a var together with the
+/// polarity and adapter reach it is reached at.
+const MarkerItem = struct { var_: Var, polarity: Polarity, reach: AdapterReachPosition };
 
 /// One incoming edge of a type-graph node, recorded by the scheme pre-walk so
 /// reachability of a generalized variable can be propagated from a child to
@@ -471,6 +503,19 @@ pub const Instantiator = struct {
         ignore_rank,
     };
 
+    /// A formal's rigid name and the argument it stands for.
+    pub const RigidSub = struct { name: Ident.Idx, var_: Var };
+
+    /// The argument for `name`; a later entry for the same name wins.
+    fn rigidSub(subs: []const RigidSub, name: Ident.Idx) ?Var {
+        var index = subs.len;
+        while (index > 0) {
+            index -= 1;
+            if (subs[index].name == name) return subs[index].var_;
+        }
+        return null;
+    }
+
     /// The mode to use when instantiating rigids
     pub const RigidBehavior = union(enum) {
         /// In this mode, all rigids are instantiated as new flex vars
@@ -490,11 +535,11 @@ pub const Instantiator = struct {
 
         /// In this mode, rigids present in the provided map are substituted,
         /// and any other rigids are instantiated as fresh rigid variables.
-        substitute_rigids_fresh: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+        substitute_rigids_fresh: []const RigidSub,
 
         /// Expected shape context substitutes declaration parameters with
         /// owned context copies while flexing other rigid leaves.
-        substitute_rigids_flex: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+        substitute_rigids_flex: []const RigidSub,
     };
 
     /// Where a nominal application's argument stands, from the declaration's
@@ -787,14 +832,25 @@ pub const Instantiator = struct {
     /// occurrence contributes; argument storage is not another occurrence.
     fn collectMarkerChoices(self: *Self, root: Var, choices: *std.AutoHashMapUnmanaged(Var, bool)) std.mem.Allocator.Error!bool {
         const marker_ident = self.polarity_var_ident orelse return true;
-        const Item = struct { var_: Var, polarity: Polarity, reach: AdapterReachPosition };
+        const Item = MarkerItem;
         const allocator = self.store.gpa;
-        var pending: std.ArrayList(Item) = .empty;
-        defer pending.deinit(allocator);
-        var visited: std.AutoHashMapUnmanaged(Item, void) = .empty;
-        defer visited.deinit(allocator);
-        var binders: std.ArrayList(Var) = .empty;
-        defer binders.deinit(allocator);
+        const buffers = self.scratch();
+        var pending = buffers.marker_pending;
+        buffers.marker_pending = .empty;
+        defer {
+            pending.clearRetainingCapacity();
+            buffers.marker_pending.deinit(allocator);
+            buffers.marker_pending = pending;
+        }
+        var binders = buffers.marker_binders;
+        buffers.marker_binders = .empty;
+        defer {
+            binders.clearRetainingCapacity();
+            buffers.marker_binders.deinit(allocator);
+            buffers.marker_binders = binders;
+        }
+        var visited = buffers.markerVisited(allocator).acquire();
+        defer buffers.markerVisited(allocator).release(&visited);
         // Which sides each marker's occurrences stand on. For
         // `.preserve_one_sided` the sides are the two polarities; otherwise
         // `first` is an occurrence that permits opening and `second` one
@@ -805,8 +861,11 @@ pub const Instantiator = struct {
         try pending.append(allocator, .{ .var_ = root, .polarity = self.current_polarity, .reach = self.current_reach });
         while (pending.pop()) |item| {
             const resolved = self.store.resolveVar(item.var_);
-            const visit = try visited.getOrPut(allocator, .{ .var_ = resolved.var_, .polarity = item.polarity, .reach = item.reach });
-            if (visit.found_existing) continue;
+            const visit_bit: u8 = @as(u8, 1) << (@as(u3, @backingInt(item.polarity)) * 4 + @as(u3, @backingInt(item.reach)));
+            const visit = try visited.getOrPut(resolved.var_);
+            if (!visit.found_existing) visit.value_ptr.* = 0;
+            if (visit.value_ptr.* & visit_bit != 0) continue;
+            visit.value_ptr.* |= visit_bit;
             switch (resolved.desc.content) {
                 .rigid => |rigid| if (rigid.name.eql(marker_ident)) {
                     const entry = try sides.getOrPut(allocator, resolved.var_);
@@ -1050,11 +1109,8 @@ pub const Instantiator = struct {
             }
         }
 
-        const flags: types_mod.DescriptorFlags = .{
-            .empty_tag_union_is_default = resolved.desc.flags.empty_tag_union_is_default,
-            .annotation_tag_ext = self.preserve_annotation_tag_ext and resolved.desc.flags.annotation_tag_ext,
-            .nominal_backing_structure = resolved.desc.flags.nominal_backing_structure,
-        };
+        var flags = resolved.desc.flags.copied();
+        flags.annotation_tag_ext = self.preserve_annotation_tag_ext and resolved.desc.flags.annotation_tag_ext;
         switch (resolved.desc.content) {
             .rigid => |rigid| {
                 // Polarity vars (the deferred open-vs-closed tag union
@@ -1142,7 +1198,7 @@ pub const Instantiator = struct {
                             return true;
                         },
                         .substitute_rigids_fresh => |rigid_subs| {
-                            if (rigid_subs.get(rigid.name)) |existing_var| {
+                            if (rigidSub(rigid_subs, rigid.name)) |existing_var| {
                                 try self.var_map.put(resolved_var, existing_var);
                                 try machine.value_stack.append(self.store.gpa, existing_var);
                                 return true;
@@ -1150,7 +1206,7 @@ pub const Instantiator = struct {
                             break :blk .rigid;
                         },
                         .substitute_rigids_flex => |rigid_subs| {
-                            if (rigid_subs.get(rigid.name)) |existing_var| {
+                            if (rigidSub(rigid_subs, rigid.name)) |existing_var| {
                                 try self.var_map.put(resolved_var, existing_var);
                                 try machine.value_stack.append(self.store.gpa, existing_var);
                                 return true;

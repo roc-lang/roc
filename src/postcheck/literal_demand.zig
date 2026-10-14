@@ -105,28 +105,11 @@ pub const Flags = packed struct(u8) {
 };
 
 /// The nominal identity a checked type and a Monotype type share across
-/// name stores: the declaring module's content identity, the declared name,
-/// and its declaring statement.
+/// name stores: the declaring module's content identity and its declaring
+/// statement (see `canonical_names.NominalTypeKey`).
 const NominalKey = struct {
     module: [32]u8,
-    name: []const u8,
-    source_decl: ?u32,
-};
-
-const NominalKeyContext = struct {
-    pub fn hash(_: NominalKeyContext, key: NominalKey) u64 {
-        var hasher = std.hash.Wyhash.init(0);
-        hasher.update(&key.module);
-        hasher.update(key.name);
-        if (key.source_decl) |decl| hasher.update(std.mem.asBytes(&decl));
-        return hasher.final();
-    }
-
-    pub fn eql(_: NominalKeyContext, a: NominalKey, b: NominalKey) bool {
-        return std.mem.eql(u8, &a.module, &b.module) and
-            std.mem.eql(u8, a.name, b.name) and
-            a.source_decl == b.source_decl;
-    }
+    source_decl: u32,
 };
 
 const TemplateKey = struct {
@@ -158,7 +141,7 @@ pub const Counters = struct {
 pub const LiteralDemand = struct {
     allocator: Allocator,
     templates: std.AutoHashMapUnmanaged(TemplateKey, NodeId) = .empty,
-    nominals: std.HashMapUnmanaged(NominalKey, NodeId, NominalKeyContext, std.hash_map.default_max_load_percentage) = .empty,
+    nominals: std.AutoHashMapUnmanaged(NominalKey, NodeId) = .empty,
     builtin: NodeId = 0,
     /// Reach flags, by node.
     flags: std.ArrayListUnmanaged(Flags) = .empty,
@@ -179,10 +162,10 @@ pub const LiteralDemand = struct {
     }
 
     /// The reach flags of a nominal, named by its declaring module's content
-    /// identity, its declared name, and its declaring statement. A nominal
-    /// with no methods and no custom conversion contributes nothing.
-    pub fn nominalFlags(self: *const LiteralDemand, module: *const [32]u8, name: []const u8, source_decl: ?u32) Flags {
-        const node = self.nominals.getContext(.{ .module = module.*, .name = name, .source_decl = source_decl }, .{}) orelse return .{};
+    /// identity and its declaring statement. A nominal with no methods and no
+    /// custom conversion contributes nothing.
+    pub fn nominalFlags(self: *const LiteralDemand, module: *const [32]u8, source_decl: u32) Flags {
+        const node = self.nominals.get(.{ .module = module.*, .source_decl = source_decl }) orelse return .{};
         return self.flags.items[node];
     }
 
@@ -220,7 +203,7 @@ pub const LiteralDemand = struct {
                 },
                 .tuple => |elems| try pending.appendSlice(allocator, elems),
                 .nominal => |nominal| {
-                    result = result.merge(self.nominalFlags(names.moduleIdentityBytes(nominal.origin_module), names.typeNameText(nominal.name), nominal.source_decl));
+                    result = result.merge(self.nominalFlags(names.moduleIdentityBytes(nominal.origin_module), nominal.source_decl));
                     if (nominal.builtin != null) result = result.merge(self.builtinFlags());
                     try pending.appendSlice(allocator, nominal.args);
                     try pending.appendSlice(allocator, nominal.padding_field_types);
@@ -335,7 +318,7 @@ const Builder = struct {
     }
 
     fn nominalNode(self: *Builder, key: NominalKey) Allocator.Error!NodeId {
-        const entry = try self.demand.nominals.getOrPutContext(self.allocator, key, .{});
+        const entry = try self.demand.nominals.getOrPut(self.allocator, key);
         if (!entry.found_existing) entry.value_ptr.* = try self.addNode(.{});
         return entry.value_ptr.*;
     }
@@ -374,7 +357,6 @@ const Builder = struct {
                     const names = view.canonical_names;
                     try self.addEdge(item.node, try self.nominalNode(.{
                         .module = names.moduleIdentityBytes(nominal.origin_module).*,
-                        .name = names.typeNameText(nominal.name),
                         .source_decl = nominal.source_decl,
                     }));
                     if (nominal.builtin != null) try self.addEdge(item.node, self.demand.builtin);
@@ -607,6 +589,9 @@ const Builder = struct {
                 if (traceEnabled()) std.debug.print("ctfe-demand unbounded unrequested-root {s} byte={d}\n", .{ view.canonical_names.moduleNameText(view.module_identity.module_name), expr.source_region.start.offset });
                 break :unrequested .{ .strict = true };
             },
+            // A root an earlier compilation left unevaluated is requested by
+            // no evaluation here, like an undeclared pending root.
+            .unevaluated => .{ .strict = true },
             .const_node, .fn_value, .discarded, .expect, .runtime => .{},
         };
     }
@@ -641,7 +626,6 @@ const Builder = struct {
                 .nominal => |nominal| owner: {
                     const node = try self.nominalNode(.{
                         .module = names.moduleIdentityBytes(nominal.module).*,
-                        .name = names.typeNameText(nominal.type_name),
                         .source_decl = nominal.source_decl,
                     });
                     const method = names.methodNameText(entry.key.method);
@@ -763,7 +747,7 @@ pub fn compute(
         var nominal_nodes = demand.nominals.iterator();
         while (nominal_nodes.next()) |entry| {
             const own = builder.own.items[entry.value_ptr.*];
-            if (own.custom_numeral or own.custom_quote) std.debug.print("ctfe-demand custom-type {s} numeral={} quote={}\n", .{ entry.key_ptr.name, own.custom_numeral, own.custom_quote });
+            if (own.custom_numeral or own.custom_quote) std.debug.print("ctfe-demand custom-type decl={d} numeral={} quote={}\n", .{ entry.key_ptr.source_decl, own.custom_numeral, own.custom_quote });
         }
         std.debug.print("ctfe-demand analysis templates={d} sources={d} reaching={d} custom-types={d}\n", .{
             demand.counters.templates,

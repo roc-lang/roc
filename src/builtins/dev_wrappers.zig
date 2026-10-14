@@ -313,6 +313,10 @@ pub fn roc_builtins_str_concat(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_ca
     const roc_ops = in_process_host.ops();
     const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
     const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
+    // A big string always carries a heap pointer; a null one means codegen
+    // passed the string's fields wrongly.
+    std.debug.assert(a.isSmallStr() or a.bytes != null);
+    std.debug.assert(b.isSmallStr() or b.bytes != null);
     out.* = strConcatC(a, b, update_mode, roc_ops);
 }
 
@@ -1421,99 +1425,6 @@ pub fn roc_builtins_box_prepare_update(payload_ptr: ?[*]u8, payload_size: usize,
     return fresh;
 }
 
-/// Consume one box reference and move its payload into `out`.
-pub fn roc_builtins_box_unbox_owned(out: ?[*]u8, payload_ptr: ?[*]u8, payload_size: usize, payload_alignment: u32, payload_has_refcounted_children: bool, payload_incref: ?RcIncFn) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    if (payload_size == 0 or payload_ptr == null) return;
-    @memcpy(out.?[0..payload_size], payload_ptr.?[0..payload_size]);
-    if (utils.isUnique(payload_ptr, roc_ops)) {
-        utils.freeDataPtrC(payload_ptr, payload_alignment, payload_has_refcounted_children, roc_ops);
-    } else {
-        if (payload_has_refcounted_children) {
-            (payload_incref orelse unreachable)(out, 1);
-        }
-        utils.decrefDataPtrC(payload_ptr, payload_alignment, payload_has_refcounted_children, roc_ops);
-    }
-}
-
-const TestBoxPayload = extern struct { list: RocList };
-
-fn testBoxPayloadIncref(payload: ?[*]u8, count: isize) callconv(.c) void {
-    const value: *TestBoxPayload = @ptrCast(@alignCast(payload.?));
-    utils.increfDataPtrC(value.list.bytes, count, in_process_host.ops());
-}
-
-fn testBoxPayloadDecref(payload: ?[*]u8) callconv(.c) void {
-    const value: *TestBoxPayload = @ptrCast(@alignCast(payload.?));
-    utils.decrefDataPtrC(value.list.bytes, @alignOf(u8), false, in_process_host.ops());
-}
-
-test "owned Box.unbox frees flat and refcounted outer headers" {
-    var env = utils.TestEnv.init(std.testing.allocator);
-    defer env.deinit();
-    const saved_host = in_process_host.enter(env.getOps(), null);
-    defer in_process_host.leave(saved_host);
-    const ops = env.getOps();
-
-    const flat = utils.allocateWithRefcountC(@sizeOf(u64), @alignOf(u64), false, ops);
-    @as(*u64, @ptrCast(@alignCast(flat))).* = 42;
-    var flat_out: u64 = 0;
-    roc_builtins_box_unbox_owned(@ptrCast(&flat_out), flat, @sizeOf(u64), @alignOf(u64), false, null);
-    try std.testing.expectEqual(@as(u64, 42), flat_out);
-    try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
-
-    const child = RocList.fromSlice(u8, &.{ 1, 2, 3 }, false, ops);
-    const outer = utils.allocateWithRefcountC(@sizeOf(TestBoxPayload), @alignOf(TestBoxPayload), true, ops);
-    @as(*TestBoxPayload, @ptrCast(@alignCast(outer))).* = .{ .list = child };
-    var out: TestBoxPayload = undefined;
-    roc_builtins_box_unbox_owned(@ptrCast(&out), outer, @sizeOf(TestBoxPayload), @alignOf(TestBoxPayload), true, testBoxPayloadIncref);
-    try std.testing.expectEqual(@as(usize, 1), env.getAllocationCount());
-    try std.testing.expect(utils.isUnique(out.list.bytes, ops));
-    utils.decrefDataPtrC(out.list.bytes, @alignOf(u8), false, ops);
-}
-
-test "owned Box.unbox preserves shared box and shared payload ownership" {
-    var env = utils.TestEnv.init(std.testing.allocator);
-    defer env.deinit();
-    const saved_host = in_process_host.enter(env.getOps(), null);
-    defer in_process_host.leave(saved_host);
-    const ops = env.getOps();
-
-    const child = RocList.fromSlice(u8, &.{ 7, 8 }, false, ops);
-    const outer = utils.allocateWithRefcountC(@sizeOf(TestBoxPayload), @alignOf(TestBoxPayload), true, ops);
-    @as(*TestBoxPayload, @ptrCast(@alignCast(outer))).* = .{ .list = child };
-    utils.increfDataPtrC(outer, 1, ops);
-
-    var out: TestBoxPayload = undefined;
-    roc_builtins_box_unbox_owned(@ptrCast(&out), outer, @sizeOf(TestBoxPayload), @alignOf(TestBoxPayload), true, testBoxPayloadIncref);
-    try std.testing.expect(!utils.isUnique(out.list.bytes, ops));
-    const replacement: u8 = 9;
-    var updated: RocList = undefined;
-    roc_builtins_list_set(&updated, out.list.bytes, out.list.length, out.list.capacity_or_alloc_ptr, @alignOf(u8), 0, @ptrCast(@constCast(&replacement)), @sizeOf(u8), false, null, null, .Immutable);
-    try std.testing.expectEqual(@as(u8, 7), @as(*TestBoxPayload, @ptrCast(@alignCast(outer))).list.elements(u8).?[0]);
-    try std.testing.expectEqual(@as(u8, 9), updated.elements(u8).?[0]);
-    utils.decrefDataPtrC(updated.bytes, @alignOf(u8), false, ops);
-    roc_builtins_box_decref_with(outer, @alignOf(TestBoxPayload), testBoxPayloadDecref);
-
-    const separately_shared = RocList.fromSlice(u8, &.{9}, false, ops);
-    utils.increfDataPtrC(separately_shared.bytes, 1, ops);
-    const unique_outer = utils.allocateWithRefcountC(@sizeOf(TestBoxPayload), @alignOf(TestBoxPayload), true, ops);
-    @as(*TestBoxPayload, @ptrCast(@alignCast(unique_outer))).* = .{ .list = separately_shared };
-    roc_builtins_box_unbox_owned(@ptrCast(&out), unique_outer, @sizeOf(TestBoxPayload), @alignOf(TestBoxPayload), true, testBoxPayloadIncref);
-    try std.testing.expect(!utils.isUnique(out.list.bytes, ops));
-    utils.decrefDataPtrC(out.list.bytes, @alignOf(u8), false, ops);
-    utils.decrefDataPtrC(separately_shared.bytes, @alignOf(u8), false, ops);
-}
-
-test "owned Box.unbox accepts a null ZST box" {
-    var env = utils.TestEnv.init(std.testing.allocator);
-    defer env.deinit();
-    const saved_host = in_process_host.enter(env.getOps(), null);
-    defer in_process_host.leave(saved_host);
-    roc_builtins_box_unbox_owned(null, null, 0, 1, false, null);
-    try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
-}
-
 /// Decref a boxed payload and optionally run payload teardown when unique.
 pub fn roc_builtins_box_decref_with(payload_ptr: ?[*]u8, payload_alignment: u32, payload_decref: ?RcDropFn) callconv(.c) void {
     const roc_ops = in_process_host.ops();
@@ -2575,55 +2486,7 @@ pub fn roc_builtins_float_from_utf8_prefix(out: *anyopaque, bytes: ?[*]u8, len: 
     floatFromPrefix(.utf8, out, bytes, len, cap, listBytes(bytes, len), float_width, layout);
 }
 
-// ── List equality and reverse wrappers ──
-
-/// Compare two lists of flat (non-refcounted) elements for equality.
-/// Elements are compared byte-by-byte using the element width.
-pub fn roc_builtins_list_eq(a_bytes: ?[*]u8, a_len: usize, _: usize, b_bytes: ?[*]u8, b_len: usize, _: usize, elem_width: usize) callconv(.c) bool {
-    if (a_len != b_len) return false;
-    if (a_len == 0) return true;
-    if (a_bytes == b_bytes) return true;
-    const a = a_bytes orelse return b_bytes == null;
-    const b = b_bytes orelse return false;
-    return std.mem.eql(u8, a[0 .. a_len * elem_width], b[0 .. b_len * elem_width]);
-}
-
-/// Compare two lists of strings for equality.
-pub fn roc_builtins_list_str_eq(a_bytes: ?[*]u8, a_len: usize, _: usize, b_bytes: ?[*]u8, b_len: usize, _: usize) callconv(.c) bool {
-    if (a_len != b_len) return false;
-    if (a_len == 0) return true;
-    if (a_bytes == b_bytes) return true;
-    const a = a_bytes orelse return b_bytes == null;
-    const b = b_bytes orelse return false;
-    const str_size = @sizeOf(RocStr);
-    for (0..a_len) |i| {
-        const a_str: *const RocStr = @ptrCast(@alignCast(a + i * str_size));
-        const b_str: *const RocStr = @ptrCast(@alignCast(b + i * str_size));
-        if (!strEqual(a_str.*, b_str.*)) return false;
-    }
-    return true;
-}
-
-/// Compare two lists of lists for equality (inner elements are flat).
-pub fn roc_builtins_list_list_eq(a_bytes: ?[*]u8, a_len: usize, _: usize, b_bytes: ?[*]u8, b_len: usize, _: usize, inner_elem_width: usize) callconv(.c) bool {
-    if (a_len != b_len) return false;
-    if (a_len == 0) return true;
-    if (a_bytes == b_bytes) return true;
-    const a = a_bytes orelse return b_bytes == null;
-    const b = b_bytes orelse return false;
-    const list_size = @sizeOf(RocList);
-    for (0..a_len) |i| {
-        const a_list: *const RocList = @ptrCast(@alignCast(a + i * list_size));
-        const b_list: *const RocList = @ptrCast(@alignCast(b + i * list_size));
-        if (a_list.length != b_list.length) return false;
-        if (a_list.length == 0) continue;
-        if (a_list.bytes == b_list.bytes) continue;
-        const ab = a_list.bytes orelse return b_list.bytes == null;
-        const bb = b_list.bytes orelse return false;
-        if (!std.mem.eql(u8, ab[0 .. a_list.length * inner_elem_width], bb[0 .. b_list.length * inner_elem_width])) return false;
-    }
-    return true;
-}
+// ── List reverse wrappers ──
 
 /// Wrapper: listReverse. The update mode is forwarded to the builtin's
 /// uniqueness check; `.InPlace` skips it and reverses the elements in place.

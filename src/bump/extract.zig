@@ -12,6 +12,7 @@
 //! versionless) dependency is a hard error with a structured failure.
 
 const std = @import("std");
+const collections = @import("collections");
 const can = @import("can");
 const check = @import("check");
 
@@ -312,7 +313,7 @@ const Extractor = struct {
         } };
     }
 
-    const ConvertMemo = std.AutoHashMapUnmanaged(CheckedTypeId, PackageApi.TypeId);
+    const ConvertMemo = collections.DenseMapUnmanaged(CheckedTypeId, PackageApi.TypeId);
 
     /// Convert a checked type into the PackageApi arena. The memo is
     /// per-item: variable nodes must not be shared across items, because
@@ -352,7 +353,7 @@ const Extractor = struct {
                     view,
                     names,
                     alias.origin_module,
-                    alias.owner_module,
+                    alias.owner_module.*,
                     alias.source_decl,
                     names.typeNameText(alias.name),
                     alias.builtin_origin,
@@ -368,7 +369,7 @@ const Extractor = struct {
                     view,
                     names,
                     nominal.origin_module,
-                    nominal.owner_module,
+                    nominal.owner_module.*,
                     nominal.source_decl,
                     names.typeNameText(nominal.name),
                     nominal.builtin != null,

@@ -562,10 +562,7 @@ fn runCheck(
     source_kind: test_helpers.SourceKind,
     source: []const u8,
 ) BuiltinDocTestError!?[]u8 {
-    var resources = (if (prePublishedBuiltin()) |ppb|
-        test_helpers.parseAndCheckProgramForProblemsWithBuiltin(allocator, source_kind, source, &.{}, ppb)
-    else
-        test_helpers.parseAndCheckProgramForProblems(allocator, source_kind, source, &.{})) catch |err|
+    var resources = test_helpers.parseAndCheckProgramForProblems(allocator, source_kind, source, &.{}, prePublishedBuiltin()) catch |err|
         return try dupeErr(allocator, "parseAndCheckProgramForProblems: {s}", .{@errorName(err)});
     defer resources.deinit(allocator);
 

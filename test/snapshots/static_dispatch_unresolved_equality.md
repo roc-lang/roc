@@ -23,7 +23,7 @@ TYPE NOT DETERMINED - static_dispatch_unresolved_equality.md:3:10:3:16
 			(reflow " ")
 			(annotated code "==")
 			(reflow " ")
-			(reflow "compares:"))
+			(reflow "compares."))
 		(document
 			(source-region (file "static_dispatch_unresolved_equality.md") (start 3 10) (end 3 16) (annotation error) (line-text "result = poly() == poly()"))
 			(line-break)

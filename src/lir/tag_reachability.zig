@@ -9,6 +9,7 @@ const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");
 const core = @import("lir_core");
+const BodyClone = @import("body_clone.zig");
 
 const LIR = core.LIR;
 const LirProgram = core.Program;
@@ -128,8 +129,7 @@ const Pass = struct {
     allocator: Allocator,
     local_info: []ValueInfo,
     proc_returns: []ValueInfo,
-    visited: collections.DenseMap(LIR.CFStmtId, void),
-    stack: std.ArrayList(LIR.CFStmtId),
+    analysis: BodyClone.AnalysisScratch,
     redirects: collections.DenseMap(LIR.CFStmtId, LIR.CFStmtId),
     use_counts: []u32,
 
@@ -153,8 +153,7 @@ const Pass = struct {
             .allocator = allocator,
             .local_info = local_info,
             .proc_returns = proc_returns,
-            .visited = collections.DenseMap(LIR.CFStmtId, void).init(allocator),
-            .stack = .empty,
+            .analysis = BodyClone.AnalysisScratch.init(allocator),
             .redirects = collections.DenseMap(LIR.CFStmtId, LIR.CFStmtId).init(allocator),
             .use_counts = use_counts,
         };
@@ -163,8 +162,7 @@ const Pass = struct {
     fn deinit(self: *Pass) void {
         self.allocator.free(self.use_counts);
         self.redirects.deinit();
-        self.stack.deinit(self.allocator);
-        self.visited.deinit();
+        self.analysis.deinit();
         for (self.proc_returns) |*ret| ret.deinit(self.allocator);
         self.allocator.free(self.proc_returns);
         for (self.local_info) |*info| info.deinit(self.allocator);
@@ -174,10 +172,10 @@ const Pass = struct {
     fn run(self: *Pass) Allocator.Error!void {
         try self.seedBoundaries();
         try self.analyze();
-        try self.collectUseCounts();
+        self.collectUseCounts();
         try self.rewriteSwitches();
         try self.removeDeadDiscriminantReads();
-        try self.patchRedirects();
+        self.patchRedirects();
     }
 
     fn seedBoundaries(self: *Pass) Allocator.Error!void {
@@ -210,118 +208,81 @@ const Pass = struct {
 
     fn analyzeProc(self: *Pass, proc_id: LIR.LirProcSpecId, body: LIR.CFStmtId) Allocator.Error!bool {
         var changed = false;
-        self.visited.clearRetainingCapacity();
-        self.stack.clearRetainingCapacity();
-        try self.stack.append(self.allocator, body);
-
-        while (self.stack.pop()) |current| {
-            if (self.visited.contains(current)) continue;
-            try self.visited.put(current, {});
+        var stmts = try BodyClone.ReachableStmts.initWithScratch(self.store, body, &self.analysis);
+        defer stmts.deinit();
+        while (try stmts.next()) |current| {
             if (try self.analyzeStmt(proc_id, current, self.store.getCFStmt(current))) changed = true;
         }
-
         return changed;
     }
 
+    /// What one statement contributes to the values its target or the
+    /// procedure's return can hold; successors are the walker's concern.
     fn analyzeStmt(self: *Pass, proc_id: LIR.LirProcSpecId, stmt_id: LIR.CFStmtId, stmt: LIR.CFStmt) Allocator.Error!bool {
-        var changed = false;
         switch (stmt) {
-            .init_uninitialized => |s| {
-                if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
-                try self.pushStmt(s.next);
-            },
-            .assign_ref => |s| {
-                if (try self.mergeRef(s.target, s.op)) changed = true;
-                try self.pushStmt(s.next);
-            },
-            .assign_literal => |s| {
-                if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
-                try self.pushStmt(s.next);
-            },
+            .assign_ref => |s| return try self.mergeRef(s.target, s.op),
             .assign_call => |s| {
                 const callee_index = @backingInt(s.proc);
                 if (callee_index >= self.proc_returns.len) tagReachabilityInvariant("callee proc id exceeded proc table");
-                if (try self.localInfoMut(s.target).mergeFrom(self.allocator, &self.proc_returns[callee_index])) changed = true;
-                try self.pushStmt(s.next);
+                return try self.localInfoMut(s.target).mergeFrom(self.allocator, &self.proc_returns[callee_index]);
             },
             .assign_call_erased => |s| {
-                if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
+                var changed = self.localInfoMut(s.target).markAll(self.allocator);
                 if (s.out_desc) |out_desc| {
                     if (self.localInfoMut(out_desc).markAll(self.allocator)) changed = true;
                 }
-                try self.pushStmt(s.next);
+                return changed;
             },
-            .assign_packed_erased_fn => |s| {
-                if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
-                try self.pushStmt(s.next);
-            },
-            inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level => |s| {
-                if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
-                try self.pushStmt(s.next);
-            },
-            inline .boxy_tag_match, .str_match => |s| {
-                try self.pushStmt(s.on_match);
-                try self.pushStmt(s.on_miss);
-            },
-            .assign_list => |s| {
-                if (self.localInfoMut(s.target).markAll(self.allocator)) changed = true;
-                try self.pushStmt(s.next);
-            },
-            .assign_struct => |s| {
-                if (try self.localInfoMut(s.target).addConstruction(self.allocator, stmt_id)) changed = true;
-                try self.pushStmt(s.next);
-            },
+            .assign_struct => |s| return try self.localInfoMut(s.target).addConstruction(self.allocator, stmt_id),
             .assign_tag => |s| {
                 const target = self.localInfoMut(s.target);
-                if (try target.tags.add(self.allocator, s.discriminant)) changed = true;
+                var changed = try target.tags.add(self.allocator, s.discriminant);
                 if (try target.addConstruction(self.allocator, stmt_id)) changed = true;
-                try self.pushStmt(s.next);
+                return changed;
             },
-            .store_struct => |s| try self.pushStmt(s.next),
-            .store_tag => |s| try self.pushStmt(s.next),
-            .set_local => |s| {
-                if (try self.localInfoMut(s.target).mergeFrom(self.allocator, self.localInfo(s.value))) changed = true;
-                try self.pushStmt(s.next);
-            },
-            .debug => |s| try self.pushStmt(s.next),
-            .expect => |s| try self.pushStmt(s.next),
-            .comptime_branch_taken => |s| try self.pushStmt(s.next),
-            .incref => |s| try self.pushStmt(s.next),
-            .decref => |s| try self.pushStmt(s.next),
-            .decref_if_initialized => |s| try self.pushStmt(s.next),
-            .free => |s| try self.pushStmt(s.next),
-            .switch_stmt => |s| {
-                const branches = self.store.getCFSwitchBranches(s.branches);
-                for (0..branches.len) |index| try self.pushStmt(GuardedList.at(branches, index).body);
-                try self.pushStmt(s.default_branch);
-                if (s.continuation) |continuation| try self.pushStmt(continuation);
-            },
-            .switch_initialized_payload => |s| {
-                try self.pushStmt(s.initialized_branch);
-                try self.pushStmt(s.uninitialized_branch);
-            },
-            .str_match_set => |s| {
-                const arms = self.store.getStrMatchArms(s.arms);
-                for (0..arms.len) |index| try self.pushStmt(GuardedList.at(arms, index).on_match);
-                try self.pushStmt(s.on_miss);
-            },
-            .join => |s| {
-                try self.pushStmt(s.body);
-                try self.pushStmt(s.remainder);
-            },
-            .ret => |s| {
-                if (try self.proc_returns[@backingInt(proc_id)].mergeFrom(self.allocator, self.localInfo(s.value))) changed = true;
-            },
+            .set_local => |s| return try self.localInfoMut(s.target).mergeFrom(self.allocator, self.localInfo(s.value)),
+            .ret => |s| return try self.proc_returns[@backingInt(proc_id)].mergeFrom(self.allocator, self.localInfo(s.value)),
+            // Every other single-target definition can hold any value.
+            inline .init_uninitialized,
+            .assign_literal,
+            .assign_packed_erased_fn,
+            .assign_boxy_desc_ref,
+            .assign_boxy_dict_ref,
+            .assign_boxy_box,
+            .assign_boxy_record_update,
+            .assign_boxy_unbox,
+            .assign_boxy_adapt,
+            .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
+            .assign_boxy_tag,
+            .assign_boxy_tag_payload,
+            .assign_call_dict,
+            .assign_low_level,
+            .assign_list,
+            => |s| return self.localInfoMut(s.target).markAll(self.allocator),
+            .boxy_tag_match,
+            .store_struct,
+            .store_tag,
+            .debug,
+            .expect,
             .expect_err,
-            .jump,
-            .crash,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .loop_continue,
-            .loop_break,
-            => {},
+            .comptime_branch_taken,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .join,
+            .jump,
+            .crash,
+            => return false,
         }
-        return changed;
     }
 
     fn mergeRef(self: *Pass, target: LIR.LocalId, op: LIR.RefOp) Allocator.Error!bool {
@@ -380,153 +341,9 @@ const Pass = struct {
         return changed;
     }
 
-    fn collectUseCounts(self: *Pass) Allocator.Error!void {
+    fn collectUseCounts(self: *Pass) void {
         @memset(self.use_counts, 0);
-        for (0..self.store.cfStmtCount()) |stmt_index| {
-            const stmt = self.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-            try self.countStmtUses(stmt);
-        }
-    }
-
-    fn countStmtUses(self: *Pass, stmt: LIR.CFStmt) Allocator.Error!void {
-        switch (stmt) {
-            .assign_ref => |s| {
-                switch (s.op) {
-                    .local => |source| self.noteUse(source),
-                    inline .discriminant, .field, .tag_payload, .tag_payload_struct => |ref| self.noteUse(ref.source),
-                    inline .list_reinterpret, .nominal => |ref| self.noteUse(ref.backing_ref),
-                }
-            },
-            .assign_call => |s| {
-                if (s.result_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
-                const args = self.store.getLocalSpan(s.args);
-                for (0..args.len) |index| self.noteUse(GuardedList.at(args, index));
-            },
-            .assign_call_erased => |s| {
-                self.noteUse(s.closure);
-                if (s.result_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
-                if (s.reuse_source) |reuse_source| self.noteUse(reuse_source);
-                const args = self.store.getLocalSpan(s.args);
-                for (0..args.len) |index| self.noteUse(GuardedList.at(args, index));
-            },
-            .assign_packed_erased_fn => |s| {
-                if (s.capture) |capture| self.noteUse(capture);
-                if (s.result_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
-                if (s.reuse) |reuse| self.noteUse(reuse);
-            },
-            .assign_boxy_desc_ref => |s| {
-                if (s.desc.localOrNull()) |local| self.noteUse(local);
-                if (s.tag_residual_for) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
-                const captures = self.store.getLocalSpan(s.captures);
-                for (0..captures.len) |index| self.noteUse(GuardedList.at(captures, index));
-            },
-            .assign_boxy_dict_ref => |s| {
-                if (s.dict.localOrNull()) |local| self.noteUse(local);
-                const captures = self.store.getLocalSpan(s.captures);
-                for (0..captures.len) |index| self.noteUse(GuardedList.at(captures, index));
-            },
-            .assign_boxy_box => |s| {
-                self.noteUse(s.payload);
-                if (s.payload_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
-            },
-            .assign_boxy_record_update => |s| {
-                self.noteUse(s.base);
-                self.noteUse(s.fields);
-                if (s.base_desc.localOrNull()) |local| self.noteUse(local);
-                if (s.fields_desc.localOrNull()) |local| self.noteUse(local);
-            },
-            .assign_boxy_reuse_box => |s| {
-                self.noteUse(s.source);
-                if (s.desc.localOrNull()) |local| self.noteUse(local);
-            },
-            .assign_boxy_unbox => |s| {
-                self.noteUse(s.source);
-                if (s.source_desc.localOrNull()) |local| self.noteUse(local);
-                if (s.target_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
-            },
-            .assign_boxy_adapt => |s| {
-                self.noteUse(s.source);
-                if (s.source_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
-                if (s.target_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
-            },
-            inline .assign_boxy_inspect, .assign_boxy_tag_payload, .boxy_tag_match => |s| {
-                self.noteUse(s.source);
-                if (s.source_desc.localOrNull()) |local| self.noteUse(local);
-            },
-            .assign_boxy_eq => |s| {
-                self.noteUse(s.lhs);
-                self.noteUse(s.rhs);
-                if (s.desc.localOrNull()) |local| self.noteUse(local);
-            },
-            .assign_boxy_hash => |s| {
-                self.noteUse(s.value);
-                self.noteUse(s.hasher);
-                if (s.desc.localOrNull()) |local| self.noteUse(local);
-            },
-            .assign_boxy_tag => |s| {
-                if (s.target_desc.localOrNull()) |local| self.noteUse(local);
-                if (s.payload) |payload| self.noteUse(payload);
-                if (s.payload_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
-            },
-            .assign_call_dict => |s| {
-                if (s.dict.localOrNull()) |local| self.noteUse(local);
-                const args = self.store.getLocalSpan(s.args);
-                for (0..args.len) |index| self.noteUse(GuardedList.at(args, index));
-                const arg_descs = self.store.getLocalSpan(s.arg_descs);
-                for (0..arg_descs.len) |index| self.noteUse(GuardedList.at(arg_descs, index));
-                const hidden_args = self.store.getLocalSpan(s.hidden_args);
-                for (0..hidden_args.len) |index| self.noteUse(GuardedList.at(hidden_args, index));
-            },
-            .assign_low_level => |s| {
-                const args = self.store.getLocalSpan(s.args);
-                for (0..args.len) |index| self.noteUse(GuardedList.at(args, index));
-            },
-            .assign_list => |s| {
-                const elems = self.store.getLocalSpan(s.elems);
-                for (0..elems.len) |index| self.noteUse(GuardedList.at(elems, index));
-            },
-            .assign_struct => |s| {
-                const fields = self.store.getLocalSpan(s.fields);
-                for (0..fields.len) |index| self.noteUse(GuardedList.at(fields, index));
-            },
-            .assign_tag => |s| {
-                if (s.target_desc) |desc| if (desc.localOrNull()) |local| self.noteUse(local);
-                if (s.payload) |payload| self.noteUse(payload);
-            },
-            .store_struct => |s| {
-                self.noteUse(s.dest);
-                const fields = self.store.getLocalSpan(s.fields);
-                for (0..fields.len) |index| self.noteUse(GuardedList.at(fields, index));
-            },
-            .store_tag => |s| {
-                self.noteUse(s.dest);
-                if (s.payload) |payload| self.noteUse(payload);
-            },
-            inline .set_local, .ret, .incref, .decref, .free => |s| self.noteUse(s.value),
-            inline .debug, .expect_err => |s| self.noteUse(s.message),
-            .expect => |s| self.noteUse(s.condition),
-            .switch_stmt => |s| self.noteUse(s.cond),
-            .switch_initialized_payload => |s| {
-                self.noteUse(s.cond);
-                self.noteUse(s.payload);
-            },
-            inline .str_match, .str_match_set => |s| self.noteUse(s.source),
-            .crash => |s| if (s.msg.localId()) |message| self.noteUse(message),
-            .decref_if_initialized => |s| {
-                self.noteUse(s.cond);
-                self.noteUse(s.value);
-            },
-            .init_uninitialized,
-            .assign_literal,
-            .comptime_branch_taken,
-            .join,
-            .jump,
-            .runtime_error,
-            .comptime_exhaustiveness_failed,
-            .loop_continue,
-            .loop_break,
-            => {},
-        }
+        for (self.store.getCFStmts()) |stmt| BodyClone.forEachStmtRead(self.store, stmt, self, noteUse);
     }
 
     fn rewriteSwitches(self: *Pass) Allocator.Error!void {
@@ -595,7 +412,7 @@ const Pass = struct {
         }
     }
 
-    fn patchRedirects(self: *Pass) Allocator.Error!void {
+    fn patchRedirects(self: *Pass) void {
         if (self.redirects.count() == 0) return;
 
         for (0..self.store.procSpecCount()) |proc_index| {
@@ -608,88 +425,8 @@ const Pass = struct {
             }
         }
 
-        var stmt_index: usize = 0;
-        while (stmt_index < self.store.cfStmtCount()) : (stmt_index += 1) {
-            const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index))));
-            const stmt = self.store.getCFStmtPtr(stmt_id);
-            switch (stmt.*) {
-                .init_uninitialized => |*s| s.next = self.resolveRedirect(s.next),
-                .assign_ref => |*s| s.next = self.resolveRedirect(s.next),
-                .assign_literal => |*s| s.next = self.resolveRedirect(s.next),
-                .assign_call => |*s| s.next = self.resolveRedirect(s.next),
-                .assign_call_erased => |*s| s.next = self.resolveRedirect(s.next),
-                .assign_packed_erased_fn => |*s| s.next = self.resolveRedirect(s.next),
-                .assign_boxy_desc_ref => |*s| s.next = self.resolveRedirect(s.next),
-                .assign_boxy_dict_ref => |*s| s.next = self.resolveRedirect(s.next),
-                .assign_boxy_box => |*s| s.next = self.resolveRedirect(s.next),
-                .assign_boxy_record_update => |*s| s.next = self.resolveRedirect(s.next),
-                .assign_boxy_reuse_box => |*s| s.next = self.resolveRedirect(s.next),
-                .assign_boxy_unbox => |*s| s.next = self.resolveRedirect(s.next),
-                .assign_boxy_adapt => |*s| s.next = self.resolveRedirect(s.next),
-                .assign_boxy_inspect => |*s| s.next = self.resolveRedirect(s.next),
-                .assign_boxy_eq => |*s| s.next = self.resolveRedirect(s.next),
-                .assign_boxy_hash => |*s| s.next = self.resolveRedirect(s.next),
-                .assign_boxy_tag => |*s| s.next = self.resolveRedirect(s.next),
-                .assign_boxy_tag_payload => |*s| s.next = self.resolveRedirect(s.next),
-                inline .boxy_tag_match, .str_match => |*s| {
-                    s.on_match = self.resolveRedirect(s.on_match);
-                    s.on_miss = self.resolveRedirect(s.on_miss);
-                },
-                .assign_call_dict => |*s| s.next = self.resolveRedirect(s.next),
-                .assign_low_level => |*s| s.next = self.resolveRedirect(s.next),
-                .assign_list => |*s| s.next = self.resolveRedirect(s.next),
-                .assign_struct => |*s| s.next = self.resolveRedirect(s.next),
-                .assign_tag => |*s| s.next = self.resolveRedirect(s.next),
-                .store_struct => |*s| s.next = self.resolveRedirect(s.next),
-                .store_tag => |*s| s.next = self.resolveRedirect(s.next),
-                .set_local => |*s| s.next = self.resolveRedirect(s.next),
-                .debug => |*s| s.next = self.resolveRedirect(s.next),
-                .expect => |*s| s.next = self.resolveRedirect(s.next),
-                .comptime_branch_taken => |*s| s.next = self.resolveRedirect(s.next),
-                .incref => |*s| s.next = self.resolveRedirect(s.next),
-                .decref => |*s| s.next = self.resolveRedirect(s.next),
-                .decref_if_initialized => |*s| s.next = self.resolveRedirect(s.next),
-                .free => |*s| s.next = self.resolveRedirect(s.next),
-                .switch_stmt => |*s| {
-                    const branches = self.store.getCFSwitchBranchesMut(s.branches);
-                    for (0..branches.len) |index| {
-                        const branch = GuardedList.atPtr(branches, index);
-                        branch.body = self.resolveRedirect(branch.body);
-                    }
-                    s.default_branch = self.resolveRedirect(s.default_branch);
-                    if (s.continuation) |continuation| s.continuation = self.resolveRedirect(continuation);
-                },
-                .switch_initialized_payload => |*s| {
-                    s.initialized_branch = self.resolveRedirect(s.initialized_branch);
-                    s.uninitialized_branch = self.resolveRedirect(s.uninitialized_branch);
-                },
-                .str_match_set => |*s| {
-                    const arms = self.store.getStrMatchArms(s.arms);
-                    const rewritten = try self.allocator.alloc(LIR.StrMatchArm, arms.len);
-                    defer self.allocator.free(rewritten);
-                    for (0..arms.len) |index| {
-                        const arm = GuardedList.at(arms, index);
-                        const out = &rewritten[index];
-                        out.* = arm;
-                        out.on_match = self.resolveRedirect(arm.on_match);
-                    }
-                    s.arms = try self.store.addStrMatchArms(rewritten);
-                    s.on_miss = self.resolveRedirect(s.on_miss);
-                },
-                .join => |*s| {
-                    s.body = self.resolveRedirect(s.body);
-                    s.remainder = self.resolveRedirect(s.remainder);
-                },
-                .ret,
-                .expect_err,
-                .jump,
-                .crash,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
-                .loop_continue,
-                .loop_break,
-                => {},
-            }
+        for (0..self.store.cfStmtCount()) |stmt_index| {
+            BodyClone.redirectSuccessors(self.store, @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))), self, resolveRedirect);
         }
     }
 
@@ -710,10 +447,6 @@ const Pass = struct {
 
     fn localInfoMut(self: *Pass, local: LIR.LocalId) *ValueInfo {
         return &self.local_info[@backingInt(local)];
-    }
-
-    fn pushStmt(self: *Pass, stmt: LIR.CFStmtId) Allocator.Error!void {
-        try self.stack.append(self.allocator, stmt);
     }
 
     fn noteUse(self: *Pass, local: LIR.LocalId) void {
@@ -850,10 +583,10 @@ test "tag reachability bypasses call result and direct payload switches" {
 
     try run(&f.result);
 
-    const call_stmt = store.getCFStmt(caller_body).assign_call;
+    const call_stmt = store.getCFStmtImmediate(caller_body).assign_call;
     try testing.expectEqual(read_payload, call_stmt.next);
 
-    const payload_stmt = store.getCFStmt(read_payload).assign_ref;
+    const payload_stmt = store.getCFStmtImmediate(read_payload).assign_ref;
     try testing.expectEqual(success, payload_stmt.next);
 }
 
@@ -950,7 +683,7 @@ test "tag reachability tracks per-payload tags through payload structs" {
 
     try run(&f.result);
 
-    const payload_stmt = store.getCFStmt(read_payload).assign_ref;
+    const payload_stmt = store.getCFStmtImmediate(read_payload).assign_ref;
     try testing.expectEqual(success, payload_stmt.next);
 }
 
@@ -1075,8 +808,8 @@ test "tag reachability preserves nested tag variants extracted across a loop joi
 
     try run(&f.result);
 
-    try testing.expectEqual(disc_read, store.getCFStmt(read_loop_inner).assign_ref.next);
-    const branches = store.getCFSwitchBranches(store.getCFStmt(switch_stmt).switch_stmt.branches);
+    try testing.expectEqual(disc_read, store.getCFStmtImmediate(read_loop_inner).assign_ref.next);
+    const branches = store.getCFSwitchBranches(store.getCFStmtImmediate(switch_stmt).switch_stmt.branches);
     try testing.expectEqual(@as(usize, 2), branches.len);
 }
 
@@ -1128,7 +861,7 @@ test "tag reachability removes impossible explicit branches from multi-value set
 
     try run(&f.result);
 
-    const rewritten = store.getCFStmt(switch_stmt).switch_stmt;
+    const rewritten = store.getCFStmtImmediate(switch_stmt).switch_stmt;
     const branches = store.getCFSwitchBranches(rewritten.branches);
     try testing.expectEqual(@as(usize, 1), branches.len);
     try testing.expectEqual(@as(u64, 0), GuardedList.at(branches, 0).value);
@@ -1186,10 +919,10 @@ test "tag reachability keeps unrelated live discriminant reads" {
 
     try run(&f.result);
 
-    const other_disc_stmt = store.getCFStmt(other_disc_read).assign_ref;
+    const other_disc_stmt = store.getCFStmtImmediate(other_disc_read).assign_ref;
     try testing.expectEqual(disc_read, other_disc_stmt.next);
 
-    const disc_stmt = store.getCFStmt(disc_read).assign_ref;
+    const disc_stmt = store.getCFStmtImmediate(disc_read).assign_ref;
     try testing.expectEqual(ret_stmt, disc_stmt.next);
 }
 
@@ -1228,10 +961,10 @@ test "tag reachability retains branches for arg-derived tags" {
 
     try run(&f.result);
 
-    const read_stmt = store.getCFStmt(body).assign_ref;
+    const read_stmt = store.getCFStmtImmediate(body).assign_ref;
     try testing.expectEqual(switch_stmt, read_stmt.next);
 
-    const rewritten = store.getCFStmt(switch_stmt).switch_stmt;
+    const rewritten = store.getCFStmtImmediate(switch_stmt).switch_stmt;
     const branches = store.getCFSwitchBranches(rewritten.branches);
     try testing.expectEqual(@as(usize, 2), branches.len);
 }
@@ -1285,10 +1018,10 @@ test "tag reachability retains branches for hosted call results" {
 
     try run(&f.result);
 
-    const call_stmt = store.getCFStmt(body).assign_call;
+    const call_stmt = store.getCFStmtImmediate(body).assign_call;
     try testing.expectEqual(disc_read, call_stmt.next);
 
-    const read_stmt = store.getCFStmt(disc_read).assign_ref;
+    const read_stmt = store.getCFStmtImmediate(disc_read).assign_ref;
     try testing.expectEqual(switch_stmt, read_stmt.next);
 }
 
@@ -1332,9 +1065,9 @@ test "tag reachability retains branches for erased call results" {
 
     try run(&f.result);
 
-    const call_stmt = store.getCFStmt(body).assign_call_erased;
+    const call_stmt = store.getCFStmtImmediate(body).assign_call_erased;
     try testing.expectEqual(disc_read, call_stmt.next);
 
-    const read_stmt = store.getCFStmt(disc_read).assign_ref;
+    const read_stmt = store.getCFStmtImmediate(disc_read).assign_ref;
     try testing.expectEqual(switch_stmt, read_stmt.next);
 }
