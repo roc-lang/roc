@@ -2188,6 +2188,9 @@ fn generateReportingSections(output: *DualOutput, reports: *const std.array_list
         name: []const u8,
         language: []const u8,
         html_is_markup: bool = false,
+        /// Each report is its own message (an LSP diagnostic), so consecutive
+        /// reports are set apart by a blank line rather than run together.
+        separates_reports: bool = false,
         render: *const fn (*const reporting.Report, *std.Io.Writer, reporting.ReportingConfig) (Allocator.Error || error{WriteFailed})!void,
         config: reporting.ReportingConfig,
     };
@@ -2195,7 +2198,7 @@ fn generateReportingSections(output: *DualOutput, reports: *const std.array_list
         .{ .name = "CLI", .language = "text", .render = reporting.renderReportToPlain, .config = reporting.ReportingConfig.initColorTerminal() },
         .{ .name = "MARKDOWN", .language = "markdown", .render = reporting.renderReportToMarkdown, .config = reporting.ReportingConfig.initMarkdown() },
         .{ .name = "HTML", .language = "html", .html_is_markup = true, .render = reporting.renderReportToHtml, .config = reporting.ReportingConfig.initHtml() },
-        .{ .name = "LSP", .language = "text", .render = reporting.renderReportToLsp, .config = reporting.ReportingConfig.initLsp() },
+        .{ .name = "LSP", .language = "text", .separates_reports = true, .render = reporting.renderReportToLsp, .config = reporting.ReportingConfig.initLsp() },
     };
 
     for (renderer_sections) |section| {
@@ -2206,7 +2209,12 @@ fn generateReportingSections(output: *DualOutput, reports: *const std.array_list
         } else {
             try output.begin_code_block(section.language);
             const payload_start = output.md_writer.written().len;
-            for (reports.items) |*report| {
+            for (reports.items, 0..) |*report, report_index| {
+                if (section.separates_reports and report_index > 0) {
+                    const writer = &output.md_writer.writer;
+                    if (writer.buffer[writer.end - 1] != '\n') try writer.writeAll("\n");
+                    try writer.writeAll("\n");
+                }
                 section.render(report, &output.md_writer.writer, section.config) catch |err| {
                     std.debug.panic("Failed to render report for {s} section: {s}", .{ section.name, @errorName(err) });
                 };
