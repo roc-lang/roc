@@ -48,17 +48,19 @@ const DispatchExprTag = enum {
     e_method_eq,
 };
 
-fn typeDispatchOwnerVar(module: TypedCIR.Module, stmt_idx: CIR.Statement.Idx) Var {
-    const stmt = module.getStatement(stmt_idx);
+/// The dispatcher variable a type-dispatch owner statement declares.
+pub fn typeDispatchOwnerVar(env: *const ModuleEnv, stmt_idx: CIR.Statement.Idx) Var {
+    const stmt = env.store.getStatement(stmt_idx);
     const tag = std.meta.activeTag(stmt);
     if (tag == .s_type_var_alias) return ModuleEnv.varFrom(stmt.s_type_var_alias.type_var_anno);
     if (tag == .s_alias_decl) return ModuleEnv.varFrom(stmt_idx);
     base.invariant("{s}", .{"type dispatch owner statement was not a type-var alias or type alias"});
 }
 
-fn typeDispatchCallDispatcherVar(module: TypedCIR.Module, owner: CIR.TypeDispatchOwner) Var {
+/// The dispatcher variable a type-dispatch call dispatches on.
+pub fn typeDispatchCallDispatcherVar(env: *const ModuleEnv, owner: CIR.TypeDispatchOwner) Var {
     return switch (owner) {
-        .statement => |stmt_idx| typeDispatchOwnerVar(module, stmt_idx),
+        .statement => |stmt_idx| typeDispatchOwnerVar(env, stmt_idx),
         .dispatcher => |dispatcher| dispatcher,
     };
 }
@@ -118,10 +120,10 @@ pub const ProcedureTemplateLookupEntry = struct {
 /// Public `MethodOwner` declaration.
 ///
 /// A method owner is identified by CONTENT: the declaring module's deep
-/// content identity plus the declared type name (see `base.module_identity`
-/// and `canonical.NominalTypeKey`). Statement indices and module name text
-/// never participate. Compiler-builtin owners keep their dedicated enum so
-/// builtin dispatch stays exact across differently-spelled builtin idents.
+/// content identity plus the declaring statement (see `base.module_identity`
+/// and `canonical.NominalTypeKey`). Type and module name text never
+/// participate. Compiler-builtin owners keep their dedicated enum so builtin
+/// dispatch stays exact across differently-spelled builtin idents.
 pub const MethodOwner = union(enum) {
     nominal: canonical.NominalTypeKey,
     builtin: BuiltinOwner,
@@ -1225,13 +1227,8 @@ fn methodOwnerForRegistryEntry(
         }
         unreachable;
     };
-    const stmt = owner_env.store.getStatement(owner.owner);
-    const stmt_tag = std.meta.activeTag(stmt);
-    const header_idx = if (stmt_tag == .s_nominal_decl)
-        stmt.s_nominal_decl.header
-    else if (stmt_tag == .s_alias_decl)
-        stmt.s_alias_decl.header
-    else {
+    const stmt_tag = std.meta.activeTag(owner_env.store.getStatement(owner.owner));
+    if (stmt_tag != .s_nominal_decl and stmt_tag != .s_alias_decl) {
         if (@import("builtin").mode == .debug) {
             base.invariant(
                 "checked static dispatch registry invariant violated: method owner statement {d} is not a type declaration",
@@ -1239,11 +1236,9 @@ fn methodOwnerForRegistryEntry(
             );
         }
         unreachable;
-    };
-    const header = owner_env.store.getTypeHeader(header_idx);
+    }
     return .{ .nominal = .{
         .module = try names.internModuleIdentity(identity_hash),
-        .type_name = try names.internTypeIdent(owner_env.getIdentStoreConst(), header.relative_name),
         .source_decl = @backingInt(owner.owner),
     } };
 }
@@ -1396,21 +1391,18 @@ fn methodOwnerOrder(a: MethodOwner, b: MethodOwner) std.math.Order {
 /// A fully-defined scalar projection of a `MethodOwner` for ordering.
 /// Comparing the union directly reads memory whose inactive-variant bytes are
 /// undefined for runtime-built registries and stack keys; projecting first
-/// writes every compared scalar explicitly. The order matches the previous
-/// per-variant comparison (nominal < builtin; module identity then type name;
-/// `source_decl == null` sorts before any value), so registries sorted by
-/// earlier builds search identically.
+/// writes every compared scalar explicitly. Nominal owners sort before
+/// builtin owners, and nominal owners by module identity then declaring
+/// statement.
 const MethodOwnerSortKey = struct {
     tag: u32,
     first: u32,
     second: u32,
-    third: u32,
 
     fn order(a: @This(), b: @This()) std.math.Order {
         if (a.tag != b.tag) return orderU32(a.tag, b.tag);
         if (a.first != b.first) return orderU32(a.first, b.first);
-        if (a.second != b.second) return orderU32(a.second, b.second);
-        return orderU32(a.third, b.third);
+        return orderU32(a.second, b.second);
     }
 };
 
@@ -1419,15 +1411,12 @@ fn methodOwnerSortKey(owner: MethodOwner) MethodOwnerSortKey {
         .nominal => |nominal| .{
             .tag = 0,
             .first = @backingInt(nominal.module),
-            .second = @backingInt(nominal.type_name),
-            // null sorts before any statement value.
-            .third = if (nominal.source_decl) |source_decl| source_decl +| 1 else 0,
+            .second = nominal.source_decl,
         },
         .builtin => |builtin_owner| .{
             .tag = 1,
             .first = @backingInt(builtin_owner),
             .second = 0,
-            .third = 0,
         },
     };
 }
@@ -1928,6 +1917,13 @@ pub const GeneratedCodecDerivationKind = enum(u8) {
 /// Stable index of a checked generated-codec derivation contract.
 pub const GeneratedCodecDerivationId = enum(u32) { _ };
 
+/// SHA-256 of a generated codec contract's complete proof graph, encoded
+/// without module-local ids: equal digests denote equivalent contracts even
+/// when different checked modules recorded them.
+pub const GeneratedCodecContentDigest = struct {
+    bytes: [32]u8 = @splat(0),
+};
+
 /// The exact checked resolution of one compiler-generated codec call.
 /// `pending` exists only while CheckedModule publication links the checker
 /// snapshot to its target evidence or nested structural derivation.
@@ -1956,6 +1952,10 @@ pub const GeneratedCodecDerivation = struct {
     /// Producer-proven equivalence class of the complete codec proof graph.
     /// Source/frozen roles remain specific to this contract for replay.
     identity: GeneratedCodecDerivationId,
+    /// Identity of the equivalence class across checked modules. Specialization
+    /// identity names a contract by this digest, never by the module that
+    /// recorded it.
+    content: GeneratedCodecContentDigest = .{},
     kind: GeneratedCodecDerivationKind,
     source_constructor_ty: CheckedTypeId,
     source_runtime_ty: CheckedTypeId,
@@ -2296,13 +2296,13 @@ pub const StaticDispatchPlanTable = struct {
                         .expr = checked_expr,
                         .method = try names.internMethodIdent(idents, dispatch_call.method_name),
                         .dispatcher = .type_only,
-                        .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, typeDispatchCallDispatcherVar(module, dispatch_call.owner)),
+                        .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, typeDispatchCallDispatcherVar(module.moduleEnvConst(), dispatch_call.owner)),
                         .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, dispatch_call.constraint_fn_var),
                         .args = ar,
                         .result_mode = try staticDispatchResultModeForCheckedValueCall(allocator, module, checked_types, &constraint_index, dispatch_call.method_name, dispatch_call.constraint_fn_var),
                     });
                     try plan_sources.append(allocator, .{
-                        .dispatcher_var = typeDispatchCallDispatcherVar(module, dispatch_call.owner),
+                        .dispatcher_var = typeDispatchCallDispatcherVar(module.moduleEnvConst(), dispatch_call.owner),
                         .constraint_fn_var = dispatch_call.constraint_fn_var,
                     });
                 },
@@ -3124,7 +3124,6 @@ fn methodOwnerForCheckedPayload(payload: anytype) ?MethodOwner {
     const nominal = payload.nominal;
     const nominal_owner: MethodOwner = .{ .nominal = .{
         .module = nominal.origin_module,
-        .type_name = nominal.name,
         .source_decl = nominal.source_decl,
     } };
     const builtin = nominal.builtin orelse return nominal_owner;
@@ -3206,8 +3205,8 @@ pub fn lookupCheckedMethodTarget(
 
 /// Rebase a method owner into an imported artifact's store: the module
 /// component crosses by 32-byte content identity (one map probe, full-value
-/// comparison), the type-name component by declared-name interning. This is
-/// the single cross-artifact owner resolution point—no module name text.
+/// comparison); the declaring statement is the same in every store. This is
+/// the single cross-artifact owner resolution point—no name text.
 pub fn methodOwnerInImportedStore(
     source_names: *const canonical.CanonicalNameStore,
     imported_names: *const canonical.CanonicalNameStore,
@@ -3217,7 +3216,6 @@ pub fn methodOwnerInImportedStore(
         .builtin => |builtin| .{ .builtin = builtin },
         .nominal => |nominal| .{ .nominal = .{
             .module = imported_names.lookupModuleIdentity(source_names.moduleIdentityBytes(nominal.module)) orelse return null,
-            .type_name = imported_names.lookupTypeName(source_names.typeNameText(nominal.type_name)) orelse return null,
             .source_decl = nominal.source_decl,
         } },
     };

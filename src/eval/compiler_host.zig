@@ -9,13 +9,45 @@ const RocOps = builtins.host_abi.RocOps;
 
 const CompilerHost = @This();
 
-const Allocation = struct {
+/// Bookkeeping stored immediately before every allocation handed to Roc
+/// code, so a free or reallocation reads the block's size back from the
+/// block itself and the live blocks form a list that `deinit` can release,
+/// without a lookup table touched on every allocation.
+const Header = extern struct {
+    prev: ?*Header,
+    next: ?*Header,
     size: usize,
     alignment: usize,
+
+    /// The payload follows the header at this offset, which keeps every
+    /// supported payload alignment because the block itself is aligned to
+    /// `block_alignment`.
+    const payload_offset = @sizeOf(Header);
+    const block_alignment: std.mem.Alignment = .@"16";
+
+    comptime {
+        std.debug.assert(payload_offset % 16 == 0);
+    }
+
+    fn fromPayload(ptr: *anyopaque) *Header {
+        const bytes: [*]u8 = @ptrCast(ptr);
+        return @ptrCast(@alignCast(bytes - payload_offset));
+    }
+
+    fn payload(self: *Header) [*]u8 {
+        const bytes: [*]u8 = @ptrCast(self);
+        return bytes + payload_offset;
+    }
+
+    fn block(self: *Header) []align(16) u8 {
+        const bytes: [*]align(16) u8 = @ptrCast(@alignCast(self));
+        return bytes[0 .. payload_offset + self.size];
+    }
 };
 
 allocator: std.mem.Allocator,
-allocations: std.AutoHashMap(usize, Allocation),
+/// The most recently allocated live block; blocks link through their headers.
+live_blocks: ?*Header = null,
 debug_messages: std.ArrayList([]u8) = .empty,
 roc_ops: ?RocOps = null,
 /// How an allocation failure leaves the evaluation this host serves. The
@@ -27,7 +59,6 @@ expect_message: ?[]u8 = null,
 pub fn init(allocator: std.mem.Allocator) CompilerHost {
     return .{
         .allocator = allocator,
-        .allocations = std.AutoHashMap(usize, Allocation).init(allocator),
     };
 }
 
@@ -35,7 +66,6 @@ pub fn deinit(self: *CompilerHost) void {
     self.freeRemainingAllocations();
     self.clearDebugMessages();
     self.debug_messages.deinit(self.allocator);
-    self.allocations.deinit();
     if (self.expect_message) |msg| self.allocator.free(msg);
     self.* = CompilerHost.init(self.allocator);
 }
@@ -77,41 +107,53 @@ pub fn clearDebugMessages(self: *CompilerHost) void {
 
 fn rocAlloc(roc_ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
     const self: *CompilerHost = @ptrCast(@alignCast(roc_ops.env));
-    const allocation: Allocation = .{ .size = length, .alignment = alignment };
-    const ptr = allocateBytes(self.allocator, length, alignment) orelse self.outOfMemory();
-    self.allocations.put(@intFromPtr(ptr), allocation) catch {
-        freeBytes(self.allocator, ptr, allocation);
-        self.outOfMemory();
-    };
-    return @ptrCast(ptr);
+    const header = self.allocateBlock(length, alignment) orelse self.outOfMemory();
+    return @ptrCast(header.payload());
 }
 
 fn rocDealloc(roc_ops: *RocOps, ptr: *anyopaque, _: usize) callconv(.c) void {
     const self: *CompilerHost = @ptrCast(@alignCast(roc_ops.env));
-    const removed = self.allocations.fetchRemove(@intFromPtr(ptr)) orelse
-        base.invariant("{s}", .{"compiler RocOps deallocated unknown pointer"});
-    freeBytes(self.allocator, ptr, removed.value);
+    self.freeBlock(Header.fromPayload(ptr));
 }
 
 fn rocRealloc(roc_ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     const self: *CompilerHost = @ptrCast(@alignCast(roc_ops.env));
-    const old_ptr = ptr;
-    const allocation: Allocation = .{ .size = new_length, .alignment = alignment };
+    const old_header = Header.fromPayload(ptr);
 
-    // Allocate the new block before touching the tracking map, so a failure
-    // leaves the old allocation intact and tracked.
-    const new_ptr = allocateBytes(self.allocator, new_length, alignment) orelse self.outOfMemory();
-    const removed = self.allocations.fetchRemove(@intFromPtr(old_ptr)) orelse
-        base.invariant("{s}", .{"compiler RocOps reallocated unknown pointer"});
-    const old_bytes: [*]u8 = @ptrCast(@alignCast(old_ptr));
-    @memcpy(new_ptr[0..@min(removed.value.size, new_length)], old_bytes[0..@min(removed.value.size, new_length)]);
-    freeBytes(self.allocator, old_ptr, removed.value);
+    // Allocate the new block before releasing the old one, so a failure
+    // leaves the old allocation intact and live.
+    const new_header = self.allocateBlock(new_length, alignment) orelse self.outOfMemory();
+    const copied = @min(old_header.size, new_length);
+    @memcpy(new_header.payload()[0..copied], old_header.payload()[0..copied]);
+    self.freeBlock(old_header);
+    return @ptrCast(new_header.payload());
+}
 
-    self.allocations.put(@intFromPtr(new_ptr), allocation) catch {
-        freeBytes(self.allocator, new_ptr, allocation);
-        self.outOfMemory();
-    };
-    return @ptrCast(new_ptr);
+/// Allocate a live block for a payload of `size` bytes at `alignment`.
+fn allocateBlock(self: *CompilerHost, size: usize, alignment: usize) ?*Header {
+    switch (alignment) {
+        1, 2, 4, 8, 16 => {},
+        else => base.invariant("{s}", .{"unsupported compiler RocOps allocation alignment"}),
+    }
+    const block = self.allocator.alignedAlloc(u8, Header.block_alignment, Header.payload_offset + size) catch return null;
+    const header: *Header = @ptrCast(@alignCast(block.ptr));
+    header.* = .{ .prev = null, .next = self.live_blocks, .size = size, .alignment = alignment };
+    if (self.live_blocks) |next| next.prev = header;
+    self.live_blocks = header;
+    return header;
+}
+
+/// Unlink and free one live block.
+fn freeBlock(self: *CompilerHost, header: *Header) void {
+    if (std.debug.runtime_safety) {
+        var cursor = self.live_blocks;
+        while (cursor) |live| : (cursor = live.next) {
+            if (live == header) break;
+        } else base.invariant("{s}", .{"compiler RocOps released a pointer it did not allocate"});
+    }
+    if (header.prev) |prev| prev.next = header.next else self.live_blocks = header.next;
+    if (header.next) |next| next.prev = header.prev;
+    self.allocator.free(header.block());
 }
 
 /// Turn an allocation failure into a Roc crash that unwinds the bound
@@ -144,36 +186,8 @@ fn rocCrashed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
 }
 
 /// Returns null on allocation failure (OOM).
-fn allocateBytes(allocator: std.mem.Allocator, len: usize, alignment: usize) ?[*]u8 {
-    return switch (alignment) {
-        1 => (allocator.alignedAlloc(u8, .@"1", len) catch return null).ptr,
-        2 => (allocator.alignedAlloc(u8, .@"2", len) catch return null).ptr,
-        4 => (allocator.alignedAlloc(u8, .@"4", len) catch return null).ptr,
-        8 => (allocator.alignedAlloc(u8, .@"8", len) catch return null).ptr,
-        16 => (allocator.alignedAlloc(u8, .@"16", len) catch return null).ptr,
-        else => base.invariant("{s}", .{"unsupported compiler RocOps allocation alignment"}),
-    };
-}
-
-fn freeBytes(allocator: std.mem.Allocator, ptr: *anyopaque, allocation: Allocation) void {
-    const bytes: [*]u8 = @ptrCast(@alignCast(ptr));
-    switch (allocation.alignment) {
-        1 => allocator.free(bytes[0..allocation.size]),
-        2 => allocator.free((@as([*]align(2) u8, @alignCast(bytes)))[0..allocation.size]),
-        4 => allocator.free((@as([*]align(4) u8, @alignCast(bytes)))[0..allocation.size]),
-        8 => allocator.free((@as([*]align(8) u8, @alignCast(bytes)))[0..allocation.size]),
-        16 => allocator.free((@as([*]align(16) u8, @alignCast(bytes)))[0..allocation.size]),
-        else => base.invariant("{s}", .{"unsupported compiler RocOps free alignment"}),
-    }
-}
-
 fn freeRemainingAllocations(self: *CompilerHost) void {
-    var iterator = self.allocations.iterator();
-    while (iterator.next()) |entry| {
-        const ptr: *anyopaque = @ptrFromInt(entry.key_ptr.*);
-        freeBytes(self.allocator, ptr, entry.value_ptr.*);
-    }
-    self.allocations.clearRetainingCapacity();
+    while (self.live_blocks) |header| self.freeBlock(header);
 }
 
 test "compiler host declarations are referenced" {

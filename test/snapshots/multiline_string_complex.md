@@ -80,7 +80,7 @@ TYPE NOT DETERMINED - multiline_string_complex.md:37:3:37:4
 		(title "Type Not Determined")
 		(region (start 37 3) (end 37 4))
 		(headline
-			(reflow "Nothing in this program determines the type of this number:"))
+			(reflow "Nothing in this program determines the type of this number."))
 		(document
 			(source-region (file "multiline_string_complex.md") (start 37 3) (end 37 4) (annotation error) (line-text "\t\t0 - \\\\"))
 			(line-break)
@@ -283,14 +283,12 @@ With multiple lines
 							(e-string
 								(e-literal (string "multiline"))))))
 				(field (name "d")
-					(e-dispatch-call (method "minus") (constraint-fn-var 355)
-						(receiver
-							(e-runtime-error (tag "erroneous_value_expr")))
-						(args
-							(e-string))))
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-num (value "0"))
+						(e-string)))
 				(field (name "e")
 					(e-call (constraint-fn-var 370)
-						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18187") (target-def "18187"))
+						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18231") (target-def "18231"))
 						(e-runtime-error (tag "erroneous_value_expr")))))))
 	(d-let
 		(p-assign (ident "x"))

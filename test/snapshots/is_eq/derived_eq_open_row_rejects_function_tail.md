@@ -141,22 +141,7 @@ x = same(Fn(|z| z), Fn(|z| z))
 									(p-assign (ident "b"))))))))))
 	(d-let
 		(p-assign (ident "x"))
-		(e-call (constraint-fn-var 267)
-			(e-runtime-error (tag "erroneous_value_expr"))
-			(e-tag (name "Fn")
-				(args
-					(e-lambda
-						(args
-							(p-assign (ident "z")))
-						(e-lookup-local
-							(p-assign (ident "z"))))))
-			(e-tag (name "Fn")
-				(args
-					(e-lambda
-						(args
-							(p-assign (ident "z")))
-						(e-lookup-local
-							(p-assign (ident "z")))))))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure

@@ -304,7 +304,20 @@ pub const Constants = struct {
     ///      "Row Coercion Primitive").
     /// 142: Module environments record the uses of top-level values that read
     ///      the value through a row coercion.
-    pub const CACHE_VERSION = 142;
+    /// 143: Module environments record row-coerced callees and the definitions
+    ///      whose bodies closed an annotated open result row.
+    /// 144: Annotation polarity flips through function argument positions, so a
+    ///      callback's result row is generated closed and its argument row open.
+    /// 145: Checked modules publish compile-time roots no compilation
+    ///      demanded as unevaluated, with every evaluated root's reads.
+    /// 146: Annotations record an erroneous generated type, and procedure
+    ///      templates record whether their signature reaches every scheme
+    ///      variable.
+    /// 147: Canonical node payloads are encoded from their payload field types.
+    /// 148: Low-level op numbering covers only ops that lowering produces.
+    /// 149: A stored checked runtime error keeps its evaluated operands in a
+    ///      field of their own.
+    pub const CACHE_VERSION = 149;
 };
 
 /// Configuration for the Roc cache system.

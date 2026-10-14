@@ -244,8 +244,6 @@ pub fn listOp(op: LowLevel) BuiltinFn {
         .{ LowLevel.list_owned_unique, BuiltinFn.list_owned_unique },
         .{ LowLevel.list_prepend, BuiltinFn.list_prepend },
         .{ LowLevel.list_sublist, BuiltinFn.list_sublist },
-        .{ LowLevel.list_drop_first, BuiltinFn.list_sublist },
-        .{ LowLevel.list_drop_last, BuiltinFn.list_sublist },
         .{ LowLevel.list_take_first, BuiltinFn.list_sublist },
         .{ LowLevel.list_take_last, BuiltinFn.list_sublist },
         .{ LowLevel.list_sublist_borrowed, BuiltinFn.list_sublist_borrowed },
@@ -262,19 +260,6 @@ pub fn listOp(op: LowLevel) BuiltinFn {
         .{ LowLevel.list_sort_with, BuiltinFn.list_sort_with },
         .{ LowLevel.list_map_can_reuse, BuiltinFn.list_map_can_reuse },
     });
-}
-
-/// Element kind selecting a structural list-equality wrapper.
-pub const ListEqElem = enum { str, list, flat };
-
-/// Structural list equality by element kind, for backends that call rather
-/// than inline it.
-pub fn listEq(elem: ListEqElem) BuiltinFn {
-    return switch (elem) {
-        .str => .list_str_eq,
-        .list => .list_list_eq,
-        .flat => .list_eq,
-    };
 }
 
 /// Hasher primitives. Scalar writes funnel into the width-normalized wrappers:

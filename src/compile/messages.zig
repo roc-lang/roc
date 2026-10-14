@@ -192,27 +192,6 @@ pub const WorkerTask = union(enum) {
     type_check: TypeCheckTask,
     /// Type-erased post-check work whose context owns all persistent task state.
     post_check: post_check_executor.Task,
-
-    pub fn getPackageName(self: WorkerTask) ?[]const u8 {
-        return switch (self) {
-            inline .parse, .canonicalize, .type_check => |t| t.package_name,
-            .post_check => null,
-        };
-    }
-
-    pub fn getModuleId(self: WorkerTask) ?ModuleId {
-        return switch (self) {
-            inline .parse, .canonicalize, .type_check => |t| t.module_id,
-            .post_check => null,
-        };
-    }
-
-    pub fn getModuleName(self: WorkerTask) ?[]const u8 {
-        return switch (self) {
-            inline .parse, .canonicalize, .type_check => |t| t.module_name,
-            .post_check => null,
-        };
-    }
 };
 
 /// Result of successfully parsing a module
@@ -357,7 +336,7 @@ pub const PendingEvaluationState = struct {
     reported_problem_count: usize,
 
     pub fn deinit(self: *PendingEvaluationState) void {
-        self.problems.deinit(self.allocator);
+        self.problems.deinit();
         self.import_mapping.deinit();
         self.allocator.free(self.imported_envs);
         self.allocator.destroy(self);
@@ -410,42 +389,6 @@ pub const WorkerResult = union(enum) {
     worker_oom: WorkerOom,
     /// Returned in worker arrival order; `Completion.id` identifies the task.
     post_check: post_check_executor.Completion,
-
-    pub fn getPackageName(self: WorkerResult) []const u8 {
-        return switch (self) {
-            .parsed => |r| r.package_name,
-            .canonicalized => |r| r.package_name,
-            .canonicalized_cached => |r| r.package_name,
-            .type_checked => |r| r.package_name,
-            .operation_failed => |r| r.package_name,
-            .worker_oom => |r| r.package_name,
-            .post_check => "",
-        };
-    }
-
-    pub fn getModuleId(self: WorkerResult) ModuleId {
-        return switch (self) {
-            .parsed => |r| r.module_id,
-            .canonicalized => |r| r.module_id,
-            .canonicalized_cached => |r| r.module_id,
-            .type_checked => |r| r.module_id,
-            .operation_failed => |r| r.module_id,
-            .worker_oom => |r| r.module_id,
-            .post_check => 0,
-        };
-    }
-
-    pub fn getModuleName(self: WorkerResult) []const u8 {
-        return switch (self) {
-            .parsed => |r| r.module_name,
-            .canonicalized => |r| r.module_name,
-            .canonicalized_cached => |r| r.module_name,
-            .type_checked => |r| r.module_name,
-            .operation_failed => |r| r.module_name,
-            .worker_oom => |r| r.module_name,
-            .post_check => "",
-        };
-    }
 
     /// Release a result that shutdown prevented the coordinator from accepting.
     /// Parsed environments have no coordinator owner yet; later stages borrow
@@ -541,51 +484,4 @@ comptime {
     if (@sizeOf(WorkerResult) > max_message_size) {
         @compileError("WorkerResult too large for efficient thread-safe copy");
     }
-}
-
-test "WorkerTask accessors" {
-    const task = WorkerTask{
-        .parse = .{
-            .package_name = "app",
-            .module_id = 0,
-            .module_name = "Main",
-            .path = "/path/to/Main.roc",
-            .source_dir = "/path/to",
-            .package_root = "/path/to",
-            .depth = 0,
-            .module_role = .user,
-            .validation = .checking,
-            .is_entry_module = false,
-        },
-    };
-
-    try std.testing.expectEqualStrings("app", task.getPackageName().?);
-    try std.testing.expectEqual(@as(ModuleId, 0), task.getModuleId().?);
-    try std.testing.expectEqualStrings("Main", task.getModuleName().?);
-}
-
-test "WorkerResult accessors" {
-    const reports = std.ArrayList(Report).empty;
-
-    const result = WorkerResult{
-        .parsed = .{
-            .package_name = "app",
-            .module_id = 1,
-            .module_name = "Foo",
-            .path = "/path/to/Foo.roc",
-            .source_file_state = .{ .hash = @as([32]u8, @splat(0)) },
-            .module_env = undefined,
-            .cached_ast = undefined,
-            .discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty,
-            .discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty,
-            .reports = reports,
-            .parse_ns = 1000,
-            .is_entry_module = false,
-            .canonicalized_cache_key = @as([32]u8, @splat(0)),
-        },
-    };
-
-    try std.testing.expectEqualStrings("app", result.getPackageName());
-    try std.testing.expectEqual(@as(ModuleId, 1), result.getModuleId());
-    try std.testing.expectEqualStrings("Foo", result.getModuleName());
 }

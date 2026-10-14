@@ -67,6 +67,22 @@ tests; it does not just build them.
 
 ### Test prerequisites
 
+Only the JavaScript cell tests in `run-test-repl-wasm` require
+[Node.js](https://nodejs.org/) **22.7.0 or newer**, available as `node` on your
+`PATH`. Node.js is not required to use Roc, build the compiler, or develop Roc
+in general. MiniCI includes this test, so running MiniCI also requires Node.js
+for this test alone.
+
+This version is needed because the test imports a `.js` ES module without a
+`package.json` declaring its module type; Node.js 22.7.0 enabled
+[module syntax detection by default](https://nodejs.org/download/release/v22.7.0/docs/api/packages.html#syntax-detection).
+Check your version with `node --version`. To run just these JavaScript tests
+from the repository root:
+
+```sh
+node --test test/repl-wasm-test/cells.test.mjs
+```
+
 The `run-test-cli` job includes the glue test suite, which compiles generated
 Rust glue for the `wasm32` target. Install a Rust toolchain (via [rustup]) with
 the WebAssembly target so those cases can build:
@@ -127,6 +143,20 @@ use `\u{202E}`. Ordinary Arabic and Hebrew text is allowed. Enable your editor's
 invisible-character warnings when reviewing Unicode changes. Remove a reported
 control from comments, or explicitly escape it in a literal when it is intended
 as runtime data; `roc fmt` refuses to rewrite affected source.
+
+### Predicates shared across compiler phases
+
+When one phase publishes a classification that a later phase consumes with its
+own hand-enumerated switch (for example, which checked expression kinds can be
+marked divergent), the two must not be kept in agreement by hand. Prefer one
+shared predicate that both phases call, as `pattern_refutability.zig` and
+`exhaustiveness_context.zig` do. When the consumer's switch has to stay
+separate, put the classification in one comptime-callable function next to the
+producer, make the consumer's arms check it at compile time, and add a parity
+test that drives the producer over every variant (enumerated from the type
+itself) and compares its answer with the classification, naming the variant
+that drifted. `checkedExprDivergence` in `src/check/checked_artifact.zig` and
+its "checked divergence parity" tests are the reference example.
 
 ### Debugging tips
 

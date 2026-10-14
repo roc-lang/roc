@@ -93,7 +93,7 @@ NON EXHAUSTIVE MATCH - everything.md:23:2:23:7
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "b")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_b")
@@ -107,7 +107,7 @@ NON EXHAUSTIVE MATCH - everything.md:23:2:23:7
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "b")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_b")
@@ -121,7 +121,7 @@ NON EXHAUSTIVE MATCH - everything.md:23:2:23:7
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "b")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_b")
@@ -135,7 +135,7 @@ NON EXHAUSTIVE MATCH - everything.md:23:2:23:7
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "b")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_b")
@@ -149,7 +149,7 @@ NON EXHAUSTIVE MATCH - everything.md:23:2:23:7
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "h1")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_h1")
@@ -163,7 +163,7 @@ NON EXHAUSTIVE MATCH - everything.md:23:2:23:7
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "h2")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_h2")
@@ -177,7 +177,7 @@ NON EXHAUSTIVE MATCH - everything.md:23:2:23:7
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "h3")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_h3")
@@ -191,7 +191,7 @@ NON EXHAUSTIVE MATCH - everything.md:23:2:23:7
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "h4")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_h4")
@@ -205,7 +205,7 @@ NON EXHAUSTIVE MATCH - everything.md:23:2:23:7
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "h5")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_h5")

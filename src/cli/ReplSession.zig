@@ -317,7 +317,7 @@ pub fn stepWithConfig(self: *ReplSession, input: []const u8, report_config: repo
 /// presentation strings.
 pub fn stepLanguageWithConfig(self: *ReplSession, input: []const u8, report_config: reporting.ReportingConfig) ReplStepError!LanguageStepResult {
     self.clearLastEvents();
-    const line = std.mem.trim(u8, input, " \t\r\n");
+    const line = std.mem.trimStart(u8, input, " \t\r\n");
     if (line.len == 0) return .none;
 
     const input_info = switch (try self.inputStatus(line)) {
@@ -374,7 +374,7 @@ pub fn stepLanguageWithConfig(self: *ReplSession, input: []const u8, report_conf
                 } };
             }
             if (input_info.definition_kind == .annotation) {
-                try self.addOrReplaceDefinitionWithImportKind(line, name, .annotation, false);
+                try self.definitions.addOrReplace(self.allocator, line, name, .annotation, false);
                 return .{ .definition = .{ .name = name, .kind = .annotation, .file_import = false } };
             }
 
@@ -389,7 +389,7 @@ pub fn stepLanguageWithConfig(self: *ReplSession, input: []const u8, report_conf
             if (bound_names) |names| {
                 try self.definitions.addOrReplaceNames(self.allocator, line, names, input_info.definition_kind, input_info.file_import);
             } else {
-                try self.addOrReplaceDefinitionWithImportKind(line, name, input_info.definition_kind, input_info.file_import);
+                try self.definitions.addOrReplace(self.allocator, line, name, input_info.definition_kind, input_info.file_import);
             }
             const validation = try self.validateDefinitions(report_config);
             if (!validation.valid) {
@@ -433,9 +433,15 @@ pub fn splitInputIntoStatementsWithAllocator(allocator: Allocator, input: []cons
     var current = std.ArrayList(u8).empty;
     defer current.deinit(allocator);
 
+    var multiline_string_at_eof = false;
     var lines = std.mem.splitScalar(u8, input, '\n');
     while (lines.next()) |raw_line| {
-        const trimmed_line = std.mem.trimEnd(u8, raw_line, " \t\r");
+        if (multiline_string_at_eof and !lineStartsMultilineString(raw_line)) {
+            try result.append(allocator, try allocator.dupe(u8, std.mem.trimStart(u8, current.items, " \t\r\n")));
+            current.clearRetainingCapacity();
+            multiline_string_at_eof = false;
+        }
+        const trimmed_line = std.mem.trimEnd(u8, raw_line, "\r");
         if (std.mem.trim(u8, trimmed_line, " \t\r\n").len == 0 and current.items.len == 0) {
             continue;
         }
@@ -443,18 +449,20 @@ pub fn splitInputIntoStatementsWithAllocator(allocator: Allocator, input: []cons
         if (current.items.len > 0) try current.append(allocator, '\n');
         try current.appendSlice(allocator, trimmed_line);
 
-        const candidate = std.mem.trim(u8, current.items, " \t\r\n");
+        const candidate = std.mem.trimStart(u8, current.items, " \t\r\n");
         if (candidate.len == 0) continue;
         switch (try inputStatusWithAllocator(allocator, candidate)) {
-            .complete => {
+            .complete => |info| {
+                multiline_string_at_eof = info.multiline_string_at_eof;
+                if (multiline_string_at_eof) continue;
                 try result.append(allocator, try allocator.dupe(u8, candidate));
                 current.clearRetainingCapacity();
             },
-            .incomplete, .invalid => {},
+            .incomplete, .invalid => multiline_string_at_eof = false,
         }
     }
 
-    const remaining = std.mem.trim(u8, current.items, " \t\r\n");
+    const remaining = std.mem.trimStart(u8, current.items, " \t\r\n");
     if (remaining.len > 0) {
         try result.append(allocator, try allocator.dupe(u8, remaining));
     }
@@ -471,42 +479,6 @@ pub fn freeStatementSlices(self: *ReplSession, slices: []const []const u8) void 
 pub fn freeStatementSlicesWithAllocator(allocator: Allocator, slices: []const []const u8) void {
     for (slices) |slice| allocator.free(slice);
     allocator.free(slices);
-}
-
-/// Add or replace one stored definition while preserving definition order.
-pub fn addOrReplaceDefinition(self: *ReplSession, source: []const u8, name: []const u8, kind: DefinitionKind) Allocator.Error!void {
-    try self.addOrReplaceDefinitionWithImportKind(source, name, kind, false);
-}
-
-fn addOrReplaceDefinitionWithImportKind(
-    self: *ReplSession,
-    source: []const u8,
-    name: []const u8,
-    kind: DefinitionKind,
-    file_import: bool,
-) Allocator.Error!void {
-    try self.definitions.addOrReplace(self.allocator, source, name, kind, file_import);
-}
-
-/// Build a block expression containing all current definitions followed by `expr`.
-pub fn buildFullSource(self: *const ReplSession, expr: []const u8) Allocator.Error![]u8 {
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(self.allocator);
-
-    try out.appendSlice(self.allocator, "{\n");
-    for (self.definitions.items.items) |definition| {
-        var lines = std.mem.splitScalar(u8, definition.source, '\n');
-        while (lines.next()) |line| {
-            try out.appendSlice(self.allocator, "    ");
-            try out.appendSlice(self.allocator, line);
-            try out.append(self.allocator, '\n');
-        }
-    }
-    try out.appendSlice(self.allocator, "    ");
-    try out.appendSlice(self.allocator, expr);
-    try out.appendSlice(self.allocator, "\n}");
-
-    return out.toOwnedSlice(self.allocator);
 }
 
 /// Build module-level source for the current stored definitions.
@@ -1431,7 +1403,7 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
     // Checking preserves the REPL semantics of this zero-argument expression
     // root, while checked publication selects its body for compile-time
     // evaluation and archives the resulting Str directly in ConstStore.
-    const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = || Str.inspect(({s}))\n", .{ definitions, expr });
+    const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = || Str.inspect((\n{s}\n))\n", .{ definitions, expr });
     defer self.allocator.free(source);
     return self.evaluateMainSource(source, report_config);
 }
@@ -1601,6 +1573,8 @@ pub const DefinitionKind = enum {
 /// What the session made of an input line, used to label transcript entries.
 pub const InputInfo = struct {
     kind: InputKind,
+    /// Valid at EOF, but the next physical line can extend this string.
+    multiline_string_at_eof: bool = false,
     definition_kind: DefinitionKind = .value,
     name: ?[]const u8 = null,
     file_import: bool = false,
@@ -1651,64 +1625,78 @@ pub fn inputStatusWithAllocator(allocator: Allocator, line: []const u8) Allocato
     }
 
     const statement = ast.store.getStatement(@fromBackingInt(@intCast(ast.root_node_idx)));
-    return .{
-        .complete = switch (statement) {
-            .expr,
-            .crash,
-            .dbg,
-            .@"return",
-            .@"break",
-            => .{ .kind = .expression },
-            .expect,
-            .@"for",
-            .@"while",
-            => .{ .kind = .statement },
-            .decl => |decl| .{
-                .kind = .definition,
-                .definition_kind = .value,
-                .name = declarationName(ast, decl.pattern),
-            },
-            .@"var" => |v| .{
-                .kind = .definition,
-                .definition_kind = .value,
-                .name = ast.resolve(v.name),
-            },
-            .type_anno => |anno| .{
-                .kind = .definition,
-                .definition_kind = .annotation,
-                .name = ast.resolve(anno.name),
-            },
-            .type_decl => |decl| blk: {
-                const header = ast.store.getTypeHeader(decl.header) catch break :blk .{
-                    .kind = .definition,
-                    .definition_kind = .type_decl,
-                    .name = null,
-                };
-                break :blk .{
-                    .kind = .definition,
-                    .definition_kind = .type_decl,
-                    .name = ast.resolve(header.name),
-                };
-            },
-            .import => |import| .{
-                .kind = .definition,
-                .definition_kind = .import,
-                .name = if (import.alias_tok) |tok|
-                    ast.resolve(tok)
-                else if (import.target.nested_start_tok) |nested_start|
-                    ast.resolve(nested_start + import.target.nested_len - 1)
-                else
-                    ast.resolve(import.target.module_name_tok),
-            },
-            .file_import => |file_import| .{
-                .kind = .definition,
-                .definition_kind = .import,
-                .name = ast.resolve(file_import.name_tok),
-                .file_import = true,
-            },
-            .malformed => return .invalid,
+    var info: InputInfo = switch (statement) {
+        .expr,
+        .crash,
+        .dbg,
+        .@"return",
+        .@"break",
+        => .{ .kind = .expression },
+        .expect,
+        .@"for",
+        .@"while",
+        => .{ .kind = .statement },
+        .decl => |decl| .{
+            .kind = .definition,
+            .definition_kind = .value,
+            .name = declarationName(ast, decl.pattern),
         },
+        .@"var" => |v| .{
+            .kind = .definition,
+            .definition_kind = .value,
+            .name = ast.resolve(v.name),
+        },
+        .type_anno => |anno| .{
+            .kind = .definition,
+            .definition_kind = .annotation,
+            .name = ast.resolve(anno.name),
+        },
+        .type_decl => |decl| blk: {
+            const header = ast.store.getTypeHeader(decl.header) catch break :blk .{
+                .kind = .definition,
+                .definition_kind = .type_decl,
+                .name = null,
+            };
+            break :blk .{
+                .kind = .definition,
+                .definition_kind = .type_decl,
+                .name = ast.resolve(header.name),
+            };
+        },
+        .import => |import| .{
+            .kind = .definition,
+            .definition_kind = .import,
+            .name = if (import.alias_tok) |tok|
+                ast.resolve(tok)
+            else if (import.target.nested_start_tok) |nested_start|
+                ast.resolve(nested_start + import.target.nested_len - 1)
+            else
+                ast.resolve(import.target.module_name_tok),
+        },
+        .file_import => |file_import| .{
+            .kind = .definition,
+            .definition_kind = .import,
+            .name = ast.resolve(file_import.name_tok),
+            .file_import = true,
+        },
+        .malformed => return .invalid,
     };
+    const tokens = ast.tokens.tokens.slice();
+    if (tokens.len >= 2) {
+        const last = tokens.get(tokens.len - 2);
+        // A closed quoted string ends in StringEnd. A multiline string's
+        // final StringPart instead reaches EOF, including empty/interpolated
+        // tails. A physical newline after it explicitly ends the input.
+        info.multiline_string_at_eof = last.tag == .StringPart and
+            last.region.end.offset == line.len;
+    }
+    return .{ .complete = info };
+}
+
+/// These are the two lexical prefixes for a multiline string's next line.
+pub fn lineStartsMultilineString(line: []const u8) bool {
+    const trimmed = std.mem.trimStart(u8, line, " \t");
+    return std.mem.startsWith(u8, trimmed, "\\\\") or std.mem.startsWith(u8, trimmed, "\"\"\"");
 }
 
 fn inputDiagnosticsAreIncomplete(ast: *const parse.AST) bool {
@@ -3175,46 +3163,19 @@ test "Repl - for loop snapshots nested product" {
     try expectStateful(.wasm, steps);
 }
 
-test "Repl - build full source with block syntax" {
-    var repl = try testRepl(.interpreter);
-    defer repl.deinit();
-
-    try repl.addOrReplaceDefinition("x = 5", "x", .value);
-    try repl.addOrReplaceDefinition("y = x + 1", "y", .value);
-
-    const full_source = try repl.buildFullSource("y");
-    defer testing.allocator.free(full_source);
-
-    const expected =
-        \\{
-        \\    x = 5
-        \\    y = x + 1
-        \\    y
-        \\}
-    ;
-    try testing.expectEqualStrings(expected, full_source);
-}
-
 test "Repl - definition replacement" {
     var repl = try testRepl(.interpreter);
     defer repl.deinit();
 
-    try repl.addOrReplaceDefinition("x = 1", "x", .value);
-    try repl.addOrReplaceDefinition("x = 2", "x", .value);
-    try repl.addOrReplaceDefinition("x = 3", "x", .value);
+    try repl.definitions.addOrReplace(testing.allocator, "x = 1", "x", .value, false);
+    try repl.definitions.addOrReplace(testing.allocator, "x = 2", "x", .value, false);
+    try repl.definitions.addOrReplace(testing.allocator, "x = 3", "x", .value, false);
 
     try testing.expect(repl.definitions.count() == 1);
 
-    const full_source = try repl.buildFullSource("x");
-    defer testing.allocator.free(full_source);
-
-    const expected =
-        \\{
-        \\    x = 3
-        \\    x
-        \\}
-    ;
-    try testing.expectEqualStrings(expected, full_source);
+    const source = try repl.definitionsSource();
+    defer testing.allocator.free(source);
+    try testing.expectEqualStrings("x = 3\n", source);
 }
 
 test "Repl - destructure definitions replace atomically by any bound name" {
@@ -3398,5 +3359,26 @@ test "Repl bidi rejection preserves definitions and escaped values remain legal"
         const expected = try std.fmt.allocPrint(testing.allocator, "{d}", .{control.utf8.len});
         defer testing.allocator.free(expected);
         try testing.expectEqualStrings(expected, result.output);
+    }
+}
+
+test "splitInputIntoStatements - contiguous multiline string lines stay whole" {
+    const definition = "str =\n  \\\\first line\n  \\\\second line  ";
+    try expectSplit(definition, &.{definition});
+    try expectSplit(definition ++ "\nstr", &.{ definition, "str" });
+    try expectSplit("\\\\first\n\\\\\n\\\\third", &.{"\\\\first\n\\\\\n\\\\third"});
+    try expectSplit("\\\\hello ${\"world\"}\n\\\\next", &.{"\\\\hello ${\"world\"}\n\\\\next"});
+}
+
+test "inputStatus - multiline string EOF is extensible" {
+    for ([_][]const u8{ "\\\\first", "str =\n  \\\\first", "\\\\", "\\\\${\"hi\"}" }) |source| {
+        const status = try inputStatusWithAllocator(testing.allocator, source);
+        try testing.expect(status == .complete);
+        try testing.expect(status.complete.multiline_string_at_eof);
+    }
+    for ([_][]const u8{ "\"quoted\"", "42", "\\\\first\n", "(\n\\\\first\n)" }) |source| {
+        const status = try inputStatusWithAllocator(testing.allocator, source);
+        try testing.expect(status == .complete);
+        try testing.expect(!status.complete.multiline_string_at_eof);
     }
 }

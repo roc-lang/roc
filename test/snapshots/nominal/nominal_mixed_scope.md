@@ -159,7 +159,7 @@ LocalStatus := [Pending, Complete]
 processColor : _ -> LocalStatus
 processColor = |color| {
 	# bring RGB into scope
-		Color.RGB
+	Color.RGB
 
 	match color {
 		RGB.Red => LocalStatus.Pending
@@ -173,7 +173,12 @@ processColor = |color| {
 (can-ir
 	(d-let
 		(p-assign (ident "processColor"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-lambda
+			(args
+				(p-assign (ident "color")))
+			(e-block
+				(s-runtime-error (tag "undeclared_type"))
+				(e-runtime-error (tag "erroneous_value_expr"))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-underscore)

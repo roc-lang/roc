@@ -46,12 +46,6 @@ pub const FrozenRootTranscode = @import("frozen_root_transcode.zig");
 pub const InterpreterStaticData = @import("interpreter_static_data.zig").InterpreterStaticData;
 pub const buildStaticDataForWidth = @import("static_data").buildStaticDataForWidth;
 pub const deinitStaticData = @import("static_data").deinitStaticData;
-/// Builtin types for type checking
-pub const BuiltinTypes = @import("builtins.zig").BuiltinTypes;
-/// Crash context for host crash handling
-const crash_context = @import("crash_context.zig");
-pub const CrashContext = crash_context.CrashContext;
-pub const CrashState = crash_context.CrashState;
 
 /// Concrete runtime value for the interpreter
 pub const value = @import("value.zig");
@@ -118,8 +112,7 @@ test "eval tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(@import("vendor_relocatable_loader"));
     std.testing.refAllDecls(@import("BuiltinModules.zig"));
-    std.testing.refAllDecls(@import("builtins.zig"));
-    std.testing.refAllDecls(@import("crash_context.zig"));
+    std.testing.refAllDecls(@import("crash_boundary.zig"));
     std.testing.refAllDecls(@import("value.zig"));
     std.testing.refAllDecls(@import("interpreter.zig"));
     std.testing.refAllDecls(@import("host_trampoline.zig"));
@@ -129,6 +122,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("const_store_writer.zig"));
     std.testing.refAllDecls(@import("native_root_export.zig"));
     std.testing.refAllDecls(@import("frozen_root_transcode.zig"));
+    std.testing.refAllDecls(@import("frozen_graph.zig"));
     std.testing.refAllDecls(@import("inspected_run.zig"));
     std.testing.refAllDecls(@import("rc_conformance.zig"));
     std.testing.refAllDecls(@import("inspected.zig"));

@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const collections = @import("collections");
 const Token = @import("tokenize.zig").Token;
 
 const DeclIndex = @This();
@@ -235,16 +236,21 @@ gpa: std.mem.Allocator,
 scopes: std.ArrayList(Scope),
 decls: std.ArrayList(Decl),
 scope_decl_ids: std.ArrayList(DeclIdx),
-scope_decl_builders: std.ArrayList(std.ArrayListUnmanaged(DeclIdx)),
-decl_by_statement: std.AutoHashMapUnmanaged(u32, DeclIdx),
+/// Declarations of the open scopes, innermost last; a declaration always
+/// joins the innermost open scope, so each scope's run sits on top while it
+/// is open and moves to `scope_decl_ids` when it closes.
+open_scope_decls: std.ArrayList(DeclIdx),
+/// Where each open scope's run in `open_scope_decls` starts, parallel to
+/// `scope_stack`.
+open_scope_decl_starts: std.ArrayList(u32),
+decl_by_statement: collections.DenseMap(u32, DeclIdx),
 type_dependencies: std.ArrayList(TypeDependency),
 type_dependency_segments: std.ArrayList(Ident.Idx),
 type_paths: std.ArrayList(TypePath),
 type_path_intern: std.AutoHashMapUnmanaged(TypePathKey, TypePathIdx),
-type_path_by_statement: std.AutoHashMapUnmanaged(u32, TypePathIdx),
+type_path_by_statement: collections.DenseMap(u32, TypePathIdx),
 type_decls_by_path: std.AutoHashMapUnmanaged(TypePathIdx, NameBucket),
 assoc_value_decls: std.AutoHashMapUnmanaged(AssocValue, NameBucket),
-assoc_owner_value_decls: std.AutoHashMapUnmanaged(TypePathIdx, NameBucket),
 package_header_modules: std.ArrayList(PackageHeaderModule),
 imports: std.ArrayList(Import),
 explicit_unqualified_imports: std.AutoHashMapUnmanaged(Ident.Idx, void),
@@ -257,16 +263,16 @@ pub fn init(gpa: std.mem.Allocator) DeclIndex {
         .scopes = .empty,
         .decls = .empty,
         .scope_decl_ids = .empty,
-        .scope_decl_builders = .empty,
-        .decl_by_statement = .{},
+        .open_scope_decls = .empty,
+        .open_scope_decl_starts = .empty,
+        .decl_by_statement = .init(gpa),
         .type_dependencies = .empty,
         .type_dependency_segments = .empty,
         .type_paths = .empty,
         .type_path_intern = .{},
-        .type_path_by_statement = .{},
+        .type_path_by_statement = .init(gpa),
         .type_decls_by_path = .{},
         .assoc_value_decls = .{},
-        .assoc_owner_value_decls = .{},
         .package_header_modules = .empty,
         .imports = .empty,
         .explicit_unqualified_imports = .{},
@@ -276,26 +282,23 @@ pub fn init(gpa: std.mem.Allocator) DeclIndex {
 
 /// Release all declaration-index storage.
 pub fn deinit(self: *DeclIndex) void {
-    for (self.scope_decl_builders.items) |*builder| {
-        builder.deinit(self.gpa);
-    }
     for (self.scopes.items) |*scope| {
         deinitNameBuckets(Ident.Idx, self.gpa, &scope.value_decls);
         deinitNameBuckets(Ident.Idx, self.gpa, &scope.type_decls);
         deinitNameBuckets(Ident.Idx, self.gpa, &scope.import_alias_decls);
     }
     deinitNameBuckets(AssocValue, self.gpa, &self.assoc_value_decls);
-    deinitNameBuckets(TypePathIdx, self.gpa, &self.assoc_owner_value_decls);
-    self.scope_decl_builders.deinit(self.gpa);
+    self.open_scope_decls.deinit(self.gpa);
+    self.open_scope_decl_starts.deinit(self.gpa);
     self.scopes.deinit(self.gpa);
     self.decls.deinit(self.gpa);
     self.scope_decl_ids.deinit(self.gpa);
-    self.decl_by_statement.deinit(self.gpa);
+    self.decl_by_statement.deinit();
     self.type_dependencies.deinit(self.gpa);
     self.type_dependency_segments.deinit(self.gpa);
     self.type_paths.deinit(self.gpa);
     self.type_path_intern.deinit(self.gpa);
-    self.type_path_by_statement.deinit(self.gpa);
+    self.type_path_by_statement.deinit();
     deinitNameBuckets(TypePathIdx, self.gpa, &self.type_decls_by_path);
     self.package_header_modules.deinit(self.gpa);
     self.imports.deinit(self.gpa);
@@ -336,8 +339,9 @@ pub fn enterScope(
         .import_alias_decls = .{},
         .region = region,
     });
-    try self.scope_decl_builders.append(self.gpa, .empty);
+    try self.open_scope_decl_starts.ensureUnusedCapacity(self.gpa, 1);
     try self.scope_stack.append(self.gpa, idx);
+    self.open_scope_decl_starts.appendAssumeCapacity(@intCast(self.open_scope_decls.items.len));
     return idx;
 }
 
@@ -349,12 +353,13 @@ pub fn exitScope(
 ) std.mem.Allocator.Error!void {
     std.debug.assert(self.scope_stack.items.len > 0);
     std.debug.assert(self.scope_stack.items[self.scope_stack.items.len - 1] == idx);
-    _ = self.scope_stack.pop();
-
+    const run_start = self.open_scope_decl_starts.items[self.open_scope_decl_starts.items.len - 1];
     const start: u32 = @intCast(self.scope_decl_ids.items.len);
-    const builder = &self.scope_decl_builders.items[@backingInt(idx)];
-    try self.scope_decl_ids.appendSlice(self.gpa, builder.items);
+    try self.scope_decl_ids.appendSlice(self.gpa, self.open_scope_decls.items[run_start..]);
     const end: u32 = @intCast(self.scope_decl_ids.items.len);
+    self.open_scope_decls.shrinkRetainingCapacity(run_start);
+    _ = self.open_scope_decl_starts.pop();
+    _ = self.scope_stack.pop();
     var scope = self.scopes.items[@backingInt(idx)];
     scope.decls = .{ .start = start, .len = end - start };
     scope.region = region;
@@ -379,10 +384,11 @@ pub fn setScopeOwnerTypePath(self: *DeclIndex, idx: ScopeIdx, owner_type_path: ?
 
 /// Append a declaration to its owning scope.
 pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
+    if (self.currentScope() != decl.scope) base.invariant("parser declaration joined a scope other than the innermost open one", .{});
     const idx: DeclIdx = @fromBackingInt(@intCast(self.decls.items.len));
     try self.decls.append(self.gpa, decl);
-    try self.scope_decl_builders.items[@backingInt(decl.scope)].append(self.gpa, idx);
-    try self.decl_by_statement.put(self.gpa, decl.statement, idx);
+    try self.open_scope_decls.append(self.gpa, idx);
+    try self.decl_by_statement.put(decl.statement, idx);
     if (decl.name_ident) |ident| {
         if (declKindMayBindValue(decl.kind)) {
             try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@backingInt(decl.scope)].value_decls, ident, idx);
@@ -391,12 +397,11 @@ pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
                     .owner = owner_path,
                     .item = ident,
                 }, idx);
-                try addDeclToBucket(TypePathIdx, self.gpa, &self.assoc_owner_value_decls, owner_path, idx);
             }
         } else if (declKindMayBindType(decl.kind)) {
             try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@backingInt(decl.scope)].type_decls, ident, idx);
             if (decl.type_path) |path| {
-                try self.type_path_by_statement.put(self.gpa, decl.statement, path);
+                try self.type_path_by_statement.put(decl.statement, path);
                 try addDeclToBucket(TypePathIdx, self.gpa, &self.type_decls_by_path, path, idx);
             }
         }
@@ -469,12 +474,6 @@ fn declKindMayBindType(kind: DeclKind) bool {
     };
 }
 
-/// Return whether a scope directly declares a value-like name.
-pub fn scopeDeclaresValue(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx) bool {
-    const scope = &self.scopes.items[@backingInt(scope_idx)];
-    return scope.value_decls.contains(ident);
-}
-
 /// Return all value-like declarations for a name in a scope.
 pub fn scopeValueDecls(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx) NameBucket {
     const scope = &self.scopes.items[@backingInt(scope_idx)];
@@ -486,20 +485,9 @@ pub fn addImportAliasDecl(self: *DeclIndex, scope_idx: ScopeIdx, ident: Ident.Id
     try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@backingInt(scope_idx)].import_alias_decls, ident, decl_idx);
 }
 
-/// Return all import declarations that introduce an alias in a scope.
-pub fn scopeImportAliasDecls(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx) NameBucket {
-    const scope = &self.scopes.items[@backingInt(scope_idx)];
-    return scope.import_alias_decls.get(ident) orelse .{};
-}
-
 /// Return all associated value declarations for an owner type path and item name.
 pub fn assocValueDecls(self: *const DeclIndex, owner: TypePathIdx, item: Ident.Idx) NameBucket {
     return self.assoc_value_decls.get(.{ .owner = owner, .item = item }) orelse .{};
-}
-
-/// Return all associated value declarations owned by one type path.
-pub fn assocOwnerValueDecls(self: *const DeclIndex, owner: TypePathIdx) NameBucket {
-    return self.assoc_owner_value_decls.get(owner) orelse .{};
 }
 
 /// Record a package-header upper expose that canonicalization should consider
@@ -616,11 +604,6 @@ pub fn declForStatement(self: *const DeclIndex, statement: u32) ?DeclIdx {
     return self.decl_by_statement.get(statement);
 }
 
-/// Return the first parser type declaration recorded for a type path.
-pub fn typeDeclForPath(self: *const DeclIndex, path: TypePathIdx) ?DeclIdx {
-    return self.typeDeclsForPath(path).at(0);
-}
-
 /// Return all parser type declarations recorded for a type path in source order.
 pub fn typeDeclsForPath(self: *const DeclIndex, path: TypePathIdx) NameBucket {
     return self.type_decls_by_path.get(path) orelse .{};
@@ -644,12 +627,6 @@ pub fn typeDependencyTop(self: *const DeclIndex) TypeDependencyMark {
         .dependencies_top = @intCast(self.type_dependencies.items.len),
         .segments_top = @intCast(self.type_dependency_segments.items.len),
     };
-}
-
-/// Append one syntactic type dependency to the side table.
-pub fn addTypeDependency(self: *DeclIndex, ident: Ident.Idx) std.mem.Allocator.Error!void {
-    const segments = [_]Ident.Idx{ident};
-    try self.addTypeDependencySegments(&segments);
 }
 
 /// Append one syntactic type dependency path to the side table.
@@ -696,7 +673,7 @@ pub fn scopeCount(self: *const DeclIndex) usize {
     return self.scopes.items.len;
 }
 
-test "scopeDeclaresValue records only value-binding declarations" {
+test "scopeValueDecls records only value-binding declarations" {
     const gpa = std.testing.allocator;
 
     var index = DeclIndex.init(gpa);
@@ -776,13 +753,13 @@ test "scopeDeclaresValue records only value-binding declarations" {
 
     try index.exitScope(scope_idx, TokenRegion.empty());
 
-    try std.testing.expect(index.scopeDeclaresValue(scope_idx, value_ident));
-    try std.testing.expect(index.scopeDeclaresValue(scope_idx, value_anno_ident));
-    try std.testing.expect(index.scopeDeclaresValue(scope_idx, var_decl_ident));
-    try std.testing.expect(index.scopeDeclaresValue(scope_idx, var_anno_ident));
-    try std.testing.expect(!index.scopeDeclaresValue(scope_idx, import_ident));
-    try std.testing.expect(!index.scopeDeclaresValue(scope_idx, type_ident));
-    const import_alias_decls = index.scopeImportAliasDecls(scope_idx, import_ident);
+    try std.testing.expect(index.scopeValueDecls(scope_idx, value_ident).count() != 0);
+    try std.testing.expect(index.scopeValueDecls(scope_idx, value_anno_ident).count() != 0);
+    try std.testing.expect(index.scopeValueDecls(scope_idx, var_decl_ident).count() != 0);
+    try std.testing.expect(index.scopeValueDecls(scope_idx, var_anno_ident).count() != 0);
+    try std.testing.expect(index.scopeValueDecls(scope_idx, import_ident).count() == 0);
+    try std.testing.expect(index.scopeValueDecls(scope_idx, type_ident).count() == 0);
+    const import_alias_decls = index.scopes.items[@backingInt(scope_idx)].import_alias_decls.get(import_ident).?;
     try std.testing.expectEqual(@as(usize, 1), import_alias_decls.count());
     try std.testing.expectEqual(import_decl_idx, import_alias_decls.first.?);
 }
@@ -798,8 +775,8 @@ test "type dependency spans preserve parser-recorded type references" {
     const second_ident = Ident.Idx{ .attributes = attrs, .idx = 2 };
 
     const start = index.typeDependencyTop();
-    try index.addTypeDependency(first_ident);
-    try index.addTypeDependency(second_ident);
+    try index.addTypeDependencySegments(&.{first_ident});
+    try index.addTypeDependencySegments(&.{second_ident});
     try index.addTypeDependencySegments(&.{ first_ident, second_ident });
     const span = index.typeDependencySpanFrom(start);
 
@@ -915,10 +892,6 @@ test "associated value declarations are keyed by structural owner path" {
     try std.testing.expectEqual(@as(usize, 1), nested_decls.count());
     try std.testing.expectEqual(decl_idx, nested_decls.at(0).?);
 
-    const owner_decls = index.assocOwnerValueDecls(nested_path);
-    try std.testing.expectEqual(@as(usize, 1), owner_decls.count());
-    try std.testing.expectEqual(decl_idx, owner_decls.at(0).?);
-
     const parent_decls = index.assocValueDecls(parent_path, value_ident);
     try std.testing.expectEqual(@as(usize, 0), parent_decls.count());
 }
@@ -961,5 +934,5 @@ test "type path buckets preserve duplicate declarations in source order" {
     try std.testing.expectEqual(@as(usize, 2), decls.count());
     try std.testing.expectEqual(first, decls.at(0).?);
     try std.testing.expectEqual(second, decls.at(1).?);
-    try std.testing.expectEqual(first, index.typeDeclForPath(path).?);
+    try std.testing.expectEqual(first, index.typeDeclsForPath(path).at(0).?);
 }

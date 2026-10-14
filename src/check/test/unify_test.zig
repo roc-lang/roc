@@ -83,7 +83,7 @@ const TestEnv = struct {
         const gpa = self.module_env.gpa;
         self.nominal_decl_statements.deinit(gpa);
         self.snapshots.deinit();
-        self.problems.deinit(gpa);
+        self.problems.deinit();
         self.type_writer.deinit();
         self.scratch.deinit();
         self.occurs_scratch.deinit();
@@ -94,7 +94,6 @@ const TestEnv = struct {
     /// Helper function to call unify with args from TestEnv
     fn unify(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!Result {
         const env = unify_mod.Env{
-            .problems_gpa = self.module_env.gpa,
             .ident_store = self.module_env.getIdentStoreConst(),
             .self_module_identity = self.module_env.selfModuleIdentity(),
             .types = &self.module_env.types,
@@ -110,7 +109,6 @@ const TestEnv = struct {
     /// Helper to call the write-no-report unify variant from TestEnv.
     fn unifyWriteNoReport(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!Result {
         const env = unify_mod.Env{
-            .problems_gpa = self.module_env.gpa,
             .ident_store = self.module_env.getIdentStoreConst(),
             .self_module_identity = self.module_env.selfModuleIdentity(),
             .types = &self.module_env.types,
@@ -125,7 +123,6 @@ const TestEnv = struct {
 
     fn unifyExact(self: *Self, a: Var, b: Var) std.mem.Allocator.Error!Result {
         const env = unify_mod.Env{
-            .problems_gpa = self.module_env.gpa,
             .ident_store = self.module_env.getIdentStoreConst(),
             .self_module_identity = self.module_env.selfModuleIdentity(),
             .types = &self.module_env.types,
@@ -1392,9 +1389,10 @@ test "partitionFields - same record" {
     const field_x = try env.mkRecordField("field_x", var_x);
     const field_y = try env.mkRecordField("field_y", var_y);
 
-    const range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ field_x, field_y });
+    const range = try env.scratch.appendSliceGathered(.record, &[_]RecordField{ field_x, field_y });
 
-    const result = try unify_mod.partitionFields(
+    const result = try unify_mod.partitionRow(
+        .record,
         env.module_env.getIdentStoreConst(),
         env.module_env.selfModuleIdentity(),
         &env.module_env.types,
@@ -1427,10 +1425,11 @@ test "partitionFields - disjoint fields" {
     const a2 = try env.mkRecordField("a2", var_a2);
     const b1 = try env.mkRecordField("b1", var_b1);
 
-    const a_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ a1, a2 });
-    const b_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{b1});
+    const a_range = try env.scratch.appendSliceGathered(.record, &[_]RecordField{ a1, a2 });
+    const b_range = try env.scratch.appendSliceGathered(.record, &[_]RecordField{b1});
 
-    const result = try unify_mod.partitionFields(
+    const result = try unify_mod.partitionRow(
+        .record,
         env.module_env.getIdentStoreConst(),
         env.module_env.selfModuleIdentity(),
         &env.module_env.types,
@@ -1464,10 +1463,11 @@ test "partitionFields - overlapping fields" {
     const both = try env.mkRecordField("both", var_both);
     const b1 = try env.mkRecordField("b1", var_b1);
 
-    const a_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ a1, both });
-    const b_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ b1, both });
+    const a_range = try env.scratch.appendSliceGathered(.record, &[_]RecordField{ a1, both });
+    const b_range = try env.scratch.appendSliceGathered(.record, &[_]RecordField{ b1, both });
 
-    const result = try unify_mod.partitionFields(
+    const result = try unify_mod.partitionRow(
+        .record,
         env.module_env.getIdentStoreConst(),
         env.module_env.selfModuleIdentity(),
         &env.module_env.types,
@@ -1504,10 +1504,11 @@ test "partitionFields - reordering is normalized" {
     const f2 = try env.mkRecordField("f2", var_f2);
     const f3 = try env.mkRecordField("f3", var_f3);
 
-    const a_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ f3, f1, f2 });
-    const b_range = try env.scratch.appendSliceGatheredFields(&[_]RecordField{ f1, f2, f3 });
+    const a_range = try env.scratch.appendSliceGathered(.record, &[_]RecordField{ f3, f1, f2 });
+    const b_range = try env.scratch.appendSliceGathered(.record, &[_]RecordField{ f1, f2, f3 });
 
-    const result = try unify_mod.partitionFields(
+    const result = try unify_mod.partitionRow(
+        .record,
         env.module_env.getIdentStoreConst(),
         env.module_env.selfModuleIdentity(),
         &env.module_env.types,
@@ -1890,9 +1891,10 @@ test "partitionTags - same tags" {
     const tag_x = try env.mkTag("X", &[_]Var{var_x});
     const tag_y = try env.mkTag("Y", &[_]Var{var_y});
 
-    const range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ tag_x, tag_y });
+    const range = try env.scratch.appendSliceGathered(.tag_union, &[_]Tag{ tag_x, tag_y });
 
-    const result = try unify_mod.partitionTags(
+    const result = try unify_mod.partitionRow(
+        .tag_union,
         env.module_env.getIdentStoreConst(),
         env.module_env.selfModuleIdentity(),
         &env.module_env.types,
@@ -1925,10 +1927,11 @@ test "partitionTags - disjoint fields" {
     const a2 = try env.mkTag("A2", &[_]Var{var_a2});
     const b1 = try env.mkTag("B1", &[_]Var{var_b1});
 
-    const a_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ a1, a2 });
-    const b_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{b1});
+    const a_range = try env.scratch.appendSliceGathered(.tag_union, &[_]Tag{ a1, a2 });
+    const b_range = try env.scratch.appendSliceGathered(.tag_union, &[_]Tag{b1});
 
-    const result = try unify_mod.partitionTags(
+    const result = try unify_mod.partitionRow(
+        .tag_union,
         env.module_env.getIdentStoreConst(),
         env.module_env.selfModuleIdentity(),
         &env.module_env.types,
@@ -1962,10 +1965,11 @@ test "partitionTags - overlapping tags" {
     const both = try env.mkTag("Both", &[_]Var{var_both});
     const b1 = try env.mkTag("B", &[_]Var{var_b});
 
-    const a_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ a1, both });
-    const b_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ b1, both });
+    const a_range = try env.scratch.appendSliceGathered(.tag_union, &[_]Tag{ a1, both });
+    const b_range = try env.scratch.appendSliceGathered(.tag_union, &[_]Tag{ b1, both });
 
-    const result = try unify_mod.partitionTags(
+    const result = try unify_mod.partitionRow(
+        .tag_union,
         env.module_env.getIdentStoreConst(),
         env.module_env.selfModuleIdentity(),
         &env.module_env.types,
@@ -2002,10 +2006,11 @@ test "partitionTags - reordering is normalized" {
     const f2 = try env.mkTag("F2", &[_]Var{var_f2});
     const f3 = try env.mkTag("F3", &[_]Var{var_f3});
 
-    const a_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ f3, f1, f2 });
-    const b_range = try env.scratch.appendSliceGatheredTags(&[_]Tag{ f1, f2, f3 });
+    const a_range = try env.scratch.appendSliceGathered(.tag_union, &[_]Tag{ f3, f1, f2 });
+    const b_range = try env.scratch.appendSliceGathered(.tag_union, &[_]Tag{ f1, f2, f3 });
 
-    const result = try unify_mod.partitionTags(
+    const result = try unify_mod.partitionRow(
+        .tag_union,
         env.module_env.getIdentStoreConst(),
         env.module_env.selfModuleIdentity(),
         &env.module_env.types,

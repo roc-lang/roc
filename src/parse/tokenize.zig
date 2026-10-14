@@ -26,14 +26,7 @@ pub const Token = struct {
 
     pub const Extra = union {
         interned: base.Ident.Idx,
-        ident_with_flags: IdentWithFlags,
         none: u32,
-    };
-
-    pub const IdentWithFlags = struct {
-        ident: base.Ident.Idx,
-        starts_with_underscore: bool,
-        ends_with_underscore: bool,
     };
 
     pub const List = std.MultiArrayList(@This());
@@ -326,10 +319,6 @@ pub const Token = struct {
                 tok == .MalformedDotQuestionUnicodeIdent;
         }
 
-        pub fn hasUnderscoreFlags(tok: Tag) bool {
-            return tok == .LowerIdent or tok == .NamedUnderscore;
-        }
-
         /// Returns true if this token can end an expression, meaning a following
         /// minus sign should be treated as a binary operator rather than unary.
         /// For example, in `x-1`, the minus after `x` (LowerIdent) should be binary.
@@ -359,6 +348,7 @@ pub const Token = struct {
                 tok == .CloseSquare or
                 tok == .CloseCurly or
                 tok == .CloseStringInterpolation or
+                tok == .TripleDot or
                 tok == .StringEnd or
                 tok == .SingleQuote or
                 tok == .MalformedSingleQuote or
@@ -688,9 +678,7 @@ pub const TokenizedBuffer = struct {
     pub fn resolveIdentifier(self: *const TokenizedBuffer, token: Token.Idx) ?base.Ident.Idx {
         const tag = self.tokens.items(.tag)[@intCast(token)];
         const extra = self.tokens.items(.extra)[@intCast(token)];
-        if (tag.hasUnderscoreFlags()) {
-            return extra.ident_with_flags.ident;
-        } else if (tag.isInterned()) {
+        if (tag.isInterned()) {
             return extra.interned;
         } else {
             return null;
@@ -1014,10 +1002,6 @@ pub const Cursor = struct {
         }
     }
 
-    pub fn chompEscapeSequence(self: *Cursor) error{ InvalidUnicodeEscapeSequence, InvalidEscapeSequence }!void {
-        return self.chompEscapeSequenceWithQuote(null);
-    }
-
     pub fn chompEscapeSequenceWithQuote(self: *Cursor, quote_char: ?u8) error{ InvalidUnicodeEscapeSequence, InvalidEscapeSequence }!void {
         // Store the start position of the escape sequence (before the backslash)
         const escape_start = if (self.pos > 0) self.pos - 1 else self.pos;
@@ -1259,9 +1243,9 @@ pub const Tokenizer = struct {
     /// Note that the caller must also provide a pre-allocated messages buffer.
     pub fn init(env: *CommonEnv, gpa: std.mem.Allocator, text: []const u8, messages: []Diagnostic) std.mem.Allocator.Error!Tokenizer {
         const cursor = Cursor.init(text, messages);
-        // TODO: tune this more. Syntax grab bag is 3:1.
-        // Generally, roc code will be less dense than that.
-        const output = try TokenizedBuffer.initCapacity(env, gpa, text.len);
+        // Even the densest syntax averages three bytes per token, and most code
+        // is sparser; a file that has more tokens grows the buffer as usual.
+        const output = try TokenizedBuffer.initCapacity(env, gpa, text.len / 3 + 16);
         return Tokenizer{
             .cursor = cursor,
             .output = output,
@@ -1315,29 +1299,12 @@ pub const Tokenizer = struct {
         const text = self.cursor.buf[text_offset..self.cursor.pos];
         const id = try self.env.insertIdent(gpa, base.Ident.for_text(text));
 
-        // Use underscore flags for type variable identifiers that benefit from fast checking
-        if (tag.hasUnderscoreFlags()) {
-            // Calculate underscore flags for identifier tokens
-            const starts_with_underscore = text.len > 0 and text[0] == '_';
-            const ends_with_underscore = text.len > 1 and text[text.len - 1] == '_';
-
-            try self.output.tokens.append(gpa, .{
-                .tag = tag,
-                .extra = .{ .ident_with_flags = .{
-                    .ident = id,
-                    .starts_with_underscore = starts_with_underscore,
-                    .ends_with_underscore = ends_with_underscore,
-                } },
-                .region = base.Region.from_raw_offsets(tok_offset, self.cursor.pos),
-            });
-        } else {
-            std.debug.assert(tag.isInterned());
-            try self.output.tokens.append(gpa, .{
-                .tag = tag,
-                .extra = .{ .interned = id },
-                .region = base.Region.from_raw_offsets(tok_offset, self.cursor.pos),
-            });
-        }
+        std.debug.assert(tag.isInterned());
+        try self.output.tokens.append(gpa, .{
+            .tag = tag,
+            .extra = .{ .interned = id },
+            .region = base.Region.from_raw_offsets(tok_offset, self.cursor.pos),
+        });
     }
 
     /// The main tokenize loop. This loops over the whole input buffer, tokenizing as it goes.
@@ -1493,9 +1460,15 @@ pub const Tokenizer = struct {
                                 try self.pushTokenNormalHere(gpa, tag, start);
                             }
                         } else {
+                            // Look at what follows the minus to determine if it's unary.
+                            // A minus before `...` follows the same rule as a minus before
+                            // a number: `x-...` is subtraction, while `-...` is negation.
+                            const negates_triple_dot = n == '.' and
+                                self.cursor.peekAt(2) == '.' and
+                                self.cursor.peekAt(3) == '.' and
+                                (sp or !(if (self.lastTokenTag()) |prev| prev.canEndExpression() else false));
                             self.cursor.pos += 1;
-                            // Look at what follows the minus to determine if it's unary
-                            const tokenType: Token.Tag = if (canFollowUnaryMinus(n)) .OpUnaryMinus else .OpBinaryMinus;
+                            const tokenType: Token.Tag = if (canFollowUnaryMinus(n) or negates_triple_dot) .OpUnaryMinus else .OpBinaryMinus;
                             try self.pushTokenNormalHere(gpa, tokenType, start);
                         }
                     } else {
@@ -2615,6 +2588,12 @@ test "tokenizer" {
     try testTokenization(gpa, "1e10", &[_]Token.Tag{.Float});
     try testTokenization(gpa, "_ident", &[_]Token.Tag{.NamedUnderscore});
     try testTokenization(gpa, "3...4", &[_]Token.Tag{ .Int, .TripleDot, .Int });
+    try testTokenization(gpa, "-...", &[_]Token.Tag{ .OpUnaryMinus, .TripleDot });
+    try testTokenization(gpa, "a -...", &[_]Token.Tag{ .LowerIdent, .OpUnaryMinus, .TripleDot });
+    try testTokenization(gpa, "a-...", &[_]Token.Tag{ .LowerIdent, .OpBinaryMinus, .TripleDot });
+    try testTokenization(gpa, "...-...", &[_]Token.Tag{ .TripleDot, .OpBinaryMinus, .TripleDot });
+    try testTokenization(gpa, "...-1", &[_]Token.Tag{ .TripleDot, .OpBinaryMinus, .Int });
+    try testTokenization(gpa, "-..", &[_]Token.Tag{ .OpBinaryMinus, .DoubleDot });
     try testTokenization(gpa, "..<", &[_]Token.Tag{.OpDoubleDotLessThan});
     try testTokenization(gpa, "..=", &[_]Token.Tag{.OpDoubleDotEquals});
     try testTokenization(gpa, "1..<5", &[_]Token.Tag{ .Int, .OpDoubleDotLessThan, .Int });
@@ -3299,7 +3278,7 @@ test "escape alphabet: tokenizer accepts exactly the shared table domain" {
         var messages: [4]Diagnostic = undefined;
         var cursor = Cursor.init(src, &messages);
         // Position the cursor as if the backslash were already consumed.
-        const accepted = if (cursor.chompEscapeSequence()) |_| true else |_| false;
+        const accepted = if (cursor.chompEscapeSequenceWithQuote(null)) |_| true else |_| false;
 
         try std.testing.expectEqual(in_domain, accepted);
     }

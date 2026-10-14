@@ -115,7 +115,10 @@ test "completed accessor reconstruction invalidates native code exactly once and
 }
 
 test "completed accessor reconstruction allocation failure cleanup" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, testRebuild, .{});
+    // Growth that happens to fit in place would make the allocation count
+    // depend on the backing allocator's history, so every resize allocates.
+    var no_resize = std.testing.FailingAllocator.init(std.testing.allocator, .{ .resize_fail_index = 0 });
+    try std.testing.checkAllAllocationFailures(no_resize.allocator(), testRebuild, .{});
 }
 
 fn testRebuild(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {

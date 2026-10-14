@@ -302,7 +302,7 @@ fn collectMovedBody(
         // statement targets, jump initialization is not represented by a
         // structural successor edge to the declaration; retaining a parameter
         // identity can therefore merge two distinct control-flow binders.
-        if (store.getCFStmt(stmt_id) == .join and !shared_stmts.contains(stmt_id)) {
+        if (store.getCFStmtImmediate(stmt_id).* == .join and !shared_stmts.contains(stmt_id)) {
             try body_clone.markStmtDefinitionsSparse(store, &fresh_definitions, stmt_id);
         }
     }
@@ -316,18 +316,18 @@ fn forwardsToJoin(
     target: LIR.LocalId,
     join_id: LIR.JoinPointId,
 ) bool {
-    const first = store.getCFStmt(body);
-    if (first == .assign_ref) {
+    const first = store.getCFStmtImmediate(body);
+    if (first.* == .assign_ref) {
         const assign = first.assign_ref;
         if (assign.target != target or assign.op != .local or assign.op.local != source) return false;
-        const terminal = store.getCFStmt(assign.next);
-        return terminal == .jump and terminal.jump.target == join_id;
+        const terminal = store.getCFStmtImmediate(assign.next);
+        return terminal.* == .jump and terminal.jump.target == join_id;
     }
-    if (first == .set_local) {
+    if (first.* == .set_local) {
         const set = first.set_local;
         if (set.target != target or set.value != source or set.mode != .initialize_join_param) return false;
-        const terminal = store.getCFStmt(set.next);
-        return terminal == .jump and terminal.jump.target == join_id;
+        const terminal = store.getCFStmtImmediate(set.next);
+        return terminal.* == .jump and terminal.jump.target == join_id;
     }
     return false;
 }
@@ -340,7 +340,7 @@ fn applyCandidate(
     candidate: Candidate,
     allocator: Allocator,
 ) ResourceError!void {
-    const outer = store.getCFStmt(candidate.outer_stmt).join;
+    const outer = store.getCFStmtImmediate(candidate.outer_stmt).join;
 
     var cloner = try body_clone.BodyCloner(RetRewriter).initWithFreshDeclaredJoinsAndAllocator(store, .{}, outer.body, join_params, allocator);
     defer cloner.deinit();
@@ -360,7 +360,7 @@ fn applyCandidate(
     // their identities. Parameter binders of alpha-renamed joins receive
     // fresh identities. The eliminated outer parameter is substituted with
     // the inner parameter that carried the same value.
-    const frame = store.getLocalSpan(store.getProcSpec(proc_id).frame_locals);
+    const frame = store.getLocalSpan(store.getProcSpecImmediate(proc_id).frame_locals);
     for (0..frame.len) |index| {
         const local = GuardedList.at(frame, index);
         if (candidate.moved.fresh_definitions.get(local) == 0) {
@@ -446,7 +446,7 @@ const TestError = ResourceError || error{ TestExpectedEqual, TestUnexpectedResul
 
 fn testRun(store: *LirStore, layouts: *const layout_mod.Store, proc: LIR.LirProcSpecId, scratch_allocator: Allocator, mode: TestMode) ResourceError!void {
     if (mode == .standalone) return run(store, layouts);
-    var scratch = std.heap.ArenaAllocator.init(scratch_allocator);
+    var scratch = collections.SingleThreadArena.init(scratch_allocator);
     defer scratch.deinit();
     const allocator = if (mode == .direct_scratch) scratch_allocator else scratch.allocator();
     var join_params = body_clone.JoinParamIndex.init(allocator);
@@ -523,7 +523,7 @@ fn testSoleConsumer(scratch_allocator: Allocator, mode: TestMode, unrelated_coun
 
     try testRun(&store, &layouts, proc, scratch_allocator, mode);
 
-    const rewritten_outer = store.getCFStmt(store.getProcSpec(proc).body.?);
+    const rewritten_outer = store.getCFStmt(store.getProcSpecImmediate(proc).body.?);
     try testing.expect(rewritten_outer == .join);
     try testing.expectEqual(inner_id, rewritten_outer.join.id);
     const moved = store.getCFStmt(rewritten_outer.join.body);
@@ -533,7 +533,7 @@ fn testSoleConsumer(scratch_allocator: Allocator, mode: TestMode, unrelated_coun
     const moved_ret = store.getCFStmt(moved.assign_ref.next);
     try testing.expect(moved_ret == .ret);
     try testing.expectEqual(moved.assign_ref.target, moved_ret.ret.value);
-    const rewritten_frame = store.getLocalSpan(store.getProcSpec(proc).frame_locals);
+    const rewritten_frame = store.getLocalSpan(store.getProcSpecImmediate(proc).frame_locals);
     try testing.expectEqual(@as(usize, 4), rewritten_frame.len);
 }
 
@@ -619,7 +619,7 @@ fn testSharedTail(scratch_allocator: Allocator, mode: TestMode) TestError!void {
 
     try testRun(&store, &layouts, proc, scratch_allocator, mode);
 
-    const rewritten = store.getCFStmt(store.getProcSpec(proc).body.?);
+    const rewritten = store.getCFStmt(store.getProcSpecImmediate(proc).body.?);
     try testing.expect(rewritten == .join);
     try testing.expectEqual(inner_id, rewritten.join.id);
     const moved_prefix = store.getCFStmt(rewritten.join.body);
@@ -631,7 +631,7 @@ fn testSharedTail(scratch_allocator: Allocator, mode: TestMode) TestError!void {
     const original_tail = store.getCFStmt(shared_tail);
     try testing.expectEqual(shared_result, original_tail.assign_ref.target);
     try testing.expectEqual(shared_ret, original_tail.assign_ref.next);
-    const rewritten_frame = store.getLocalSpan(store.getProcSpec(proc).frame_locals);
+    const rewritten_frame = store.getLocalSpan(store.getProcSpecImmediate(proc).frame_locals);
     try testing.expectEqual(@as(usize, 5), rewritten_frame.len);
 }
 
@@ -693,7 +693,7 @@ test "forwarding join inline preserves recursive outer join declarations" {
 
     try run(&store, &layouts);
 
-    const preserved = store.getCFStmt(store.getProcSpec(proc).body.?);
+    const preserved = store.getCFStmt(store.getProcSpecImmediate(proc).body.?);
     try testing.expect(preserved == .join);
     try testing.expectEqual(outer_id, preserved.join.id);
     try testing.expectEqual(outer_back_edge, preserved.join.body);
@@ -752,7 +752,7 @@ test "forwarding join inline preserves owning continuation parameters" {
 
     try run(&store, &layouts);
 
-    const preserved = store.getCFStmt(store.getProcSpec(proc).body.?);
+    const preserved = store.getCFStmt(store.getProcSpecImmediate(proc).body.?);
     try testing.expect(preserved == .join);
     try testing.expectEqual(outer_id, preserved.join.id);
     try testing.expectEqual(outer_body, preserved.join.body);

@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const lir = @import("lir");
+const collections = @import("collections");
 const ProcArtifact = @import("ProcArtifact.zig");
 const Allocator = std.mem.Allocator;
 const Self = @This();
@@ -470,7 +471,7 @@ pub fn prepareVariants(
     // Preparation borrows payloads; only the accepted physical graph is
     // deep-owned. Avoid cloning whole packs twice on every warm preparation.
     var combined = ProcArtifact.Set{
-        .arena = std.heap.ArenaAllocator.init(allocator),
+        .arena = collections.SingleThreadArena.init(allocator),
         .artifacts = &.{},
     };
     defer combined.deinit();
@@ -625,8 +626,8 @@ test "physical selection preserves static and seed serving closures" {
             // Exact physical edges retain their original codegen policy.
             try std.testing.expect(!compatibleDefinition(runtime[2], ctfe[2]));
             try std.testing.expect(!compatibleDefinition(ctfe[1], runtime[1]));
-            const rt = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &runtime };
-            const cf = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &ctfe };
+            const rt = ProcArtifact.Set{ .arena = collections.SingleThreadArena.init(allocator), .artifacts = &runtime };
+            const cf = ProcArtifact.Set{ .arena = collections.SingleThreadArena.init(allocator), .artifacts = &ctfe };
             const sources = if (reverse) [_]*const ProcArtifact.Set{ &cf, &rt } else [_]*const ProcArtifact.Set{ &rt, &cf };
             const accepts = struct {
                 fn node(_: *anyopaque, _: ProcArtifact.Artifact) bool {
@@ -690,9 +691,9 @@ fn testCanonicalMixed(allocator: Allocator, conflict: bool) (ProcArtifact.Extrac
     ctfe[0].kind = .{ .proc = lir.ProcIdentity.forTest(3) };
     ctfe[1].code = "\x48\xb8" ++ "\x00\x00\x00\x00\x00\x00\x00\x00" ++ "\x48\xb8" ++ "\x00\x00\x00\x00\x00\x00\x00\x00" ++ "\xc3";
     if (conflict) runtime[1].callable_contract = @as([32]u8, @splat(9));
-    var runtime_set = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &runtime };
+    var runtime_set = ProcArtifact.Set{ .arena = collections.SingleThreadArena.init(allocator), .artifacts = &runtime };
     defer runtime_set.deinit();
-    var ctfe_set = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &ctfe };
+    var ctfe_set = ProcArtifact.Set{ .arena = collections.SingleThreadArena.init(allocator), .artifacts = &ctfe };
     defer ctfe_set.deinit();
     const Accept = struct {
         fn node(_: *anyopaque, _: ProcArtifact.Artifact) bool {
@@ -800,7 +801,7 @@ test "artifact admission evaluates each chain node once and propagates invalid a
         }
     }
     var source = ProcArtifact.Set{
-        .arena = std.heap.ArenaAllocator.init(std.testing.allocator),
+        .arena = collections.SingleThreadArena.init(std.testing.allocator),
         .artifacts = &artifacts,
     };
     defer source.deinit();
@@ -852,7 +853,7 @@ test "symbolic index resolves a chain once and preserves cycles external names a
     };
     artifacts[count + 1].symbolic_refs = &.{external};
     var source = ProcArtifact.Set{
-        .arena = std.heap.ArenaAllocator.init(std.testing.allocator),
+        .arena = collections.SingleThreadArena.init(std.testing.allocator),
         .artifacts = &artifacts,
     };
     defer source.deinit();
@@ -911,7 +912,7 @@ test "symbolic index declines ambiguous same-identity contracts in either defini
             const exact = ProcArtifact.Reference{ .site = 0, .form = .call, .target = runtime_index, .delta = 0 };
             artifacts[3].kind = .{ .proc = lir.ProcIdentity.forTest(3) };
             artifacts[3].refs = &.{exact};
-            var source = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(std.testing.allocator), .artifacts = &artifacts };
+            var source = ProcArtifact.Set{ .arena = collections.SingleThreadArena.init(std.testing.allocator), .artifacts = &artifacts };
             defer source.deinit();
             var graph = try Self.init(std.testing.allocator, &source);
             defer graph.deinit();
@@ -943,7 +944,7 @@ test "symbolic index declines ambiguous same-identity contracts in either defini
 /// and rebasing only set-local references. Order is the producer's set order.
 pub fn selectMarked(allocator: Allocator, source: *const ProcArtifact.Set, marked: []const bool) Allocator.Error!Selection {
     std.debug.assert(marked.len == source.artifacts.len);
-    var temporary = std.heap.ArenaAllocator.init(allocator);
+    var temporary = collections.SingleThreadArena.init(allocator);
     defer temporary.deinit();
     const a = temporary.allocator();
     const remap = try a.alloc(?u32, marked.len);
@@ -1026,7 +1027,7 @@ fn testSelection(allocator: Allocator) (@import("PackFile.zig").WriteError || @i
             .context_dependencies = .{},
         },
     };
-    const source = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &artifacts };
+    const source = ProcArtifact.Set{ .arena = collections.SingleThreadArena.init(allocator), .artifacts = &artifacts };
     var closure = try init(allocator, &source);
     defer closure.deinit();
     const placed = try closure.of(1);

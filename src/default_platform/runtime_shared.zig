@@ -39,3 +39,48 @@ pub fn defaultTrunc(value: f64) callconv(.c) f64 {
     const fraction_mask = (@as(u64, 1) << fraction_bits) - 1;
     return @bitCast(bits & ~fraction_mask);
 }
+
+/// Formats `value` in decimal into the end of `buf`, returning the digits.
+pub fn formatUnsigned(buf: *[20]u8, value: u64) []const u8 {
+    var index = buf.len;
+    var n = value;
+    while (true) {
+        index -= 1;
+        buf[index] = '0' + @as(u8, @intCast(n % 10));
+        n /= 10;
+        if (n == 0) break;
+    }
+    return buf[index..];
+}
+
+/// `memcpy` for runtimes that link no C library.
+pub fn defaultMemcpy(dest: [*]u8, src: [*]const u8, len: usize) callconv(.c) [*]u8 {
+    var i: usize = 0;
+    while (i < len) : (i += 1) dest[i] = src[i];
+    return dest;
+}
+
+/// `memmove` for runtimes that link no C library.
+pub fn defaultMemmove(dest: [*]u8, src: [*]const u8, len: usize) callconv(.c) [*]u8 {
+    if (@intFromPtr(dest) <= @intFromPtr(src)) {
+        var i: usize = 0;
+        while (i < len) : (i += 1) dest[i] = src[i];
+    } else {
+        var i = len;
+        while (i != 0) {
+            i -= 1;
+            dest[i] = src[i];
+        }
+    }
+    return dest;
+}
+
+/// `memset` for runtimes that link no C library. The stores are volatile so
+/// the compiler cannot turn this loop back into a call to `memset` itself.
+pub fn defaultMemset(dest: [*]u8, value: c_int, len: usize) callconv(.c) [*]u8 {
+    const byte: u8 = @bitCast(@as(i8, @truncate(value)));
+    const volatile_dest: [*]volatile u8 = dest;
+    var i: usize = 0;
+    while (i < len) : (i += 1) volatile_dest[i] = byte;
+    return dest;
+}

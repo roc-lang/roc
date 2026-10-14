@@ -57,7 +57,7 @@ TYPE MISMATCH - try_suffix_return_mismatch.md:29:2:29:2
 		(headline
 			(reflow "It's usually a mistake to use a postfix ")
 			(annotated code "?")
-			(reflow " on values being returned implicitly at the end of a function like this:"))
+			(reflow " on a value being returned implicitly at the end of a function."))
 		(document
 			(source-region (file "try_suffix_return_mismatch.md") (start 9 10) (end 9 11) (annotation warning) (line-text "\tparse(t)?"))
 			(line-break)

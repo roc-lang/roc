@@ -404,6 +404,12 @@ pub const CachedLiteralLocalContext = lir_core.Program.CachedLiteralLocalContext
 /// The checked site an emitted statement originates from.
 pub const CheckedSiteOrigin = lir_core.LIR.CheckedSiteOrigin;
 
+/// A checked compile-time root, named by its module's identity bytes.
+pub const ComptimeRootRead = extern struct {
+    module: [32]u8,
+    root: u32,
+};
+
 /// What the object cache knows about a specialization it can serve: the
 /// content identity of its compiled procedure and the ownership signature
 /// and uniqueness facts ARC solved for it, which the program that links the
@@ -421,6 +427,11 @@ pub const SpecCacheHit = struct {
     /// Complete serving-closure demand, borrowed from the immutable provider.
     /// Consumers declare these checked roots before retiring a source body.
     checked_root_uses: []const CheckedRootUse = &.{},
+    /// Producer-owned demand summary: the compile-time roots the procedure's
+    /// code reads, through every procedure it reaches. A program that takes
+    /// the hit demands them as if it had lowered the body (design.md
+    /// "Demand-Driven Compile-Time Evaluation").
+    comptime_root_reads: []const ComptimeRootRead = &.{},
     /// Producer-owned reachability summary: null means independent of app
     /// filling; otherwise the code requires this exact platform/app relation.
     platform_requirement_relation: ?[32]u8 = null,

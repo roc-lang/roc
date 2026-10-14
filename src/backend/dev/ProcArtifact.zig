@@ -18,6 +18,7 @@
 //! as compiling it directly.
 
 const std = @import("std");
+const collections = @import("collections");
 const Sha256 = @import("base").Sha256;
 const lir = @import("lir");
 const layout = @import("layout");
@@ -359,7 +360,7 @@ fn validatePatchSpan(code: []const u8, span: PatchSpan) PatchError!void {
 /// An ordered set of artifacts covering one code buffer. Order is emission
 /// order, which `assemble` reproduces.
 pub const Set = struct {
-    arena: std.heap.ArenaAllocator,
+    arena: collections.SingleThreadArena,
     artifacts: []const Artifact,
     /// Content identity of this exact physical graph when its producer
     /// recorded one, as a decoded pack does. Otherwise `ArtifactClosure`
@@ -547,7 +548,7 @@ pub fn validateSourceEventCertificates(allocator: Allocator, artifact: Artifact,
 /// Deep-copy sets into one ownership domain, rebasing only set-local references.
 /// Callers select cache entries using their full compilation provenance.
 pub fn combine(allocator: Allocator, sets: []const *const Set) Allocator.Error!Set {
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     errdefer arena.deinit();
     const a = arena.allocator();
     var artifacts = std.ArrayList(Artifact).empty;
@@ -677,7 +678,7 @@ pub const ExtractError = Allocator.Error || error{
 /// node whose rendering refers to nothing above its own frame.
 pub const ContentNames = struct {
     allocator: Allocator,
-    arena: std.heap.ArenaAllocator,
+    arena: collections.SingleThreadArena,
     /// Every carried item, by the name its program gave it.
     items: std.StringHashMapUnmanaged(DataItem) = .empty,
     /// Content name of each program-local item.
@@ -693,7 +694,7 @@ pub const ContentNames = struct {
     const no_reference: u32 = std.math.maxInt(u32);
 
     pub fn init(allocator: Allocator, set: *const Set) Allocator.Error!ContentNames {
-        var self = ContentNames{ .allocator = allocator, .arena = std.heap.ArenaAllocator.init(allocator) };
+        var self = ContentNames{ .allocator = allocator, .arena = collections.SingleThreadArena.init(allocator) };
         errdefer self.deinit();
         var has_code = false;
         for (set.artifacts) |artifact| for (artifact.data) |item| for (item.relocations) |relocation| {
@@ -838,7 +839,7 @@ pub const ContentNames = struct {
 /// Immutable data catalog prepared once by the coordinator. Worker lookups
 /// borrow it read-only; retained artifacts copy only their reachable closure.
 pub const PreparedData = struct {
-    arena: std.heap.ArenaAllocator,
+    arena: collections.SingleThreadArena,
     items: std.StringHashMapUnmanaged(DataItem),
 
     pub fn init(
@@ -848,7 +849,7 @@ pub const PreparedData = struct {
         constant_exports: []const lir.Program.StaticDataExport,
         spliced_data: []const DataItem,
     ) Allocator.Error!PreparedData {
-        var arena = std.heap.ArenaAllocator.init(allocator);
+        var arena = collections.SingleThreadArena.init(allocator);
         errdefer arena.deinit();
         const a = arena.allocator();
         var items = std.StringHashMapUnmanaged(DataItem){};
@@ -931,7 +932,7 @@ pub fn extractPrepared(
     layout_store: *const layout.Store,
     prepared: *const PreparedData,
 ) ExtractError!Set {
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     errdefer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -1782,7 +1783,7 @@ test "indexed artifact calls retain exact placement despite logical procedure ma
     var image = try CG.init(allocator, &store, &layouts, .{}, &.{}, .default);
     defer image.deinit();
     const set = Set{
-        .arena = std.heap.ArenaAllocator.init(allocator),
+        .arena = collections.SingleThreadArena.init(allocator),
         .artifacts = &.{
             .{
                 .kind = .entrypoint,
@@ -1856,7 +1857,7 @@ test "indexed artifact placement preserves duplicate logical definitions in eith
     };
     var artifacts = [_]Artifact{ caller, leaf, leaf, caller };
     artifacts[3].refs = &.{.{ .site = 0, .form = .call, .target = 2, .delta = 0 }};
-    const set = Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &artifacts };
+    const set = Set{ .arena = collections.SingleThreadArena.init(allocator), .artifacts = &artifacts };
     inline for (.{ false, true }) |reverse| {
         var store = lir.LirStore.init(allocator);
         defer store.deinit();
@@ -1920,9 +1921,9 @@ test "indexed symbolic calls keep their source namespace after another variant w
         .relocations = &.{},
         .data = &.{},
     };
-    const previous = Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &.{leaf} };
+    const previous = Set{ .arena = collections.SingleThreadArena.init(allocator), .artifacts = &.{leaf} };
     const source = Set{
-        .arena = std.heap.ArenaAllocator.init(allocator),
+        .arena = collections.SingleThreadArena.init(allocator),
         .artifacts = &.{
             .{
                 .kind = .entrypoint,
@@ -1995,7 +1996,7 @@ test "frozen callable names distinguish physical graphs with equal logical ident
             .context_dependencies = .{},
         },
     };
-    const set = Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &artifacts };
+    const set = Set{ .arena = collections.SingleThreadArena.init(allocator), .artifacts = &artifacts };
     var first = try ContentNames.init(allocator, &set);
     defer first.deinit();
     artifacts[1].context_dependencies.?.dict_seed = true;
@@ -2049,7 +2050,7 @@ test "frozen callable placement and recapture retain exact duplicate variants" {
         .symbol_offset = 0,
         .relocations = &.{.{ .offset = 0, .name = "logical-function", .addend = 0, .function = true, .code_target = .{ .local = 2 } }},
     }};
-    const set = Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &artifacts };
+    const set = Set{ .arena = collections.SingleThreadArena.init(allocator), .artifacts = &artifacts };
     var graph = try @import("ArtifactClosure.zig").init(allocator, &set);
     defer graph.deinit();
     var bindings = std.AutoHashMap(u32, lir.LIR.LirProcSpecId).init(allocator);
@@ -2113,7 +2114,7 @@ test "produced references bind selected declarations without rebinding cached si
     artifacts[1].producer_proc = @fromBackingInt(@intCast(1));
     artifacts[2].refs = &.{.{ .site = 0, .form = .call, .target = 2, .delta = 0 }};
     artifacts[3].kind = .{ .rc_helper = "helper" };
-    const source = Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &artifacts };
+    const source = Set{ .arena = collections.SingleThreadArena.init(allocator), .artifacts = &artifacts };
     var set = try combine(allocator, &.{&source});
     defer set.deinit();
     try bindProducedReferences(&set, 1, &.{3});
@@ -2206,7 +2207,7 @@ test "artifact local calls reserve veneers before later regions exceed reach" {
     image.codegen.branch_reach_limit = 4096;
     const gap = @as([8192]u8, @splat(0));
     var set = Set{
-        .arena = std.heap.ArenaAllocator.init(allocator),
+        .arena = collections.SingleThreadArena.init(allocator),
         .artifacts = &.{
             .{
                 .kind = .entrypoint,
@@ -2253,7 +2254,7 @@ fn testPreparedData(allocator: Allocator) (ExtractError || error{ TestExpectedEq
     }, &.{});
     var prepared_live = true;
     defer if (prepared_live) prepared.deinit();
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     defer arena.deinit();
     const a = arena.allocator();
     var local = std.StringHashMap(DataItem).init(allocator);
@@ -2356,7 +2357,7 @@ test "artifact metadata queues unresolved targets and preserves same-offset line
 
 fn testCombineOwnership(allocator: Allocator) (Allocator.Error || error{TestExpectedEqual})!void {
     const source = Set{
-        .arena = std.heap.ArenaAllocator.init(allocator),
+        .arena = collections.SingleThreadArena.init(allocator),
         .artifacts = &.{.{
             .kind = .{ .rc_helper = "helper" },
             .code = "code",
@@ -2417,7 +2418,7 @@ fn testReloc(offset: u32, name: []const u8, addend: i64) DataRelocation {
 /// A set whose one artifact carries `data`; the set owns nothing.
 fn testDataSet(storage: *[1]Artifact, data: []const DataItem) Set {
     storage[0] = .{ .kind = .entrypoint, .code = &.{}, .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = data };
-    return .{ .arena = std.heap.ArenaAllocator.init(std.testing.allocator), .artifacts = storage };
+    return .{ .arena = collections.SingleThreadArena.init(std.testing.allocator), .artifacts = storage };
 }
 
 test "constants are named by content across programs, through cycles, and never when host-visible" {

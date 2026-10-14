@@ -254,6 +254,30 @@ test "checking evaluates a generic function's conversion at its concrete runtime
     try std.testing.expectEqual(demand.monotype.parked, demand.monotype.stubs + demand.monotype.unparked);
 }
 
+test "checking specializes no runtime body that cannot reach its module's dependent conversion" {
+    if (is_freestanding) return error.SkipZigTest;
+    var checked = try checkApp(std.testing.allocator,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\import Crunch
+    ++ "\n" ++ word_type ++ "\n" ++
+        \\label : a -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
+        \\label = |_| "good"
+        \\main! = |args| {
+        \\    Echo.line!(Str.inspect(Crunch.crunch([List.len(args)])))
+        \\    Ok({})
+        \\}
+    , &.{helper_module}, null);
+    defer checked.deinit();
+    try checked.expectErrors(false);
+    // The module has a conversion that depends on its instance, but the
+    // runtime root reaches neither it nor the custom type it converts to.
+    const demand = checked.demand();
+    try std.testing.expect(demand.program_roots != 0);
+    try std.testing.expectEqual(@as(u64, 0), demand.discovery_roots);
+    try std.testing.expectEqual(@as(u64, 0), demand.monotype.discovery_bodies);
+}
+
 test "checking reports a generic function's conversion rejected at its concrete runtime instance" {
     if (is_freestanding) return error.SkipZigTest;
     var checked = try checkApp(std.testing.allocator, genericLabelApp("bad"), &.{helper_module}, null);

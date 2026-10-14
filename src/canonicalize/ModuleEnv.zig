@@ -841,6 +841,35 @@ pub const RecordOmittedDefault = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// A top-level function definition whose body closed a result row its
+/// annotation leaves open (design.md "Row Subsumption"). An
+/// importer's call of it widens the result exactly as a call in the defining
+/// module does. Sorted by the definition's node.
+pub const ClosedResultBinding = extern struct {
+    /// The definition node (`Node.Idx`).
+    node_idx: u32,
+
+    /// The checked module's sorted table of such definitions.
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// A call's callee lookup of an annotated function whose body closed a result
+/// row its annotation leaves open (design.md "Row Subsumption"). The
+/// lookup's checked type re-opens that row; checked-body construction lowers
+/// the call at the function's own instantiated type `fn_var` and result
+/// `ret_var`, and widens the call's result by a `row_coerce`.
+pub const RowCoercedCallee = extern struct {
+    /// The callee lookup expression node (`Node.Idx`).
+    node_idx: u32,
+    /// The function's own instantiated type (`Var`).
+    fn_var: u32,
+    /// That type's result (`Var`).
+    ret_var: u32,
+
+    /// The checked module's sorted table of row-coerced callees.
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// One use of a top-level value whose checked type is a widening copy of the
 /// value's own type: every tag union the row coercion reaches from the root
 /// has a fresh extension (design.md "Value Rows: Local Values Share, Top-Level
@@ -1061,6 +1090,8 @@ binding_schemes: BindingScheme.SafeList,
 /// `row_coerce` of the value, read at the value's own type. Sorted by
 /// source node.
 row_coerced_uses: RowCoercedUse.SafeList,
+row_coerced_callees: RowCoercedCallee.SafeList,
+closed_result_bindings: ClosedResultBinding.SafeList,
 /// Generated-codec relations carried by those schemes. Sorted by source node;
 /// multiple requirements for one binding occupy one contiguous run.
 binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList,
@@ -1493,6 +1524,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .dispatch_relation_merges = try DispatchRelationMerge.SafeList.initCapacity(gpa, 0),
         .binding_schemes = try BindingScheme.SafeList.initCapacity(gpa, 8),
         .row_coerced_uses = try RowCoercedUse.SafeList.initCapacity(gpa, 8),
+        .row_coerced_callees = try RowCoercedCallee.SafeList.initCapacity(gpa, 8),
+        .closed_result_bindings = try ClosedResultBinding.SafeList.initCapacity(gpa, 8),
         .binding_scheme_codec_requirements = try BindingSchemeCodecRequirement.SafeList.initCapacity(gpa, 4),
         .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
         .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
@@ -1531,6 +1564,8 @@ pub fn deinit(self: *Self) void {
     self.dispatch_relation_merges.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
     self.row_coerced_uses.deinit(self.gpa);
+    self.row_coerced_callees.deinit(self.gpa);
+    self.closed_result_bindings.deinit(self.gpa);
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
@@ -1638,6 +1673,8 @@ pub fn deinitCachedModule(self: *Self) void {
     self.dispatch_relation_merges.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
     self.row_coerced_uses.deinit(self.gpa);
+    self.row_coerced_callees.deinit(self.gpa);
+    self.closed_result_bindings.deinit(self.gpa);
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
@@ -2116,7 +2153,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_ident = try report.addOwnedString(ident_name);
             try report.headline.addReflowingText("Variable ");
             try report.headline.addUnqualifiedSymbol(owned_ident);
-            try report.headline.addReflowingText(" is defined here and then never used:");
+            try report.headline.addReflowingText(" is defined here and then never used.");
 
             try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
             const ident_with_underscore = try std.fmt.allocPrint(allocator, "_{s}", .{owned_ident});
@@ -2198,7 +2235,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addType(owned_type_name);
             try report.document.addReflowingText(" was already declared in ");
             try report.document.addSourceLocation(original_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try self.addSourceRegionTo(&report.document, original_region_info, .dimmed, owned_filename);
 
@@ -2223,7 +2260,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addType(owned_type_name);
             try report.document.addReflowingText(" was already declared in ");
             try report.document.addSourceLocation(original_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try self.addSourceRegionTo(&report.document, original_region_info, .dimmed, owned_filename);
 
@@ -2248,7 +2285,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addType(owned_type_name);
             try report.document.addReflowingText(" was already declared in ");
             try report.document.addSourceLocation(original_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try self.addSourceRegionTo(&report.document, original_region_info, .dimmed, owned_filename);
 
@@ -2353,7 +2390,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addRecordField(owned_field_name);
             try report.document.addReflowingText(" was first defined in ");
             try report.document.addSourceLocation(original_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try self.addSourceRegionTo(&report.document, original_region_info, .dimmed, owned_filename);
 
@@ -2510,7 +2547,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_ident = try report.addOwnedString(ident_name);
             try report.headline.addReflowingText("The name ");
             try report.headline.addUnqualifiedSymbol(owned_ident);
-            try report.headline.addReflowingText(" is being redeclared here:");
+            try report.headline.addReflowingText(" is being redeclared here.");
 
             // The primary region shows the new declaration; point below it at the original.
             const owned_filename = try report.addOwnedString(filename);
@@ -2521,7 +2558,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addUnqualifiedSymbol(owned_ident);
             try report.document.addReflowingText(" was already defined in ");
             try report.document.addSourceLocation(original_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try self.addSourceRegionTo(&report.document, original_region_info, .dimmed, owned_filename);
 
@@ -3476,7 +3513,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             var report = try Report.init(allocator, "Trailing `?`", "", .warning);
             try report.headline.addReflowingText("It's usually a mistake to use a postfix ");
             try report.headline.addAnnotated("?", .inline_code);
-            try report.headline.addReflowingText(" on values being returned implicitly at the end of a function like this:");
+            try report.headline.addReflowingText(" on a value being returned implicitly at the end of a function.");
 
             try self.addSourceRegionTo(&report.document, region_info, .warning_highlight, filename);
             try report.document.addLineBreak();
@@ -3654,13 +3691,15 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addAnnotated("expect", .inline_code);
             try report.headline.addReflowingText(" reassigns ");
             try report.headline.addUnqualifiedSymbol(owned_ident);
-            try report.headline.addReflowingText(", which was declared outside of it:");
+            try report.headline.addReflowingText(", which was declared outside of it.");
 
             try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
 
             try report.document.addLineBreak();
             try report.document.addUnqualifiedSymbol(owned_ident);
-            try report.document.addReflowingText(" was declared here:");
+            try report.document.addReflowingText(" was declared in ");
+            try report.document.addSourceLocation(declaration_region_info, owned_filename);
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try self.addSourceRegionTo(&report.document, declaration_region_info, .dimmed, owned_filename);
 
@@ -3684,29 +3723,30 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             var report = try Report.init(allocator, "Mutually Recursive Type Aliases", "", .runtime_error);
             const owned_type_name = try report.addOwnedString(type_name);
             const owned_other_name = try report.addOwnedString(other_type_name);
-            try report.headline.addReflowingText("The type alias ");
+            try report.headline.addReflowingText("The type aliases ");
             try report.headline.addInlineCode(owned_type_name);
             try report.headline.addReflowingText(" and ");
             try report.headline.addInlineCode(owned_other_name);
             try report.headline.addReflowingText(" form a recursive cycle.");
 
-            try report.document.addReflowingText("Type aliases are transparent synonyms and cannot be mutually recursive. ");
-            try report.document.addReflowingText("If you need recursive types, use nominal types (");
-            try report.document.addAnnotated(":=", .inline_code);
-            try report.document.addReflowingText(") instead.");
-            try report.document.addLineBreaks(2);
-
             const owned_filename = try report.addOwnedString(filename);
             try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
 
             try report.document.addLineBreak();
-            try report.document.addReflowingText("And it references ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(" references ");
             try report.document.addType(owned_other_name);
-            try report.document.addReflowingText(" declared in ");
+            try report.document.addReflowingText(", which is declared in ");
             try report.document.addSourceLocation(other_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try self.addSourceRegionTo(&report.document, other_region_info, .dimmed, owned_filename);
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Type aliases are transparent synonyms and cannot be mutually recursive. ");
+            try report.document.addReflowingText("If you need recursive types, use nominal types (");
+            try report.document.addAnnotated(":=", .inline_code);
+            try report.document.addReflowingText(") instead.");
 
             break :blk report;
         },
@@ -3872,6 +3912,8 @@ pub const Serialized = extern struct {
     dispatch_relation_merges: DispatchRelationMerge.SafeList.Serialized,
     binding_schemes: BindingScheme.SafeList.Serialized,
     row_coerced_uses: RowCoercedUse.SafeList.Serialized,
+    row_coerced_callees: RowCoercedCallee.SafeList.Serialized,
+    closed_result_bindings: ClosedResultBinding.SafeList.Serialized,
     binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList.Serialized,
     generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
     generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
@@ -3882,30 +3924,27 @@ pub const Serialized = extern struct {
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
 
-    comptime {
-        const renamed_fields = [_]collections.serde_validation.FieldRename{
-            .{ .owner = "display_module_name_idx", .serialized = "display_module_name_idx_reserved" },
-            .{ .owner = "self_module_identity", .serialized = "self_module_identity_reserved" },
-            .{ .owner = "evaluation_order", .serialized = "evaluation_order_reserved" },
-            .{ .owner = "import_mapping", .serialized = "import_mapping_reserved" },
-        };
-        const serialized_only_fields = [_][]const u8{
+    pub const root_contract: collections.serde_validation.RootContract = .{
+        .Owner = Self,
+        .owner_only_fields = &.{
+            "qualified_module_name", // Workspace information, recorded by the coordinator.
+        },
+        .serialized_only_fields = &.{
             "display_module_name_idx_padding", // Fixed-width padding after the display name slot.
             "self_module_identity_padding", // Fixed-width padding for the reserved identity slot.
             "runtime_prepared_padding", // Fixed-width padding for the serialized bool.
             "_reserved_flags", // Format-reserved bytes for fields removed from ModuleEnv.
             "_padding", // Tail padding kept explicit and zeroed for deterministic bytes.
-        };
-        const owner_only_fields = [_][]const u8{
-            "qualified_module_name", // Workspace information, recorded by the coordinator.
-        };
-        collections.serde_validation.assertBidirectionalFieldSet(
-            Self,
-            Serialized,
-            &owner_only_fields,
-            &serialized_only_fields,
-            &renamed_fields,
-        );
+        },
+        .renames = &.{
+            .{ .owner = "display_module_name_idx", .serialized = "display_module_name_idx_reserved" },
+            .{ .owner = "self_module_identity", .serialized = "self_module_identity_reserved" },
+            .{ .owner = "evaluation_order", .serialized = "evaluation_order_reserved" },
+            .{ .owner = "import_mapping", .serialized = "import_mapping_reserved" },
+        },
+    };
+
+    comptime {
         collections.serde_validation.assertSerializedRelocatable(Serialized);
     }
 
@@ -3997,6 +4036,8 @@ pub const Serialized = extern struct {
         try self.dispatch_relation_merges.serialize(&env.dispatch_relation_merges, allocator, writer);
         try self.binding_schemes.serialize(&env.binding_schemes, allocator, writer);
         try self.row_coerced_uses.serialize(&env.row_coerced_uses, allocator, writer);
+        try self.row_coerced_callees.serialize(&env.row_coerced_callees, allocator, writer);
+        try self.closed_result_bindings.serialize(&env.closed_result_bindings, allocator, writer);
         try self.binding_scheme_codec_requirements.serialize(&env.binding_scheme_codec_requirements, allocator, writer);
         try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
         try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
@@ -4073,6 +4114,8 @@ pub const Serialized = extern struct {
             .dispatch_relation_merges = self.dispatch_relation_merges.deserializeInto(base_addr),
             .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
             .row_coerced_uses = self.row_coerced_uses.deserializeInto(base_addr),
+            .row_coerced_callees = self.row_coerced_callees.deserializeInto(base_addr),
+            .closed_result_bindings = self.closed_result_bindings.deserializeInto(base_addr),
             .binding_scheme_codec_requirements = self.binding_scheme_codec_requirements.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
@@ -4155,6 +4198,8 @@ pub const Serialized = extern struct {
             .dispatch_relation_merges = try self.dispatch_relation_merges.deserializeWithCopy(base_addr, gpa),
             .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
             .row_coerced_uses = try self.row_coerced_uses.deserializeWithCopy(base_addr, gpa),
+            .row_coerced_callees = try self.row_coerced_callees.deserializeWithCopy(base_addr, gpa),
+            .closed_result_bindings = try self.closed_result_bindings.deserializeWithCopy(base_addr, gpa),
             .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
@@ -4249,6 +4294,8 @@ pub const Serialized = extern struct {
             .dispatch_relation_merges = try self.dispatch_relation_merges.deserializeWithCopy(base_addr, gpa),
             .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
             .row_coerced_uses = try self.row_coerced_uses.deserializeWithCopy(base_addr, gpa),
+            .row_coerced_callees = try self.row_coerced_callees.deserializeWithCopy(base_addr, gpa),
+            .closed_result_bindings = try self.closed_result_bindings.deserializeWithCopy(base_addr, gpa),
             .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
@@ -4455,6 +4502,45 @@ pub fn nodeIsBindingScheme(self: *const Self, node_idx: Node.Idx) bool {
         self.binding_schemes.items.items,
         @backingInt(node_idx),
     ) != null;
+}
+
+/// Record that the definition at `node_idx` closed an annotated open result
+/// row (`ClosedResultBinding`). Checker-produced binding metadata.
+pub fn recordClosedResultBinding(self: *Self, node_idx: Node.Idx) std.mem.Allocator.Error!void {
+    try upsertSortedByNode(ClosedResultBinding, &self.closed_result_bindings, self.gpa, .{ .node_idx = @backingInt(node_idx) });
+}
+
+/// Whether checking recorded the definition at `node_idx` as one that closed
+/// an annotated open result row (`ClosedResultBinding`).
+pub fn nodeIsClosedResultBinding(self: *const Self, node_idx: Node.Idx) bool {
+    return findSortedByNode(ClosedResultBinding, self.closed_result_bindings.items.items, @backingInt(node_idx)) != null;
+}
+
+/// Record that the callee lookup at `node_idx` is called at its function's
+/// own type `fn_var`, whose result `ret_var` the call widens
+/// (`RowCoercedCallee`). Checker-produced use metadata.
+pub fn recordRowCoercedCallee(self: *Self, node_idx: Node.Idx, fn_var: types_mod.Var, ret_var: types_mod.Var) std.mem.Allocator.Error!void {
+    try upsertSortedByNode(
+        RowCoercedCallee,
+        &self.row_coerced_callees,
+        self.gpa,
+        .{ .node_idx = @backingInt(node_idx), .fn_var = @backingInt(fn_var), .ret_var = @backingInt(ret_var) },
+    );
+}
+
+/// Drop the row-coerced callee record for the lookup at `node_idx`: the call
+/// widened nothing, so it is an ordinary call.
+pub fn removeRowCoercedCallee(self: *Self, node_idx: Node.Idx) void {
+    const entries = self.row_coerced_callees.items.items;
+    const slot = sortedNodeSlot(RowCoercedCallee, entries, @backingInt(node_idx));
+    if (slot >= entries.len or entries[slot].node_idx != @backingInt(node_idx)) return;
+    _ = self.row_coerced_callees.items.orderedRemove(slot);
+}
+
+/// The row-coerced callee record for the lookup at `node_idx`, if checking
+/// recorded one (`RowCoercedCallee`).
+pub fn rowCoercedCallee(self: *const Self, node_idx: Node.Idx) ?RowCoercedCallee {
+    return findSortedByNode(RowCoercedCallee, self.row_coerced_callees.items.items, @backingInt(node_idx));
 }
 
 /// Record that the use at `node_idx` reads the value at `value_var` through a
@@ -4861,44 +4947,19 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
 }
 
 /// Add a new expression to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addDef(self: *Self, expr: CIR.Def, region: Region) std.mem.Allocator.Error!CIR.Def.Idx {
-    const expr_idx = try self.store.addDef(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addDef = storeAdder("addDef");
 
 /// Add a new type header to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addTypeHeader(self: *Self, expr: CIR.TypeHeader, region: Region) std.mem.Allocator.Error!CIR.TypeHeader.Idx {
-    const expr_idx = try self.store.addTypeHeader(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addTypeHeader = storeAdder("addTypeHeader");
 
 /// Add a new statement to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addStatement(self: *Self, expr: CIR.Statement, region: Region) std.mem.Allocator.Error!CIR.Statement.Idx {
-    const expr_idx = try self.store.addStatement(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addStatement = storeAdder("addStatement");
 
 /// Add a new pattern to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addPattern(self: *Self, expr: CIR.Pattern, region: Region) std.mem.Allocator.Error!CIR.Pattern.Idx {
-    const expr_idx = try self.store.addPattern(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addPattern = storeAdder("addPattern");
 
 /// Add a new expression to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addExpr(self: *Self, expr: CIR.Expr, region: Region) std.mem.Allocator.Error!CIR.Expr.Idx {
-    const expr_idx = try self.store.addExpr(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addExpr = storeAdder("addExpr");
 
 /// Reserve one contiguous field-access path plus its enclosing expression.
 pub fn startFieldAccessPath(self: *Self, segment_count: u32) std.mem.Allocator.Error!NodeStore.FieldAccessPathBuilder {
@@ -4931,91 +4992,59 @@ pub fn rollbackFieldAccessPath(self: *Self, builder: NodeStore.FieldAccessPathBu
 }
 
 /// Add a new capture to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addCapture(self: *Self, capture: CIR.Expr.Capture, region: Region) std.mem.Allocator.Error!CIR.Expr.Capture.Idx {
-    const capture_idx = try self.store.addCapture(capture, region);
-    self.debugAssertArraysInSync();
-    return capture_idx;
-}
+pub const addCapture = storeAdder("addCapture");
 
 /// Add a new record field to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addRecordField(self: *Self, expr: CIR.RecordField, region: Region) std.mem.Allocator.Error!CIR.RecordField.Idx {
-    const expr_idx = try self.store.addRecordField(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addRecordField = storeAdder("addRecordField");
 
 /// Add a new unset record field (`name: _`) to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addUnsetField(self: *Self, unset_field: CIR.UnsetField, region: Region) std.mem.Allocator.Error!CIR.UnsetField.Idx {
-    const unset_idx = try self.store.addUnsetField(unset_field, region);
-    self.debugAssertArraysInSync();
-    return unset_idx;
-}
+pub const addUnsetField = storeAdder("addUnsetField");
 
 /// Add a new record destructuring to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addRecordDestruct(self: *Self, expr: CIR.Pattern.RecordDestruct, region: Region) std.mem.Allocator.Error!CIR.Pattern.RecordDestruct.Idx {
-    const expr_idx = try self.store.addRecordDestruct(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addRecordDestruct = storeAdder("addRecordDestruct");
 
 /// Adds a new if branch to the store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addIfBranch(self: *Self, expr: CIR.Expr.IfBranch, region: Region) std.mem.Allocator.Error!CIR.Expr.IfBranch.Idx {
-    const expr_idx = try self.store.addIfBranch(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addIfBranch = storeAdder("addIfBranch");
 
 /// Add a new match branch to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addMatchBranch(self: *Self, expr: CIR.Expr.Match.Branch, region: Region) std.mem.Allocator.Error!CIR.Expr.Match.Branch.Idx {
-    const expr_idx = try self.store.addMatchBranch(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addMatchBranch = storeAdder("addMatchBranch");
 
 /// Add a new where clause to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addWhereClause(self: *Self, expr: CIR.WhereClause, region: Region) std.mem.Allocator.Error!CIR.WhereClause.Idx {
-    const expr_idx = try self.store.addWhereClause(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addWhereClause = storeAdder("addWhereClause");
 
 /// Add a new type annotation to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addTypeAnno(self: *Self, expr: CIR.TypeAnno, region: Region) std.mem.Allocator.Error!CIR.TypeAnno.Idx {
-    const expr_idx = try self.store.addTypeAnno(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addTypeAnno = storeAdder("addTypeAnno");
 
 /// Add a new annotation to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addAnnotation(self: *Self, expr: CIR.Annotation, region: Region) std.mem.Allocator.Error!CIR.Annotation.Idx {
-    const expr_idx = try self.store.addAnnotation(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addAnnotation = storeAdder("addAnnotation");
 
 /// Add a new record field to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addAnnoRecordField(self: *Self, expr: CIR.TypeAnno.RecordField, region: Region) std.mem.Allocator.Error!CIR.TypeAnno.RecordField.Idx {
-    const expr_idx = try self.store.addAnnoRecordField(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addAnnoRecordField = storeAdder("addAnnoRecordField");
 
 /// Add a new exposed item to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addExposedItem(self: *Self, expr: CIR.ExposedItem, region: Region) std.mem.Allocator.Error!CIR.ExposedItem.Idx {
-    const expr_idx = try self.store.addExposedItem(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
+pub const addExposedItem = storeAdder("addExposedItem");
+
+/// The value type `NodeStore.<name>` stores.
+fn StoreValue(comptime name: []const u8) type {
+    return @typeInfo(@TypeOf(@field(NodeStore, name))).@"fn".param_types[1].?;
+}
+
+/// The index type `NodeStore.<name>` returns.
+fn StoreIdx(comptime name: []const u8) type {
+    const store_fn = @typeInfo(@TypeOf(@field(NodeStore, name))).@"fn";
+    return @typeInfo(store_fn.return_type.?).error_union.payload;
+}
+
+/// `NodeStore.<name>(value, region)` forwarded through this env, asserting the
+/// node and region arrays are in sync once the store has grown.
+fn storeAdder(comptime name: []const u8) fn (*Self, StoreValue(name), Region) std.mem.Allocator.Error!StoreIdx(name) {
+    return struct {
+        fn add(self: *Self, value: StoreValue(name), region: Region) std.mem.Allocator.Error!StoreIdx(name) {
+            const idx = try @field(NodeStore, name)(&self.store, value, region);
+            self.debugAssertArraysInSync();
+            return idx;
+        }
+    }.add;
 }
 
 /// Add a diagnostic.
@@ -5027,20 +5056,10 @@ pub fn addDiagnostic(self: *Self, reason: CIR.Diagnostic) std.mem.Allocator.Erro
 }
 
 /// Add a new malformed node to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addMalformed(self: *Self, diagnostic_idx: CIR.Diagnostic.Idx, region: Region) std.mem.Allocator.Error!CIR.Node.Idx {
-    const malformed_idx = try self.store.addMalformed(diagnostic_idx, region);
-    self.debugAssertArraysInSync();
-    return malformed_idx;
-}
+pub const addMalformed = storeAdder("addMalformed");
 
 /// Add a new match branch pattern to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addMatchBranchPattern(self: *Self, expr: CIR.Expr.Match.BranchPattern, region: Region) std.mem.Allocator.Error!CIR.Expr.Match.BranchPattern.Idx {
-    const expr_idx = try self.store.addMatchBranchPattern(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addMatchBranchPattern = storeAdder("addMatchBranchPattern");
 
 /// Retrieves the text of an identifier by its index
 pub fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {

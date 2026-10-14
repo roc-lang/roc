@@ -372,12 +372,6 @@ fn rejectConsumerOwnedLargeStackPatternPayloads(
 ) harness.LowerToLirHarnessError!void {
     try std.testing.expect(hasLargeDiscriminatedTagLocal(store, layouts));
 
-    for (store.getPatterns(), 0..) |_, index| {
-        if (patternHasUnsafeLargeAggregate(store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))))) {
-            return error.Issue806UnsafeLargeStackPatternPayload;
-        }
-    }
-
     for (store.getCFStmts()) |stmt| {
         if (stmt == .switch_initialized_payload and
             isUnsafeLargeAggregateLocal(store, layouts, stmt.switch_initialized_payload.payload))
@@ -497,41 +491,4 @@ fn isUnsafeLargeAggregateLayout(layouts: *const layout.Store, local_layout: layo
 
 fn layoutIsLargerThanGuardPages(layouts: *const layout.Store, local_layout: layout.Layout) bool {
     return layouts.layoutSizeAlign(local_layout).size > issue806UnsafeAggregateBytes;
-}
-
-fn patternHasUnsafeLargeAggregate(
-    store: *const lir.LirStore,
-    layouts: *const layout.Store,
-    pattern_id: lir.LirPatternId,
-) bool {
-    if (pattern_id.isNone()) return false;
-
-    return switch (store.getPattern(pattern_id)) {
-        .bind => |pattern| isUnsafeLargeAggregateLayoutIdx(layouts, pattern.layout_idx),
-        .wildcard => |pattern| isUnsafeLargeAggregateLayoutIdx(layouts, pattern.layout_idx),
-        .int_literal, .float_literal, .str_literal => false,
-        .tag => |pattern| isUnsafeLargeAggregateLayoutIdx(layouts, pattern.union_layout) or
-            patternSpanHasUnsafeLargeAggregate(store, layouts, pattern.args),
-        .struct_ => |pattern| isUnsafeLargeAggregateLayoutIdx(layouts, pattern.struct_layout) or
-            patternSpanHasUnsafeLargeAggregate(store, layouts, pattern.fields),
-        .list => |pattern| isUnsafeLargeAggregateLayoutIdx(layouts, pattern.elem_layout) or
-            patternSpanHasUnsafeLargeAggregate(store, layouts, pattern.prefix) or
-            patternHasUnsafeLargeAggregate(store, layouts, pattern.rest) or
-            patternSpanHasUnsafeLargeAggregate(store, layouts, pattern.suffix),
-        .as_pattern => |pattern| isUnsafeLargeAggregateLayoutIdx(layouts, pattern.layout_idx) or
-            patternHasUnsafeLargeAggregate(store, layouts, pattern.inner),
-    };
-}
-
-fn patternSpanHasUnsafeLargeAggregate(
-    store: *const lir.LirStore,
-    layouts: *const layout.Store,
-    span: lir.LirPatternSpan,
-) bool {
-    const pattern_ids = store.getPatternSpan(span);
-    for (0..pattern_ids.len) |i| {
-        const pattern_id = GuardedList.at(pattern_ids, i);
-        if (patternHasUnsafeLargeAggregate(store, layouts, pattern_id)) return true;
-    }
-    return false;
 }

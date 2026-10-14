@@ -422,12 +422,25 @@ fn splitmix64(x: u64) u64 {
     return z ^ (z >> 31);
 }
 
+/// 256-bit layout fingerprint of a registered serialization root (see
+/// `collections.serde_validation.RootContract`). Validated on load, through the
+/// cache-entry admission hash or the baked builtin blob's trailer, so a blob whose
+/// layout differs from the running compiler's is rejected rather than relocated
+/// into a mismatched struct.
+///
+/// Only a type that declares a `root_contract` has a fingerprint, so every type
+/// whose bytes are admitted from outside the running compiler has had its
+/// owner/serialized field set audited at compile time. Bump `version` for a change
+/// in how persisted bytes are interpreted that the structural fingerprint can't see.
+pub fn rootLayoutVersionHash(comptime Root: type, comptime version: u32) [32]u8 {
+    comptime collections.serde_validation.assertRegisteredRoot(Root);
+    return layoutVersionHash(Root, version);
+}
+
 /// 256-bit layout-version digest of a `Serialized` type: a manual `version`
 /// discriminant + the total relocatable-pointer count + the full recursive layout
-/// fingerprint, folded with FNV-1a and expanded to 32 bytes via splitmix64. Same
-/// role as `cache_module.MODULE_ENV_VERSION_HASH`; validated on load so a blob whose
-/// layout differs from the running compiler's is rejected, not relocated into a
-/// mismatched struct. Bump `version` for a semantic change the fingerprint can't see.
+/// fingerprint, folded with FNV-1a and expanded to 32 bytes via splitmix64. Bump
+/// `version` for a semantic change the fingerprint can't see.
 pub fn layoutVersionHash(comptime T: type, comptime version: u32) [32]u8 {
     @setEvalBranchQuota(20_000_000);
     comptime assertPortableSerialized(T);
@@ -510,7 +523,7 @@ pub fn appendSpan(
 
 /// Comptime byte-equality of two comptime strings. `std.mem.eql` is banned in
 /// `src/check`, so field-name matching uses this manual loop.
-fn comptimeStrEq(comptime a: []const u8, comptime b: []const u8) bool {
+pub fn comptimeStrEq(comptime a: []const u8, comptime b: []const u8) bool {
     if (a.len != b.len) return false;
     for (a, b) |x, y| {
         if (x != y) return false;
@@ -673,6 +686,110 @@ pub fn SliceStoreSerde(comptime Store: type, comptime Serialized: type) type {
     };
 }
 
+/// `deinit` for a store whose ownership is uniform: every slice field is freed,
+/// every field with a `deinit` is deinitialized, and POD fields need nothing. A
+/// `serialized: bool` frozen flag gates the persisted fields (they alias a loaded
+/// buffer) while declared transients are always released. The store is reset to
+/// its default value. A store aliases it as `pub const deinit = SliceStoreDeinit(@This()).deinit;`.
+pub fn SliceStoreDeinit(comptime Store: type) type {
+    return struct {
+        pub fn deinit(store: *Store, allocator: std.mem.Allocator) void {
+            const flag = comptime frozenFlagField(Store);
+            const frozen = if (comptime flag != null) @field(store, flag.?) else false;
+            inline for (@typeInfo(Store).@"struct".field_names) |name| {
+                const is_flag = comptime flag != null and comptimeStrEq(name, flag.?);
+                const persisted = comptime !is_flag and !isTransientField(Store, name);
+                if (!frozen or !persisted) deinitStoreField(&@field(store, name), allocator);
+            }
+            store.* = .{};
+        }
+    };
+}
+
+fn deinitStoreField(field: anytype, allocator: std.mem.Allocator) void {
+    const FT = @TypeOf(field.*);
+    switch (@typeInfo(FT)) {
+        .pointer => |info| {
+            if (info.size != .slice) @compileError("SliceStoreDeinit: " ++ @typeName(FT) ++ " is not a slice");
+            allocator.free(field.*);
+        },
+        .@"struct" => if (comptime @hasDecl(FT, "deinit")) {
+            if (@typeInfo(@TypeOf(FT.deinit)).@"fn".param_types.len == 1) field.deinit() else field.deinit(allocator);
+        } else if (comptime ownsPointers(FT)) {
+            @compileError("SliceStoreDeinit: " ++ @typeName(FT) ++ " holds pointers but has no pub deinit");
+        },
+        .optional => |info| if (comptime @typeInfo(info.child) == .@"struct" and @hasDecl(info.child, "deinit")) {
+            @compileError("SliceStoreDeinit: optional owned field " ++ @typeName(FT) ++ " needs a hand-written deinit");
+        },
+        .type,
+        .void,
+        .bool,
+        .noreturn,
+        .int,
+        .float,
+        .array,
+        .comptime_float,
+        .comptime_int,
+        .undefined,
+        .null,
+        .error_union,
+        .error_set,
+        .@"enum",
+        .@"union",
+        .@"fn",
+        .@"opaque",
+        .frame,
+        .@"anyframe",
+        .vector,
+        .enum_literal,
+        .spirv,
+        => {},
+    }
+}
+
+/// Whether a value of `T` can hold a pointer, so dropping it without a `deinit`
+/// could leak.
+fn ownsPointers(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .pointer => true,
+        .optional => |info| ownsPointers(info.child),
+        .array => |info| ownsPointers(info.child),
+        .@"struct" => |info| blk: {
+            for (info.field_types) |field_type| {
+                if (ownsPointers(field_type)) break :blk true;
+            }
+            break :blk false;
+        },
+        .@"union" => |info| blk: {
+            for (info.field_types) |field_type| {
+                if (ownsPointers(field_type)) break :blk true;
+            }
+            break :blk false;
+        },
+        .type,
+        .void,
+        .bool,
+        .noreturn,
+        .int,
+        .float,
+        .comptime_float,
+        .comptime_int,
+        .undefined,
+        .null,
+        .error_union,
+        .error_set,
+        .@"enum",
+        .@"fn",
+        .@"opaque",
+        .frame,
+        .@"anyframe",
+        .vector,
+        .enum_literal,
+        .spirv,
+        => false,
+    };
+}
+
 fn fieldDefaultValue(comptime Store: type, comptime name: []const u8) ?@FieldType(Store, name) {
     for (@typeInfo(Store).@"struct".field_names, @typeInfo(Store).@"struct".field_types, @typeInfo(Store).@"struct".field_attrs) |f_name, f_type, f_attrs| {
         if (comptimeStrEq(f_name, name)) return f_attrs.defaultValue(f_type);
@@ -721,7 +838,7 @@ pub fn roundTripForTest(gpa: Allocator, comptime Store: type, store: *const Stor
     buffer: []align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
     loaded: Store,
 } {
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
 
@@ -903,7 +1020,7 @@ test "SerializedSlice: round-trips a POD slice via CompactWriter" {
 
     const src = [_]Elem{ @fromBackingInt(@intCast(7)), @fromBackingInt(@intCast(5)), @fromBackingInt(@intCast(4242)), @fromBackingInt(@intCast(1)) };
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
 
@@ -955,7 +1072,7 @@ test "SerializedSlice.serialize zeroes element padding (deterministic bytes)" {
 
 test "SerializedSlice.serialize: padding-free elements are iovec'd verbatim (no copy buffer)" {
     const gpa = testing.allocator;
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
 
@@ -988,7 +1105,7 @@ fn serializeHolderToBuffer(
     comptime Holder: type,
     items: anytype,
 ) TestError![]align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 {
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
     var writer = CompactWriter.init();
@@ -1010,7 +1127,7 @@ test "SerializedOptional: present and absent round-trip" {
     const present: ?Key = Key{ .bytes = .{ 1, 2, 3, 4, 5, 6, 7, 8 } };
     const absent: ?Key = null;
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
     var writer = CompactWriter.init();
@@ -1034,7 +1151,7 @@ test "SerializedSlice: empty slice round-trips to empty (no spurious offset)" {
     const Holder = extern struct {
         items: SerializedSlice(u64),
     };
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
 

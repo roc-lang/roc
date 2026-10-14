@@ -47,8 +47,10 @@ test {
     // index (4B); expect effects live in checker-owned slots because they belong
     // to call occurrences, not copied type constraints. The optional derived-map
     // payload selection adds its tag, payload index, and optional discriminant
-    // without affecting type identity.
-    try std.testing.expectEqual(88, @sizeOf(StaticDispatchConstraint));
+    // without affecting type identity. Interpolation metadata records whose
+    // source its regions point into, so reports never render another module's
+    // positions against this module's source.
+    try std.testing.expectEqual(92, @sizeOf(StaticDispatchConstraint));
     // Directed effect dependencies must survive type generalization,
     // instantiation, and cross-module copying, so they live with the function
     // payload rather than in checker-only side state.
@@ -141,6 +143,29 @@ pub const DescriptorFlags = packed struct(u8) {
     /// requirement records; the checker links it to the callable's copy
     /// before anything reads it, and reading it unlinked is a compiler bug.
     deferred_callable: bool = false,
+
+    /// The flags a copy of this class carries: those that describe its type.
+    /// The others record what happened to this class itself—a rejection, a
+    /// defaulting decision, a freeze, the annotation that opened its row, a
+    /// deferred copy—and a copy is a new class none of that happened to.
+    /// Instantiation carries these (and `annotation_tag_ext` when asked to
+    /// preserve it), and so does a frozen replay copy, which stands for a
+    /// fresh instance (design.md "Concrete dispatch replay").
+    pub fn copied(self: DescriptorFlags) DescriptorFlags {
+        return .{
+            .empty_tag_union_is_default = self.empty_tag_union_is_default,
+            .nominal_backing_structure = self.nominal_backing_structure,
+        };
+    }
+
+    /// The flags a successful relation of this class can observe: all but
+    /// `default_decided`, which only the report for a failed requirement
+    /// reads (design.md "Diagnostics About Defaulted Types").
+    pub fn relational(self: DescriptorFlags) DescriptorFlags {
+        var flags = self;
+        flags.default_decided = false;
+        return flags;
+    }
 };
 
 /// A type descriptor
@@ -640,6 +665,14 @@ pub const NominalType = struct {
 
     pub fn sourceDeclOptional(self: NominalType) ?u32 {
         return self.source.sourceDecl().toOptional();
+    }
+
+    /// The statement index of this type's declaration in its origin module env.
+    /// Every nominal type the checker produces names its declaration.
+    pub fn statement(self: NominalType) u32 {
+        const source_decl = self.source.sourceDecl();
+        std.debug.assert(source_decl.present);
+        return source_decl.statement;
     }
 
     pub fn isOpaque(self: NominalType) bool {
@@ -1143,13 +1176,28 @@ pub const StaticDispatchConstraint = struct {
     };
 
     pub const InterpolationMetadata = struct {
-        expr_region: OptRegion = OptRegion.none,
-        item_var: Var = no_var,
-        interpolated_parts: InterpolationPartMetadata.SafeList.Range = .empty(),
+        expr_region: OptRegion,
+        item_var: Var,
+        interpolated_parts: InterpolationPartMetadata.SafeList.Range,
+        /// Whose source `expr_region` and the parts' regions point into.
+        regions: RegionSource,
 
         const no_var: Var = @fromBackingInt(@intCast(std.math.maxInt(u32)));
 
-        pub const none = InterpolationMetadata{};
+        /// A module can render only its own source positions. Cross-module
+        /// copying keeps the defining module's positions, so a report about an
+        /// imported copy points at the use that instantiated it instead.
+        pub const RegionSource = enum(u8) {
+            this_module,
+            imported,
+        };
+
+        pub const none = InterpolationMetadata{
+            .expr_region = OptRegion.none,
+            .item_var = no_var,
+            .interpolated_parts = .empty(),
+            .regions = .this_module,
+        };
 
         pub fn isPresent(self: InterpolationMetadata) bool {
             return self.expr_region.get() != null;
@@ -1259,14 +1307,24 @@ pub const TwoStaticDispatchConstraints = struct {
 ///
 /// This is walk state for annotation generation, instantiation, and display—it
 /// is never stored in a type. The root of an annotation is positive
-/// (output). Each function resets its arguments to negative and its return
-/// to positive, independently of the enclosing position. Type application
-/// args, record fields, tuple elements, and tag payloads inherit position.
+/// (output). A function's argument positions flip the surrounding polarity
+/// and its return keeps it, so a callback's result is an input of the
+/// function that receives the callback. Type application args, record
+/// fields, tuple elements, and tag payloads inherit position.
 pub const Polarity = enum {
     /// An input (negative) position: a value the annotated thing consumes.
     neg,
     /// An output (positive) position: a value the annotated thing produces.
     pos,
+
+    /// The polarity of a function argument position whose function stands
+    /// at `self`.
+    pub fn flip(self: Polarity) Polarity {
+        return switch (self) {
+            .neg => .pos,
+            .pos => .neg,
+        };
+    }
 };
 
 /// The ident text of the compiler-internal rigid var used as the extension of

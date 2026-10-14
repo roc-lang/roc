@@ -169,6 +169,14 @@ pub const TargetConfig = struct {
     checked_module_state: CheckedModuleState = .complete,
     /// The compilation session supplies evaluated root slots for these reads.
     comptime_value_reads: bool = false,
+    /// With `comptime_value_reads`, the program lowers and publishes only the
+    /// compile-time roots it demands (design.md "Demand-Driven Compile-Time
+    /// Evaluation").
+    demand_driven_comptime_roots: bool = false,
+    /// This program's specializations may be written to the object cache, so
+    /// Monotype records what each one reads of compile-time evaluation
+    /// (`SpecComptimeReads`).
+    spec_comptime_reads: bool = false,
     /// The compilation session evaluates the program's literal roots.
     literal_roots: bool = false,
     inline_mode: InlineMode = .none,
@@ -244,10 +252,6 @@ pub const TargetConfig = struct {
     /// is enabled for optimized builds and kept off for dev and compile-time
     /// evaluation.
     prove_ranges: bool = false,
-    /// Debug-only: forwarded to `SolvedLirLower.Options.debug_materialized_out`
-    /// so a differential harness can execute the Debug verifier's materialized
-    /// Lambda Mono program. The slot receives a value only in Debug builds.
-    debug_materialized_out: ?*?postcheck.LambdaMono.Ast.Program = null,
     /// Optional deterministic task counts for solved-LIR body-shard lowering.
     solved_lir_parallel_metrics_out: ?*SolvedLirParallelMetrics = null,
     /// Per-run staged specialization counters; SpecConstr owns resetting them.
@@ -277,10 +281,12 @@ pub const DemandMetrics = struct {
     discovery_roots: u64 = 0,
     /// Checked modules the literal-demand analysis read.
     modules: u64 = 0,
-    /// Modules whose own checked data can register a literal root.
-    source_modules: u64 = 0,
-    /// Modules that can reach a literal root.
-    reaching_modules: u64 = 0,
+    /// Procedure templates the literal-demand analysis read.
+    templates: u64 = 0,
+    /// Templates whose own checked data can contribute to a literal root.
+    source_templates: u64 = 0,
+    /// Templates whose specializations can register a literal root.
+    reaching_templates: u64 = 0,
     /// Nominal types with their own literal conversion.
     custom_literal_types: u64 = 0,
     /// Monotype counters; see `postcheck.Monotype.Lower.DemandCounters`.
@@ -660,21 +666,31 @@ const TimingPhase = enum {
     boxy_lower,
 };
 
-const PipelineTimingScope = struct {
+/// One post-check stage in progress: records the stage for crash reports and,
+/// when timing is enabled, its duration. `end` is idempotent so a stage can end
+/// explicitly and still be covered by a `defer` on error paths.
+const PipelineStageScope = struct {
     timing: ?*Timing = null,
     started_ns: i64 = 0,
-    phase: TimingPhase = undefined,
+    phase: TimingPhase,
+    ice: ?base.ice_context.Guard,
 
-    fn begin(timing: ?*Timing, phase: TimingPhase) PipelineTimingScope {
-        const active = timing orelse return .{};
+    fn begin(timing: ?*Timing, phase: TimingPhase) PipelineStageScope {
+        const ice = base.ice_context.enter(.{ .phase = .post_check, .stage = @tagName(phase) });
+        const active = timing orelse return .{ .phase = phase, .ice = ice };
         return .{
             .timing = active,
             .started_ns = active.start(),
             .phase = phase,
+            .ice = ice,
         };
     }
 
-    fn end(self: *PipelineTimingScope) void {
+    fn end(self: *PipelineStageScope) void {
+        if (self.ice) |ice| {
+            ice.leave();
+            self.ice = null;
+        }
         const timing = self.timing orelse return;
         timing.finish(self.started_ns, self.phase);
         self.timing = null;
@@ -980,7 +996,6 @@ pub const Observers = struct {
     work_metrics: ?*WorkMetrics = null,
     timing: ?*Timing = null,
     post_check_executor: ?base.post_check_task_executor.Executor = null,
-    debug_materialized_out: ?*?postcheck.LambdaMono.Ast.Program = null,
     solved_lir_parallel_metrics_out: ?*SolvedLirParallelMetrics = null,
     lir_pass_parallel_metrics_out: ?*LirPassParallelMetrics = null,
     arc_parallel_metrics_out: ?*ArcParallelMetrics = null,
@@ -1129,10 +1144,6 @@ pub const FrozenMaterializer = struct {
     materialize: *const fn (Allocator, *anyopaque, *LirProgram.Result) Allocator.Error!LirProgram.FrozenStaticData,
 };
 
-/// Materialized Lambda Mono program type, re-exported for harnesses that
-/// receive one through `TargetConfig.debug_materialized_out`.
-pub const LambdaMonoProgram = postcheck.LambdaMono.Ast.Program;
-
 /// Runtime record and tag-union schemas needed by dev tooling.
 pub const RuntimeValueSchemaStore = struct {
     allocator: Allocator,
@@ -1211,18 +1222,6 @@ pub fn retainRuntimeRoots(lowered: *LoweredProgram, root_indices: []const u32) A
     try completeComptimeValueSlots(lowered);
 }
 
-/// Turn a runtime consumer's completed compile-time value slots into ordinary
-/// frozen program data.
-///
-/// This consumer lowered only its own roots, so nothing here selects roots. It
-/// reaches each compile-time value through a slot the evaluation has since
-/// filled, and its own roots are the program's roots already.
-pub fn adoptCompletedComptimeValues(lowered: *LoweredProgram) Allocator.Error!void {
-    if (lowered.lir_result.const_roots.items.len != 0 or lowered.lir_result.literal_roots.items.len != 0) checkedPipelineInvariant("runtime consumer lowered a compile-time root");
-    if (lowered.frozen_static_data == null) checkedPipelineInvariant("runtime consumer has no completed compile-time values to adopt");
-    try completeComptimeValueSlots(lowered);
-}
-
 /// Adopt completed values whose frozen graph already participated in this
 /// consumer's reachability pass. This is the separate-target continuation;
 /// rerunning compaction here would repeat work after ARC and cannot discover
@@ -1273,8 +1272,11 @@ pub const LoweredProgram = struct {
     target_usize: base.target.TargetUsize,
     runtime_value_schemas: RuntimeValueSchemaStore,
     frozen_static_data: ?LirProgram.FrozenStaticData = null,
+    /// See `TargetConfig.spec_comptime_reads`.
+    spec_comptime_reads: ?SpecComptimeReads = null,
 
     pub fn deinit(self: *LoweredProgram) void {
+        if (self.spec_comptime_reads) |*reads| reads.deinit();
         if (self.frozen_static_data) |*data| data.deinit();
         self.runtime_value_schemas.deinit();
         self.lir_result.deinit();
@@ -1345,6 +1347,20 @@ pub const PreparedMonotype = struct {
     target: TargetConfig,
     root_count: usize,
     test_plan_metadata: []postcheck.Common.RootTestPlanMetadata,
+    /// What a shared program demands of compile-time evaluation; null for a
+    /// program that reads no compile-time root slots. The compile-time
+    /// consumer takes it before the program continues to Solved.
+    comptime_demand: ?ComptimeDemand = null,
+    /// See `TargetConfig.spec_comptime_reads`; it travels to the program's
+    /// final consumer.
+    spec_comptime_reads: ?SpecComptimeReads = null,
+
+    /// Take ownership of the program's compile-time demand.
+    pub fn takeComptimeDemand(self: *PreparedMonotype) ComptimeDemand {
+        const demand = self.comptime_demand orelse checkedPipelineInvariant("Monotype program recorded no compile-time demand");
+        self.comptime_demand = null;
+        return demand;
+    }
 
     /// A shared program preserves both expect semantics explicitly. A program
     /// specialized for one mode cannot acquire the missing continuation later.
@@ -1358,21 +1374,37 @@ pub const PreparedMonotype = struct {
         var target = self.target;
         target.target_usize = target_usize;
         target.inline_expects = inline_expects;
+        var spec_reads: ?SpecComptimeReads = if (self.spec_comptime_reads) |*reads| try reads.clone(self.allocator) else null;
+        errdefer if (spec_reads) |*reads| reads.deinit();
         return .{
             .allocator = self.allocator,
             .program = program,
             .target = target,
             .root_count = self.root_count,
             .test_plan_metadata = metadata,
+            .spec_comptime_reads = spec_reads,
         };
     }
 
     pub fn deinit(self: *PreparedMonotype) void {
         self.program.deinit();
         self.allocator.free(self.test_plan_metadata);
+        if (self.comptime_demand) |*demand| demand.deinit();
+        if (self.spec_comptime_reads) |*reads| reads.deinit();
         self.* = undefined;
     }
 };
+
+/// See `postcheck.Monotype.Lower.ComptimeDemand`.
+pub const ComptimeDemand = postcheck.Monotype.Lower.ComptimeDemand;
+/// See `postcheck.Monotype.Lower.SpecComptimeReads`.
+pub const SpecComptimeReads = postcheck.Monotype.Lower.SpecComptimeReads;
+/// See `postcheck.Common.ComptimeRootRead`.
+pub const ComptimeRootRead = postcheck.Common.ComptimeRootRead;
+/// A checked compile-time root named in a `ComptimeDemand`.
+pub const ComptimeDemandRoot = postcheck.Monotype.Solve.EntryRoot;
+/// A root of a prepared Monotype program.
+pub const MonotypeRoot = postcheck.Monotype.Ast.Root;
 
 /// Lower checked modules and explicit roots directly into an ARC-ready LIR program.
 pub fn lowerCheckedModulesToLir(
@@ -1419,7 +1451,12 @@ pub fn prepareCheckedModulesMonotype(
 
     const test_plan_metadata = try allocator.dupe(postcheck.Common.RootTestPlanMetadata, roots.test_plan_metadata);
     errdefer allocator.free(test_plan_metadata);
-    const monotype_started_ns = if (target.timing) |timing| timing.start() else 0;
+    var comptime_demand: ComptimeDemand = .{ .allocator = allocator };
+    errdefer comptime_demand.deinit();
+    var spec_comptime_reads: SpecComptimeReads = .{ .allocator = allocator };
+    errdefer spec_comptime_reads.deinit();
+    var monotype_scope = PipelineStageScope.begin(target.timing, .monotype);
+    defer monotype_scope.end();
     var monotype_timing: ?postcheck.Monotype.Lower.Timing = if (target.timing) |timing|
         postcheck.Monotype.Lower.Timing.init(timing.std_io)
     else
@@ -1433,12 +1470,14 @@ pub fn prepareCheckedModulesMonotype(
     }
     var demand_counters: postcheck.Monotype.Lower.DemandCounters = .{};
     const mono = monotype: {
-        defer if (target.timing) |timing| {
-            timing.finish(monotype_started_ns, .monotype);
-            if (monotype_timing) |*detail| timing.addMonotypeSnapshot(detail.snapshot());
-            if (monotype_diagnostics) |diagnostics| timing.addMonotypeDiagnostics(diagnostics);
-            timing.addDemand(.{ .monotype = demand_counters });
-        };
+        defer {
+            monotype_scope.end();
+            if (target.timing) |timing| {
+                if (monotype_timing) |*detail| timing.addMonotypeSnapshot(detail.snapshot());
+                if (monotype_diagnostics) |diagnostics| timing.addMonotypeDiagnostics(diagnostics);
+                timing.addDemand(.{ .monotype = demand_counters });
+            }
+        }
         if (target.work_metrics) |metrics| metrics.monotype_runs += 1;
         break :monotype try postcheck.Monotype.Lower.run(
             allocator,
@@ -1455,6 +1494,9 @@ pub fn prepareCheckedModulesMonotype(
                 .post_check_executor = target.post_check_executor,
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
+                .demand_driven_comptime_roots = target.demand_driven_comptime_roots,
+                .comptime_demand_out = if (target.comptime_value_reads) &comptime_demand else null,
+                .spec_comptime_reads_out = if (target.spec_comptime_reads) &spec_comptime_reads else null,
                 .literal_roots = target.literal_roots,
                 .replay_interface_summaries = target.replay_interface_summaries,
                 .target_usize = target.target_usize,
@@ -1469,12 +1511,20 @@ pub fn prepareCheckedModulesMonotype(
         );
     };
     if (SpecCensus.enabled()) try SpecCensus.runMonotype(allocator, modules, &mono);
+    // A demand-driven program publishes only the compile-time roots it
+    // demands; every other program publishes one root per request.
+    const root_count = mono.rootsView().len;
+    if (!target.demand_driven_comptime_roots and root_count != roots.requests.len) {
+        checkedPipelineInvariant("Monotype lowering published a root count different from its requests");
+    }
     return .{
         .allocator = allocator,
         .program = mono,
         .target = prepared_target,
-        .root_count = roots.requests.len,
+        .root_count = root_count,
         .test_plan_metadata = test_plan_metadata,
+        .comptime_demand = if (target.comptime_value_reads) comptime_demand else null,
+        .spec_comptime_reads = if (target.spec_comptime_reads) spec_comptime_reads else null,
     };
 }
 
@@ -1555,11 +1605,18 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
     const target = prepared.target;
     if (target.work_metrics) |metrics| metrics.solved_runs += 1;
     errdefer allocator.free(prepared.test_plan_metadata);
+    // Only a compile-time consumer reads the demand, and it takes it first.
+    if (prepared.comptime_demand) |demand| {
+        var unread = demand;
+        unread.deinit();
+    }
+    var spec_comptime_reads = prepared.spec_comptime_reads;
+    errdefer if (spec_comptime_reads) |*reads| reads.deinit();
     var mono = prepared.program;
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();
 
-    var lift_timing_scope = PipelineTimingScope.begin(target.timing, .lift);
+    var lift_timing_scope = PipelineStageScope.begin(target.timing, .lift);
     defer lift_timing_scope.end();
 
     // Each post-check transform consumes its input even when it returns an
@@ -1580,15 +1637,16 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
         .metrics_out = spec_constr_metrics,
     };
     var procedure_usage = if (target.inline_mode != .none) blk: {
-        var spec_constr_timing_scope = PipelineTimingScope.begin(target.timing, .spec_constr);
+        var spec_constr_timing_scope = PipelineStageScope.begin(target.timing, .spec_constr);
         defer spec_constr_timing_scope.end();
         const usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsageWithOptions(allocator, &lifted, target.spec_constr_clone_inlining, spec_constr_options);
         spec_constr_timing_scope.end();
         break :blk usage;
     } else blk: {
-        const spec_constr_started_ns = if (target.timing) |timing| timing.start() else 0;
+        var spec_constr_timing_scope = PipelineStageScope.begin(target.timing, .spec_constr);
+        defer spec_constr_timing_scope.end();
         try postcheck.MonotypeLifted.SpecConstr.runIteratorFusionWithOptions(allocator, &lifted, spec_constr_options);
-        if (target.timing) |timing| timing.finish(spec_constr_started_ns, .spec_constr);
+        spec_constr_timing_scope.end();
         break :blk postcheck.MonotypeLifted.SpecConstr.OwnedProcedureUsage.empty(allocator);
     };
     defer procedure_usage.deinit();
@@ -1598,7 +1656,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
     if (target.lifted_expr_count_out) |slot| slot.* = lifted_expr_count;
     if (SpecCensus.enabled()) SpecCensus.runLifted(&lifted);
 
-    var lambda_solve_timing_scope = PipelineTimingScope.begin(target.timing, .lambda_solve);
+    var lambda_solve_timing_scope = PipelineStageScope.begin(target.timing, .lambda_solve);
     defer lambda_solve_timing_scope.end();
     const lifted_input = lifted;
     lifted_owned = false;
@@ -1607,7 +1665,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
     errdefer solved.deinit();
     lambda_solve_timing_scope.end();
 
-    var inline_plan_timing_scope = PipelineTimingScope.begin(
+    var inline_plan_timing_scope = PipelineStageScope.begin(
         if (target.inline_mode != .none) target.timing else null,
         .inline_plan,
     );
@@ -1623,6 +1681,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
         .root_count = prepared.root_count,
         .test_plan_metadata = prepared.test_plan_metadata,
         .lifted_expr_count = lifted_expr_count,
+        .spec_comptime_reads = spec_comptime_reads,
     };
 }
 
@@ -1635,6 +1694,8 @@ pub const PreparedSolved = struct {
     root_count: usize,
     test_plan_metadata: []postcheck.Common.RootTestPlanMetadata,
     lifted_expr_count: usize,
+    /// See `PreparedMonotype.spec_comptime_reads`.
+    spec_comptime_reads: ?SpecComptimeReads = null,
 
     /// The evaluated roots this producer program records reads of. Whoever
     /// materializes completed values materializes these and no others.
@@ -1652,6 +1713,7 @@ pub const PreparedSolved = struct {
         self.program.deinit();
         self.inline_plan.deinit();
         self.allocator.free(self.test_plan_metadata);
+        if (self.spec_comptime_reads) |*reads| reads.deinit();
         self.* = undefined;
     }
 };
@@ -1691,7 +1753,14 @@ pub fn lowerConsumerToLir(prepared: *PreparedSolved, consumer: Consumer) LowerRe
     else
         null;
     errdefer if (frozen) |*data| data.deinit();
-    return finishLoweredOutput(prepared.allocator, consumerRootCount(prepared.*, consumer), generated.target, &generated.output, &frozen);
+    // Any consumer's specializations may be written to the object cache; a
+    // consumer before the last one reads its own copy of what each one reads
+    // of compile-time evaluation.
+    var spec_comptime_reads: ?SpecComptimeReads = if (prepared.spec_comptime_reads) |*reads| try reads.clone(prepared.allocator) else null;
+    errdefer if (spec_comptime_reads) |*reads| reads.deinit();
+    var lowered = try finishLoweredOutput(prepared.allocator, consumerRootCount(prepared.*, consumer), generated.target, &generated.output, &frozen);
+    lowered.spec_comptime_reads = spec_comptime_reads;
+    return lowered;
 }
 
 /// Lower the producer program's last consumer, and release the producer as
@@ -1715,9 +1784,16 @@ pub fn lowerFinalConsumerToLir(prepared: PreparedSolved, consumer: Consumer) Low
     else
         null;
     errdefer if (frozen) |*data| data.deinit();
+    // The specializations' compile-time reads outlive the producer: the
+    // object cache writes them beside the program's procedures.
+    var spec_comptime_reads = owned.spec_comptime_reads;
+    owned.spec_comptime_reads = null;
+    errdefer if (spec_comptime_reads) |*reads| reads.deinit();
     owned_live = false;
     owned.deinit();
-    return finishLoweredOutput(allocator, root_count, target, &generated.output, &frozen);
+    var lowered = try finishLoweredOutput(allocator, root_count, target, &generated.output, &frozen);
+    lowered.spec_comptime_reads = spec_comptime_reads;
+    return lowered;
 }
 
 /// How many roots this consumer lowers: its own share, or the producer's
@@ -1752,7 +1828,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
     }
     if (target.work_metrics) |metrics| metrics.lir_continuations += 1;
     if (target.lifted_expr_count_out) |slot| slot.* = prepared.lifted_expr_count;
-    var lir_gen_timing_scope = PipelineTimingScope.begin(target.timing, .lir_gen);
+    var lir_gen_timing_scope = PipelineStageScope.begin(target.timing, .lir_gen);
     defer lir_gen_timing_scope.end();
     var local_parallel_metrics: SolvedLirParallelMetrics = .{};
     const parallel_metrics = solvedLirMetricsOutput(target, &local_parallel_metrics);
@@ -1772,7 +1848,6 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
         .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or packTraceEnabled(),
         .layout_request_const_plans = target.layout_request_const_plans,
         .test_plan_metadata = prepared.test_plan_metadata,
-        .debug_materialized_out = target.debug_materialized_out,
         .parallel_metrics = parallel_metrics,
         .completed_scalar_values = target.completed_scalar_values,
     });
@@ -1826,7 +1901,7 @@ fn finishLoweredOutput(
     frozen: *?LirProgram.FrozenStaticData,
 ) LowerResourceError!LoweredProgram {
     verifyArithmeticBoundary(&lowered.lir_result.store, false);
-    var lir_passes_timing_scope = PipelineTimingScope.begin(target.timing, .lir_passes);
+    var lir_passes_timing_scope = PipelineStageScope.begin(target.timing, .lir_passes);
     defer lir_passes_timing_scope.end();
     var local_pass_metrics: LirPassParallelMetrics = .{};
     var pass_target = target;
@@ -1893,7 +1968,7 @@ fn finishLoweredOutput(
     }
     lir_passes_timing_scope.end();
 
-    var arc_timing_scope = PipelineTimingScope.begin(target.timing, .arc);
+    var arc_timing_scope = PipelineStageScope.begin(target.timing, .arc);
     defer arc_timing_scope.end();
     var local_arc_metrics: ArcParallelMetrics = .{};
     const arc_metrics = arcMetricsOutput(target, &local_arc_metrics);
@@ -1995,7 +2070,7 @@ pub const PreparedBoxy = struct {
 
     pub fn lower(self: *const PreparedBoxy, target: TargetConfig) LowerResourceError!LoweredProgram {
         std.debug.assert(target.specialization_strategy == .boxy);
-        var scope = PipelineTimingScope.begin(target.timing, .boxy_lower);
+        var scope = PipelineStageScope.begin(target.timing, .boxy_lower);
         defer scope.end();
         var lowered = try postcheck.Boxy.Lower.run(
             self.allocator,
@@ -2032,7 +2107,7 @@ pub fn prepareBoxyCheckedModules(
     errdefer allocator.free(layout_requests);
     const static_data_requests = try collectStaticDataRequests(allocator, modules.root.module, roots.static_data_requests, roots.include_provided_data_exports);
     errdefer allocator.free(static_data_requests);
-    var scope = PipelineTimingScope.begin(target.timing, .boxy_plan);
+    var scope = PipelineStageScope.begin(target.timing, .boxy_plan);
     defer scope.end();
     const plan = try postcheck.Boxy.Plan.analyzeProgram(allocator, .{
         .root_module = modules.root,
@@ -2381,7 +2456,7 @@ test "adopting completed compile-time values drops their initializers and identi
     };
     lowered.frozen_static_data = .{ .allocator = allocator, .exports = exports };
 
-    try adoptCompletedComptimeValues(&lowered);
+    try completeComptimeValueSlots(&lowered);
 
     const slot = lowered.lir_result.static_data_values.items[0];
     try std.testing.expectEqual(@as(?LIR.LirProcSpecId, null), slot.initializer);
@@ -2808,7 +2883,6 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
             var rendered: std.Io.Writer.Allocating = .init(allocator);
             defer rendered.deinit();
             renderType(&rendered.writer, allocator, mono, view.types, spec.identity.request_fn_ty, 0) catch return error.OutOfMemory;
-            const key_hex = std.fmt.bytesToHex(spec.request_fn_ty_digest.bytes, .lower);
             const req_hex = std.fmt.bytesToHex(spec.identity.request_fn_ty_digest.bytes, .lower);
             const solved_hex = std.fmt.bytesToHex(spec.solved_fn_ty_digest.bytes, .lower);
             std.debug.print("CENSUS_SPEC\t{d}\t{s}\t{s}\t{s}\t{d}\t{d}\t{s}\t{d}\t{d}\t{d}\t{s}\t{s}\t{s}\t{s}\n", .{
@@ -2827,7 +2901,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
                 @tagName(spec.status),
                 &shape.classes(),
             });
-            std.debug.print("CENSUS_REQ\t{s}\t{s}\t{s}\n", .{ callable_name, key_hex[0..16], rendered.written() });
+            std.debug.print("CENSUS_REQ\t{s}\t{s}\t{s}\n", .{ callable_name, req_hex[0..16], rendered.written() });
         }
     }
 

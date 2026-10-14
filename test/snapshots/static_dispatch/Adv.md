@@ -104,7 +104,7 @@ TYPE NOT DETERMINED - Adv.md:28:13:28:20
 		(title "Type Not Determined")
 		(region (start 28 13) (end 28 20))
 		(headline
-			(reflow "Nothing in this program determines the type of this string:"))
+			(reflow "Nothing in this program determines the type of this string."))
 		(document
 			(source-region (file "Adv.md") (start 28 13) (end 28 20) (annotation error) (line-text "\tnext_val = \"Hello\".update(100)"))
 			(line-break)
@@ -477,11 +477,10 @@ main = {
 		(e-block
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dispatch-call (method "update") (constraint-fn-var 497)
-					(receiver
-						(e-runtime-error (tag "erroneous_value_expr")))
-					(args
-						(e-num (value "100")))))
+				(e-runtime-error (tag "erroneous_value_expr")
+					(e-string
+						(e-literal (string "Hello")))
+					(e-num (value "100"))))
 			(e-lookup-local
 				(p-assign (ident "next_val")))))
 	(d-let

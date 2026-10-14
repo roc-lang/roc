@@ -84,7 +84,7 @@ fn measureLiteralList(literal_count: usize) TestError!Measurement {
         defer walk.deinit();
         while (try walk.next()) |stmt| {
             result.statements += 1;
-            switch (store.getCFStmt(stmt)) {
+            switch (store.getCFStmtImmediate(stmt).*) {
                 .decref, .decref_if_initialized, .free => result.releases += 1,
                 .init_uninitialized,
                 .assign_ref,
@@ -96,7 +96,6 @@ fn measureLiteralList(literal_count: usize) TestError!Measurement {
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -124,8 +123,6 @@ fn measureLiteralList(literal_count: usize) TestError!Measurement {
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .loop_continue,
-                .loop_break,
                 .join,
                 .jump,
                 .ret,

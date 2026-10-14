@@ -7,6 +7,7 @@
 //! only then may the coordinator append code or destroy fragment owners.
 
 const std = @import("std");
+const collections = @import("collections");
 const base = @import("base");
 const lir = @import("lir");
 const layout = @import("layout");
@@ -262,7 +263,7 @@ fn executeWave(comptime CG: type, allocator: Allocator, jobs: []Job(CG), executo
         }
         session.end();
     } else {
-        var scratch = std.heap.ArenaAllocator.init(allocator);
+        var scratch = base.SingleThreadArena.init(allocator);
         defer scratch.deinit();
         var accepted: usize = 0;
         for (jobs) |*job| {
@@ -734,7 +735,7 @@ test "native retained data binds local self pointers through nonzero fragment pl
     defer cg.deinit();
     _ = try cg.appendAssembledRegion("\x90\x90\x90\x90\x90\x90\x90\x90", .entrypoint, 0, null);
     const source = Artifact.Set{
-        .arena = std.heap.ArenaAllocator.init(a),
+        .arena = collections.SingleThreadArena.init(a),
         .artifacts = &.{.{
             .kind = .{ .proc = spec.identity },
             .code = "\x90\x48\x8b\x05\x00\x00\x00\x00\xc3",

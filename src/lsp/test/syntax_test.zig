@@ -172,7 +172,7 @@ pub fn syntaxCheckerSkipsRebuildWhenContentUnchanged() integration_spec.SpecErro
         h.allocator.free(result1);
     }
 
-    const hash1 = h.checker.dependency_graph.getContentHash(h.file_path.?);
+    const hash1 = h.checker.content_hashes.get(h.file_path.?);
     try std.testing.expect(hash1 != null);
 
     // Same content should skip rebuild (returns empty)
@@ -183,7 +183,7 @@ pub fn syntaxCheckerSkipsRebuildWhenContentUnchanged() integration_spec.SpecErro
     }
 
     try std.testing.expectEqual(@as(usize, 0), result2.len);
-    const hash2 = h.checker.dependency_graph.getContentHash(h.file_path.?);
+    const hash2 = h.checker.content_hashes.get(h.file_path.?);
     try std.testing.expect(hash2 != null);
     try std.testing.expectEqualSlices(u8, &hash1.?, &hash2.?);
 }
@@ -217,7 +217,7 @@ pub fn syntaxCheckerRebuildsWhenContentChanges() integration_spec.SpecError!void
         h.allocator.free(result1);
     }
 
-    const hash1 = h.checker.dependency_graph.getContentHash(h.file_path.?);
+    const hash1 = h.checker.content_hashes.get(h.file_path.?);
     try std.testing.expect(hash1 != null);
 
     const result2 = try h.checker.check(h.uri.?, contents2, null);
@@ -226,7 +226,7 @@ pub fn syntaxCheckerRebuildsWhenContentChanges() integration_spec.SpecError!void
         h.allocator.free(result2);
     }
 
-    const hash2 = h.checker.dependency_graph.getContentHash(h.file_path.?);
+    const hash2 = h.checker.content_hashes.get(h.file_path.?);
     try std.testing.expect(hash2 != null);
     try std.testing.expect(!std.mem.eql(u8, &hash1.?, &hash2.?));
 }
@@ -1111,7 +1111,7 @@ fn focusedExpressionDiagnostics() integration_spec.SpecError!void {
             \\    value
             \\}
             ,
-            "type mismatch",
+            "used in an unexpected way",
             "|value|",
         },
         .{
@@ -1121,7 +1121,7 @@ fn focusedExpressionDiagnostics() integration_spec.SpecError!void {
             \\    1
             \\}
             ,
-            "type mismatch",
+            "used in an unexpected way",
             "||",
         },
         .{
@@ -1131,7 +1131,7 @@ fn focusedExpressionDiagnostics() integration_spec.SpecError!void {
             \\    1
             \\}
             ,
-            "type mismatch",
+            "used in an unexpected way",
             "|\"|\"|",
         },
         .{

@@ -5,11 +5,10 @@
 
 const std = @import("std");
 const can = @import("can");
-const check = @import("check");
 const collections = @import("collections");
 const ctx_mod = @import("ctx");
 
-const Constants = @import("cache_config.zig").Constants;
+const cache_versioning = @import("cache_versioning.zig");
 const CoreCtx = ctx_mod.CoreCtx;
 
 const ModuleEnv = can.ModuleEnv;
@@ -17,19 +16,6 @@ const Allocator = std.mem.Allocator;
 
 /// Magic number for cache validation
 const CACHE_MAGIC: u32 = 0x524F4343; // "ROCC" in ASCII
-
-/// The cache header's layout-version hash, computed at comptime. It changes when
-/// the struct layout changes, enabling automatic cache invalidation. Delegates to
-/// the shared `check.layoutVersionHash`, which recurses into nested aggregates and
-/// serialized element layouts, so a change nested inside a field's type also
-/// invalidates the cache. `cache_version` is a manual discriminant for semantic
-/// changes the structural walk cannot observe.
-fn computeVersionHash(comptime StructType: type, comptime cache_version: u32) [32]u8 {
-    return check.layoutVersionHash(StructType, cache_version);
-}
-
-/// Version hash of ModuleEnv.Serialized computed at comptime
-pub const MODULE_ENV_VERSION_HASH: [32]u8 = computeVersionHash(ModuleEnv.Serialized, Constants.CACHE_VERSION);
 
 /// Cache header that gets written to disk before the cached data
 pub const Header = struct {
@@ -76,7 +62,7 @@ pub const Header = struct {
         if (header.magic != CACHE_MAGIC) return InitError.InvalidMagic;
 
         // Validate version hash
-        if (!std.mem.eql(u8, &header.version_hash, &MODULE_ENV_VERSION_HASH)) {
+        if (!std.mem.eql(u8, &header.version_hash, &cache_versioning.module_env_layout)) {
             return InitError.InvalidVersionHash;
         }
 
@@ -127,7 +113,7 @@ pub const CacheModule = struct {
         const header = @as(*Header, @ptrCast(cache_data.ptr));
         header.* = Header{
             .magic = CACHE_MAGIC,
-            .version_hash = MODULE_ENV_VERSION_HASH,
+            .version_hash = cache_versioning.module_env_layout,
             .data_size = @intCast(total_data_size),
             .error_count = error_count,
             .warning_count = warning_count,
@@ -204,38 +190,6 @@ pub const CacheModule = struct {
         return module_env_ptr;
     }
 
-    /// Get diagnostic information about the cache
-    pub fn getDiagnostics(self: *const CacheModule) Diagnostics {
-        return Diagnostics{
-            .total_size = @sizeOf(Header) + self.header.data_size,
-            .header_size = @sizeOf(Header),
-            .data_size = self.header.data_size,
-        };
-    }
-
-    /// Validate the cache structure and integrity
-    pub fn validate(self: *const CacheModule) Allocator.Error!void {
-        // Just validate that we have data
-        if (self.data.len != self.header.data_size) {
-            return error.DataSizeMismatch;
-        }
-    }
-
-    /// Convenience function for reading cache files
-    pub fn readFromFile(
-        allocator: Allocator,
-        file_path: []const u8,
-        filesystem: anytype,
-    ) Allocator.Error![]align(SERIALIZATION_ALIGNMENT.toByteUnits()) u8 {
-        const file_data = try filesystem.readFile(file_path, allocator);
-        defer allocator.free(file_data);
-
-        const buffer = try allocator.alignedAlloc(u8, SERIALIZATION_ALIGNMENT, file_data.len);
-        @memcpy(buffer, file_data);
-
-        return buffer;
-    }
-
     /// Tagged union to represent cache data that can be either memory-mapped or heap-allocated
     pub const CacheData = union(enum) {
         mapped: CoreCtx.MappedFile,
@@ -261,33 +215,6 @@ pub const CacheModule = struct {
         }
     };
 
-    /// Load a cache file, memory-mapping it when `roc_ctx` can map files and
-    /// reading it onto the heap otherwise.
-    ///
-    /// The mapping is copy-on-write (`CoreCtx.mapFilePrivate`), so callers may
-    /// write into the returned bytes (for example, relocating serialized
-    /// pointers in place) without those writes ever reaching the cache file on
-    /// disk. If a caller keeps references into the mapped bytes, the mapping
-    /// must outlive them; free it through `CacheData.deinit`, which unmaps a
-    /// `.mapped` value and never routes it through the heap allocator.
-    ///
-    /// An empty file, a mapping error, or a `roc_ctx` that cannot map files (a
-    /// virtual filesystem, a target without `mmap`) uses the heap-read path via
-    /// `filesystem.readFile`, so a mapping failure never fails the load.
-    pub fn readFromFileMapped(
-        allocator: Allocator,
-        roc_ctx: CoreCtx,
-        file_path: []const u8,
-        filesystem: anytype,
-    ) Allocator.Error!CacheData {
-        if (tryMapCacheFile(roc_ctx, file_path)) |mapped| {
-            return mapped;
-        }
-
-        const data = try readFromFile(allocator, file_path, filesystem);
-        return CacheData{ .allocated = data };
-    }
-
     /// Copy-on-write map `file_path` into a `CacheData.mapped` value, or return
     /// `null` when `roc_ctx` cannot map it (a virtual filesystem, a target without
     /// `mmap`, or a missing, empty, or kernel-refused file). A `null` result is
@@ -297,90 +224,3 @@ pub const CacheModule = struct {
         return CacheData{ .mapped = mapped };
     }
 };
-
-/// Diagnostic information about a cache
-pub const Diagnostics = struct {
-    total_size: u32,
-    header_size: u32,
-    data_size: u32,
-};
-
-test "MODULE_ENV_VERSION_HASH golden value" {
-    // Tripwire: an *accidental* change to `ModuleEnv.Serialized`'s layout silently
-    // invalidates every on-disk module cache. It flips this hash and fails here. On
-    // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
-    // golden bytes below with the ones this assertion prints.
-    const golden: [32]u8 = .{
-        0x15, 0x25, 0x50, 0x0D, 0x08, 0x7F, 0x72, 0xED, 0x30, 0x3B, 0x7D, 0xCC, 0xDB, 0x3B, 0x45, 0x11,
-        0x04, 0xA3, 0xD5, 0x4F, 0x6E, 0x4C, 0x7A, 0x49, 0xF1, 0x45, 0x15, 0x3F, 0x21, 0x12, 0xE1, 0xEE,
-    };
-    try std.testing.expectEqualSlices(u8, &golden, &MODULE_ENV_VERSION_HASH);
-}
-
-test "readFromFileMapped memory-maps a cache file copy-on-write" {
-    if (comptime !CoreCtx.can_map_files) return;
-
-    const testing = std.testing;
-    const roc_ctx = CoreCtx.default(testing.allocator, testing.allocator, testing.io);
-
-    var tmp_dir = testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-    const tmp_path = try tmp_dir.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
-    defer testing.allocator.free(tmp_path);
-    const path = try std.fs.path.join(testing.allocator, &.{ tmp_path, "mmap-roundtrip.bin" });
-    defer testing.allocator.free(path);
-
-    // A page of deterministic bytes so the mapped data spans the whole page.
-    var payload: [4096]u8 = undefined;
-    for (&payload, 0..) |*b, i| b.* = @truncate(i);
-    try roc_ctx.writeFile(path, &payload);
-
-    // A filesystem whose read errors, proving the heap-read path is not taken when
-    // the mapping succeeds.
-    const StubFs = struct {
-        fn readFile(_: @This(), _: []const u8, _: Allocator) Allocator.Error![]u8 {
-            return error.OutOfMemory;
-        }
-    };
-
-    const cache_data = try CacheModule.readFromFileMapped(testing.allocator, roc_ctx, path, StubFs{});
-    defer cache_data.deinit(testing.allocator);
-
-    try testing.expect(std.meta.activeTag(cache_data) == .mapped);
-    try testing.expectEqualSlices(u8, &payload, cache_data.data());
-
-    // Copy-on-write: mutating the mapping (as relocation does) must not reach disk.
-    const mutable: [*]u8 = @constCast(cache_data.data().ptr);
-    mutable[0] +%= 1;
-    mutable[payload.len - 1] +%= 1;
-
-    const reread = try roc_ctx.readFile(path, testing.allocator);
-    defer testing.allocator.free(reread);
-    try testing.expectEqualSlices(u8, &payload, reread);
-}
-
-test "readFromFileMapped heap-reads when the path is not a real on-disk file" {
-    const testing = std.testing;
-    const roc_ctx = CoreCtx.default(testing.allocator, testing.allocator, testing.io);
-
-    // Opening this path fails to map, so the load drops to the heap-read path;
-    // on targets that cannot map files, the heap-read path is the only path.
-    const HeapFs = struct {
-        payload: []const u8,
-        fn readFile(self: @This(), _: []const u8, allocator: Allocator) Allocator.Error![]u8 {
-            return allocator.dupe(u8, self.payload);
-        }
-    };
-
-    const payload = "roc cache heap-read payload bytes";
-    const cache_data = try CacheModule.readFromFileMapped(
-        testing.allocator,
-        roc_ctx,
-        "/roc-nonexistent/cache/entry.bin",
-        HeapFs{ .payload = payload },
-    );
-    defer cache_data.deinit(testing.allocator);
-
-    try testing.expect(std.meta.activeTag(cache_data) == .allocated);
-    try testing.expectEqualSlices(u8, payload, cache_data.data());
-}

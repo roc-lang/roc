@@ -9,6 +9,7 @@
 //! No solver variables, redirects, or descriptors change.
 
 const std = @import("std");
+const collections = @import("collections");
 const types = @import("types");
 const Var = types.Var;
 const Allocator = std.mem.Allocator;
@@ -19,7 +20,7 @@ gpa: Allocator,
 // Stable storage is part of this reader's representation, not merely scratch.
 // Do not use SingleThreadArena here: its allocation-debug pass-through mode
 // disables the bulk ownership these immutable spans and dependency graphs need.
-arena: std.heap.ArenaAllocator,
+arena: collections.SingleThreadArena,
 source_len: u32,
 vars_base: u32,
 tags_base: u32,
@@ -87,7 +88,7 @@ pub fn init(gpa: Allocator, source: *const types.Store) Self {
     return .{
         .source = source,
         .gpa = gpa,
-        .arena = std.heap.ArenaAllocator.init(gpa),
+        .arena = collections.SingleThreadArena.init(gpa),
         .source_len = @intCast(source.len()),
         .vars_base = @intCast(source.vars.len()),
         .tags_base = source.tags.len(),

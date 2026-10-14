@@ -29,17 +29,14 @@ pub fn StoreSpanBorrow(comptime T: type, comptime field_name: []const u8) type {
 pub const TypeId = enum(u32) { _ };
 
 /// Slice descriptor for type, field, or tag arrays in this store.
-pub const SidePoolSpan = extern struct {
+pub const Span = extern struct {
     start: u32,
     len: u32,
 
-    pub fn empty() SidePoolSpan {
+    pub fn empty() Span {
         return .{ .start = 0, .len = 0 };
     }
 };
-
-/// Compatibility name for existing Monotype type side-pool spans.
-pub const Span = SidePoolSpan;
 
 /// Primitive type copied from checked module data.
 pub const Primitive = checked.CheckedPrimitive;
@@ -218,7 +215,7 @@ pub const FieldKindState = enum(u8) {
 };
 
 /// Record field type entry.
-pub const MonoTypeField = struct {
+pub const Field = struct {
     name: names.RecordFieldNameId,
     ty: TypeId,
     /// Source value type for an optional slot. This is explicit post-check
@@ -233,18 +230,12 @@ pub const MonoTypeField = struct {
     default: ?FieldDefault,
 };
 
-/// Compatibility name for existing Monotype record field entries.
-pub const Field = MonoTypeField;
-
 /// Tag-union variant type entry.
-pub const MonoTypeTag = struct {
+pub const Tag = struct {
     name: names.TagNameId,
     checked_name: names.TagNameId,
     payloads: Span,
 };
-
-/// Compatibility name for existing Monotype tag-union variant entries.
-pub const Tag = MonoTypeTag;
 
 /// One entry of a nominal record's declared fields. The backing row is always
 /// lexicographic; this separate source order supports boxy descriptor planning,
@@ -260,7 +251,7 @@ pub const DeclaredField = union(enum(u8)) {
 };
 
 /// Durable monomorphic type node.
-pub const MonoTypeNode = union(enum(u8)) {
+pub const Content = union(enum(u8)) {
     primitive: Primitive,
     named: struct {
         named_type: NamedType,
@@ -286,18 +277,35 @@ pub const MonoTypeNode = union(enum(u8)) {
     zst,
 };
 
-/// Compatibility name for existing Monotype type-node content.
-pub const Content = MonoTypeNode;
+/// Payload stored by `Content.named`.
+pub const NamedContent = std.meta.fieldInfo(Content, .named).type;
 
-/// Payload stored by `MonoTypeNode.named`.
-pub const NamedContent = std.meta.fieldInfo(MonoTypeNode, .named).type;
+/// A type node as the store keeps it. A named payload and an erased digest
+/// are far larger than every other variant, so they live in side lists and
+/// the node holds their index; every node is then a few words.
+pub const StoredNode = union(enum(u8)) {
+    primitive: Primitive,
+    named: u32,
+    record: Span,
+    tuple: Span,
+    tag_union: Span,
+    list: TypeId,
+    box: TypeId,
+    func: @FieldType(Content, "func"),
+    erased: u32,
+    zst,
+};
 
 /// Store for monomorphic types and their shared spans.
 pub const Store = struct {
     /// Scoped diagnostic sink; never copied into store epochs or serialized.
     digest_stats: ?*DigestStats = null,
     allocator: std.mem.Allocator,
-    types: StoreList(Content, "types"),
+    types: StoreList(StoredNode, "types"),
+    /// Payloads of the named nodes in `types`, by `StoredNode.named` index.
+    named_nodes: StoreList(NamedContent, "named_nodes"),
+    /// Digests of the erased nodes in `types`, by `StoredNode.erased` index.
+    erased_digests: StoreList(names.TypeDigest, "erased_digests"),
     type_digests: StoreList(?names.TypeDigest, "type_digests"),
     specialization_digests: StoreList(?names.TypeDigest, "specialization_digests"),
     equality_digests: StoreList(?names.TypeDigest, "equality_digests"),
@@ -335,6 +343,18 @@ pub const Store = struct {
     /// separate digest calls. Keys and values are content-addressed, so
     /// entries stay valid across `restore` truncations and need no rollback.
     recursive_digest_unfoldings: std.AutoHashMap([32]u8, names.TypeDigest),
+    /// Every reduced recursive group by its shape: the hash of its members'
+    /// content labels in discovery order and each member's ordered in-group
+    /// references by position. A group's reduction is a function of exactly
+    /// that shape, so a later group of the same shape takes each position's
+    /// digest from here. Its unfoldings were indexed when the entry was
+    /// recorded. Keys and values are content-addressed, so entries stay valid
+    /// across `restore` truncations and need no rollback.
+    recursive_scc_shapes: std.AutoHashMap([32]u8, RecursiveSccShape),
+    /// Each recorded shape's per-position rank into its block digests.
+    recursive_scc_ranks: std.ArrayList(u32),
+    /// Each recorded shape's block digests, in rank order.
+    recursive_scc_digests: std.ArrayList(names.TypeDigest),
     /// Full-content-identity buckets for store-level acyclic interning: full
     /// digest bytes to every committed candidate that hashed to them,
     /// resolved to exact equality with `typeEql`. Keys and stored ids are
@@ -378,6 +398,8 @@ pub const Store = struct {
         return .{
             .allocator = allocator,
             .types = .empty,
+            .named_nodes = .empty,
+            .erased_digests = .empty,
             .type_digests = .empty,
             .specialization_digests = .empty,
             .equality_digests = .empty,
@@ -393,6 +415,9 @@ pub const Store = struct {
             .iterator_interface_visit_epochs = .empty,
             .iterator_interface_visit_epoch = 0,
             .recursive_digest_unfoldings = std.AutoHashMap([32]u8, names.TypeDigest).init(allocator),
+            .recursive_scc_shapes = std.AutoHashMap([32]u8, RecursiveSccShape).init(allocator),
+            .recursive_scc_ranks = .empty,
+            .recursive_scc_digests = .empty,
             .full_digest_interned = std.AutoHashMap(DigestBucketKey, std.ArrayList(TypeId)).init(allocator),
             .spans = .empty,
             .fields = .empty,
@@ -409,7 +434,7 @@ pub const Store = struct {
         if (!self.frozen) Common.invariant("Monotype type cloning requires a frozen graph");
         var result = Store.init(allocator);
         errdefer result.deinit();
-        inline for (.{ "types", "type_digests", "specialization_digests", "equality_digests", "representation_digests", "constructing", "iterator_interface_cache", "generated_private_cache", "spans", "fields", "tags", "declared_fields" }) |field| {
+        inline for (.{ "types", "named_nodes", "erased_digests", "type_digests", "specialization_digests", "equality_digests", "representation_digests", "constructing", "iterator_interface_cache", "generated_private_cache", "spans", "fields", "tags", "declared_fields" }) |field| {
             try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
         }
         // Traversal history is local, but every cloned type still needs a slot
@@ -505,6 +530,9 @@ pub const Store = struct {
         while (full_digest_buckets.next()) |bucket| bucket.deinit(self.allocator);
         self.full_digest_interned.deinit();
         self.recursive_digest_unfoldings.deinit();
+        self.recursive_scc_shapes.deinit();
+        self.recursive_scc_ranks.deinit(self.allocator);
+        self.recursive_scc_digests.deinit(self.allocator);
         self.iterator_interface_visit_epochs.deinit(self.allocator);
         self.iterator_interface_visited.deinit(self.allocator);
         self.iterator_interface_pending.deinit(self.allocator);
@@ -516,6 +544,8 @@ pub const Store = struct {
         self.specialization_digests.deinit(self.allocator);
         self.type_digests.deinit(self.allocator);
         self.types.deinit(self.allocator);
+        self.named_nodes.deinit(self.allocator);
+        self.erased_digests.deinit(self.allocator);
     }
 
     /// The lowest type count a rollback has truncated to since the last
@@ -553,6 +583,10 @@ pub const Store = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
+    /// Append a record field span exactly as given. Digests and equality
+    /// compare field spans positionally, so a span that becomes record
+    /// content must already be sorted and duplicate-free by label text; only
+    /// `verify` catches one that is not. `addRecordFields` normalizes.
     pub fn addFields(self: *Store, values: []const Field) std.mem.Allocator.Error!Span {
         self.assertMutable();
         if (values.len == 0) return .empty();
@@ -565,13 +599,27 @@ pub const Store = struct {
     pub fn addRecordFields(self: *Store, name_store: *const names.NameStore, values: []const Field) std.mem.Allocator.Error!Span {
         self.assertMutable();
         if (values.len == 0) return .empty();
+        // Producers usually hand over rows already in label order. Rows read
+        // from this store are copied first, since appending can move them.
+        if (!sliceOverlaps(Field, values, self.fields.unsafeRawItemsForView()) and
+            std.sort.isSorted(Field, values, name_store, recordFieldLessThan))
+        {
+            assertNoDuplicateRecordFields(name_store, values);
+            return try self.addFields(values);
+        }
         const normalized = try self.allocator.dupe(Field, values);
         defer self.allocator.free(normalized);
-        std.mem.sort(Field, normalized, name_store, recordFieldLessThan);
+        // Labels are unique within a row, so an unstable sort orders it the
+        // same way a stable one would.
+        std.sort.pdq(Field, normalized, name_store, recordFieldLessThan);
         assertNoDuplicateRecordFields(name_store, normalized);
         return try self.addFields(normalized);
     }
 
+    /// Append a tag span exactly as given. Digests and equality compare tag
+    /// spans positionally, so a span that becomes tag-union content must
+    /// already be sorted and duplicate-free by label text; only `verify`
+    /// catches one that is not. `addTagVariants` normalizes.
     pub fn addTags(self: *Store, values: []const Tag) std.mem.Allocator.Error!Span {
         self.assertMutable();
         if (values.len == 0) return .empty();
@@ -584,9 +632,16 @@ pub const Store = struct {
     pub fn addTagVariants(self: *Store, name_store: *const names.NameStore, values: []const Tag) std.mem.Allocator.Error!Span {
         self.assertMutable();
         if (values.len == 0) return .empty();
+        if (!sliceOverlaps(Tag, values, self.tags.unsafeRawItemsForView()) and
+            std.sort.isSorted(Tag, values, name_store, tagLessThan))
+        {
+            return try self.addSortedTagVariants(name_store, values);
+        }
         const normalized = try self.allocator.dupe(Tag, values);
         defer self.allocator.free(normalized);
-        std.mem.sort(Tag, normalized, name_store, tagLessThan);
+        // Labels are unique within a union, so an unstable sort orders it the
+        // same way a stable one would.
+        std.sort.pdq(Tag, normalized, name_store, tagLessThan);
         return try self.addSortedTagVariants(name_store, normalized);
     }
 
@@ -599,11 +654,22 @@ pub const Store = struct {
         return try self.addTags(values);
     }
 
+    /// Append one type node. The store trusts `content`'s record and tag
+    /// spans to be sorted by label text (see `addFields` and `addTags`): an
+    /// unsorted row would digest and compare unequal to its sorted twin.
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeId {
         self.assertMutable();
         const index = self.types.len();
-        try self.types.append(self.allocator, content);
-        errdefer _ = self.types.pop();
+        try self.types.ensureUnusedCapacity(self.allocator, 1);
+        try self.ensureSideCapacity(content);
+        const named_nodes_len = self.named_nodes.len();
+        const erased_digests_len = self.erased_digests.len();
+        self.types.appendAssumeCapacity(self.encodeAssumeCapacity(content));
+        errdefer {
+            _ = self.types.pop();
+            self.named_nodes.restoreLen(named_nodes_len);
+            self.erased_digests.restoreLen(erased_digests_len);
+        }
         try self.type_digests.append(self.allocator, null);
         errdefer _ = self.type_digests.pop();
         try self.specialization_digests.append(self.allocator, null);
@@ -665,10 +731,46 @@ pub const Store = struct {
     }
 
     fn reserveSlot(self: *Store) std.mem.Allocator.Error!TypeId {
+        // Filling a slot cannot fail, so every unfinished slot keeps room for
+        // a side-list entry of its eventual content.
+        try self.named_nodes.ensureUnusedCapacity(self.allocator, self.unfinished_type_count + 1);
+        try self.erased_digests.ensureUnusedCapacity(self.allocator, self.unfinished_type_count + 1);
         const reserved = try self.add(.zst);
         self.constructing.set(@backingInt(reserved), true);
         self.unfinished_type_count += 1;
         return reserved;
+    }
+
+    /// Room in the side lists for `content` and for every unfinished slot.
+    fn ensureSideCapacity(self: *Store, content: Content) std.mem.Allocator.Error!void {
+        switch (content) {
+            .named => try self.named_nodes.ensureUnusedCapacity(self.allocator, self.unfinished_type_count + 1),
+            .erased => try self.erased_digests.ensureUnusedCapacity(self.allocator, self.unfinished_type_count + 1),
+            .primitive, .record, .tuple, .tag_union, .list, .box, .func, .zst => {},
+        }
+    }
+
+    fn encodeAssumeCapacity(self: *Store, content: Content) StoredNode {
+        return switch (content) {
+            .primitive => |primitive| .{ .primitive = primitive },
+            .named => |named| blk: {
+                const index: u32 = @intCast(self.named_nodes.len());
+                self.named_nodes.appendAssumeCapacity(named);
+                break :blk .{ .named = index };
+            },
+            .record => |span_| .{ .record = span_ },
+            .tuple => |span_| .{ .tuple = span_ },
+            .tag_union => |span_| .{ .tag_union = span_ },
+            .list => |ty| .{ .list = ty },
+            .box => |ty| .{ .box = ty },
+            .func => |func| .{ .func = func },
+            .erased => |digest| blk: {
+                const index: u32 = @intCast(self.erased_digests.len());
+                self.erased_digests.appendAssumeCapacity(digest);
+                break :blk .{ .erased = index };
+            },
+            .zst => .zst,
+        };
     }
 
     fn fillReservedSlot(self: *Store, ty: TypeId, content: Content) void {
@@ -677,7 +779,7 @@ pub const Store = struct {
         if (!self.constructing.unsafeRawItemsForView()[index]) {
             Common.invariant("filled a Monotype type slot that was not under construction");
         }
-        self.types.set(index, content);
+        self.types.set(index, self.encodeAssumeCapacity(content));
         self.constructing.set(index, false);
         if (self.unfinished_type_count == 0) {
             Common.compilerBug("filled a Monotype slot without an unfinished construction");
@@ -688,7 +790,11 @@ pub const Store = struct {
     }
 
     pub fn get(self: *const Store, ty: TypeId) Content {
-        return self.types.unsafeRawItemsForView()[@backingInt(ty)];
+        return decodeNode(
+            self.types.unsafeRawItemsForView()[@backingInt(ty)],
+            self.named_nodes.unsafeRawItemsForView(),
+            self.erased_digests.unsafeRawItemsForView(),
+        );
     }
 
     /// Number of types this store holds. A structural walk that follows stored
@@ -905,11 +1011,9 @@ pub const Store = struct {
             end: EpochBoundary,
         ) std.mem.Allocator.Error!EpochDelta {
             requireEpochRange(source, begin, end);
-            const types = try allocator.dupe(
-                Content,
-                source.types.unsafeRawItemsForView()[begin.types..end.types],
-            );
+            const types = try allocator.alloc(Content, end.types - begin.types);
             errdefer allocator.free(types);
+            for (types, begin.types..) |*content, index| content.* = source.get(@fromBackingInt(@intCast(index)));
             const type_digests = try allocator.dupe(
                 ?names.TypeDigest,
                 source.type_digests.unsafeRawItemsForView()[begin.types..end.types],
@@ -980,6 +1084,15 @@ pub const Store = struct {
                 self.end.declared_fields,
             );
             try destination.types.ensureTotalCapacity(destination.allocator, self.end.types);
+            var named_count: usize = 0;
+            var erased_count: usize = 0;
+            for (self.types) |content| switch (content) {
+                .named => named_count += 1,
+                .erased => erased_count += 1,
+                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .zst => {},
+            };
+            try destination.named_nodes.ensureUnusedCapacity(destination.allocator, named_count + destination.unfinished_type_count + 1);
+            try destination.erased_digests.ensureUnusedCapacity(destination.allocator, erased_count + destination.unfinished_type_count + 1);
             try destination.type_digests.ensureTotalCapacity(destination.allocator, self.end.types);
             try destination.specialization_digests.ensureTotalCapacity(
                 destination.allocator,
@@ -1096,8 +1209,8 @@ pub const Store = struct {
         const field_limit = end.fields;
         const tag_limit = end.tags;
         const declared_limit = end.declared_fields;
-        for (self.types.unsafeRawItemsForView()[begin.types..end.types]) |content| {
-            switch (content) {
+        for (begin.types..end.types) |index| {
+            switch (self.get(@fromBackingInt(@intCast(index)))) {
                 .primitive, .erased, .zst => {},
                 .named => |named| {
                     requireEpochSpan(named.args, span_limit);
@@ -1143,6 +1256,8 @@ pub const Store = struct {
 
     const Mark = struct {
         types_len: usize,
+        named_nodes_len: usize,
+        erased_digests_len: usize,
         type_digests_len: usize,
         specialization_digests_len: usize,
         equality_digests_len: usize,
@@ -1161,6 +1276,8 @@ pub const Store = struct {
     fn mark(self: *const Store) Mark {
         return .{
             .types_len = self.types.len(),
+            .named_nodes_len = self.named_nodes.len(),
+            .erased_digests_len = self.erased_digests.len(),
             .type_digests_len = self.type_digests.len(),
             .specialization_digests_len = self.specialization_digests.len(),
             .equality_digests_len = self.equality_digests.len(),
@@ -1184,6 +1301,8 @@ pub const Store = struct {
         const floor = if (mark_.unfinished_type_count != 0) 0 else mark_.types_len;
         self.rollback_floor = @min(self.rollback_floor orelse floor, floor);
         self.types.restoreLen(mark_.types_len);
+        self.named_nodes.restoreLen(mark_.named_nodes_len);
+        self.erased_digests.restoreLen(mark_.erased_digests_len);
         self.type_digests.restoreLen(mark_.type_digests_len);
         self.specialization_digests.restoreLen(mark_.specialization_digests_len);
         self.equality_digests.restoreLen(mark_.equality_digests_len);
@@ -1439,27 +1558,24 @@ pub const Store = struct {
             self.active_transaction = null;
         }
 
-        const interned_original = try self.allocator.alloc(TypeId, suffix_len);
-        defer self.allocator.free(interned_original);
-        const digests = try self.allocator.alloc(names.TypeDigest, suffix_len);
-        defer self.allocator.free(digests);
+        // The seal's own working state lives in one scratch arena.
+        var scratch = collections.SingleThreadArena.init(self.allocator);
+        defer scratch.deinit();
+        const temp = scratch.allocator();
+        const interned_original = try temp.alloc(TypeId, suffix_len);
+        const digests = try temp.alloc(names.TypeDigest, suffix_len);
         // Durable index of each speculative offset that survives as a
         // representative, relative to the transaction's first id. Recording it
         // during classification keeps remap construction linear.
-        const representative_of_offset = try self.allocator.alloc(u32, suffix_len);
-        defer self.allocator.free(representative_of_offset);
+        const representative_of_offset = try temp.alloc(u32, suffix_len);
         var representatives = std.ArrayList(TypeId).empty;
-        defer representatives.deinit(self.allocator);
 
-        // Speculative offsets grouped by digest. A candidate can only be equal
-        // to a digest-equal earlier candidate, so grouping replaces a scan of
-        // the whole suffix per node.
-        var suffix_by_digest = std.AutoHashMap(DigestBucketKey, std.ArrayList(u32)).init(self.allocator);
-        defer {
-            var groups = suffix_by_digest.valueIterator();
-            while (groups.next()) |group| group.deinit(self.allocator);
-            suffix_by_digest.deinit();
-        }
+        // Speculative offsets grouped by digest, each group chained from its
+        // first classified offset through `group_next` in classification
+        // order. A candidate can only be equal to a digest-equal earlier
+        // candidate, so grouping replaces a scan of the whole suffix per node.
+        var suffix_groups = std.AutoHashMap(DigestBucketKey, SuffixGroup).init(temp);
+        const group_next = try temp.alloc(u32, suffix_len);
 
         // Classify children before the parents that reach them, so comparing
         // a parent meets already-classified children through `classes` and
@@ -1468,8 +1584,7 @@ pub const Store = struct {
         defer self.allocator.free(order);
         // The class each classified offset joined: a durable id, or the
         // speculative id of the class's first classified member.
-        const classes = try self.allocator.alloc(?TypeId, suffix_len);
-        defer self.allocator.free(classes);
+        const classes = try temp.alloc(?TypeId, suffix_len);
         @memset(classes, null);
         const resolver = SuffixClasses{ .start = @intCast(mark_.types_len), .classes = classes };
 
@@ -1480,8 +1595,8 @@ pub const Store = struct {
             // so it must not become the digest path's panic.
             digests[offset] = try self.computeCommitDigest(name_store, candidate, .full);
             const key = DigestBucketKey.from(digests[offset]);
-            const group = try suffix_by_digest.getOrPut(key);
-            if (!group.found_existing) group.value_ptr.* = .empty;
+            const group = try suffix_groups.getOrPut(key);
+            const earlier_first: ?u32 = if (group.found_existing) group.value_ptr.first else null;
 
             var class: ?TypeId = null;
             if (self.full_digest_interned.get(key)) |bucket| {
@@ -1494,8 +1609,7 @@ pub const Store = struct {
             }
             if (class == null) {
                 // Digest-equal candidates are one type; see `bucketHit`.
-                if (group.value_ptr.items.len != 0) {
-                    const earlier = group.value_ptr.items[0];
+                if (earlier_first) |earlier| {
                     if (std.debug.runtime_safety) {
                         const earlier_ty: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + earlier))));
                         std.debug.assert(try typeViewEql(self.view(), self.allocator, name_store, earlier_ty, candidate, .exact, resolver));
@@ -1508,13 +1622,19 @@ pub const Store = struct {
             // inserts into this map today, but a future one would move it.
             // Every offset is grouped, not just representatives, so a later
             // candidate compares against every digest-equal classified node.
-            try suffix_by_digest.getPtr(key).?.append(self.allocator, @intCast(offset));
+            const grouped = suffix_groups.getPtr(key).?;
+            group_next[offset] = SuffixGroup.end;
+            if (earlier_first == null) {
+                grouped.* = .{ .first = @intCast(offset), .last = @intCast(offset) };
+            } else {
+                group_next[grouped.last] = @intCast(offset);
+                grouped.last = @intCast(offset);
+            }
         }
 
         // Each speculative class is represented by its lowest offset, and
         // representatives take durable ids in offset order.
-        var class_representatives = collections.DenseMap(TypeId, TypeId).init(self.allocator);
-        defer class_representatives.deinit();
+        var class_representatives = collections.DenseMap(TypeId, TypeId).init(temp);
         for (0..suffix_len) |offset| {
             const candidate: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + offset))));
             const class = classes[offset].?;
@@ -1530,7 +1650,7 @@ pub const Store = struct {
             entry.value_ptr.* = candidate;
             interned_original[offset] = candidate;
             representative_of_offset[offset] = @intCast(representatives.items.len);
-            try representatives.append(self.allocator, candidate);
+            try representatives.append(temp, candidate);
         }
 
         // Owned copies of just the representatives' rows. Construction reads
@@ -1564,7 +1684,7 @@ pub const Store = struct {
         // Preflight the durable index. Reserving the map slot and the bucket
         // room for every representative here -- while failing is still free --
         // is what lets the indexing step below run without a fallible call.
-        try self.reserveInternedCapacity(mark_, interned_original, &suffix_by_digest, representatives.items.len);
+        try self.reserveInternedCapacity(mark_, interned_original, &suffix_groups, group_next, representatives.items.len);
 
         self.restore(mark_);
 
@@ -2155,18 +2275,29 @@ pub const Store = struct {
         }
     }
 
+    /// One digest's speculative offsets during a seal: the first and last
+    /// classified, chained through the seal's `group_next`.
+    const SuffixGroup = struct {
+        first: u32,
+        last: u32,
+
+        const end = std.math.maxInt(u32);
+    };
+
     fn reserveInternedCapacity(
         self: *Store,
         mark_: Mark,
         interned_original: []const TypeId,
-        suffix_by_digest: *std.AutoHashMap(DigestBucketKey, std.ArrayList(u32)),
+        suffix_groups: *const std.AutoHashMap(DigestBucketKey, SuffixGroup),
+        group_next: []const u32,
         representative_count: usize,
     ) std.mem.Allocator.Error!void {
         try self.full_digest_interned.ensureUnusedCapacity(@intCast(representative_count));
-        var groups = suffix_by_digest.iterator();
+        var groups = suffix_groups.iterator();
         while (groups.next()) |entry| {
             var needed: usize = 0;
-            for (entry.value_ptr.items) |offset| {
+            var offset = entry.value_ptr.first;
+            while (offset != SuffixGroup.end) : (offset = group_next[offset]) {
                 const candidate: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + offset))));
                 if (interned_original[offset] == candidate) needed += 1;
             }
@@ -2204,7 +2335,12 @@ pub const Store = struct {
     ///
     /// Full digests answer "is this the same stored type?": every field that
     /// deep structural comparison observes participates, and aliases digest
-    /// as opaque nodes rather than as their backing.
+    /// as opaque nodes rather than as their backing. Equal full digests imply
+    /// `typeEql`, but `typeEql`-equal types can digest differently (a plain
+    /// nominal's backing and checked provenance participate here), so a key
+    /// made of this digest alone can split equal types into separate entries,
+    /// never merge unequal ones. A key that must share across equal types
+    /// uses `equalityDigest`.
     pub fn typeDigest(self: *Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
         return self.typeDigestCached(name_store, ty, null);
     }
@@ -2223,6 +2359,14 @@ pub const Store = struct {
     pub fn equalityDigest(self: *Store, name_store: *const names.NameStore, ty: TypeId) names.TypeDigest {
         return self.equalityDigestCached(name_store, ty, null);
     }
+
+    /// One recorded recursive-group shape, as spans of the store's rank and
+    /// block-digest pools.
+    const RecursiveSccShape = struct {
+        ranks_start: u32,
+        digests_start: u32,
+        block_count: u32,
+    };
 
     pub const DigestStats = struct {
         root_requests: u64 = 0,
@@ -2248,7 +2392,9 @@ pub const Store = struct {
     };
 
     pub const View = struct {
-        types: []const Content,
+        types: []const StoredNode,
+        named_nodes: []const NamedContent,
+        erased_digests: []const names.TypeDigest,
         type_digests: []const ?names.TypeDigest,
         spans: []const TypeId,
         fields: []const Field,
@@ -2257,7 +2403,7 @@ pub const Store = struct {
         frozen: bool,
 
         pub fn get(self: View, ty: TypeId) Content {
-            return self.types[@backingInt(ty)];
+            return decodeNode(self.types[@backingInt(ty)], self.named_nodes, self.erased_digests);
         }
 
         pub fn span(self: View, span_: Span) []const TypeId {
@@ -2320,8 +2466,13 @@ pub const Store = struct {
                 }
             }
 
-            for (self.types) |content| {
-                switch (content) {
+            for (self.types, 0..) |node, index| {
+                switch (node) {
+                    .named => |named_index| if (named_index >= self.named_nodes.len) return .type_ref_out_of_bounds,
+                    .erased => |erased_index| if (erased_index >= self.erased_digests.len) return .type_ref_out_of_bounds,
+                    .primitive, .zst, .list, .box, .tuple, .record, .tag_union, .func => {},
+                }
+                switch (self.get(@fromBackingInt(@intCast(index)))) {
                     .primitive, .erased, .zst => {},
                     .list, .box => |ty| if (!self.typeRefInBounds(ty)) return .type_ref_out_of_bounds,
                     .tuple => |span_| if (self.verifyTypeSpan(span_)) |err| return err,
@@ -2412,6 +2563,8 @@ pub const Store = struct {
     pub fn view(self: *const Store) View {
         return .{
             .types = self.types.unsafeRawItemsForView(),
+            .named_nodes = self.named_nodes.unsafeRawItemsForView(),
+            .erased_digests = self.erased_digests.unsafeRawItemsForView(),
             .type_digests = self.type_digests.unsafeRawItemsForView(),
             .spans = self.spans.unsafeRawItemsForView(),
             .fields = self.fields.unsafeRawItemsForView(),
@@ -3240,10 +3393,41 @@ pub const Store = struct {
         child_offsets: std.ArrayList(usize),
         scalar_bytes: std.ArrayList(u8),
         render_buf: std.ArrayList(u8),
+        scc: SccScratch,
 
         /// Whether this engine runs on the store's kept lists and returns
         /// them; an engine started while another is running owns its own.
         uses_store_storage: bool,
+
+        /// Tarjan state of one SCC pass, kept between digest requests.
+        const SccScratch = struct {
+            visit_index: std.ArrayList(u32) = .empty,
+            low_link: std.ArrayList(u32) = .empty,
+            on_stack: std.ArrayList(bool) = .empty,
+            stack: std.ArrayList(u32) = .empty,
+            frames: std.ArrayList(SccFrame) = .empty,
+            members: std.ArrayList(u32) = .empty,
+
+            fn clear(self: *SccScratch) void {
+                self.visit_index.clearRetainingCapacity();
+                self.low_link.clearRetainingCapacity();
+                self.on_stack.clearRetainingCapacity();
+                self.stack.clearRetainingCapacity();
+                self.frames.clearRetainingCapacity();
+                self.members.clearRetainingCapacity();
+            }
+
+            fn deinit(self: *SccScratch, allocator: std.mem.Allocator) void {
+                self.visit_index.deinit(allocator);
+                self.low_link.deinit(allocator);
+                self.on_stack.deinit(allocator);
+                self.stack.deinit(allocator);
+                self.frames.deinit(allocator);
+                self.members.deinit(allocator);
+            }
+        };
+
+        const SccFrame = struct { node: u32, edge_cursor: u32 };
 
         const no_scc_position = std.math.maxInt(u32);
         const unvisited = std.math.maxInt(u32);
@@ -3255,6 +3439,7 @@ pub const Store = struct {
             child_offsets: std.ArrayList(usize) = .empty,
             scalar_bytes: std.ArrayList(u8) = .empty,
             render_buf: std.ArrayList(u8) = .empty,
+            scc: SccScratch = .{},
             in_use: bool = false,
 
             const retained_lookup_capacity = 64;
@@ -3266,6 +3451,7 @@ pub const Store = struct {
                 self.child_offsets.deinit(allocator);
                 self.scalar_bytes.deinit(allocator);
                 self.render_buf.deinit(allocator);
+                self.scc.deinit(allocator);
                 self.* = .{};
             }
         };
@@ -3283,6 +3469,7 @@ pub const Store = struct {
                 .child_offsets = .empty,
                 .scalar_bytes = .empty,
                 .render_buf = .empty,
+                .scc = .{},
                 .uses_store_storage = false,
             };
             kept.in_use = true;
@@ -3297,6 +3484,7 @@ pub const Store = struct {
                 .child_offsets = kept.child_offsets,
                 .scalar_bytes = kept.scalar_bytes,
                 .render_buf = kept.render_buf,
+                .scc = kept.scc,
                 .uses_store_storage = true,
             };
             kept.* = .{ .in_use = true };
@@ -3311,8 +3499,10 @@ pub const Store = struct {
                 self.scalar_bytes.deinit(self.gpa);
                 self.node_lookup.deinit();
                 self.nodes.deinit(self.gpa);
+                self.scc.deinit(self.gpa);
                 return;
             }
+            self.scc.clear();
             self.nodes.clearRetainingCapacity();
             // Clearing a map touches its whole capacity, so one that a large
             // type grew is released instead of being cleared before every
@@ -3333,6 +3523,7 @@ pub const Store = struct {
                 .child_offsets = self.child_offsets,
                 .scalar_bytes = self.scalar_bytes,
                 .render_buf = self.render_buf,
+                .scc = self.scc,
             };
         }
 
@@ -3518,22 +3709,20 @@ pub const Store = struct {
         /// already points at finalized digests and it can resolve on the spot.
         fn resolveSccs(self: *DigestEngine) std.mem.Allocator.Error!void {
             const node_count = self.nodes.items.len;
-            const visit_index = try self.gpa.alloc(u32, node_count);
-            defer self.gpa.free(visit_index);
+            const scratch = &self.scc;
+            scratch.clear();
+            try scratch.visit_index.resize(self.gpa, node_count);
+            const visit_index = scratch.visit_index.items;
             @memset(visit_index, unvisited);
-            const low_link = try self.gpa.alloc(u32, node_count);
-            defer self.gpa.free(low_link);
-            const on_stack = try self.gpa.alloc(bool, node_count);
-            defer self.gpa.free(on_stack);
+            try scratch.low_link.resize(self.gpa, node_count);
+            const low_link = scratch.low_link.items;
+            try scratch.on_stack.resize(self.gpa, node_count);
+            const on_stack = scratch.on_stack.items;
             @memset(on_stack, false);
 
-            var scc_stack: std.ArrayList(u32) = .empty;
-            defer scc_stack.deinit(self.gpa);
-            const Frame = struct { node: u32, edge_cursor: u32 };
-            var frames: std.ArrayList(Frame) = .empty;
-            defer frames.deinit(self.gpa);
-            var scc_members: std.ArrayList(u32) = .empty;
-            defer scc_members.deinit(self.gpa);
+            const scc_stack = &scratch.stack;
+            const frames = &scratch.frames;
+            const scc_members = &scratch.members;
 
             var next_visit: u32 = 0;
             for (0..node_count) |start| {
@@ -3673,6 +3862,42 @@ pub const Store = struct {
                 labels[pos] = hasher.finalResult();
                 try distinct_labels.put(labels[pos], no_scc_position);
             }
+
+            // Labels and positional in-group references determine the whole
+            // reduction below, so a group of a recorded shape is already
+            // reduced.
+            const shape = shape: {
+                var hasher = TypeDigestHasher.init();
+                hashBytes(&hasher, "recursive-scc-shape");
+                hashU32(&hasher, @intCast(member_count));
+                for (members, 0..) |node_index, pos| {
+                    hasher.update(&labels[pos]);
+                    for (self.linksOf(node_index)) |ref| {
+                        const target = switch (ref) {
+                            .external => continue,
+                            .node => |node_target| node_target,
+                        };
+                        const target_pos = member_pos_of_node[target];
+                        if (target_pos == no_scc_position) continue;
+                        hashU32(&hasher, target_pos);
+                    }
+                    hashBytes(&hasher, "end-member");
+                }
+                break :shape hasher.finalResult();
+            };
+            if (self.store.recursive_scc_shapes.get(shape)) |recorded| {
+                const ranks = self.store.recursive_scc_ranks.items[recorded.ranks_start..][0..member_count];
+                const digests = self.store.recursive_scc_digests.items[recorded.digests_start..][0..recorded.block_count];
+                for (members, ranks) |node_index, rank| {
+                    const node = &self.nodes.items[node_index];
+                    std.debug.assert(!node.resolved);
+                    node.digest = digests[rank];
+                    node.resolved = true;
+                    self.store.setCachedDigest(node.ty, node.mode, node.digest);
+                }
+                return;
+            }
+
             var label_count: u32 = distinct_labels.count();
             while (true) {
                 distinct_labels.clearRetainingCapacity();
@@ -3779,6 +4004,9 @@ pub const Store = struct {
                 unfoldings[rank] = typeHashOf(self.render_buf.items);
             }
             try self.store.recursive_digest_unfoldings.ensureUnusedCapacity(block_count);
+            try self.store.recursive_scc_shapes.ensureUnusedCapacity(1);
+            try self.store.recursive_scc_ranks.ensureUnusedCapacity(self.store.allocator, member_count);
+            try self.store.recursive_scc_digests.ensureUnusedCapacity(self.store.allocator, block_count);
 
             // No fallible work remains; completed earlier SCCs remain reusable
             // if any subsequent SCC fails.
@@ -3792,6 +4020,13 @@ pub const Store = struct {
                     gop.value_ptr.* = block_digest[rank];
                 }
             }
+            self.store.recursive_scc_shapes.putAssumeCapacityNoClobber(shape, .{
+                .ranks_start = @intCast(self.store.recursive_scc_ranks.items.len),
+                .digests_start = @intCast(self.store.recursive_scc_digests.items.len),
+                .block_count = block_count,
+            });
+            self.store.recursive_scc_ranks.appendSliceAssumeCapacity(rank_of_member);
+            self.store.recursive_scc_digests.appendSliceAssumeCapacity(block_digest);
             for (members) |node_index| {
                 const node = self.nodes.items[node_index];
                 self.store.setCachedDigest(node.ty, node.mode, node.digest);
@@ -4124,6 +4359,27 @@ fn writeU32(hasher: *TypeDigestHasher, value: u32) void {
 // helpers reachable there.
 const hashBytes = writeBytes;
 const hashU32 = writeU32;
+
+fn sliceOverlaps(comptime T: type, a: []const T, b: []const T) bool {
+    const a_start = @intFromPtr(a.ptr);
+    const b_start = @intFromPtr(b.ptr);
+    return a_start < b_start + b.len * @sizeOf(T) and b_start < a_start + a.len * @sizeOf(T);
+}
+
+fn decodeNode(node: StoredNode, named_nodes: []const NamedContent, erased_digests: []const names.TypeDigest) Content {
+    return switch (node) {
+        .primitive => |primitive| .{ .primitive = primitive },
+        .named => |index| .{ .named = named_nodes[index] },
+        .record => |span_| .{ .record = span_ },
+        .tuple => |span_| .{ .tuple = span_ },
+        .tag_union => |span_| .{ .tag_union = span_ },
+        .list => |ty| .{ .list = ty },
+        .box => |ty| .{ .box = ty },
+        .func => |func| .{ .func = func },
+        .erased => |index| .{ .erased = erased_digests[index] },
+        .zst => .zst,
+    };
+}
 
 fn typeHashOf(bytes: []const u8) [32]u8 {
     var hasher = TypeDigestHasher.init();
@@ -4834,8 +5090,12 @@ test "monotype cross-store import is atomic under allocation failure" {
             std.debug.assert(stable == relocation.remapType(source_store, shared));
         }
     };
+    // The digest engine grows retained buffers, whose in-place growth under
+    // the testing allocator depends on the heap's layout, so the failure check
+    // runs over an allocator that refuses in-place growth.
+    var deterministic = @import("base").DeterministicAllocator.init(std.testing.allocator);
     try std.testing.checkAllAllocationFailures(
-        std.testing.allocator,
+        deterministic.allocator(),
         Helper.run,
         .{ &source, &source_names, unit, recursive_result.root },
     );
@@ -6180,6 +6440,61 @@ test "monotype digest folds a recursive knot beyond depth 300 into its unrolling
     try std.testing.expectEqualSlices(u8, chain_digest.bytes[0..], mid_digest.bytes[0..]);
 }
 
+test "monotype digest and equality agree on 300-level nesting built twice" {
+    // Two separately built chains of nested records and single-tag unions
+    // share no TypeId below the leaf, so only a structural walk through all
+    // 300 levels can give them one digest and equal them.
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const field_name = try name_store.internRecordFieldLabel("inner");
+    const tag_name = try name_store.internTagLabel("Wrap");
+    const depth = 300;
+    var tops: [2]TypeId = undefined;
+    for (&tops) |*top| {
+        var current = try store.add(.{ .primitive = .i64 });
+        for (0..depth) |level| {
+            current = if (level % 2 == 0)
+                try store.add(.{ .record = try store.addRecordFields(&name_store, &.{
+                    .{ .name = field_name, .ty = current, .default = null },
+                }) })
+            else
+                try store.add(.{ .tag_union = try store.addTagVariants(&name_store, &.{
+                    .{ .name = tag_name, .checked_name = tag_name, .payloads = try store.addSpan(&.{current}) },
+                }) });
+        }
+        top.* = current;
+    }
+    try std.testing.expect(tops[0] != tops[1]);
+
+    for ([_]Store.NamedDigestMode{ .full, .identity_only, .equality, .representation }) |mode| {
+        const first = try store.computeDigest(&name_store, tops[0], mode, null);
+        const second = try store.computeDigest(&name_store, tops[1], mode, null);
+        try std.testing.expectEqualSlices(u8, first.bytes[0..], second.bytes[0..]);
+    }
+    try std.testing.expect(try store.typeEql(&name_store, tops[0], tops[1]));
+
+    // A difference at the innermost leaf still separates the chains.
+    var other = try store.add(.{ .primitive = .str });
+    for (0..depth) |level| {
+        other = if (level % 2 == 0)
+            try store.add(.{ .record = try store.addRecordFields(&name_store, &.{
+                .{ .name = field_name, .ty = other, .default = null },
+            }) })
+        else
+            try store.add(.{ .tag_union = try store.addTagVariants(&name_store, &.{
+                .{ .name = tag_name, .checked_name = tag_name, .payloads = try store.addSpan(&.{other}) },
+            }) });
+    }
+    const top_digest = store.typeDigest(&name_store, tops[0]);
+    const other_digest = store.typeDigest(&name_store, other);
+    try std.testing.expect(!std.mem.eql(u8, top_digest.bytes[0..], other_digest.bytes[0..]));
+    try std.testing.expect(!try store.typeEql(&name_store, tops[0], other));
+}
+
 test "monotype digest equates bisimilar recursive graphs of different sizes" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
@@ -6207,6 +6522,34 @@ test "monotype digest equates bisimilar recursive graphs of different sizes" {
     const prefix = try store.add(.{ .list = z });
     const prefix_digest = store.typeDigest(&name_store, prefix);
     try std.testing.expectEqualSlices(u8, z_digest.bytes[0..], prefix_digest.bytes[0..]);
+}
+
+test "monotype digest reuses the reduction of a recorded recursive group shape" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+
+    const str = try store.add(.{ .primitive = .str });
+    var digests: [2][2]names.TypeDigest = undefined;
+    var encodings: [2]u64 = undefined;
+    for (&digests, &encodings) |*pair, *count| {
+        const x = try store.reserveSlot();
+        const y = try store.reserveSlot();
+        store.fillReservedSlot(x, .{ .tuple = try store.addSpan(&.{ y, str }) });
+        store.fillReservedSlot(y, .{ .list = x });
+        var stats: Store.DigestStats = .{};
+        pair[0] = store.typeDigestCached(&name_store, x, &stats);
+        pair[1] = store.typeDigest(&name_store, y);
+        count.* = stats.group_encodings;
+    }
+    try std.testing.expectEqualSlices(u8, digests[0][0].bytes[0..], digests[1][0].bytes[0..]);
+    try std.testing.expectEqualSlices(u8, digests[0][1].bytes[0..], digests[1][1].bytes[0..]);
+    try std.testing.expect(!std.mem.eql(u8, digests[0][0].bytes[0..], digests[0][1].bytes[0..]));
+    // The second knot replays only its two member labels.
+    try std.testing.expectEqual(@as(u64, 2), encodings[1]);
+    try std.testing.expect(encodings[0] > encodings[1]);
 }
 
 test "monotype digest ignores child cachedness inside a recursive group" {

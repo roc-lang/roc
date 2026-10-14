@@ -65,10 +65,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-a.Encodable(fmt) :  where [a.encode : a, fmt -> fmt]
-
-encode_twice : a, fmt -> fmt where [a.Encodable(fmt)]
-encode_twice = |value, fmt| value.encode(value.encode(fmt))
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

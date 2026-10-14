@@ -6,6 +6,7 @@
 const lir = @import("lir");
 const check = @import("check");
 const std = @import("std");
+const collections = @import("collections");
 const base = @import("base");
 
 /// The compile-time producer whose value a failed guard protects.
@@ -64,7 +65,7 @@ pub const Registry = struct {
     allocator: std.mem.Allocator,
     result: *const lir.Program.Result,
     prefix: u32,
-    guards: std.AutoHashMapUnmanaged(lir.LIR.CFStmtId, lir.LIR.StaticDataId) = .{},
+    guards: collections.DenseMapUnmanaged(lir.LIR.CFStmtId, lir.LIR.StaticDataId) = .empty,
     bound: std.ArrayList(Observation) = .empty,
 
     pub fn create(allocator: std.mem.Allocator, result: *const lir.Program.Result) std.mem.Allocator.Error!*Registry {

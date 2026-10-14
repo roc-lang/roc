@@ -11,7 +11,6 @@
 const std = @import("std");
 const can = @import("can");
 const types = @import("types");
-const type_utils = @import("type_utils.zig");
 
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
@@ -19,6 +18,17 @@ const Allocator = std.mem.Allocator;
 
 /// How many alias layers to follow before giving up on a type.
 const max_alias_depth: usize = 16;
+
+/// The content behind `type_var` after following at most `max_alias_depth`
+/// alias layers.
+fn unwrapAliases(type_store: *const types.Store, type_var: types.Var) types.Content {
+    var content = type_store.resolveVar(type_var).desc.content;
+    var depth: usize = 0;
+    while (depth < max_alias_depth and content == .alias) : (depth += 1) {
+        content = type_store.resolveVar(type_store.getAliasBackingVar(content.alias)).desc.content;
+    }
+    return content;
+}
 
 /// How deeply a placeholder may nest.
 ///
@@ -112,7 +122,7 @@ fn writeNestedPlaceholder(
 ) PlaceholderError!void {
     if (depth > max_nesting) return error.UnsupportedType;
 
-    const content = type_utils.unwrapAliases(&module_env.types, type_var, max_alias_depth).content;
+    const content = unwrapAliases(&module_env.types, type_var);
     switch (content) {
         .structure => |flat_type| switch (flat_type) {
             .nominal_type => |nominal| {
@@ -169,18 +179,12 @@ fn writeRecordPlaceholder(
         return;
     }
 
-    var iterator = type_utils.RecordFieldsIterator{
-        .names = fields.items(.name),
-        .presences = fields.items(.presence),
-    };
-
     try out.appendSlice(allocator, "{ ");
-    var written: usize = 0;
-    while (iterator.next()) |field| : (written += 1) {
+    for (fields.items(.name), fields.items(.presence), 0..) |name, presence, written| {
         if (written > 0) try out.appendSlice(allocator, ", ");
-        try out.appendSlice(allocator, module_env.common.idents.getText(field.name));
+        try out.appendSlice(allocator, module_env.common.idents.getText(name));
         try out.appendSlice(allocator, ": ");
-        try writeNestedPlaceholder(allocator, module_env, field.type_var, out, depth + 1);
+        try writeNestedPlaceholder(allocator, module_env, presence.typeVar(), out, depth + 1);
     }
     try out.appendSlice(allocator, " }");
 }
@@ -193,7 +197,7 @@ fn writeRecordPlaceholder(
 /// do. A function taking no arguments is left out as well, because its call
 /// syntax is not the one written here.
 fn callableFunction(module_env: *const ModuleEnv, type_var: types.Var) ?types.Func {
-    const content = type_utils.unwrapAliases(&module_env.types, type_var, max_alias_depth).content;
+    const content = unwrapAliases(&module_env.types, type_var);
     const func = switch (content) {
         .structure => |flat_type| switch (flat_type) {
             .fn_pure, .fn_unbound => |pure| pure,

@@ -26,6 +26,7 @@ const layout_mod = @import("layout");
 const arc_sig = @import("arc_sig.zig");
 const arc_solve = @import("arc_solve.zig");
 const body_clone = @import("body_clone.zig");
+const TaskExecutor = base.post_check_task_executor;
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -236,21 +237,21 @@ pub const FieldRestitutionArg = struct {
 
 /// Per-procedure dismantling decisions consumed while emitting ARC operations.
 pub const Dismantles = struct {
-    arena: std.heap.ArenaAllocator,
+    arena: base.SingleThreadArena,
     /// `assign_ref .field` statements whose reads consume the container's
     /// stored unit; emission skips their retain.
-    takes: std.AutoHashMapUnmanaged(LIR.CFStmtId, Take),
+    takes: collections.DenseMap(LIR.CFStmtId, Take),
     /// Dismantlable containers and their committed field-place domains.
-    containers: std.AutoHashMapUnmanaged(LIR.LocalId, Container),
+    containers: collections.DenseMap(LIR.LocalId, Container),
     /// Takes on containers that are proc parameters solved borrowed: valid
     /// only in emissions where the demand vector overrides the parameter to
     /// owned (mode-specialized variants). The value is the parameter local,
     /// so emission can check the override for the current variant.
-    owned_only_takes: std.AutoHashMapUnmanaged(LIR.CFStmtId, Take),
+    owned_only_takes: collections.DenseMap(LIR.CFStmtId, Take),
     /// Containers behind `owned_only_takes`, keyed by the container local:
     /// the parameter itself, or a projection binding whose takes that
     /// parameter's owned override activates.
-    owned_only_containers: std.AutoHashMapUnmanaged(LIR.LocalId, Container),
+    owned_only_containers: collections.DenseMap(LIR.LocalId, Container),
     /// Parameter positions whose owned variant activates an exact field take,
     /// indexed directly by source procedure id.
     owned_only_param_benefits: []arc_sig.ParamMask,
@@ -271,25 +272,25 @@ pub const Dismantles = struct {
     /// of another local. Moving one of these locals moves the root's unit
     /// directly when that unit is present; otherwise the ordinary retain is
     /// preserved.
-    projection_units: std.AutoHashMapUnmanaged(LIR.LocalId, LIR.LocalId),
+    projection_units: collections.DenseMap(LIR.LocalId, LIR.LocalId),
     /// Complete projection reads whose owned target can receive the root's
     /// unit directly. The solve-time transfer still checks path liveness and
     /// keeps the ordinary retain when the root must survive.
-    complete_takes: std.AutoHashMapUnmanaged(LIR.CFStmtId, LIR.LocalId),
+    complete_takes: collections.DenseMap(LIR.CFStmtId, LIR.LocalId),
     /// Later complete projections rewritten to explicit aliases of the
     /// dominating projected container that owns their representation.
-    projection_aliases: std.AutoHashMapUnmanaged(LIR.LocalId, LIR.LocalId),
+    projection_aliases: collections.DenseMap(LIR.LocalId, LIR.LocalId),
 
     pub fn deinit(self: *Dismantles) void {
         const gpa = self.arena.child_allocator;
-        self.takes.deinit(gpa);
-        self.containers.deinit(gpa);
-        self.owned_only_takes.deinit(gpa);
-        self.owned_only_containers.deinit(gpa);
+        self.takes.deinit();
+        self.containers.deinit();
+        self.owned_only_takes.deinit();
+        self.owned_only_containers.deinit();
         self.field_restitution_args.deinit(gpa);
-        self.projection_units.deinit(gpa);
-        self.complete_takes.deinit(gpa);
-        self.projection_aliases.deinit(gpa);
+        self.projection_units.deinit();
+        self.complete_takes.deinit();
+        self.projection_aliases.deinit();
         self.arena.deinit();
     }
 
@@ -696,8 +697,8 @@ const Analysis = struct {
         }
         const candidate = (try self.entryOf(local)) orelse return;
         if (self.solution.isJoinParam(local)) {
-            const definition = self.store.getCFStmt(stmt);
-            if (definition != .set_local or definition.set_local.mode != .initialize_join_param) {
+            const definition = self.store.getCFStmtImmediate(stmt);
+            if (definition.* != .set_local or definition.set_local.mode != .initialize_join_param) {
                 candidate.disqualified = true;
                 return;
             }
@@ -796,38 +797,174 @@ const Analysis = struct {
     }
 };
 
-/// Candidate-local backward may-observation solution. Reversing the CFG lets
-/// all reads share one traversal; each field bit crosses each edge at most once.
-/// Edge masks end precisely the old field lifetimes restored on that edge.
+/// Candidate-local backward may-observation solution. Each procedure's
+/// statement graph is reversed once, as the field walk follows it; every
+/// candidate then walks back only from its own reads, and each field bit
+/// crosses each edge at most once. Edge masks end precisely the old field
+/// lifetimes restored on that edge.
 const FutureFields = struct {
     const Node = struct {
         stmt: LIR.CFStmtId,
         observed: u64 = 0,
         pending: u64 = 0,
-        predecessor: u32 = no_index,
     };
-    const Edge = struct { source: u32, next: u32, preserved: u64 };
+
+    /// One edge of the field walk, stored at its target.
+    const Predecessor = struct {
+        target: LIR.CFStmtId,
+        source: LIR.CFStmtId,
+        /// The switch branch index for `.branch`, the rebound local for `.rebind`.
+        label: u32,
+        kind: Kind,
+
+        const Kind = enum(u8) {
+            plain,
+            branch,
+            default_branch,
+            /// A `set_local` edge, which a candidate rebinding that local ends.
+            rebind,
+        };
+    };
+
+    /// One procedure's reversed field-walk graph, as spans of the shared pools.
+    const ProcGraph = struct {
+        predecessors_start: u32,
+        predecessors_len: u32,
+    };
 
     indices: collections.DenseMap(LIR.CFStmtId, u32),
     nodes: std.ArrayList(Node) = .empty,
-    edges: std.ArrayList(Edge) = .empty,
     work: std.ArrayList(u32) = .empty,
+    /// Every built procedure's edges, grouped by procedure and sorted by
+    /// target within each group.
+    predecessors: std.ArrayList(Predecessor) = .empty,
+    seen: collections.DenseMap(LIR.CFStmtId, void),
+    stack: std.ArrayList(LIR.CFStmtId) = .empty,
 
     fn init(gpa: Allocator) FutureFields {
-        return .{ .indices = collections.DenseMap(LIR.CFStmtId, u32).init(gpa) };
+        return .{
+            .indices = collections.DenseMap(LIR.CFStmtId, u32).init(gpa),
+            .seen = collections.DenseMap(LIR.CFStmtId, void).init(gpa),
+        };
     }
 
     fn deinit(self: *FutureFields, gpa: Allocator) void {
         self.indices.deinit();
         self.nodes.deinit(gpa);
-        self.edges.deinit(gpa);
         self.work.deinit(gpa);
+        self.predecessors.deinit(gpa);
+        self.seen.deinit();
+        self.stack.deinit(gpa);
+    }
+
+    fn addPredecessor(self: *FutureFields, gpa: Allocator, source: LIR.CFStmtId, target: LIR.CFStmtId, kind: Predecessor.Kind, label: u32) Error!void {
+        try self.predecessors.append(gpa, .{ .target = target, .source = source, .label = label, .kind = kind });
+    }
+
+    fn predecessorTargetLessThan(_: void, a: Predecessor, b: Predecessor) bool {
+        return @backingInt(a.target) < @backingInt(b.target);
+    }
+
+    /// Reverse the field walk over every statement reachable from `roots`.
+    /// Join bodies are entered through the jumps that name them, and a switch
+    /// continuation is not an edge of the walk; both are still visited so
+    /// that every statement a read can reach has its incoming edges.
+    fn buildProcGraph(
+        self: *FutureFields,
+        gpa: Allocator,
+        store: *const LirStore,
+        roots: []const LIR.CFStmtId,
+        joins: *const collections.DenseMap(u32, LIR.CFStmtId),
+    ) Error!ProcGraph {
+        const predecessors_start = self.predecessors.items.len;
+        self.seen.clearRetainingCapacity();
+        self.stack.clearRetainingCapacity();
+        try self.stack.appendSlice(gpa, roots);
+        while (self.stack.pop()) |cursor| {
+            if ((try self.seen.getOrPut(cursor)).found_existing) continue;
+            const reached = self.stack.items.len;
+            try body_clone.appendSuccessors(store, &self.stack, cursor, gpa);
+            switch (store.getCFStmtImmediate(cursor).*) {
+                .set_local => |stmt| try self.addPredecessor(gpa, cursor, stmt.next, .rebind, @backingInt(stmt.target)),
+                .join => |stmt| try self.addPredecessor(gpa, cursor, stmt.remainder, .plain, 0),
+                .jump => |stmt| {
+                    if (joins.get(@backingInt(stmt.target))) |body| try self.addPredecessor(gpa, cursor, body, .plain, 0);
+                },
+                .switch_stmt => |stmt| {
+                    const branches = store.getCFSwitchBranches(stmt.branches);
+                    for (0..GuardedList.borrowLen(branches)) |branch_index| {
+                        try self.addPredecessor(gpa, cursor, GuardedList.at(branches, branch_index).body, .branch, @intCast(branch_index));
+                    }
+                    try self.addPredecessor(gpa, cursor, stmt.default_branch, .default_branch, 0);
+                },
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .ret,
+                .crash,
+                => for (self.stack.items[reached..]) |next| try self.addPredecessor(gpa, cursor, next, .plain, 0),
+            }
+        }
+        const group = self.predecessors.items[predecessors_start..];
+        std.sort.pdq(Predecessor, group, {}, predecessorTargetLessThan);
+        return .{
+            .predecessors_start = @intCast(predecessors_start),
+            .predecessors_len = @intCast(group.len),
+        };
+    }
+
+    fn predecessorsOf(self: *const FutureFields, graph: ProcGraph, stmt: LIR.CFStmtId) []const Predecessor {
+        const group = self.predecessors.items[graph.predecessors_start..][0..graph.predecessors_len];
+        const target = @backingInt(stmt);
+        var low: usize = 0;
+        var high: usize = group.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            if (@backingInt(group[mid].target) < target) low = mid + 1 else high = mid;
+        }
+        var end = low;
+        while (end < group.len and group[end].target == stmt) end += 1;
+        return group[low..end];
     }
 
     fn clear(self: *FutureFields) void {
         self.indices.clearRetainingCapacity();
         self.nodes.clearRetainingCapacity();
-        self.edges.clearRetainingCapacity();
         self.work.clearRetainingCapacity();
     }
 
@@ -840,15 +977,9 @@ const FutureFields = struct {
         return index;
     }
 
-    fn edge(self: *FutureFields, gpa: Allocator, source: u32, target: LIR.CFStmtId, preserved: u64) Error!void {
-        if (preserved == 0) return;
-        const target_index = try self.node(gpa, target);
-        const target_node = &self.nodes.items[target_index];
-        try self.edges.append(gpa, .{ .source = source, .next = target_node.predecessor, .preserved = preserved });
-        target_node.predecessor = @intCast(self.edges.items.len - 1);
-    }
-
-    fn observe(self: *FutureFields, gpa: Allocator, index: u32, bits: u64) Error!void {
+    fn observe(self: *FutureFields, gpa: Allocator, stmt: LIR.CFStmtId, bits: u64) Error!void {
+        if (bits == 0) return;
+        const index = try self.node(gpa, stmt);
         const target = &self.nodes.items[index];
         const added = bits & ~target.observed;
         if (added == 0) return;
@@ -857,21 +988,9 @@ const FutureFields = struct {
         target.pending |= added;
     }
 
-    fn solve(self: *FutureFields, gpa: Allocator) Error!void {
-        while (self.work.pop()) |index| {
-            const bits = self.nodes.items[index].pending;
-            self.nodes.items[index].pending = 0;
-            var predecessor = self.nodes.items[index].predecessor;
-            while (predecessor != no_index) {
-                const incoming = self.edges.items[predecessor];
-                try self.observe(gpa, incoming.source, bits & incoming.preserved);
-                predecessor = incoming.next;
-            }
-        }
-    }
-
     fn observed(self: *const FutureFields, stmt: LIR.CFStmtId) u64 {
-        return self.nodes.items[self.indices.get(stmt).?].observed;
+        const index = self.indices.get(stmt) orelse return 0;
+        return self.nodes.items[index].observed;
     }
 
     fn compute(
@@ -880,97 +999,37 @@ const FutureFields = struct {
         store: *const LirStore,
         solution: *const arc_solve.Solution,
         local: LIR.LocalId,
-        reads: *const std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind),
-        joins: *const std.AutoHashMapUnmanaged(u32, LIR.CFStmtId),
+        graph: ProcGraph,
+        reads: *const collections.DenseMap(LIR.CFStmtId, ReadKind),
         receipts: []const FieldRestitution,
         redefinition: ?LIR.CFStmtId,
     ) Error!void {
         self.clear();
-        var read_it = reads.iterator();
+        // Past the container's own single definition, reached through a loop
+        // back edge, every read observes the next iteration's value, so that
+        // definition observes nothing and no observation crosses it.
+        var read_it = reads.constIterator();
         while (read_it.next()) |read| {
-            if (read.value_ptr.consuming) {
-                _ = try self.node(gpa, store.getCFStmt(read.key_ptr.*).assign_ref.next);
+            if (redefinition) |def_stmt| if (read.key_ptr.* == def_stmt) continue;
+            try self.observe(gpa, read.key_ptr.*, read.value_ptr.bit);
+        }
+        while (self.work.pop()) |index| {
+            const bits = self.nodes.items[index].pending;
+            self.nodes.items[index].pending = 0;
+            for (self.predecessorsOf(graph, self.nodes.items[index].stmt)) |edge| {
+                if (redefinition) |def_stmt| if (edge.source == def_stmt) continue;
+                const preserved: u64 = switch (edge.kind) {
+                    .plain => ~@as(u64, 0),
+                    .rebind => if (edge.label == @backingInt(local)) 0 else ~@as(u64, 0),
+                    .branch => if (receipts.len == 0) ~@as(u64, 0) else blk: {
+                        const branches = store.getCFSwitchBranches(store.getCFStmtImmediate(edge.source).switch_stmt.branches);
+                        break :blk ~restoredFieldMaskForBranch(solution, receipts, edge.source, GuardedList.at(branches, edge.label).value);
+                    },
+                    .default_branch => if (receipts.len == 0) ~@as(u64, 0) else ~restoredFieldMaskForDefault(solution, store, receipts, edge.source),
+                };
+                try self.observe(gpa, edge.source, bits & preserved);
             }
         }
-        var successors = std.ArrayList(LIR.CFStmtId).empty;
-        defer successors.deinit(gpa);
-        // Node insertion is the finite discovery worklist. No statement is
-        // decoded again when another consuming read reaches the same region.
-        var index: u32 = 0;
-        while (index < self.nodes.items.len) : (index += 1) {
-            const cursor = self.nodes.items[index].stmt;
-            // Past the container's own single definition, reached through a
-            // loop back edge, every read observes the next iteration's value.
-            if (redefinition) |def_stmt| if (cursor == def_stmt) continue;
-            if (reads.get(cursor)) |read| try self.observe(gpa, index, read.bit);
-            switch (store.getCFStmt(cursor)) {
-                .set_local => |stmt| {
-                    if (stmt.target != local) try self.edge(gpa, index, stmt.next, ~@as(u64, 0));
-                },
-                .join => |stmt| try self.edge(gpa, index, stmt.remainder, ~@as(u64, 0)),
-                .jump => |stmt| {
-                    if (joins.get(@backingInt(stmt.target))) |body| try self.edge(gpa, index, body, ~@as(u64, 0));
-                },
-                .switch_stmt => |stmt| {
-                    const branches = store.getCFSwitchBranches(stmt.branches);
-                    for (0..GuardedList.borrowLen(branches)) |branch_index| {
-                        const branch = GuardedList.at(branches, branch_index);
-                        try self.edge(gpa, index, branch.body, ~restoredFieldMaskForBranch(solution, receipts, cursor, branch.value));
-                    }
-                    try self.edge(gpa, index, stmt.default_branch, ~restoredFieldMaskForDefault(solution, store, receipts, cursor));
-                },
-                .loop_continue, .loop_break => {
-                    if (solution.isJoinParam(local)) try self.observe(gpa, index, ~@as(u64, 0));
-                },
-                .init_uninitialized,
-                .assign_ref,
-                .assign_literal,
-                .assign_call,
-                .assign_call_erased,
-                .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .assign_call_dict,
-                .assign_low_level,
-                .assign_list,
-                .assign_struct,
-                .assign_tag,
-                .store_struct,
-                .store_tag,
-                .debug,
-                .expect,
-                .comptime_branch_taken,
-                .incref,
-                .decref,
-                .decref_if_initialized,
-                .free,
-                .switch_initialized_payload,
-                .str_match,
-                .str_match_set,
-                .boxy_tag_match,
-                .ret,
-                .crash,
-                .expect_err,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
-                => {
-                    successors.clearRetainingCapacity();
-                    try body_clone.appendSuccessors(store, &successors, cursor, gpa);
-                    for (successors.items) |next| try self.edge(gpa, index, next, ~@as(u64, 0));
-                },
-            }
-        }
-        try self.solve(gpa);
     }
 };
 
@@ -985,8 +1044,8 @@ fn fieldObservedAfter(
     local: LIR.LocalId,
     bit: u64,
     start: LIR.CFStmtId,
-    reads: *const std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind),
-    joins: *const std.AutoHashMapUnmanaged(u32, LIR.CFStmtId),
+    reads: *const collections.DenseMap(LIR.CFStmtId, ReadKind),
+    joins: *const collections.DenseMap(u32, LIR.CFStmtId),
     receipts: []const FieldRestitution,
     redefinition: ?LIR.CFStmtId,
     visits: *usize,
@@ -1005,7 +1064,7 @@ fn fieldObservedAfter(
         if (reads.get(cursor)) |read| {
             if (read.bit & bit != 0) return true;
         }
-        switch (store.getCFStmt(cursor)) {
+        switch (store.getCFStmtImmediate(cursor).*) {
             .set_local => |stmt| {
                 if (stmt.target != local) try work.append(gpa, stmt.next);
             },
@@ -1025,7 +1084,6 @@ fn fieldObservedAfter(
                     try work.append(gpa, stmt.default_branch);
                 }
             },
-            .loop_continue, .loop_break => if (solution.isJoinParam(local)) return true,
             .init_uninitialized,
             .assign_ref,
             .assign_literal,
@@ -1036,7 +1094,6 @@ fn fieldObservedAfter(
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -1044,6 +1101,7 @@ fn fieldObservedAfter(
             .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
+            .boxy_tag_match,
             .assign_call_dict,
             .assign_low_level,
             .assign_list,
@@ -1053,6 +1111,9 @@ fn fieldObservedAfter(
             .store_tag,
             .debug,
             .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
             .comptime_branch_taken,
             .incref,
             .decref,
@@ -1061,12 +1122,8 @@ fn fieldObservedAfter(
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .boxy_tag_match,
             .ret,
             .crash,
-            .expect_err,
-            .runtime_error,
-            .comptime_exhaustiveness_failed,
             => try body_clone.appendSuccessors(store, &work, cursor, gpa),
         }
     }
@@ -1075,31 +1132,22 @@ fn fieldObservedAfter(
 
 /// Index one procedure's structural CFG. Jump targets use procedure-local
 /// identities, so a field-use walk must never resolve them through another
-/// procedure's join declaration.
+/// procedure's join declaration. `stmts` is every statement reachable from the
+/// procedure's body.
 fn collectProcJoinBodies(
-    gpa: Allocator,
     store: *const LirStore,
-    root: LIR.CFStmtId,
-    joins: *std.AutoHashMapUnmanaged(u32, LIR.CFStmtId),
-    epochs: []u32,
-    epoch: u32,
-    stack: *std.ArrayList(LIR.CFStmtId),
+    stmts: []const LIR.CFStmtId,
+    joins: *collections.DenseMap(u32, LIR.CFStmtId),
 ) Error!void {
-    try stack.append(gpa, root);
-    while (stack.pop()) |stmt_id| {
-        const stmt_index = @backingInt(stmt_id);
-        if (epochs[stmt_index] == epoch) continue;
-        epochs[stmt_index] = epoch;
-        const stmt = store.getCFStmt(stmt_id);
-        if (stmt == .join) {
-            const entry = try joins.getOrPut(gpa, @backingInt(stmt.join.id));
-            if (entry.found_existing) {
-                if (entry.value_ptr.* != stmt.join.body) dismantleInvariant("procedure contains two bodies for one join identity");
-            } else {
-                entry.value_ptr.* = stmt.join.body;
-            }
+    for (stmts) |stmt_id| {
+        const stmt = store.getCFStmtImmediate(stmt_id);
+        if (stmt.* != .join) continue;
+        const entry = try joins.getOrPut(@backingInt(stmt.join.id));
+        if (entry.found_existing) {
+            if (entry.value_ptr.* != stmt.join.body) dismantleInvariant("procedure contains two bodies for one join identity");
+        } else {
+            entry.value_ptr.* = stmt.join.body;
         }
-        try body_clone.appendSuccessors(store, stack, stmt_id, gpa);
     }
 }
 
@@ -1131,40 +1179,41 @@ test "future field uses resolve joins in their procedure" {
         .body = exit,
         .remainder = back_edge,
     } }, .test_fixture);
-    var loop_joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
-    defer loop_joins.deinit(gpa);
-    var other_joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
-    defer other_joins.deinit(gpa);
-    const epochs = try gpa.alloc(u32, store.cfStmtCount());
-    defer gpa.free(epochs);
-    @memset(epochs, 0);
-    var stack = std.ArrayList(LIR.CFStmtId).empty;
-    defer stack.deinit(gpa);
-    try collectProcJoinBodies(gpa, &store, loop_proc, &loop_joins, epochs, 1, &stack);
-    try collectProcJoinBodies(gpa, &store, other_proc, &other_joins, epochs, 2, &stack);
+    var loop_joins = collections.DenseMap(u32, LIR.CFStmtId).init(gpa);
+    defer loop_joins.deinit();
+    var other_joins = collections.DenseMap(u32, LIR.CFStmtId).init(gpa);
+    defer other_joins.deinit();
+    var proc_stmts = std.ArrayList(LIR.CFStmtId).empty;
+    defer proc_stmts.deinit(gpa);
+    try arc_solve.collectProcStatements(gpa, &store, loop_proc, &proc_stmts);
+    try collectProcJoinBodies(&store, proc_stmts.items, &loop_joins);
+    try arc_solve.collectProcStatements(gpa, &store, other_proc, &proc_stmts);
+    try collectProcJoinBodies(&store, proc_stmts.items, &other_joins);
     try std.testing.expectEqual(read, loop_joins.get(0).?);
     try std.testing.expectEqual(exit, other_joins.get(0).?);
 
-    var reads = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
-    defer reads.deinit(gpa);
-    try reads.put(gpa, read, .{ .bit = 1, .consuming = true });
+    var reads = collections.DenseMap(LIR.CFStmtId, ReadKind).init(gpa);
+    defer reads.deinit();
+    try reads.put(read, .{ .bit = 1, .consuming = true });
     const solution: arc_solve.Solution = undefined;
     var future = FutureFields.init(gpa);
     defer future.deinit(gpa);
-    try future.compute(gpa, &store, &solution, container, &reads, &loop_joins, &.{}, null);
+    const loop_graph = try future.buildProcGraph(gpa, &store, &.{loop_proc}, &loop_joins);
+    const other_graph = try future.buildProcGraph(gpa, &store, &.{other_proc}, &other_joins);
+    try future.compute(gpa, &store, &solution, container, loop_graph, &reads, &.{}, null);
     try std.testing.expect(future.observed(back_edge) & 1 != 0);
-    try future.compute(gpa, &store, &solution, container, &reads, &other_joins, &.{}, null);
+    try future.compute(gpa, &store, &solution, container, other_graph, &reads, &.{}, null);
     try std.testing.expect(future.observed(back_edge) & 1 == 0);
 }
 
-test "future field observations agree with per-read traversal across joins rebinds loops and outcomes" {
+test "future field observations agree with per-read traversal across joins rebinds and outcomes" {
     const gpa = std.testing.allocator;
     var store = LirStore.init(gpa);
     defer store.deinit();
     const local = try store.addLocal(.{ .layout_idx = .str });
     const other = try store.addLocal(.{ .layout_idx = .str });
     const exit = try store.addCFStmt(.{ .ret = .{ .value = other } }, .test_fixture);
-    const boundary = try store.addCFStmt(.loop_continue, .test_fixture);
+    const boundary = try store.addCFStmt(.runtime_error, .test_fixture);
     // Reserve the two procedure-local join identities before building their
     // bodies, which contain forward references to the enclosing joins.
     var join_ids: [2]LIR.JoinPointId = undefined;
@@ -1204,23 +1253,24 @@ test "future field observations agree with per-read traversal across joins rebin
         .body = nested,
         .remainder = jump,
     } }, .test_fixture);
-    var joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
-    defer joins.deinit(gpa);
-    try joins.put(gpa, @backingInt(outer_id), nested);
-    try joins.put(gpa, @backingInt(nested_id), branch);
-    var reads = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
-    defer reads.deinit(gpa);
-    try reads.put(gpa, read, .{ .bit = 1, .consuming = false });
+    var joins = collections.DenseMap(u32, LIR.CFStmtId).init(gpa);
+    defer joins.deinit();
+    try joins.put(@backingInt(outer_id), nested);
+    try joins.put(@backingInt(nested_id), branch);
+    var reads = collections.DenseMap(LIR.CFStmtId, ReadKind).init(gpa);
+    defer reads.deinit();
+    try reads.put(read, .{ .bit = 1, .consuming = false });
     // Models the already-expanded borrowed descendant/whole-value mentions.
-    try reads.put(gpa, rebind, .{ .bit = 2, .consuming = false });
+    try reads.put(rebind, .{ .bit = 2, .consuming = false });
     const starts = [_]LIR.CFStmtId{ exit, boundary, jump, rebind, read, branch, nested_jump, nested, outer };
-    for (starts) |start| {
-        const probe = try store.addCFStmt(.{ .assign_ref = .{
+    var probes: [starts.len]LIR.CFStmtId = undefined;
+    for (starts, &probes) |start, *probe| {
+        probe.* = try store.addCFStmt(.{ .assign_ref = .{
             .target = other,
             .op = .{ .field = .{ .source = local, .field_idx = 2 } },
             .next = start,
         } }, .test_fixture);
-        try reads.put(gpa, probe, .{ .bit = 4, .consuming = true });
+        try reads.put(probe.*, .{ .bit = 4, .consuming = true });
     }
     // These queries consume only join membership and the outcome signature
     // table; keep unrelated solver state undefined so accidental access fails.
@@ -1249,11 +1299,10 @@ test "future field observations agree with per-read traversal across joins rebin
     for (0..128) |configuration| {
         for (&outcomes, 0..) |*outcome, index| outcome.restituted_params = @intCast((configuration >> @intCast(index)) & 1);
         if (configuration & 16 != 0) solution.join_param.set(0) else solution.join_param.unset(0);
-        store.getCFStmtPtr(boundary).* = if (configuration & 1 != 0) .loop_break else .loop_continue;
         store.getCFStmtPtr(rebind).set_local.target = if (configuration & 32 != 0) local else other;
-        try joins.put(gpa, 0, if (configuration & 64 != 0) nested else exit);
-        try future.compute(gpa, &store, &solution, local, &reads, &joins, &receipts, null);
-        try std.testing.expectEqual(if (configuration & 16 != 0) ~@as(u64, 0) else @as(u64, 0), future.observed(boundary));
+        try joins.put(0, if (configuration & 64 != 0) nested else exit);
+        const graph = try future.buildProcGraph(gpa, &store, &probes, &joins);
+        try future.compute(gpa, &store, &solution, local, graph, &reads, &receipts, null);
         for (starts) |start| {
             for ([_]u64{ 1, 2, 4 }) |bit| {
                 var visits: usize = 0;
@@ -1264,7 +1313,7 @@ test "future field observations agree with per-read traversal across joins rebin
     }
 }
 
-test "future field observations share CFG discovery across many consuming reads" {
+test "future field observations share one reversed CFG across many consuming reads" {
     const gpa = std.testing.allocator;
     var store = LirStore.init(gpa);
     defer store.deinit();
@@ -1280,10 +1329,12 @@ test "future field observations share CFG discovery across many consuming reads"
             .next = start,
         } }, .test_fixture);
     }
-    var reads = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
-    defer reads.deinit(gpa);
-    try reads.put(gpa, exit, .{ .bit = 2, .consuming = false });
-    const joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
+    var reads = collections.DenseMap(LIR.CFStmtId, ReadKind).init(gpa);
+    defer reads.deinit();
+    try reads.put(exit, .{ .bit = 2, .consuming = false });
+    var probes = std.ArrayList(LIR.CFStmtId).empty;
+    defer probes.deinit(gpa);
+    var joins = collections.DenseMap(u32, LIR.CFStmtId).init(gpa);
     var solution: arc_solve.Solution = undefined;
     solution.leader = &.{};
     solution.join_param = .{};
@@ -1298,16 +1349,19 @@ test "future field observations share CFG discovery across many consuming reads"
                 .op = .{ .field = .{ .source = local, .field_idx = 0 } },
                 .next = start,
             } }, .test_fixture);
-            try reads.put(gpa, probe, .{ .bit = 1, .consuming = true });
+            try reads.put(probe, .{ .bit = 1, .consuming = true });
+            try probes.append(gpa, probe);
         }
         var old_visits: usize = 0;
         for (0..count) |_| {
             try std.testing.expect(!try fieldObservedAfter(gpa, &store, &solution, local, 1, start, &reads, &joins, &.{}, null, &old_visits));
         }
-        try future.compute(gpa, &store, &solution, local, &reads, &joins, &.{}, null);
+        const graph = try future.buildProcGraph(gpa, &store, probes.items, &joins);
+        try future.compute(gpa, &store, &solution, local, graph, &reads, &.{}, null);
         try std.testing.expectEqual(@as(usize, 256) * count, old_visits);
-        try std.testing.expectEqual(@as(usize, 256), future.nodes.items.len);
-        try std.testing.expectEqual(@as(usize, 255), future.edges.items.len);
+        // The shared continuation and each read are solved once.
+        try std.testing.expectEqual(@as(usize, 256) + count, future.nodes.items.len);
+        try std.testing.expectEqual(@as(usize, 255) + count, graph.predecessors_len);
         try std.testing.expectEqual(@as(u64, 2), future.observed(start));
     }
 }
@@ -1345,77 +1399,6 @@ const FieldRestitution = struct {
     outcomes: arc_sig.OutcomeSpan,
 };
 
-fn findOutcomeRefinement(
-    allocator: Allocator,
-    store: *const LirStore,
-    target: LIR.LocalId,
-    next: LIR.CFStmtId,
-    outcomes: arc_sig.OutcomeSpan,
-) Error!?LIR.CFStmtId {
-    if (outcomes.isEmpty()) return null;
-    var aliases = std.ArrayList(LIR.LocalId).empty;
-    defer aliases.deinit(allocator);
-    try aliases.append(allocator, target);
-    var discriminant: ?LIR.LocalId = null;
-    var cursor = next;
-    while (true) {
-        const stmt = store.getCFStmt(cursor);
-        if (stmt == .assign_ref) {
-            const assign = stmt.assign_ref;
-            switch (assign.op) {
-                .local => |source| {
-                    var source_is_result = false;
-                    for (aliases.items) |alias| source_is_result = source_is_result or alias == source;
-                    if (!source_is_result) return null;
-                    var already = false;
-                    for (aliases.items) |alias| already = already or alias == assign.target;
-                    if (!already) try aliases.append(allocator, assign.target);
-                    cursor = assign.next;
-                },
-                .discriminant => |op| {
-                    var source_is_result = false;
-                    for (aliases.items) |alias| source_is_result = source_is_result or alias == op.source;
-                    if (!source_is_result or discriminant != null) return null;
-                    discriminant = assign.target;
-                    cursor = assign.next;
-                },
-                .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return null,
-            }
-        } else if (stmt == .switch_stmt) {
-            if (discriminant == null or stmt.switch_stmt.cond != discriminant.?) return null;
-            return cursor;
-        } else {
-            return null;
-        }
-    }
-}
-
-fn outcomeMaskForValue(outcomes: []const arc_sig.Outcome, value: u64) ?arc_sig.ParamMask {
-    if (value > std.math.maxInt(u32)) return null;
-    for (outcomes) |outcome| {
-        if (outcome.discriminant == @as(u32, @intCast(value))) return outcome.restituted_params;
-    }
-    return null;
-}
-
-fn defaultOutcomeMask(outcomes: []const arc_sig.Outcome, branches: anytype) ?arc_sig.ParamMask {
-    var mask: arc_sig.ParamMask = std.math.maxInt(arc_sig.ParamMask);
-    var any = false;
-    for (outcomes) |outcome| {
-        var explicit = false;
-        for (0..GuardedList.borrowLen(branches)) |index| {
-            if (GuardedList.at(branches, index).value == outcome.discriminant) {
-                explicit = true;
-                break;
-            }
-        }
-        if (explicit) continue;
-        any = true;
-        mask &= outcome.restituted_params;
-    }
-    return if (any) mask else null;
-}
-
 fn restoredFieldMaskForBranch(
     solution: *const arc_solve.Solution,
     restorations: []const FieldRestitution,
@@ -1427,7 +1410,7 @@ fn restoredFieldMaskForBranch(
         if (receipt.switch_stmt != switch_stmt) continue;
         const position_bit = arc_sig.paramBit(receipt.call_arg.position).?;
         const outcomes = solution.sigTable().outcomesOf(.{ .outcomes = receipt.outcomes });
-        const mask = outcomeMaskForValue(outcomes, value) orelse continue;
+        const mask = arc_sig.outcomeMaskForValue(outcomes, value) orelse continue;
         if ((mask & position_bit) != 0) restored |= receipt.field_mask;
     }
     return restored;
@@ -1439,13 +1422,13 @@ fn restoredFieldMaskForDefault(
     restorations: []const FieldRestitution,
     switch_stmt: LIR.CFStmtId,
 ) u64 {
-    const branches = store.getCFSwitchBranches(store.getCFStmt(switch_stmt).switch_stmt.branches);
+    const branches = store.getCFSwitchBranches(store.getCFStmtImmediate(switch_stmt).switch_stmt.branches);
     var restored: u64 = 0;
     for (restorations) |receipt| {
         if (receipt.switch_stmt != switch_stmt) continue;
         const position_bit = arc_sig.paramBit(receipt.call_arg.position).?;
         const outcomes = solution.sigTable().outcomesOf(.{ .outcomes = receipt.outcomes });
-        const mask = defaultOutcomeMask(outcomes, branches) orelse continue;
+        const mask = arc_sig.defaultOutcomeMask(outcomes, branches) orelse continue;
         if ((mask & position_bit) != 0) restored |= receipt.field_mask;
     }
     return restored;
@@ -1461,24 +1444,6 @@ const StatementDominance = struct {
 
     const Edge = struct { from: u32, to: u32 };
     const Frame = struct { node: u32, edge: u32 };
-
-    fn init(gpa: Allocator, store: *LirStore) Error!StatementDominance {
-        const entry: u32 = @intCast(store.cfStmtCount());
-        var edges = std.ArrayList(Edge).empty;
-        defer edges.deinit(gpa);
-        var successors = std.ArrayList(LIR.CFStmtId).empty;
-        defer successors.deinit(store.allocator);
-        for (0..store.cfStmtCount()) |index| {
-            successors.clearRetainingCapacity();
-            try body_clone.appendSuccessors(store, &successors, @fromBackingInt(@as(u32, @intCast(index))), store.allocator);
-            for (successors.items) |next| try edges.append(gpa, .{ .from = @intCast(index), .to = @backingInt(next) });
-        }
-        for (0..store.procSpecCount()) |index| {
-            const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
-            if (proc.body) |body| try edges.append(gpa, .{ .from = entry, .to = @backingInt(body) });
-        }
-        return initGraph(gpa, store.cfStmtCount() + 1, entry, edges.items);
-    }
 
     fn initGraph(gpa: Allocator, count: usize, entry: u32, edges: []const Edge) Error!StatementDominance {
         const outgoing = try gpa.alloc(u32, count);
@@ -1595,12 +1560,229 @@ const StatementDominance = struct {
     }
 
     fn dominates(self: StatementDominance, dominator: LIR.CFStmtId, target: LIR.CFStmtId) bool {
-        const a = @backingInt(dominator);
-        const b = @backingInt(target);
+        return self.dominatesNode(@backingInt(dominator), @backingInt(target));
+    }
+
+    fn dominatesNode(self: StatementDominance, a: u32, b: u32) bool {
         std.debug.assert(self.enter[a] != no_index and self.enter[b] != no_index);
         return self.enter[a] <= self.enter[b] and self.enter[b] < self.leave[a];
     }
 };
+
+/// Statement dominance from a synthetic entry for every procedure body, solved
+/// separately for each component of procedures that reach a common statement,
+/// on its first query. Every path from the entry to a statement starts at the
+/// body of a procedure reaching that statement and stays among statements that
+/// procedure reaches, all of which lie in the statement's component. A
+/// statement therefore dominates only statements of its own component, and the
+/// component's graph answers every query exactly as the whole store's would.
+const ComponentDominance = struct {
+    store: *const LirStore,
+    solution: *const arc_solve.Solution,
+    /// Union-find over procedures; a statement reached by two procedures
+    /// unites them.
+    proc_parent: []u32,
+    /// First procedure (in procedure order) reaching each statement.
+    stmt_first_proc: []const u32,
+    /// Index of each statement within its solved component's graph.
+    dense: []u32 = &.{},
+    /// Procedures grouped by component root, built with the first solve.
+    component_offsets: []u32 = &.{},
+    component_procs: []u32 = &.{},
+    solved: std.AutoHashMapUnmanaged(u32, StatementDominance) = .empty,
+
+    fn init(gpa: Allocator, store: *const LirStore, solution: *const arc_solve.Solution, stmt_first_proc: []const u32) Error!ComponentDominance {
+        const proc_parent = try gpa.alloc(u32, store.procSpecCount());
+        for (proc_parent, 0..) |*parent, index| parent.* = @intCast(index);
+        return .{ .store = store, .solution = solution, .proc_parent = proc_parent, .stmt_first_proc = stmt_first_proc };
+    }
+
+    fn deinit(self: *ComponentDominance, gpa: Allocator) void {
+        var it = self.solved.valueIterator();
+        while (it.next()) |dominance| dominance.deinit(gpa);
+        self.solved.deinit(gpa);
+        gpa.free(self.component_procs);
+        gpa.free(self.component_offsets);
+        gpa.free(self.dense);
+        gpa.free(self.proc_parent);
+    }
+
+    fn root(self: *ComponentDominance, proc: u32) u32 {
+        var current = proc;
+        while (self.proc_parent[current] != current) {
+            self.proc_parent[current] = self.proc_parent[self.proc_parent[current]];
+            current = self.proc_parent[current];
+        }
+        return current;
+    }
+
+    fn unite(self: *ComponentDominance, left: u32, right: u32) void {
+        const a = self.root(left);
+        const b = self.root(right);
+        self.proc_parent[@max(a, b)] = @min(a, b);
+    }
+
+    fn dominates(self: *ComponentDominance, gpa: Allocator, dominator: LIR.CFStmtId, target: LIR.CFStmtId) Error!bool {
+        const component = self.root(self.stmt_first_proc[@backingInt(target)]);
+        if (self.root(self.stmt_first_proc[@backingInt(dominator)]) != component) return false;
+        const slot = try self.solved.getOrPut(gpa, component);
+        if (!slot.found_existing) {
+            errdefer _ = self.solved.remove(component);
+            slot.value_ptr.* = try self.solve(gpa, component);
+        }
+        return slot.value_ptr.dominatesNode(self.dense[@backingInt(dominator)], self.dense[@backingInt(target)]);
+    }
+
+    fn solve(self: *ComponentDominance, gpa: Allocator, component: u32) Error!StatementDominance {
+        const store = self.store;
+        if (self.component_offsets.len == 0) try self.groupProcs(gpa);
+        var stmts = std.ArrayList(LIR.CFStmtId).empty;
+        defer stmts.deinit(gpa);
+        const procs = self.component_procs[self.component_offsets[component]..self.component_offsets[component + 1]];
+        for (procs) |proc| {
+            for (self.solution.procStatements(store, @fromBackingInt(@intCast(proc)))) |stmt_id| {
+                const dense = &self.dense[@backingInt(stmt_id)];
+                if (dense.* != no_index) continue;
+                dense.* = @intCast(stmts.items.len);
+                try stmts.append(gpa, stmt_id);
+            }
+        }
+        const entry: u32 = @intCast(stmts.items.len);
+        var edges = std.ArrayList(StatementDominance.Edge).empty;
+        defer edges.deinit(gpa);
+        var successors = std.ArrayList(LIR.CFStmtId).empty;
+        defer successors.deinit(gpa);
+        for (stmts.items, 0..) |stmt_id, index| {
+            successors.clearRetainingCapacity();
+            try body_clone.appendSuccessors(store, &successors, stmt_id, gpa);
+            for (successors.items) |next| try edges.append(gpa, .{ .from = @intCast(index), .to = self.dense[@backingInt(next)] });
+        }
+        for (procs) |proc| {
+            const body = store.getProcSpec(@fromBackingInt(@intCast(proc))).body orelse continue;
+            try edges.append(gpa, .{ .from = entry, .to = self.dense[@backingInt(body)] });
+        }
+        return StatementDominance.initGraph(gpa, stmts.items.len + 1, entry, edges.items);
+    }
+
+    fn groupProcs(self: *ComponentDominance, gpa: Allocator) Error!void {
+        const proc_count = self.proc_parent.len;
+        const offsets = try gpa.alloc(u32, proc_count + 1);
+        errdefer gpa.free(offsets);
+        @memset(offsets, 0);
+        for (0..proc_count) |proc| offsets[self.root(@intCast(proc)) + 1] += 1;
+        for (1..offsets.len) |index| offsets[index] += offsets[index - 1];
+        const procs = try gpa.alloc(u32, proc_count);
+        errdefer gpa.free(procs);
+        const cursors = try gpa.dupe(u32, offsets[0..proc_count]);
+        defer gpa.free(cursors);
+        for (0..proc_count) |proc| {
+            const component = self.root(@intCast(proc));
+            procs[cursors[component]] = @intCast(proc);
+            cursors[component] += 1;
+        }
+        const dense = try gpa.alloc(u32, self.store.cfStmtCount());
+        @memset(dense, no_index);
+        self.component_offsets = offsets;
+        self.component_procs = procs;
+        self.dense = dense;
+    }
+};
+
+test "component dominance agrees with whole-store dominance across shared procedure statements" {
+    const gpa = std.testing.allocator;
+    var store = LirStore.init(gpa);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(gpa, .u64);
+    defer layouts.deinit();
+    const value = try store.addLocal(.{ .layout_idx = .i64 });
+    const frame = try store.addLocalSpan(&.{value});
+    const literal = struct {
+        fn add(s: *LirStore, target: LIR.LocalId, next: LIR.CFStmtId) Error!LIR.CFStmtId {
+            return s.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } },
+                .next = next,
+            } }, .test_fixture);
+        }
+    }.add;
+    // Procedures 0 and 1 share a tail; procedure 2 shares nothing. An
+    // unreachable statement points into the shared tail.
+    const tail = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
+    const shared = try literal(&store, value, tail);
+    const left = try literal(&store, value, shared);
+    const right = try literal(&store, value, shared);
+    const branch = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = value,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = left }}),
+        .default_branch = right,
+        .continuation = null,
+    } }, .test_fixture);
+    const bodies = [_]LIR.CFStmtId{
+        try literal(&store, value, branch),
+        try literal(&store, value, shared),
+        try literal(&store, value, try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture)),
+    };
+    _ = try literal(&store, value, left);
+    for (bodies) |body| {
+        _ = try store.addProcSpec(.{
+            .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
+            .name = store.freshSyntheticSymbol(),
+            .args = .empty(),
+            .frame_locals = frame,
+            .body = body,
+            .ret_layout = .i64,
+        }, .none);
+    }
+    const rc = try gpa.alloc(bool, store.localCount());
+    defer gpa.free(rc);
+    @memset(rc, false);
+    var solution = try arc_solve.solve(gpa, &store, &layouts, rc, &.{}, &.{}, true);
+    defer solution.deinit();
+
+    const stmt_first_proc = try gpa.alloc(u32, store.cfStmtCount());
+    defer gpa.free(stmt_first_proc);
+    @memset(stmt_first_proc, no_index);
+    var components = try ComponentDominance.init(gpa, &store, &solution, stmt_first_proc);
+    defer components.deinit(gpa);
+    var edges = std.ArrayList(StatementDominance.Edge).empty;
+    defer edges.deinit(gpa);
+    var successors = std.ArrayList(LIR.CFStmtId).empty;
+    defer successors.deinit(gpa);
+    for (0..store.procSpecCount()) |proc_index| {
+        const proc: u32 = @intCast(proc_index);
+        for (solution.procStatements(&store, @fromBackingInt(proc))) |stmt_id| {
+            const index = @backingInt(stmt_id);
+            if (stmt_first_proc[index] != no_index) {
+                components.unite(stmt_first_proc[index], proc);
+                continue;
+            }
+            stmt_first_proc[index] = proc;
+            successors.clearRetainingCapacity();
+            try body_clone.appendSuccessors(&store, &successors, stmt_id, gpa);
+            for (successors.items) |next| try edges.append(gpa, .{ .from = index, .to = @backingInt(next) });
+        }
+    }
+    const entry: u32 = @intCast(store.cfStmtCount());
+    for (bodies) |body| try edges.append(gpa, .{ .from = entry, .to = @backingInt(body) });
+    var whole = try StatementDominance.initGraph(gpa, store.cfStmtCount() + 1, entry, edges.items);
+    defer whole.deinit(gpa);
+    try std.testing.expect(components.root(1) == components.root(0));
+    try std.testing.expect(components.root(2) != components.root(0));
+    var comparisons: usize = 0;
+    for (0..store.cfStmtCount()) |a| {
+        if (stmt_first_proc[a] == no_index) continue;
+        for (0..store.cfStmtCount()) |b| {
+            if (stmt_first_proc[b] == no_index) continue;
+            const dominator: LIR.CFStmtId = @fromBackingInt(@intCast(a));
+            const target: LIR.CFStmtId = @fromBackingInt(@intCast(b));
+            try std.testing.expectEqual(whole.dominates(dominator, target), try components.dominates(gpa, dominator, target));
+            comparisons += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 81), comparisons);
+    try std.testing.expect(!try components.dominates(gpa, bodies[0], shared));
+    try std.testing.expect(try components.dominates(gpa, branch, left));
+}
 
 test "statement dominance agrees with deleted-node reachability on every four-node graph" {
     const gpa = std.testing.allocator;
@@ -1647,6 +1829,502 @@ test "statement dominance agrees with deleted-node reachability on every four-no
     }
 }
 
+/// Classify every occurrence of every local in one reachable statement. The
+/// switch is exhaustive so a new statement form fails to compile rather than
+/// silently escaping classification.
+fn classifyStatement(
+    analysis: *Analysis,
+    store: *const LirStore,
+    solution: *const arc_solve.Solution,
+    operand_read_counts: []u32,
+    direct_call_stmt_by_arg: []u32,
+    direct_call_position_by_arg: []u8,
+    current: LIR.CFStmtId,
+) Error!void {
+    const current_stmt = store.getCFStmtImmediate(current);
+    body_clone.countStmtReads(store, operand_read_counts, current_stmt.*);
+    switch (current_stmt.*) {
+        .init_uninitialized => |stmt| {
+            try analysis.useWhole(current, stmt.target);
+        },
+        .assign_ref => |stmt| {
+            switch (stmt.op) {
+                .field => |op| {
+                    try analysis.noteFieldRead(current, op.source, op.field_idx, stmt.target);
+                    try analysis.noteDef(stmt.target, current);
+                },
+                .local => |source| {
+                    try analysis.noteDemandAlias(source, stmt.target);
+                    if (stmt.target == source) {
+                        try analysis.useWhole(current, source);
+                    } else {
+                        try analysis.noteAliasDef(current, stmt.target, source);
+                    }
+                },
+                .discriminant => |op| {
+                    // The tag word is disjoint from every stored unit, so
+                    // reading it is no use of a tag union.
+                    analysis.disqualify(op.source);
+                    try analysis.noteDef(stmt.target, current);
+                },
+                .tag_payload => |op| {
+                    try analysis.useWhole(current, op.source);
+                    try analysis.noteDef(stmt.target, current);
+                },
+                .tag_payload_struct => |op| {
+                    if (!try analysis.notePayloadView(stmt.target, op)) try analysis.useWhole(current, op.source);
+                    try analysis.noteDef(stmt.target, current);
+                },
+                inline .list_reinterpret, .nominal => |op| {
+                    try analysis.useWhole(current, op.backing_ref);
+                    analysis.disqualify(stmt.target);
+                },
+            }
+        },
+        .assign_literal => |stmt| {
+            try analysis.noteDef(stmt.target, current);
+        },
+        .assign_call => |stmt| {
+            const args = store.getLocalSpan(stmt.args);
+            const callee_sig = solution.sigOf(stmt.proc);
+            for (0..GuardedList.borrowLen(args)) |i| {
+                const arg = GuardedList.at(args, i);
+                if (i < arc_sig.tracked_param_count) {
+                    direct_call_stmt_by_arg[@backingInt(arg)] = @backingInt(current);
+                    direct_call_position_by_arg[@backingInt(arg)] = @intCast(i);
+                }
+                try analysis.useWholeAt(arg, current);
+                if (callee_sig.paramMode(i) == .owned) analysis.demandOwned(arg);
+            }
+            try analysis.noteDef(stmt.target, current);
+        },
+        .assign_call_erased => |stmt| {
+            try analysis.useWhole(current, stmt.closure);
+            if (stmt.reuse_source) |reuse_source| try analysis.useWhole(current, reuse_source);
+            const args = store.getLocalSpan(stmt.args);
+            for (0..GuardedList.borrowLen(args)) |i| try analysis.useWholeAt(GuardedList.at(args, i), current);
+            try analysis.noteDef(stmt.target, current);
+        },
+        .assign_packed_erased_fn => |stmt| {
+            if (stmt.capture) |capture| try analysis.useWhole(current, capture);
+            if (stmt.reuse) |reuse| try analysis.useWhole(current, reuse);
+            try analysis.noteDef(stmt.target, current);
+        },
+        .assign_boxy_desc_ref => |stmt| {
+            if (stmt.desc.localOrNull()) |local| try analysis.useWhole(current, local);
+            if (stmt.tag_residual_for) |desc| if (desc.localOrNull()) |local| try analysis.useWhole(current, local);
+            const captures = store.getLocalSpan(stmt.captures);
+            for (0..GuardedList.borrowLen(captures)) |i| try analysis.useWhole(current, GuardedList.at(captures, i));
+            try analysis.noteDef(stmt.target, current);
+            analysis.disqualify(stmt.target);
+        },
+        .assign_boxy_dict_ref => |stmt| {
+            if (stmt.dict.localOrNull()) |local| try analysis.useWhole(current, local);
+            const captures = store.getLocalSpan(stmt.captures);
+            for (0..GuardedList.borrowLen(captures)) |i| try analysis.useWhole(current, GuardedList.at(captures, i));
+            try analysis.noteDef(stmt.target, current);
+            analysis.disqualify(stmt.target);
+        },
+        .assign_boxy_box => |stmt| {
+            try analysis.useWhole(current, stmt.payload);
+            try analysis.noteDef(stmt.target, current);
+            analysis.disqualify(stmt.target);
+        },
+        .assign_boxy_record_update => |stmt| {
+            try analysis.useWhole(current, stmt.base);
+            try analysis.useWhole(current, stmt.fields);
+            try analysis.noteDef(stmt.target, current);
+            analysis.disqualify(stmt.target);
+        },
+        inline .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect => |stmt| {
+            try analysis.useWhole(current, stmt.source);
+            try analysis.noteDef(stmt.target, current);
+            analysis.disqualify(stmt.target);
+        },
+        .assign_boxy_eq => |stmt| {
+            try analysis.useWhole(current, stmt.lhs);
+            try analysis.useWhole(current, stmt.rhs);
+            try analysis.noteDef(stmt.target, current);
+            analysis.disqualify(stmt.target);
+        },
+        .assign_boxy_hash => |stmt| {
+            try analysis.useWhole(current, stmt.value);
+            try analysis.useWhole(current, stmt.hasher);
+            try analysis.noteDef(stmt.target, current);
+            analysis.disqualify(stmt.target);
+        },
+        .assign_boxy_tag => |stmt| {
+            if (stmt.payload) |payload| try analysis.useWhole(current, payload);
+            try analysis.noteDef(stmt.target, current);
+            analysis.disqualify(stmt.target);
+        },
+        .assign_boxy_tag_payload => |stmt| {
+            try analysis.useWhole(current, stmt.source);
+            try analysis.noteDef(stmt.target, current);
+            analysis.disqualify(stmt.target);
+            if (stmt.target_desc) |target_desc| {
+                try analysis.noteDef(target_desc, current);
+                analysis.disqualify(target_desc);
+            }
+        },
+        .assign_call_dict => |stmt| {
+            if (stmt.dict.localOrNull()) |local| try analysis.useWhole(current, local);
+            const args = store.getLocalSpan(stmt.args);
+            for (0..GuardedList.borrowLen(args)) |i| try analysis.useWhole(current, GuardedList.at(args, i));
+            const arg_descs = store.getLocalSpan(stmt.arg_descs);
+            for (0..GuardedList.borrowLen(arg_descs)) |i| try analysis.useWhole(current, GuardedList.at(arg_descs, i));
+            const hidden_args = store.getLocalSpan(stmt.hidden_args);
+            for (0..GuardedList.borrowLen(hidden_args)) |i| try analysis.useWhole(current, GuardedList.at(hidden_args, i));
+            try analysis.noteDef(stmt.target, current);
+            analysis.disqualify(stmt.target);
+        },
+        .assign_low_level => |stmt| {
+            const args = store.getLocalSpan(stmt.args);
+            const demand_mask = stmt.rc_effect.consume_args | stmt.rc_effect.retain_args;
+            for (0..GuardedList.borrowLen(args)) |i| {
+                const arg = GuardedList.at(args, i);
+                try analysis.useWholeAt(arg, current);
+                if (i < 64 and (demand_mask & (@as(u64, 1) << @intCast(i))) != 0) analysis.demandOwned(arg);
+            }
+            try analysis.noteDef(stmt.target, current);
+        },
+        .assign_list => |stmt| {
+            const elems = store.getLocalSpan(stmt.elems);
+            for (0..GuardedList.borrowLen(elems)) |i| try analysis.useWholeAt(GuardedList.at(elems, i), current);
+            try analysis.noteDef(stmt.target, current);
+        },
+        .assign_struct => |stmt| {
+            const fields = store.getLocalSpan(stmt.fields);
+            for (0..GuardedList.borrowLen(fields)) |i| try analysis.useWholeAt(GuardedList.at(fields, i), current);
+            try analysis.noteDef(stmt.target, current);
+        },
+        .assign_tag => |stmt| {
+            if (stmt.payload) |payload| try analysis.useWholeAt(payload, current);
+            try analysis.noteDef(stmt.target, current);
+        },
+        .store_struct => |stmt| {
+            try analysis.useWhole(current, stmt.dest);
+            const fields = store.getLocalSpan(stmt.fields);
+            for (0..GuardedList.borrowLen(fields)) |i| try analysis.useWhole(current, GuardedList.at(fields, i));
+        },
+        .store_tag => |stmt| {
+            try analysis.useWhole(current, stmt.dest);
+            if (stmt.payload) |payload| try analysis.useWhole(current, payload);
+        },
+        .set_local => |stmt| {
+            try analysis.useWholeAt(stmt.value, current);
+            if (stmt.mode == .initialize_join_param and analysis.explicit_init_join[@backingInt(stmt.target)]) {
+                try analysis.noteDef(stmt.target, current);
+            } else {
+                try analysis.useWhole(current, stmt.target);
+            }
+        },
+        .debug => |stmt| {
+            try analysis.useWhole(current, stmt.message);
+        },
+        .expect => |stmt| {
+            try analysis.useWhole(current, stmt.condition);
+        },
+        .expect_err => |stmt| try analysis.useWhole(current, stmt.message),
+        .runtime_error, .comptime_exhaustiveness_failed, .jump => {},
+        .comptime_branch_taken => {},
+        // The input contract is RC-free LIR; if RC statements ever appear
+        // here, classifying their operands as whole uses stays sound.
+        inline .incref, .decref, .free => |stmt| {
+            try analysis.useWhole(current, stmt.value);
+        },
+        .decref_if_initialized => |stmt| {
+            try analysis.useWhole(current, stmt.cond);
+            try analysis.useWhole(current, stmt.value);
+        },
+        .switch_stmt => |stmt| {
+            try analysis.useWhole(current, stmt.cond);
+        },
+        .switch_initialized_payload => |stmt| {
+            try analysis.useWhole(current, stmt.cond);
+            try analysis.useWhole(current, stmt.payload);
+        },
+        .str_match => |stmt| {
+            try analysis.useWhole(current, stmt.source);
+            const steps = store.getStrMatchSteps(stmt.steps);
+            for (0..GuardedList.borrowLen(steps)) |i| {
+                switch (GuardedList.at(steps, i).capture) {
+                    .discard => {},
+                    .view => |view_local| try analysis.useWhole(current, view_local),
+                }
+            }
+        },
+        .str_match_set => |stmt| {
+            try analysis.useWhole(current, stmt.source);
+            const arms = store.getStrMatchArms(stmt.arms);
+            for (0..GuardedList.borrowLen(arms)) |arm_index| {
+                const arm = GuardedList.at(arms, arm_index);
+                const steps = store.getStrMatchSteps(arm.steps);
+                for (0..GuardedList.borrowLen(steps)) |i| {
+                    switch (GuardedList.at(steps, i).capture) {
+                        .discard => {},
+                        .view => |view_local| try analysis.useWhole(current, view_local),
+                    }
+                }
+            }
+        },
+        .boxy_tag_match => |stmt| {
+            try analysis.useWhole(current, stmt.source);
+        },
+        // Join parameters are excluded by the gate; the condition locals
+        // are scalar presence words.
+        .join => {},
+        .ret => |stmt| try analysis.useWholeAt(stmt.value, current),
+        .crash => |stmt| if (stmt.msg.localId()) |message| try analysis.useWholeAt(message, current),
+    }
+}
+
+/// A reachable reference read that can carry its source's ownership root: a
+/// borrowed same-layout alias or an ownership-complete projection.
+const ProjectionEdge = struct {
+    source: LIR.LocalId,
+    target: LIR.LocalId,
+    stmt: LIR.CFStmtId,
+    is_projection: bool,
+};
+
+fn projectionEdgeOf(
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    solution: *const arc_solve.Solution,
+    stmt_id: LIR.CFStmtId,
+    assign: anytype,
+) ?ProjectionEdge {
+    const source: LIR.LocalId, const is_projection: bool = switch (assign.op) {
+        .local => |local| blk: {
+            if (!solution.isBorrowed(assign.target)) return null;
+            if (store.getLocal(local).layout_idx != store.getLocal(assign.target).layout_idx) return null;
+            break :blk .{ local, false };
+        },
+        .field, .tag_payload, .tag_payload_struct => blk: {
+            const projection = encodeProjection(assign.op).?;
+            const local = switch (assign.op) {
+                inline .field, .tag_payload, .tag_payload_struct => |op| op.source,
+                .local, .discriminant, .list_reinterpret, .nominal => unreachable,
+            };
+            if (!projectionOwnsAllRc(store, layouts, local, assign.target, projection)) return null;
+            break :blk .{ local, true };
+        },
+        .discriminant, .list_reinterpret, .nominal => return null,
+    };
+    return .{ .source = source, .target = assign.target, .stmt = stmt_id, .is_projection = is_projection };
+}
+
+const PlaceEdgeKind = union(enum) {
+    alias,
+    projection: u32,
+};
+
+/// One edge of the ownership-place graph: a borrowed alias sharing its
+/// source's unit, or an ownership-complete projection of its source.
+const PlaceLink = struct {
+    source: u32,
+    target: u32,
+    kind: PlaceEdgeKind,
+};
+
+fn placeLinkOf(
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    solution: *const arc_solve.Solution,
+    stmt_index: u32,
+    assign: anytype,
+) ?PlaceLink {
+    const source: LIR.LocalId, const kind: PlaceEdgeKind = switch (assign.op) {
+        .local => |local| blk: {
+            if (!solution.isBorrowed(assign.target)) return null;
+            if (solution.unitLocalOf(assign.target) != solution.unitLocalOf(local)) return null;
+            break :blk .{ local, .alias };
+        },
+        .field, .tag_payload, .tag_payload_struct => blk: {
+            const projection = encodeProjection(assign.op).?;
+            const projection_source = switch (assign.op) {
+                inline .field, .tag_payload, .tag_payload_struct => |op| op.source,
+                .local, .discriminant, .list_reinterpret, .nominal => unreachable,
+            };
+            if (!projectionOwnsAllRc(store, layouts, projection_source, assign.target, projection)) return null;
+            break :blk .{ projection_source, .{ .projection = stmt_index } };
+        },
+        .discriminant, .list_reinterpret, .nominal => return null,
+    };
+    return .{ .source = @backingInt(source), .target = @backingInt(assign.target), .kind = kind };
+}
+
+/// A reachable reference read whose place link is read after projection
+/// aliases are materialized. Only a read carrying a projection edge can be
+/// rewritten into an alias, so every other read keeps the link computed here.
+const PlaceRead = struct {
+    stmt: u32,
+    link: ?PlaceLink,
+};
+
+/// Facts of the reachable statements in one statement-id range. Each fact
+/// depends only on its own statement, the store, and the solution, so ranges
+/// are independent executor tasks. Concatenating ranges in order lists every
+/// fact in ascending statement order, exactly as one whole-store scan would.
+const StatementFacts = struct {
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    solution: *const arc_solve.Solution,
+    reachable: *const std.bit_set.DynamicBitSetUnmanaged,
+    start: u32,
+    end: u32,
+    allocator: Allocator,
+    /// Join cells written by an `initialize_join_param` statement.
+    join_init_targets: std.ArrayList(LIR.LocalId) = .empty,
+    projection_edges: std.ArrayList(ProjectionEdge) = .empty,
+    place_reads: std.ArrayList(PlaceRead) = .empty,
+    calls: std.ArrayList(LIR.CFStmtId) = .empty,
+    failed: bool = false,
+    completed: bool = false,
+
+    fn deinit(self: *StatementFacts) void {
+        self.join_init_targets.deinit(self.allocator);
+        self.projection_edges.deinit(self.allocator);
+        self.place_reads.deinit(self.allocator);
+        self.calls.deinit(self.allocator);
+    }
+
+    fn collect(self: *StatementFacts, allocator: Allocator) Error!void {
+        self.allocator = allocator;
+        var index = self.start;
+        while (index < self.end) : (index += 1) {
+            if (!self.reachable.isSet(index)) continue;
+            const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(index));
+            switch (self.store.getCFStmtImmediate(stmt_id).*) {
+                .set_local => |stmt| if (stmt.mode == .initialize_join_param) {
+                    try self.join_init_targets.append(allocator, stmt.target);
+                },
+                .assign_ref => |stmt| {
+                    const projection = projectionEdgeOf(self.store, self.layouts, self.solution, stmt_id, stmt);
+                    if (projection) |edge| try self.projection_edges.append(allocator, edge);
+                    const link = placeLinkOf(self.store, self.layouts, self.solution, index, stmt);
+                    if (projection != null or link != null) try self.place_reads.append(allocator, .{ .stmt = index, .link = link });
+                },
+                .assign_call => try self.calls.append(allocator, stmt_id),
+                .init_uninitialized,
+                .assign_literal,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => {},
+            }
+        }
+    }
+
+    fn run(opaque_context: *anyopaque, worker: TaskExecutor.Worker) ?*anyopaque {
+        const self: *StatementFacts = @ptrCast(@alignCast(opaque_context));
+        self.collect(worker.allocator) catch {
+            self.failed = true;
+        };
+        return self;
+    }
+};
+
+/// Statement ids per fact range. A fixed width makes the task set a function
+/// of the store alone, independent of how many lanes run it.
+const statement_facts_range_size = 8192;
+
+/// Executor tasks of one `compute` call.
+pub const TaskMetrics = struct {
+    submitted: u64 = 0,
+    committed: u64 = 0,
+};
+
+/// How `compute` schedules its statement-range tasks.
+pub const ComputeOptions = struct {
+    executor: ?*const TaskExecutor.Executor = null,
+    metrics: ?*TaskMetrics = null,
+};
+
+/// Collect every range's facts, on the executor's lanes when one is given.
+/// Submission failures stop admission, not draining: every accepted range
+/// finishes before its owner can be released.
+fn collectStatementFacts(
+    gpa: Allocator,
+    ranges: []StatementFacts,
+    options: ComputeOptions,
+) Error!void {
+    const executor = options.executor orelse {
+        for (ranges) |*range| try range.collect(gpa);
+        return;
+    };
+    var session = executor.begin();
+    var submitted: usize = 0;
+    var received: usize = 0;
+    var failed = false;
+    while (received < submitted or (!failed and submitted < ranges.len)) {
+        while (!failed and submitted < ranges.len and session.canSubmit()) {
+            session.submit(.{ .id = submitted, .context = &ranges[submitted], .run = StatementFacts.run }) catch {
+                failed = true;
+                break;
+            };
+            submitted += 1;
+            if (options.metrics) |metrics| metrics.submitted += 1;
+        }
+        if (received < submitted) {
+            const completion = session.receive();
+            if (completion.id >= submitted or completion.worker_id >= executor.worker_count) {
+                dismantleInvariant("ARC dismantle received invalid task identity");
+            }
+            const range = &ranges[completion.id];
+            if (range.completed or completion.value != @as(*anyopaque, @ptrCast(range))) {
+                dismantleInvariant("ARC dismantle received invalid task completion");
+            }
+            range.completed = true;
+            received += 1;
+            if (range.failed) {
+                failed = true;
+            } else if (options.metrics) |metrics| {
+                metrics.committed += 1;
+            }
+        }
+    }
+    session.end();
+    if (failed) return error.OutOfMemory;
+}
+
 /// Solve takes for every reachable statement in the store.
 pub fn compute(
     gpa: Allocator,
@@ -1654,6 +2332,7 @@ pub fn compute(
     layouts: *const layout_mod.Store,
     rc_local: []const bool,
     solution: *const arc_solve.Solution,
+    options: ComputeOptions,
 ) Error!Dismantles {
     if (rc_local.len != store.localCount()) {
         dismantleInvariant("ARC dismantle resource table did not cover every local");
@@ -1661,8 +2340,8 @@ pub fn compute(
     // Proc parameters are defined by the proc entry rather than a statement;
     // remember each parameter's body so its spine has a start. A local that
     // parameterizes more than one proc spec never dismantles.
-    var param_bodies = std.AutoHashMapUnmanaged(LIR.LocalId, ?LIR.CFStmtId).empty;
-    defer param_bodies.deinit(gpa);
+    var param_bodies = collections.DenseMap(LIR.LocalId, ?LIR.CFStmtId).init(gpa);
+    defer param_bodies.deinit();
     const is_param = try gpa.alloc(bool, store.localCount());
     defer gpa.free(is_param);
     @memset(is_param, false);
@@ -1682,7 +2361,7 @@ pub fn compute(
         for (0..GuardedList.borrowLen(params)) |position| {
             const param = GuardedList.at(params, position);
             is_param[@backingInt(param)] = true;
-            const slot = try param_bodies.getOrPut(gpa, param);
+            const slot = try param_bodies.getOrPut(param);
             if (slot.found_existing) {
                 slot.value_ptr.* = null;
             } else {
@@ -1695,68 +2374,71 @@ pub fn compute(
     // projection roots must be known at the candidate gate: a borrowed payload
     // struct can carry its parent's exact unit in an owned emission and is then
     // a real dismantlable container, rather than an independently borrowed
-    // value with no unit to spend.
+    // value with no unit to spend. The uniqueness solve already listed every
+    // statement reachable from each procedure. Join identities belong to a
+    // procedure, so the same lists name each statement's procedure. The
+    // candidate's defining CFG statement identifies that procedure explicitly,
+    // including dismantle temporaries that are deliberately absent from a
+    // specialization frame.
     var reachable = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(gpa, store.cfStmtCount());
     defer reachable.deinit(gpa);
-    var reach_work = std.ArrayList(LIR.CFStmtId).empty;
-    defer reach_work.deinit(gpa);
+    const stmt_proc = try gpa.alloc(u32, store.cfStmtCount());
+    defer gpa.free(stmt_proc);
+    @memset(stmt_proc, no_index);
+    // Statements reached by more than one procedure have no single owner.
+    var shared_stmts = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(gpa, store.cfStmtCount());
+    defer shared_stmts.deinit(gpa);
+    var dominance = try ComponentDominance.init(gpa, store, solution, stmt_proc);
+    defer dominance.deinit(gpa);
     for (0..store.procSpecCount()) |proc_index| {
-        const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
-        if (proc.body) |body| try reach_work.append(gpa, body);
-    }
-    while (reach_work.pop()) |stmt_id| {
-        const index = @backingInt(stmt_id);
-        if (reachable.isSet(index)) continue;
-        reachable.set(index);
-        try body_clone.appendSuccessors(store, &reach_work, stmt_id, gpa);
-    }
-
-    const join_init_counts = try gpa.alloc(u32, store.localCount());
-    defer gpa.free(join_init_counts);
-    @memset(join_init_counts, 0);
-    for (0..store.cfStmtCount()) |stmt_index| {
-        if (!reachable.isSet(stmt_index)) continue;
-        const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-        if (stmt == .set_local and stmt.set_local.mode == .initialize_join_param) {
-            join_init_counts[@backingInt(stmt.set_local.target)] += 1;
+        const proc: u32 = @intCast(proc_index);
+        for (solution.procStatements(store, @fromBackingInt(proc))) |stmt_id| {
+            const stmt_index = @backingInt(stmt_id);
+            reachable.set(stmt_index);
+            const owner = stmt_proc[stmt_index];
+            if (owner == no_index) {
+                stmt_proc[stmt_index] = proc;
+            } else if (owner != proc) {
+                shared_stmts.set(stmt_index);
+                dominance.unite(owner, proc);
+            }
         }
     }
+
+    // Every per-statement fact the whole-store passes below consume, gathered
+    // in disjoint statement ranges off the coordinator.
+    const range_count = @max(1, std.math.divCeil(usize, store.cfStmtCount(), statement_facts_range_size) catch unreachable);
+    const fact_ranges = try gpa.alloc(StatementFacts, range_count);
+    defer gpa.free(fact_ranges);
+    for (fact_ranges, 0..) |*range, index| {
+        range.* = .{
+            .store = store,
+            .layouts = layouts,
+            .solution = solution,
+            .reachable = &reachable,
+            .start = @intCast(@min(index * statement_facts_range_size, store.cfStmtCount())),
+            .end = @intCast(@min((index + 1) * statement_facts_range_size, store.cfStmtCount())),
+            .allocator = gpa,
+        };
+    }
+    defer for (fact_ranges) |*range| range.deinit();
+    try collectStatementFacts(gpa, fact_ranges, options);
+
     const explicit_init_join = try gpa.alloc(bool, store.localCount());
     defer gpa.free(explicit_init_join);
-    for (join_init_counts, 0..) |count, index| {
-        explicit_init_join[index] = count != 0;
+    @memset(explicit_init_join, false);
+    for (fact_ranges) |range| {
+        for (range.join_init_targets.items) |target| explicit_init_join[@backingInt(target)] = true;
     }
 
     const projected_root = try gpa.alloc(u32, store.localCount());
     defer gpa.free(projected_root);
     @memset(projected_root, no_index);
-    const ProjectionEdge = struct { source: LIR.LocalId, target: LIR.LocalId, stmt: LIR.CFStmtId, is_projection: bool };
-    var projection_edges = std.ArrayList(ProjectionEdge).empty;
+    var projection_edge_count: usize = 0;
+    for (fact_ranges) |range| projection_edge_count += range.projection_edges.items.len;
+    var projection_edges = try std.ArrayList(ProjectionEdge).initCapacity(gpa, projection_edge_count);
     defer projection_edges.deinit(gpa);
-    for (0..store.cfStmtCount()) |stmt_index| {
-        if (!reachable.isSet(stmt_index)) continue;
-        const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-        if (stmt != .assign_ref) continue;
-        const assign = stmt.assign_ref;
-        const source: LIR.LocalId, const is_projection: bool = switch (assign.op) {
-            .local => |local| blk: {
-                if (!solution.isBorrowed(assign.target)) continue;
-                if (store.getLocal(local).layout_idx != store.getLocal(assign.target).layout_idx) continue;
-                break :blk .{ local, false };
-            },
-            .field, .tag_payload, .tag_payload_struct => blk: {
-                const projection = encodeProjection(assign.op).?;
-                const local = switch (assign.op) {
-                    inline .field, .tag_payload, .tag_payload_struct => |op| op.source,
-                    .local, .discriminant, .list_reinterpret, .nominal => unreachable,
-                };
-                if (!projectionOwnsAllRc(store, layouts, local, assign.target, projection)) continue;
-                break :blk .{ local, true };
-            },
-            .discriminant, .list_reinterpret, .nominal => continue,
-        };
-        try projection_edges.append(gpa, .{ .source = source, .target = assign.target, .stmt = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))), .is_projection = is_projection });
-    }
+    for (fact_ranges) |range| projection_edges.appendSliceAssumeCapacity(range.projection_edges.items);
     var projection_changed = true;
     while (projection_changed) {
         projection_changed = false;
@@ -1803,8 +2485,6 @@ pub fn compute(
         root_next[index] = root_heads[root];
         root_heads[root] = @intCast(index);
     }
-    var dominance = try StatementDominance.init(gpa, store);
-    defer dominance.deinit(gpa);
     for (projected_root, 0..) |root, local_index| {
         if (root == no_index) continue;
         const local: LIR.LocalId = @fromBackingInt(@intCast(@as(u32, @intCast(local_index))));
@@ -1815,13 +2495,15 @@ pub fn compute(
         var representative: u32 = @intCast(local_index);
         var other_index = root_heads[root];
         while (other_index != no_index) : (other_index = root_next[other_index]) {
+            // A projection dominates itself and the representative it starts as.
+            if (other_index == local_index) continue;
             const other: LIR.LocalId = @fromBackingInt(@intCast(@as(u32, @intCast(other_index))));
             if (store.getLocal(other).layout_idx != store.getLocal(local).layout_idx) continue;
             const other_stmt: LIR.CFStmtId = @fromBackingInt(@intCast(projected_stmt[other_index]));
             const target_stmt: LIR.CFStmtId = @fromBackingInt(@intCast(target_stmt_index));
-            if (!dominance.dominates(other_stmt, target_stmt)) continue;
+            if (!try dominance.dominates(gpa, other_stmt, target_stmt)) continue;
             const representative_stmt: LIR.CFStmtId = @fromBackingInt(@intCast(projected_stmt[representative]));
-            if (dominance.dominates(other_stmt, representative_stmt)) {
+            if (try dominance.dominates(gpa, other_stmt, representative_stmt)) {
                 representative = @intCast(other_index);
             }
         }
@@ -1855,300 +2537,22 @@ pub fn compute(
     @memset(analysis.mention_heads, no_index);
 
     // One linear scan over every reachable statement, classifying each
-    // occurrence of each local. The switch is exhaustive so a new statement
-    // form fails to compile rather than silently escaping classification.
+    // occurrence of each local. The order is one depth-first walk from every
+    // procedure body, last procedure first, which classifies a statement
+    // shared by several procedures on its first visit: each procedure's
+    // statement list, last procedure first, skipping statements already
+    // classified.
     var visited = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(gpa, store.cfStmtCount());
     defer visited.deinit(gpa);
-    var stack = std.ArrayList(LIR.CFStmtId).empty;
-    defer stack.deinit(gpa);
-    for (0..store.procSpecCount()) |proc_index| {
-        const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
-        if (proc.body) |body| try stack.append(gpa, body);
-    }
-
-    while (stack.pop()) |current| {
-        const stmt_index = @backingInt(current);
-        if (visited.isSet(stmt_index)) continue;
-        visited.set(stmt_index);
-        const current_stmt = store.getCFStmt(current);
-        body_clone.countStmtReads(store, operand_read_counts, current_stmt);
-        switch (current_stmt) {
-            .init_uninitialized => |stmt| {
-                try analysis.useWhole(current, stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_ref => |stmt| {
-                switch (stmt.op) {
-                    .field => |op| {
-                        try analysis.noteFieldRead(current, op.source, op.field_idx, stmt.target);
-                        try analysis.noteDef(stmt.target, current);
-                    },
-                    .local => |source| {
-                        try analysis.noteDemandAlias(source, stmt.target);
-                        if (stmt.target == source) {
-                            try analysis.useWhole(current, source);
-                        } else {
-                            try analysis.noteAliasDef(current, stmt.target, source);
-                        }
-                    },
-                    .discriminant => |op| {
-                        // The tag word is disjoint from every stored unit, so
-                        // reading it is no use of a tag union.
-                        analysis.disqualify(op.source);
-                        try analysis.noteDef(stmt.target, current);
-                    },
-                    .tag_payload => |op| {
-                        try analysis.useWhole(current, op.source);
-                        try analysis.noteDef(stmt.target, current);
-                    },
-                    .tag_payload_struct => |op| {
-                        if (!try analysis.notePayloadView(stmt.target, op)) try analysis.useWhole(current, op.source);
-                        try analysis.noteDef(stmt.target, current);
-                    },
-                    inline .list_reinterpret, .nominal => |op| {
-                        try analysis.useWhole(current, op.backing_ref);
-                        analysis.disqualify(stmt.target);
-                    },
-                }
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_literal => |stmt| {
-                try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_call => |stmt| {
-                const args = store.getLocalSpan(stmt.args);
-                const callee_sig = solution.sigOf(stmt.proc);
-                for (0..GuardedList.borrowLen(args)) |i| {
-                    const arg = GuardedList.at(args, i);
-                    if (i < arc_sig.tracked_param_count) {
-                        direct_call_stmt_by_arg[@backingInt(arg)] = @backingInt(current);
-                        direct_call_position_by_arg[@backingInt(arg)] = @intCast(i);
-                    }
-                    try analysis.useWholeAt(arg, current);
-                    if (callee_sig.paramMode(i) == .owned) analysis.demandOwned(arg);
-                }
-                try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_call_erased => |stmt| {
-                try analysis.useWhole(current, stmt.closure);
-                if (stmt.reuse_source) |reuse_source| try analysis.useWhole(current, reuse_source);
-                const args = store.getLocalSpan(stmt.args);
-                for (0..GuardedList.borrowLen(args)) |i| try analysis.useWholeAt(GuardedList.at(args, i), current);
-                try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_packed_erased_fn => |stmt| {
-                if (stmt.capture) |capture| try analysis.useWhole(current, capture);
-                if (stmt.reuse) |reuse| try analysis.useWhole(current, reuse);
-                try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_boxy_desc_ref => |stmt| {
-                if (stmt.desc.localOrNull()) |local| try analysis.useWhole(current, local);
-                if (stmt.tag_residual_for) |desc| if (desc.localOrNull()) |local| try analysis.useWhole(current, local);
-                const captures = store.getLocalSpan(stmt.captures);
-                for (0..GuardedList.borrowLen(captures)) |i| try analysis.useWhole(current, GuardedList.at(captures, i));
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_boxy_dict_ref => |stmt| {
-                if (stmt.dict.localOrNull()) |local| try analysis.useWhole(current, local);
-                const captures = store.getLocalSpan(stmt.captures);
-                for (0..GuardedList.borrowLen(captures)) |i| try analysis.useWhole(current, GuardedList.at(captures, i));
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_boxy_box => |stmt| {
-                try analysis.useWhole(current, stmt.payload);
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_boxy_record_update => |stmt| {
-                try analysis.useWhole(current, stmt.base);
-                try analysis.useWhole(current, stmt.fields);
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            inline .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect => |stmt| {
-                try analysis.useWhole(current, stmt.source);
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_boxy_eq => |stmt| {
-                try analysis.useWhole(current, stmt.lhs);
-                try analysis.useWhole(current, stmt.rhs);
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_boxy_hash => |stmt| {
-                try analysis.useWhole(current, stmt.value);
-                try analysis.useWhole(current, stmt.hasher);
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_boxy_tag => |stmt| {
-                if (stmt.payload) |payload| try analysis.useWhole(current, payload);
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_boxy_tag_payload => |stmt| {
-                try analysis.useWhole(current, stmt.source);
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                if (stmt.target_desc) |target_desc| {
-                    try analysis.noteDef(target_desc, current);
-                    analysis.disqualify(target_desc);
-                }
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_call_dict => |stmt| {
-                if (stmt.dict.localOrNull()) |local| try analysis.useWhole(current, local);
-                const args = store.getLocalSpan(stmt.args);
-                for (0..GuardedList.borrowLen(args)) |i| try analysis.useWhole(current, GuardedList.at(args, i));
-                const arg_descs = store.getLocalSpan(stmt.arg_descs);
-                for (0..GuardedList.borrowLen(arg_descs)) |i| try analysis.useWhole(current, GuardedList.at(arg_descs, i));
-                const hidden_args = store.getLocalSpan(stmt.hidden_args);
-                for (0..GuardedList.borrowLen(hidden_args)) |i| try analysis.useWhole(current, GuardedList.at(hidden_args, i));
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_low_level => |stmt| {
-                const args = store.getLocalSpan(stmt.args);
-                const demand_mask = stmt.rc_effect.consume_args | stmt.rc_effect.retain_args;
-                for (0..GuardedList.borrowLen(args)) |i| {
-                    const arg = GuardedList.at(args, i);
-                    try analysis.useWholeAt(arg, current);
-                    if (i < 64 and (demand_mask & (@as(u64, 1) << @intCast(i))) != 0) analysis.demandOwned(arg);
-                }
-                try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_list => |stmt| {
-                const elems = store.getLocalSpan(stmt.elems);
-                for (0..GuardedList.borrowLen(elems)) |i| try analysis.useWholeAt(GuardedList.at(elems, i), current);
-                try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_struct => |stmt| {
-                const fields = store.getLocalSpan(stmt.fields);
-                for (0..GuardedList.borrowLen(fields)) |i| try analysis.useWholeAt(GuardedList.at(fields, i), current);
-                try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_tag => |stmt| {
-                if (stmt.payload) |payload| try analysis.useWholeAt(payload, current);
-                try analysis.noteDef(stmt.target, current);
-                try stack.append(gpa, stmt.next);
-            },
-            .store_struct => |stmt| {
-                try analysis.useWhole(current, stmt.dest);
-                const fields = store.getLocalSpan(stmt.fields);
-                for (0..GuardedList.borrowLen(fields)) |i| try analysis.useWhole(current, GuardedList.at(fields, i));
-                try stack.append(gpa, stmt.next);
-            },
-            .store_tag => |stmt| {
-                try analysis.useWhole(current, stmt.dest);
-                if (stmt.payload) |payload| try analysis.useWhole(current, payload);
-                try stack.append(gpa, stmt.next);
-            },
-            .set_local => |stmt| {
-                try analysis.useWholeAt(stmt.value, current);
-                if (stmt.mode == .initialize_join_param and analysis.explicit_init_join[@backingInt(stmt.target)]) {
-                    try analysis.noteDef(stmt.target, current);
-                } else {
-                    try analysis.useWhole(current, stmt.target);
-                }
-                try stack.append(gpa, stmt.next);
-            },
-            .debug => |stmt| {
-                try analysis.useWhole(current, stmt.message);
-                try stack.append(gpa, stmt.next);
-            },
-            .expect => |stmt| {
-                try analysis.useWhole(current, stmt.condition);
-                try stack.append(gpa, stmt.next);
-            },
-            .expect_err => |stmt| try analysis.useWhole(current, stmt.message),
-            .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break, .jump => {},
-            .comptime_branch_taken => |stmt| try stack.append(gpa, stmt.next),
-            // The input contract is RC-free LIR; if RC statements ever appear
-            // here, classifying their operands as whole uses stays sound.
-            inline .incref, .decref, .free => |stmt| {
-                try analysis.useWhole(current, stmt.value);
-                try stack.append(gpa, stmt.next);
-            },
-            .decref_if_initialized => |stmt| {
-                try analysis.useWhole(current, stmt.cond);
-                try analysis.useWhole(current, stmt.value);
-                try stack.append(gpa, stmt.next);
-            },
-            .switch_stmt => |stmt| {
-                try analysis.useWhole(current, stmt.cond);
-                const branches = store.getCFSwitchBranches(stmt.branches);
-                for (0..GuardedList.borrowLen(branches)) |i| {
-                    try stack.append(gpa, GuardedList.at(branches, i).body);
-                }
-                try stack.append(gpa, stmt.default_branch);
-                if (stmt.continuation) |continuation| try stack.append(gpa, continuation);
-            },
-            .switch_initialized_payload => |stmt| {
-                try analysis.useWhole(current, stmt.cond);
-                try analysis.useWhole(current, stmt.payload);
-                try stack.append(gpa, stmt.initialized_branch);
-                try stack.append(gpa, stmt.uninitialized_branch);
-            },
-            .str_match => |stmt| {
-                try analysis.useWhole(current, stmt.source);
-                const steps = store.getStrMatchSteps(stmt.steps);
-                for (0..GuardedList.borrowLen(steps)) |i| {
-                    switch (GuardedList.at(steps, i).capture) {
-                        .discard => {},
-                        .view => |view_local| try analysis.useWhole(current, view_local),
-                    }
-                }
-                try stack.append(gpa, stmt.on_match);
-                try stack.append(gpa, stmt.on_miss);
-            },
-            .str_match_set => |stmt| {
-                try analysis.useWhole(current, stmt.source);
-                const arms = store.getStrMatchArms(stmt.arms);
-                for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                    const arm = GuardedList.at(arms, arm_index);
-                    const steps = store.getStrMatchSteps(arm.steps);
-                    for (0..GuardedList.borrowLen(steps)) |i| {
-                        switch (GuardedList.at(steps, i).capture) {
-                            .discard => {},
-                            .view => |view_local| try analysis.useWhole(current, view_local),
-                        }
-                    }
-                    try stack.append(gpa, arm.on_match);
-                }
-                try stack.append(gpa, stmt.on_miss);
-            },
-            .boxy_tag_match => |stmt| {
-                try analysis.useWhole(current, stmt.source);
-                try stack.append(gpa, stmt.on_match);
-                try stack.append(gpa, stmt.on_miss);
-            },
-            .join => |stmt| {
-                // Join parameters are excluded by the gate; the condition
-                // locals are scalar presence words.
-                try stack.append(gpa, stmt.body);
-                try stack.append(gpa, stmt.remainder);
-            },
-            .ret => |stmt| try analysis.useWholeAt(stmt.value, current),
-            .crash => |stmt| if (stmt.msg.localId()) |message| try analysis.useWholeAt(message, current),
+    var proc_cursor = store.procSpecCount();
+    while (proc_cursor > 0) {
+        proc_cursor -= 1;
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_cursor))));
+        for (solution.procStatements(store, proc_id)) |current| {
+            const stmt_index = @backingInt(current);
+            if (visited.isSet(stmt_index)) continue;
+            visited.set(stmt_index);
+            try classifyStatement(&analysis, store, solution, operand_read_counts, direct_call_stmt_by_arg, direct_call_position_by_arg, current);
         }
     }
 
@@ -2170,18 +2574,18 @@ pub fn compute(
     // Second phase: verify the surviving candidates' read shapes and spines,
     // and build the output.
     var result = Dismantles{
-        .arena = std.heap.ArenaAllocator.init(gpa),
-        .takes = .empty,
-        .containers = .empty,
-        .owned_only_takes = .empty,
-        .owned_only_containers = .empty,
+        .arena = base.SingleThreadArena.init(gpa),
+        .takes = .init(gpa),
+        .containers = .init(gpa),
+        .owned_only_takes = .init(gpa),
+        .owned_only_containers = .init(gpa),
         .owned_only_param_benefits = &.{},
         .take_bindings = &.{},
         .owned_only_binding_roots = &.{},
         .field_restitution_args = .empty,
-        .projection_units = .empty,
-        .complete_takes = .empty,
-        .projection_aliases = .empty,
+        .projection_units = .init(gpa),
+        .complete_takes = .init(gpa),
+        .projection_aliases = .init(gpa),
     };
     errdefer result.deinit();
     result.owned_only_param_benefits = try result.arena.allocator().alloc(arc_sig.ParamMask, store.procSpecCount());
@@ -2191,52 +2595,48 @@ pub fn compute(
     result.owned_only_binding_roots = try result.arena.allocator().alloc(u32, store.localCount());
     @memset(result.owned_only_binding_roots, no_index);
 
-    var read_kinds = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
-    defer read_kinds.deinit(gpa);
-    const proc_joins = try gpa.alloc(std.AutoHashMapUnmanaged(u32, LIR.CFStmtId), store.procSpecCount());
+    var read_kinds = collections.DenseMap(LIR.CFStmtId, ReadKind).init(gpa);
+    defer read_kinds.deinit();
+    const proc_joins = try gpa.alloc(collections.DenseMap(u32, LIR.CFStmtId), store.procSpecCount());
     defer {
-        for (proc_joins) |*joins| joins.deinit(gpa);
+        for (proc_joins) |*joins| joins.deinit();
         gpa.free(proc_joins);
     }
-    @memset(proc_joins, .empty);
+    for (proc_joins) |*joins| joins.* = .init(gpa);
     const joins_ready = try gpa.alloc(bool, store.procSpecCount());
     defer gpa.free(joins_ready);
     @memset(joins_ready, false);
-    const join_scan_epochs = try gpa.alloc(u32, store.cfStmtCount());
-    defer gpa.free(join_scan_epochs);
-    @memset(join_scan_epochs, 0);
-    var join_scan_stack = std.ArrayList(LIR.CFStmtId).empty;
-    defer join_scan_stack.deinit(gpa);
-    var join_scan_epoch: u32 = 0;
-    // Join identities belong to a procedure. The candidate's defining CFG
-    // statement identifies that procedure explicitly, including dismantle
-    // temporaries that are deliberately absent from a specialization frame.
-    const stmt_proc = try gpa.alloc(u32, store.cfStmtCount());
-    defer gpa.free(stmt_proc);
-    @memset(stmt_proc, no_index);
-    const ambiguous_proc = no_index - 1;
-    for (0..store.procSpecCount()) |proc_index| {
-        const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
-        if (proc.body == null) continue;
-        join_scan_epoch += 1;
-        try join_scan_stack.append(gpa, proc.body.?);
-        while (join_scan_stack.pop()) |stmt_id| {
-            const stmt_index = @backingInt(stmt_id);
-            if (join_scan_epochs[stmt_index] == join_scan_epoch) continue;
-            join_scan_epochs[stmt_index] = join_scan_epoch;
-            const owner = &stmt_proc[stmt_index];
-            if (owner.* == no_index) {
-                owner.* = @intCast(proc_index);
-            } else if (owner.* != @as(u32, @intCast(proc_index))) {
-                owner.* = ambiguous_proc;
-            }
-            try body_clone.appendSuccessors(store, &join_scan_stack, stmt_id, gpa);
-        }
+    const proc_graphs = try gpa.alloc(FutureFields.ProcGraph, store.procSpecCount());
+    defer gpa.free(proc_graphs);
+    // The one successor of every statement the take flow walk passes straight
+    // through, or `no_index` for a statement it must decode. Each candidate's
+    // walk reads this column instead of loading every statement it passes.
+    const straight_next = try gpa.alloc(u32, store.cfStmtCount());
+    defer gpa.free(straight_next);
+    for (straight_next, 0..) |*next, stmt_index| {
+        next.* = switch (store.getCFStmtImmediate(@fromBackingInt(@intCast(stmt_index))).*) {
+            inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| @backingInt(stmt.next),
+            .set_local,
+            .join,
+            .switch_stmt,
+            .jump,
+            .switch_initialized_payload,
+            .str_match,
+            .boxy_tag_match,
+            .str_match_set,
+            .ret,
+            .crash,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            => no_index,
+        };
     }
+
     var future_fields = FutureFields.init(gpa);
     defer future_fields.deinit(gpa);
-    var body_states = std.AutoHashMapUnmanaged(LIR.CFStmtId, FlowState).empty;
-    defer body_states.deinit(gpa);
+    var body_states = collections.DenseMap(LIR.CFStmtId, FlowState).init(gpa);
+    defer body_states.deinit();
     const FlowFrame = struct { cursor: LIR.CFStmtId, state: FlowState };
     var flow_frames = std.ArrayList(FlowFrame).empty;
     defer flow_frames.deinit(gpa);
@@ -2332,7 +2732,7 @@ pub fn compute(
         const spine_start: LIR.CFStmtId = if (candidate.join_starts.items.len != 0)
             candidate.join_starts.items[0]
         else if (candidate.def_count == 1)
-            switch (store.getCFStmt(candidate.def_stmt)) {
+            switch (store.getCFStmtImmediate(candidate.def_stmt).*) {
                 inline .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag => |stmt| stmt.next,
                 .assign_ref => |stmt| if (union_root != null or analysis.projected_root[@backingInt(local)] != no_index) stmt.next else continue :candidates,
                 .set_local => continue :candidates,
@@ -2341,7 +2741,6 @@ pub fn compute(
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -2367,8 +2766,6 @@ pub fn compute(
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .loop_continue,
-                .loop_break,
                 .join,
                 .jump,
                 .ret,
@@ -2417,7 +2814,7 @@ pub fn compute(
             const bit = @as(u64, 1) << @intCast(read.field_idx);
             if (rc_mask & bit == 0) continue;
             const consuming = !solution.isBorrowed(read.target) or analysis.owned_demand[@backingInt(read.target)];
-            try read_kinds.put(gpa, read.stmt, .{
+            try read_kinds.put(read.stmt, .{
                 .bit = bit,
                 .consuming = consuming,
             });
@@ -2433,14 +2830,14 @@ pub fn compute(
             const position = direct_call_position_by_arg[@backingInt(read.target)];
             if (call_stmt_index == no_index or position == std.math.maxInt(u8)) continue;
             const call_stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(call_stmt_index));
-            const call_stmt = store.getCFStmt(call_stmt_id);
-            if (call_stmt != .assign_call) continue;
+            const call_stmt = store.getCFStmtImmediate(call_stmt_id);
+            if (call_stmt.* != .assign_call) continue;
             const args = store.getLocalSpan(call_stmt.assign_call.args);
             if (position >= GuardedList.borrowLen(args) or GuardedList.at(args, position) != read.target) continue;
             const callee_sig = solution.sigOf(call_stmt.assign_call.proc);
             if (callee_sig.paramMode(position) != .owned) continue;
             const outcomes = solution.availableOutcomeSpanOf(call_stmt.assign_call.proc);
-            const refinement = (try findOutcomeRefinement(gpa, store, call_stmt.assign_call.target, call_stmt.assign_call.next, outcomes)) orelse continue;
+            const refinement = (try arc_solve.findOutcomeRefinement(gpa, store, call_stmt.assign_call.target, call_stmt.assign_call.next, outcomes)) orelse continue;
             const position_bit = arc_sig.paramBit(position).?;
             var any_restitution = false;
             for (solution.sigTable().outcomesOf(.{ .outcomes = outcomes })) |outcome| {
@@ -2459,7 +2856,7 @@ pub fn compute(
         // may run before it on any path, so the value it moves or observes
         // is the intact container.
         for (candidate.whole_uses.items) |stmt| {
-            const slot = try read_kinds.getOrPut(gpa, stmt);
+            const slot = try read_kinds.getOrPut(stmt);
             if (slot.found_existing) {
                 slot.value_ptr.bit = ~@as(u64, 0);
                 slot.value_ptr.consuming = false;
@@ -2486,7 +2883,7 @@ pub fn compute(
                 var mention = analysis.mention_heads[borrower];
                 while (mention != no_index) {
                     const edge = analysis.mention_edges.items[mention];
-                    const slot = try read_kinds.getOrPut(gpa, @fromBackingInt(@intCast(edge.stmt)));
+                    const slot = try read_kinds.getOrPut(@fromBackingInt(@intCast(edge.stmt)));
                     if (!slot.found_existing) {
                         slot.value_ptr.* = .{ .bit = bit, .consuming = false };
                     } else if (slot.value_ptr.consuming) {
@@ -2515,13 +2912,14 @@ pub fn compute(
         if (candidate_mask == 0) continue;
 
         if (candidate.reads.items.len == 0) dismantleInvariant("field-take candidate had no field projection");
-        const owner = stmt_proc[@backingInt(candidate.reads.items[0].stmt)];
-        if (owner == no_index or owner == ambiguous_proc) continue;
+        const first_read = @backingInt(candidate.reads.items[0].stmt);
+        const owner = stmt_proc[first_read];
+        if (owner == no_index or shared_stmts.isSet(first_read)) continue;
         if (!joins_ready[owner]) {
             joins_ready[owner] = true;
-            join_scan_epoch += 1;
-            const proc = store.getProcSpec(@fromBackingInt(@intCast(owner)));
-            try collectProcJoinBodies(gpa, store, proc.body.?, &proc_joins[owner], join_scan_epochs, join_scan_epoch, &join_scan_stack);
+            try collectProcJoinBodies(store, solution.procStatements(store, @fromBackingInt(@intCast(owner))), &proc_joins[owner]);
+            const proc_body = store.getProcSpec(@fromBackingInt(@intCast(owner))).body.?;
+            proc_graphs[owner] = try future_fields.buildProcGraph(gpa, store, &.{proc_body}, &proc_joins[owner]);
         }
         const join_bodies = &proc_joins[owner];
 
@@ -2531,11 +2929,11 @@ pub fn compute(
         // recreating the view still observes the same stored units.
         const fresh_def = if (union_root) |root| root.def_stmt else candidate.def_stmt;
         const redefinition: ?LIR.CFStmtId = if (candidate.join_starts.items.len == 0) fresh_def else null;
-        try future_fields.compute(gpa, store, solution, local, &read_kinds, join_bodies, field_restitutions.items, redefinition);
+        try future_fields.compute(gpa, store, solution, local, proc_graphs[owner], &read_kinds, field_restitutions.items, redefinition);
         for (candidate.reads.items) |read| {
             const kind = read_kinds.getPtr(read.stmt) orelse continue;
             if (!kind.consuming) continue;
-            const definition = store.getCFStmt(read.stmt).assign_ref;
+            const definition = store.getCFStmtImmediate(read.stmt).assign_ref;
             if (future_fields.observed(definition.next) & kind.bit != 0) {
                 kind.consuming = false;
             }
@@ -2588,8 +2986,13 @@ pub fn compute(
                         poison |= state.may & kind.bit;
                     }
                 }
-                switch (store.getCFStmt(cursor)) {
-                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
+                const straight = straight_next[@backingInt(cursor)];
+                if (straight != no_index) {
+                    cursor = @fromBackingInt(straight);
+                    continue :chain;
+                }
+                switch (store.getCFStmtImmediate(cursor).*) {
+                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
                     .set_local => |stmt| {
                         // The value operand above still observes the old
                         // definition. Only the explicit write starts a fresh
@@ -2624,7 +3027,7 @@ pub fn compute(
                         // return would. Reads living past it are never
                         // visited, which keeps their fields residual.
                         const body = join_bodies.get(@backingInt(stmt.target)) orelse break :chain;
-                        const slot = try body_states.getOrPut(gpa, body);
+                        const slot = try body_states.getOrPut(body);
                         if (slot.found_existing) {
                             const merged = FlowState.meet(slot.value_ptr.*, state);
                             if (FlowState.eql(merged, slot.value_ptr.*)) break :chain;
@@ -2650,10 +3053,6 @@ pub fn compute(
                             try flow_frames.append(gpa, .{ .cursor = GuardedList.at(arms, i).on_match, .state = state });
                         }
                         cursor = stmt.on_miss;
-                    },
-                    .loop_continue, .loop_break => {
-                        if (solution.isJoinParam(local)) poison |= state.may;
-                        break :chain;
                     },
                     .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => {
                         break :chain;
@@ -2697,7 +3096,7 @@ pub fn compute(
             // Publishing the binding edge makes the ordinary ARC transfer and
             // certifier machinery carry that unit; no retain is suppressed
             // without the explicit complete-projection receipt.
-            try result.complete_takes.put(gpa, candidate.def_stmt, activation_root);
+            try result.complete_takes.put(candidate.def_stmt, activation_root);
             if (owned_only) {
                 result.owned_only_binding_roots[@backingInt(local)] = @backingInt(activation_root);
             } else {
@@ -2711,7 +3110,7 @@ pub fn compute(
             if (solution.isBorrowed(read.target) and !analysis.owned_demand[@backingInt(read.target)]) continue;
             const take = Take{ .root = local, .field_mask = bit };
             if (owned_only) {
-                try result.owned_only_takes.put(gpa, read.stmt, take);
+                try result.owned_only_takes.put(read.stmt, take);
                 // A target solved owned holds its own unit in every emission;
                 // the take only spares its retain. Only a target solved
                 // borrowed needs its binding overridden to owned, and a
@@ -2725,7 +3124,7 @@ pub fn compute(
                 }
                 result.owned_only_binding_roots[target_index] = @backingInt(activation_root);
             } else {
-                try result.takes.put(gpa, read.stmt, take);
+                try result.takes.put(read.stmt, take);
                 result.take_bindings[@backingInt(read.target)] = true;
             }
         }
@@ -2751,7 +3150,7 @@ pub fn compute(
         }
         if (union_root) |view_root_entry| {
             const root_local: LIR.LocalId = @fromBackingInt(@intCast(analysis.view_root[@backingInt(local)]));
-            try result.containers.put(gpa, root_local, .{
+            try result.containers.put(root_local, .{
                 .fields = stored_fields,
                 .full_mask = rc_mask,
                 .payload_view = .{
@@ -2760,12 +3159,14 @@ pub fn compute(
                 },
             });
         } else if (owned_only) {
-            try result.owned_only_containers.put(gpa, local, .{ .fields = stored_fields, .full_mask = rc_mask });
+            try result.owned_only_containers.put(local, .{ .fields = stored_fields, .full_mask = rc_mask });
         } else {
-            try result.containers.put(gpa, local, .{ .fields = stored_fields, .full_mask = rc_mask });
+            try result.containers.put(local, .{ .fields = stored_fields, .full_mask = rc_mask });
         }
     }
 
+    var rewritten_reads = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(gpa, store.cfStmtCount());
+    defer rewritten_reads.deinit(gpa);
     // Materialize only equivalences whose representative actually acquired a
     // committed dismantle plan. Lookup-only projections retain their original
     // LIR and ownership schedule.
@@ -2784,14 +3185,15 @@ pub fn compute(
         const stmt = store.getCFStmtPtr(@fromBackingInt(@intCast(stmt_index)));
         if (stmt.* != .assign_ref) dismantleInvariant("projected alias definition stopped being a reference read");
         stmt.assign_ref.op = .{ .local = representative_local };
-        try result.projection_aliases.put(gpa, @fromBackingInt(@intCast(@as(u32, @intCast(local_index)))), representative_local);
+        rewritten_reads.set(stmt_index);
+        try result.projection_aliases.put(@fromBackingInt(@intCast(@as(u32, @intCast(local_index)))), representative_local);
     }
 
     // Variant admission consumes the exact owned-only benefit without
     // rescanning bodies or reconstructing parameter identity from statements.
     for (0..store.procSpecCount()) |proc_index| {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
-        const params = store.getLocalSpan(store.getProcSpec(proc_id).args);
+        const params = store.getLocalSpan(store.getProcSpecImmediate(proc_id).args);
         for (0..GuardedList.borrowLen(params)) |position| {
             const bit = arc_sig.paramBit(position) orelse break;
             const param = GuardedList.at(params, position);
@@ -2813,7 +3215,7 @@ pub fn compute(
 
     for (0..store.procSpecCount()) |proc_index| {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
-        const params = store.getLocalSpan(store.getProcSpec(proc_id).args);
+        const params = store.getLocalSpan(store.getProcSpecImmediate(proc_id).args);
         for (0..GuardedList.borrowLen(params)) |position| {
             const param = GuardedList.at(params, position);
             const param_index = @backingInt(param);
@@ -2844,10 +3246,6 @@ pub fn compute(
         root: u32,
         projected: bool,
     };
-    const PlaceEdgeKind = union(enum) {
-        alias,
-        projection: u32,
-    };
     const PlaceEdge = struct {
         source: u32,
         target: u32,
@@ -2858,41 +3256,23 @@ pub fn compute(
     defer place_edges.deinit(gpa);
     var place_heads = std.AutoHashMapUnmanaged(u32, u32).empty;
     defer place_heads.deinit(gpa);
-    for (0..store.cfStmtCount()) |stmt_index| {
-        if (!visited.isSet(stmt_index)) continue;
-        const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-        if (stmt != .assign_ref) continue;
-        const assign = stmt.assign_ref;
-        const source: LIR.LocalId, const kind: PlaceEdgeKind = switch (assign.op) {
-            .local => |local| blk: {
-                if (!solution.isBorrowed(assign.target)) continue;
-                if (solution.unitLocalOf(assign.target) != solution.unitLocalOf(local)) continue;
-                break :blk .{ local, .alias };
-            },
-            .field, .tag_payload, .tag_payload_struct => blk: {
-                const projection = encodeProjection(assign.op).?;
-                const projection_source = switch (assign.op) {
-                    inline .field, .tag_payload, .tag_payload_struct => |op| op.source,
-                    .local,
-                    .discriminant,
-                    .list_reinterpret,
-                    .nominal,
-                    => unreachable,
-                };
-                if (!projectionOwnsAllRc(store, layouts, projection_source, assign.target, projection)) continue;
-                break :blk .{ projection_source, .{ .projection = @intCast(stmt_index) } };
-            },
-            .discriminant, .list_reinterpret, .nominal => continue,
-        };
-        const source_index = @backingInt(source);
-        const previous_head = place_heads.get(source_index) orelse no_index;
-        try place_edges.append(gpa, .{
-            .source = source_index,
-            .target = @backingInt(assign.target),
-            .kind = kind,
-            .next = previous_head,
-        });
-        try place_heads.put(gpa, source_index, @intCast(place_edges.items.len - 1));
+    for (fact_ranges) |range| {
+        for (range.place_reads.items) |read| {
+            // A materialized alias reads its representative now.
+            const link = if (rewritten_reads.isSet(read.stmt))
+                placeLinkOf(store, layouts, solution, read.stmt, store.getCFStmt(@fromBackingInt(@intCast(read.stmt))).assign_ref)
+            else
+                read.link;
+            const edge = link orelse continue;
+            const previous_head = place_heads.get(edge.source) orelse no_index;
+            try place_edges.append(gpa, .{
+                .source = edge.source,
+                .target = edge.target,
+                .kind = edge.kind,
+                .next = previous_head,
+            });
+            try place_heads.put(gpa, edge.source, @intCast(place_edges.items.len - 1));
+        }
     }
 
     var places = std.AutoHashMapUnmanaged(u32, PlaceOrigin).empty;
@@ -2964,7 +3344,7 @@ pub fn compute(
         const local: LIR.LocalId = @fromBackingInt(@intCast(entry.key_ptr.*));
         if (!solution.isBorrowed(local) or solution.isJoinParam(local)) continue;
         if (result.isTakeBinding(local) or result.owned_only_binding_roots[@backingInt(local)] != no_index) continue;
-        try result.projection_units.put(gpa, local, @fromBackingInt(@intCast(origin.root)));
+        try result.projection_units.put(local, @fromBackingInt(@intCast(origin.root)));
     }
     for (place_edges.items) |edge| {
         if (edge.kind != .projection) continue;
@@ -2975,7 +3355,7 @@ pub fn compute(
         if (solution.isBorrowed(target)) continue;
         const origin = places.get(edge.source) orelse continue;
         if (origin.root == ambiguous_index) continue;
-        try result.complete_takes.put(gpa, @fromBackingInt(@intCast(edge.kind.projection)), @fromBackingInt(@intCast(origin.root)));
+        try result.complete_takes.put(@fromBackingInt(@intCast(edge.kind.projection)), @fromBackingInt(@intCast(origin.root)));
 
         // A complete projection can move its root's exact unit in an owned
         // parameter emission. Publish that mechanical capability to variant
@@ -3001,30 +3381,29 @@ pub fn compute(
     defer benefit_edges.deinit(gpa);
     var benefit_heads = std.AutoHashMapUnmanaged(u32, u32).empty;
     defer benefit_heads.deinit(gpa);
-    for (0..store.cfStmtCount()) |stmt_index| {
-        if (!visited.isSet(stmt_index)) continue;
-        const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-        if (stmt != .assign_call) continue;
-        const call = stmt.assign_call;
-        const args = store.getLocalSpan(call.args);
-        for (0..GuardedList.borrowLen(args)) |position| {
-            if (position >= arc_sig.tracked_param_count) continue;
-            const arg = GuardedList.at(args, position);
-            const arg_index = @backingInt(arg);
-            const place_origin = places.get(arg_index);
-            const root_index: u32 = if (place_origin) |origin| origin.root else @backingInt(solution.unitLocalOf(arg));
-            if (root_index == no_index or root_index == ambiguous_index) continue;
-            const source_info = param_info.get(root_index) orelse continue;
-            if (source_info.proc == ambiguous_index) continue;
-            const source_proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(source_info.proc));
-            if (solution.isPinnedProc(source_proc)) continue;
-            const target_key: u32 = @intCast(@backingInt(call.proc) * arc_sig.tracked_param_count + position);
-            const previous_head = benefit_heads.get(target_key) orelse no_index;
-            try benefit_edges.append(gpa, .{
-                .source_key = @intCast(source_info.proc * arc_sig.tracked_param_count + source_info.position),
-                .next = previous_head,
-            });
-            try benefit_heads.put(gpa, target_key, @intCast(benefit_edges.items.len - 1));
+    for (fact_ranges) |range| {
+        for (range.calls.items) |call_stmt| {
+            const call = store.getCFStmt(call_stmt).assign_call;
+            const args = store.getLocalSpan(call.args);
+            for (0..GuardedList.borrowLen(args)) |position| {
+                if (position >= arc_sig.tracked_param_count) continue;
+                const arg = GuardedList.at(args, position);
+                const arg_index = @backingInt(arg);
+                const place_origin = places.get(arg_index);
+                const root_index: u32 = if (place_origin) |origin| origin.root else @backingInt(solution.unitLocalOf(arg));
+                if (root_index == no_index or root_index == ambiguous_index) continue;
+                const source_info = param_info.get(root_index) orelse continue;
+                if (source_info.proc == ambiguous_index) continue;
+                const source_proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(source_info.proc));
+                if (solution.isPinnedProc(source_proc)) continue;
+                const target_key: u32 = @intCast(@backingInt(call.proc) * arc_sig.tracked_param_count + position);
+                const previous_head = benefit_heads.get(target_key) orelse no_index;
+                try benefit_edges.append(gpa, .{
+                    .source_key = @intCast(source_info.proc * arc_sig.tracked_param_count + source_info.position),
+                    .next = previous_head,
+                });
+                try benefit_heads.put(gpa, target_key, @intCast(benefit_edges.items.len - 1));
+            }
         }
     }
 

@@ -154,7 +154,7 @@ const SnapshotFill = struct {
     original_var: types.Var,
     resolved_var: types.Var,
     /// The polarity of the position this var was requested from: `.pos` at
-    /// the snapshot root, negated through function argument positions,
+    /// the snapshot root, flipped through function argument positions,
     /// preserved everywhere else. The formatted string rendered at
     /// `finishFrame` starts its polarity walk here, so error messages hide
     /// implicit output-position openness exactly where the full type's
@@ -684,7 +684,9 @@ pub const Store = struct {
                 .head => {
                     if (frame.idx < frame.constraints.len) {
                         frame.stage = .await_fn;
-                        if (!try self.requestVar(store, type_writer, frame.constraints[frame.idx].fn_var, .neg)) return false;
+                        // A method signature is its own annotation root, as
+                        // `TypeWriter` writes it in a where clause.
+                        if (!try self.requestVar(store, type_writer, frame.constraints[frame.idx].fn_var, .pos)) return false;
                         continue;
                     }
                     const range = try self.static_dispatch_constraints.appendSlice(
@@ -833,7 +835,7 @@ pub const Store = struct {
                 .args => {
                     if (frame.idx < frame.args.len) {
                         frame.stage = .await_arg;
-                        if (!try self.requestVar(store, type_writer, frame.args[frame.idx], .neg)) return false;
+                        if (!try self.requestVar(store, type_writer, frame.args[frame.idx], frame.fill.polarity.flip())) return false;
                         continue;
                     }
                     // The argument run is committed before the return type is
@@ -844,7 +846,7 @@ pub const Store = struct {
                     );
                     self.scratch_content.clearFrom(frame.scratch_top);
                     frame.stage = .await_ret;
-                    if (!try self.requestVar(store, type_writer, frame.ret, .pos)) return false;
+                    if (!try self.requestVar(store, type_writer, frame.ret, frame.fill.polarity)) return false;
                     continue;
                 },
                 .await_arg => {

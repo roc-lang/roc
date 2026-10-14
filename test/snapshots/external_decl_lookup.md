@@ -30,7 +30,7 @@ DOES NOT EXIST - external_decl_lookup.md:9:5:9:17
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "Json")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "external_decl_lookup.md") (start 4 1) (end 4 17) (annotation error) (line-text "import json.Json"))
 			(line-break)
@@ -41,7 +41,7 @@ DOES NOT EXIST - external_decl_lookup.md:9:5:9:17
 				(file "external_decl_lookup.md")
 				(line 1)
 				(column 1))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "external_decl_lookup.md") (start 1 1) (end 1 1) (annotation dim) (line-text "app [main!] { pf: platform \"../basic-cli/platform.roc\" }"))))
 	(report

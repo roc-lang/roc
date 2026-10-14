@@ -37,6 +37,7 @@ test "builtins tests" {
     std.testing.refAllDecls(@import("float_bits.zig"));
     std.testing.refAllDecls(@import("float_math/f32.zig"));
     std.testing.refAllDecls(@import("float_math/f64.zig"));
+    std.testing.refAllDecls(@import("float_math/ieee.zig"));
     std.testing.refAllDecls(@import("float_math/tan.zig"));
     std.testing.refAllDecls(@import("hash.zig"));
     std.testing.refAllDecls(@import("host_abi.zig"));

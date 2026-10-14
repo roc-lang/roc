@@ -213,33 +213,6 @@ pub const ColorUtils = struct {
     }
 };
 
-/// Style theme configuration.
-pub const Theme = struct {
-    name: []const u8,
-    palette: ColorPalette,
-    use_bold: bool = true,
-    use_underline: bool = true,
-    use_dim: bool = true,
-
-    pub const DEFAULT = Theme{
-        .name = "default",
-        .palette = ColorPalette.ANSI,
-    };
-
-    pub const HIGH_CONTRAST = Theme{
-        .name = "high-contrast",
-        .palette = ColorPalette.ANSI_BRIGHT,
-    };
-
-    pub const NO_COLOR = Theme{
-        .name = "no-color",
-        .palette = ColorPalette.NO_COLOR,
-        .use_bold = false,
-        .use_underline = false,
-        .use_dim = false,
-    };
-};
-
 // Tests
 const testing = std.testing;
 
@@ -269,13 +242,4 @@ test "ColorUtils palette selection" {
 
     // High contrast should have bright colors
     try testing.expectEqualStrings(AnsiCodes.BRIGHT_RED, contrast_palette.error_color);
-}
-
-test "Theme configurations" {
-    try testing.expectEqualStrings("default", Theme.DEFAULT.name);
-    try testing.expectEqualStrings("high-contrast", Theme.HIGH_CONTRAST.name);
-    try testing.expectEqualStrings("no-color", Theme.NO_COLOR.name);
-
-    try testing.expect(Theme.DEFAULT.use_bold);
-    try testing.expect(!Theme.NO_COLOR.use_bold);
 }

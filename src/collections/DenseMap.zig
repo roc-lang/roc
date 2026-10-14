@@ -135,6 +135,27 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
             return self.getOrPut(key) catch collectionsInvariant("{s}", .{"DenseMap.getOrPutAssumeCapacity exceeded reserved storage"});
         }
 
+        /// Insert or find `key` without allocating: the key's page must
+        /// already exist (an entry in it was added before) and the dense
+        /// columns must have room, as after a removal of the same key.
+        pub fn getOrPutInReservedPage(self: *Self, key: K) GetOrPutResult {
+            const index = keyIndex(key);
+            if (self.densePosition(index)) |existing| return .{
+                .value_ptr = &self.values.items[existing],
+                .found_existing = true,
+            };
+            const slot = self.sparseSlotPtr(index) orelse
+                collectionsInvariant("{s}", .{"DenseMap.getOrPutInReservedPage reached a page no earlier entry reserved"});
+            const position: u32 = @intCast(self.active_indices.items.len);
+            self.active_indices.appendAssumeCapacity(index);
+            self.values.appendAssumeCapacity(undefined);
+            slot.* = position;
+            return .{
+                .value_ptr = &self.values.items[position],
+                .found_existing = false,
+            };
+        }
+
         pub fn getOrPutValue(self: *Self, key: K, value: V) Allocator.Error!GetOrPutResult {
             const result = try self.getOrPut(key);
             if (!result.found_existing) result.value_ptr.* = value;
@@ -156,6 +177,25 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
             return .{ .key = key, .value = value };
         }
 
+        /// A copy holding the same entries, with its own storage.
+        pub fn clone(self: *const Self) Allocator.Error!Self {
+            var copy = Self.init(self.allocator);
+            errdefer copy.deinit();
+            try copy.sparse_chunks.ensureTotalCapacityPrecise(self.allocator, self.sparse_chunks.items.len);
+            for (self.sparse_chunks.items) |chunk| {
+                const copied: ?*SparseChunk = if (chunk) |source| blk: {
+                    const fresh = try self.allocator.create(SparseChunk);
+                    fresh.* = source.*;
+                    break :blk fresh;
+                } else null;
+                copy.sparse_chunks.appendAssumeCapacity(copied);
+            }
+            copy.chunk_base = self.chunk_base;
+            try copy.active_indices.appendSlice(self.allocator, self.active_indices.items);
+            try copy.values.appendSlice(self.allocator, self.values.items);
+            return copy;
+        }
+
         pub fn ensureTotalCapacity(self: *Self, expected_count: usize) Allocator.Error!void {
             try self.active_indices.ensureTotalCapacity(self.allocator, expected_count);
             try self.values.ensureTotalCapacity(self.allocator, expected_count);
@@ -170,6 +210,17 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
             for (self.active_indices.items) |index| self.sparseSlotPtr(index).?.* = empty_position;
             self.active_indices.clearRetainingCapacity();
             self.values.clearRetainingCapacity();
+        }
+
+        /// Empty the map, keeping its storage only while its chunk directory
+        /// spans at most `max_chunks` chunks; a map kept for reuse that once
+        /// reached far-apart ids would otherwise hold their pages forever.
+        pub fn clearRetainingAtMost(self: *Self, max_chunks: usize) void {
+            if (self.sparse_chunks.items.len > max_chunks) {
+                self.clearAndFree();
+            } else {
+                self.clearRetainingCapacity();
+            }
         }
 
         pub fn clearAndFree(self: *Self) void {
@@ -189,6 +240,10 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
         }
 
         pub fn constKeyIterator(self: *const Self) ConstKeyIterator {
+            return .{ .map = self };
+        }
+
+        pub fn constIterator(self: *const Self) ConstIterator {
             return .{ .map = self };
         }
 
@@ -217,6 +272,28 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
             pub fn next(self: *KeyIterator) ?*const K {
                 const entry = self.inner.next() orelse return null;
                 return entry.key_ptr;
+            }
+        };
+
+        /// Entry returned by `ConstIterator`.
+        pub const ConstEntry = struct {
+            key_ptr: *const K,
+            value_ptr: *const V,
+        };
+
+        /// Iterates the entries of a map it cannot change.
+        pub const ConstIterator = struct {
+            map: *const Self,
+            position: usize = 0,
+            key: K = undefined,
+
+            pub fn next(self: *ConstIterator) ?ConstEntry {
+                if (self.position >= self.map.active_indices.items.len) return null;
+                const position = self.position;
+                self.position += 1;
+                const index = self.map.active_indices.items[position];
+                self.key = keyFromIndex(K, index);
+                return .{ .key_ptr = &self.key, .value_ptr = &self.map.values.items[position] };
             }
         };
 
@@ -280,16 +357,7 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
             return &self.sparse_chunks.items[slot_index].?[index & chunk_mask];
         }
 
-        fn sparseSlotPtr(self: *Self, index: usize) ?*u32 {
-            const chunk_index = index >> chunk_shift;
-            if (chunk_index < self.chunk_base) return null;
-            const slot_index = chunk_index - self.chunk_base;
-            if (slot_index >= self.sparse_chunks.items.len) return null;
-            const chunk = self.sparse_chunks.items[slot_index] orelse return null;
-            return &chunk[index & chunk_mask];
-        }
-
-        fn sparseSlotPtrConst(self: *const Self, index: usize) ?*const u32 {
+        fn sparseSlotPtr(self: *const Self, index: usize) ?*u32 {
             const chunk_index = index >> chunk_shift;
             if (chunk_index < self.chunk_base) return null;
             const slot_index = chunk_index - self.chunk_base;
@@ -299,7 +367,7 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
         }
 
         fn densePosition(self: *const Self, index: usize) ?usize {
-            const raw_position = (self.sparseSlotPtrConst(index) orelse return null).*;
+            const raw_position = (self.sparseSlotPtr(index) orelse return null).*;
             if (raw_position == empty_position) return null;
             const dense_position: usize = raw_position;
             std.debug.assert(dense_position < self.active_indices.items.len);
@@ -324,6 +392,154 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
             for (self.sparse_chunks.items) |maybe_chunk| {
                 if (maybe_chunk) |chunk| self.allocator.destroy(chunk);
             }
+        }
+    };
+}
+
+/// A `DenseMap` that holds no allocator: like the standard unmanaged maps,
+/// every call that allocates or frees takes one, and `.empty` is a ready map.
+pub fn DenseMapUnmanaged(comptime K: type, comptime V: type) type {
+    return struct {
+        const Self = @This();
+
+        /// The managed map this one stores, lent the caller's allocator for
+        /// each call that may allocate or free.
+        pub const Managed = DenseMap(K, V);
+        /// Entry returned by map iterators.
+        pub const Entry = Managed.Entry;
+        /// Removed key-value pair returned by `fetchRemove`.
+        pub const KV = Managed.KV;
+        /// Result returned by `getOrPut`.
+        pub const GetOrPutResult = Managed.GetOrPutResult;
+        /// Iterates the entries of the map.
+        pub const Iterator = Managed.Iterator;
+        /// Iterates the keys of the map.
+        pub const KeyIterator = Managed.KeyIterator;
+        /// Iterates the entries of a map it cannot change.
+        pub const ConstIterator = Managed.ConstIterator;
+        /// Iterates the keys of a map it cannot change.
+        pub const ConstKeyIterator = Managed.ConstKeyIterator;
+        /// Iterates the values of the map.
+        pub const ValueIterator = Managed.ValueIterator;
+
+        map: Managed = .{ .allocator = undefined },
+
+        /// A map holding no entries and no storage.
+        pub const empty: Self = .{};
+
+        fn lend(self: *Self, gpa: Allocator) *Managed {
+            self.map.allocator = gpa;
+            return &self.map;
+        }
+
+        pub fn deinit(self: *Self, gpa: Allocator) void {
+            self.lend(gpa).deinit();
+            self.* = undefined;
+        }
+
+        pub fn count(self: *const Self) usize {
+            return self.map.count();
+        }
+
+        pub fn contains(self: *const Self, key: K) bool {
+            return self.map.contains(key);
+        }
+
+        pub fn get(self: *const Self, key: K) ?V {
+            return self.map.get(key);
+        }
+
+        pub fn getPtr(self: *Self, key: K) ?*V {
+            return self.map.getPtr(key);
+        }
+
+        pub fn getPtrConst(self: *const Self, key: K) ?*const V {
+            return self.map.getPtrConst(key);
+        }
+
+        pub fn put(self: *Self, gpa: Allocator, key: K, value: V) Allocator.Error!void {
+            return self.lend(gpa).put(key, value);
+        }
+
+        pub fn putNoClobber(self: *Self, gpa: Allocator, key: K, value: V) Allocator.Error!void {
+            return self.lend(gpa).putNoClobber(key, value);
+        }
+
+        pub fn getOrPut(self: *Self, gpa: Allocator, key: K) Allocator.Error!GetOrPutResult {
+            return self.lend(gpa).getOrPut(key);
+        }
+
+        pub fn getOrPutValue(self: *Self, gpa: Allocator, key: K, value: V) Allocator.Error!GetOrPutResult {
+            return self.lend(gpa).getOrPutValue(key, value);
+        }
+
+        /// See `DenseMap.getOrPutInReservedPage`. Capacity reserved by
+        /// `ensureTotalCapacity` covers only the dense columns, never a new
+        /// key's page, so there is no `getOrPutAssumeCapacity`.
+        pub fn getOrPutInReservedPage(self: *Self, key: K) GetOrPutResult {
+            return self.map.getOrPutInReservedPage(key);
+        }
+
+        /// `put` into a reserved page; see `getOrPutInReservedPage`.
+        pub fn putInReservedPage(self: *Self, key: K, value: V) void {
+            self.getOrPutInReservedPage(key).value_ptr.* = value;
+        }
+
+        pub fn remove(self: *Self, key: K) bool {
+            return self.map.remove(key);
+        }
+
+        pub fn fetchRemove(self: *Self, key: K) ?KV {
+            return self.map.fetchRemove(key);
+        }
+
+        /// A copy holding the same entries, with its own storage.
+        pub fn clone(self: *const Self, gpa: Allocator) Allocator.Error!Self {
+            var source = self.map;
+            source.allocator = gpa;
+            return .{ .map = try source.clone() };
+        }
+
+        pub fn ensureTotalCapacity(self: *Self, gpa: Allocator, expected_count: usize) Allocator.Error!void {
+            return self.lend(gpa).ensureTotalCapacity(expected_count);
+        }
+
+        pub fn ensureUnusedCapacity(self: *Self, gpa: Allocator, additional_count: usize) Allocator.Error!void {
+            return self.lend(gpa).ensureUnusedCapacity(additional_count);
+        }
+
+        pub fn clearRetainingCapacity(self: *Self) void {
+            self.map.clearRetainingCapacity();
+        }
+
+        pub fn clearAndFree(self: *Self, gpa: Allocator) void {
+            self.lend(gpa).clearAndFree();
+        }
+
+        /// Empty the map, keeping its storage only while its chunk directory
+        /// spans at most `max_chunks` chunks.
+        pub fn clearRetainingAtMost(self: *Self, gpa: Allocator, max_chunks: usize) void {
+            self.lend(gpa).clearRetainingAtMost(max_chunks);
+        }
+
+        pub fn iterator(self: *Self) Iterator {
+            return self.map.iterator();
+        }
+
+        pub fn keyIterator(self: *Self) KeyIterator {
+            return self.map.keyIterator();
+        }
+
+        pub fn constKeyIterator(self: *const Self) ConstKeyIterator {
+            return self.map.constKeyIterator();
+        }
+
+        pub fn constIterator(self: *const Self) ConstIterator {
+            return self.map.constIterator();
+        }
+
+        pub fn valueIterator(self: *Self) ValueIterator {
+            return self.map.valueIterator();
         }
     };
 }
@@ -538,4 +754,19 @@ test "DenseMapPool reuses released map storage and supports nested acquires" {
 inline fn collectionsInvariant(comptime fmt: []const u8, args: anytype) noreturn {
     if (std.debug.runtime_safety) std.debug.panic(fmt, args);
     unreachable;
+}
+
+test "DenseMapUnmanaged starts empty and takes its allocator per call" {
+    const TestId = enum(u32) { _ };
+    var map: DenseMapUnmanaged(TestId, u32) = .empty;
+    defer map.deinit(std.testing.allocator);
+    try map.put(std.testing.allocator, @fromBackingInt(9), 1);
+    try std.testing.expectEqual(@as(?u32, 1), map.get(@fromBackingInt(9)));
+    try std.testing.expect(map.remove(@fromBackingInt(9)));
+    // A removed key's page and dense room remain reserved.
+    map.putInReservedPage(@fromBackingInt(9), 2);
+    try std.testing.expectEqual(@as(?u32, 2), map.get(@fromBackingInt(9)));
+    var copy = try map.clone(std.testing.allocator);
+    defer copy.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), copy.count());
 }

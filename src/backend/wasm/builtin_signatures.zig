@@ -10,147 +10,26 @@ const SymbolIndex = @import("index_types.zig").SymbolIndex;
 /// Wasm value type used in builtin wrapper signatures.
 pub const ValType = WasmModule.ValType;
 
-/// Builtin wrapper known to wasm codegen.
-pub const BuiltinKind = enum {
-    dec_mul,
-    dec_div,
-    dec_div_trunc,
-    dec_pow,
-    dec_atan2,
-    dec_sqrt,
-    dec_sin,
-    dec_cos,
-    dec_tan,
-    dec_asin,
-    dec_acos,
-    dec_atan,
-    dec_to_str,
-    num_div_trunc_i128,
-    num_rem_trunc_i128,
-    num_div_trunc_u128,
-    num_rem_trunc_u128,
-    num_mod_i128,
-    num_mul_with_overflow_i128,
-    num_mul_with_overflow_u128,
-    i128_to_dec_try_unsafe,
-    u128_to_dec_try_unsafe,
-    dec_to_int_try_unsafe,
-    dec_to_f32_try_unsafe,
-    f32_to_int_try_unsafe,
-    f64_to_int_try_unsafe,
-    dec_to_f32,
-    dec_to_f64,
-    i128_to_f32,
-    i128_to_f64,
-    u128_to_f32,
-    u128_to_f64,
-    float_to_str,
-    float_pow_f32,
-    float_atan2_f32,
-    float_pow,
-    float_atan2,
-    float_rem_f32,
-    float_rem,
-    float_sin_f32,
-    float_sin,
-    float_cos_f32,
-    float_cos,
-    float_tan_f32,
-    float_tan,
-    float_asin_f32,
-    float_asin,
-    float_acos_f32,
-    float_acos,
-    float_atan_f32,
-    float_atan,
-    int_to_str,
-    int_from_str,
-    dec_from_str,
-    float_from_str,
-    int_from_str_prefix,
-    int_from_utf8_prefix,
-    dec_from_str_prefix,
-    dec_from_utf8_prefix,
-    float_from_str_prefix,
-    float_from_utf8_prefix,
-    str_equal,
-    str_split_first,
-    str_split_last,
-    str_concat,
-    str_repeat,
-    str_trim,
-    str_trim_start,
-    str_trim_end,
-    str_split,
-    str_join_with,
-    str_reserve,
-    str_release_excess_capacity,
-    str_with_capacity,
-    str_drop_prefix,
-    str_drop_prefix_caseless_ascii,
-    str_drop_suffix,
-    str_with_ascii_lowercased,
-    str_with_ascii_uppercased,
-    str_caseless_ascii_equals,
-    str_escape_and_quote,
-    str_from_utf8,
-    str_from_utf8_result,
-    str_from_utf8_validated,
-    str_from_utf16_le_short,
-    str_from_utf16_be_short,
-    str_from_utf32_le_short,
-    str_from_utf32_be_short,
+const builtin_registry = @import("builtins").builtin_registry;
+const dev_wrappers = @import("builtins").dev_wrappers;
+const RocOps = @import("builtins").host_abi.RocOps;
 
-    list_append_unsafe,
-    list_concat,
-    list_append_range_within,
-    list_append_range_within_unsafe,
-    list_copy_range_within,
-    list_append_sublist,
-    list_append_le_bytes,
-    list_slack_unique,
-    list_owned_unique,
-    list_drop_at,
-    list_prepend,
-    list_reserve,
-    list_reserve_for_append,
-    list_replace,
-    list_set,
-    list_sublist,
-    list_swap,
-    list_eq,
-    list_str_eq,
-    list_list_eq,
-    list_reverse,
-    list_sort_with,
-    simd_store_16,
-    simd_append_16,
-    allocate_with_refcount,
-    erased_callable_repack,
-    i8_mod_by,
-    u8_mod_by,
-    i16_mod_by,
-    u16_mod_by,
-    i32_mod_by,
-    u32_mod_by,
-    i64_mod_by,
-    u64_mod_by,
-    dict_pseudo_seed,
-    hasher_finish,
-    hasher_write_u64,
-    hasher_write_u128,
-    hasher_write_f32_bits,
-    hasher_write_f64_bits,
-    hasher_write_bytes,
-    hasher_write_str,
-    crypto_sha256_hash_bytes,
-    crypto_sha256_hasher_empty,
-    crypto_sha256_hasher_write,
-    crypto_sha256_hasher_finish,
-    crypto_blake3_hash_bytes,
-    crypto_blake3_hasher_empty,
-    crypto_blake3_hasher_write,
-    crypto_blake3_hasher_finish,
+/// Builtin wrapper known to wasm codegen: one member, of the same name, per
+/// `builtin_registry.BuiltinFn` member the linkable builtins payloads export
+/// (every member whose `payload()` is not `.jit_only`), in registry order.
+pub const BuiltinKind = blk: {
+    @setEvalBranchQuota(10_000);
+    const all = std.enums.values(builtin_registry.BuiltinFn);
+    var names: [all.len][:0]const u8 = undefined;
+    var count: usize = 0;
+    for (all) |f| {
+        if (f.payload() == .jit_only) continue;
+        names[count] = @tagName(f);
+        count += 1;
+    }
+    const Tag = std.math.IntFittingRange(0, count - 1);
+    const frozen = names[0..count].*;
+    break :blk @Enum(Tag, .exhaustive, &frozen, &std.simd.iota(Tag, count));
 };
 
 /// The BuiltinKind for a registry member selected by the shared
@@ -168,10 +47,6 @@ pub const Sig = struct {
     takes_roc_ops: bool,
 };
 
-const builtin_registry = @import("builtins").builtin_registry;
-const dev_wrappers = @import("builtins").dev_wrappers;
-const RocOps = @import("builtins").host_abi.RocOps;
-
 /// Builtin signatures indexed by `BuiltinKind`, each derived at comptime from
 /// the Zig wrapper it names.
 ///
@@ -179,8 +54,7 @@ const RocOps = @import("builtins").host_abi.RocOps;
 /// `takes_roc_ops` flag is silent stack corruption at runtime, so every field is
 /// read straight from `@typeInfo` of the wrapper instead of written by hand. Each
 /// `BuiltinKind` resolves to the `builtin_registry.BuiltinFn` member of the same
-/// name—a missing member is a compile error, pinning this enum to the registry—
-/// and that member supplies the symbol name (`symbolName()`) and the wrapper type
+/// name, which supplies the symbol name (`symbolName()`) and the wrapper type
 /// the params, results, and `takes_roc_ops` flag are lowered from.
 pub const sigs: [@typeInfo(BuiltinKind).@"enum".field_names.len]Sig = blk: {
     @setEvalBranchQuota(200_000);

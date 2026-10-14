@@ -4,6 +4,7 @@
 //! Non-construction values retain their static storage, and failed roots retain
 //! their ordinary failure guards.
 const std = @import("std");
+const collections = @import("collections");
 const builtins = @import("builtins");
 const check = @import("check");
 const core = @import("lir_core");
@@ -109,7 +110,7 @@ pub const CompletedScalarValues = struct {
     /// construction, keyed like `entries`.
     uniform_lists: UniformMap,
     /// Owns the nested constructions the entries point into.
-    arena: std.heap.ArenaAllocator,
+    arena: collections.SingleThreadArena,
 
     const Key = struct {
         module: checked.ModuleId,
@@ -135,7 +136,7 @@ pub const CompletedScalarValues = struct {
     /// Collects every completed successful root of `program` whose frozen
     /// image decodes to a construction.
     pub fn init(allocator: Allocator, program: *const Program.Result, frozen: *const Program.FrozenStaticData) Allocator.Error!CompletedScalarValues {
-        var values = CompletedScalarValues{ .entries = .empty, .uniform_lists = .empty, .arena = std.heap.ArenaAllocator.init(allocator) };
+        var values = CompletedScalarValues{ .entries = .empty, .uniform_lists = .empty, .arena = collections.SingleThreadArena.init(allocator) };
         errdefer values.deinit(allocator);
         var decoder = Decoder{ .program = program, .frozen = frozen, .arena = values.arena.allocator() };
         for (program.static_data_values.items, 0..) |entry, index| {
@@ -869,7 +870,7 @@ test "completed empty list roots decode to their constructions; lists with eleme
     const origin = LIR.StmtOrigin{ .loc = .none, .region = .zero(), .inline_scope = .none, .kind = .scaffold };
     const empty_ret = try reader.store.addCFStmt(.{ .ret = .{ .value = empty_target } }, origin);
     const reserved = try emit(ctx, &reader.store, &reader.layouts, origin, empty_target, values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(1)) }, reader_list_layout).?, empty_ret) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(i64, 16), reader.store.getCFStmt(reserved).assign_literal.value.i64_literal.value);
+    try std.testing.expectEqual(@as(i64, 16), reader.store.getCFStmtImmediate(reserved).assign_literal.value.i64_literal.value);
 }
 
 test "an empty string root and a record of an empty list and a scalar decode to constructions" {

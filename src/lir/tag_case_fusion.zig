@@ -190,8 +190,6 @@ const BranchRewriter = struct {
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .ret,
@@ -200,7 +198,6 @@ const BranchRewriter = struct {
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -282,7 +279,7 @@ const BranchRewriter = struct {
                 },
                 .local, .discriminant, .field, .list_reinterpret, .nominal => unreachable,
             },
-            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => unreachable,
+            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => unreachable,
         }
     }
 };
@@ -332,7 +329,7 @@ pub fn runWithStats(store: *LirStore, layouts: *const layout_mod.Store) Resource
 
 /// Fusion applies to every available body, including erased-ABI procedures.
 pub fn rewritableProcBody(store: *const LirStore, proc: LIR.LirProcSpecId) ?LIR.CFStmtId {
-    return store.getProcSpec(proc).body;
+    return store.getProcSpecImmediate(proc).body;
 }
 
 /// Reach the procedure's fixed point using task-owned scratch. The caller must
@@ -387,7 +384,7 @@ fn runProcWithStats(
             // fusion plan from that committed graph, never reuse old facts.
             continue;
         }
-        const fused_id = store.getCFStmt(candidate.join_stmt).join.id;
+        const fused_id = store.getCFStmtImmediate(candidate.join_stmt).join.id;
         try applyCandidate(store, layouts, join_params, &candidate, stats, allocator);
         stats.fusions += 1;
         try debugCheckJumpScopes(store, proc, fused_id, allocator);
@@ -412,11 +409,11 @@ fn debugCheckJumpScopes(store: *LirStore, proc: LIR.LirProcSpecId, fused_id: LIR
     defer visited.deinit();
     var declarations = collections.DenseMap(LIR.JoinPointId, void).init(allocator);
     defer declarations.deinit();
-    try work.append(allocator, .{ .stmt = store.getProcSpec(proc).body orelse return, .depth = 0 });
+    try work.append(allocator, .{ .stmt = store.getProcSpecImmediate(proc).body orelse return, .depth = 0 });
     while (work.pop()) |item| {
         if ((try visited.getOrPut(item.stmt)).found_existing) continue;
         scope.shrinkRetainingCapacity(item.depth);
-        switch (store.getCFStmt(item.stmt)) {
+        switch (store.getCFStmtImmediate(item.stmt).*) {
             .join => |join| {
                 if ((try declarations.getOrPut(join.id)).found_existing) {
                     base.invariant("tag case fusion of j{d} duplicated declaration j{d}", .{ @backingInt(fused_id), @backingInt(join.id) });
@@ -465,15 +462,12 @@ fn debugCheckJumpScopes(store: *LirStore, proc: LIR.LirProcSpecId, fused_id: LIR
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .ret,
             .crash,
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -534,9 +528,9 @@ fn findCandidate(
         var keep_wrappers = false;
         defer if (!keep_wrappers) wrappers.deinit(allocator);
         var match_start = join.body;
-        while (store.getCFStmt(match_start) == .join) {
+        while (store.getCFStmtImmediate(match_start).* == .join) {
             try wrappers.append(allocator, match_start);
-            match_start = store.getCFStmt(match_start).join.remainder;
+            match_start = store.getCFStmtImmediate(match_start).join.remainder;
         }
 
         var matched_value = param;
@@ -660,11 +654,11 @@ fn findCandidate(
         var shared_edge = false;
         {
             for (builds.items) |build| {
-                var current = store.getCFStmt(build.stmt).assign_tag.next;
+                var current = store.getCFStmtImmediate(build.stmt).assign_tag.next;
                 while (true) {
                     if ((predecessors.get(current) orelse 0) != 1) shared_edge = true;
                     if (current == build.edge_jump) break;
-                    current = edgeStmtNext(store.getCFStmt(current));
+                    current = edgeStmt(store, current).next;
                 }
             }
         }
@@ -759,12 +753,12 @@ fn cloneSharedConsumer(
     candidate: *const Candidate,
     allocator: Allocator,
 ) ResourceError!void {
-    const body = store.getCFStmt(candidate.join_stmt).join.body;
+    const body = store.getCFStmtImmediate(candidate.join_stmt).join.body;
     var defs = try body_clone.collectReachableDefinitionsWithAllocator(store, body, allocator);
     defer defs.deinit();
     var cloner = try body_clone.BodyCloner(ConsumerRewriter).initWithFreshDeclaredJoinsAndAllocator(store, .{}, body, join_params, allocator);
     defer cloner.deinit();
-    const frame = store.getLocalSpan(store.getProcSpec(candidate.proc).frame_locals);
+    const frame = store.getLocalSpan(store.getProcSpecImmediate(candidate.proc).frame_locals);
     for (0..frame.len) |index| {
         const local = GuardedList.at(frame, index);
         if (defs.get(local) == 0) try cloner.local_map.put(local, local);
@@ -772,7 +766,7 @@ fn cloneSharedConsumer(
     const cloned = try cloner.cloneStmt(body);
     var locals = std.ArrayList(LIR.LocalId).empty;
     defer locals.deinit(allocator);
-    const old_frame = store.getLocalSpan(store.getProcSpec(candidate.proc).frame_locals);
+    const old_frame = store.getLocalSpan(store.getProcSpecImmediate(candidate.proc).frame_locals);
     for (0..old_frame.len) |index| try locals.append(allocator, GuardedList.at(old_frame, index));
     try locals.appendSlice(allocator, cloner.new_locals.items);
     const frame_locals = try store.addLocalSpan(locals.items);
@@ -796,7 +790,7 @@ fn producerEdgeJump(
 ) ?LIR.CFStmtId {
     var current = start;
     while (true) {
-        switch (store.getCFStmt(current)) {
+        switch (store.getCFStmtImmediate(current).*) {
             .jump => |jump| return if (jump.target == join_id) current else null,
             inline .decref, .decref_if_initialized => |release| {
                 if (release.value == param or release.value == payload) return null;
@@ -830,8 +824,6 @@ fn producerEdgeJump(
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .join,
             .ret,
             .crash,
@@ -839,7 +831,6 @@ fn producerEdgeJump(
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -955,8 +946,6 @@ const ArmRewrite = struct {
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .ret,
@@ -965,7 +954,6 @@ const ArmRewrite = struct {
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -1182,7 +1170,7 @@ fn applyCandidate(
     stats: *WorkStats,
     allocator: Allocator,
 ) ResourceError!void {
-    const join = store.getCFStmt(candidate.join_stmt).join;
+    const join = store.getCFStmtImmediate(candidate.join_stmt).join;
     var dests = std.ArrayList(VariantDest).empty;
     defer dests.deinit(allocator);
     var cloned_locals = std.ArrayList(LIR.LocalId).empty;
@@ -1215,7 +1203,7 @@ fn applyCandidate(
             .body = join.remainder,
             .remainder = join.remainder,
         } }, fusionOrigin(store.stmtOrigin(candidate.join_stmt)));
-        try join_params.record(store.getCFStmt(join_stmt).join);
+        try join_params.record(store.getCFStmtImmediate(join_stmt).join);
 
         const plan = plans.getPtr(branch).?;
         var cloner = try body_clone.BodyCloner(BranchRewriter).initWithFreshDeclaredJoinsAndAllocator(store, .{
@@ -1231,7 +1219,7 @@ fn applyCandidate(
         // Statements the rewrite leaves unchanged are shared with the
         // original arm, and copied statements define fresh locals.
         for (plan.shared.items) |stmt_id| try cloner.stmt_map.put(stmt_id, stmt_id);
-        const frame = store.getLocalSpan(store.getProcSpec(candidate.proc).frame_locals);
+        const frame = store.getLocalSpan(store.getProcSpecImmediate(candidate.proc).frame_locals);
         for (0..frame.len) |index| {
             const local = GuardedList.at(frame, index);
             if (plan.copied_defs.get(local) == 0) try cloner.local_map.put(local, local);
@@ -1250,7 +1238,7 @@ fn applyCandidate(
         stats.variant_lookups += 1;
         const dest_index = candidate.variants.indices.get(variantKey(build.variant_index, build.discriminant)).?;
         const dest = dests.items[dest_index];
-        const edge = try redirectProducerEdge(store, store.getCFStmt(build.stmt).assign_tag.next, build.edge_jump, dest.join_id);
+        const edge = try redirectProducerEdge(store, store.getCFStmtImmediate(build.stmt).assign_tag.next, build.edge_jump, dest.join_id);
         if (dest.payload_param) |payload_param| {
             const payload = build.payload orelse unreachable;
             try store.replaceCFStmt(build.stmt, .{ .set_local = .{
@@ -1302,18 +1290,31 @@ fn applyCandidate(
     if (store.procNeedsStackProbe(layouts, proc.*)) proc.stack_probe = .required;
 }
 
-/// The statement after `stmt` on a producer edge, whose statements between
-/// the constructor and the edge's jump are reference-count operations only.
-inline fn edgeStmtNext(stmt: LIR.CFStmt) LIR.CFStmtId {
+/// A statement on a producer edge between the constructor and the edge's
+/// jump, which is always a reference-count operation, and its successor.
+fn edgeStmt(store: *const LirStore, stmt_id: LIR.CFStmtId) struct { stmt: LIR.CFStmt, next: LIR.CFStmtId } {
+    const stmt = store.getCFStmt(stmt_id);
     return switch (stmt) {
-        inline .decref, .decref_if_initialized => |release| release.next,
-        .incref => |retain| retain.next,
+        .decref, .decref_if_initialized, .incref => .{ .stmt = stmt, .next = body_clone.linearNext(stmt) },
         .init_uninitialized,
         .assign_ref,
         .assign_literal,
         .assign_call,
         .assign_call_erased,
         .assign_packed_erased_fn,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_record_update,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .boxy_tag_match,
+        .assign_call_dict,
         .assign_low_level,
         .assign_list,
         .assign_struct,
@@ -1332,26 +1333,10 @@ inline fn edgeStmtNext(stmt: LIR.CFStmt) LIR.CFStmtId {
         .switch_initialized_payload,
         .str_match,
         .str_match_set,
-        .loop_continue,
-        .loop_break,
         .join,
         .jump,
         .ret,
         .crash,
-        .assign_boxy_desc_ref,
-        .assign_boxy_dict_ref,
-        .assign_boxy_box,
-        .assign_boxy_record_update,
-        .assign_boxy_reuse_box,
-        .assign_boxy_unbox,
-        .assign_boxy_adapt,
-        .assign_boxy_inspect,
-        .assign_boxy_eq,
-        .assign_boxy_hash,
-        .assign_boxy_tag,
-        .assign_boxy_tag_payload,
-        .boxy_tag_match,
-        .assign_call_dict,
         => unreachable,
     };
 }
@@ -1373,29 +1358,13 @@ fn redirectProducerEdge(
     var cursor = start;
     while (cursor != edge_jump) {
         try chain.append(store.allocator, cursor);
-        cursor = edgeStmtNext(store.getCFStmt(cursor));
+        cursor = edgeStmt(store, cursor).next;
     }
     var next = try store.addCFStmt(.{ .jump = .{ .target = target } }, fusionOrigin(store.stmtOrigin(edge_jump)));
     while (chain.pop()) |stmt_id| {
-        const origin = store.stmtOrigin(stmt_id);
-        next = switch (store.getCFStmt(stmt_id)) {
-            .decref => |release| blk: {
-                var copy = release;
-                copy.next = next;
-                break :blk try store.addCFStmt(.{ .decref = copy }, origin);
-            },
-            .incref => |retain| blk: {
-                var copy = retain;
-                copy.next = next;
-                break :blk try store.addCFStmt(.{ .incref = copy }, origin);
-            },
-            .decref_if_initialized => |release| blk: {
-                var copy = release;
-                copy.next = next;
-                break :blk try store.addCFStmt(.{ .decref_if_initialized = copy }, origin);
-            },
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => unreachable,
-        };
+        var copy = edgeStmt(store, stmt_id).stmt;
+        body_clone.setLinearNext(&copy, next);
+        next = try store.addCFStmt(copy, store.stmtOrigin(stmt_id));
     }
     return next;
 }
@@ -1683,7 +1652,7 @@ test "tag case fusion does not recover opaque producers after descendant cloning
     try testing.expectEqual(inner, first.join_stmt);
     const stats = try runWithStats(&store, &layouts);
     try testing.expectEqual(@as(usize, 1), stats.fusions);
-    try testing.expectEqual(outer_id, store.getCFStmt(outer).join.id);
+    try testing.expectEqual(outer_id, store.getCFStmtImmediate(outer).join.id);
     // Renamed constructors now initialize the outer parameter through explicit
     // transfers. Those are deliberately not recovered as literal producers.
     var walk = try body_clone.ReachableStmts.init(&store, outer);
@@ -1759,20 +1728,20 @@ test "tag case fusion fuses a nested candidate in the arm it shares" {
     const result = try graph.local(.u64);
     const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const inner = try graph.candidate(selector, .{ ret, ret }, 2);
-    const inner_id = store.getCFStmt(inner).join.id;
+    const inner_id = store.getCFStmtImmediate(inner).join.id;
     const outer = try graph.candidate(selector, .{ inner, ret }, 2);
     _ = try graph.proc(outer);
     const stats = try runWithStats(&store, &layouts);
     try testing.expectEqual(@as(usize, 2), stats.fusions);
     // The nested candidate does not read the outer union, so the fused outer
     // variant shares it instead of copying it, and it is fused in place.
-    try testing.expect(store.getCFStmt(inner).join.id != inner_id);
+    try testing.expect(store.getCFStmtImmediate(inner).join.id != inner_id);
     var reached_inner = false;
     var walk = try body_clone.ReachableStmts.init(&store, outer);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         if (stmt_id == inner) reached_inner = true;
-        try testing.expect(store.getCFStmt(stmt_id) != .assign_tag);
+        try testing.expect(store.getCFStmtImmediate(stmt_id).* != .assign_tag);
     }
     try testing.expect(reached_inner);
 }
@@ -2009,25 +1978,25 @@ fn testDiscriminantRouting(missing_payload: bool) TestError!void {
     for (producers, 0..) |producer, index| {
         const rewritten = store.getCFStmt(producer);
         const target = if (rewritten == .set_local)
-            store.getCFStmt(rewritten.set_local.next).jump.target
+            store.getCFStmtImmediate(rewritten.set_local.next).jump.target
         else
             rewritten.jump.target;
         var destination = root;
-        while (store.getCFStmt(destination).join.id != target) {
-            destination = store.getCFStmt(destination).join.remainder;
+        while (store.getCFStmtImmediate(destination).join.id != target) {
+            destination = store.getCFStmtImmediate(destination).join.remainder;
         }
-        const join = store.getCFStmt(destination).join;
+        const join = store.getCFStmtImmediate(destination).join;
         if (index == 0) {
             const write = rewritten.set_local;
             try testing.expectEqual(payload, write.value);
             try testing.expectEqual(GuardedList.at(store.getLocalSpan(join.params), 0), write.target);
-            try testing.expectEqual(join.id, store.getCFStmt(write.next).jump.target);
-            const projection = store.getCFStmt(join.body).assign_ref;
+            try testing.expectEqual(join.id, store.getCFStmtImmediate(write.next).jump.target);
+            const projection = store.getCFStmtImmediate(join.body).assign_ref;
             try testing.expectEqual(write.target, projection.op.local);
-            try testing.expectEqual(projection.target, store.getCFStmt(projection.next).ret.value);
+            try testing.expectEqual(projection.target, store.getCFStmtImmediate(projection.next).ret.value);
         } else {
             try testing.expectEqual(join.id, rewritten.jump.target);
-            try testing.expectEqual(selector, store.getCFStmt(join.body).ret.value);
+            try testing.expectEqual(selector, store.getCFStmtImmediate(join.body).ret.value);
         }
     }
     var defaults: usize = 0;
@@ -2115,14 +2084,14 @@ test "tag case fusion indexes reused join ids per procedure when cloning nested 
                 nested += 1;
                 const cloned_param = GuardedList.at(params, 0);
                 try testing.expect(cloned_param != result);
-                const bridge = store.getCFStmt(stmt.join.body).set_local;
+                const bridge = store.getCFStmtImmediate(stmt.join.body).set_local;
                 try testing.expectEqual(result, bridge.target);
                 try testing.expectEqual(cloned_param, bridge.value);
                 try testing.expectEqual(LIR.SetLocalWriteMode.initialize_join_param, bridge.mode);
-                try testing.expectEqual(external_id, store.getCFStmt(bridge.next).jump.target);
-                const initialized = store.getCFStmt(stmt.join.remainder).assign_literal;
+                try testing.expectEqual(external_id, store.getCFStmtImmediate(bridge.next).jump.target);
+                const initialized = store.getCFStmtImmediate(stmt.join.remainder).assign_literal;
                 try testing.expectEqual(cloned_param, initialized.target);
-                try testing.expectEqual(stmt.join.id, store.getCFStmt(initialized.next).jump.target);
+                try testing.expectEqual(stmt.join.id, store.getCFStmtImmediate(initialized.next).jump.target);
                 bridges += 1;
             }
         }
@@ -2207,7 +2176,7 @@ test "tag case fusion routes exact constructor edges without materializing tags"
 
     try run(&store, &layouts);
 
-    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpec(proc).body.?);
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.?);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);
@@ -2322,7 +2291,7 @@ test "tag case fusion shares the suffix its arms converge on" {
     // Neither arm reads the union, so both fused variants keep their arm and
     // the suffix it converges on, which still defines its local once.
     var default_count: usize = 0;
-    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpec(proc).body.?);
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.?);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);
@@ -2419,7 +2388,7 @@ test "tag case fusion carries releases on a producer edge" {
     try run(&store, &layouts);
 
     var releases: u32 = 0;
-    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpec(proc).body.?);
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.?);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);
@@ -2520,7 +2489,7 @@ test "tag case fusion releases the payload where an arm released the union" {
     try run(&store, &layouts);
 
     var payload_releases: u32 = 0;
-    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpec(proc).body.?);
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.?);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);
@@ -2644,15 +2613,15 @@ fn testContinuationJoin(shared_continuation: bool) TestError!void {
 
     // The continuation is now the outermost declaration, and every jump to it
     // sits inside its remainder.
-    const proc_body = store.getProcSpec(proc).body.?;
+    const proc_body = store.getProcSpecImmediate(proc).body.?;
     const root = store.getCFStmt(if (shared_continuation) store.getCFStmt(proc_body).join.remainder else proc_body);
     try testing.expect(root == .join);
     if (shared_continuation) {
         try testing.expect(root.join.id != cont_id);
         try testing.expect(GuardedList.at(store.getLocalSpan(root.join.params), 0) != out);
-        try testing.expect(store.getCFStmt(external_build.?) == .assign_tag);
-        try testing.expectEqual(cont, store.getCFStmt(proc_body).join.body);
-        try testing.expectEqual(read_disc, store.getCFStmt(cont).join.remainder);
+        try testing.expect(store.getCFStmtImmediate(external_build.?).* == .assign_tag);
+        try testing.expectEqual(cont, store.getCFStmtImmediate(proc_body).join.body);
+        try testing.expectEqual(read_disc, store.getCFStmtImmediate(cont).join.remainder);
     } else {
         try testing.expectEqual(cont_id, root.join.id);
     }
@@ -2671,7 +2640,7 @@ fn testContinuationJoin(shared_continuation: bool) TestError!void {
 
     var declarations = collections.DenseMap(LIR.JoinPointId, LIR.CFStmtId).init(testing.allocator);
     defer declarations.deinit();
-    var all = try body_clone.ReachableStmts.init(&store, store.getProcSpec(proc).body.?);
+    var all = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.?);
     defer all.deinit();
     while (try all.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);
@@ -2779,7 +2748,7 @@ test "tag case fusion keeps the join when a producer edge is shared with another
     // shared path, still matching the tag.
     var union_joins: u32 = 0;
     var tag_builds: u32 = 0;
-    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpec(proc).body.?);
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.?);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         const stmt = store.getCFStmt(stmt_id);

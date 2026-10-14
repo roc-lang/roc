@@ -1069,7 +1069,7 @@ test "NodeStore round trip - Targets" {
     };
 
     for (target_files) |file| {
-        const idx = try store.addTargetFile(file);
+        const idx = try store.addTargetFile(file, rand_region(random));
         const retrieved = store.getTargetFile(idx);
 
         testing.expectEqualDeep(file, retrieved) catch |err| {
@@ -1080,7 +1080,7 @@ test "NodeStore round trip - Targets" {
     }
 
     const config_value = AST.TargetConfigValue{ .int_literal = rand_token_idx(random) };
-    const config_value_idx = try store.addTargetConfigValue(config_value);
+    const config_value_idx = try store.addTargetConfigValue(config_value, rand_region(random));
     const retrieved_config_value = store.getTargetConfigValue(config_value_idx);
 
     testing.expectEqualDeep(config_value, retrieved_config_value) catch |err| {

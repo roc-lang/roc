@@ -52,7 +52,8 @@ pub const HostSplice = struct {
     allocator: Allocator,
     /// The carried data items in placement order, one per name.
     data: std.ArrayList(ProcArtifact.DataItem) = .empty,
-    data_names: std.StringHashMap(void),
+    /// Each carried data item's index in `data`, by name.
+    data_names: std.StringHashMap(u32),
     /// Each data item's offset in the mapping once `link` has laid it out.
     data_offsets: std.StringHashMap(usize),
     /// Each data item's symbol offset in the mapping, which references to
@@ -77,7 +78,7 @@ pub const HostSplice = struct {
     pub fn init(allocator: Allocator) HostSplice {
         return .{
             .allocator = allocator,
-            .data_names = std.StringHashMap(void).init(allocator),
+            .data_names = std.StringHashMap(u32).init(allocator),
             .data_offsets = std.StringHashMap(usize).init(allocator),
             .data_symbol_offsets = std.StringHashMap(usize).init(allocator),
             .hosted_stubs = std.StringHashMap(usize).init(allocator),
@@ -147,7 +148,7 @@ pub const HostSplice = struct {
         var external = std.ArrayList(lir.LIR.LirProcSpecId).empty;
         defer external.deinit(self.allocator);
         for (demand) |proc_id| {
-            if (codegen.store.getProcSpec(proc_id).external) try external.append(self.allocator, proc_id);
+            if (codegen.store.getProcSpecImmediate(proc_id).external) try external.append(self.allocator, proc_id);
         }
         if (external.items.len == 0) return;
         const BoundSource = struct {
@@ -187,6 +188,7 @@ pub const HostSplice = struct {
             const gop = try self.data_names.getOrPut(item.name);
             if (gop.found_existing) continue;
             errdefer _ = self.data_names.remove(item.name);
+            gop.value_ptr.* = @intCast(self.data.items.len);
             try self.data.append(self.allocator, item);
         }
     }
@@ -548,7 +550,7 @@ fn collectCodeSymbols(allocator: Allocator, codegen: *HostLirCodeGen, out: *std.
             .proc => |proc_id| blk: {
                 const selected = codegen.compiledProcSymbol(proc_id) orelse continue;
                 if (selected.code_start != region.start + region.entry) continue;
-                break :blk try codegen.store.getProcSpec(proc_id).identity.symbolName(allocator);
+                break :blk try codegen.store.getProcSpecImmediate(proc_id).identity.symbolName(allocator);
             },
             .spliced_proc => |identity| blk: {
                 if (codegen.spliced_proc_starts.get(identity) != region.start + region.entry) continue;
@@ -681,7 +683,7 @@ test "nonfragment ordinary code links shared static cells and common source even
     defer codegen.deinit();
     try codegen.setStaticDataSymbols(&exports);
     codegen.setContextCatalog(.{ .sites = &sites });
-    try codegen.compileSelectedProcSpecs(&.{proc});
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
     const wrapper = try codegen.generateEntrypointWrapper("shared_root_wrapper", proc, &.{}, .i64);
     var splice = HostSplice.init(allocator);
     defer splice.deinit();
@@ -807,4 +809,54 @@ test "static bindings link pointer cells without copying mutable slots" {
     try std.testing.expectEqual(@as(u64, 42), std.mem.readInt(u64, slots.allocation[8..16], .little));
     // Linking must not bake the process address into retained source data.
     try std.testing.expectEqual(@as(usize, 0), std.mem.readInt(usize, splice.data.items[0].bytes[0..@sizeOf(usize)], .little));
+}
+
+test "linking many data items resolves each pointer through its target's own symbol offset" {
+    // Every item points at the next one. Finding a target by scanning all
+    // items makes linking quadratic, which at this count runs for minutes.
+    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try @import("layout").Store.init(allocator, @import("base").target.TargetUsize.native);
+    defer layouts.deinit();
+    var codegen = try HostLirCodeGen.init(allocator, &store, &layouts, .{}, &.{}, .default);
+    defer codegen.deinit();
+    _ = try codegen.generateHostedStub("test_unused_entry");
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const count = 100_000;
+    const items = try arena.allocator().alloc(ProcArtifact.DataItem, count);
+    const names = try arena.allocator().alloc([]const u8, count);
+    for (names, 0..) |*name, index| name.* = try std.fmt.allocPrint(arena.allocator(), "test_item_{d}", .{index});
+    for (items, 0..) |*item, index| {
+        const bytes = try arena.allocator().alloc(u8, 2 * @sizeOf(usize));
+        @memset(bytes, 0);
+        const relocations = try arena.allocator().alloc(ProcArtifact.DataRelocation, 1);
+        relocations[0] = .{ .offset = @sizeOf(usize), .name = names[(index + 1) % count], .addend = 0, .function = false };
+        item.* = .{
+            .name = names[index],
+            .bytes = bytes,
+            .alignment = @alignOf(usize),
+            .symbol_offset = @sizeOf(usize),
+            .relocations = relocations,
+        };
+    }
+    var splice = HostSplice.init(allocator);
+    defer splice.deinit();
+    try splice.addDataItems(items);
+    var table: BoxyNativeFnTable = undefined;
+    @memset(&table, 0);
+    try splice.generateHostedStubs(&codegen, &table);
+    try codegen.finishImage();
+    var executable = try splice.link(&codegen, &table);
+    defer executable.deinit();
+    const base_address = @intFromPtr(executable.memory.ptr);
+    for (names, 0..) |name, index| {
+        const offset = splice.data_offsets.get(name).?;
+        const pointer = std.mem.readInt(usize, executable.memory[offset + @sizeOf(usize) ..][0..@sizeOf(usize)], .little);
+        const target = splice.data_offsets.get(names[(index + 1) % count]).?;
+        try std.testing.expectEqual(base_address + target + @sizeOf(usize), pointer);
+    }
 }

@@ -15,11 +15,12 @@ const types = @import("types");
 
 const Diagnostics = @import("diagnostics.zig");
 const uri_util = @import("uri.zig");
-const DependencyGraph = @import("dependency_graph.zig").DependencyGraph;
 const compiled_builtins = @import("compiled_builtins");
 const scope_map = @import("scope_map.zig");
 const BuildSession = @import("build_session.zig").BuildSession;
 const cir_queries = @import("cir_queries.zig");
+const CirVisitor = @import("cir_visitor.zig").CirVisitor;
+const VisitAction = @import("cir_visitor.zig").VisitAction;
 const module_lookup = @import("module_lookup.zig");
 const completion_context = @import("completion/context.zig");
 const completion_builtins = @import("completion/builtins.zig");
@@ -152,6 +153,13 @@ fn typeDeclAnno(stmt: CIR.Statement) ?CIR.TypeAnno.Idx {
 
 /// Unwraps `result`; on allocation failure records it in `oom` and yields
 /// null, for queries that report "nothing found" as null.
+/// Blake3 hash of a document's text, identifying the content a build saw.
+fn contentHash(text: []const u8) [32]u8 {
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.Blake3.hash(text, &hash, .{});
+    return hash;
+}
+
 fn noteOom(oom: *?Allocator.Error, result: anytype) ?@typeInfo(@TypeOf(result)).error_union.payload {
     return result catch |err| {
         oom.* = err;
@@ -173,8 +181,9 @@ pub const SyntaxChecker = struct {
     snapshot_envs: std.StringHashMapUnmanaged(*BuildEnvHandle) = .{},
     /// Pre-published Builtin module reused by each fresh LSP BuildEnv.
     builtin_modules: ?*eval.BuiltinModules = null,
-    /// Dependency graph for tracking module relationships and invalidation.
-    dependency_graph: DependencyGraph,
+    /// Content hash of the last text built for each absolute document path,
+    /// used to skip rebuilding unchanged documents. Keys are owned.
+    content_hashes: std.StringHashMapUnmanaged([32]u8) = .{},
     /// Absolute workspace root from LSP initialize (`rootUri`), used to prefer
     /// `{workspace_root}/main.roc` for package-alias resolution.
     workspace_root: ?[]u8 = null,
@@ -254,7 +263,6 @@ pub const SyntaxChecker = struct {
         return .{
             .allocator = allocator,
             .std_io = std_io,
-            .dependency_graph = DependencyGraph.init(allocator),
             .cache_config = cache_config,
             .debug = debug,
             .log_file = log_file,
@@ -291,7 +299,9 @@ pub const SyntaxChecker = struct {
             self.builtin_modules = null;
         }
 
-        self.dependency_graph.deinit();
+        var hash_keys = self.content_hashes.keyIterator();
+        while (hash_keys.next()) |key| self.allocator.free(key.*);
+        self.content_hashes.deinit(self.allocator);
     }
 
     fn clearPublishedDiagnosticUris(self: *SyntaxChecker) void {
@@ -339,7 +349,7 @@ pub const SyntaxChecker = struct {
 
         return .{
             .absolute_path = absolute_path,
-            .content_hash = DependencyGraph.computeContentHash(text),
+            .content_hash = contentHash(text),
         };
     }
 
@@ -498,8 +508,8 @@ pub const SyntaxChecker = struct {
             defer if (abs_path) |a| self.allocator.free(a);
 
             if (abs_path) |ap| {
-                const new_hash = DependencyGraph.computeContentHash(text);
-                const old_hash = self.dependency_graph.getContentHash(ap);
+                const new_hash = contentHash(text);
+                const old_hash = self.content_hashes.get(ap);
 
                 if (old_hash) |existing| {
                     if (std.mem.eql(u8, &existing, &new_hash)) {
@@ -521,7 +531,14 @@ pub const SyntaxChecker = struct {
                     });
                 }
 
-                try self.dependency_graph.setContentHash(ap, new_hash);
+                const entry = try self.content_hashes.getOrPut(self.allocator, ap);
+                if (!entry.found_existing) {
+                    entry.key_ptr.* = self.allocator.dupe(u8, ap) catch |err| {
+                        self.content_hashes.removeByPtr(entry.key_ptr);
+                        return err;
+                    };
+                }
+                entry.value_ptr.* = new_hash;
             }
         }
 
@@ -534,13 +551,10 @@ pub const SyntaxChecker = struct {
         const absolute_path = session.absolute_path;
 
         if (override_text) |text| {
-            env_handle.setDocumentContent(absolute_path, DependencyGraph.computeContentHash(text), self.documentHasReports(absolute_path, session.drained_reports)) catch |err| {
+            env_handle.setDocumentContent(absolute_path, contentHash(text), self.documentHasReports(absolute_path, session.drained_reports)) catch |err| {
                 self.logDebug(.build, "Failed to record document content: {s}", .{@errorName(err)});
             };
         }
-
-        // Update dependency graph from successful build
-        try self.updateDependencyGraph(env);
 
         var publish_list: std.ArrayList(Diagnostics.PublishDiagnostics) = .empty;
         errdefer {
@@ -876,64 +890,6 @@ pub const SyntaxChecker = struct {
     fn getModuleEnvByPathInEnv(_: *SyntaxChecker, env: *BuildEnv, path: []const u8) ?*ModuleEnv {
         const module_state = env.findModuleByPath(path) orelse return null;
         return module_state.moduleEnv();
-    }
-
-    /// Update the dependency graph from a successful build.
-    fn updateDependencyGraph(self: *SyntaxChecker, env: *BuildEnv) Allocator.Error!void {
-        self.logDebug(.build, "[DEPS] Updating dependency graph...", .{});
-
-        // Clear only relationships, preserving content/exports hashes for incremental detection
-        self.dependency_graph.clearRelationships();
-
-        var total_modules: usize = 0;
-        var exports_computed: usize = 0;
-
-        const coord = env.coordinator orelse return;
-        var pkg_it = coord.packages.iterator();
-        while (pkg_it.next()) |entry| {
-            const pkg_name = entry.key_ptr.*;
-            const pkg = entry.value_ptr.*;
-
-            self.logDebug(.build, "[DEPS] Processing package '{s}' with {d} modules", .{ pkg_name, pkg.modules.items.len });
-
-            try self.dependency_graph.buildFromPackageState(pkg);
-
-            // Compute and store exports hash for each module with a valid ModuleEnv
-            for (pkg.modules.items) |*module_state| {
-                total_modules += 1;
-
-                if (module_state.moduleEnv()) |module_env| {
-                    const new_exports_hash = try DependencyGraph.computeExportsHash(self.allocator, module_env);
-
-                    // Check if exports changed (for future smart invalidation)
-                    const old_exports_hash = self.dependency_graph.getExportsHash(module_state.path);
-                    if (old_exports_hash) |existing| {
-                        if (!std.mem.eql(u8, &existing, &new_exports_hash)) {
-                            self.logDebug(.build, "[DEPS] EXPORTS CHANGED for {s}: {x}... -> {x}...", .{
-                                module_state.path,
-                                existing[0..4].*,
-                                new_exports_hash[0..4].*,
-                            });
-                        }
-                    }
-
-                    self.dependency_graph.setExportsHash(module_state.path, new_exports_hash);
-                    exports_computed += 1;
-
-                    // Log module with its dependencies
-                    if (self.dependency_graph.getModule(module_state.path)) |node| {
-                        if (node.imports.items.len > 0) {
-                            self.logDebug(.build, "[DEPS]   {s} imports {d} modules", .{ module_state.name, node.imports.items.len });
-                        }
-                    }
-                }
-            }
-        }
-
-        self.logDebug(.build, "[DEPS] Graph complete: {d} modules tracked, {d} exports hashes computed", .{
-            self.dependency_graph.count(),
-            exports_computed,
-        });
     }
 
     fn reportToDiagnostic(self: *SyntaxChecker, rep: reporting.Report) (Allocator.Error || error{WriteFailed})!Diagnostics.Diagnostic {
@@ -2579,7 +2535,8 @@ pub const SyntaxChecker = struct {
         }
     }
 
-    /// Recursively search for type annotations in nested expressions (blocks, lambdas, etc.)
+    /// Search the type annotations of statements nested in blocks reachable
+    /// through lambdas, closures, `if`, `match`, and calls.
     fn findTypeAnnoInExpr(
         self: *SyntaxChecker,
         build_env: *BuildEnv,
@@ -2590,151 +2547,104 @@ pub const SyntaxChecker = struct {
         current_uri: []const u8,
         oom: *?Allocator.Error,
     ) ?DefinitionResult {
-        const expr = module_env.store.getSourceExpr(expr_idx);
+        const Search = struct {
+            checker: *SyntaxChecker,
+            build_env: *BuildEnv,
+            module_env: *ModuleEnv,
+            doc_path: []const u8,
+            target_offset: u32,
+            current_uri: []const u8,
+            oom: *?Allocator.Error,
+            result: ?DefinitionResult = null,
 
-        switch (expr) {
-            .e_block => |block| {
-                // Check statements in the block for type annotations
-                const stmts = module_env.store.sliceStatements(block.stmts);
-                for (stmts) |stmt_idx| {
-                    const stmt = module_env.store.getSourceStatement(stmt_idx);
+            fn visitExpr(_: *@This(), _: CIR.Expr.Idx, expr: CIR.Expr) VisitAction {
+                return switch (expr) {
+                    .e_block, .e_lambda, .e_closure, .e_if, .e_match, .e_call => .continue_traversal,
+                    .e_num,
+                    .e_frac_f32,
+                    .e_frac_f64,
+                    .e_dec,
+                    .e_dec_small,
+                    .e_num_from_numeral,
+                    .e_typed_int,
+                    .e_typed_frac,
+                    .e_typed_num_from_numeral,
+                    .e_str_segment,
+                    .e_str,
+                    .e_bytes_literal,
+                    .e_lookup_local,
+                    .e_lookup_external,
+                    .e_lookup_associated_local,
+                    .e_lookup_associated,
+                    .e_lookup_associated_resolved,
+                    .e_lookup_required,
+                    .e_list,
+                    .e_empty_list,
+                    .e_tuple,
+                    .e_record,
+                    .e_empty_record,
+                    .e_tag,
+                    .e_nominal,
+                    .e_nominal_external,
+                    .e_zero_argument_tag,
+                    .e_hosted_lambda,
+                    .e_binop,
+                    .e_unary_minus,
+                    .e_field_access,
+                    .e_method_call,
+                    .e_dispatch_call,
+                    .e_interpolation,
+                    .e_structural_eq,
+                    .e_structural_hash,
+                    .e_method_eq,
+                    .e_type_method_call,
+                    .e_type_dispatch_call,
+                    .e_tuple_access,
+                    .e_runtime_error,
+                    .e_crash,
+                    .e_dbg,
+                    .e_expect_err,
+                    .e_expect,
+                    .e_ellipsis,
+                    .e_anno_only,
+                    .e_derived_method,
+                    .e_return,
+                    .e_break,
+                    .e_for,
+                    .e_run_low_level,
+                    => .skip_children,
+                    .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+                };
+            }
 
-                    // Extract type annotation from statement
-                    const maybe_type_anno = statementTypeAnno(module_env, stmt);
+            fn visitStmt(search: *@This(), _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
+                const type_anno_idx = statementTypeAnno(search.module_env, stmt) orelse return .continue_traversal;
+                const found = search.checker.findTypeAnnoAtOffset(search.build_env, search.module_env, search.doc_path, type_anno_idx, search.target_offset, search.oom) orelse return .continue_traversal;
+                if (found.uri.len == 0) {
+                    const uri_copy = noteOom(search.oom, search.checker.allocator.dupe(u8, search.current_uri)) orelse return .stop;
+                    search.result = .{ .uri = uri_copy, .range = found.range };
+                } else {
+                    search.result = found;
+                }
+                return .stop;
+            }
+        };
 
-                    if (maybe_type_anno) |type_anno_idx| {
-                        if (self.findTypeAnnoAtOffset(build_env, module_env, doc_path, type_anno_idx, target_offset, oom)) |result| {
-                            if (result.uri.len == 0) {
-                                const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
-                                return DefinitionResult{
-                                    .uri = uri_copy,
-                                    .range = result.range,
-                                };
-                            }
-                            return result;
-                        }
-                    }
-
-                    // Recurse into expressions within the statement
-                    const stmt_parts = module_lookup.getStatementParts(stmt);
-                    if (stmt_parts.expr) |stmt_expr| {
-                        if (self.findTypeAnnoInExpr(build_env, module_env, doc_path, stmt_expr, target_offset, current_uri, oom)) |result| {
-                            return result;
-                        }
-                    }
-                    if (stmt_parts.expr2) |stmt_expr| {
-                        if (self.findTypeAnnoInExpr(build_env, module_env, doc_path, stmt_expr, target_offset, current_uri, oom)) |result| {
-                            return result;
-                        }
-                    }
-                }
-                // Also check final expression
-                return self.findTypeAnnoInExpr(build_env, module_env, doc_path, block.final_expr, target_offset, current_uri, oom);
-            },
-            .e_lambda => |lambda| {
-                return self.findTypeAnnoInExpr(build_env, module_env, doc_path, lambda.body, target_offset, current_uri, oom);
-            },
-            .e_closure => |closure| {
-                return self.findTypeAnnoInExpr(build_env, module_env, doc_path, closure.lambda_idx, target_offset, current_uri, oom);
-            },
-            .e_if => |if_expr| {
-                const branch_indices = module_env.store.sliceIfBranches(if_expr.branches);
-                for (branch_indices) |branch_idx| {
-                    const branch = module_env.store.getIfBranch(branch_idx);
-                    if (self.findTypeAnnoInExpr(build_env, module_env, doc_path, branch.cond, target_offset, current_uri, oom)) |result| {
-                        return result;
-                    }
-                    if (self.findTypeAnnoInExpr(build_env, module_env, doc_path, branch.body, target_offset, current_uri, oom)) |result| {
-                        return result;
-                    }
-                }
-                return self.findTypeAnnoInExpr(build_env, module_env, doc_path, if_expr.final_else, target_offset, current_uri, oom);
-            },
-            .e_match => |match_expr| {
-                if (self.findTypeAnnoInExpr(build_env, module_env, doc_path, match_expr.cond, target_offset, current_uri, oom)) |result| {
-                    return result;
-                }
-                const branch_indices = module_env.store.sliceMatchBranches(match_expr.branches);
-                for (branch_indices) |branch_idx| {
-                    const branch = module_env.store.getMatchBranch(branch_idx);
-                    if (self.findTypeAnnoInExpr(build_env, module_env, doc_path, branch.value, target_offset, current_uri, oom)) |result| {
-                        return result;
-                    }
-                    if (branch.guard) |guard| {
-                        if (self.findTypeAnnoInExpr(build_env, module_env, doc_path, guard, target_offset, current_uri, oom)) |result| {
-                            return result;
-                        }
-                    }
-                }
-                return null;
-            },
-            .e_call => |call| {
-                if (self.findTypeAnnoInExpr(build_env, module_env, doc_path, call.func, target_offset, current_uri, oom)) |result| {
-                    return result;
-                }
-                const args = module_env.store.sliceExpr(call.args);
-                for (args) |arg| {
-                    if (self.findTypeAnnoInExpr(build_env, module_env, doc_path, arg, target_offset, current_uri, oom)) |result| {
-                        return result;
-                    }
-                }
-                return null;
-            },
-            .e_num,
-            .e_frac_f32,
-            .e_frac_f64,
-            .e_dec,
-            .e_dec_small,
-            .e_num_from_numeral,
-            .e_typed_int,
-            .e_typed_frac,
-            .e_typed_num_from_numeral,
-            .e_str_segment,
-            .e_str,
-            .e_bytes_literal,
-            .e_lookup_local,
-            .e_lookup_external,
-            .e_lookup_associated_local,
-            .e_lookup_associated,
-            .e_lookup_associated_resolved,
-            .e_lookup_required,
-            .e_list,
-            .e_empty_list,
-            .e_tuple,
-            .e_record,
-            .e_empty_record,
-            .e_tag,
-            .e_nominal,
-            .e_nominal_external,
-            .e_zero_argument_tag,
-            .e_hosted_lambda,
-            .e_binop,
-            .e_unary_minus,
-            .e_field_access,
-            .e_method_call,
-            .e_dispatch_call,
-            .e_interpolation,
-            .e_structural_eq,
-            .e_structural_hash,
-            .e_method_eq,
-            .e_type_method_call,
-            .e_type_dispatch_call,
-            .e_tuple_access,
-            .e_runtime_error,
-            .e_crash,
-            .e_dbg,
-            .e_expect_err,
-            .e_expect,
-            .e_ellipsis,
-            .e_anno_only,
-            .e_derived_method,
-            .e_return,
-            .e_break,
-            .e_for,
-            .e_run_low_level,
-            => return null,
-            .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
-        }
+        var search = Search{
+            .checker = self,
+            .build_env = build_env,
+            .module_env = module_env,
+            .doc_path = doc_path,
+            .target_offset = target_offset,
+            .current_uri = current_uri,
+            .oom = oom,
+        };
+        var visitor = CirVisitor(Search).init(&search, .{
+            .visit_expr_pre = Search.visitExpr,
+            .visit_stmt_pre = Search.visitStmt,
+        });
+        visitor.walkExpr(&module_env.store, expr_idx);
+        return search.result;
     }
 
     /// Result of finding highlights for a symbol

@@ -257,13 +257,14 @@ fn returnedResult(
     };
 }
 
-fn mainProcArgLayouts(allocator: Allocator, program: Program) Allocator.Error![]LayoutIdx {
-    const proc = program.store.getProcSpec(program.main_proc);
-    const arg_locals = program.store.getLocalSpan(proc.args);
+/// Return the layout indices for `main_proc`'s arguments.
+pub fn mainProcArgLayouts(allocator: Allocator, store: *const lir.LirStore, main_proc: LirProcSpecId) Allocator.Error![]LayoutIdx {
+    const proc = store.getProcSpec(main_proc);
+    const arg_locals = store.getLocalSpan(proc.args);
     const arg_layouts = try allocator.alloc(LayoutIdx, arg_locals.len);
     for (0..arg_locals.len) |i| {
         const local_id = GuardedList.at(arg_locals, i);
-        arg_layouts[i] = program.store.getLocal(local_id).layout_idx;
+        arg_layouts[i] = store.getLocal(local_id).layout_idx;
     }
     return arg_layouts;
 }
@@ -312,7 +313,7 @@ fn runInterpreter(allocator: Allocator, program: Program, execution_host: Execut
     static_data.install(&interp);
     static_data.ownByInterpreter(&interp);
 
-    const arg_layouts = try mainProcArgLayouts(allocator, program);
+    const arg_layouts = try mainProcArgLayouts(allocator, program.store, program.main_proc);
     defer allocator.free(arg_layouts);
 
     const eval_result = interp.eval(.{
@@ -329,7 +330,7 @@ fn runInterpreter(allocator: Allocator, program: Program, execution_host: Execut
         error.UnsupportedHostedFunction,
         => return err,
     };
-    const ret_layout = program.store.getProcSpec(program.main_proc).ret_layout;
+    const ret_layout = program.store.getProcSpecImmediate(program.main_proc).ret_layout;
     return returnedResult(allocator, &runtime_env, try copyReturnedRocStr(
         allocator,
         program.layouts,
@@ -470,7 +471,7 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
         defer retained.deinit();
 
         const proc = program.store.getProcSpec(program.main_proc);
-        const arg_layouts = try mainProcArgLayouts(allocator, program);
+        const arg_layouts = try mainProcArgLayouts(allocator, program.store, program.main_proc);
         defer allocator.free(arg_layouts);
         const entrypoint = try codegen.generateEntrypointWrapper(
             "roc_eval_main",
@@ -533,8 +534,7 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
         defer crash_boundary.deinit();
         const saved_observer = builtins.source_events.enter(null);
         defer builtins.source_events.leave(saved_observer);
-        const sj = crash_boundary.set();
-        if (sj != 0) return crashResult(allocator, &runtime_env, null);
+        if (crash_boundary.set() != 0) return crashResult(allocator, &runtime_env, null);
 
         const entered = builtins.in_process_host.enter(runtime_env.get_ops(), null);
         defer builtins.in_process_host.leave(entered);
@@ -608,19 +608,20 @@ fn runWasm(allocator: Allocator, program: Program) WasmError!Result {
     };
 }
 
-const OwnedLlvmCompileOptions = struct {
+/// LLVM compile options plus the owned strings they point into.
+pub const OwnedLlvmCompileOptions = struct {
     options: @import("llvm_compile").CompileOptions,
     cpu: [:0]u8,
     features: [:0]u8,
 
-    fn deinit(self: *OwnedLlvmCompileOptions, allocator: Allocator) void {
+    pub fn deinit(self: *OwnedLlvmCompileOptions, allocator: Allocator) void {
         allocator.free(self.cpu);
         allocator.free(self.features);
     }
 };
 
-fn llvmCompileOptions(allocator: Allocator, target_usize: base.target.TargetUsize) LlvmOptionsError!OwnedLlvmCompileOptions {
-    const llvm_compile = @import("llvm_compile");
+/// Options for compiling in-process LLVM code at `optimization`.
+pub fn llvmCompileOptions(allocator: Allocator, target_usize: base.target.TargetUsize, optimization: @import("llvm_compile").bindings.IrOptimizationLevel) LlvmOptionsError!OwnedLlvmCompileOptions {
     // This code is compiled to run in this process, so the CPU floor is the
     // one this machine executes rather than the native target's default.
     const native_roc_target = roc_target.host_cpu.nativeTarget();
@@ -635,7 +636,7 @@ fn llvmCompileOptions(allocator: Allocator, target_usize: base.target.TargetUsiz
         .options = .{
             .function_sections = false,
             .use_module_target_triple = true,
-            .optimization = llvm_compile.bindings.IrOptimizationLevel.O3,
+            .optimization = optimization,
             .target_ptr_width_bits = @intCast(target_usize.size() * 8),
             .sha256_rounds = builtins.sha256.Rounds.forCpu(resolved_target.cpu),
             .cpu = cpu,
@@ -667,7 +668,7 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
     defer allocator.free(static_helpers);
 
     const proc = program.store.getProcSpec(program.main_proc);
-    const arg_layouts = try mainProcArgLayouts(allocator, program);
+    const arg_layouts = try mainProcArgLayouts(allocator, program.store, program.main_proc);
     defer allocator.free(arg_layouts);
 
     const llvm_entrypoints = [_]llvm_compile.MonoLlvmCodeGen.Entrypoint{.{
@@ -699,7 +700,7 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
         owned.deinit();
     }
 
-    var compile_options = try llvmCompileOptions(allocator, program.layouts.targetUsize());
+    var compile_options = try llvmCompileOptions(allocator, program.layouts.targetUsize(), llvm_compile.bindings.IrOptimizationLevel.O3);
     defer compile_options.deinit(allocator);
     const object_bytes = try llvm_compile.compileBitcodeModulesToObject(
         allocator,
@@ -762,8 +763,7 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
     defer crash_boundary.deinit();
     const entered = builtins.in_process_host.enter(runtime_env.get_ops(), null);
     defer builtins.in_process_host.leave(entered);
-    const sj = crash_boundary.set();
-    if (sj != 0) return crashResult(allocator, &runtime_env, null);
+    if (crash_boundary.set() != 0) return crashResult(allocator, &runtime_env, null);
 
     entry(
         ret_buf.ptr,
@@ -806,7 +806,8 @@ fn installBoxyGlobal(
     return true;
 }
 
-fn entrypointParamSlotSize(layouts: *const LayoutStore, layout_idx: LayoutIdx) u32 {
+/// Compute the entrypoint calling-convention slot size for a layout.
+pub fn entrypointParamSlotSize(layouts: *const LayoutStore, layout_idx: LayoutIdx) u32 {
     const runtime_layout_idx = layouts.runtimeRepresentationLayoutIdx(layout_idx);
     if (runtime_layout_idx == .str) return 24;
     if (runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec) return 16;
@@ -825,7 +826,8 @@ fn entrypointParamSlotSize(layouts: *const LayoutStore, layout_idx: LayoutIdx) u
     return if (size == 0) 0 else 8;
 }
 
-fn zeroedEntrypointArgBuffer(
+/// Allocate a zeroed, alignment-sorted entrypoint argument buffer, or null if no args.
+pub fn zeroedEntrypointArgBuffer(
     allocator: Allocator,
     layouts: *const LayoutStore,
     arg_layouts: []const LayoutIdx,
@@ -878,7 +880,8 @@ fn zeroedEntrypointArgBuffer(
     return buffer;
 }
 
-fn copyReturnedRocStr(
+/// Copy the Roc `Str` an entrypoint returned at `value_ptr` and release the returned ownership through `roc_ops`.
+pub fn copyReturnedRocStr(
     allocator: Allocator,
     layouts: *const LayoutStore,
     ret_layout: LayoutIdx,

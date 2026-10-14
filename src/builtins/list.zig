@@ -2061,7 +2061,7 @@ test "listConcat: non-unique with unique overlapping" {
     const nonUnique = RocList.fromSlice(u8, ([_]u8{1})[0..], false, test_env.getOps());
     const bytes: [*]u8 = @as([*]u8, @ptrCast(nonUnique.bytes));
     const refcount_ptr: [*]isize = utils.alignedPtrCast([*]isize, bytes - @sizeOf(usize), @src());
-    utils.increfRcPtrC(&refcount_ptr[0], 1, test_env.getOps());
+    utils.increfRcPtr(&refcount_ptr[0], 1, .atomic, test_env.getOps());
     // NOTE: nonUnique will be consumed by listConcat, so no defer decref needed
 
     const unique = RocList.fromSlice(u8, ([_]u8{ 2, 3, 4 })[0..], false, test_env.getOps());

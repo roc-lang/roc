@@ -182,11 +182,7 @@ pub fn pushString(self: *SExprTree, value: []const u8) std.mem.Allocator.Error!v
 
 /// Push a string key-value pair onto the stack
 pub fn pushStringPair(self: *SExprTree, key: []const u8, value: []const u8) std.mem.Allocator.Error!void {
-    const begin = self.beginNode();
-    try self.pushStaticAtom(key);
-    try self.pushString(value);
-    const attrs = self.beginNode();
-    try self.endNode(begin, attrs);
+    return self.pushPair(key, pushString, .{value});
 }
 
 /// Push a formatted string (copied into data buffer) onto the stack.
@@ -199,11 +195,7 @@ pub fn pushStringFmt(self: *SExprTree, comptime fmt: []const u8, args: anytype) 
 
 /// Push a formatted string key-value pair onto the stack.
 pub fn pushStringPairFmt(self: *SExprTree, key: []const u8, comptime fmt: []const u8, args: anytype) std.mem.Allocator.Error!void {
-    const begin = self.beginNode();
-    try self.pushStaticAtom(key);
-    try self.pushStringFmt(fmt, args);
-    const attrs = self.beginNode();
-    try self.endNode(begin, attrs);
+    return self.pushPair(key, pushStringFmt, .{ fmt, args });
 }
 
 /// Reserve bytes in the data buffer for a caller-owned formatter that needs a
@@ -236,11 +228,14 @@ pub fn pushReservedString(self: *SExprTree, begin: u32, value: []const u8) std.m
 
 /// Push a key-value pair for a string produced inside a reserved data-buffer range.
 pub fn pushReservedStringPair(self: *SExprTree, key: []const u8, begin: u32, value: []const u8) std.mem.Allocator.Error!void {
-    const node_begin = self.beginNode();
-    try self.pushStaticAtom(key);
-    try self.pushReservedString(begin, value);
-    const attrs = self.beginNode();
-    try self.endNode(node_begin, attrs);
+    return self.pushPair(key, pushReservedString, .{ begin, value });
+}
+
+/// Push a `(key value)` node whose value is pushed by `push` called with `args`.
+fn pushPair(self: *SExprTree, key: []const u8, comptime push: anytype, args: anytype) std.mem.Allocator.Error!void {
+    const begin = try self.beginNamedNode(key);
+    try @call(.auto, push, .{self} ++ args);
+    try self.endNodeWithoutChildren(begin);
 }
 
 /// Push a boolean node onto the stack
@@ -250,11 +245,7 @@ pub fn pushBool(self: *SExprTree, value: bool) std.mem.Allocator.Error!void {
 
 /// Push a boolean key-value pair onto the stack
 pub fn pushBoolPair(self: *SExprTree, key: []const u8, value: bool) std.mem.Allocator.Error!void {
-    const begin = self.beginNode();
-    try self.pushStaticAtom(key);
-    try self.pushBool(value);
-    const attrs = self.beginNode();
-    try self.endNode(begin, attrs);
+    return self.pushPair(key, pushBool, .{value});
 }
 
 /// Push an unsigned integer node onto the stack
@@ -264,11 +255,7 @@ pub fn pushU64(self: *SExprTree, value: u64) std.mem.Allocator.Error!void {
 
 /// Push an unsigned integer key-value pair onto the stack
 pub fn pushU64Pair(self: *SExprTree, key: []const u8, value: u64) std.mem.Allocator.Error!void {
-    const begin = self.beginNode();
-    try self.pushStaticAtom(key);
-    try self.pushU64(value);
-    const attrs = self.beginNode();
-    try self.endNode(begin, attrs);
+    return self.pushPair(key, pushU64, .{value});
 }
 
 /// Push a BytesRange node onto the stack

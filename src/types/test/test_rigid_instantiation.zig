@@ -666,8 +666,8 @@ test "instantiate - annotation tag closure authority belongs to the definition" 
 
 test "instantiate - rejected nominal positions produce error and unwind partial copies" {
     const Provider = struct {
-        fn position(_: *anyopaque, _: types_mod.NominalType, index: u32, _: types_mod.Polarity) std.mem.Allocator.Error!?types_mod.Polarity {
-            return if (index == 1) null else .pos;
+        fn position(_: *anyopaque, _: types_mod.NominalType, index: u32, _: types_mod.Polarity) std.mem.Allocator.Error!?Instantiator.NominalArgumentPosition {
+            return if (index == 1) null else .{ .at = .pos };
         }
     };
     for ([_]Instantiator.PolarityVarBehavior{ .close, .preserve, .resolve_by_polarity }) |behavior| {
@@ -793,6 +793,7 @@ test "instantiate - markers in interpolation metadata get their own choices" {
             .expr_region = .some(region),
             .item_var = item_union,
             .interpolated_parts = parts,
+            .regions = .this_module,
         },
     }});
     const source = try env.types.freshFromContentWithRank(.{ .flex = .{ .name = null, .constraints = constraints } }, .generalized);

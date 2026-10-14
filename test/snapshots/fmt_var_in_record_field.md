@@ -41,7 +41,7 @@ UNUSED VARIABLE - fmt_var_in_record_field.md:1:10:1:11
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "c")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_c")

@@ -2,6 +2,7 @@
 //! Monotype reservation and the artifacts the object writer splices in.
 
 const std = @import("std");
+const collections = @import("collections");
 const backend = @import("backend");
 const check = @import("check");
 const compile = @import("compile");
@@ -51,11 +52,8 @@ pub const Store = struct {
     }
 
     fn packPath(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8) Allocator.Error![]u8 {
-        const dir = try self.identityDir(origin, identity);
-        defer self.allocator.free(dir);
-        const name = try std.fmt.allocPrint(self.allocator, "{s}.rpk", .{&std.fmt.bytesToHex(key, .lower)});
-        defer self.allocator.free(name);
-        return std.fs.path.join(self.allocator, &.{ dir, name });
+        const name = std.fmt.bytesToHex(key, .lower) ++ ".rpk".*;
+        return std.fs.path.join(self.allocator, &.{ self.root, @tagName(origin), &std.fmt.bytesToHex(identity, .lower), &name });
     }
 
     /// Whether the pack for `key` is already in the store.
@@ -299,7 +297,7 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
     const identity = lir.ProcIdentity.forTest(43);
     const key = @as([32]u8, @splat(41));
     const set = backend.dev.ProcArtifact.Set{
-        .arena = std.heap.ArenaAllocator.init(allocator),
+        .arena = @import("base").SingleThreadArena.init(allocator),
         .artifacts = &.{.{
             .kind = .{ .proc = identity },
             .code = "\xc3",
@@ -400,7 +398,7 @@ test "object cache semantic offers select compatible relations in either order" 
                 };
                 const identity = lir.ProcIdentity.forTest(@intCast(51 + index));
                 const set = backend.dev.ProcArtifact.Set{
-                    .arena = std.heap.ArenaAllocator.init(allocator),
+                    .arena = @import("base").SingleThreadArena.init(allocator),
                     .artifacts = &.{.{
                         .kind = .{ .proc = identity },
                         .code = "\xc3",
@@ -468,7 +466,7 @@ test "normal native offers attest one exact physical definition and fixed metada
     const Producer = struct {
         fn bytes(a: Allocator, proc_identity: lir.ProcIdentity, key: [32]u8, code: []const u8, borrowed: u64) PackFile.WriteError![]u8 {
             const set = backend.dev.ProcArtifact.Set{
-                .arena = std.heap.ArenaAllocator.init(a),
+                .arena = collections.SingleThreadArena.init(a),
                 .artifacts = &.{.{
                     .kind = .{ .proc = proc_identity },
                     .code = code,
@@ -548,7 +546,7 @@ test "normal native retained objects keep borrowed exact graphs stable while the
             artifacts[0].refs = &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0 }};
         }
         const set = backend.dev.ProcArtifact.Set{
-            .arena = std.heap.ArenaAllocator.init(allocator),
+            .arena = collections.SingleThreadArena.init(allocator),
             .artifacts = if (index == 0) &artifacts else artifacts[0..1],
         };
         const bytes = try PackFile.write(allocator, &set, &.{.{
@@ -605,7 +603,7 @@ test "normal native source certificates reload only against current checked auth
     var event_data = @as([@sizeOf(SourceEvents.Descriptor)]u8, @splat(0));
     backend.dev.LirCodeGenMod.encodeSourceEventField(SourceEvents.Descriptor, descriptor, &event_data, .little);
     const set = backend.dev.ProcArtifact.Set{
-        .arena = std.heap.ArenaAllocator.init(allocator),
+        .arena = collections.SingleThreadArena.init(allocator),
         .artifacts = &.{.{
             .kind = .{ .proc = identity },
             .code = "\xc3",
@@ -901,18 +899,18 @@ test "pack checked materializer projection uses actual pending inputs and surviv
     const declaration = authority: {
         var builtin_modules = try eval.BuiltinModules.init(allocator);
         defer builtin_modules.deinit();
-        var resources = try eval.Inspected.parseAndCanonicalizeProgramWithBuiltin(allocator, .module,
+        var resources = try eval.Inspected.parseProgram(allocator, .module,
             \\Test := [].{
             \\    value : U64
             \\    value = 7.U64
             \\}
             \\main = || Test.value
             \\expect Test.value == 7.U64
-        , &.{}, .{
+        , &.{}, .{ .pre_published_builtin = .{
             .env = builtin_modules.builtin_module.env,
             .indices = builtin_modules.builtin_indices,
             .artifact = &builtin_modules.checked_artifact,
-        });
+        } });
         defer eval.Inspected.cleanupParseAndCanonical(allocator, resources);
         var uses = std.ArrayList(Common.CheckedRootUse).empty;
         defer uses.deinit(allocator);
@@ -952,7 +950,7 @@ test "pack checked materializer projection uses actual pending inputs and surviv
             };
             var pending_pack = PackFile.Pack{
                 .set = .{
-                    .arena = std.heap.ArenaAllocator.init(allocator),
+                    .arena = collections.SingleThreadArena.init(allocator),
                     .artifacts = &.{.{
                         .kind = .{ .proc = lir.ProcIdentity.forTest(105) },
                         .code = "\xc3",
@@ -1027,7 +1025,7 @@ test "pack checked materializer demand is shared across recursive callers and re
         .{ .kind = .{ .proc = lir.ProcIdentity.forTest(103) }, .code = "\xc3", .entry = 0, .frame = null, .refs = &.{.{ .site = 0, .form = .call, .target = 0, .delta = 0 }}, .relocations = &.{}, .data = &.{}, .materializations = &.{dependency} },
         .{ .kind = .{ .proc = lir.ProcIdentity.forTest(104) }, .code = "\xc3", .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = &.{} },
     };
-    var set = backend.dev.ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &artifacts };
+    var set = backend.dev.ProcArtifact.Set{ .arena = collections.SingleThreadArena.init(allocator), .artifacts = &artifacts };
     defer set.deinit();
     var closure = try backend.dev.ArtifactClosure.init(allocator, &set);
     defer closure.deinit();
@@ -1054,7 +1052,7 @@ test "pack literal projection retains producer declarations after source retirem
     const declaration = authority: {
         var builtin_modules = try eval.BuiltinModules.init(allocator);
         defer builtin_modules.deinit();
-        var resources = try eval.Inspected.parseAndCanonicalizeProgramWithBuiltin(allocator, .module,
+        var resources = try eval.Inspected.parseProgram(allocator, .module,
             \\main = || Test.value
             \\Test := [].{
             \\    value : U64
@@ -1071,11 +1069,11 @@ test "pack literal projection retains producer declarations after source retirem
             \\    }
             \\}
             \\expect Test.value == 3.U64
-        , &.{}, .{
+        , &.{}, .{ .pre_published_builtin = .{
             .env = builtin_modules.builtin_module.env,
             .indices = builtin_modules.builtin_indices,
             .artifact = &builtin_modules.checked_artifact,
-        });
+        } });
         defer eval.Inspected.cleanupParseAndCanonical(allocator, resources);
         const source_modules = [_]check.TypedCIR.Modules.SourceModule{
             .{ .precompiled = resources.module_env },
@@ -1597,6 +1595,7 @@ pub const LoadedPacks = struct {
                     .demand = demand,
                     .checked_root_uses = summaries[spec.artifact].checked_roots,
                     .platform_requirement_relation = spec.platform_requirement_relation,
+                    .comptime_root_reads = spec.comptime_root_reads,
                     .rc_borrowed_params = spec.rc_borrowed_params,
                     .rc_ret_borrowed = spec.rc_ret_borrowed,
                     .rc_ret_lenders = spec.rc_ret_lenders,
@@ -2508,7 +2507,7 @@ test "pack machine callee literals close empty caller demand and recursive SCCs"
                 Fixture.artifact(134, &.{}),
                 Fixture.artifact(if (mode == 1) 999 else 131, &.{}),
             };
-            var set = backend.dev.ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &artifacts };
+            var set = backend.dev.ProcArtifact.Set{ .arena = collections.SingleThreadArena.init(allocator), .artifacts = &artifacts };
             defer set.deinit();
             const specs = [_]PackFile.SpecEntry{
                 Fixture.spec(@splat(32), 0, &.{}),
@@ -2570,7 +2569,7 @@ test "pack literal materializers require a recipe in their own serving closure" 
         .{ .kind = .{ .proc = lir.ProcIdentity.forTest(143) }, .code = "\xc3", .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = &.{}, .materializations = &.{dependency} },
         .{ .kind = .{ .proc = lir.ProcIdentity.forTest(144) }, .code = "\xc3", .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = &.{} },
     };
-    var set = backend.dev.ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &artifacts };
+    var set = backend.dev.ProcArtifact.Set{ .arena = collections.SingleThreadArena.init(allocator), .artifacts = &artifacts };
     defer set.deinit();
     var closure = try backend.dev.ArtifactClosure.init(allocator, &set);
     defer closure.deinit();
