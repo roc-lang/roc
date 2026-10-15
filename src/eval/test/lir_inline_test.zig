@@ -12432,6 +12432,9 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
     // `MissingRequiredField` directly, with no remaining-state binding for an
     // `invalid_value` call:
     //   fns=10 defs=11 exprs=593 locals=119 template_misses=14 nested_misses=0
+    // and once a value whose closed or annotation-bounded row flows into an
+    // annotated result relates through a row coercion (design.md "Row
+    // Subsumption"), which lowers as a `row_widen` expression per such flow.
     // Every count is exact, including expressions and locals. The reserve-
     // and-copy that Phase-B emission ends in is the same reserve-and-copy the
     // eager restore already performed (it too filled a reservation with a
@@ -12444,7 +12447,7 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_gate_source);
     try std.testing.expectEqual(@as(usize, 10), stats.functions);
     try std.testing.expectEqual(@as(usize, 11), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 549), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 552), stats.expressions);
     try std.testing.expectEqual(@as(usize, 120), stats.locals);
     try std.testing.expect(stats.template_misses <= 14);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
@@ -12570,12 +12573,14 @@ test "stored parser restore lowers a shape with an optional field" {
     // Re-measured after the 2026-09-15 rebase onto upstream's codec contract
     // machinery (exprs 669 -> 731, locals 127 -> 140), and again once a
     // missing required field always constructs `MissingRequiredField`
-    // directly (exprs 731 -> 727, locals 140 -> 138).
+    // directly (exprs 731 -> 727, locals 140 -> 138), and again once a value
+    // whose annotation-bounded row flows into an annotated result lowers as a
+    // `row_widen` expression (exprs 727 -> 730).
     const allocator = std.testing.allocator;
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_optional_gate_source);
     try std.testing.expectEqual(@as(usize, 10), stats.functions);
     try std.testing.expectEqual(@as(usize, 11), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 679), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 682), stats.expressions);
     try std.testing.expectEqual(@as(usize, 138), stats.locals);
     try std.testing.expectEqual(@as(u64, 14), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);

@@ -1095,7 +1095,7 @@ const Solver = struct {
                 }
             },
             .tag => |tag| {
-                const tys = try self.tagPayloadsSpan(expected, tag.name);
+                const tys = try self.tagPayloadsSpanFor(expected, tag.name, expr.ty);
                 const children = self.lifted.exprSpan(tag.payloads);
                 if (tys.count() != children.len) Common.invariant("tag expression payload arity differs from its checked type");
                 if (cursor < children.len) return .{ .expr = .{ .id = children[cursor], .expected = self.program.types.spanItem(tys, cursor) } };
@@ -1458,7 +1458,7 @@ const Solver = struct {
             },
             .list => children.elem_ty = try self.listElem(pat_ty),
             .tag => |tag| {
-                children.component_tys = try self.tagPayloadsSpan(pat_ty, tag.name);
+                children.component_tys = try self.tagPayloadsSpanFor(pat_ty, tag.name, pat.ty);
                 if (children.component_tys.count() != self.lifted.patSpan(tag.payloads).len) Common.invariant("tag pattern payload arity differs from its checked type");
             },
             .nominal => |backing| {
@@ -2016,12 +2016,149 @@ const Solver = struct {
         Common.invariant("low-level record result was missing a required field");
     }
 
-    fn tagPayloadsSpan(self: *Solver, ty: Type.TypeVarId, name: Type.names.TagNameId) Allocator.Error!Type.Span {
+    /// The payloads of the tag `name` in the row of `ty`, as the static type
+    /// `mono_ty` sees it. A joined row may hold the label at several payload
+    /// types (`mergeTags`); the static type lists it once, and the variant
+    /// whose payloads its own payload types can unify with is the one it
+    /// constructs and matches.
+    fn tagPayloadsSpanFor(self: *Solver, ty: Type.TypeVarId, name: Type.names.TagNameId, mono_ty: MonoType.TypeId) Allocator.Error!Type.Span {
         const content = try self.shapeContent(ty);
         if (std.meta.activeTag(content) != .tag_union) Common.invariant("tag operation had a non-tag-union checked type");
-        const index = (try self.tagRowIndex(content.tag_union)).get(name) orelse
-            Common.invariant("tag was absent from checked tag-union type");
-        return self.program.types.tagItem(content.tag_union, index).payloads;
+        const entries = (try self.tagRowIndex(content.tag_union)).entriesOf(name);
+        if (entries.len == 0) Common.invariant("tag was absent from checked tag-union type");
+        if (entries.len == 1) return self.program.types.tagItem(content.tag_union, entries[0].position).payloads;
+        const static_payloads = self.monoTagPayloads(mono_ty, name);
+        var selected: ?Type.Span = null;
+        for (entries) |entry| {
+            const payloads = self.program.types.tagItem(content.tag_union, entry.position).payloads;
+            if (payloads.count() != static_payloads.len) continue;
+            var compatible = true;
+            for (0..static_payloads.len) |index| {
+                const fresh = try self.lowerTypeFresh(static_payloads[index]);
+                if (!try self.typesCompatible(self.program.types.spanItem(payloads, index), fresh)) {
+                    compatible = false;
+                    break;
+                }
+            }
+            if (!compatible) continue;
+            if (selected != null) Common.invariant("two variants of one label both fit a tag's static payloads");
+            selected = payloads;
+        }
+        return selected orelse Common.invariant("no variant of a repeated label fit a tag's static payloads");
+    }
+
+    /// The payload types the static Monotype `mono_ty` gives the tag `name`,
+    /// through named backings.
+    fn monoTagPayloads(self: *Solver, mono_ty: MonoType.TypeId, name: Type.names.TagNameId) []const MonoType.TypeId {
+        var current = mono_ty;
+        var remaining = self.lifted.types.types.len;
+        while (remaining > 0) : (remaining -= 1) {
+            switch (self.lifted.types.get(current)) {
+                .tag_union => |tags| {
+                    const span = self.lifted.types.tagSpan(tags);
+                    for (span) |tag| {
+                        if (tag.name == name) return self.lifted.types.span(tag.payloads);
+                    }
+                    Common.invariant("tag was absent from its static Monotype row");
+                },
+                .named => |named| current = (named.backing orelse Common.invariant("tag operation's static type named no backing row")).ty,
+                .primitive, .record, .tuple, .list, .box, .func, .erased, .zst => Common.invariant("tag operation's static type was not a tag union"),
+            }
+        }
+        Common.invariant("tag operation's static type chained named backings without end");
+    }
+
+    /// Whether two payload spans could unify without a structural conflict:
+    /// the same count, and `typesCompatible` pairwise.
+    fn payloadsCompatible(self: *Solver, lhs: Type.Span, rhs: Type.Span) Allocator.Error!bool {
+        if (lhs.count() != rhs.count()) return false;
+        for (0..lhs.count()) |index| {
+            if (!try self.typesCompatible(self.program.types.spanItem(lhs, index), self.program.types.spanItem(rhs, index))) return false;
+        }
+        return true;
+    }
+
+    /// Whether unifying `a` with `b` would reach no structural conflict: the
+    /// checks `unifyRoots` raises an invariant on, asked ahead of time so that
+    /// two same-label tags whose payloads differ in shape become two variants
+    /// of one joined row (`mergeTags`) rather than a failed relation. Anything
+    /// unification can relate—unbound variables, callable slots, rows, named
+    /// types with their own relations—is compatible. Materializing lazy
+    /// leaves along the way is the ordinary expansion a relation performs.
+    fn typesCompatible(self: *Solver, a: Type.TypeVarId, b: Type.TypeVarId) Allocator.Error!bool {
+        var work = std.ArrayList(UnifyPair).empty;
+        defer work.deinit(self.allocator);
+        var visited = UnifyPairSet.init(self.allocator);
+        defer visited.deinit();
+        try work.append(self.allocator, .{ .first = a, .second = b });
+        while (work.pop()) |pair| {
+            const left = self.program.types.rootCompressed(pair.first);
+            const right = self.program.types.rootCompressed(pair.second);
+            if (left == right) continue;
+            if ((try visited.getOrPut(UnifyPair.init(left, right))).found_existing) continue;
+            const left_content = try self.resolvedContentAt(left);
+            const right_content = try self.resolvedContentAt(right);
+            const left_tag = std.meta.activeTag(left_content);
+            const right_tag = std.meta.activeTag(right_content);
+            if (left_tag == .unbound or left_tag == .forall or right_tag == .unbound or right_tag == .forall) continue;
+            // A named type and a bare structure are a lifted pair, which
+            // unification relates through the named type's backing.
+            if (left_tag == .named and right_tag != .named) {
+                if (left_content.named.backing) |backing| try work.append(self.allocator, .{ .first = backing.ty, .second = right });
+                continue;
+            }
+            if (right_tag == .named and left_tag != .named) {
+                if (right_content.named.backing) |backing| try work.append(self.allocator, .{ .first = left, .second = backing.ty });
+                continue;
+            }
+            if (left_tag != right_tag) return false;
+            switch (left_content) {
+                .link, .mono, .unbound, .forall => unreachable,
+                .primitive => |prim| if (prim != right_content.primitive) return false,
+                .zst, .lambda_set, .erased, .tag_union => {},
+                .list => |elem| try work.append(self.allocator, .{ .first = elem, .second = right_content.list }),
+                .box => |elem| try work.append(self.allocator, .{ .first = elem, .second = right_content.box }),
+                .tuple => |items| {
+                    const right_items = right_content.tuple;
+                    if (items.count() != right_items.count()) return false;
+                    for (0..items.count()) |index| {
+                        try work.append(self.allocator, .{ .first = self.program.types.spanItem(items, index), .second = self.program.types.spanItem(right_items, index) });
+                    }
+                },
+                .record => |fields| {
+                    const right_fields = right_content.record;
+                    if (fields.count() != right_fields.count()) return false;
+                    for (0..fields.count()) |index| {
+                        const field = self.program.types.fieldItem(fields, index);
+                        const right_field = self.program.types.fieldItem(right_fields, index);
+                        if (field.name != right_field.name) return false;
+                        if ((field.value_ty == null) != (right_field.value_ty == null)) return false;
+                        try work.append(self.allocator, .{ .first = field.ty, .second = right_field.ty });
+                        if (field.value_ty) |value_ty| try work.append(self.allocator, .{ .first = value_ty, .second = right_field.value_ty.? });
+                    }
+                },
+                .func => |func| {
+                    const right_func = right_content.func;
+                    if (func.args.count() != right_func.args.count()) return false;
+                    for (0..func.args.count()) |index| {
+                        try work.append(self.allocator, .{ .first = self.program.types.spanItem(func.args, index), .second = self.program.types.spanItem(right_func.args, index) });
+                    }
+                    try work.append(self.allocator, .{ .first = func.ret, .second = right_func.ret });
+                },
+                .named => |named| {
+                    const right_named = right_content.named;
+                    // Named types with different declarations have relations
+                    // of their own (iterator views, opaque views); only a pair
+                    // of one declaration is examined further.
+                    if (!std.meta.eql(named.def, right_named.def) or named.kind != right_named.kind or named.builtin_owner != right_named.builtin_owner) continue;
+                    if (named.args.count() != right_named.args.count()) return false;
+                    for (0..named.args.count()) |index| {
+                        try work.append(self.allocator, .{ .first = self.program.types.spanItem(named.args, index), .second = self.program.types.spanItem(right_named.args, index) });
+                    }
+                },
+            }
+        }
+        return true;
     }
 
     fn namedBacking(self: *Solver, ty: Type.TypeVarId) Allocator.Error!?Type.TypeVarId {
@@ -3248,12 +3385,12 @@ const Solver = struct {
 
     /// Merge two tag unions, collecting the shared tags' payload spans for the
     /// caller to unify once the merged span has been recorded.
-    /// Positions of a stored tag row's tags by name; the first position wins
-    /// for a repeated name.
-    /// Positions of a stored row's labels by name, sorted by name for binary
-    /// search; the first position wins for a repeated name. A row is short
-    /// and its label ids are spread over the whole name table, so a sorted
-    /// slice holds it more compactly than a direct-indexed map.
+    /// Positions of a stored row's labels by name, sorted by name then by
+    /// position for binary search. A tag row may repeat a label (design.md
+    /// "Row Joins": one label at two payload types is two variants), so a
+    /// name's entries form a range; a record row never repeats a label. A row
+    /// is short and its label ids are spread over the whole name table, so a
+    /// sorted slice holds it more compactly than a direct-indexed map.
     fn RowNameIndex(comptime Name: type) type {
         return struct {
             const Self = @This();
@@ -3262,7 +3399,20 @@ const Solver = struct {
             len: u32,
             entries: std.ArrayList(Entry) = .empty,
 
+            /// The first position of `name`, if the row holds it.
             fn get(self: *const Self, name: Name) ?usize {
+                const range = self.rangeOf(name);
+                if (range.start == range.end) return null;
+                return self.entries.items[range.start].position;
+            }
+
+            /// The entries of `name`, in row order.
+            fn entriesOf(self: *const Self, name: Name) []const Entry {
+                const range = self.rangeOf(name);
+                return self.entries.items[range.start..range.end];
+            }
+
+            fn rangeOf(self: *const Self, name: Name) struct { start: usize, end: usize } {
                 const key = @backingInt(name);
                 var low: usize = 0;
                 var high: usize = self.entries.items.len;
@@ -3271,8 +3421,9 @@ const Solver = struct {
                     const mid_key = @backingInt(self.entries.items[mid].name);
                     if (mid_key < key) low = mid + 1 else high = mid;
                 }
-                if (low < self.entries.items.len and self.entries.items[low].name == name) return self.entries.items[low].position;
-                return null;
+                var end = low;
+                while (end < self.entries.items.len and self.entries.items[end].name == name) end += 1;
+                return .{ .start = low, .end = end };
             }
 
             fn lessThan(_: void, lhs: Entry, rhs: Entry) bool {
@@ -3288,13 +3439,6 @@ const Solver = struct {
                 try self.entries.ensureTotalCapacity(allocator, len);
                 for (0..len) |position| self.entries.appendAssumeCapacity(.{ .name = labels.at(position), .position = @intCast(position) });
                 std.sort.pdq(Entry, self.entries.items, {}, lessThan);
-                var kept: usize = 0;
-                for (self.entries.items) |entry| {
-                    if (kept != 0 and self.entries.items[kept - 1].name == entry.name) continue;
-                    self.entries.items[kept] = entry;
-                    kept += 1;
-                }
-                self.entries.shrinkRetainingCapacity(kept);
             }
 
             fn deinit(self: *Self, allocator: Allocator) void {
@@ -3338,6 +3482,14 @@ const Solver = struct {
         return gop.value_ptr;
     }
 
+    /// Merge two tag rows into one holding both rows' tags (design.md "Row
+    /// Joins"). A left tag pairs with a right tag of the same label whose
+    /// payloads it can unify with (`payloadsCompatible`), and the pair's
+    /// payloads are returned for the caller to unify; a tag with no such
+    /// partner stays its own variant, so one label can stand twice in the
+    /// merged row, at two payload types. Each static type that reaches the
+    /// row lists the label once, and selects its variant by payload
+    /// (`tagPayloadsSpanFor`), so no reader observes the other variant.
     fn mergeTags(
         self: *Solver,
         lhs: Type.Span,
@@ -3345,44 +3497,39 @@ const Solver = struct {
         payload_pairs: *std.ArrayList(DeferredSpanPair),
     ) Allocator.Error!Type.Span {
         const right_index = try self.tagRowIndex(rhs);
-        var shared_count: usize = 0;
-        var every_left_in_right = true;
+        const right_paired = try self.allocator.alloc(bool, rhs.count());
+        defer self.allocator.free(right_paired);
+        @memset(right_paired, false);
+        var left_unpaired: usize = 0;
         for (0..lhs.count()) |left_index| {
             const left_tag = self.program.types.tagItem(lhs, left_index);
-            if (right_index.get(left_tag.name)) |right_position| {
-                try payload_pairs.append(self.allocator, .{
-                    .lhs = left_tag.payloads,
-                    .rhs = self.program.types.tagItem(rhs, right_position).payloads,
-                });
-                shared_count += 1;
-            } else {
-                every_left_in_right = false;
-            }
+            const paired = for (right_index.entriesOf(left_tag.name)) |entry| {
+                if (right_paired[entry.position]) continue;
+                const right_tag = self.program.types.tagItem(rhs, entry.position);
+                if (!try self.payloadsCompatible(left_tag.payloads, right_tag.payloads)) continue;
+                try payload_pairs.append(self.allocator, .{ .lhs = left_tag.payloads, .rhs = right_tag.payloads });
+                right_paired[entry.position] = true;
+                break true;
+            } else false;
+            if (!paired) left_unpaired += 1;
         }
 
         // Two rows with no tag in common still join: a procedure shared by
         // specializations whose rows differ only in tag names relates each
-        // caller's row to one result, and both callers then carry the union
-        // (design.md "Row Joins").
+        // caller's row to one result, and both callers then carry the union.
 
         // The right row already holds every left tag: the merge is the right
         // row itself.
-        if (every_left_in_right) return rhs;
+        if (left_unpaired == 0) return rhs;
 
         var merged = std.ArrayList(Type.Tag).empty;
         defer merged.deinit(self.allocator);
-        var left_names = collections.DenseMapUnmanaged(Type.names.TagNameId, void).empty;
-        defer left_names.deinit(self.allocator);
-        try left_names.ensureTotalCapacity(self.allocator, @intCast(lhs.count()));
         for (0..lhs.count()) |left_index| {
-            const left_tag = self.program.types.tagItem(lhs, left_index);
-            try merged.append(self.allocator, left_tag);
-            try left_names.put(self.allocator, left_tag.name, {});
+            try merged.append(self.allocator, self.program.types.tagItem(lhs, left_index));
         }
         for (0..rhs.count()) |right_position| {
-            const right_tag = self.program.types.tagItem(rhs, right_position);
-            if (left_names.contains(right_tag.name)) continue;
-            try merged.append(self.allocator, right_tag);
+            if (right_paired[right_position]) continue;
+            try merged.append(self.allocator, self.program.types.tagItem(rhs, right_position));
         }
         // Every right tag already sits in the left row: the merge is the
         // left row itself.
@@ -5364,6 +5511,56 @@ test "lambda solved return boundaries join rows and propagate callable payloads"
     try solver.unify(source_cycle, target_cycle);
     try std.testing.expectEqual(program.types.rootCompressed(source_cycle), program.types.rootCompressed(target_cycle));
     try std.testing.expectEqual(@as(usize, 2), (try solver.shapeContent(source_cycle)).tag_union.count());
+}
+
+test "lambda solved row joins keep one label at two payload types as two variants" {
+    // design.md "Row Joins": one value's row joined with two rows that name a
+    // tag at two payload types holds both variants of that label, and the two
+    // payload records stay their own types.
+    const allocator = std.testing.allocator;
+    var lifted = emptyLiftedProgramForTest(allocator);
+    const shared_name = try lifted.names.internTagLabel("Shared");
+    const conflict_name = try lifted.names.internTagLabel("Conflict");
+    const a_field = try lifted.names.internRecordFieldLabel("a");
+    const b_field = try lifted.names.internRecordFieldLabel("b");
+    var program = Ast.Program.init(allocator, lifted);
+    defer program.deinit();
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+
+    const u64_ty = try program.types.add(.{ .primitive = .u64 });
+    const str_ty = try program.types.add(.{ .primitive = .str });
+    const a_record = try program.types.add(.{ .record = try program.types.addFields(&.{
+        .{ .name = a_field, .ty = u64_ty, .default = null },
+    }) });
+    const b_record = try program.types.add(.{ .record = try program.types.addFields(&.{
+        .{ .name = b_field, .ty = str_ty, .default = null },
+    }) });
+    const shared = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+        .{ .name = shared_name, .checked_name = shared_name, .payloads = .empty() },
+    }) });
+    const a_row = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+        .{ .name = conflict_name, .checked_name = conflict_name, .payloads = try program.types.addSpan(&.{a_record}) },
+        .{ .name = shared_name, .checked_name = shared_name, .payloads = .empty() },
+    }) });
+    const b_row = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+        .{ .name = conflict_name, .checked_name = conflict_name, .payloads = try program.types.addSpan(&.{b_record}) },
+        .{ .name = shared_name, .checked_name = shared_name, .payloads = .empty() },
+    }) });
+
+    try solver.unify(shared, a_row);
+    try solver.unify(shared, b_row);
+    try std.testing.expectEqual(program.types.rootCompressed(a_row), program.types.rootCompressed(b_row));
+    const joined = (try solver.shapeContent(shared)).tag_union;
+    try std.testing.expectEqual(@as(usize, 3), joined.count());
+    var conflicts: usize = 0;
+    for (0..joined.count()) |index| {
+        if (program.types.tagItem(joined, index).name == conflict_name) conflicts += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), conflicts);
+    try std.testing.expect(program.types.rootCompressed(a_record) != program.types.rootCompressed(b_record));
+    try std.testing.expect(program.types.rootContent(a_record) == .record);
+    try std.testing.expect(program.types.rootContent(b_record) == .record);
 }
 
 test "lambda solved row joins reach every row of a value" {

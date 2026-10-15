@@ -140,7 +140,7 @@ pub const OccId = enum(u32) {
 /// tupleItemCount(pat) u32
 /// tupleItem(pat, ty, i) LowerError!SubPat
 /// nominalInner(pat, ty) LowerError!SubPat                 // backing pattern + type
-/// tagVariant(pat, ty) u32
+/// tagVariant(pat, ty) LowerError!u32
 /// tagPayloadCount(pat) u32
 /// tagPayload(pat, ty, i) LowerError!SubPat
 /// tagVariantCount(ty) ?u32                                // null: unknown, never exhaustive
@@ -528,7 +528,7 @@ pub fn Compiler(comptime Ctx: type) type {
 
                 switch (kind) {
                     .tag => {
-                        const variant = self.ctx.tagVariant(col.pat, col.ty);
+                        const variant = try self.ctx.tagVariant(col.pat, col.ty);
                         const count = self.ctx.tagPayloadCount(col.pat);
                         const single = count == 1;
                         var i: u32 = 0;
@@ -1937,7 +1937,7 @@ const MockCtx = struct {
         return self.get(pat).nominal;
     }
 
-    pub fn tagVariant(self: MockCtx, pat: u32, _: u32) u32 {
+    pub fn tagVariant(self: MockCtx, pat: u32, _: u32) LowerError!u32 {
         return self.get(pat).tag.variant;
     }
 

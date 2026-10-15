@@ -9359,14 +9359,28 @@ crossing into it crosses Boxy's ordinary concrete-to-dynamic boundary, as every
 value stored at a dynamic representation does. A `where` result opened per use
 is such an open row, so a dispatch edge needs no seed of its own.
 
-**One value, two rows that disagree.** A join needs the rows it unites to
-agree on every tag they share, and a value has one representation. A
-top-level value is one stored constant, so its uses share one row and a use
-whose row disagrees with the others is a type mismatch (Value Rows: Uses
-Share One Row); the checker decides it, and lowering never meets two rows for
-one value that it cannot unite. A function's result does not have this
-problem either: Monotype specializes a template per request, so each caller's
-row joins its own specialization.
+**One label, two payload types.** A join unites rows that may name one tag
+at two payload types: a value of `[Shared]` forwarded into both
+`[Shared, Conflict({ a : U64 })]` and `[Shared, Conflict({ b : Str })]`
+puts both `Conflict`s in one row. The merge (`Solver.mergeTags`) pairs two
+same-label tags only when their payloads could unify without a structural
+conflict (`Solver.typesCompatible`, which asks ahead of time exactly what
+`unifyRoots` would raise an invariant on: a different kind of type, a
+different primitive, records with different fields, a different arity);
+otherwise both stay, as two variants of one label. That is sound because a
+label names one variant within any static type: a constructor or pattern is
+written at one static type, which lists the label once, and its own payload
+types pick the variant (`Solver.tagPayloadsSpanFor`,
+`Lowerer.tagIndexForPayloads`); a value carries the variant it was built with
+and flows only to positions whose static type lists that variant, so no
+reader ever sees the other one. A `match` is exhaustive once every LABEL of
+its scrutinee's row has an arm (`tagVariantCount`), since the other variant
+of a repeated label cannot reach it. Variants of one label are ordered by the
+digests of their payload types when the row is lowered
+(`Lowerer.orderRepeatedLabels`), so two rows holding the same variants are one
+Lambda Mono type. `.boxy` does not do this yet: its planner leaves such a set
+without a representative, and a value crossing between two of its members
+crosses Boxy's representation boundary.
 
 **The host boundary.** A host is compiled before the Roc program against the
 rows its declarations wrote, so a host row cannot join a wider one. Every tag
