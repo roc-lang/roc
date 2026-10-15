@@ -17738,7 +17738,7 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!ExprStep {
         const rep = self.parent.plan.representations.items[@backingInt(rep_id)];
         return switch (rep.kind) {
-            .tag_union => try self.beginPlannedTagVariant(target, rep_id, self.tagVariant(rep, name), args, next),
+            .tag_union => try self.beginPlannedTagVariant(target, rep_id, try self.tagVariantForExprArgs(rep, name, args), args, next),
             .bool_tag_union => exprDone(try self.lowerBoolTagInto(target, name, args, next)),
             .dynamic => try self.beginDynamicTag(target, rep_id, name, args, next),
             .alias => .{ .tail = .{ .tag_rep = .{
@@ -22711,11 +22711,14 @@ const ProcBodyBuilder = struct {
             .bool_tag_union => exprDone(try self.restoreConstBoolTagInto(target, tag, next)),
             .tag_union => blk: {
                 const checked_tag = constTagPayloadTypes(type_module, checked_ty, tag.tag_name);
+                const arg_types = try self.parent.allocator.alloc(Plan.CheckedTypeIdentity, checked_tag.payload_tys.len);
+                defer self.parent.allocator.free(arg_types);
+                for (checked_tag.payload_tys, arg_types) |payload_ty, *arg_type| arg_type.* = .{ .module = type_module.key, .ty = payload_ty };
                 break :blk try self.beginRestoreConstPlannedTagPayloads(
                     target,
                     store_module,
                     type_module,
-                    self.tagVariantForModule(rep, type_module, checked_tag.name),
+                    try self.tagVariantForArgs(rep, type_module, checked_tag.name, arg_types),
                     tag,
                     checked_tag.payload_tys,
                     next,
@@ -29540,7 +29543,7 @@ const ProcBodyBuilder = struct {
                 }
             },
             .tag_union => {
-                const variant = self.tagVariant(pattern_rep, name);
+                const variant = try self.tagVariantForPatternArgs(pattern_rep, name, args);
                 try self.validateTagPatternPayloads(variant.name, variant.payloads, args);
             },
             .dynamic => try self.validateDynamicTagPatternPayloads(pattern_tag_rep, name, args),
@@ -29580,7 +29583,7 @@ const ProcBodyBuilder = struct {
                 },
                 .tag_union => {
                     const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
-                    const variant = self.tagVariant(rep, name);
+                    const variant = try self.tagVariantForPatternArgs(rep, name, args);
                     try self.validateTagPatternPayloads(variant.name, variant.payloads, args);
                     try state.actions.append(allocator, .{ .tag_discriminant = .{ .source = source, .variant_index = variant.index, .single_variant = variants.len == 1, .context = context } });
                     try self.pushTagPayloadPatterns(state, rep_id, rep_id, name, variant.index, args, source, context);
@@ -29634,15 +29637,12 @@ const ProcBodyBuilder = struct {
 
         const source_tag_rep = self.tagVariantRepForBoundary(pattern_tag_rep) orelse
             boxyLowerInvariant("boxy tag payload pattern schema had no tag representation");
-        const source_payloads = if (variant_index == null)
-            try self.dynamicTagPayloadsForName(source_tag_rep, tag_name)
+        // The tag action already chose the variant (`tagVariantForPatternArgs`),
+        // which a repeated label needs; its payloads are that variant's.
+        const source_payloads = if (variant_index) |index|
+            self.parent.plan.childSlice(self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@backingInt(source_tag_rep)].tag_variants)[index].payloads)
         else
-            self.parent.plan.childSlice(
-                self.tagVariant(
-                    self.parent.plan.representations.items[@backingInt(source_tag_rep)],
-                    tag_name,
-                ).payloads,
-            );
+            try self.dynamicTagPayloadsForName(source_tag_rep, tag_name);
         if (source_payloads.len != args.len) {
             boxyLowerInvariant("boxy tag match payload count disagreed with planned source representation");
         }
@@ -42005,7 +42005,7 @@ const ProcBodyBuilder = struct {
                     if (variants.len != 1) {
                         boxyLowerInvariant("refutable tag pattern reached boxy irrefutable binder lowering");
                     }
-                    const variant = self.tagVariant(rep, name);
+                    const variant = try self.tagVariantForPatternArgs(rep, name, args);
                     if (variant.index != 0) {
                         boxyLowerInvariant("single-variant tag pattern had a nonzero variant index");
                     }
@@ -42053,7 +42053,7 @@ const ProcBodyBuilder = struct {
                     const rep = self.parent.plan.representations.items[@backingInt(tag_rep)];
                     const payloads = switch (rep.kind) {
                         .dynamic => try self.dynamicTagPayloadsForName(tag_rep, tag.name),
-                        .tag_union => self.parent.plan.childSlice(self.tagVariant(rep, tag.name).payloads),
+                        .tag_union => self.parent.plan.childSlice((try self.tagVariantForPatternArgs(rep, tag.name, tag.args)).payloads),
                         .bool_tag_union => &.{},
                         .in_progress, .primitive, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => boxyLowerInvariant("boxy tag pattern binder source was not a tag representation"),
                     };
@@ -42145,7 +42145,7 @@ const ProcBodyBuilder = struct {
                         },
                         .tag_union => {
                             const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
-                            const payloads = self.parent.plan.childSlice(self.tagVariant(rep, tag.name).payloads);
+                            const payloads = self.parent.plan.childSlice((try self.tagVariantForPatternArgs(rep, tag.name, tag.args)).payloads);
                             if (payloads.len != tag.args.len) {
                                 boxyLowerInvariant("tag match pattern payload count disagreed during miss analysis");
                             }
@@ -43019,14 +43019,6 @@ const ProcBodyBuilder = struct {
         }
     }
 
-    fn tagVariant(
-        self: *const ProcBodyBuilder,
-        rep: Plan.TypeRepresentation,
-        name: names.TagNameId,
-    ) TagVariantLookup {
-        return self.tagVariantForModule(rep, self.module, name);
-    }
-
     fn tagVariantForModule(
         self: *const ProcBodyBuilder,
         rep: Plan.TypeRepresentation,
@@ -43034,19 +43026,92 @@ const ProcBodyBuilder = struct {
         name: names.TagNameId,
     ) TagVariantLookup {
         const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
+        var found: ?TagVariantLookup = null;
         for (variants, 0..) |variant, index| {
             if (!self.tagVariantNameMatches(variant, requested_module, name)) continue;
             if (index > std.math.maxInt(u32)) {
                 boxyLowerInvariant("tag variant index exceeded LIR variant range");
             }
-            return .{
+            if (found != null) boxyLowerInvariant("a repeated tag label was looked up without the payload types that select its variant");
+            found = .{
                 .index = @intCast(index),
                 .name = variant.name,
                 .name_module = variant.name_module,
                 .payloads = variant.payloads,
             };
         }
-        boxyLowerInvariant("tag expression referenced a variant outside its checked type representation");
+        return found orelse boxyLowerInvariant("tag expression referenced a variant outside its checked type representation");
+    }
+
+    /// The variant of `name` in `rep` that a constructor or pattern with
+    /// payload types `arg_types` belongs to. A joined row may hold one label at
+    /// two structurally incompatible payload types (design.md "Row Joins");
+    /// the constructor or pattern is written at one static type, which lists
+    /// the label once, so its own payload types select the variant whose
+    /// planned payloads they are compatible with.
+    fn tagVariantForArgs(
+        self: *const ProcBodyBuilder,
+        rep: Plan.TypeRepresentation,
+        requested_module: Plan.ModuleView,
+        name: names.TagNameId,
+        arg_types: []const Plan.CheckedTypeIdentity,
+    ) Allocator.Error!TagVariantLookup {
+        const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
+        var candidates: u32 = 0;
+        for (variants) |variant| {
+            if (self.tagVariantNameMatches(variant, requested_module, name)) candidates += 1;
+        }
+        if (candidates <= 1) return self.tagVariantForModule(rep, requested_module, name);
+        var found: ?TagVariantLookup = null;
+        for (variants, 0..) |variant, index| {
+            if (!self.tagVariantNameMatches(variant, requested_module, name)) continue;
+            const payloads = self.parent.plan.childSlice(variant.payloads);
+            if (payloads.len != arg_types.len) continue;
+            const compatible = for (payloads, arg_types) |payload, arg_type| {
+                const payload_type = self.parent.plan.representations.items[@backingInt(payload.rep)].source_type;
+                if (!try Plan.checkedTypesStructurallyCompatible(self.parent.allocator, LowererModules{ .modules = self.parent.modules }, payload_type, arg_type)) break false;
+            } else true;
+            if (!compatible) continue;
+            if (found != null) boxyLowerInvariant("two variants of one tag label were both compatible with a constructor's payload types");
+            found = .{
+                .index = @intCast(index),
+                .name = variant.name,
+                .name_module = variant.name_module,
+                .payloads = variant.payloads,
+            };
+        }
+        return found orelse boxyLowerInvariant("no variant of a repeated tag label was compatible with a constructor's payload types");
+    }
+
+    const LowererModules = struct {
+        modules: Common.CheckedModules,
+        pub fn view(self: LowererModules, module: checked.ModuleId) Plan.ModuleView {
+            return Plan.moduleViewForKey(self.modules, module);
+        }
+    };
+
+    fn exprArgTypes(self: *const ProcBodyBuilder, args: []const checked.CheckedExprId) Allocator.Error![]Plan.CheckedTypeIdentity {
+        const arg_types = try self.parent.allocator.alloc(Plan.CheckedTypeIdentity, args.len);
+        for (args, arg_types) |arg, *ty| ty.* = .{ .module = self.module.key, .ty = self.module.checked_bodies.expr(arg).ty };
+        return arg_types;
+    }
+
+    fn patternArgTypes(self: *const ProcBodyBuilder, args: []const checked.CheckedPatternId) Allocator.Error![]Plan.CheckedTypeIdentity {
+        const arg_types = try self.parent.allocator.alloc(Plan.CheckedTypeIdentity, args.len);
+        for (args, arg_types) |arg, *ty| ty.* = .{ .module = self.module.key, .ty = self.module.checked_bodies.pattern(arg).ty };
+        return arg_types;
+    }
+
+    fn tagVariantForExprArgs(self: *const ProcBodyBuilder, rep: Plan.TypeRepresentation, name: names.TagNameId, args: []const checked.CheckedExprId) Allocator.Error!TagVariantLookup {
+        const arg_types = try self.exprArgTypes(args);
+        defer self.parent.allocator.free(arg_types);
+        return try self.tagVariantForArgs(rep, self.module, name, arg_types);
+    }
+
+    fn tagVariantForPatternArgs(self: *const ProcBodyBuilder, rep: Plan.TypeRepresentation, name: names.TagNameId, args: []const checked.CheckedPatternId) Allocator.Error!TagVariantLookup {
+        const arg_types = try self.patternArgTypes(args);
+        defer self.parent.allocator.free(arg_types);
+        return try self.tagVariantForArgs(rep, self.module, name, arg_types);
     }
 
     fn tagVariantNameMatches(

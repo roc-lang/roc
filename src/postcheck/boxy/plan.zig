@@ -2231,6 +2231,83 @@ pub const ModuleView = struct {
     module_env: ?*const can.ModuleEnv = null,
 };
 
+/// A type variable, or a type checking left unresolved, constrains no shape.
+fn structurallyUnconstrained(payload: checked.CheckedTypePayload) bool {
+    return switch (payload) {
+        .flex, .rigid, .pending, .err => true,
+        .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
+    };
+}
+
+/// Whether two checked types could be one runtime type: the same kind of type
+/// at every position, with the same record fields, tuple and function
+/// arities, nominal declarations and primitives. A type variable is compatible
+/// with anything, and so is a tag row, since rows join (design.md "Row
+/// Joins"). One label of two joined rows is one variant exactly when its
+/// payloads are compatible; otherwise the joined row holds it twice. `modules`
+/// provides `view(module_id) ModuleView`.
+pub fn checkedTypesStructurallyCompatible(
+    allocator: Allocator,
+    modules: anytype,
+    a: CheckedTypeIdentity,
+    b: CheckedTypeIdentity,
+) Allocator.Error!bool {
+    var work = std.ArrayList([2]CheckedTypeIdentity).empty;
+    defer work.deinit(allocator);
+    var seen = std.AutoHashMap([2]CheckedTypeIdentity, void).init(allocator);
+    defer seen.deinit();
+    try work.append(allocator, .{ a, b });
+    while (work.pop()) |pair| {
+        if (typeRefEql(pair[0], pair[1])) continue;
+        if ((try seen.getOrPut(pair)).found_existing) continue;
+        const view_a = modules.view(pair[0].module);
+        const view_b = modules.view(pair[1].module);
+        const left = Builder.resolvedRowJoinPayload(view_a, pair[0].ty);
+        const right = Builder.resolvedRowJoinPayload(view_b, pair[1].ty);
+        if (structurallyUnconstrained(left.payload) or structurallyUnconstrained(right.payload)) continue;
+        switch (left.payload) {
+            .flex, .rigid, .pending, .err, .alias => unreachable,
+            .tag_union, .empty_tag_union => if (right.payload != .tag_union and right.payload != .empty_tag_union) return false,
+            .empty_record => if (right.payload != .empty_record) return false,
+            .record => |record_a| {
+                if (right.payload != .record) return false;
+                const record_b = right.payload.record;
+                if (record_a.fields.len != record_b.fields.len) return false;
+                const names_a = view_a.canonical_names orelse boxyPlanInvariant("compared record had no resolved field labels");
+                const names_b = view_b.canonical_names orelse boxyPlanInvariant("compared record had no resolved field labels");
+                for (record_a.fields, record_b.fields) |field_a, field_b| {
+                    if (!std.mem.eql(u8, names_a.recordFieldLabelText(field_a.name), names_b.recordFieldLabelText(field_b.name))) return false;
+                    try work.append(allocator, .{ typeRef(view_a, field_a.ty), typeRef(view_b, field_b.ty) });
+                }
+            },
+            .tuple => |items_a| {
+                if (right.payload != .tuple) return false;
+                const items_b = right.payload.tuple;
+                if (items_a.len != items_b.len) return false;
+                for (items_a, items_b) |item_a, item_b| try work.append(allocator, .{ typeRef(view_a, item_a), typeRef(view_b, item_b) });
+            },
+            .function => |function_a| {
+                if (right.payload != .function) return false;
+                const function_b = right.payload.function;
+                if (function_a.args.len != function_b.args.len) return false;
+                for (function_a.args, function_b.args) |arg_a, arg_b| try work.append(allocator, .{ typeRef(view_a, arg_a), typeRef(view_b, arg_b) });
+                try work.append(allocator, .{ typeRef(view_a, function_a.ret), typeRef(view_b, function_b.ret) });
+            },
+            .nominal => |nominal_a| {
+                if (right.payload != .nominal) return false;
+                const nominal_b = right.payload.nominal;
+                const names_a = view_a.canonical_names orelse boxyPlanInvariant("compared nominal had no resolved names");
+                const names_b = view_b.canonical_names orelse boxyPlanInvariant("compared nominal had no resolved names");
+                if (nominal_a.source_decl != nominal_b.source_decl) return false;
+                if (!std.mem.eql(u8, names_a.moduleIdentityBytes(nominal_a.origin_module), names_b.moduleIdentityBytes(nominal_b.origin_module))) return false;
+                if (nominal_a.args.len != nominal_b.args.len) return false;
+                for (nominal_a.args, nominal_b.args) |arg_a, arg_b| try work.append(allocator, .{ typeRef(view_a, arg_a), typeRef(view_b, arg_b) });
+            },
+        }
+    }
+    return true;
+}
+
 /// The view of checked module `key` among the modules lowering received.
 pub fn moduleViewForKey(modules: Common.CheckedModules, key: checked.ModuleId) ModuleView {
     if (moduleKeyEqual(modules.root.module.key, key)) return moduleViewFromCheckedModule(modules.root.module);
@@ -9787,15 +9864,13 @@ const Builder = struct {
                 _ = try self.collectRowJoinTags(view_a, resolved_a.ty, &tags_a);
                 _ = try self.collectRowJoinTags(view_b, resolved_b.ty, &tags_b);
                 for (tags_a.items) |tag_a| {
-                    const text_a = rowJoinTagText(tag_a);
                     for (tags_b.items) |tag_b| {
-                        if (!std.mem.eql(u8, text_a, rowJoinTagText(tag_b))) continue;
+                        // A label whose payloads are structurally incompatible
+                        // is a second variant of the joined row (design.md "Row
+                        // Joins"), and its payloads join nothing.
+                        if (!try self.rowJoinTagsSameVariant(tag_a, tag_b)) continue;
                         const args_a = tag_a.tag.argsSlice(tag_a.view.checked_types);
                         const args_b = tag_b.tag.argsSlice(tag_b.view.checked_types);
-                        // One label at two arities makes the set incompatible
-                        // (`rowJoinSetCompatible`); its members keep their own
-                        // representations.
-                        if (args_a.len != args_b.len) break;
                         for (args_a, args_b) |arg_a, arg_b| try work.append(self.allocator, .{ typeRef(tag_a.view, arg_a), typeRef(tag_b.view, arg_b) });
                         break;
                     }
@@ -9834,6 +9909,26 @@ const Builder = struct {
         const names = tag.view.canonical_names orelse boxyPlanInvariant("joined tag row had no resolved tag labels");
         return names.tagLabelText(tag.tag.name);
     }
+
+    /// Whether two tags of joined rows are one variant: the same label and
+    /// structurally compatible payloads (`checkedTypesStructurallyCompatible`).
+    fn rowJoinTagsSameVariant(self: *Builder, a: RowJoinTag, b: RowJoinTag) Allocator.Error!bool {
+        if (!std.mem.eql(u8, rowJoinTagText(a), rowJoinTagText(b))) return false;
+        const args_a = a.tag.argsSlice(a.view.checked_types);
+        const args_b = b.tag.argsSlice(b.view.checked_types);
+        if (args_a.len != args_b.len) return false;
+        for (args_a, args_b) |arg_a, arg_b| {
+            if (!try checkedTypesStructurallyCompatible(self.allocator, BuilderModules{ .builder = self }, typeRef(a.view, arg_a), typeRef(b.view, arg_b))) return false;
+        }
+        return true;
+    }
+
+    const BuilderModules = struct {
+        builder: *Builder,
+        pub fn view(self: BuilderModules, module: checked.ModuleId) ModuleView {
+            return self.builder.moduleForId(module);
+        }
+    };
 
     /// Whether a type is ground: no type variable and no open tag row
     /// anywhere in it. Only ground members share a join set's representation;
@@ -9970,12 +10065,10 @@ const Builder = struct {
                     defer tags.deinit(self.allocator);
                     _ = try self.collectRowJoinTags(view, resolved.ty, &tags);
                     for (tags.items) |tag| {
-                        const text = rowJoinTagText(tag);
                         for (first_tags.items) |first_tag| {
-                            if (!std.mem.eql(u8, text, rowJoinTagText(first_tag))) continue;
+                            if (!try self.rowJoinTagsSameVariant(tag, first_tag)) continue;
                             const args = tag.tag.argsSlice(tag.view.checked_types);
                             const first_args = first_tag.tag.argsSlice(first_tag.view.checked_types);
-                            if (args.len != first_args.len) return false;
                             for (args, first_args) |arg, first_arg| {
                                 if (!try self.rowJoinPairCompatible(typeRef(tag.view, arg), typeRef(first_tag.view, first_arg), groups, compatibility)) return false;
                             }
@@ -10093,18 +10186,30 @@ const Builder = struct {
                 .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record => boxyPlanInvariant("a tag row's join set held a type that is not a tag row"),
             }
         }
+        // One variant per label and structurally compatible payloads; one
+        // label at incompatible payloads is two variants (design.md "Row
+        // Joins"), ordered by label and then by their first payloads'
+        // identities, so the order depends on the program alone.
         var unique = std.ArrayList(RowJoinTag).empty;
         defer unique.deinit(self.allocator);
         candidates: for (tags.items) |candidate| {
-            const text = rowJoinTagText(candidate);
             for (unique.items) |existing| {
-                if (std.mem.eql(u8, text, rowJoinTagText(existing))) continue :candidates;
+                if (try self.rowJoinTagsSameVariant(candidate, existing)) continue :candidates;
             }
             try unique.append(self.allocator, candidate);
         }
         std.mem.sort(RowJoinTag, unique.items, {}, struct {
             fn lessThan(_: void, a: RowJoinTag, b: RowJoinTag) bool {
-                return std.mem.lessThan(u8, rowJoinTagText(a), rowJoinTagText(b));
+                switch (std.mem.order(u8, rowJoinTagText(a), rowJoinTagText(b))) {
+                    .lt => return true,
+                    .gt => return false,
+                    .eq => {},
+                }
+                const args_a = a.tag.argsSlice(a.view.checked_types);
+                const args_b = b.tag.argsSlice(b.view.checked_types);
+                if (args_a.len != args_b.len) return args_a.len < args_b.len;
+                if (args_a.len == 0) return false;
+                return rowJoinIdentityLessThan({}, typeRef(a.view, args_a[0]), typeRef(b.view, args_b[0]));
             }
         }.lessThan);
         var roles = std.ArrayList(ChildRole).empty;
@@ -15069,6 +15174,15 @@ const Builder = struct {
         const stored_rep = self.plan.representations.items[@backingInt(stored_rep_id)];
         // An erased stored value carries no structure below this position.
         if (stored_rep.kind == .dynamic) return;
+        // An alias names its backing's representation, and a stored value
+        // records no alias layers, so either side's alias is looked through
+        // to the structure the other side holds.
+        if (checked_rep.kind == .alias and stored_rep.kind != .alias) {
+            return try self.collectStoredRepSubstitutions(self.repQuery().requiredSingleChild(checked_rep_id, .alias_backing).rep, stored_rep_id, out, seen);
+        }
+        if (stored_rep.kind == .alias and checked_rep.kind != .alias) {
+            return try self.collectStoredRepSubstitutions(checked_rep_id, self.repQuery().requiredSingleChild(stored_rep_id, .alias_backing).rep, out, seen);
+        }
         for (0..checked_rep.children.len) |index| {
             const child = self.plan.children.items[checked_rep.children.start + index];
             if (self.plan.childIsSharedBackingTemplate(checked_rep_id, child)) continue;

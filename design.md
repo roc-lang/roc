@@ -9349,11 +9349,10 @@ representation, and a representative tag row's representation lists every
 member's tags (`planJoinedTagUnionRep`). Identities join through their
 aliases, since an alias names its backing's representation. Checked types are
 shared by structure, so a join set collects every flow of a type rather than
-one value's flows; a set whose ground members do not agree in shape—one tag
-label at two payload types or arities, or two kinds of type—has no one
-representation (`rowJoinSetCompatible`) and gets no representative: its
-members keep their own, and a value crossing between two of them crosses
-Boxy's representation boundary. An open row keeps Boxy's dynamic
+one value's flows; one tag label at two incompatible payload types is two
+variants of the joined row (see below), so the descent joins only compatible
+payloads and every set is one shape. `rowJoinSetCompatible` checks that each
+elected set agrees in shape before it gets a representative. An open row keeps Boxy's dynamic
 representation and connects the ground types on either side of it; a value
 crossing into it crosses Boxy's ordinary concrete-to-dynamic boundary, as every
 value stored at a dynamic representation does. A `where` result opened per use
@@ -9378,9 +9377,14 @@ its scrutinee's row has an arm (`tagVariantCount`), since the other variant
 of a repeated label cannot reach it. Variants of one label are ordered by the
 digests of their payload types when the row is lowered
 (`Lowerer.orderRepeatedLabels`), so two rows holding the same variants are one
-Lambda Mono type. `.boxy` does not do this yet: its planner leaves such a set
-without a representative, and a value crossing between two of its members
-crosses Boxy's representation boundary.
+Lambda Mono type. `.boxy` applies the same rule over checked types: two
+same-label tags of joined rows are one variant only when their payloads are
+structurally compatible (`checkedTypesStructurallyCompatible`, the planner's
+counterpart of `typesCompatible`), and only then are their payloads joined;
+the joined representation lists the other as a second variant, ordered after
+the first by its payload's identity; and the lowerer selects a constructor's,
+pattern's or restored constant's variant by its own checked payload types
+(`tagVariantForArgs`).
 
 **The host boundary.** A host is compiled before the Roc program against the
 rows its declarations wrote, so a host row cannot join a wider one. Every tag
