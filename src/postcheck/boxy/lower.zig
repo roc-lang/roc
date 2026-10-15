@@ -7287,6 +7287,20 @@ const ProcedureBuilder = struct {
         return dict;
     }
 
+    /// The identity of one of a literal conversion's compile-time slots. Boxy
+    /// procedures are program-local, so the code that reads a slot is too, and
+    /// the slot is named by its literal conversion and its role in the program.
+    fn literalSlotIdentity(module: [32]u8, index: u32, role: enum { failure, value }) [32]u8 {
+        var hasher = base.TypeDigestHasher.init();
+        hasher.update("roc.static-value.boxy-literal.v1");
+        hasher.update(&module);
+        var bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, &bytes, index, .little);
+        hasher.update(&bytes);
+        hasher.update(@tagName(role));
+        return hasher.finalResult();
+    }
+
     /// Build a literal conversion's accessor, the getter its dictionary
     /// exposes, and its initializer.
     fn buildLiteralAccessor(self: *ProcedureBuilder, index: u32, method_slot: u32) Allocator.Error!void {
@@ -7303,6 +7317,7 @@ const ProcedureBuilder = struct {
         const failure_struct = self.result.layouts.getLayout(failure_layout).getStruct().idx;
         const failure_slot: LIR.StaticDataId = @fromBackingInt(@intCast(self.result.static_data_values.items.len));
         try self.result.static_data_values.append(self.allocator, .{
+            .symbol_identity = literalSlotIdentity(site.source.module.bytes, index, .failure),
             .initializer = null,
             .layout_idx = failure_layout,
             .compile_time_root = .{ .module = site.source.module, .root = producer, .const_locator = null, .role = .{ .failure_message = .{
@@ -7314,6 +7329,7 @@ const ProcedureBuilder = struct {
         });
         const value_slot: LIR.StaticDataId = @fromBackingInt(@intCast(self.result.static_data_values.items.len));
         try self.result.static_data_values.append(self.allocator, .{
+            .symbol_identity = literalSlotIdentity(site.source.module.bytes, index, .value),
             .initializer = null,
             .layout_idx = ret_layout,
             .compile_time_root = .{ .module = site.source.module, .root = producer, .const_locator = null, .role = .{ .value = .{ .failure_slot = failure_slot, .plan = constant_plan } } },
@@ -7445,6 +7461,8 @@ const ProcedureBuilder = struct {
             .ret_layout = ret_layout,
             .plan = constant_plan,
             .value_slot = value_slot,
+            // The conversion's demand originates at its literal.
+            .demand = .{ .origin_region = expr.source_region, .origin_loc = origin.loc },
         };
     }
 
