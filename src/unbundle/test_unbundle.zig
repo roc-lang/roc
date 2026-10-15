@@ -872,17 +872,16 @@ test "download fetches an http://localhost URL over the family localhost resolve
 
 test "download routes plain HTTP to an exact loopback address and HTTPS by host" {
     const route = struct {
-        fn of(url: []const u8) !download.Route {
+        fn of(url: []const u8) (std.Uri.ParseError || download.DownloadError)!download.Route {
             return download.routeFor(try std.Uri.parse(url));
         }
     }.of;
 
     try testing.expectEqual(download.Route{ .loopback_http = .{ .ip4 = .loopback(8000) } }, try route("http://127.0.0.1:8000/x.tar.zst"));
     try testing.expectEqual(download.Route{ .loopback_http = .{ .ip6 = .loopback(80) } }, try route("http://[::1]/x.tar.zst"));
-    switch (try route("http://localhost:8000/x.tar.zst")) {
-        .loopback_http => |address| try testing.expectEqual(@as(u16, 8000), address.getPort()),
-        else => return error.TestUnexpectedResult,
-    }
+    const localhost_route = try route("http://localhost:8000/x.tar.zst");
+    if (localhost_route != .loopback_http) return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(u16, 8000), localhost_route.loopback_http.getPort());
 
     // HTTPS to this machine is never proxied; its host is left as written so
     // TLS checks the certificate against it.

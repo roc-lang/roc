@@ -47,7 +47,7 @@ pub const Route = union(enum) {
 /// Choose how to reach `uri`, which must already have passed `validateUrl`.
 pub fn routeFor(uri: std.Uri) DownloadError!Route {
     const host = switch (uri.host.?) {
-        inline else => |text| text,
+        .raw, .percent_encoded => |text| text,
     };
     const is_localhost = std.mem.eql(u8, host, "localhost");
     if (std.mem.eql(u8, uri.scheme, "https")) {
