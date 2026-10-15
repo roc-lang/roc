@@ -363,7 +363,10 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
         try tmp.dir.writeFile(io, .{ .sub_path = old_path, .data = incompatible });
         const dir_path = try tmp.dir.realPathFileAlloc(io, dir_name, allocator);
         defer allocator.free(dir_path);
-        try std.testing.checkAllAllocationFailures(allocator, Attempt.run, .{ dir_path, key, identity });
+        // In-place growth under the testing allocator depends on the heap's
+        // layout, so the failure check runs over an allocator that refuses it.
+        var deterministic = collections.DeterministicAllocator.init(allocator);
+        try std.testing.checkAllAllocationFailures(deterministic.allocator(), Attempt.run, .{ dir_path, key, identity });
         try std.testing.expectError(error.UnsupportedPackVersion, LoadedPacks.loadDir(allocator, io, dir_path));
     }
     try tmp.dir.createDirPath(io, "malformed");
@@ -452,8 +455,9 @@ test "object cache semantic offers select compatible relations in either order" 
             try std.testing.expectEqual(@as(u64, 7), packs.hits);
         }
     };
+    var deterministic = collections.DeterministicAllocator.init(std.testing.allocator);
     for ([_]bool{ false, true }) |reverse| {
-        try std.testing.checkAllAllocationFailures(std.testing.allocator, Attempt.run, .{reverse});
+        try std.testing.checkAllAllocationFailures(deterministic.allocator(), Attempt.run, .{reverse});
     }
 }
 

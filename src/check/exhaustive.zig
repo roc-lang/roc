@@ -4426,7 +4426,8 @@ fn resultAllocationFailureCase(gpa: Allocator) (Allocator.Error || Ident.Error |
 }
 
 test "nominal views result ownership cleans up every allocation failure" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, resultAllocationFailureCase, .{});
+    var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), resultAllocationFailureCase, .{});
 }
 
 fn inhabitedGraphAllocationCase(gpa: Allocator) (Allocator.Error || Ident.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
@@ -4619,7 +4620,8 @@ test "nominal views unconditional union witnesses prune alternatives under exact
 }
 
 test "nominal views unconditional union witnesses clean up every allocation failure" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, inhabitedWitnessCase, .{});
+    var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), inhabitedWitnessCase, .{});
 }
 
 test "nominal views inhabitedness modes preserve leaf and row-cycle policies" {
@@ -4884,7 +4886,8 @@ test "nominal views record rows preserve mode policies and graph-linear sharing"
 }
 
 test "nominal views record rows clean up every graph allocation failure" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, inhabitedRecordRowsCase, .{@as(usize, 2)});
+    var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), inhabitedRecordRowsCase, .{@as(usize, 2)});
 }
 
 fn recordTailBlockersCase(analysis_allocator: Allocator, depth: usize) (Allocator.Error || Ident.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {

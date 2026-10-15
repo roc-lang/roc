@@ -204,13 +204,14 @@ fn alloc(ctx: *anyopaque, n: usize, alignment: Alignment, ret_addr: usize) ?[*]u
             return cur_buf[adjusted_index..new_end_index].ptr;
         }
 
-        // The head chunk is full: chain a new, larger chunk and bump from
-        // there. The chunk is never grown in place, because whether a child
-        // allocator can extend a buffer depends on what happens to lie after
-        // it in memory, and the arena's sequence of child allocations must be
-        // a function of the allocation sequence alone, as the
-        // allocation-failure checks require.
-        cur_node = arena.createNode(cur_buf.len, n + ptr_align) orelse return null;
+        // The head chunk is full. Try to grow it in place; otherwise chain a
+        // new, larger chunk and bump from there.
+        const bigger_buf_size = @sizeOf(BufNode) + new_end_index;
+        if (arena.child_allocator.rawResize(fullSlice(cur_node), buf_node_align, bigger_buf_size, @returnAddress())) {
+            cur_node.capacity = bigger_buf_size;
+        } else {
+            cur_node = arena.createNode(cur_buf.len, n + ptr_align) orelse return null;
+        }
     }
 }
 

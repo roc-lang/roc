@@ -482,12 +482,7 @@ pub fn writeWithBody(
     namespace.update("roc.native.physical.pack.v1");
     namespace.update(bytes.items[body_offset..]);
     namespace.final(bytes.items[namespace_offset..][0..32]);
-    // Copied rather than shrunk in place: whether the child allocator can
-    // shrink a buffer in place is not a property of the encoding, and the
-    // allocation-failure checks require one allocation sequence per input.
-    const owned = try allocator.alloc(u8, bytes.items.len);
-    @memcpy(owned, bytes.items);
-    return owned;
+    return try bytes.toOwnedSlice(allocator);
 }
 
 /// Decode a pack. Every slice in the result is owned by the pack's arena.
@@ -1216,7 +1211,10 @@ test "pack index selects closures and decodes their artifacts alone" {
 }
 
 test "pack ownership survives input destruction and allocation failure" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, testOwnedPack, .{});
+    // In-place growth under the testing allocator depends on the heap's
+    // layout, so the failure check runs over an allocator that refuses it.
+    var deterministic = collections.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), testOwnedPack, .{});
 }
 
 test "pack ordinary code patches validate producer-declared spans" {
@@ -1676,7 +1674,8 @@ test "pack preserves relation summaries and rejects old records" {
         }
     };
     for ([_]?[32]u8{ null, @as([32]u8, @splat(0)), @as([32]u8, @splat(9)) }) |relation| {
-        try std.testing.checkAllAllocationFailures(std.testing.allocator, Attempt.run, .{relation});
+        var deterministic = collections.DeterministicAllocator.init(std.testing.allocator);
+        try std.testing.checkAllAllocationFailures(deterministic.allocator(), Attempt.run, .{relation});
     }
 }
 
