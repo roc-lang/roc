@@ -88,7 +88,7 @@ pub fn init(allocator: Allocator, set: *const ProcArtifact.Set) Allocator.Error!
 }
 
 /// The physical identity of a set no producer recorded one for.
-fn derivedPhysicalNamespace(set: *const ProcArtifact.Set) [32]u8 {
+pub fn derivedPhysicalNamespace(set: *const ProcArtifact.Set) [32]u8 {
     var physical = std.crypto.hash.Blake3.init(.{});
     physical.update("roc.native.physical.provision.v1");
     for (set.artifacts) |artifact| {

@@ -68,6 +68,13 @@ pub const Pack = struct {
     specs: []const SpecEntry,
     discovery: []const DiscoveryEntry = &.{},
     materializer_reads: []const MaterializerRead = &.{},
+    /// Each artifact's callees by index in the set: its set-local
+    /// references, the symbolic references resolved to a definition in the
+    /// pack, and the code targets of its data (`IndexArtifact.edges`).
+    edges: []const []const u32,
+    /// Whether each artifact has a reference that resolves to nothing in the
+    /// pack (`IndexArtifact.unresolved`).
+    unresolved: []const bool,
 
     pub fn deinit(self: *Pack) void {
         self.set.deinit();
@@ -526,11 +533,20 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
     const materializer_reads = offers.materializer_reads;
     if (reader.offset != bytes.len) return error.MalformedPack;
 
+    const edges = try arena_allocator.alloc([]const u32, artifact_count);
+    const unresolved = try arena_allocator.alloc(bool, artifact_count);
+    for (offers.artifacts, edges, unresolved) |entry, *artifact_edges, *flag| {
+        artifact_edges.* = entry.edges;
+        flag.* = entry.unresolved;
+    }
+
     return .{
         .set = .{ .arena = arena, .artifacts = artifacts, .physical_namespace = physical_namespace },
         .specs = specs,
         .discovery = discovery,
         .materializer_reads = materializer_reads,
+        .edges = edges,
+        .unresolved = unresolved,
     };
 }
 

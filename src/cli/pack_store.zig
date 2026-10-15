@@ -962,6 +962,8 @@ test "pack checked materializer projection uses actual pending inputs and surviv
                     }},
                 },
                 .specs = &.{},
+                .edges = &.{&.{}},
+                .unresolved = &.{false},
             };
             defer pending_pack.deinit();
             try projected.projectPendingMaterializers(&pending_pack, &.{.{
@@ -1028,7 +1030,9 @@ test "pack checked materializer demand is shared across recursive callers and re
     defer set.deinit();
     var closure = try backend.dev.ArtifactClosure.init(allocator, &set);
     defer closure.deinit();
-    const summaries = try packs.servingDemandSummaries(&closure, &.{}, &.{}, &.{});
+    const edges = try testEdges(allocator, &closure);
+    defer freeTestEdges(allocator, edges);
+    const summaries = try packs.servingDemandSummaries(set.artifacts, edges, &.{}, &.{}, &.{});
     defer allocator.free(summaries);
     try std.testing.expect(summaries[0].checked_roots.ptr == summaries[1].checked_roots.ptr);
     try std.testing.expectEqual(@as(usize, 1), summaries[0].checked_roots.len);
@@ -1210,8 +1214,13 @@ pub const LoadedPacks = struct {
     decode_ns: i128 = 0,
     index_ns: i128 = 0,
     /// Nanoseconds the compile-time cache spent capturing and encoding this
-    /// program's offers.
+    /// program's offers, and within that combining the retained artifacts,
+    /// planning the encoding, encoding each owner's pack, and staging it.
     capture_ns: i128 = 0,
+    capture_combine_ns: i128 = 0,
+    capture_plan_ns: i128 = 0,
+    capture_encode_ns: i128 = 0,
+    capture_stage_ns: i128 = 0,
     /// Artifacts handed to a splice so far.
     artifacts_served: u64 = 0,
     /// Set until `indexPacks` runs; lookups before that load the pending
@@ -1280,6 +1289,8 @@ pub const LoadedPacks = struct {
         artifact_list: std.ArrayListUnmanaged(backend.dev.ProcArtifact.Artifact) = .empty,
         definition_list: std.ArrayListUnmanaged(u32) = .empty,
         spec_list: std.ArrayListUnmanaged(PackFile.SpecEntry) = .empty,
+        edge_list: std.ArrayListUnmanaged([]const u32) = .empty,
+        unresolved_list: std.ArrayListUnmanaged(bool) = .empty,
     };
 
     /// What indexing has covered of one admitted pack, so a pack that grows
@@ -1500,7 +1511,14 @@ pub const LoadedPacks = struct {
         const a = pack.set.arena.allocator();
         try source.artifact_list.ensureUnusedCapacity(self.allocator, added.items.len);
         try source.definition_list.ensureUnusedCapacity(self.allocator, added.items.len);
+        try source.edge_list.ensureUnusedCapacity(self.allocator, added.items.len);
+        try source.unresolved_list.ensureUnusedCapacity(self.allocator, added.items.len);
         for (added.items) |member| {
+            const table_entry = offers.artifacts[member];
+            const callees = try a.alloc(u32, table_entry.edges.len);
+            for (table_entry.edges, callees) |edge, *callee| callee.* = source.position.get(edge) orelse return error.MalformedPack;
+            source.edge_list.appendAssumeCapacity(callees);
+            source.unresolved_list.appendAssumeCapacity(table_entry.unresolved);
             var artifact = source.decoded.get(member) orelse unreachable;
             const refs = try a.dupe(backend.dev.ProcArtifact.Reference, artifact.refs);
             for (refs) |*ref| ref.target = source.position.get(ref.target) orelse return error.MalformedPack;
@@ -1530,6 +1548,8 @@ pub const LoadedPacks = struct {
         pack.set.artifacts = source.artifact_list.items;
         pack.set.definitions = source.definition_list.items;
         pack.specs = source.spec_list.items;
+        pack.edges = source.edge_list.items;
+        pack.unresolved = source.unresolved_list.items;
         return added.items.len != 0;
     }
 
@@ -1549,6 +1569,8 @@ pub const LoadedPacks = struct {
             .specs = &.{},
             .discovery = source.index.offers.discovery,
             .materializer_reads = source.index.offers.materializer_reads,
+            .edges = &.{},
+            .unresolved = &.{},
         };
         try self.packs.ensureUnusedCapacity(self.allocator, 1);
         try self.pack_states.ensureUnusedCapacity(self.allocator, 1);
@@ -1813,21 +1835,17 @@ pub const LoadedPacks = struct {
                 };
                 for (artifact.source_events) |certificate| try self.pinAuthority(certificate);
             }
-            var closure = try backend.dev.ArtifactClosure.init(self.allocator, &pack.set);
-            defer closure.deinit();
-            const summaries = try self.servingDemandSummaries(&closure, pack.specs, pack.materializer_reads, state.summaries.items);
+            const summaries = try self.servingDemandSummaries(pack.set.artifacts, pack.edges, pack.specs, pack.materializer_reads, state.summaries.items);
             defer self.allocator.free(summaries);
             try self.projectPendingMaterializers(pack, summaries);
             const closed = try self.allocator.alloc(bool, pack.set.artifacts.len);
             defer self.allocator.free(closed);
             @memcpy(closed[0..from], state.valid.items);
-            for (pack.set.artifacts[from..], summaries[from..], closed[from..]) |artifact, summary, *admitted| {
-                admitted.* = normalNode(self, artifact) and summary.complete and literalMaterializersDeclared(artifact, summary.literal_reads);
-            }
-            try closure.propagateInvalid(closed);
+            try self.admitNewArtifacts(pack, from, summaries, closed);
             try state.summaries.appendSlice(self.allocator, summaries[from..]);
             try state.valid.appendSlice(self.allocator, closed[from..]);
             state.artifacts = pack.set.artifacts.len;
+            const physical_namespace = pack.set.physical_namespace orelse backend.dev.ArtifactClosure.derivedPhysicalNamespace(&pack.set);
             for (pack.specs) |spec| {
                 if (spec.artifact < from) continue;
                 const root = pack.set.artifacts[spec.artifact];
@@ -1873,7 +1891,7 @@ pub const LoadedPacks = struct {
                     .rc_ret_conditions = spec.rc_ret_conditions,
                 };
                 const physical: backend.dev.LirCodeGenMod.PhysicalProvision = .{
-                    .graph = closure.physical_namespace,
+                    .graph = physical_namespace,
                     .definition = pack.set.physicalDefinition(spec.artifact),
                 };
                 const artifact_entry = try self.artifacts.getOrPut(identity);
@@ -1899,6 +1917,72 @@ pub const LoadedPacks = struct {
         self.indexed_count = self.packs.items.len;
         try self.certifyLiteralOffers();
         @atomicStore(@TypeOf(self.state), &self.state, .ready, .release);
+    }
+
+    /// The strongly connected components of a set's artifacts from `from`
+    /// on, over the edges among them, numbered so that no edge leads into a
+    /// lower-numbered component. Artifacts before `from` are settled: nothing
+    /// they reach was added, so they take part only as settled callees.
+    /// Everything is allocated in `arena`.
+    fn newComponents(arena: Allocator, edges: []const []const u32, from: usize) Allocator.Error!collections.scc.Components {
+        const count = edges.len - from;
+        const succ_starts = try arena.alloc(u32, count + 1);
+        const pred_starts = try arena.alloc(u32, count + 1);
+        @memset(pred_starts, 0);
+        succ_starts[0] = 0;
+        for (edges[from..], 0..) |callees, node| {
+            var kept: u32 = 0;
+            for (callees) |callee| if (callee >= from) {
+                kept += 1;
+                pred_starts[callee - from + 1] += 1;
+            };
+            succ_starts[node + 1] = succ_starts[node] + kept;
+        }
+        for (1..count + 1) |node| pred_starts[node] += pred_starts[node - 1];
+        const succs = try arena.alloc(u32, succ_starts[count]);
+        const preds = try arena.alloc(u32, pred_starts[count]);
+        const cursors = try arena.dupe(u32, pred_starts[0..count]);
+        var next: usize = 0;
+        for (edges[from..], 0..) |callees, node| {
+            for (callees) |callee| if (callee >= from) {
+                succs[next] = @intCast(callee - from);
+                next += 1;
+                preds[cursors[callee - from]] = @intCast(node);
+                cursors[callee - from] += 1;
+            };
+        }
+        return collections.scc.compute(arena, succ_starts, succs, pred_starts, preds);
+    }
+
+    /// Decide `closed` for the artifacts of `pack` from `from` on: an
+    /// artifact's closure is admitted when every artifact in it is an
+    /// ordinary node with complete serving demand and declared literal
+    /// materializers, every reference resolves in the pack, and every
+    /// settled callee is admitted. The decision is made per component, from
+    /// the callees up.
+    fn admitNewArtifacts(self: *LoadedPacks, pack: *const PackFile.Pack, from: usize, summaries: []const ServingDemand, closed: []bool) Allocator.Error!void {
+        var scratch = collections.SingleThreadArena.init(self.allocator);
+        defer scratch.deinit();
+        const components = try newComponents(scratch.allocator(), pack.edges, from);
+        const count = components.count();
+        const component_valid = try scratch.allocator().alloc(bool, count);
+        var component = count;
+        while (component != 0) {
+            component -= 1;
+            var valid = true;
+            for (components.membersOf(component)) |member| {
+                const node = from + member;
+                const artifact = pack.set.artifacts[node];
+                if (pack.unresolved[node] or !normalNode(self, artifact) or !summaries[node].complete or !literalMaterializersDeclared(artifact, summaries[node].literal_reads)) valid = false;
+                for (pack.edges[node]) |callee| {
+                    if (callee < from) {
+                        if (!closed[callee]) valid = false;
+                    } else if (components.component_of[callee - from] != component and !component_valid[components.component_of[callee - from]]) valid = false;
+                }
+            }
+            component_valid[component] = valid;
+            for (components.membersOf(component)) |member| closed[from + member] = valid;
+        }
     }
 
     /// Semantic producer edges are additional to machine references. Propagate
@@ -2148,41 +2232,43 @@ pub const LoadedPacks = struct {
             std.mem.eql(u8, &recipe.producer_key, &producer.conversion_identity);
     }
 
-    /// The serving demand of every artifact of `closure`'s set. `cached`
-    /// holds the demand of the set's first artifacts, which an earlier
-    /// indexing settled; nothing they reach was added since, so their
-    /// components are taken as given and only later components are summed.
+    /// The serving demand of every artifact of a set: the checked roots and
+    /// literal reads its closure materializes, and whether that closure's
+    /// offers are complete. `settled` holds the demand of the set's first
+    /// artifacts, which an earlier indexing found; nothing they reach was
+    /// added since, so they take part only as settled callees and only the
+    /// later artifacts' components are summed.
     fn servingDemandSummaries(
         self: *LoadedPacks,
-        closure: *backend.dev.ArtifactClosure,
+        artifacts: []const backend.dev.ProcArtifact.Artifact,
+        edges: []const []const u32,
         specs: []const PackFile.SpecEntry,
         materializer_reads: []const PackFile.MaterializerRead,
-        cached: []const ServingDemand,
+        settled: []const ServingDemand,
     ) Allocator.Error![]const ServingDemand {
-        var components = try closure.components();
-        defer components.deinit();
-        const settled = try self.allocator.alloc(?ServingDemand, components.callees.len);
-        defer self.allocator.free(settled);
-        @memset(settled, null);
-        for (components.nodes[0..cached.len], cached) |component, summary| settled[component] = summary;
-        const sets = try self.allocator.alloc(std.AutoHashMap(Common.CheckedRootUse, void), components.callees.len);
+        const from = settled.len;
+        var scratch = collections.SingleThreadArena.init(self.allocator);
+        defer scratch.deinit();
+        const components = try newComponents(scratch.allocator(), edges, from);
+        const count = components.count();
+        const sets = try self.allocator.alloc(std.AutoHashMap(Common.CheckedRootUse, void), count);
         defer self.allocator.free(sets);
         for (sets) |*set| set.* = std.AutoHashMap(Common.CheckedRootUse, void).init(self.allocator);
         defer for (sets) |*set| set.deinit();
-        const literals = try self.allocator.alloc(std.AutoHashMap(LiteralReadKey, lir.Program.CachedLiteralRead), sets.len);
+        const literals = try self.allocator.alloc(std.AutoHashMap(LiteralReadKey, lir.Program.CachedLiteralRead), count);
         defer self.allocator.free(literals);
         for (literals) |*set| set.* = std.AutoHashMap(LiteralReadKey, lir.Program.CachedLiteralRead).init(self.allocator);
         defer for (literals) |*set| set.deinit();
-        const recipes = try self.allocator.alloc(std.AutoHashMap(LiteralProducer, [32]u8), sets.len);
+        const recipes = try self.allocator.alloc(std.AutoHashMap(LiteralProducer, [32]u8), count);
         defer self.allocator.free(recipes);
         for (recipes) |*set| set.* = std.AutoHashMap(LiteralProducer, [32]u8).init(self.allocator);
         defer for (recipes) |*set| set.deinit();
-        const complete = try self.allocator.alloc(bool, sets.len);
+        const complete = try self.allocator.alloc(bool, count);
         defer self.allocator.free(complete);
         @memset(complete, true);
         for (specs) |spec| {
-            const component = components.nodes[spec.artifact];
-            if (settled[component] != null) continue;
+            if (spec.artifact < from) continue;
+            const component = components.component_of[spec.artifact - from];
             const demand = spec.demand orelse {
                 complete[component] = false;
                 continue;
@@ -2190,8 +2276,7 @@ pub const LoadedPacks = struct {
             complete[component] = complete[component] and demand.permitsRetirement();
             for (demand.literal_reads) |read| try addLiteralRead(&literals[component], &recipes[component], &complete[component], read);
         }
-        for (closure.set.artifacts, components.nodes) |artifact, component| {
-            if (settled[component] != null) continue;
+        for (artifacts[from..], components.component_of) |artifact, component| {
             for (artifact.materializations) |dependency| {
                 const declaration = dependency.materialization;
                 switch (declaration.producer) {
@@ -2211,32 +2296,30 @@ pub const LoadedPacks = struct {
                 }
             }
         }
-        var component: usize = sets.len;
+        var component: usize = count;
         while (component != 0) {
             component -= 1;
-            if (settled[component] != null) continue;
-            for (components.callees[component]) |callee| {
-                if (settled[callee]) |summary| {
+            for (components.membersOf(component)) |member| for (edges[from + member]) |callee| {
+                if (callee < from) {
+                    const summary = settled[callee];
                     for (summary.checked_roots) |use| try sets[component].put(use, {});
                     complete[component] = complete[component] and summary.complete;
                     for (summary.literal_reads) |read| try addLiteralRead(&literals[component], &recipes[component], &complete[component], read);
                     continue;
                 }
-                var keys = sets[callee].keyIterator();
+                const callee_component = components.component_of[callee - from];
+                if (callee_component == component) continue;
+                var keys = sets[callee_component].keyIterator();
                 while (keys.next()) |use| try sets[component].put(use.*, {});
-                complete[component] = complete[component] and complete[callee];
-                var reads = literals[callee].valueIterator();
+                complete[component] = complete[component] and complete[callee_component];
+                var reads = literals[callee_component].valueIterator();
                 while (reads.next()) |read| try addLiteralRead(&literals[component], &recipes[component], &complete[component], read.*);
-            }
+            };
         }
-        const summaries = try self.allocator.alloc(ServingDemand, sets.len);
+        const summaries = try self.allocator.alloc(ServingDemand, count);
         defer self.allocator.free(summaries);
         const a = self.authority_arena.allocator();
-        for (sets, literals, complete, summaries, settled) |*set, *literal_set, is_complete, *summary, given| {
-            if (given) |value| {
-                summary.* = value;
-                continue;
-            }
+        for (sets, literals, complete, summaries) |*set, *literal_set, is_complete, *summary| {
             const uses = try a.alloc(Common.CheckedRootUse, set.count());
             var keys = set.keyIterator();
             for (uses) |*use| use.* = keys.next().?.*;
@@ -2266,8 +2349,9 @@ pub const LoadedPacks = struct {
             for (ordered, literal_reads) |read, *out| out.* = read.read;
             summary.* = .{ .checked_roots = uses, .literal_reads = literal_reads, .complete = is_complete };
         }
-        const nodes = try self.allocator.alloc(ServingDemand, closure.set.artifacts.len);
-        for (components.nodes, nodes) |id, *summary| summary.* = summaries[id];
+        const nodes = try self.allocator.alloc(ServingDemand, artifacts.len);
+        @memcpy(nodes[0..from], settled);
+        for (components.component_of, nodes[from..]) |id, *summary| summary.* = summaries[id];
         return nodes;
     }
 
@@ -2629,6 +2713,8 @@ pub const LoadedPacks = struct {
             source.artifact_list.deinit(self.allocator);
             source.definition_list.deinit(self.allocator);
             source.spec_list.deinit(self.allocator);
+            source.edge_list.deinit(self.allocator);
+            source.unresolved_list.deinit(self.allocator);
             source.arena.deinit();
         }
         self.store_packs.deinit(self.allocator);
@@ -2777,6 +2863,24 @@ const test_literal_representations = struct {
     const result: lir.Program.LiteralRepresentation = .{ .root = number, .types = &result_types };
 };
 
+/// The serving edges of a closure's set, as a pack records them.
+fn testEdges(allocator: Allocator, closure: *const backend.dev.ArtifactClosure) Allocator.Error![]const []const u32 {
+    const edges = try allocator.alloc([]const u32, closure.set.artifacts.len);
+    for (closure.set.artifacts, edges, 0..) |artifact, *callees, index| {
+        var list = std.ArrayList(u32).empty;
+        for (artifact.refs) |ref| try list.append(allocator, ref.target);
+        for (closure.symbolicTargets(@intCast(index))) |target| if (target) |node| try list.append(allocator, node);
+        for (closure.dataTargets(@intCast(index))) |target| if (target) |node| try list.append(allocator, node);
+        callees.* = try list.toOwnedSlice(allocator);
+    }
+    return edges;
+}
+
+fn freeTestEdges(allocator: Allocator, edges: []const []const u32) void {
+    for (edges) |callees| allocator.free(callees);
+    allocator.free(edges);
+}
+
 fn testLiteralRead(key: [32]u8, identity: [32]u8) lir.Program.CachedLiteralRead {
     return .{
         .recipe = .{
@@ -2911,6 +3015,8 @@ test "pack literal materializers require a recipe in their own serving closure" 
     defer set.deinit();
     var closure = try backend.dev.ArtifactClosure.init(allocator, &set);
     defer closure.deinit();
+    const edges = try testEdges(allocator, &closure);
+    defer freeTestEdges(allocator, edges);
     var spec = PackFile.SpecEntry{
         .key = @splat(45),
         .artifact = 2,
@@ -2923,12 +3029,12 @@ test "pack literal materializers require a recipe in their own serving closure" 
         .rc_ret_unique_fields = 0,
         .rc_ret_conditions = &.{},
     };
-    const unrelated = try packs.servingDemandSummaries(&closure, (&spec)[0..1], &.{}, &.{});
+    const unrelated = try packs.servingDemandSummaries(set.artifacts, edges, (&spec)[0..1], &.{}, &.{});
     defer allocator.free(unrelated);
     try std.testing.expect(!LoadedPacks.literalMaterializersDeclared(artifacts[1], unrelated[1].literal_reads));
     spec.artifact = 1;
     spec.demand.?.literal_reads = &.{ read, read, other_cause };
-    const matched = try packs.servingDemandSummaries(&closure, (&spec)[0..1], &.{}, &.{});
+    const matched = try packs.servingDemandSummaries(set.artifacts, edges, (&spec)[0..1], &.{}, &.{});
     defer allocator.free(matched);
     try std.testing.expect(LoadedPacks.literalMaterializersDeclared(artifacts[1], matched[1].literal_reads));
     try std.testing.expectEqual(@as(usize, 2), matched[0].literal_reads.len);
@@ -2936,7 +3042,7 @@ test "pack literal materializers require a recipe in their own serving closure" 
     var conflicting = read;
     conflicting.recipe.current_fn_key.bytes[0] ^= 1;
     spec.demand.?.literal_reads = &.{ read, conflicting };
-    const rejected = try packs.servingDemandSummaries(&closure, (&spec)[0..1], &.{}, &.{});
+    const rejected = try packs.servingDemandSummaries(set.artifacts, edges, (&spec)[0..1], &.{}, &.{});
     defer allocator.free(rejected);
     try std.testing.expect(!rejected[0].complete);
     try std.testing.expect(!rejected[1].complete);
@@ -2946,7 +3052,7 @@ test "pack literal materializers require a recipe in their own serving closure" 
     spec.artifact = 2;
     spec.demand.?.literal_reads = &.{};
     const recorded = [_]PackFile.MaterializerRead{.{ .wrapper_identity = declaration.wrapper_identity, .read = read }};
-    const carried = try packs.servingDemandSummaries(&closure, (&spec)[0..1], &recorded, &.{});
+    const carried = try packs.servingDemandSummaries(set.artifacts, edges, (&spec)[0..1], &recorded, &.{});
     defer allocator.free(carried);
     try std.testing.expect(LoadedPacks.literalMaterializersDeclared(artifacts[1], carried[1].literal_reads));
     try std.testing.expect(carried[0].complete and carried[1].complete);
@@ -2956,7 +3062,7 @@ test "pack literal materializers require a recipe in their own serving closure" 
     var other_producer = read;
     other_producer.recipe.producer_key[0] ^= 1;
     const mismatched = [_]PackFile.MaterializerRead{.{ .wrapper_identity = declaration.wrapper_identity, .read = other_producer }};
-    const refused = try packs.servingDemandSummaries(&closure, (&spec)[0..1], &mismatched, &.{});
+    const refused = try packs.servingDemandSummaries(set.artifacts, edges, (&spec)[0..1], &mismatched, &.{});
     defer allocator.free(refused);
     try std.testing.expect(!refused[1].complete);
     try std.testing.expect(!LoadedPacks.literalMaterializersDeclared(artifacts[1], refused[1].literal_reads));
