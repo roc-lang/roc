@@ -9397,7 +9397,7 @@ test "issue 12145: fuzzed layouts are stable" {
             "\n" ++
             "v1, f2! #\n" ++
             "] { p3: \"\", p4: \"\" }\n",
-        "package [] { p4 # c4\n" ++
+        "package [] { p4: \"\" # c4\n" ++
             "\n" ++
             ", }\n",
         "import T4 exposing [ # c8\n" ++
