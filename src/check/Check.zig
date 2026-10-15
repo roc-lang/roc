@@ -7121,6 +7121,15 @@ fn appendTypeMismatch(
     const unify_env = self.unifyEnv();
     const evidence = try unifier.snapshotMismatchEvidence(&unify_env);
     const leaf = try unifier.snapshotMismatchLeaf(&unify_env);
+    const host_fixed_row = try self.varReachesHostFixedRow(actual);
+    const host_fixed_origin: ?Ident.Idx = if (!host_fixed_row)
+        null
+    else if (diagnostic_ctx == .try_operator)
+        diagnostic_ctx.try_operator.hosted_origin
+    else if (self.exprAtVar(actual)) |expr_idx|
+        try self.tryHostedErrorOrigin(expr_idx, false)
+    else
+        null;
     const problem_idx = try self.problems.appendProblem(.{ .type_mismatch = .{
         .types = .{
             .expected_var = expected,
@@ -7131,9 +7140,19 @@ fn appendTypeMismatch(
         .context = diagnostic_ctx,
         .evidence = evidence,
         .leaf = leaf,
+        .host_fixed_row = host_fixed_row,
+        .host_fixed_origin = host_fixed_origin,
     } });
     try self.noteInterpolationTie(problem_idx);
     return problem_idx;
+}
+
+/// The expression whose type variable is `var_`, when it is one.
+fn exprAtVar(self: *const Self, var_: Var) ?CIR.Expr.Idx {
+    const raw = @backingInt(var_);
+    if (raw >= self.cir.store.nodes.len()) return null;
+    if (!isExprNodeTag(self.cir.store.nodes.get(@fromBackingInt(@intCast(raw))).tag)) return null;
+    return @fromBackingInt(@intCast(raw));
 }
 
 /// The context the relation just rejected reports under. A relation the
@@ -9207,8 +9226,8 @@ fn tryNominalIdent(self: *const Self) Instantiator.TryNominalIdent {
 /// resolving polarity vars (the deferred tag-union extensions of alias
 /// declaration bodies) per `polarity_behavior`, starting the polarity walk at
 /// `polarity` (the polarity of the annotation position being generated) and the
-/// adapter-reach walk at `reach` (where that position sits relative to the row
-/// the result-row widening adapter can re-tag).
+/// reach walk at `reach` (where that position sits relative to the rows a
+/// where-method use may widen).
 /// An instantiator over this module's store that recognizes its polarity and
 /// anonymous-extension idents; callers set the remaining behavior fields.
 fn baseInstantiator(self: *Self, rank: types_mod.Rank, rigid_behavior: Instantiator.RigidBehavior) Instantiator {
@@ -9601,7 +9620,7 @@ fn groundTypeHash(self: *Self, var_: Var) std.mem.Allocator.Error!?u64 {
             continue;
         }
         visit.value_ptr.* = @intCast(seen.count() - 1);
-        std.hash.autoHash(&hasher, @as(u8, @bitCast(resolved.desc.flags.copied())));
+        std.hash.autoHash(&hasher, @as(u16, @bitCast(resolved.desc.flags.copied())));
         std.hash.autoHash(&hasher, std.meta.activeTag(resolved.desc.content));
         switch (resolved.desc.content) {
             .flex, .rigid, .field_presence, .err => return null,
@@ -9680,7 +9699,7 @@ fn groundTypesIdentical(self: *Self, left: Var, right: Var) std.mem.Allocator.Er
         const l = self.types.resolveVar(pair.left);
         const r = self.types.resolveVar(pair.right);
         if ((try seen.getOrPut(self.gpa, .{ .left = l.var_, .right = r.var_ })).found_existing) continue;
-        if (@as(u8, @bitCast(l.desc.flags.copied())) != @as(u8, @bitCast(r.desc.flags.copied()))) return false;
+        if (@as(u16, @bitCast(l.desc.flags.copied())) != @as(u16, @bitCast(r.desc.flags.copied()))) return false;
         switch (l.desc.content) {
             .flex, .rigid, .field_presence, .err => return false,
             .alias => |la| {
@@ -20013,13 +20032,13 @@ const GenTypeAnnoCtx = union(enum) {
         /// `provides` defs): the host is not a Roc producer participating in
         /// unification, so those rows keep their written, closed meaning.
         opening: OpeningBehavior,
-        /// Where this position sits relative to the result row the Monotype
-        /// result-row widening adapter can re-tag (design.md "Result-Row
-        /// Widening Adapter"). Only an adapter-reachable position gets
-        /// `.per_use` opening; every other output position of a where-method
-        /// signature keeps its row as written, exactly as a negative position
-        /// does, so a body use that widens one is an ordinary mismatch at the
-        /// use instead of a widening no lowering can express.
+        /// Where this position sits relative to the result rows a where-method
+        /// use may widen (design.md "Closed Result Rows At Template
+        /// Boundaries"). Only a reachable position gets `.per_use` opening;
+        /// every other output position of a where-method signature keeps its
+        /// row as written, exactly as a negative position does, so a body use
+        /// that widens one is an ordinary mismatch at the use instead of a
+        /// widening outside the row coercion's reach.
         adapter_reach: AdapterReach = .nested,
 
         pub const OpeningBehavior = enum {
@@ -20040,10 +20059,10 @@ const GenTypeAnnoCtx = union(enum) {
             /// result is `.result` and whose arguments are `.nested`. The walk
             /// re-aims a function written here to those two reaches.
             signature,
-            /// The signature's direct result. The adapter re-tags a row
-            /// written here, and descends into a `Try` result's arguments.
+            /// The signature's direct result. A use may widen a row written
+            /// here, and the walk descends into a `Try` result's arguments.
             result,
-            /// A type argument of a `Try` result. The adapter re-tags a row
+            /// A type argument of a `Try` result. A use may widen a row
             /// written here, but nothing below it.
             try_row,
             /// Every other position: inside a `List`, a record field, a
@@ -20082,8 +20101,8 @@ const GenTypeAnnoCtx = union(enum) {
         };
     }
 
-    /// Where a referenced declaration's own root sits relative to the row the
-    /// result-row widening adapter can re-tag. `.defer_open` carries the walk
+    /// Where a referenced declaration's own root sits relative to the rows a
+    /// where-method use may widen. `.defer_open` carries the walk
     /// on from here, so a marker the referenced declaration mints under a
     /// `List`, a record field, a tuple, a tag payload, a function or a
     /// non-`Try` nominal closes instead of reopening per use.
@@ -20110,8 +20129,8 @@ const GenTypeAnnoCtx = union(enum) {
                 .implicit_open => .resolve_by_polarity,
                 // A referenced alias's markers stay deferred inside a
                 // where-method signature: the signature's own instantiation
-                // decides them—but only where the result-row widening
-                // adapter could re-tag the row. Elsewhere the alias
+                // decides them—but only where a use may widen the row.
+                // Elsewhere the alias
                 // contributes its row as written, like a negative position.
                 //
                 // `.defer_open` is position-aware INSIDE the referenced
@@ -20201,6 +20220,9 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
         .start = implicit_open_exts_start,
         .len = @intCast(self.implicit_open_exts.items.len - implicit_open_exts_start),
     });
+    // The host was compiled against every tag row this annotation wrote, so
+    // none of them ever joins a wider row (design.md "Row Joins").
+    if (opening == .as_written) try self.markHostFixedRows(ModuleEnv.varFrom(annotation.anno));
 
     // Redirect the root annotation to inner annotation
     _ = try self.unify(annotation_var, ModuleEnv.varFrom(annotation.anno), env);
@@ -20709,6 +20731,8 @@ fn appendWidenedReachChildren(self: *Self, var_: Var, children: *std.ArrayListUn
 /// copied through the reach, under a fresh open extension. A row whose chain
 /// ends in a rigid is not the value's to widen and is shared.
 fn widenedRowCopy(self: *Self, row: Var, env: *Env, region: Region) std.mem.Allocator.Error!Var {
+    // A host-boundary row never widens (design.md "Row Joins").
+    if (self.rowIsHostFixed(row)) return self.types.resolveVar(row).var_;
     const tags_start = self.widened_use_tags.items.len;
     defer self.widened_use_tags.shrinkRetainingCapacity(tags_start);
     var current = row;
@@ -20851,6 +20875,90 @@ fn useRowListsExtraTag(self: *Self, pair: WidenedUseRow) std.mem.Allocator.Error
         for (value_tags) |value_tag| {
             if (value_tag.name.eql(use_tag.name)) break;
         } else return true;
+    }
+    return false;
+}
+
+/// Mark every tag row reachable from `root` as a host-boundary row
+/// (`DescriptorFlags.host_fixed_row`), through aliases, nominal arguments,
+/// records, tuples, functions and tag payloads.
+fn markHostFixedRows(self: *Self, root: Var) std.mem.Allocator.Error!void {
+    const stack = &self.type_visit_stack;
+    const stack_base = stack.items.len;
+    defer stack.items.len = stack_base;
+    self.var_set.clearRetainingCapacity();
+    try stack.append(self.gpa, root);
+    while (stack.items.len > stack_base) {
+        const resolved = self.types.resolveVar(stack.pop().?);
+        if (self.var_set.contains(resolved.var_)) continue;
+        try self.var_set.put(resolved.var_, {});
+        switch (resolved.desc.content) {
+            .flex, .rigid, .field_presence, .err => {},
+            .alias => |alias| {
+                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                try stack.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
+            },
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| {
+                    try self.types.markHostFixedRow(resolved.var_);
+                    for (self.types.getTagsSlice(tag_union.tags).items(.args)) |tag_args| {
+                        try stack.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+                    }
+                    try stack.append(self.gpa, tag_union.ext);
+                },
+                .empty_tag_union => try self.types.markHostFixedRow(resolved.var_),
+                .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try stack.append(self.gpa, func.ret);
+                },
+                .record => |record| {
+                    for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                        try stack.append(self.gpa, presence.typeVar());
+                    }
+                    try stack.append(self.gpa, record.ext);
+                },
+                .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                .empty_record => {},
+            },
+        }
+    }
+}
+
+/// Whether the tag row at `var_` is one a host-boundary annotation wrote.
+fn rowIsHostFixed(self: *const Self, var_: Var) bool {
+    return self.types.resolveVar(var_).desc.flags.host_fixed_row;
+}
+
+/// Whether a value of type `var_` carries a host-boundary tag row within the
+/// row coercion's reach: the root row, rows in tag payloads, and rows behind
+/// aliases and nominal arguments. Function arguments are outside it.
+fn varReachesHostFixedRow(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
+    const stack = &self.type_visit_stack;
+    const stack_base = stack.items.len;
+    defer stack.items.len = stack_base;
+    self.var_set.clearRetainingCapacity();
+    try stack.append(self.gpa, var_);
+    while (stack.items.len > stack_base) {
+        const resolved = self.types.resolveVar(stack.pop().?);
+        if (self.var_set.contains(resolved.var_)) continue;
+        try self.var_set.put(resolved.var_, {});
+        switch (resolved.desc.content) {
+            .flex, .rigid, .field_presence, .err => {},
+            .alias => |alias| try stack.append(self.gpa, self.types.getAliasBackingVar(alias)),
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| {
+                    if (resolved.desc.flags.host_fixed_row) return true;
+                    for (self.types.getTagsSlice(tag_union.tags).items(.args)) |tag_args| {
+                        try stack.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+                    }
+                    try stack.append(self.gpa, tag_union.ext);
+                },
+                .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| try stack.append(self.gpa, func.ret),
+                .record, .tuple, .empty_record, .empty_tag_union => {},
+            },
+        }
     }
     return false;
 }
@@ -23043,8 +23151,8 @@ fn stepRigidAnnoGen(self: *Self, frame: *AnnoGenFrame, rigid: std.meta.fieldInfo
 /// walked like any function annotation: its arguments are inputs (closed
 /// as written) and its return an output.
 ///
-/// Only the output positions the result-row widening adapter can re-tag
-/// open per use (`AnnotationGenCtx.AdapterReach`). The return starts at
+/// Only the output positions a use may widen open per use
+/// (`AnnotationGenCtx.AdapterReach`). The return starts at
 /// `.result`; every other position of the signature—the receiver, the
 /// arguments, and anything the walk descends into that is not a `Try`
 /// result's rows—keeps its row as written.
@@ -23474,13 +23582,13 @@ fn stepTagUnionAnnoGen(self: *Self, frame: *AnnoGenFrame, tag_union: std.meta.fi
     const implicitly_open = output_opening == .implicit_open;
     // A where-method signature's output row: deferred with the
     // polarity marker, resolved per body use and per obligation—but
-    // only in a position the result-row widening adapter can re-tag
-    // (design.md "Result-Row Widening Adapter"). A row nested anywhere
+    // only in a position within the row coercion's reach (design.md
+    // "Closed Result Rows At Template Boundaries"). A row nested anywhere
     // else is generated as written, so a body use that widens it is an
-    // ordinary mismatch at the use rather than a widening no lowering
-    // can express.
+    // ordinary mismatch at the use rather than a widening outside the
+    // reach.
     const deferred_open = output_opening == .per_use and switch (ctx.annotation.adapter_reach) {
-        // Adapter-reachable: the row defers its open/closed decision to
+        // Reachable: the row defers its open/closed decision to
         // the use site (a polarity marker).
         .signature, .result, .try_row => true,
         // Out of reach: generated as written, so a body use that widens
@@ -41636,8 +41744,10 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
         if (gathered.has_tags) {
             // A closed source row is included by its heads alone: it has no
             // residual to relate, and equating it with the result would close
-            // the result's row (design.md "Row Subsumption").
-            if (gathered.nested or self.varIsEmptyTagUnion(gathered.tail)) {
+            // the result's row (design.md "Row Subsumption"). A host-boundary
+            // row is the exception: it never widens, so it is equated with the
+            // result and a wider result is a mismatch (design.md "Row Joins").
+            if (gathered.nested or (self.varIsEmptyTagUnion(gathered.tail) and !self.rowIsHostFixed(root))) {
                 _ = try self.gatherTryReturnRow(root, true);
                 const projection = try self.projectTryReturnRow(gathered.tail, env, self.cir.store.getExprRegion(plan.expr));
                 try rows.projections.put(root, projection);
@@ -43666,7 +43776,8 @@ fn appendReplayShapeWalk(self: *Self) Allocator.Error!?void {
             continue;
         }
         seen.value_ptr.* = @intCast(self.scratch_replay_shape_vars.count() - 1);
-        try out.append(self.gpa, @bitCast(resolved.desc.flags.relational()));
+        const relational_flags: u16 = @bitCast(resolved.desc.flags.relational());
+        try out.appendSlice(self.gpa, &.{ @truncate(relational_flags), @truncate(relational_flags >> 8) });
         // Children are pushed in reverse, so they are encoded in order.
         switch (resolved.desc.content) {
             .err => return null,
@@ -46519,6 +46630,29 @@ inline fn processDeferredDispatchEntry(
                     region,
                     failure_expr,
                 )) orelse continue;
+
+                // A `where` requirement's result rows are opened per use, so
+                // the requiring body may use them at a wider union. A hosted
+                // declaration's rows are the host's and never widen (design.md
+                // "Row Joins"), so it satisfies no requirement whose result
+                // reaches a tag row.
+                if (constraint.origin == .where_clause and
+                    method_env.store.getExpr(def.expr) == .e_hosted_lambda and
+                    try self.varReachesHostFixedRow(method_var))
+                {
+                    const use_region = if (failure_expr orelse constraintIntroExpr(constraint)) |use_expr|
+                        self.cir.store.getExprRegion(use_expr)
+                    else
+                        self.getRegionAt(constraint.fn_var);
+                    _ = try self.problems.appendProblem(.{ .hosted_where_requirement = .{
+                        .region = use_region,
+                        .dispatcher_name = nominal_type.ident.ident_idx,
+                        .method_name = constraint.fn_name,
+                    } });
+                    try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
+                    try self.markStaticDispatchRejected(constraint);
+                    continue;
+                }
 
                 // Unwrap the constraint type
                 if (constraint_fn_resolved.unwrapFunc() == null) {

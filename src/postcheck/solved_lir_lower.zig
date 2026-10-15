@@ -6674,9 +6674,10 @@ const Lowerer = struct {
             .static_data_candidate => |candidate| try self.staticDataCandidateStep(where, target, candidate, expr_ty, next),
             .comptime_value => |value| .{ .ret = try self.lowerComptimeValueInto(where, target, value, expr_ty, next) },
             .typed_boundary => |boundary| try self.typedBoundaryStep(where, target, expr_ty, boundary, next),
-            // A row coercion lowers as the same typed assignment: the source
-            // row's layout comes from the value's solved type, the destination
-            // from this expression's, and the tag-union boundary re-tags.
+            // A row coercion lowers its value straight into the destination:
+            // Lambda Solved joined the value's rows with this expression's
+            // (design.md "Row Joins"), so the two solved types have one
+            // representation.
             .row_widen => |widen| try self.rowWidenStep(where, target, expr_ty, widen.value, next),
             .list => |items| try self.listStep(where, target, expr_ty, items, next),
             .tuple => |items| try self.structExprsStep(where, target, self.solved.lifted.exprSpan(items), self.tupleItemTypes(expr_ty), next),
@@ -6862,9 +6863,9 @@ const Lowerer = struct {
         return .{ .tail = exprTask(where, source, boundary.value, source_ty, after_source) };
     }
 
-    /// A checked row coercion (design.md "Row Coercion Primitive") is the
-    /// typed assignment of the return boundary, after asserting the
-    /// coercion's reach and superset rule on the two solved types.
+    /// A checked row join (design.md "Row Joins") lowers as its value: Lambda
+    /// Solved made the value's rows and the destination's rows one row each,
+    /// so the value is already at the destination's type.
     fn rowWidenStep(
         self: *Lowerer,
         where: LowerSite,
@@ -6873,64 +6874,14 @@ const Lowerer = struct {
         value: Lifted.ExprId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LowerStep {
-        try self.assertRowWidenReach(target_ty, try self.lowerExprContextTy(value));
-        return try self.typedBoundaryStep(where, target, target_ty, .{ .value = value }, next);
-    }
-
-    /// Inside the reach (the root row, rows that are tag payloads of a reached
-    /// row, and rows behind a named backing) every source tag is in the
-    /// destination with the same arity; anywhere else the two sides are
-    /// value-encoding equivalent.
-    fn assertRowWidenReach(self: *Lowerer, target_ty: Type.TypeId, source_ty: Type.TypeId) Common.LowerError!void {
-        var work = std.ArrayList([2]Type.TypeId).empty;
-        defer work.deinit(self.allocator);
-        var visited = std.AutoHashMap(u64, void).init(self.allocator);
-        defer visited.deinit();
-        var equivalent_pairs = std.AutoHashMap(u64, void).init(self.allocator);
-        defer equivalent_pairs.deinit();
-        try work.append(self.allocator, .{ target_ty, source_ty });
-        while (work.pop()) |pair| {
-            const target_runtime = self.namedBackingRoot(pair[0]);
-            const source_runtime = self.namedBackingRoot(pair[1]);
-            const key = (@as(u64, @backingInt(target_runtime)) << 32) | @as(u64, @backingInt(source_runtime));
-            const entry = try visited.getOrPut(key);
-            if (entry.found_existing) continue;
-            const target_content = self.types.get(target_runtime);
-            const source_content = self.types.get(source_runtime);
-            if (source_content == .tag_union and target_content == .tag_union) {
-                const target_tags = self.types.tagSpan(target_content.tag_union);
-                const source_tags = self.types.tagSpan(source_content.tag_union);
-                for (0..source_tags.len) |source_index| {
-                    const source_tag = GuardedList.at(source_tags, source_index);
-                    const target_tag = GuardedList.at(target_tags, Lowerer.tagIndexInTags(target_tags, source_tag));
-                    const target_payloads = self.types.span(target_tag.payloads);
-                    const source_payloads = self.types.span(source_tag.payloads);
-                    if (target_payloads.len != source_payloads.len) {
-                        Common.invariant("row coercion source tag payload arity differed from its destination tag");
-                    }
-                    for (0..source_payloads.len) |payload_index| {
-                        try work.append(self.allocator, .{
-                            GuardedList.at(target_payloads, payload_index),
-                            GuardedList.at(source_payloads, payload_index),
-                        });
-                    }
-                }
-                continue;
-            }
-            if (source_content == .tag_union and self.types.tagSpan(source_content.tag_union).len == 0) continue;
-            if (!try self.typesEquivalentInMode(.value_encoding, target_runtime, source_runtime, &equivalent_pairs)) {
-                Common.invariant("row coercion reached differing types outside tag payloads and named backings");
+        if (builtin.mode == .debug) {
+            var equivalent_pairs = std.AutoHashMap(u64, void).init(self.allocator);
+            defer equivalent_pairs.deinit();
+            if (!try self.typesEquivalentInMode(.value_encoding, target_ty, try self.lowerExprContextTy(value), &equivalent_pairs)) {
+                Common.invariant("row join value and destination had different representations");
             }
         }
-    }
-
-    fn namedBackingRoot(self: *Lowerer, ty: Type.TypeId) Type.TypeId {
-        var current = ty;
-        while (true) {
-            const next = self.runtimeBackingType(current);
-            if (next == current) return current;
-            current = next;
-        }
+        return .{ .tail = exprTask(where, target, value, target_ty, next) };
     }
 
     fn listStep(
@@ -12466,7 +12417,17 @@ const Lowerer = struct {
             frame.index += 1;
         } else {
             switch (task.kind) {
-                .tag_union => if (source_len == 0) Common.invariant("tag union boundary saw an empty source tag union"),
+                .tag_union => {
+                    if (source_len == 0) Common.invariant("tag union boundary saw an empty source tag union");
+                    // Rows that flow together are one row (design.md "Row
+                    // Joins"), so a boundary between two tag unions converts
+                    // payload representations only: both sides list the same
+                    // tags. `variantConversion` finds each source tag in the
+                    // target; this pins that the target lists nothing more.
+                    if (source_len != self.types.tagSpan(task.target_span).len) {
+                        Common.invariant("tag union boundary saw two different tag rows");
+                    }
+                },
                 .callable => {
                     if (source_len != self.types.fnVariantSpan(task.target_span).len) {
                         Common.invariant("callable boundary saw different source and target variant counts");

@@ -9699,10 +9699,13 @@ test "W6a open where-method widening and nested evidence lower through explicit 
     try std.testing.expectEqualStrings("True", output);
 }
 
-/// Monotype functions defined as generated adapters. The result-row widening
-/// adapter is the only producer of `.checked_generated` in a plain Roc module,
-/// so this count is the mechanism witness: a program that compiles the impl at
-/// the caller's wide row instead reports zero while still running correctly.
+/// Monotype functions the lowering generated rather than specialized from a
+/// Roc definition: an unavailable hosted declaration's stand-in and a
+/// field-names iterator step. A plain Roc module that requests a closed
+/// implementation at a wider row has none: the implementation is specialized
+/// at its declared row and its result row joins the request's (design.md "Row
+/// Joins"), so this count is the mechanism witness that no generated
+/// conversion stands between them.
 fn checkedGeneratedFnCount(program: *const MonoAst.Program) usize {
     var count: usize = 0;
     for (program.view().fns) |function| {
@@ -9721,15 +9724,14 @@ fn checkedGeneratedFnCount(program: *const MonoAst.Program) usize {
     return count;
 }
 
-test "W6b widened closed where-method impl is reached through a generated adapter" {
+test "W6b widened closed where-method impl is specialized once with no generated function" {
     const allocator = std.testing.allocator;
     // `status` is published at the closed row `[Ok(Str), Err(Str)]` while
-    // `describe` requests `[Ok(Str), Err(Str), Extra]`. The impl must stay
-    // specialized at its declared row and be reached through a generated
-    // adapter that re-tags into the requested row (design.md "Result-Row
-    // Widening Adapter"). Running the program proves neither: it produces the
-    // same answer whether the impl was adapted or simply specialized wide, so
-    // the adapter count is the only witness.
+    // `describe` requests `[Ok(Str), Err(Str), Extra]`. The impl is
+    // specialized at its declared row and its result row joins the request's
+    // where the call's result flows (design.md "Row Joins"); nothing is
+    // generated to convert between them. Running the program proves only the
+    // answer, so the generated-function count is the witness.
     const widened =
         \\describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]
         \\describe = |x| x.status()
@@ -9750,10 +9752,9 @@ test "W6b widened closed where-method impl is reached through a generated adapte
         .root_selection = .test_expects,
     });
     defer widened_lowered.deinit(allocator);
-    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&widened_lowered.mono));
+    try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&widened_lowered.mono));
 
-    // The control: the same dispatch requested at the impl's own row. Nothing
-    // is widened, so no adapter may be minted.
+    // The control: the same dispatch requested at the impl's own row.
     const exact =
         \\describe : a -> [Ok(Str), Err(Str)] where [a.status : a -> [Ok(Str), Err(Str)]]
         \\describe = |x| x.status()
@@ -9777,12 +9778,11 @@ test "W6b widened closed where-method impl is reached through a generated adapte
     try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&exact_lowered.mono));
 }
 
-test "W6b question-widened closed Try impl is reached through a generated adapter" {
+test "W6b question-widened closed Try impl needs no generated function" {
     const allocator = std.testing.allocator;
     // The `Try` instance of the same mechanism: `fetch` publishes the closed
-    // error row `[NotFound]` and `?` requests `[NotFound, Other]`, so the
-    // adapter unwraps the declared-row `Try` and re-wraps its error into the
-    // wider row.
+    // error row `[NotFound]` and `?` requests `[NotFound, Other]`; the two
+    // error rows join, and nothing unwraps or re-wraps the `Try`.
     const source =
         \\load : a -> Try(Str, [NotFound, Other]) where [a.fetch : a -> Try(Str, [NotFound])]
         \\load = |x| {
@@ -9803,20 +9803,20 @@ test "W6b question-widened closed Try impl is reached through a generated adapte
         .root_selection = .test_expects,
     });
     defer lowered.deinit(allocator);
-    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&lowered.mono));
+    try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&lowered.mono));
 }
 
-test "W6b closed impl reached through nested evidence is adapted" {
+test "W6b closed impl reached through nested evidence needs no generated function" {
     const allocator = std.testing.allocator;
     // `Wrap.status` carries its OWN where-clause, so the obligation that
     // reaches it drags a second requirement along, and its published result
     // row is still closed by `closed_ok` / `closed_err`. `describe` uses the
     // method twice in one body—exhaustively at the declared row and widened—so
-    // the adapter is minted beside an ordinary declared-row
-    // specialization of the same template. `test/cli`'s
-    // `WidenNestedEvidenceClosedImpl.roc` runs this program on both backends
-    // and only proves it computes the right answer; the adapter count is what
-    // proves the mechanism.
+    // one declared-row specialization serves both uses and its result row
+    // joins the wider one. `test/cli`'s `WidenNestedEvidenceClosedImpl.roc`
+    // runs this program on both backends and only proves it computes the
+    // right answer; the generated-function count is what proves the
+    // mechanism.
     const source =
         \\Wrap(a) := [W(a, [Ok(Str), Err(Str)], [Ok(Str), Err(Str)])].{
         \\    status : Wrap(a) -> [Ok(Str), Err(Str)] where [a.name : a -> Str]
@@ -9854,22 +9854,21 @@ test "W6b closed impl reached through nested evidence is adapted" {
         .root_selection = .test_expects,
     });
     defer lowered.deinit(allocator);
-    // One adapter per (template specialization, requested type): `Wrap(Thing)`
-    // and `Wrap(Other)` are distinct specializations of `status`, so each
-    // widened request gets its own.
-    try std.testing.expectEqual(@as(usize, 2), checkedGeneratedFnCount(&lowered.mono));
+    // `Wrap(Thing)` and `Wrap(Other)` are distinct specializations of
+    // `status`; neither needs a generated function.
+    try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&lowered.mono));
 }
 
-test "W6b closed impl with rigid payloads is adapted at the requested payloads" {
+test "W6b closed impl with rigid payloads is specialized at the requested payloads" {
     const allocator = std.testing.allocator;
     // `Relay(a).route` publishes the closed row `[Ok(a), Err(a)]`—closed
     // because it returns its own input-position parameter—with RIGID
     // payloads. `lowerCheckedTypeVariable` seals a rigid to the empty tag
-    // union, so the adapter's narrowed source type must take its payloads
-    // from the REQUEST rather than from `lowerType` of the checked root
-    // (`resultRowWideningAdapterOrNull`'s doc comment). Both constructors go
-    // through the adapter, so a payload taken from the declared type would
-    // be a zero-sized representation rather than a `Str`.
+    // union, so the request relation takes a payload's representation from
+    // the REQUEST rather than from `lowerType` of the checked root (design.md
+    // "Closed Result Rows At Template Boundaries"). Both constructors carry a
+    // payload, so one taken from the declared type would be a zero-sized
+    // representation rather than a `Str`.
     const source =
         \\Relay(a) := [R(a)].{
         \\    route : Relay(a), [Ok(a), Err(a)] -> [Ok(a), Err(a)]
@@ -9891,22 +9890,23 @@ test "W6b closed impl with rigid payloads is adapted at the requested payloads" 
         .root_selection = .test_expects,
     });
     defer lowered.deinit(allocator);
-    // Both expects request `Relay(Str).route` at the same widened type, so
-    // the adapter is keyed once.
-    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&lowered.mono));
+    // Both expects request `Relay(Str).route` at the same widened type; no
+    // function is generated for it.
+    try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&lowered.mono));
 }
 
-test "W6b direct-result widening adapter re-tags into the requested row at run time" {
+test "W6b direct-result row join numbers the impl's result at the requested row at run time" {
     const allocator = std.testing.allocator;
     // The executing half of "W6b widened closed where-method impl ...", which
     // only lowers. `Extra` is chosen because it SORTS BETWEEN the declared
-    // labels: tags are ordered by name, so the declared row numbers
-    // `Err` 0, `Ok` 1 while the requested row numbers `Err` 0, `Extra` 1,
-    // `Ok` 2. An adapter that forwarded the callee's result unchanged, or that
-    // mapped the labels in the wrong order, would therefore read the `Ok`
-    // payload out of a payload-less `Extra`—which only running the program
-    // can catch. (`Err` maps 0 to 0 and proves nothing on its own; it is here
-    // so both constructors travel through the adapter.)
+    // labels: tags are ordered by name, so the declared row alone numbers
+    // `Err` 0, `Ok` 1 while the joined row numbers `Err` 0, `Extra` 1,
+    // `Ok` 2. The impl's result and `describe`'s result are one row (design.md
+    // "Row Joins"), so the impl constructs `Ok` at 2; a lowering that
+    // numbered the impl's result by its declared row alone would read the
+    // `Ok` payload out of a payload-less `Extra`—which only running the
+    // program can catch. (`Err` is 0 in both numberings and proves nothing on
+    // its own; it is here so both constructors travel through the join.)
     const source =
         \\Job := [Run([Ok(Str), Err(Str)])].{
         \\    status : Job -> [Ok(Str), Err(Str)]
@@ -9927,11 +9927,11 @@ test "W6b direct-result widening adapter re-tags into the requested row at run t
         \\}
     ;
 
-    // The mechanism witness: the value below is the same either way, so pin
-    // that an adapter really is what produced it.
+    // The mechanism witness: no generated function stands between the impl
+    // and the request, so the join is what produces the value below.
     var lowered = try lowerMonotypeModule(allocator, source);
     defer lowered.deinit(allocator);
-    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&lowered.mono));
+    try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&lowered.mono));
 
     var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
         allocator,
@@ -9952,15 +9952,15 @@ test "W6b direct-result widening adapter re-tags into the requested row at run t
     try std.testing.expectEqualStrings("True", output);
 }
 
-test "W6b Try error-row widening adapter re-tags into the requested row at run time" {
+test "W6b Try error-row join numbers the impl's error at the requested row at run time" {
     const allocator = std.testing.allocator;
     // The `Try` instance, executed. The extra label is `Gone` rather than the
     // `Other` the lowering-only test uses, because `Other` sorts AFTER
-    // `NotFound` and leaves it at discriminant 0 in both rows—an adapter that
-    // injected nothing at all would still produce the right answer. `Gone`
-    // sorts first, so the declared row numbers `NotFound` 0 while the requested
-    // row numbers `Gone` 0 and `NotFound` 1, and a missing or misordered
-    // injection reports `Gone` where the callee returned `NotFound`.
+    // `NotFound` and leaves it at discriminant 0 in both rows—a wrong
+    // numbering would still produce the right answer. `Gone` sorts first, so
+    // the declared row alone numbers `NotFound` 0 while the joined row numbers
+    // `Gone` 0 and `NotFound` 1, and an impl numbered by its declared row
+    // alone would report `Gone` where it returned `NotFound`.
     const source =
         \\Src := [Load(Try(Str, [NotFound]))].{
         \\    fetch : Src -> Try(Str, [NotFound])
@@ -9986,7 +9986,7 @@ test "W6b Try error-row widening adapter re-tags into the requested row at run t
 
     var lowered = try lowerMonotypeModule(allocator, source);
     defer lowered.deinit(allocator);
-    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&lowered.mono));
+    try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&lowered.mono));
 
     var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
         allocator,
@@ -10007,21 +10007,19 @@ test "W6b Try error-row widening adapter re-tags into the requested row at run t
     try std.testing.expectEqualStrings("True", output);
 }
 
-test "W6b alias-wrapped closed Try error row is adapted and re-tagged at run time" {
+test "W6b alias-wrapped closed Try error row joins the requested row at run time" {
     const allocator = std.testing.allocator;
     // The declared `Try` reached through a transparent alias. The checked side
-    // crosses alias layers when it publishes the `Try` capability and records
-    // the widening, so the mono side has to cross them too: reading
-    // `IoResult(Str)` as-is finds an `.alias` named node whose def is not
-    // `Try`'s, which declined the adapter after the relation had already
-    // committed to it. `test/cli/WidenAliasTryClosedImpl.roc` runs the same
-    // shape end to end on both backends; the count below is what proves an
-    // adapter—not a specialization at the wide row—serves the request.
+    // crosses alias layers when it widens the `?`'s closed row, and the join
+    // descends through the alias to the `Try`'s error argument on the mono
+    // side too. `test/cli/WidenAliasTryClosedImpl.roc` runs the same shape end
+    // to end on both backends; the count below pins that no generated
+    // function serves the request.
     //
-    // `Gone` sorts before `NotFound`, so the declared row numbers `NotFound` 0
-    // while the requested row numbers `Gone` 0 and `NotFound` 1: a missing or
-    // misordered injection reports `Gone` where the callee returned
-    // `NotFound`.
+    // `Gone` sorts before `NotFound`, so the declared row alone numbers
+    // `NotFound` 0 while the joined row numbers `Gone` 0 and `NotFound` 1: an
+    // impl numbered by its declared row alone would report `Gone` where it
+    // returned `NotFound`.
     const source =
         \\IoResult(a) : Try(a, [NotFound])
         \\
@@ -10049,7 +10047,7 @@ test "W6b alias-wrapped closed Try error row is adapted and re-tagged at run tim
 
     var lowered = try lowerMonotypeModule(allocator, source);
     defer lowered.deinit(allocator);
-    try std.testing.expectEqual(@as(usize, 1), checkedGeneratedFnCount(&lowered.mono));
+    try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&lowered.mono));
 
     var compiled = try helpers.compileInspectedProgramForTargetWithBuiltin(
         allocator,
@@ -10070,13 +10068,12 @@ test "W6b alias-wrapped closed Try error row is adapted and re-tagged at run tim
     try std.testing.expectEqualStrings("True", output);
 }
 
-test "polarity W3 open-method widening adapter counts" {
+test "polarity W3 open-method widening generates nothing" {
     const allocator = std.testing.allocator;
     // `test/cli/OpenMethodWidenedCaller.roc` and `OpenMethodOwnRowCaller.roc`
     // are mechanism-blind: they assert exit status, the pass line and the
-    // absence of panic needles, so they pass whether the program compiles to
-    // one wide specialization or to an adapter plus a narrow one. These
-    // counts are what makes a change to their specialization strategy visible.
+    // absence of panic needles, so they pass whatever representation the rows
+    // take. These counts pin that nothing is generated for them.
     const widened =
         \\Rows := {}.{
         \\    wrapped : Rows -> Try(Str, [Unavailable])
@@ -10149,25 +10146,17 @@ test "polarity W3 open-method widening adapter counts" {
     });
     defer direct_lowered.deinit(allocator);
 
-    // No adapters in any of the three. Every row `?` widens here belongs to an
-    // ORDINARY ANNOTATED signature—`wrap`'s in the first program, the method
-    // `wrapped`'s own in the third—and an ordinary annotated result row is
-    // implicitly open: its extension is an unresolved flex the request relation
-    // unifies with the wider row like any other. Nothing declined to unify, so
-    // nothing is owed an adapter; each specialization simply lowers at the row
-    // it was requested at. The `W6b ...` tests above hold the positive witness,
-    // where the implementation's published row really is closed.
-    //
-    // The first and third counted 1 before template completion consumed the
-    // relation's own answer. Completion used to re-derive "is this row closed"
-    // from the checked root, where `variableSealsToRowDefault` reports a flex
-    // tail defaulting to the empty tag union as closed—the right answer for a
-    // where-method's per-use marker, the wrong one for an ordinary annotated
-    // row. Each spurious adapter also added a second, narrow specialization of
-    // the same template and pulled it off the parallel body shards onto the
-    // coordinator (`specJobCompletesOnCoordinator`).
+    // No generated function in any of the three. Every row `?` widens here
+    // belongs to an ORDINARY ANNOTATED signature—`wrap`'s in the first
+    // program, the method `wrapped`'s own in the third—and an ordinary
+    // annotated result row is implicitly open: its extension is an unresolved
+    // flex the request relation unifies with the wider row like any other, so
+    // each specialization lowers at the row it was requested at. A closed
+    // published row (the `W6b ...` tests above) is specialized at its own row
+    // and joins the request's (design.md "Row Joins"); neither case generates
+    // a function.
     try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&widened_lowered.mono));
-    // Nothing is requested wider than it was published, so no adapter exists.
+    // Nothing is requested wider than it was published.
     try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&own_row_lowered.mono));
     try std.testing.expectEqual(@as(usize, 0), checkedGeneratedFnCount(&direct_lowered.mono));
 }
@@ -12727,11 +12716,12 @@ fn expectStampedRowCoercionResults(source: []const u8, expectations: []const [2]
     }
 }
 
-test "row coercion: a closed tag row re-tags into a wider row in both strategies" {
-    // `[B, C]` has two variants, so lowering emits the discriminant switch
-    // rather than the single-variant short cut, and every variant changes
-    // index: B is 0 in `[B, C]` and 1 in `[A, B, C]`. A lowering that copied
-    // the value through would read B as A (1) and C as B (2).
+test "row coercion: a closed tag row joins a wider row in both strategies" {
+    // `[B, C]` has two variants, and every variant changes index once the
+    // rows join: B is 0 in `[B, C]` alone and 1 in `[A, B, C]`. The join
+    // gives `x` and its constructor sites the joined numbering; a lowering
+    // that numbered the value by `[B, C]` alone and read it at `[A, B, C]`
+    // would read B as A (1) and C as B (2).
     try expectStampedRowCoercionResults(
         \\widen : [B, C] -> [A, B, C]
         \\widen = |x| match x {
@@ -12748,9 +12738,9 @@ test "row coercion: a closed tag row re-tags into a wider row in both strategies
     , &.{ .{ 0, 2 }, .{ 1, 3 } });
 }
 
-test "row coercion: a Try error row re-tags inside the nominal in both strategies" {
+test "row coercion: a Try error row joins inside the nominal in both strategies" {
     // The coercion crosses the `Try` nominal into its `Err` payload: `[E2, E3]`
-    // widens to `[E1, E2, E3]` while the `Ok` payload is moved unchanged.
+    // joins `[E1, E2, E3]` while the `Ok` payload is unchanged.
     try expectStampedRowCoercionResults(
         \\widen : Try(U8, [E2, E3]) -> Try(U8, [E1, E2, E3])
         \\widen = |x| match x {
@@ -12808,9 +12798,9 @@ fn expectStampedRowCoercionCrash(source: []const u8, expected_message: []const u
     }
 }
 
-test "row coercion: a refcounted Str payload moves through the re-tag without leaking" {
+test "row coercion: a refcounted Str payload moves through the join without leaking" {
     // The Str is built at runtime and is long enough for heap storage, so ARC
-    // over the `tag_payload_struct` read and the `assign_tag` actually runs.
+    // over the value's move into the destination actually runs.
     try expectStampedRowCoercionResults(
         \\widen : [Ok(Str), Err(U64)] -> [Bad, Ok(Str), Err(U64)]
         \\widen = |x| match x {
@@ -12827,7 +12817,7 @@ test "row coercion: a refcounted Str payload moves through the re-tag without le
     , &.{ .{ 0, 38 }, .{ 1, 101 } });
 }
 
-test "row coercion: a refcounted List payload moves through the re-tag without leaking" {
+test "row coercion: a refcounted List payload moves through the join without leaking" {
     try expectStampedRowCoercionResults(
         \\widen : [Some(List(U64)), Empty] -> [Bad, Some(List(U64)), Empty]
         \\widen = |x| match x {
@@ -12844,10 +12834,10 @@ test "row coercion: a refcounted List payload moves through the re-tag without l
     , &.{ .{ 0, 3 }, .{ 1, 7 } });
 }
 
-test "row coercion: a row directly in a tag payload re-tags too" {
-    // Inside the declared reach: the inner `[B, C]` widens to `[A, B, C]`
-    // (every inner variant changes index) while the outer row gains `Bad`
-    // (every outer variant changes index).
+test "row coercion: a row directly in a tag payload joins too" {
+    // Inside the declared reach: the inner `[B, C]` joins `[A, B, C]` (every
+    // inner variant changes index) while the outer row gains `Bad` (every
+    // outer variant changes index).
     try expectStampedRowCoercionResults(
         \\widen : [Ok([B, C]), Err] -> [Bad, Ok([A, B, C]), Err]
         \\widen = |x| match x {
@@ -12867,7 +12857,7 @@ test "row coercion: a row directly in a tag payload re-tags too" {
     , &.{ .{ 0, 2 }, .{ 1, 3 }, .{ 2, 4 } });
 }
 
-test "row coercion: a generic payload crosses the re-tag" {
+test "row coercion: a generic payload crosses the join" {
     // `widen` is generic in its `Ok` payload and is used at Str and U64, so
     // `.boxy` lowers it once with a descriptor-carried payload.
     try expectStampedRowCoercionResults(

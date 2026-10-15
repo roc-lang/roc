@@ -95,6 +95,7 @@ pub const HostBoundaryOptionalField = types.HostBoundaryOptionalField;
 pub const AnnotationOnlyValue = types.AnnotationOnlyValue;
 /// Public `AnnotationOnlyValueUse` re-export.
 pub const AnnotationOnlyValueUse = types.AnnotationOnlyValueUse;
+pub const HostedWhereRequirement = types.HostedWhereRequirement;
 pub const DerivedMethodValueUse = types.DerivedMethodValueUse;
 pub const CapturingMethod = types.CapturingMethod;
 pub const UnsupportedGeneratedMethod = types.UnsupportedGeneratedMethod;

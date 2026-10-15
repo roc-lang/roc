@@ -1,6 +1,6 @@
-# The adapter-reachable row written as an alias's
+# A widenable row written as an alias's
 # type ARGUMENT. `Res(e) : Try(Str, e)` puts `e` in the `Try` error position,
-# which the result-row widening adapter re-tags, so the row written at the
+# which a where-method use may widen, so the row written at the
 # reference (`Res([IoErr])`) has to be opened per use exactly as a directly
 # written `Try(Str, [IoErr])` is.
 #

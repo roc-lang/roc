@@ -99,6 +99,7 @@ pub const Problem = union(enum) {
     effectful_function_name: EffectfulFunctionName,
     annotation_only_value: AnnotationOnlyValue,
     annotation_only_value_use: AnnotationOnlyValueUse,
+    hosted_where_requirement: HostedWhereRequirement,
     derived_method_value_use: DerivedMethodValueUse,
     capturing_method: CapturingMethod,
     unsupported_generated_method: UnsupportedGeneratedMethod,
@@ -223,6 +224,20 @@ pub const AnnotationOnlyValue = struct {
 /// nothing to evaluate.
 pub const AnnotationOnlyValueUse = struct {
     region: base.Region,
+};
+
+/// A hosted declaration was selected to satisfy a `where` requirement whose
+/// result holds a tag union. The requiring function's body may use that union
+/// as part of a wider one, and a host's unions have the representation the host
+/// was compiled with, so a hosted declaration never serves such a requirement
+/// (design.md "Row Joins").
+pub const HostedWhereRequirement = struct {
+    /// The use that selected the hosted declaration.
+    region: base.Region,
+    /// The dispatcher type that owns the hosted declaration.
+    dispatcher_name: Ident.Idx,
+    /// The method the requirement names.
+    method_name: Ident.Idx,
 };
 
 /// A compiler-derived associated method was used as a value instead of being
@@ -635,6 +650,13 @@ pub const TypeMismatch = struct {
     /// Set when `leaf` failed because the use gave one instantiated
     /// interpolation's values different types.
     interpolation_tie: ?InterpolationTie = null,
+    /// Set when the actual type carries a tag row a host-boundary annotation
+    /// wrote, which never widens (design.md "Row Joins"); the report says
+    /// how to write the value again, tag by tag, instead.
+    host_fixed_row: bool = false,
+    /// The hosted function the actual value's row is forwarded from, when the
+    /// forwarding path is unchanged. Diagnostic-only provenance.
+    host_fixed_origin: ?Ident.Idx = null,
 };
 
 /// A use of a generalized definition gave the values one of its

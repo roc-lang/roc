@@ -2211,8 +2211,10 @@ const Pass = struct {
                 inline .try_sequence, .try_record_sequence => |sequence| try tails.append(self.allocator, sequence.ok_body),
                 .comptime_branch_taken => |taken| try tails.append(self.allocator, taken.body),
                 .typed_boundary => |boundary| try tails.append(self.allocator, boundary.value),
-                // A self call under a row coercion is not in tail position: its
-                // result is still re-tagged after it returns.
+                // A self call under a row coercion is not in tail position: the
+                // call's type and the coercion's are distinct Monotype types
+                // until Lambda Solved joins them, so the call's value is not
+                // the function's own result here.
                 .row_widen,
                 .local,
                 .unit,
@@ -15028,8 +15030,10 @@ fn tailSelfCallSummary(allocator: Allocator, program: *const Ast.Program, root: 
         },
         .comptime_branch_taken => |taken| try tails.append(allocator, taken.body),
         .typed_boundary => |boundary| try tails.append(allocator, boundary.value),
-        // A self call under a row coercion is not in tail position: its
-        // result is still re-tagged after it returns.
+        // A self call under a row coercion is not in tail position: the
+        // call's type and the coercion's are distinct Monotype types until
+        // Lambda Solved joins them, so the call's value is not the function's
+        // own result here.
         .row_widen,
         .local,
         .unit,

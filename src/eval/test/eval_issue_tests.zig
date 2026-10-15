@@ -4207,7 +4207,7 @@ pub const tests = [_]TestCase{
         // A `?` on a closed error row read out of a nominal payload contributes
         // that row's tags to the annotated result without closing it (design.md
         // "Row Subsumption"), so the result also holds `NotAFunction` and the
-        // `?` return re-tags the forwarded error.
+        // `?` return's error row joins it (design.md "Row Joins").
         .name = "try suffix on a closed error row from a nominal payload widens into the result",
         .source_kind = .module,
         .source =
@@ -4837,8 +4837,8 @@ pub const tests = [_]TestCase{
         // https://github.com/roc-lang/roc/issues/12095
         // `f`'s body returns its closed parameter through a widening copy, so
         // the result row stays open (design.md "Row Subsumption") and its own
-        // recursive call may be used at a wider union; the forwarded parameter
-        // is re-tagged at the return.
+        // recursive call may be used at a wider union; the parameter's row
+        // joins the result's at the return (design.md "Row Joins").
         .name = "issue 12095: recursive call result used at a wider tag union than the body forwards",
         .source_kind = .module,
         .source =

@@ -3761,6 +3761,7 @@ pub fn analyzeProgram(
     var builder = Builder.init(allocator, input);
     defer builder.deinit();
     try builder.collectQuantifiedVariables();
+    try builder.computeRowJoins();
     try builder.bindInterpolationItemRepresentations();
 
     if (input.source_modules.len != 0 and input.source_modules.len != input.roots.len)
@@ -3914,6 +3915,17 @@ const Builder = struct {
     relation_modules: []const checked.ImportedModuleView,
     plan: ProgramPlan,
     by_type: std.AutoHashMap(CheckedTypeIdentity, TypeBindingId),
+    /// Union-find over the checked type identities whose values flow into
+    /// one another (design.md "Row Joins"): each identity maps to its parent,
+    /// a set's root to itself.
+    row_joins: std.AutoHashMap(CheckedTypeIdentity, CheckedTypeIdentity),
+    /// For every ground member of a join set with at least two ground
+    /// members, the set's representative member, whose representation the member
+    /// binds to.
+    row_join_representative: std.AutoHashMap(CheckedTypeIdentity, CheckedTypeIdentity),
+    /// For every representative member, the set's ground members, sorted; a tag
+    /// row's representation holds every member's tags.
+    row_join_members: std.AutoHashMap(CheckedTypeIdentity, []CheckedTypeIdentity),
     quantified_variables: std.AutoHashMap(CheckedTypeIdentity, void),
     /// The stored function whose use is having its dictionaries planned.
     active_stored_fn: ?StoredFnSource = null,
@@ -4033,6 +4045,9 @@ const Builder = struct {
             .relation_modules = if (input.root_module) |root_module| root_module.relation_modules else &.{},
             .plan = ProgramPlan.init(allocator),
             .by_type = std.AutoHashMap(CheckedTypeIdentity, TypeBindingId).init(allocator),
+            .row_joins = std.AutoHashMap(CheckedTypeIdentity, CheckedTypeIdentity).init(allocator),
+            .row_join_representative = std.AutoHashMap(CheckedTypeIdentity, CheckedTypeIdentity).init(allocator),
+            .row_join_members = std.AutoHashMap(CheckedTypeIdentity, []CheckedTypeIdentity).init(allocator),
             .quantified_variables = std.AutoHashMap(CheckedTypeIdentity, void).init(allocator),
             .nominal_declaration_formals = std.AutoHashMap(NominalDeclarationKey, Span).init(allocator),
             .optional_slots = std.AutoHashMap(CheckedTypeIdentity, TypeRepId).init(allocator),
@@ -4081,6 +4096,11 @@ const Builder = struct {
         self.body_exprs_seen.deinit();
         self.optional_slots.deinit();
         self.by_type.deinit();
+        self.row_joins.deinit();
+        self.row_join_representative.deinit();
+        var members = self.row_join_members.valueIterator();
+        while (members.next()) |group| self.allocator.free(group.*);
+        self.row_join_members.deinit();
         self.quantified_variables.deinit();
         self.stored_use_substitutions.deinit(self.allocator);
         self.nominal_declaration_formals.deinit();
@@ -9335,6 +9355,19 @@ const Builder = struct {
         const binding = try self.internTypeBinding(source_type);
         if (self.plan.type_reps.items[@backingInt(binding)].rep) |rep| return rep;
 
+        // A type whose values flow into another type's values shares that
+        // type's representation (design.md "Row Joins"): every ground member
+        // of a join set binds to the set's representative member's plan.
+        if (self.row_join_representative.get(source_type)) |representative| {
+            if (!typeRefEql(representative, source_type)) {
+                try frames.append(self.allocator, .{ .saved_context = self.host_context, .state = .{ .row_redirect = .{
+                    .binding = binding,
+                    .request = .{ .checked = .{ .view = self.moduleForId(representative.module), .ty = representative.ty, .context = self.host_context } },
+                } } });
+                return null;
+            }
+        }
+
         // A row with no declared tags has exactly its extension's storage
         // and descriptor. Keep both checked types bound to that same plan.
         var row_ty = ty;
@@ -9606,10 +9639,322 @@ const Builder = struct {
             .empty_record => self.completeRep(rep_id, .{ .source_type = source_type, .kind = .empty_record }),
             .tag_union => |tag_union| if (self.host_mode)
                 try self.planHostTagUnionRep(requests, view, source_type, tag_union)
+            else if (self.row_join_members.get(source_type)) |members|
+                try self.planJoinedTagUnionRep(requests, source_type, members)
             else
                 try self.planTagUnionRep(requests, view, source_type, tag_union),
-            .empty_tag_union => self.completeRep(rep_id, .{ .source_type = source_type, .kind = .empty_tag_union }),
+            .empty_tag_union => if (!self.host_mode and self.row_join_members.get(source_type) != null)
+                try self.planJoinedTagUnionRep(requests, source_type, self.row_join_members.get(source_type).?)
+            else
+                self.completeRep(rep_id, .{ .source_type = source_type, .kind = .empty_tag_union }),
         };
+    }
+
+    // Row joins //
+
+    /// Seed the row joins from every place a value's rows flow into another
+    /// value's rows (design.md "Row Joins"): a checked row coercion, a lambda
+    /// body into its function's result, and a `return` into its function's
+    /// result. Each seeded pair is then descended structurally, so the types
+    /// at every matching position join too, and every join set holding at
+    /// least two ground members elects the member the others bind to.
+    fn computeRowJoins(self: *Builder) Allocator.Error!void {
+        var views = std.ArrayList(ModuleView).empty;
+        defer views.deinit(self.allocator);
+        try views.append(self.allocator, self.root_view);
+        try views.appendSlice(self.allocator, self.extra_module_views);
+        for (self.imports) |imported| try views.append(self.allocator, moduleViewFromImported(imported));
+        for (self.relation_modules) |relation| try views.append(self.allocator, moduleViewFromImported(relation));
+
+        var work = std.ArrayList([2]CheckedTypeIdentity).empty;
+        defer work.deinit(self.allocator);
+        for (views.items) |view| {
+            const bodies = view.checked_bodies;
+            for (0..bodies.exprCount()) |index| {
+                const expr = bodies.expr(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
+                switch (expr.data) {
+                    .row_coerce => |coerce| try work.append(self.allocator, .{ typeRef(view, expr.ty), typeRef(view, bodies.expr(coerce.value).ty) }),
+                    .lambda => |lambda| if (functionResultType(view, expr.ty)) |ret| {
+                        try work.append(self.allocator, .{ typeRef(view, ret), typeRef(view, bodies.expr(lambda.body).ty) });
+                    },
+                    .return_ => |ret| if (functionResultType(view, bodies.expr(ret.lambda).ty)) |fn_ret| {
+                        try work.append(self.allocator, .{ typeRef(view, fn_ret), typeRef(view, bodies.expr(ret.expr).ty) });
+                    },
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .for_, .hosted_lambda, .run_low_level => {},
+                }
+            }
+        }
+        while (work.pop()) |pair| try self.joinIdentities(&work, pair[0], pair[1]);
+        try self.chooseRowJoinRepresentatives();
+    }
+
+    /// The result type of a function type, through aliases; null for any
+    /// other type.
+    fn functionResultType(view: ModuleView, ty: checked.CheckedTypeId) ?checked.CheckedTypeId {
+        return switch (resolvedRowJoinPayload(view, ty).payload) {
+            .function => |function| function.ret,
+            .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => null,
+        };
+    }
+
+    /// Put `a` and `b` in one join set and queue their matching components.
+    fn joinIdentities(self: *Builder, work: *std.ArrayList([2]CheckedTypeIdentity), a: CheckedTypeIdentity, b: CheckedTypeIdentity) Allocator.Error!void {
+        const root_a = try self.rowJoinRoot(a);
+        const root_b = try self.rowJoinRoot(b);
+        if (typeRefEql(root_a, root_b)) return;
+        try self.row_joins.put(root_b, root_a);
+        try self.appendRowJoinComponents(work, a, b);
+    }
+
+    /// The root of `identity`'s join set, entering it as its own set when it
+    /// is new.
+    fn rowJoinRoot(self: *Builder, identity: CheckedTypeIdentity) Allocator.Error!CheckedTypeIdentity {
+        var current = identity;
+        var remaining = self.row_joins.count() + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            const parent = self.row_joins.get(current) orelse {
+                try self.row_joins.put(current, current);
+                return current;
+            };
+            if (typeRefEql(parent, current)) return current;
+            current = parent;
+        }
+        boxyPlanInvariant("row join parents were cyclic");
+    }
+
+    const ResolvedRowJoinPayload = struct { ty: checked.CheckedTypeId, payload: checked.CheckedTypePayload };
+
+    /// `ty`'s payload through aliases, with the type it resolved to.
+    fn resolvedRowJoinPayload(view: ModuleView, ty: checked.CheckedTypeId) ResolvedRowJoinPayload {
+        var current = ty;
+        var remaining = view.checked_types.payloadCount();
+        while (remaining > 0) : (remaining -= 1) {
+            const payload = view.checked_types.payload(current);
+            if (payload != .alias) return .{ .ty = current, .payload = payload };
+            current = payload.alias.backing;
+        }
+        boxyPlanInvariant("checked alias chain was cyclic");
+    }
+
+    const RowJoinTag = struct { view: ModuleView, tag: checked.CheckedTag };
+
+    /// Append the tags along `ty`'s extension chain, and whether the chain
+    /// ends in a closed row.
+    fn collectRowJoinTags(self: *Builder, view: ModuleView, ty: checked.CheckedTypeId, out: *std.ArrayList(RowJoinTag)) Allocator.Error!bool {
+        var current = ty;
+        var remaining = view.checked_types.payloadCount();
+        while (remaining > 0) : (remaining -= 1) {
+            switch (view.checked_types.payload(current)) {
+                .tag_union => |row| {
+                    for (row.tags) |tag| try out.append(self.allocator, .{ .view = view, .tag = tag });
+                    current = row.ext;
+                },
+                .alias => |alias| current = alias.backing,
+                .empty_tag_union => return true,
+                .flex, .rigid => return try self.tagUnionExtensionIsExplicitlyClosed(view, current),
+                .pending, .err, .record, .tuple, .nominal, .function, .empty_record => boxyPlanInvariant("checked tag extension is not a tag row"),
+            }
+        }
+        boxyPlanInvariant("cyclic checked tag row extension");
+    }
+
+    /// Queue the component pairs of two joined types: shared tags' payloads,
+    /// nominal arguments, record fields, tuple items, and function arguments
+    /// and results.
+    fn appendRowJoinComponents(self: *Builder, work: *std.ArrayList([2]CheckedTypeIdentity), a: CheckedTypeIdentity, b: CheckedTypeIdentity) Allocator.Error!void {
+        const view_a = self.moduleForId(a.module);
+        const view_b = self.moduleForId(b.module);
+        const resolved_a = resolvedRowJoinPayload(view_a, a.ty);
+        const resolved_b = resolvedRowJoinPayload(view_b, b.ty);
+        switch (resolved_a.payload) {
+            .tag_union, .empty_tag_union => {
+                if (resolved_b.payload != .tag_union and resolved_b.payload != .empty_tag_union) return;
+                var tags_a = std.ArrayList(RowJoinTag).empty;
+                defer tags_a.deinit(self.allocator);
+                var tags_b = std.ArrayList(RowJoinTag).empty;
+                defer tags_b.deinit(self.allocator);
+                _ = try self.collectRowJoinTags(view_a, resolved_a.ty, &tags_a);
+                _ = try self.collectRowJoinTags(view_b, resolved_b.ty, &tags_b);
+                for (tags_a.items) |tag_a| {
+                    const text_a = rowJoinTagText(tag_a);
+                    for (tags_b.items) |tag_b| {
+                        if (!std.mem.eql(u8, text_a, rowJoinTagText(tag_b))) continue;
+                        const args_a = tag_a.tag.argsSlice(tag_a.view.checked_types);
+                        const args_b = tag_b.tag.argsSlice(tag_b.view.checked_types);
+                        if (args_a.len != args_b.len) boxyPlanInvariant("joined tag rows held one tag at two payload arities");
+                        for (args_a, args_b) |arg_a, arg_b| try work.append(self.allocator, .{ typeRef(tag_a.view, arg_a), typeRef(tag_b.view, arg_b) });
+                        break;
+                    }
+                }
+            },
+            .nominal => |nominal_a| {
+                if (resolved_b.payload != .nominal) return;
+                const nominal_b = resolved_b.payload.nominal;
+                if (nominal_a.args.len != nominal_b.args.len) return;
+                for (nominal_a.args, nominal_b.args) |arg_a, arg_b| try work.append(self.allocator, .{ typeRef(view_a, arg_a), typeRef(view_b, arg_b) });
+            },
+            .record => |record_a| {
+                if (resolved_b.payload != .record) return;
+                const record_b = resolved_b.payload.record;
+                if (record_a.fields.len != record_b.fields.len) return;
+                for (record_a.fields, record_b.fields) |field_a, field_b| try work.append(self.allocator, .{ typeRef(view_a, field_a.ty), typeRef(view_b, field_b.ty) });
+            },
+            .tuple => |items_a| {
+                if (resolved_b.payload != .tuple) return;
+                const items_b = resolved_b.payload.tuple;
+                if (items_a.len != items_b.len) return;
+                for (items_a, items_b) |item_a, item_b| try work.append(self.allocator, .{ typeRef(view_a, item_a), typeRef(view_b, item_b) });
+            },
+            .function => |function_a| {
+                if (resolved_b.payload != .function) return;
+                const function_b = resolved_b.payload.function;
+                if (function_a.args.len != function_b.args.len) return;
+                for (function_a.args, function_b.args) |arg_a, arg_b| try work.append(self.allocator, .{ typeRef(view_a, arg_a), typeRef(view_b, arg_b) });
+                try work.append(self.allocator, .{ typeRef(view_a, function_a.ret), typeRef(view_b, function_b.ret) });
+            },
+            .pending, .err, .flex, .rigid, .alias, .empty_record => {},
+        }
+    }
+
+    fn rowJoinTagText(tag: RowJoinTag) []const u8 {
+        const names = tag.view.canonical_names orelse boxyPlanInvariant("joined tag row had no resolved tag labels");
+        return names.tagLabelText(tag.tag.name);
+    }
+
+    /// Whether a type is ground: no type variable and no open tag row
+    /// anywhere in it. Only ground members share a join set's representation;
+    /// an open row keeps its own dynamic representation and only connects the
+    /// ground types on either side of it.
+    fn rowJoinIdentityIsGround(self: *Builder, identity: CheckedTypeIdentity) Allocator.Error!bool {
+        var work = std.ArrayList(CheckedTypeIdentity).empty;
+        defer work.deinit(self.allocator);
+        var seen = std.AutoHashMap(CheckedTypeIdentity, void).init(self.allocator);
+        defer seen.deinit();
+        try work.append(self.allocator, identity);
+        while (work.pop()) |current| {
+            if ((try seen.getOrPut(current)).found_existing) continue;
+            const view = self.moduleForId(current.module);
+            const resolved = resolvedRowJoinPayload(view, current.ty);
+            switch (resolved.payload) {
+                .flex, .rigid, .pending, .err => return false,
+                .alias => unreachable,
+                .empty_record, .empty_tag_union => {},
+                .tag_union => {
+                    var tags = std.ArrayList(RowJoinTag).empty;
+                    defer tags.deinit(self.allocator);
+                    if (!try self.collectRowJoinTags(view, resolved.ty, &tags)) return false;
+                    for (tags.items) |tag| {
+                        for (tag.tag.argsSlice(tag.view.checked_types)) |arg| try work.append(self.allocator, typeRef(tag.view, arg));
+                    }
+                },
+                .nominal => |nominal| for (nominal.args) |arg| try work.append(self.allocator, typeRef(view, arg)),
+                .record => |record| for (record.fields) |field| try work.append(self.allocator, typeRef(view, field.ty)),
+                .tuple => |items| for (items) |item| try work.append(self.allocator, typeRef(view, item)),
+                .function => |function| {
+                    for (function.args) |arg| try work.append(self.allocator, typeRef(view, arg));
+                    try work.append(self.allocator, typeRef(view, function.ret));
+                },
+            }
+        }
+        return true;
+    }
+
+    fn rowJoinIdentityLessThan(_: void, a: CheckedTypeIdentity, b: CheckedTypeIdentity) bool {
+        return switch (std.mem.order(u8, &a.module.bytes, &b.module.bytes)) {
+            .lt => true,
+            .gt => false,
+            .eq => @backingInt(a.ty) < @backingInt(b.ty),
+        };
+    }
+
+    /// Elect, for every join set with at least two ground members, the
+    /// member every other ground member binds to: the least identity, so the
+    /// choice depends on the program alone.
+    fn chooseRowJoinRepresentatives(self: *Builder) Allocator.Error!void {
+        var groups = std.AutoHashMap(CheckedTypeIdentity, std.ArrayListUnmanaged(CheckedTypeIdentity)).init(self.allocator);
+        defer {
+            var it = groups.valueIterator();
+            while (it.next()) |group| group.deinit(self.allocator);
+            groups.deinit();
+        }
+        var identities = std.ArrayList(CheckedTypeIdentity).empty;
+        defer identities.deinit(self.allocator);
+        var keys = self.row_joins.keyIterator();
+        while (keys.next()) |identity| try identities.append(self.allocator, identity.*);
+        for (identities.items) |identity| {
+            if (!try self.rowJoinIdentityIsGround(identity)) continue;
+            const root = try self.rowJoinRoot(identity);
+            const entry = try groups.getOrPut(root);
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            try entry.value_ptr.append(self.allocator, identity);
+        }
+        var it = groups.valueIterator();
+        while (it.next()) |group| {
+            if (group.items.len < 2) continue;
+            std.mem.sort(CheckedTypeIdentity, group.items, {}, rowJoinIdentityLessThan);
+            const representative = group.items[0];
+            for (group.items) |member| try self.row_join_representative.put(member, representative);
+            try self.row_join_members.put(representative, try self.allocator.dupe(CheckedTypeIdentity, group.items));
+        }
+    }
+
+    /// The representation of a tag row that is a join set's representative member:
+    /// every member's tags, each payload at the representation its own type
+    /// binds to (design.md "Row Joins").
+    fn planJoinedTagUnionRep(
+        self: *Builder,
+        requests: *std.ArrayList(RepRequest),
+        source_type: CheckedTypeIdentity,
+        members: []const CheckedTypeIdentity,
+    ) Allocator.Error!RepFinish {
+        var tags = std.ArrayList(RowJoinTag).empty;
+        defer tags.deinit(self.allocator);
+        for (members) |member| {
+            const view = self.moduleForId(member.module);
+            const resolved = resolvedRowJoinPayload(view, member.ty);
+            switch (resolved.payload) {
+                .tag_union, .empty_tag_union => _ = try self.collectRowJoinTags(view, resolved.ty, &tags),
+                .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record => boxyPlanInvariant("a tag row's join set held a type that is not a tag row"),
+            }
+        }
+        var unique = std.ArrayList(RowJoinTag).empty;
+        defer unique.deinit(self.allocator);
+        candidates: for (tags.items) |candidate| {
+            const text = rowJoinTagText(candidate);
+            for (unique.items) |existing| {
+                if (std.mem.eql(u8, text, rowJoinTagText(existing))) continue :candidates;
+            }
+            try unique.append(self.allocator, candidate);
+        }
+        std.mem.sort(RowJoinTag, unique.items, {}, struct {
+            fn lessThan(_: void, a: RowJoinTag, b: RowJoinTag) bool {
+                return std.mem.lessThan(u8, rowJoinTagText(a), rowJoinTagText(b));
+            }
+        }.lessThan);
+        var roles = std.ArrayList(ChildRole).empty;
+        defer roles.deinit(self.allocator);
+        var variants = std.ArrayList(TagVariant).empty;
+        defer variants.deinit(self.allocator);
+        for (unique.items) |entry| {
+            const start: u32 = @intCast(roles.items.len);
+            for (entry.tag.argsSlice(entry.view.checked_types), 0..) |arg, index| {
+                try roles.append(self.allocator, .{ .tag_payload = .{ .tag = entry.tag.name, .index = @intCast(index) } });
+                try requests.append(self.allocator, .{ .checked = .{ .view = entry.view, .ty = arg, .context = self.host_context } });
+            }
+            try variants.append(self.allocator, .{ .name = entry.tag.name, .name_module = entry.view.key, .payloads = .{ .start = start, .len = entry.tag.args_len } });
+        }
+        const sources = try self.allocator.alloc(CheckedTypeIdentity, requests.items.len);
+        errdefer self.allocator.free(sources);
+        for (requests.items, sources) |request, *source| source.* = requestSourceType(request);
+        const owned_roles = try roles.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(owned_roles);
+        return .{ .host_tag_union = .{
+            .source_type = source_type,
+            .open = false,
+            .roles = owned_roles,
+            .sources = sources,
+            .variants = try variants.toOwnedSlice(self.allocator),
+        } };
     }
 
     /// Write a component-free representation into the slot the frame

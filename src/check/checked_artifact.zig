@@ -10940,8 +10940,9 @@ pub const CheckedExprData = union(enum) {
     },
     /// A checker-stamped row coercion (design.md "Row Coercion Primitive"):
     /// `value` is a closed tag row whose every tag this expression's wider
-    /// type lists. The two types are related, never unified, and lowering
-    /// re-tags the value. No checker site emits it yet.
+    /// type lists. The checker relates the two types without unifying them;
+    /// lowering joins their rows into one row (design.md "Row Joins") and
+    /// lowers `value` straight into this expression's destination.
     row_coerce: struct {
         value: CheckedExprId,
     },
@@ -22165,21 +22166,6 @@ pub const ProcTarget = union(enum) {
     comptime_only,
 };
 
-/// Checker-owned capability for a closed `Builtin.Try` result row. General
-/// dispatch adapters use it to retag results, including hosted selections;
-/// hosted ABI validation also uses it. The nominal, tags, and type argument positions
-/// are explicit so postcheck never recognizes Try by names or backing shape.
-pub const HostedTryAdapterCapability = struct {
-    nominal: canonical.NominalTypeKey,
-    /// The nominal's declared name: display metadata for the lowered type
-    /// definition, never identity.
-    type_name: canonical.TypeNameId,
-    ok_tag: canonical.TagLabelId,
-    err_tag: canonical.TagLabelId,
-    ok_type_arg_index: u8,
-    err_type_arg_index: u8,
-};
-
 /// Public `CheckedProcedureTemplate` declaration.
 pub const CheckedProcedureTemplate = struct {
     proc_base: canonical.ProcBaseKeyRef,
@@ -22201,7 +22187,6 @@ pub const CheckedProcedureTemplate = struct {
     top_level_value_uses: TopLevelUseSummaryRef,
     nested_proc_sites: NestedProcSiteTableRef,
     target: ProcTarget,
-    hosted_try_adapter: ?HostedTryAdapterCapability = null,
     /// The low-level operation this template's body runs over its parameters,
     /// for a Builtin definition the Builtin low-level transform produced.
     /// Post-check stages read the operation from here; they never recognize a
@@ -22306,175 +22291,6 @@ test "hosted Try adapter capability recognizes only closed structural error rows
     try std.testing.expect(checkedTypeIsClosedTagRow(&store, aliased_row));
     try std.testing.expect(!checkedTypeIsClosedTagRow(&store, open_row));
     try std.testing.expect(!checkedTypeIsClosedTagRow(&store, non_row));
-}
-
-/// Whether a tag row is closed for the purposes of result-row widening: its
-/// extension chain ends in the empty tag union, or in a variable that lowering
-/// seals to one.
-///
-/// Closedness here is `CheckedTypePayload.variableSealsToRowDefault` (see its
-/// doc comment: the rule Monotype's sealed-cell guard shares, so the two
-/// cannot drift), not `checkedTypeIsClosedTagRow` above. The two differ at a
-/// rigid tail, which that rule counts as closed. A rigid result row is
-/// parametric—the caller supplies it—so a template carrying one is
-/// polymorphic in its result and must never mint a widening adapter.
-fn checkedResultRowIsClosed(
-    checked_types: *const CheckedTypeStore,
-    root: CheckedTypeId,
-) bool {
-    var remaining = checked_types.payloads.items.len;
-    var current = root;
-    while (true) {
-        const payload = checked_types.payload(current);
-        switch (payload) {
-            .alias => |alias| current = alias.backing,
-            .tag_union => |tag_union| current = tag_union.ext,
-            .empty_tag_union => return true,
-            .flex, .rigid => |variable| return payload.variableSealsToRowDefault() and
-                variable.row_default == .empty_tag_union,
-            .pending,
-            .err,
-            .record,
-            .tuple,
-            .nominal,
-            .function,
-            .empty_record,
-            => return false,
-        }
-        if (remaining == 0) {
-            checkedArtifactInvariant("result row extension chain was cyclic", .{});
-        }
-        remaining -= 1;
-    }
-}
-
-/// Whether a procedure template's published result row is closed, so a request
-/// at a row that includes it is served by a generated widening adapter
-/// (design.md "Result-Row Widening Adapter"). The result row is the function
-/// result's own tag row, or—when the result is `Builtin.Try`—its error
-/// argument's row. Monotype mirrors this walk in `lower.zig`'s
-/// `closedResultRowOrNull`.
-fn checkedRootHasClosedResultRow(
-    checked_types: *const CheckedTypeStore,
-    checked_fn_root: CheckedTypeId,
-) bool {
-    var remaining = checked_types.payloads.items.len;
-    var current = checked_fn_root;
-    const function = while (true) {
-        switch (checked_types.payload(current)) {
-            .alias => |alias| current = alias.backing,
-            .function => |function| break function,
-            .pending,
-            .err,
-            .flex,
-            .rigid,
-            .record,
-            .tuple,
-            .nominal,
-            .empty_record,
-            .tag_union,
-            .empty_tag_union,
-            => return false,
-        }
-        if (remaining == 0) {
-            checkedArtifactInvariant("procedure root alias chain was cyclic", .{});
-        }
-        remaining -= 1;
-    };
-    remaining = checked_types.payloads.items.len;
-    current = function.ret;
-    while (true) {
-        switch (checked_types.payload(current)) {
-            .alias => |alias| current = alias.backing,
-            .nominal => |nominal| {
-                if (nominal.builtin != .try_) return false;
-                if (nominal.args.len != 2) {
-                    checkedArtifactInvariant("Builtin.Try checked type did not have exactly two type arguments", .{});
-                }
-                return checkedResultRowIsClosed(checked_types, nominal.args[1]);
-            },
-            .tag_union, .empty_tag_union => return checkedResultRowIsClosed(checked_types, current),
-            .pending,
-            .err,
-            .flex,
-            .rigid,
-            .record,
-            .tuple,
-            .function,
-            .empty_record,
-            => return false,
-        }
-        if (remaining == 0) {
-            checkedArtifactInvariant("procedure result alias chain was cyclic", .{});
-        }
-        remaining -= 1;
-    }
-}
-
-fn hostedTryAdapterCapabilityForCheckedRoot(
-    names: *canonical.CanonicalNameStore,
-    checked_types: *const CheckedTypeStore,
-    checked_fn_root: CheckedTypeId,
-) Allocator.Error!?HostedTryAdapterCapability {
-    var remaining = checked_types.payloads.items.len;
-    var current = checked_fn_root;
-    const function = while (true) {
-        switch (checked_types.payload(current)) {
-            .alias => |alias| current = alias.backing,
-            .function => |function| break function,
-            .pending,
-            .err,
-            .flex,
-            .rigid,
-            .record,
-            .tuple,
-            .nominal,
-            .empty_record,
-            .tag_union,
-            .empty_tag_union,
-            => return null,
-        }
-        if (remaining == 0) {
-            checkedArtifactInvariant("hosted function type alias chain was cyclic", .{});
-        }
-        remaining -= 1;
-    };
-    remaining = checked_types.payloads.items.len;
-    current = function.ret;
-    const nominal = while (true) {
-        switch (checked_types.payload(current)) {
-            .alias => |alias| current = alias.backing,
-            .nominal => |nominal| break nominal,
-            .pending,
-            .err,
-            .flex,
-            .rigid,
-            .record,
-            .tuple,
-            .function,
-            .empty_record,
-            .tag_union,
-            .empty_tag_union,
-            => return null,
-        }
-        if (remaining == 0) {
-            checkedArtifactInvariant("hosted result type alias chain was cyclic", .{});
-        }
-        remaining -= 1;
-    };
-    if (nominal.builtin != .try_) return null;
-    if (nominal.args.len != 2) {
-        checkedArtifactInvariant("Builtin.Try checked type did not have exactly two type arguments", .{});
-    }
-    if (!checkedTypeIsClosedTagRow(checked_types, nominal.args[1])) return null;
-    return .{
-        .nominal = checkedNominalTypeKey(nominal),
-        .type_name = nominal.name,
-        .ok_tag = try names.internTagLabel("Ok"),
-        .err_tag = try names.internTagLabel("Err"),
-        .ok_type_arg_index = 0,
-        .err_type_arg_index = 1,
-    };
 }
 
 /// Public `CheckedProcedureTemplateTable` declaration.
@@ -22629,18 +22445,6 @@ pub const CheckedProcedureTemplateTable = struct {
                 else
                     .roc,
                 .provided_low_level = module.moduleEnvConst().providedLowLevelForDef(def_idx),
-                // The `Try` capability is published for every template whose
-                // published result row is closed, not only hosted ones: a Roc
-                // implementation reached at a row that includes its own is
-                // adapted by the same mechanism (design.md "Result-Row
-                // Widening Adapter"). Hosted templates keep publishing it
-                // unconditionally so the host ABI boundary is unaffected by
-                // the stricter closed-row rule.
-                .hosted_try_adapter = if (isHostedProcedureExpr(def.expr.data) or
-                    checkedRootHasClosedResultRow(&checked_type_publication.store, checked_fn_root))
-                    try hostedTryAdapterCapabilityForCheckedRoot(names, &checked_type_publication.store, checked_fn_root)
-                else
-                    null,
             });
         }
 
@@ -22708,10 +22512,6 @@ pub const CheckedProcedureTemplateTable = struct {
                 .top_level_value_uses = .{},
                 .nested_proc_sites = .{},
                 .target = .roc,
-                .hosted_try_adapter = if (checkedRootHasClosedResultRow(&checked_type_publication.store, checked_fn_root))
-                    try hostedTryAdapterCapabilityForCheckedRoot(names, &checked_type_publication.store, checked_fn_root)
-                else
-                    null,
             });
             entry.* = .{ .pattern = promoted.pattern, .template = template_ref };
         }
@@ -22790,14 +22590,6 @@ pub const CheckedProcedureTemplateTable = struct {
                     .expect => .entry,
                     .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .repl_expr => .comptime_only,
                 },
-                // Compile-time root wrappers publish the capability under the
-                // same closed-result-row rule as ordinary procedure templates,
-                // so Monotype never meets a closed `Try` result row without the
-                // provenance the adapter reads it through.
-                .hosted_try_adapter = if (checkedRootHasClosedResultRow(checked_types, checked_fn_root))
-                    try hostedTryAdapterCapabilityForCheckedRoot(names, checked_types, checked_fn_root)
-                else
-                    null,
             });
         }
     }
@@ -26879,7 +26671,6 @@ pub fn pairCheckedPlatform(
         template.checked_fn_root = try substitutions.specializeRootWithMemo(session, &result.checked_types, source_root, &type_memo);
         if (template.checked_fn_root != source_root) {
             template.checked_fn_scheme = syntheticSchemeKeyForType(result.checked_types.roots.items[@backingInt(template.checked_fn_root)].key);
-            template.hosted_try_adapter = try hostedTryAdapterCapabilityForCheckedRoot(&result.canonical_names, &result.checked_types, template.checked_fn_root);
             switch (template.body) {
                 .entry_wrapper => |id| {
                     if (!copied_entry_wrappers) {
@@ -39112,8 +38903,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x1D, 0x53, 0xCF, 0x79, 0x0F, 0x53, 0x44, 0x58, 0xF1, 0x22, 0x56, 0x82, 0x7F, 0x8C, 0x5B, 0x2F,
-        0x6B, 0x05, 0xBD, 0x5E, 0x1F, 0x22, 0x14, 0x9E, 0x44, 0x6A, 0x65, 0x83, 0x5E, 0x3C, 0x16, 0xC0,
+        0x9E, 0x55, 0x2E, 0x47, 0x57, 0xE1, 0xD2, 0xCB, 0xBF, 0xEA, 0x61, 0x9B, 0xDA, 0x2A, 0x61, 0x89,
+        0x00, 0x8D, 0x67, 0x5C, 0x97, 0x0F, 0x44, 0x44, 0xE0, 0x26, 0x55, 0x4A, 0xBF, 0x8F, 0x18, 0x52,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

@@ -1163,10 +1163,10 @@ pub const TypedBoundary = struct {
 
 /// A checked row coercion (design.md "Row Coercion Primitive"): the child is a
 /// value at its own closed tag row, and this expression's `ty` is the wider row
-/// it is used at. A `Return` without control flow: Lambda Solved relates the
-/// child to the target through the directed return relation rather than
-/// unifying the two rows, and LIR lowering re-tags the value. Nothing in the
-/// checker emits it yet.
+/// it is used at. A `Return` without control flow: Lambda Solved unifies the
+/// child's type with this expression's, so the two rows become one row
+/// (design.md "Row Joins"), and LIR lowering lowers the child straight into
+/// the destination.
 pub const RowWiden = struct {
     value: ExprId,
 };

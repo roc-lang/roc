@@ -18996,12 +18996,15 @@ const ProcBodyBuilder = struct {
         return .{ .tail = .{ .expr = .{ .target = expr_local, .expr_id = expr_id, .next = assign_ret } } };
     }
 
-    /// A checked row coercion (design.md "Row Coercion Primitive") crosses the
-    /// representation boundary exactly as an explicit return does: the value
-    /// is lowered at its own checked type into a fresh local, and the boundary
-    /// re-tags it into the target local. `target_rep` is the representation
-    /// the caller stores the target at; the coercion's own pair, the child's
-    /// type and `coerce_ty`, is what the reach check reads.
+    /// A checked row coercion (design.md "Row Coercion Primitive"). The child's
+    /// type and the coercion's are one join set, so when both are ground they
+    /// share one representation and the child lowers straight into the target
+    /// (design.md "Row Joins"). Otherwise the coercion's type holds an open
+    /// row: the value is lowered at its own representation into a fresh local
+    /// and crosses the representation boundary into the target's dynamic
+    /// storage exactly as an explicit return does. `target_rep` is the
+    /// representation the caller stores the target at; the coercion's own
+    /// pair, the child's type and `coerce_ty`, is what the reach check reads.
     fn beginRowCoerce(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -19015,7 +19018,17 @@ const ProcBodyBuilder = struct {
         if (!self.localUsesWorkerLayoutForRep(target, target_rep)) {
             boxyLowerInvariant("boxy row coercion target local layout disagreed with its caller's representation");
         }
-        // A child that diverges produces no value to re-tag, and its own
+        // The value's type and the destination's type are one join set, so
+        // they share one representation (design.md "Row Joins") and the value
+        // is lowered straight into the target. The two differ only when the
+        // value's type holds an open row, which keeps its dynamic
+        // representation and crosses the boundary below.
+        if (value_rep == target_rep) {
+            const items = try self.parent.allocator.alloc(ExprChainItem, 1);
+            items[0] = .{ .lower = .{ .expr = .{ .target = target, .expr_id = value_id, .next = undefined } } };
+            return exprChain(items, next);
+        }
+        // A child that diverges produces no value to move, and its own
         // checked type need not be a row at all.
         if (!self.module.checked_bodies.exprDiverges(value_id, .omit)) {
             try self.assertRowCoerceReach(self.repForType(coerce_ty), value_rep);
@@ -19044,7 +19057,7 @@ const ProcBodyBuilder = struct {
     /// be copied as it is and read at the wrong row. Such a coercion adapts
     /// the value's descriptor to the target representation's own
     /// (`assignRuntimeAdapterBoundary`). A closed tag row has no descriptor
-    /// and re-tags through the shared boundary; an open destination row and a
+    /// and crosses the shared boundary; an open destination row and a
     /// bare type parameter keep the dynamic-destination adapters there.
     ///
     /// No value holding a callable in its structure reaches this branch
@@ -19082,7 +19095,7 @@ const ProcBodyBuilder = struct {
     /// backing, which `tagVariantRepForBoundary` steps through) every source
     /// variant is in the target with the same payload arity; anywhere else
     /// the two representations hold the same tag rows. The shared
-    /// representation boundary would otherwise re-tag records and other
+    /// representation boundary would otherwise convert records and other
     /// aggregates structurally and accept a pure narrowing.
     fn assertRowCoerceReach(
         self: *ProcBodyBuilder,

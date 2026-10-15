@@ -2403,10 +2403,10 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "polarity W3: recursive method whose dispatch target is the enclosing template (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/OpenMethodRecursiveMethod.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
     // A where-method implementation whose published
     // result row is CLOSED, requested at a row that includes it. The template
-    // stays specialized at its declared row and a generated adapter at the
-    // requested row re-tags the result (design.md "Result-Row Widening
-    // Adapter"). Each fixture runs on both backends; running one proves the
-    // program computes the right answer, not that an adapter was minted, so
+    // stays specialized at its declared row and its result row joins the
+    // request's where the call's result flows (design.md "Row Joins"). Each
+    // fixture runs on both backends; running one proves the program computes
+    // the right answer, not that nothing was generated to convert it, so
     // `lir_inline_test.zig` counts `.checked_generated` fns for the same
     // shapes. `roc test` prints its pass line before consulting checker
     // errors, hence the "type mismatch" and "missing method" stderr needles.
@@ -2435,8 +2435,8 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "polarity W6b: alias-referenced row nested in the result rejects a widening use", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/WidenAliasNestedRow.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "x.statuses()" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
 
     // The same rule for a row written as an alias's type ARGUMENT.
-    // `Res(e) : Try(Str, e)` puts `e` in the `Try` error cell the adapter
-    // re-tags, so `Res([IoErr])` at a where-method's direct result has to open
+    // `Res(e) : Try(Str, e)` puts `e` in the `Try` error cell a use may
+    // widen, so `Res([IoErr])` at a where-method's direct result has to open
     // per use exactly as a directly written `Try(Str, [IoErr])` does. Matching
     // only a DIRECT builtin `Try` generated it closed and this program failed
     // to check, while lowering crossed the same alias and would have adapted
@@ -2453,7 +2453,8 @@ const subcommand_cases = [_]CliCase{
     // which per-use opening withholds, so `x.status()` has the closed ok row
     // the where clause writes. That row is within the row coercion's reach, so
     // the body use widens it through a row coercion into the annotated result
-    // (design.md "Row Subsumption"), and every backend re-tags the value.
+    // (design.md "Row Subsumption"), and the two ok rows are one row on every
+    // backend (design.md "Row Joins").
     .{ .id = 0, .suite = .subcommands, .name = "polarity W6b: alias type-argument in the Try ok position widens at the body use (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/WidenAliasOkFormalRow.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "polarity W6b: alias type-argument in the Try ok position widens at the body use (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/WidenAliasOkFormalRow.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "polarity W6b: alias type-argument in the Try ok position widens at the body use (boxy)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/WidenAliasOkFormalRow.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "missing method" }, .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },

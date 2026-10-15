@@ -4,7 +4,8 @@
 # of `Try`'s backing), so the body's value relates to the annotated result
 # through a widening copy and crosses into it through a row coercion
 # (design.md "Row Subsumption"): the body use widens the ok row rather than
-# rejecting it, and every backend re-tags the forwarded value.
+# rejecting it, and the two ok rows are one row on every backend (design.md
+# "Row Joins").
 WidenAliasOkFormalRow := {}
 
 OkRes(a) : Try(a, [IoErr])
