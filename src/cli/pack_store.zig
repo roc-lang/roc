@@ -1028,7 +1028,7 @@ test "pack checked materializer demand is shared across recursive callers and re
     defer set.deinit();
     var closure = try backend.dev.ArtifactClosure.init(allocator, &set);
     defer closure.deinit();
-    const summaries = try packs.servingDemandSummaries(&closure, &.{}, &.{});
+    const summaries = try packs.servingDemandSummaries(&closure, &.{}, &.{}, &.{});
     defer allocator.free(summaries);
     try std.testing.expect(summaries[0].checked_roots.ptr == summaries[1].checked_roots.ptr);
     try std.testing.expectEqual(@as(usize, 1), summaries[0].checked_roots.len);
@@ -1185,6 +1185,8 @@ pub const LoadedPacks = struct {
 
     allocator: Allocator,
     packs: std.ArrayList(*PackFile.Pack),
+    /// Indexing state of each pack in `packs`, in the same order.
+    pack_states: std.ArrayListUnmanaged(Indexed) = .empty,
     indexed_count: usize = 0,
     /// A rejected checking session can never offer or extend its objects
     /// again; the code of specializations it already served stays readable.
@@ -1258,9 +1260,31 @@ pub const LoadedPacks = struct {
         /// The offers (by root artifact) whose closures were admitted or
         /// found unservable.
         admitted_roots: std.AutoHashMapUnmanaged(u32, void) = .empty,
-        /// Whether an admitted closure carried the pack's discovery
-        /// summaries, which the first one does.
-        discovery_indexed: bool = false,
+        /// The one set admitted from this pack, in `packs`, which grows by
+        /// a closure at a time; null until a closure is admitted.
+        admitted: ?*PackFile.Pack = null,
+        /// Each admitted artifact's index in the admitted set, by its index
+        /// in the pack.
+        position: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+        /// The admitted set's artifacts, specs, and definitions; the set's
+        /// slices view these lists.
+        artifact_list: std.ArrayListUnmanaged(backend.dev.ProcArtifact.Artifact) = .empty,
+        definition_list: std.ArrayListUnmanaged(u32) = .empty,
+        spec_list: std.ArrayListUnmanaged(PackFile.SpecEntry) = .empty,
+    };
+
+    /// What indexing has covered of one admitted pack, so a pack that grows
+    /// by another closure indexes only the artifacts it gained. An
+    /// artifact's serving facts depend on its closure alone, and nothing an
+    /// admitted artifact reaches arrives later, so the facts of indexed
+    /// artifacts stay as they are.
+    const Indexed = struct {
+        /// How many of the set's artifacts are indexed.
+        artifacts: usize = 0,
+        /// The serving demand of each indexed artifact.
+        summaries: std.ArrayListUnmanaged(ServingDemand) = .empty,
+        /// Whether each indexed artifact's closure is admitted.
+        valid: std.ArrayListUnmanaged(bool) = .empty,
     };
 
     const Deferred = struct {
@@ -1368,7 +1392,10 @@ pub const LoadedPacks = struct {
         owner.* = pack;
         // After this succeeds, only LoadedPacks owns the decoded arena,
         // including errors in subsequent files or indexing.
-        try self.packs.append(self.allocator, owner);
+        try self.packs.ensureUnusedCapacity(self.allocator, 1);
+        try self.pack_states.ensureUnusedCapacity(self.allocator, 1);
+        self.packs.appendAssumeCapacity(owner);
+        self.pack_states.appendAssumeCapacity(.{});
     }
 
     /// Register a store pack's offers without decoding its artifacts. Takes
@@ -1415,12 +1442,12 @@ pub const LoadedPacks = struct {
     }
 
     /// Admit the closure of store pack `id`'s offers of `key` that are not
-    /// admitted yet, as a set of its own: the artifacts the offers reach,
-    /// renumbered densely, naming their definitions by their index in the
-    /// pack so every closure of one pack names a shared definition alike.
-    /// The set offers every spec of the pack whose artifact it holds, and
-    /// queues the literal producers those offers and the pack's
-    /// materializer reads name. Returns whether a set was admitted.
+    /// admitted yet, into the one set admitted from that pack: the
+    /// artifacts the offers reach that the set lacks are appended to it,
+    /// renumbered densely and naming their definitions by their index in
+    /// the pack. The set offers every spec of the pack whose artifact it
+    /// holds, and admission queues the literal producers those offers and
+    /// the pack's materializer reads name. Returns whether the set grew.
     fn admitClosure(self: *LoadedPacks, id: u32, key: [32]u8, pending: *std.ArrayList([32]u8)) LoadError!bool {
         const source = &self.store_packs.items[id];
         const offers = source.index.offers;
@@ -1439,58 +1466,75 @@ pub const LoadedPacks = struct {
             return false;
         };
         defer self.allocator.free(members);
-        try self.decodeMembers(source, members);
-
-        var arena = collections.SingleThreadArena.init(self.allocator);
-        errdefer arena.deinit();
-        const a = arena.allocator();
-        const remap = try self.allocator.alloc(?u32, offers.artifacts.len);
-        defer self.allocator.free(remap);
-        @memset(remap, null);
-        for (members, 0..) |member, new| remap[member] = @intCast(new);
-        const artifacts = try a.alloc(backend.dev.ProcArtifact.Artifact, members.len);
-        for (members, artifacts) |member, *artifact| {
-            artifact.* = source.decoded.get(member) orelse unreachable;
+        var added = std.ArrayList(u32).empty;
+        defer added.deinit(self.allocator);
+        for (members) |member| {
+            if (!source.position.contains(member)) try added.append(self.allocator, member);
+        }
+        if (std.c.getenv("ROC_PACK_TRACE") != null) std.debug.print("admit-closure pack={d} key={x} roots={d} members={d} added={d}\n", .{ id, key[0..8], roots.items.len, members.len, added.items.len });
+        try self.decodeMembers(source, added.items);
+        const pack = source.admitted orelse try self.createAdmittedPack(source);
+        const base: u32 = @intCast(source.artifact_list.items.len);
+        for (added.items, 0..) |member, offset| try source.position.put(self.allocator, member, base + @as(u32, @intCast(offset)));
+        const a = pack.set.arena.allocator();
+        try source.artifact_list.ensureUnusedCapacity(self.allocator, added.items.len);
+        try source.definition_list.ensureUnusedCapacity(self.allocator, added.items.len);
+        for (added.items) |member| {
+            var artifact = source.decoded.get(member) orelse unreachable;
             const refs = try a.dupe(backend.dev.ProcArtifact.Reference, artifact.refs);
-            for (refs) |*ref| ref.target = remap[ref.target] orelse return error.MalformedPack;
+            for (refs) |*ref| ref.target = source.position.get(ref.target) orelse return error.MalformedPack;
             artifact.refs = refs;
             const data = try a.dupe(backend.dev.ProcArtifact.DataItem, artifact.data);
             for (data) |*item| {
                 const relocations = try a.dupe(backend.dev.ProcArtifact.DataRelocation, item.relocations);
                 for (relocations) |*relocation| if (relocation.code_target) |*target| {
-                    if (target.* == .local) target.local = remap[target.local] orelse return error.MalformedPack;
+                    if (target.* == .local) target.local = source.position.get(target.local) orelse return error.MalformedPack;
                 };
                 item.relocations = relocations;
             }
             artifact.data = data;
+            source.artifact_list.appendAssumeCapacity(artifact);
+            source.definition_list.appendAssumeCapacity(member);
         }
-        var specs = std.ArrayList(PackFile.SpecEntry).empty;
         for (offers.specs) |spec| {
-            const new = remap[spec.artifact] orelse continue;
+            if (source.admitted_roots.contains(spec.artifact)) continue;
+            const new = source.position.get(spec.artifact) orelse continue;
             var entry = spec;
             entry.artifact = new;
-            try specs.append(a, entry);
+            try source.spec_list.append(self.allocator, entry);
             try source.admitted_roots.put(self.allocator, spec.artifact, {});
             if (spec.demand) |demand| for (demand.literal_reads) |read| try pending.append(self.allocator, read.recipe.producer_key);
         }
         for (offers.materializer_reads) |entry| try pending.append(self.allocator, entry.read.recipe.producer_key);
-        const discovery: []const PackFile.DiscoveryEntry = if (source.discovery_indexed) &.{} else offers.discovery;
-        source.discovery_indexed = true;
+        pack.set.artifacts = source.artifact_list.items;
+        pack.set.definitions = source.definition_list.items;
+        pack.specs = source.spec_list.items;
+        return added.items.len != 0;
+    }
+
+    /// The set admitted from `source`, created empty and registered among
+    /// the packs, so that its first growth indexes the pack's discovery
+    /// summaries and materializer reads along with its artifacts.
+    fn createAdmittedPack(self: *LoadedPacks, source: *StorePack) LoadError!*PackFile.Pack {
         const owner = try self.allocator.create(PackFile.Pack);
         errdefer self.allocator.destroy(owner);
         owner.* = .{
             .set = .{
-                .arena = arena,
-                .artifacts = artifacts,
+                .arena = collections.SingleThreadArena.init(self.allocator),
+                .artifacts = &.{},
                 .physical_namespace = source.index.physical_namespace,
-                .definitions = try a.dupe(u32, members),
+                .definitions = &.{},
             },
-            .specs = specs.items,
-            .discovery = discovery,
-            .materializer_reads = offers.materializer_reads,
+            .specs = &.{},
+            .discovery = source.index.offers.discovery,
+            .materializer_reads = source.index.offers.materializer_reads,
         };
-        try self.packs.append(self.allocator, owner);
-        return true;
+        try self.packs.ensureUnusedCapacity(self.allocator, 1);
+        try self.pack_states.ensureUnusedCapacity(self.allocator, 1);
+        self.packs.appendAssumeCapacity(owner);
+        self.pack_states.appendAssumeCapacity(.{});
+        source.admitted = owner;
+        return owner;
     }
 
     /// Decode the members of a closure `source` has not decoded yet, from
@@ -1729,15 +1773,19 @@ pub const LoadedPacks = struct {
     }
 
     fn indexPacksUnrecorded(self: *LoadedPacks) LoadError!void {
-        for (self.packs.items[self.indexed_count..]) |pack| {
-            for (pack.discovery) |entry| {
-                try self.discovery.put(self.allocator, .{ .key = entry.key, .platform_requirement_relation = entry.platform_requirement_relation }, {});
+        for (self.packs.items, self.pack_states.items) |pack, *state| {
+            const from = state.artifacts;
+            if (from == pack.set.artifacts.len) continue;
+            if (from == 0) {
+                for (pack.discovery) |entry| {
+                    try self.discovery.put(self.allocator, .{ .key = entry.key, .platform_requirement_relation = entry.platform_requirement_relation }, {});
+                }
+                for (pack.materializer_reads) |entry| {
+                    const read = try self.materializer_reads.getOrPut(self.allocator, entry.wrapper_identity);
+                    if (!read.found_existing) read.value_ptr.* = entry.read;
+                }
             }
-            for (pack.materializer_reads) |entry| {
-                const read = try self.materializer_reads.getOrPut(self.allocator, entry.wrapper_identity);
-                if (!read.found_existing) read.value_ptr.* = entry.read;
-            }
-            for (pack.set.artifacts) |artifact| {
+            for (pack.set.artifacts[from..]) |artifact| {
                 backend.dev.ProcArtifact.validateSourceEventCertificates(self.allocator, artifact, @import("builtin").cpu.arch.endian()) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
                     error.InvalidSourceEventCertificate => return error.MalformedPack,
@@ -1746,27 +1794,49 @@ pub const LoadedPacks = struct {
             }
             var closure = try backend.dev.ArtifactClosure.init(self.allocator, &pack.set);
             defer closure.deinit();
-            const summaries = try self.servingDemandSummaries(&closure, pack.specs, pack.materializer_reads);
+            const summaries = try self.servingDemandSummaries(&closure, pack.specs, pack.materializer_reads, state.summaries.items);
             defer self.allocator.free(summaries);
             try self.projectPendingMaterializers(pack, summaries);
-            const closed = try closure.admit(self, normalNode);
+            const closed = try self.allocator.alloc(bool, pack.set.artifacts.len);
             defer self.allocator.free(closed);
-            for (pack.set.artifacts, summaries, closed) |artifact, summary, *admitted| {
-                admitted.* = admitted.* and summary.complete and literalMaterializersDeclared(artifact, summary.literal_reads);
+            @memcpy(closed[0..from], state.valid.items);
+            for (pack.set.artifacts[from..], summaries[from..], closed[from..]) |artifact, summary, *admitted| {
+                admitted.* = normalNode(self, artifact) and summary.complete and literalMaterializersDeclared(artifact, summary.literal_reads);
             }
             try closure.propagateInvalid(closed);
+            try state.summaries.appendSlice(self.allocator, summaries[from..]);
+            try state.valid.appendSlice(self.allocator, closed[from..]);
+            state.artifacts = pack.set.artifacts.len;
             for (pack.specs) |spec| {
+                if (spec.artifact < from) continue;
                 const root = pack.set.artifacts[spec.artifact];
                 const identity = switch (root.kind) {
                     .proc => |identity| identity,
                     .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => return error.MalformedPack,
                 };
-                var demand = spec.demand orelse continue;
-                if (!demand.permitsRetirement()) continue;
-                if (!closed[spec.artifact]) continue;
-                if (root.callable_contract == null) continue;
+                const trace = std.c.getenv("ROC_PACK_TRACE") != null;
+                var demand = spec.demand orelse {
+                    if (trace) std.debug.print("index-offer key={x} reason=no-demand\n", .{spec.key[0..8]});
+                    continue;
+                };
+                if (!demand.permitsRetirement()) {
+                    if (trace) std.debug.print("index-offer key={x} reason=no-retirement\n", .{spec.key[0..8]});
+                    continue;
+                }
+                if (!closed[spec.artifact]) {
+                    if (trace) std.debug.print("index-offer key={x} reason=not-closed complete={} artifacts={d}\n", .{ spec.key[0..8], summaries[spec.artifact].complete, pack.set.artifacts.len });
+                    continue;
+                }
+                if (root.callable_contract == null) {
+                    if (trace) std.debug.print("index-offer key={x} reason=no-contract\n", .{spec.key[0..8]});
+                    continue;
+                }
                 demand.literal_reads = summaries[spec.artifact].literal_reads;
-                if (!self.factsNameCurrentModules(demand, summaries[spec.artifact].checked_roots, spec.comptime_root_reads)) continue;
+                if (!self.factsNameCurrentModules(demand, summaries[spec.artifact].checked_roots, spec.comptime_root_reads)) {
+                    if (trace) std.debug.print("index-offer key={x} reason=facts-name-other-modules\n", .{spec.key[0..8]});
+                    continue;
+                }
+                if (trace) std.debug.print("index-offer key={x} reason=accepted artifacts={d}\n", .{ spec.key[0..8], pack.set.artifacts.len });
                 const hit: Common.SpecCacheHit = .{
                     .identity = identity.bytes,
                     .demand = demand,
@@ -2057,14 +2127,23 @@ pub const LoadedPacks = struct {
             std.mem.eql(u8, &recipe.producer_key, &producer.conversion_identity);
     }
 
+    /// The serving demand of every artifact of `closure`'s set. `cached`
+    /// holds the demand of the set's first artifacts, which an earlier
+    /// indexing settled; nothing they reach was added since, so their
+    /// components are taken as given and only later components are summed.
     fn servingDemandSummaries(
         self: *LoadedPacks,
         closure: *backend.dev.ArtifactClosure,
         specs: []const PackFile.SpecEntry,
         materializer_reads: []const PackFile.MaterializerRead,
+        cached: []const ServingDemand,
     ) Allocator.Error![]const ServingDemand {
         var components = try closure.components();
         defer components.deinit();
+        const settled = try self.allocator.alloc(?ServingDemand, components.callees.len);
+        defer self.allocator.free(settled);
+        @memset(settled, null);
+        for (components.nodes[0..cached.len], cached) |component, summary| settled[component] = summary;
         const sets = try self.allocator.alloc(std.AutoHashMap(Common.CheckedRootUse, void), components.callees.len);
         defer self.allocator.free(sets);
         for (sets) |*set| set.* = std.AutoHashMap(Common.CheckedRootUse, void).init(self.allocator);
@@ -2082,6 +2161,7 @@ pub const LoadedPacks = struct {
         @memset(complete, true);
         for (specs) |spec| {
             const component = components.nodes[spec.artifact];
+            if (settled[component] != null) continue;
             const demand = spec.demand orelse {
                 complete[component] = false;
                 continue;
@@ -2090,6 +2170,7 @@ pub const LoadedPacks = struct {
             for (demand.literal_reads) |read| try addLiteralRead(&literals[component], &recipes[component], &complete[component], read);
         }
         for (closure.set.artifacts, components.nodes) |artifact, component| {
+            if (settled[component] != null) continue;
             for (artifact.materializations) |dependency| {
                 const declaration = dependency.materialization;
                 switch (declaration.producer) {
@@ -2112,7 +2193,14 @@ pub const LoadedPacks = struct {
         var component: usize = sets.len;
         while (component != 0) {
             component -= 1;
+            if (settled[component] != null) continue;
             for (components.callees[component]) |callee| {
+                if (settled[callee]) |summary| {
+                    for (summary.checked_roots) |use| try sets[component].put(use, {});
+                    complete[component] = complete[component] and summary.complete;
+                    for (summary.literal_reads) |read| try addLiteralRead(&literals[component], &recipes[component], &complete[component], read);
+                    continue;
+                }
                 var keys = sets[callee].keyIterator();
                 while (keys.next()) |use| try sets[component].put(use.*, {});
                 complete[component] = complete[component] and complete[callee];
@@ -2123,7 +2211,11 @@ pub const LoadedPacks = struct {
         const summaries = try self.allocator.alloc(ServingDemand, sets.len);
         defer self.allocator.free(summaries);
         const a = self.authority_arena.allocator();
-        for (sets, literals, complete, summaries) |*set, *literal_set, is_complete, *summary| {
+        for (sets, literals, complete, summaries, settled) |*set, *literal_set, is_complete, *summary, given| {
+            if (given) |value| {
+                summary.* = value;
+                continue;
+            }
             const uses = try a.alloc(Common.CheckedRootUse, set.count());
             var keys = set.keyIterator();
             for (uses) |*use| use.* = keys.next().?.*;
@@ -2512,6 +2604,10 @@ pub const LoadedPacks = struct {
             source.index.deinit();
             source.decoded.deinit(self.allocator);
             source.admitted_roots.deinit(self.allocator);
+            source.position.deinit(self.allocator);
+            source.artifact_list.deinit(self.allocator);
+            source.definition_list.deinit(self.allocator);
+            source.spec_list.deinit(self.allocator);
             source.arena.deinit();
         }
         self.store_packs.deinit(self.allocator);
@@ -2523,6 +2619,11 @@ pub const LoadedPacks = struct {
             self.allocator.destroy(pack);
         }
         self.packs.deinit(self.allocator);
+        for (self.pack_states.items) |*state| {
+            state.summaries.deinit(self.allocator);
+            state.valid.deinit(self.allocator);
+        }
+        self.pack_states.deinit(self.allocator);
     }
 
     /// The lookup Monotype consults at reservation.
@@ -2801,12 +2902,12 @@ test "pack literal materializers require a recipe in their own serving closure" 
         .rc_ret_unique_fields = 0,
         .rc_ret_conditions = &.{},
     };
-    const unrelated = try packs.servingDemandSummaries(&closure, (&spec)[0..1], &.{});
+    const unrelated = try packs.servingDemandSummaries(&closure, (&spec)[0..1], &.{}, &.{});
     defer allocator.free(unrelated);
     try std.testing.expect(!LoadedPacks.literalMaterializersDeclared(artifacts[1], unrelated[1].literal_reads));
     spec.artifact = 1;
     spec.demand.?.literal_reads = &.{ read, read, other_cause };
-    const matched = try packs.servingDemandSummaries(&closure, (&spec)[0..1], &.{});
+    const matched = try packs.servingDemandSummaries(&closure, (&spec)[0..1], &.{}, &.{});
     defer allocator.free(matched);
     try std.testing.expect(LoadedPacks.literalMaterializersDeclared(artifacts[1], matched[1].literal_reads));
     try std.testing.expectEqual(@as(usize, 2), matched[0].literal_reads.len);
@@ -2814,7 +2915,7 @@ test "pack literal materializers require a recipe in their own serving closure" 
     var conflicting = read;
     conflicting.recipe.current_fn_key.bytes[0] ^= 1;
     spec.demand.?.literal_reads = &.{ read, conflicting };
-    const rejected = try packs.servingDemandSummaries(&closure, (&spec)[0..1], &.{});
+    const rejected = try packs.servingDemandSummaries(&closure, (&spec)[0..1], &.{}, &.{});
     defer allocator.free(rejected);
     try std.testing.expect(!rejected[0].complete);
     try std.testing.expect(!rejected[1].complete);
@@ -2824,7 +2925,7 @@ test "pack literal materializers require a recipe in their own serving closure" 
     spec.artifact = 2;
     spec.demand.?.literal_reads = &.{};
     const recorded = [_]PackFile.MaterializerRead{.{ .wrapper_identity = declaration.wrapper_identity, .read = read }};
-    const carried = try packs.servingDemandSummaries(&closure, (&spec)[0..1], &recorded);
+    const carried = try packs.servingDemandSummaries(&closure, (&spec)[0..1], &recorded, &.{});
     defer allocator.free(carried);
     try std.testing.expect(LoadedPacks.literalMaterializersDeclared(artifacts[1], carried[1].literal_reads));
     try std.testing.expect(carried[0].complete and carried[1].complete);
@@ -2834,7 +2935,7 @@ test "pack literal materializers require a recipe in their own serving closure" 
     var other_producer = read;
     other_producer.recipe.producer_key[0] ^= 1;
     const mismatched = [_]PackFile.MaterializerRead{.{ .wrapper_identity = declaration.wrapper_identity, .read = other_producer }};
-    const refused = try packs.servingDemandSummaries(&closure, (&spec)[0..1], &mismatched);
+    const refused = try packs.servingDemandSummaries(&closure, (&spec)[0..1], &mismatched, &.{});
     defer allocator.free(refused);
     try std.testing.expect(!refused[1].complete);
     try std.testing.expect(!LoadedPacks.literalMaterializersDeclared(artifacts[1], refused[1].literal_reads));
