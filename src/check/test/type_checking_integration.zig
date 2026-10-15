@@ -7207,11 +7207,11 @@ test "check type - polarity - try may not flow an unlisted error into the annota
     );
 }
 
-test "check type - polarity - a rejected callback row keeps the annotated type" {
-    // The callback result is an input of `run`, so its row is closed, and
-    // `?` relates that row to the enclosing result, so `Err(NotAFunction)`
-    // would add a tag the callback's annotation does not list. That relation is rejected where it happens, and `run`
-    // keeps its annotated type.
+test "check type - polarity - a callback's closed error row is included in the composed result" {
+    // The callback result is an input of `run`, so its row is closed. The `?`
+    // contributes that row's tags to `run`'s composed result without relating
+    // the closed tail to it (design.md "Row Subsumption"), so the result also
+    // holds `NotAFunction`, and the callback's own row stays closed.
     const source =
         \\run : ({} -> Try(I64, [WrongArity])) -> Try(I64, _)
         \\run = |fn| {
@@ -7221,8 +7221,8 @@ test "check type - polarity - a rejected callback row keeps the annotated type" 
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
-    try test_env.assertOneTypeError("Type Mismatch");
-    try test_env.assertDefTypeOptions("run", "({} -> Try(I64, [WrongArity])) -> Try(I64, [NotAFunction])", .{ .allow_type_errors = true });
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("run", "({} -> Try(I64, [WrongArity])) -> Try(I64, [NotAFunction, WrongArity])");
 }
 
 // record extension in type annotations //
@@ -9244,11 +9244,12 @@ test "check type - polarity - a caller widens a forwarded closed output row" {
     try test_env.assertNoErrors();
 }
 
-test "check type - polarity - closed output row cannot be widened by its own recursive call" {
+test "check type - polarity - forwarded output row may be widened by its own recursive call" {
     // A recursive call instantiates the annotation's predeclared scheme, whose
-    // result row is open, but the body closes that row by returning its
-    // closed parameter. The call is related to the scheme the body publishes,
-    // exactly like `wider`'s call above (issue #12095).
+    // result row is open. The body forwards its closed parameter into that
+    // result through a widening copy (design.md "Row Subsumption"), so the
+    // scheme the body publishes has the same open row and the call may widen
+    // its own copy, exactly as it may for a body that constructs its result.
     const source =
         \\f : [A] -> [A]
         \\f = |a| if a == A a else {
@@ -9256,10 +9257,10 @@ test "check type - polarity - closed output row cannot be widened by its own rec
         \\    a
         \\}
     ;
-    try checkTypesModule(source, .fail_first, "Type Mismatch");
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A] -> [A]");
 }
 
-test "check type - polarity - closed output row cannot be widened by a recursive call after it closes" {
+test "check type - polarity - forwarded output row may be widened by a recursive call after an early return" {
     const source =
         \\f : [A] -> [A]
         \\f = |a| {
@@ -9268,10 +9269,10 @@ test "check type - polarity - closed output row cannot be widened by a recursive
         \\    a
         \\}
     ;
-    try checkTypesModule(source, .fail_first, "Type Mismatch");
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A] -> [A]");
 }
 
-test "check type - polarity - closed output row cannot be widened by a recursive group member" {
+test "check type - polarity - forwarded output row may be widened by a recursive group member" {
     const source =
         \\f : [A] -> [A]
         \\f = |a| if a == A a else g(a)
@@ -9282,10 +9283,10 @@ test "check type - polarity - closed output row cannot be widened by a recursive
         \\    a
         \\}
     ;
-    try checkTypesModule(source, .fail_first, "Type Mismatch");
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A] -> [A]");
 }
 
-test "check type - polarity - closed output row cannot be widened by an annotated local's recursive call" {
+test "check type - polarity - forwarded output row may be widened by an annotated local's recursive call" {
     const source =
         \\main = {
         \\    f : [A] -> [A]
@@ -9296,7 +9297,7 @@ test "check type - polarity - closed output row cannot be widened by an annotate
         \\    f(A)
         \\}
     ;
-    try checkTypesModule(source, .fail_first, "Type Mismatch");
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A]");
 }
 
 test "check type - polarity - open output row may be widened by its own recursive call" {
@@ -10319,14 +10320,12 @@ test "check type - polarity - nested widening is rejected even against an open i
     );
 }
 
-test "check type - polarity - where-method Try ok row stays closed as written" {
-    // The adapter-reachable set is exactly the direct result row and a `Try`'s
-    // ERROR row: `closedResultRowOrNull` narrows `Try`'s `args[1]`, and
-    // `hostedTryReturnInjectionExpr` asserts the ok type is unchanged. Per-use
-    // opening is therefore withheld from a `Try`'s ok row too, so widening it
-    // is an ordinary mismatch at the body use rather than a lowering panic.
-    // `m`'s implementation publishes the closed row, which is the case the
-    // adapter exists for and the case it cannot reach here.
+test "check type - polarity - a where-method result's closed ok row is widened into the annotated result" {
+    // Per-use opening is withheld from a `Try`'s ok row, so `x.m()` has the
+    // closed ok row the where clause writes. That row is within the row
+    // coercion's reach (a tag payload of `Try`'s backing), so the body's value
+    // relates to the annotated result through a widening copy and crosses
+    // into it through a row coercion (design.md "Row Subsumption").
     const source =
         \\describe : a -> Try([Some(Str), None], [E1]) where [a.m : a -> Try([Some(Str)], [E1])]
         \\describe = |x| x.m()
@@ -10339,25 +10338,10 @@ test "check type - polarity - where-method Try ok row stays closed as written" {
         \\    m = |_| closed_try
         \\}
     ;
-    // The region is the body use, not the signature and not the obligation.
-    try checkTypesModule(source, .fail_with,
-        \\**Type Mismatch**
-        \\This expression is used in an unexpected way.
-        \\```roc
-        \\describe = |x| x.m()
-        \\```
-        \\               ^^^^^
-        \\
-        \\It has the type:
-        \\
-        \\    Try([Some(Str)], [E1])
-        \\
-        \\But the annotation says it should be:
-        \\
-        \\    Try([None, Some(Str)], [E1])
-        \\
-        \\
-    );
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("describe", "a -> Try([None, Some(Str)], [E1]) where [a.m : a -> Try([Some(Str)], [E1])]");
 }
 
 test "check type - polarity - explicit anonymous ext in a function's output position warns redundant" {
@@ -11543,29 +11527,47 @@ test "check type - annotated open arg not closed even with exhaustive match" {
     );
 }
 
-test "check type - tag union - ext hints 1" {
-    // A closed union (the input-position arg) flowing into a named-rigid
-    // open row: closed where open was expected.
+test "check type - tag union - a forwarded closed union widens into a named-rigid output row" {
+    // The closed input-position arg flows into the result through a widening
+    // copy, which relates to the named-rigid extension as any caller's row
+    // would (design.md "Row Subsumption").
     const source =
         \\foo : [X, Y] -> [X, Y, ..ext]
         \\foo = |tag| tag
     ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[X, Y] -> [X, Y, ..ext]");
+}
+
+test "check type - tag union - ext hints 1" {
+    // A closed union (an input-position arg) flowing into a named-rigid open
+    // row (another input-position arg of the same function, whose `ext` the
+    // body cannot bind): closed where open was expected.
+    const source =
+        \\foo : [X, Y], [X, Y, ..ext] -> Str
+        \\foo = |closed, open| {
+        \\    _both = [closed, open]
+        \\    "tag"
+        \\}
+    ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This expression is used in an unexpected way.
+        \\The two elements in this list have incompatible types.
         \\```roc
-        \\foo = |tag| tag
+        \\    _both = [closed, open]
         \\```
-        \\            ^^^
+        \\                     ^^^^
         \\
-        \\It has the type:
+        \\The first element has this type:
         \\
         \\    [X, Y]
         \\
-        \\But the annotation says it should be:
+        \\However, the second element has this type:
         \\
         \\    [X, Y, ..ext]
         \\
+        \\All elements in a list must have compatible types.
+        \\__Note:__ You can wrap each element in a tag to make them compatible.
+        \\To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
         \\**Hint:** This tag union is closed, but I expected it be extended by `ext`.
         \\
         \\
@@ -14464,4 +14466,38 @@ test "check type - row subsumption - an importer's call widens a forwarded close
     var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
     defer main_env.deinit();
     try main_env.assertNoErrors();
+}
+
+test "check type - row subsumption - a method call widens a forwarded closed result row" {
+    // repro for https://github.com/roc-lang/roc/issues/12262
+    // `position` forwards a closed error row out of a nominal field. A method
+    // call `reader.position()?` widens its result exactly like the qualified
+    // call `Reader.position(reader)?` does (design.md "Row Subsumption").
+    const source =
+        \\Reader := { pos : Try(U64, [ReadErr(Str)]) }.{
+        \\    position : Reader -> Try(U64, [ReadErr(Str)])
+        \\    position = |reader| reader.pos
+        \\}
+        \\
+        \\direct : Reader, Bool -> Try(U64, [ReadErr(Str), Other])
+        \\direct = |reader, fail| {
+        \\    if fail {
+        \\        return Err(Other)
+        \\    }
+        \\    n = Reader.position(reader)?
+        \\    Ok(n)
+        \\}
+        \\
+        \\method : Reader, Bool -> Try(U64, [ReadErr(Str), Other])
+        \\method = |reader, fail| {
+        \\    if fail {
+        \\        return Err(Other)
+        \\    }
+        \\    n = reader.position()?
+        \\    Ok(n)
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
 }

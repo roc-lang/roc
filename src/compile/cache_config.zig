@@ -317,7 +317,9 @@ pub const Constants = struct {
     /// 148: Low-level op numbering covers only ops that lowering produces.
     /// 149: A stored checked runtime error keeps its evaluated operands in a
     ///      field of their own.
-    pub const CACHE_VERSION = 149;
+    /// 150: Module environments record row-coerced results in place of
+    ///      row-coerced callees and closed-result definitions.
+    pub const CACHE_VERSION = 150;
 };
 
 /// Configuration for the Roc cache system.

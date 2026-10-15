@@ -8806,25 +8806,22 @@ for every caller, which is precisely what identical signatures already
 promise. The body is bounded by the audit, never by which value a particular
 return path constructed.
 
-The extension is an ordinary flex during the body check, so a closed value
-still CLOSES the row there: a definition returning a value from a closed
-source (an input-position parameter, a nominal field, a hosted result)
-has a closed row in its own type. Each direct call of such a definition widens its own
-copy of the result instead (Row Subsumption), so two identically annotated
-definitions behave the same for a caller that calls them; a definition used
-as a function value keeps its own result row.
+The extension is an ordinary flex during the body check. A value from a
+closed source (an input-position parameter, a nominal field, a hosted result)
+that flows into the definition's result does not bind it: the value relates to
+the result through a copy of its type with each closed row re-opened, and
+crosses into the result through a row coercion (Row Subsumption). The
+definition's own result row is therefore the annotation's open row whatever
+its body forwards, and two identically annotated definitions have one type.
 `test/fx-open/issue_9963_hosted_try_question_mark.roc` carries both halves of
 that witness in one platform module. `Fallible.via_match!` and
 `Fallible.via_question!` are annotated `{} => Try(Str, [HostErr(Str)])`
 identically. The first reconstructs the hosted error with a `match`, so the
 `Err(HostErr(msg))` construction mints its own open row, the annotation's flex
 is never bound, and the function's row stays open. The second forwards the
-hosted error with `?`; the host's row is closed, so unifying it into the
-annotation's extension would bind that extension to `[]` and close the row.
-With the hosted widening exception removed, that forwarding closes the
-definition's own result row, and a call of `Fallible.via_question!` widens its
-result at the call (Row Subsumption). The match-reconstructing case keeps its
-open row.
+hosted error with `?`; the host's row is closed, and the `?` contributes its
+tags to the composed result without relating the closed tail to it (Try
+Return-Row Composition), so this function's row stays open too.
 
 An anonymous `..` in a positive position of an opening annotation means
 exactly what absence means there and is generated the same way (a recorded
@@ -9147,38 +9144,50 @@ while a definition that FORWARDS a value out of a closed source—an
 input-position parameter, a nominal field, a hosted result—binds that
 extension to `[]`. The bodies differ; the signatures do not.
 
-The body still closes the row, so such a definition's own type, which it is
-specialized at, has the closed row its body produces. The coercion happens at each
-call. A direct call whose callee names an annotated function whose body closed
-a result row its annotation implicitly opens
-(`Check.defClosedAnnotatedResultRow`; imported through
-`ModuleEnv.ClosedResultBinding`) relates its callee to a copy of the
-function's instantiated type in which each such closed row the row coercion
-reaches in the result is re-opened (`Check.widenedFunctionResultUseVar`). Only
-the result's spine down to a re-opened row is copied: a forwarder's argument
-and result rows can be one class, and its argument row stays closed, so a call
-at a tag the argument does not list is still rejected. Checking records the
-callee with the function's own type and result (`ModuleEnv.RowCoercedCallee`),
-and checked-body construction makes the call at that type and widens its result
-with a `row_coerce` (Row Coercion Primitive, below). A call inside the
-function's own definition relates to the type the body is still producing and
-is not widened.
+The coercion happens where the closed value meets the definition's result. A
+value expression that flows into an annotated function's result—the lambda's
+body, a branch of an `if` or `match` in result position, the value of a
+`return`—and whose type reaches a closed tag union (the reach is fixed below)
+relates to the result through a copy of its type in which each such closed row
+is re-opened (`Check.widenedClosedRowsCopy`), with every open row and every
+position outside the reach shared with the value. The expression keeps its own
+type. Checking records it with the copy (`ModuleEnv.RowCoercedResult`), and
+checked-body construction keeps the expression's own node and adds a
+`row_coerce` of it at the copy's type, which is the node the expression's
+parent refers to (Row Coercion Primitive, below); every consumer keyed by the
+source node—dispatch plans, exhaustiveness sites, value references—still finds
+the expression's own kind. The copy only re-opens rows the value's own type
+closes, so a relation
+that rejects the copy rejects the value's own type too, and the rejection is
+reported through that type. A copy whose rows settle closed with exactly the
+value's own tags is the value itself, and its record is dropped
+(`Check.settleUnwidenedResults`); a row whose tail is quantified with the
+function's result may widen in a specialization, so its record stays.
 
-A definition used as a function value rather than called directly keeps its
-own result row: widening it would need an adapter closure around the function,
-which is not built. An author who wants a genuinely closed output row would
-write the closure explicitly, in the shape of `[MyErr, ..[]]`; that spelling
-does not exist and is not designed.
+A forwarder's argument and result rows can be one class. The copy separates
+only the result, so the argument row stays closed, and a call at a tag the
+argument does not list is still rejected. The function's result is its
+annotated result, open, so every use of the function—a direct call, a method
+call, an imported call, the function as a value—has the type a constructing
+definition would have, and no use site does anything. An author who wants a
+genuinely closed output row would write the closure explicitly, in the shape
+of `[MyErr, ..[]]`; that spelling does not exist and is not designed.
 
-The host-specific checker rewrite has been removed (Hosted Try Question
-Widening Removed). A hosted declaration is a host-boundary annotation whose
-rows are generated as written, so a direct hosted call is never widened: Roc
-wrappers reconstruct hosted errors when composing direct calls with wider
-error rows, and the direct hosted forwarding rejection in
-`src/compile/test/hosted_error_diagnostic_test.zig` pins that. The Result-Row
-Widening Adapter remains for admitted generic dispatch requests, including
-those selecting hosted implementations, and for non-hosted closed
-implementations (`test/cli/WidenClosedImpl.roc` and its siblings).
+A `?` whose error row is closed contributes that row's tags to the composed
+result and relates no tail (Try Return-Row Composition): a closed row has no
+residual, and equating it with the result would close the result's row. The
+`?` return already crosses the return boundary through the directed relation
+that lowers a `row_coerce`.
+
+A hosted declaration is a host-boundary annotation whose rows are generated
+as written, so the host's own row is closed. A `?` on a hosted call, on an
+alias of one, or on a wrapper that forwards its result widens into the
+enclosing result exactly as any other closed row does; Hosted Try Question
+Widening Removed records what the earlier host-specific rewrite was and why
+this is not it. The Result-Row Widening Adapter remains for admitted generic
+dispatch requests, including those selecting hosted implementations, and for
+non-hosted closed implementations (`test/cli/WidenClosedImpl.roc` and its
+siblings).
 
 A top-level value's uses, in its own module and in every importer, widen
 through the same coercion applied to a value rather than to a call result
@@ -9194,8 +9203,8 @@ own type is the wider row a value is used at and whose child keeps its own
 closed row. No CIR form lowers to it; checked-body construction stamps it for
 the two checker records that ask for it: a use of a top-level value
 (`ModuleEnv.RowCoercedUse`; Value Rows: Local Values Share, Top-Level Values
-Widen At Each Use) and a call whose function's body closed an annotated open
-result row (`ModuleEnv.RowCoercedCallee`; Row Subsumption).
+Widen At Each Use) and a value with a closed row flowing into an annotated
+function's result (`ModuleEnv.RowCoercedResult`; Row Subsumption).
 
 The coercion has a fixed REACH, which contains every position the Result-Row
 Widening Adapter re-tags (the direct result row and a `Try`'s error row).
@@ -9454,17 +9463,18 @@ tags, which asserts that no value has it, is never re-opened.
 
 ### Hosted Try Question Widening Removed
 
-The checker no longer has a special widening rule for `?` on direct hosted
-calls. A hosted result keeps its declared closed error row, and `?` relates
-that row to the enclosing return through ordinary return-row composition and
-unification. Matching rows can still relate; a wider incompatible row is a
-type error. Forwarding into an implicitly open annotation closes that
-definition's own result row, just as forwarding any other closed value does,
-and a call of the definition widens its result (Row Subsumption).
-
-This removes the use-site redirect and its subset/payload probes. There is no
-`RedirectRule` for hosted question widening. Hosted error provenance remains
-purely diagnostic and does not affect acceptance.
+The checker has no host-specific widening rule for `?` on direct hosted
+calls. The rule that was removed was a use-site redirect with subset and
+payload probes: it inspected the solved graph and then rewrote it, which is
+why it needed a `RedirectRule`. What exists instead is not host-specific and
+rewrites nothing. A `?` whose error row is closed contributes its tags to the
+composed result and relates no tail (Try Return-Row Composition), and a value
+with a closed row flowing into an annotated result relates through a copy with
+that row re-opened (Row Subsumption); both are relations the checker chooses
+before unifying, and both lower through the directed return relation and row
+coercion every `?` return already uses. A hosted result keeps its declared
+closed error row at the host boundary. Hosted error provenance remains purely
+diagnostic and does not affect acceptance.
 
 Hosted lowering has no host-specific widening graph relation or expected-result
 request rewrite. The general Result-Row Widening Adapter remains for generic
@@ -9476,13 +9486,14 @@ would require carrying individual body-use row requirements through generic
 constraints and imports; the bounded where requirement alone does not record
 those widened uses.
 
-Roc wrappers that combine hosted errors with a wider return row must explicitly
-match and reconstruct each error variant (or wrap the error in a new tag).
-Forwarding `Err(err)` does not reconstruct the inner error union. The accepted
-side is pinned by explicit reconstruction in the host diagnostic tests,
-`FallibleChannels.roc`, `FallibleAlias.roc`, issue #11286 on both specialization
-strategies, and the wasm32 host ABI fixture. The rejected side is pinned by
-`host error diagnostic rejects implicit widening through a direct hosted question`.
+A Roc wrapper that combines a hosted error with a wider return row needs no
+reconstruction: `line! = |s| Host.stdout_line!(s)`, `line! = Host.stdout_line!`,
+and a `?` on either in a function with a wider error row are accepted, and
+`src/compile/test/hosted_error_diagnostic_test.zig` pins that, together with
+a `?` whose error payload disagrees with the enclosing result still reporting
+a mismatch that names the host function. Explicit reconstruction stays
+accepted too: `FallibleChannels.roc`, `FallibleAlias.roc`, issue #11286 on both
+specialization strategies, and the wasm32 host ABI fixture.
 
 ### Hosted Error Diagnostics
 
@@ -9532,6 +9543,12 @@ Any tags exposed in a residual source by the payload relations contribute by
 the same rule before its terminal extension is related. A tagless nested
 contribution is the zero-head instance of this same operation.
 
+A contribution whose error row is CLOSED is included by its heads alone,
+through the same fresh spine, and relates no tail: a closed row has no
+residual dependency, and relating its terminal `[]` to the result's residual
+would close the result (Row Subsumption). The body's own result follows the
+same rule.
+
 A source already identical to the destination's residual tail is included
 without equating it to the whole destination row. Independent contributions
 otherwise retain ordinary full-row equality. This preserves
@@ -9552,7 +9569,8 @@ it without an additional constraint kind or per-type-variable metadata.
 The body's own result is one more contribution, and it is INCLUDED in the
 composed result rather than equal to it: its success type is equal, its error
 row contributes through a fresh spine with unchanged payload variables when
-nested and ordinary row unification otherwise, and a tagless error row becomes the composed row's residual extension. Equating the rows
+nested or closed and ordinary row unification otherwise, and a tagless open
+error row becomes the composed row's residual extension. Equating the rows
 instead writes every composed tag back into whatever produced the body's
 value. When that value is a tail call, that is the callee's own error row—for
 a callback parameter, the caller's callback—and a caller whose callback fails

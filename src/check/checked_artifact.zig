@@ -4393,11 +4393,11 @@ pub const CheckedTypeStore = struct {
         for (module_env.row_coerced_uses.items.items) |use| {
             _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @fromBackingInt(use.value_var));
         }
-        // A row-coerced call is lowered at its function's own type and result
-        // (`ModuleEnv.RowCoercedCallee`).
-        for (module_env.row_coerced_callees.items.items) |callee| {
-            _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @fromBackingInt(callee.fn_var));
-            _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @fromBackingInt(callee.ret_var));
+        // A row-coerced result's coercion node has its widening copy's type;
+        // the expression's own node keeps its own type
+        // (`ModuleEnv.RowCoercedResult`).
+        for (module_env.row_coerced_results.items.items) |result| {
+            _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @fromBackingInt(result.wide_var));
         }
 
         for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
@@ -12342,6 +12342,10 @@ pub const CheckedBodyStore = struct {
         errdefer string_builder.deinitAll();
         var source_node_map = try CheckedSourceNodeMap.init(allocator, module.nodeCount());
         errdefer source_node_map.deinit(allocator);
+        // The coercion node a parent refers to in place of each row-coerced
+        // result expression, by raw source node.
+        var result_wrappers: std.AutoHashMapUnmanaged(u32, CheckedExprId) = .empty;
+        defer result_wrappers.deinit(allocator);
 
         var top_level_defs = try TopLevelDefPatternIndex.init(allocator, module);
         defer top_level_defs.deinit(allocator);
@@ -12351,13 +12355,7 @@ pub const CheckedBodyStore = struct {
             const node: CIR.Node.Idx = @fromBackingInt(@intCast(node_idx));
             if (source_nodes.hasExpr(@fromBackingInt(@intCast(node_idx)))) {
                 const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
-                // A row-coerced callee is read at its function's own type; the
-                // call widens the result (`ModuleEnv.RowCoercedCallee`).
-                const source_var = if (module.moduleEnvConst().rowCoercedCallee(node)) |callee|
-                    @as(Var, @fromBackingInt(callee.fn_var))
-                else
-                    module.exprType(expr_idx);
-                const ty = checked_types.rootForSourceVar(module, source_var) orelse {
+                const ty = checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
                     if (builtin.mode == .debug) {
                         base.invariant("checked artifact invariant violated: checked expr type root was not published", .{});
                     }
@@ -12371,6 +12369,28 @@ pub const CheckedBodyStore = struct {
                     .data = .pending,
                 });
                 try source_node_map.putExpr(node_idx, id);
+                // A value expression checking recorded as flowing into its
+                // function's result through a widening copy of its type
+                // (`ModuleEnv.RowCoercedResult`) keeps its own node, kind and
+                // type; the coercion to the copy is a separate node that only
+                // the expression's parent refers to (design.md "Row
+                // Subsumption", "Row Coercion Primitive").
+                if (module.moduleEnvConst().rowCoercedResultWideVar(node)) |wide_var| {
+                    const wide_ty = checked_types.rootForSourceVar(module, wide_var) orelse {
+                        if (builtin.mode == .debug) {
+                            base.invariant("checked artifact invariant violated: row-coerced result's widened type root was not published", .{});
+                        }
+                        unreachable;
+                    };
+                    const wrapper: CheckedExprId = @fromBackingInt(@intCast(try checkedSourceNodeIdFromLen(exprs.items.len)));
+                    try exprs.append(allocator, .{
+                        .id = wrapper,
+                        .ty = wide_ty,
+                        .source_region = module.regionAt(node),
+                        .data = .{ .row_coerce = .{ .value = id } },
+                    });
+                    try result_wrappers.put(allocator, node_idx, wrapper);
+                }
             } else if (source_nodes.hasPattern(@fromBackingInt(@intCast(node_idx)))) {
                 const pattern_idx: CIR.Pattern.Idx = @fromBackingInt(@intCast(node_idx));
                 const ty = checked_types.rootForSourceVar(module, checkedPatternSourceTypeVar(module, &top_level_defs, pattern_idx)) orelse {
@@ -12419,6 +12439,7 @@ pub const CheckedBodyStore = struct {
             .module = module,
             .names = names,
             .source_node_map = &source_node_map,
+            .result_wrappers = &result_wrappers,
             .string_builder = &string_builder,
             .pattern_binders = &pattern_binders,
             .pattern_binder_by_pattern = pattern_binder_by_pattern,
@@ -14749,6 +14770,9 @@ const CheckedBodyPayloadCopier = struct {
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
     source_node_map: *CheckedSourceNodeMap,
+    /// The coercion node that stands for each row-coerced result expression
+    /// wherever a parent refers to it, by raw source node (`checkedExpr`).
+    result_wrappers: *const std.AutoHashMapUnmanaged(u32, CheckedExprId),
     string_builder: *CheckedStringLiteralBuilder,
     pattern_binders: *std.ArrayList(CheckedPatternBinder),
     pattern_binder_by_pattern: []?PatternBinderId,
@@ -14827,7 +14851,15 @@ const CheckedBodyPayloadCopier = struct {
                 .final_else = self.checkedExpr(if_.final_else),
                 .warn_unused_branches = if_.origin == .source,
             } },
-            .e_call => |call| try self.copyCallData(expr_idx, call),
+            .e_call => |call| .{ .call = .{
+                .func = self.checkedExpr(call.func),
+                .args = try self.copyExprSpan(call.args),
+                .called_via = call.called_via,
+                .source_fn_ty_payload = try self.checkedTypeForRequiredVar(
+                    call.constraint_fn_var orelse checkedArtifactInvariant("checked call expression had no published function constraint type", .{}),
+                    "checked call function constraint type root was not published",
+                ),
+            } },
             .e_record => |record| .{ .record = .{
                 .fields = try self.copyRecordFields(record.fields),
                 .unsets = try self.copyUnsetFieldLabels(record.unsets),
@@ -15683,8 +15715,12 @@ const CheckedBodyPayloadCopier = struct {
         try out.append(self.allocator, binder);
     }
 
+    /// The checked expression a parent refers to for `expr`: its coercion
+    /// node when checking recorded it as a row-coerced result, and its own
+    /// node otherwise.
     fn checkedExpr(self: *const @This(), expr: CIR.Expr.Idx) CheckedExprId {
         const raw = @backingInt(expr);
+        if (self.result_wrappers.get(raw)) |wrapper| return wrapper;
         if (self.source_node_map.expr(expr)) |id| return id;
         if (builtin.mode == .debug) {
             base.invariant("checked artifact invariant violated: expression {d} was not copied into checked body store", .{raw});
@@ -15710,36 +15746,6 @@ const CheckedBodyPayloadCopier = struct {
             };
         }
         return null;
-    }
-
-    /// A call, or, when its callee is a row-coerced callee
-    /// (`ModuleEnv.RowCoercedCallee`), a row coercion of the call made at the
-    /// function's own type: the inner call's result is the function's own
-    /// result, and the coercion's type is this expression's wider one
-    /// (design.md "Row Subsumption").
-    fn copyCallData(self: *@This(), expr_idx: CIR.Expr.Idx, call: @FieldType(CIR.Expr, "e_call")) Allocator.Error!CheckedExprData {
-        const callee = self.module.moduleEnvConst().rowCoercedCallee(ModuleEnv.nodeIdxFrom(call.func));
-        const call_data: CheckedExprData = .{ .call = .{
-            .func = self.checkedExpr(call.func),
-            .args = try self.copyExprSpan(call.args),
-            .called_via = call.called_via,
-            .source_fn_ty_payload = if (callee) |coerced|
-                try self.checkedTypeForRequiredVar(@fromBackingInt(coerced.fn_var), "row-coerced callee function type root was not published")
-            else
-                try self.checkedTypeForRequiredVar(
-                    call.constraint_fn_var orelse checkedArtifactInvariant("checked call expression had no published function constraint type", .{}),
-                    "checked call function constraint type root was not published",
-                ),
-        } };
-        const coerced = callee orelse return call_data;
-        const call_id: CheckedExprId = @fromBackingInt(try checkedSourceNodeIdFromLen(self.exprs.items.len));
-        try self.exprs.append(self.allocator, .{
-            .id = call_id,
-            .ty = try self.checkedTypeForRequiredVar(@fromBackingInt(coerced.ret_var), "row-coerced call result type root was not published"),
-            .source_region = self.module.regionAt(ModuleEnv.nodeIdxFrom(expr_idx)),
-            .data = call_data,
-        });
-        return .{ .row_coerce = .{ .value = call_id } };
     }
 
     /// A use checking recorded as a widening of a top-level value
@@ -16672,8 +16678,7 @@ pub const ResolvedValueRefTable = struct {
                 &local_pattern_roles,
                 checked_bodies,
             );
-            const coerced_callee = module.moduleEnvConst().rowCoercedCallee(ModuleEnv.nodeIdxFrom(expr_idx)) != null;
-            const checked_ty = if (coerced_lookup) |value| value.ty else if (coerced_callee) checked_bodies.expr(checked_expr).ty else checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
+            const checked_ty = if (coerced_lookup) |value| value.ty else checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
                 if (builtin.mode == .debug) {
                     base.invariant("checked artifact invariant violated: resolved value ref type root was not published", .{});
                 }
@@ -16681,7 +16686,7 @@ pub const ResolvedValueRefTable = struct {
             };
             // Publication keys every source root by this same writer.
             const checked_type_key = checked_types.store.view().rootKey(checked_ty);
-            if (builtin.mode == .debug and coerced_lookup == null and !coerced_callee) {
+            if (builtin.mode == .debug and coerced_lookup == null) {
                 const written = (try key_writer.fromVar(module.exprType(expr_idx))).key;
                 if (@as(u256, @bitCast(written.bytes)) != @as(u256, @bitCast(checked_type_key.bytes))) {
                     base.invariant("checked artifact invariant violated: resolved value ref type key differs from its published root", .{});
