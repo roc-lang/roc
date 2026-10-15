@@ -338,8 +338,9 @@ pub fn versionBumpNotes(
 }
 
 /// Sidecar metadata recorded next to each extracted bundle in the cache.
-/// `format` guards against layout changes; unknown formats are regenerated
-/// from the extracted bundle, never trusted.
+/// `format` guards against changes to the sidecar layout and to the header
+/// rules that decide what a scan records (or rejects); unknown formats are
+/// regenerated from the extracted bundle, never trusted.
 pub const Sidecar = struct {
     format: u32,
     kind: []const u8,
@@ -363,7 +364,7 @@ pub const Sidecar = struct {
         compiler_owned_platform: ?CompilerOwnedPlatform = null,
     };
 
-    pub const current_format: u32 = 3;
+    pub const current_format: u32 = 4;
 };
 
 /// One validated `--replace-dep` request.
@@ -2508,6 +2509,20 @@ test "scanHeaderSource rejects multiple package platform dependencies" {
             "package [Wrapper] { one: platform \"../one/main.roc\", two: platform \"../two/main.roc\" }\n",
         ),
     );
+}
+
+test "scanHeaderSource rejects a repeated dependency shorthand" {
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    for ([_][]const u8{
+        "package [Wrapper] { dep: \"../a/main.roc\", dep: \"../b/main.roc\" }\n",
+        "app [main!] { pf: platform \"../platform/main.roc\", pf: \"../other/main.roc\" }\n",
+        "platform \"p\"\n    requires {}\n    exposes []\n    packages { dep: \"../a/main.roc\", dep: \"../b/main.roc\" }\n    provides {}\n",
+    }) |src| {
+        try std.testing.expectError(error.HeaderParseFailed, scanHeaderSource(gpa, gpa, "/tmp/main.roc", src));
+    }
 }
 
 test "scanHeaderSource rejects malformed package headers" {

@@ -1522,6 +1522,7 @@ fn parsePackageHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Id
         .platform = null,
     };
 
+    try self.reportDuplicateShorthands(deps.packages);
     return try self.store.addHeader(.{ .package = .{
         .exposes = exposed.collection,
         .platform_idx = deps.platform,
@@ -1628,6 +1629,31 @@ fn parseOpenedDependencyRecordTokens(
     } };
 }
 
+/// Report every dependency entry whose shorthand an earlier entry in the same
+/// record already declared. A shorthand names exactly one package or platform,
+/// so a repeated one is a mistake no matter what each entry points at.
+///
+/// Entries named `roc` are left to `takeRocVersionField`, which reports a
+/// repeated version pin or a dependency using the reserved name on its own.
+fn reportDuplicateShorthands(self: *Parser, packages: AST.Collection.Idx) std.mem.Allocator.Error!void {
+    const collection = self.store.getCollection(packages);
+    const fields = self.store.recordFieldSlice(.{ .span = collection.span });
+    if (fields.len < 2) return;
+
+    var seen: std.StringHashMapUnmanaged(void) = .{};
+    defer seen.deinit(self.gpa);
+    try seen.ensureTotalCapacity(self.gpa, @intCast(fields.len));
+
+    for (fields) |field_idx| {
+        const field = self.store.getRecordField(field_idx);
+        const name = self.tokenText(field.name);
+        if (std.mem.eql(u8, name, roc_version_key)) continue;
+        if (seen.getOrPutAssumeCapacity(name).found_existing) {
+            try self.pushDiagnostic(.duplicate_package_shorthand, field.region);
+        }
+    }
+}
+
 /// The dependency-record key reserved for pinning the compiler version.
 const roc_version_key = "roc";
 
@@ -1696,6 +1722,8 @@ fn parseAppHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
         .ok => |ok| ok,
         .malformed => |malformed| return malformed,
     };
+
+    try self.reportDuplicateShorthands(deps.packages);
 
     // An app that names no platform gets the built-in Echo platform, the same
     // one a headerless app gets; its packages are its own.
@@ -2294,6 +2322,7 @@ fn parsePlatformHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.I
         targets = try self.parseTargetsSectionTokens();
     }
 
+    try self.reportDuplicateShorthands(packages);
     return try self.store.addHeader(.{ .platform = .{
         .name = name,
         .requires_entries = requires_entries,
