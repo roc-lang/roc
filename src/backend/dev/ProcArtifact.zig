@@ -841,6 +841,11 @@ pub const ContentNames = struct {
 pub const PreparedData = struct {
     arena: collections.SingleThreadArena,
     items: std.StringHashMapUnmanaged(DataItem),
+    /// The frozen values an address cell carries with the code that reads
+    /// them: every prepared constant that is not a compile-time root's
+    /// storage (`StaticDataExport.root_slot`), which the linking program
+    /// declares itself.
+    cell_targets: std.StringHashMapUnmanaged(void),
 
     pub fn init(
         allocator: Allocator,
@@ -899,7 +904,12 @@ pub const PreparedData = struct {
             const owned = try cloneData(a, item);
             try items.put(a, owned.name, owned);
         }
-        return .{ .arena = arena, .items = items };
+        var cell_targets = std.StringHashMapUnmanaged(void){};
+        for (constant_exports) |constant| {
+            if (constant.value_id == null or constant.root_slot) continue;
+            try cell_targets.put(a, items.get(constant.symbol_name).?.name, {});
+        }
+        return .{ .arena = arena, .items = items, .cell_targets = cell_targets };
     }
 
     pub fn deinit(self: *PreparedData) void {
@@ -965,12 +975,16 @@ pub fn extractPrepared(
         }
         const name = try arena_allocator.dupe(u8, cell.name);
         const cell_relocations = try arena_allocator.alloc(DataRelocation, 1);
+        // A cell to a frozen constant carries the constant, so the code reads
+        // the same value in every program it is linked into; a cell to a
+        // compile-time root's storage, or to a materializer's header, binds
+        // to what the linking program declares.
         cell_relocations[0] = .{
             .offset = 0,
             .name = try arena_allocator.dupe(u8, cell.target_name),
             .addend = 0,
             .function = false,
-            .external = true,
+            .external = cell.root_materialization != null or !prepared.cell_targets.contains(cell.target_name),
         };
         try data_by_name.put(name, .{
             .name = name,

@@ -1320,14 +1320,14 @@ test "ObjectFileCompiler native emission skips static initializers and captures 
     try std.testing.expectEqual(@as(u64, 0), snapshot.rc_helper_instructions_ns);
 }
 
-test "ObjectFileCompiler ordinary static-root pack binds consumer storage without carrying producer headers" {
+test "ObjectFileCompiler static value cells carry frozen constants and bind consumer storage for root slots" {
     const allocator = std.testing.allocator;
     const PackFile = @import("PackFile.zig");
     const text = "immutable runtime data survives its producer";
     const identity = lir.ProcIdentity.forTest(717);
     // The native target joins the fixed ones only where native LIR codegen exists.
     const native_targets = if (LirCodeGenMod.host_lir_codegen_available) .{comptime RocTarget.detectNative()} else .{};
-    inline for (.{ RocTarget.x64linux, RocTarget.arm64linux } ++ native_targets) |target| {
+    inline for (.{ RocTarget.x64linux, RocTarget.arm64linux } ++ native_targets) |target| inline for (.{ false, true }) |root_slot| {
         var result = producer: {
             var arena = collections.SingleThreadArena.init(allocator);
             defer arena.deinit();
@@ -1372,6 +1372,7 @@ test "ObjectFileCompiler ordinary static-root pack binds consumer storage withou
                 .bytes = descriptor,
                 .alignment = 8,
                 .is_exported = false,
+                .root_slot = root_slot,
                 .relocations = relocation,
             };
             exports[1] = .{
@@ -1402,22 +1403,49 @@ test "ObjectFileCompiler ordinary static-root pack binds consumer storage withou
         try std.testing.expectEqual(@as(usize, 1), pack.set.artifacts.len);
         const artifact = pack.set.artifacts[0];
         try ProcArtifact.validateSourceEventCertificates(allocator, artifact, target.toCpuArch().endian());
-        try std.testing.expectEqual(1 + artifact.source_events.len, artifact.data.len);
+        // A root slot's cell binds to the consumer's storage and carries
+        // nothing; a frozen constant's cell carries the constant and its
+        // backing, both by content name, and `roc__d8` never travels.
+        const carried: usize = if (root_slot) 0 else 2;
+        try std.testing.expectEqual(1 + carried + artifact.source_events.len, artifact.data.len);
         var cells: usize = 0;
+        var carried_root: ?ProcArtifact.DataItem = null;
+        var carried_backing: ?ProcArtifact.DataItem = null;
         for (artifact.data) |item| {
             var event_data = false;
             for (artifact.source_events) |certificate| {
                 if (std.mem.eql(u8, certificate.data_name, item.name)) event_data = true;
             }
             if (event_data) continue;
-            cells += 1;
-            try std.testing.expectEqualStrings("fixture_semantic_root__address", item.name);
-            try std.testing.expectEqualSlices(u8, &(@as([8]u8, @splat(0))), item.bytes);
-            try std.testing.expectEqual(@as(usize, 1), item.relocations.len);
-            try std.testing.expect(item.relocations[0].external);
-            try std.testing.expectEqualStrings("fixture_semantic_root", item.relocations[0].name);
+            if (std.mem.eql(u8, item.name, "fixture_semantic_root__address")) {
+                cells += 1;
+                try std.testing.expectEqualSlices(u8, &(@as([8]u8, @splat(0))), item.bytes);
+                try std.testing.expectEqual(@as(usize, 1), item.relocations.len);
+                try std.testing.expectEqual(root_slot, item.relocations[0].external);
+                if (root_slot) try std.testing.expectEqualStrings("fixture_semantic_root", item.relocations[0].name);
+                continue;
+            }
+            try std.testing.expect(!root_slot);
+            try std.testing.expect(std.mem.startsWith(u8, item.name, lir.Program.content_data_symbol_prefix));
+            if (item.bytes.len == 24) {
+                carried_root = item;
+            } else {
+                try std.testing.expectEqual(16 + text.len, item.bytes.len);
+                try std.testing.expectEqualStrings(text, item.bytes[16..]);
+                carried_backing = item;
+            }
         }
         try std.testing.expectEqual(@as(usize, 1), cells);
+        if (!root_slot) {
+            const root = carried_root orelse return error.TestUnexpectedResult;
+            const backing = carried_backing orelse return error.TestUnexpectedResult;
+            for (artifact.data) |item| {
+                if (!std.mem.eql(u8, item.name, "fixture_semantic_root__address")) continue;
+                try std.testing.expectEqualStrings(root.name, item.relocations[0].name);
+            }
+            try std.testing.expectEqual(@as(usize, 1), root.relocations.len);
+            try std.testing.expectEqualStrings(backing.name, root.relocations[0].name);
+        }
         var data_references: usize = 0;
         for (artifact.relocations) |relocation| {
             if (relocation.kind != .data) continue;
@@ -1456,7 +1484,9 @@ test "ObjectFileCompiler ordinary static-root pack binds consumer storage withou
             };
             var current_slots = try @import("StaticDataImage.zig").StaticDataImage.init(allocator, &current_exports);
             defer current_slots.deinit();
-            try splice.bindStaticDataSymbols(&current_exports, &current_slots);
+            // Only a root slot needs this consumer's storage; the carried
+            // constant links on its own.
+            if (root_slot) try splice.bindStaticDataSymbols(&current_exports, &current_slots);
             var table: LirCodeGenMod.BoxyNativeFnTable = undefined;
             @memset(&table, 0);
             var executable = try splice.link(&receiver, &table);
@@ -1472,7 +1502,7 @@ test "ObjectFileCompiler ordinary static-root pack binds consumer storage withou
             const value: [*]const u8 = @ptrFromInt(output[0]);
             try std.testing.expectEqualStrings(text, value[0..output[2]]);
         }
-    }
+    };
 }
 
 /// `ROC_DEV_ARTIFACT_ROUNDTRIP` makes every object compile also assemble the

@@ -39,6 +39,11 @@ pub const StaticDataExport = struct {
     is_global: bool = true,
     /// Whether this symbol is part of the host-visible ABI.
     is_exported: bool = true,
+    /// Storage of a compile-time root: a consumer of cached code declares it
+    /// from the code's demand facts (`SpecCacheHit.checked_root_uses`), so a
+    /// captured address cell leaves it to the linking program. Every other
+    /// value is frozen data the cell carries with the code.
+    root_slot: bool = false,
     /// Pointer relocations from this symbol's bytes to other symbols.
     relocations: []const StaticDataRelocation = &.{},
     /// The capacities the empty lists inside this value were evaluated

@@ -726,11 +726,22 @@ const Solver = struct {
         var pending: std.ArrayList(Type.TypeVarId) = .empty;
         defer pending.deinit(self.allocator);
 
-        for (self.program.layout_requests.items) |request| try pending.append(self.allocator, request.ty);
+        // The same boundaries `markAbiBoundaryCallables` and the storage
+        // requests erase: a literal root's storage keeps its conversion's
+        // lambda sets, and only a host procedure's hosted body is a boundary.
+        for (self.program.layout_requests.items) |request| {
+            if (request.comptime_root) |root| if (root.root == .literal) continue;
+            try pending.append(self.allocator, request.ty);
+        }
         for (self.program.runtime_schema_requests.items) |request| try pending.append(self.allocator, request.ty);
         try pending.appendSlice(self.allocator, self.box_boundaries.items);
         for (self.lifted.fns, 0..) |fn_, index| {
-            if (fn_.body == .hosted) try self.appendFunctionBoundary(self.program.fn_tys.items[index], &pending);
+            if (fn_.body != .hosted) continue;
+            const source = fn_.source orelse continue;
+            switch (source.fn_def) {
+                .local_hosted, .imported_hosted => try self.appendFunctionBoundary(self.program.fn_tys.items[index], &pending),
+                .local_template, .imported_template, .checked_generated, .nested, .parser_runtime, .encoder_for_runtime => {},
+            }
         }
         for (self.lifted.roots) |root| switch (root.request.abi) {
             .platform, .hosted => try self.appendFunctionBoundary(self.program.fn_tys.items[@backingInt(root.fn_id)], &pending),

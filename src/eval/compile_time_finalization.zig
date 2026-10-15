@@ -620,7 +620,7 @@ fn uninitializedFailedSlot(allocator: Allocator, program: *const LirProgram.Resu
     errdefer allocator.free(bytes);
     @memset(bytes, 0);
     const exports = try allocator.alloc(static_data_exports.StaticDataExport, 1);
-    exports[0] = .{ .symbol_name = name, .symbol_identity = entry.symbol_identity, .value_id = slot, .bytes = bytes, .alignment = @intCast(size_align.alignment.toByteUnits()), .is_exported = false };
+    exports[0] = .{ .symbol_name = name, .symbol_identity = entry.symbol_identity, .value_id = slot, .bytes = bytes, .alignment = @intCast(size_align.alignment.toByteUnits()), .is_exported = false, .root_slot = true };
     return exports;
 }
 
@@ -4206,6 +4206,7 @@ test "completed-success imported failure storage freezes a canonical empty strin
         .bytes = try allocator.alloc(u8, size_align.size),
         .alignment = @intCast(size_align.alignment.toByteUnits()),
         .is_exported = false,
+        .root_slot = true,
     };
     @memset(@constCast(initial[0].bytes), 0);
     const image = try backend.StaticDataImage.init(allocator, initial);
@@ -4649,7 +4650,7 @@ const StaticSlotEnvironment = struct {
                 return err;
             };
             @memset(bytes, 0);
-            exports[0] = .{ .symbol_name = name, .symbol_identity = entry.symbol_identity, .value_id = slot, .bytes = bytes, .alignment = @intCast(size_align.alignment.toByteUnits()), .is_exported = false };
+            exports[0] = .{ .symbol_name = name, .symbol_identity = entry.symbol_identity, .value_id = slot, .bytes = bytes, .alignment = @intCast(size_align.alignment.toByteUnits()), .is_exported = false, .root_slot = true };
             count = 1;
             bytes[metadata.failed_offset] = @backingInt(if (failure) |failed| failed.kind.recordKind() else lir.Program.ComptimeFailureKind.none);
             if (large) {
@@ -6694,8 +6695,8 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     const value_name = try LirProgram.staticDataSymbolName(allocator, value_slot);
     defer allocator.free(value_name);
     const materialized = try static_data_exports.cloneStaticData(allocator, &.{
-        .{ .symbol_name = failure_name, .value_id = failure_slot, .bytes = zeros, .alignment = @alignOf(usize) },
-        .{ .symbol_name = value_name, .value_id = value_slot, .bytes = zeros[0..@sizeOf(builtins.str.RocStr)], .alignment = @alignOf(usize) },
+        .{ .symbol_name = failure_name, .value_id = failure_slot, .bytes = zeros, .alignment = @alignOf(usize), .root_slot = true },
+        .{ .symbol_name = value_name, .value_id = value_slot, .bytes = zeros[0..@sizeOf(builtins.str.RocStr)], .alignment = @alignOf(usize), .root_slot = true },
     });
     var image = try backend.StaticDataImage.init(allocator, materialized);
     const addresses = try image.lirValueAddresses(allocator, 2);

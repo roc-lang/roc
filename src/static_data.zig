@@ -1594,6 +1594,7 @@ const StaticDataBuilder = struct {
                     .alignment = @intCast(size_align.alignment.toByteUnits()),
                     .is_global = true,
                     .is_exported = false,
+                    .root_slot = true,
                 });
                 continue;
             }
@@ -1611,6 +1612,7 @@ const StaticDataBuilder = struct {
                 .alignment = materialized.alignment,
                 .is_global = true,
                 .is_exported = false,
+                .root_slot = entry.compile_time_root != null,
                 .relocations = materialized.relocations,
             });
         }

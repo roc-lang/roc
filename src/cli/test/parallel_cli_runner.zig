@@ -7967,7 +7967,7 @@ fn customSharedEarlyObjectCache(
     }, &app)) |failure| return failure;
 
     var platform_offer: ?PlatformCacheOffer = null;
-    for ([_][]const u8{ "original 45 55\n", "edited 45 55\n" }, 0..) |stdout, revision| {
+    for ([_][]const u8{ "original 45 55 earth\n", "edited 45 55 earth\n" }, 0..) |stdout, revision| {
         if (revision == 1) {
             const edited_path = std.fs.path.join(allocator, &.{ std.fs.path.dirname(app).?, "edited.roc" }) catch |err|
                 return customInfraFailure(allocator, timer, "failed to allocate edited source path: {}", .{err});

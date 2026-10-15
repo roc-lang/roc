@@ -180,6 +180,7 @@ pub fn Graph(comptime AllocationKey: type) type {
                     .alignment = source.alignment,
                     .is_global = false,
                     .is_exported = false,
+                    .root_slot = true,
                     .relocations = relocations,
                     .empty_list_capacities = capacities,
                 };

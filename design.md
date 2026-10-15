@@ -523,6 +523,8 @@ reads that distinction, or anything else, back out of the spelling:
 | `roc__d{N}_{k}` | the `k`th further node (from 1) of owner `N`'s value | program |
 | `roc__b{N}` | the compile-time evaluator's cell holding the address of slot `N`'s value | program |
 | `roc__h{hash}` | a datum named by content: a string literal's backing, or a constant an object-cache pack carries | shared |
+| `roc__sv{hash}` | a static value by its producer certificate (`StaticDataValue.symbol_identity`): a checked constant's value or a compile-time root's slot | shared |
+| `roc__sv{hash}__address` | the cell holding the address of that value's storage in this program (see below) | shared |
 | `roc__p{hash}` | a procedure, by its `ProcIdentity` | shared |
 
 An owner is whoever freezes a value, and its number keeps names unique by
@@ -557,6 +559,20 @@ does not carry. The pack encoder renames every carried program-numbered datum
 (`DataItem.program_local_name`, from the producer's `is_exported`) to its
 `roc__h` content name and records the references to it as `shared`; capture
 keeps program names, so only a pack write pays for the hashing.
+
+Code reaches a static value through its address cell, never by the value's
+name, so what a captured artifact carries decides who defines the value when
+the code is linked into another program. A cell to a compile-time root's
+storage (`StaticDataExport.root_slot`) binds to storage the linking program
+declares from the code's demand facts (`SpecCacheHit.checked_root_uses`), and
+the program names that storage with the same certificate because the facts
+name the root's module and an offer whose modules the program does not contain
+is not offered. A cell to any other value carries the frozen value with the
+code (`ProcArtifact.PreparedData.cell_targets`): the program that links the
+code need not lower any body that holds the constant, and after an edit it
+often lowers none, so nothing but the artifact itself can be relied on to
+define it. The carried value is program-numbered data like any other constant
+a pack carries, so it takes its `roc__h` content name in the pack.
 
 A `ProcIdentity` names the same code in every program only because everything
 that decides a procedure's code is digested into it: its checked source, its
