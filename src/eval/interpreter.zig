@@ -3523,6 +3523,12 @@ pub const Interpreter = struct {
         /// The last conversion a procedure skipped by returning while this
         /// call was pending. Each procedure that returns early replaces it.
         conversion: ?PendingConversion,
+        /// The conversion skipped when the call this driver made left this
+        /// call pending: from that call's callee result to the layout and
+        /// result descriptor the call was made with. It applies after
+        /// `conversion` and is replaced by any boundary skipped nearer whoever
+        /// makes the call, as in the native erased-call runtime.
+        callee_boundary: ?PendingConversion = null,
     };
 
     /// A conversion of a pending call's result that a procedure left to
@@ -3558,6 +3564,9 @@ pub const Interpreter = struct {
         while (self.pending_erased) |call| {
             self.pending_erased = null;
             const raw = try self.evalErasedCallOnce(frame, call.closure, null, call.args, call.arg_layouts, call.arg_descs, call.arg_desc_keys, call.arg_plan, call.site_layout, false);
+            if (self.pending_erased) |*next| {
+                next.callee_boundary = .{ .layout = call.site_layout, .desc = call.result_desc, .keeps_own_desc = false };
+            }
             if (self.pending_erased == null) {
                 var current = try self.boxy_runtime.materializeCallResult(
                     self.boxyFrameHooks(frame),
@@ -3568,7 +3577,7 @@ pub const Interpreter = struct {
                     call.site_layout,
                 );
                 var current_layout = call.site_layout;
-                for ([_]?PendingConversion{ call.conversion, outermost }) |skipped| {
+                for ([_]?PendingConversion{ call.conversion, call.callee_boundary, outermost }) |skipped| {
                     const conversion = skipped orelse continue;
                     current = try self.boxy_runtime.materializeCallResult(
                         self.boxyFrameHooks(frame),
@@ -3584,7 +3593,7 @@ pub const Interpreter = struct {
                     .value = current.value,
                     .layout = current_layout,
                     .desc = current.desc,
-                    .stored_as = if (call.conversion == null and outermost == null) call.result_desc else null,
+                    .stored_as = if (call.conversion == null and call.callee_boundary == null and outermost == null) call.result_desc else null,
                 };
             }
             if (first) {

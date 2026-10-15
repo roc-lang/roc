@@ -12488,6 +12488,12 @@ of a stored function value is therefore not an edge along which descriptor
 leaves propagate into the using worker; the use's type describes the worker's
 signature, and its stored captures describe the rest.
 
+Child representations restored from a stored value carry the stored root's
+checked type as their source type, not the checked type at their own
+position. Planning therefore reads a stored child's representation, never its
+source type, as its type: a worker slot that holds such a child in a presence
+slot builds that slot around the child's representation.
+
 A stored function value restored inside a stored aggregate (a static function)
 is restored at its stored representation. That concrete representation alone
 supplies its worker's hidden descriptor arguments: the construction site's
@@ -19283,7 +19289,11 @@ procedures that returned early would have converted it: by the conversion
 recorded on that call, then by the one recorded on the first call of the
 chain, which is the one skipped on the way out to this caller. Skipping the
 conversions in between is sound because each only changes how the same value
-is represented. The caller's own result descriptor applies last, as it would
+is represented. The erased-call runtime converts what a callee it
+invoked returns to the layout and result descriptor of the site that called
+it; when that callee leaves a call pending instead, the runtime records this
+boundary conversion on the pending call too, and applies it after the call's
+own conversion and before the chain's first. The caller's own result descriptor applies last, as it would
 have to the value its callee returned.
 
 Backends follow these marks and nothing else: a deferred call becomes a call

@@ -4015,6 +4015,9 @@ const Builder = struct {
     stored_use_substitutions: std.AutoHashMapUnmanaged(u64, Span) = .empty,
     nominal_declaration_formals: std.AutoHashMap(NominalDeclarationKey, Span),
     optional_slots: std.AutoHashMap(CheckedTypeIdentity, TypeRepId),
+    /// Presence slots built around a representation rather than a checked
+    /// type (`presenceSlotAroundRep`), by payload representation.
+    rep_presence_slots: collections.DenseMap(TypeRepId, TypeRepId),
     by_stored_type: std.AutoHashMap(StoredTypeIdentity, TypeRepId),
     body_exprs_seen: std.AutoHashMap(BodyExprVisit, void),
     body_patterns_seen: std.AutoHashMap(BodyPatternVisit, void),
@@ -4128,6 +4131,7 @@ const Builder = struct {
             .quantified_variables = std.AutoHashMap(CheckedTypeIdentity, void).init(allocator),
             .nominal_declaration_formals = std.AutoHashMap(NominalDeclarationKey, Span).init(allocator),
             .optional_slots = std.AutoHashMap(CheckedTypeIdentity, TypeRepId).init(allocator),
+            .rep_presence_slots = collections.DenseMap(TypeRepId, TypeRepId).init(allocator),
             .by_stored_type = std.AutoHashMap(StoredTypeIdentity, TypeRepId).init(allocator),
             .body_exprs_seen = std.AutoHashMap(BodyExprVisit, void).init(allocator),
             .body_patterns_seen = std.AutoHashMap(BodyPatternVisit, void).init(allocator),
@@ -4172,6 +4176,7 @@ const Builder = struct {
         self.body_patterns_seen.deinit();
         self.body_exprs_seen.deinit();
         self.optional_slots.deinit();
+        self.rep_presence_slots.deinit();
         self.by_type.deinit();
         self.row_joins.deinit();
         self.row_join_representative.deinit();
@@ -20121,12 +20126,55 @@ const Builder = struct {
     /// A worker field whose kind is undetermined is stored as a presence
     /// slot. Where the call made that field required, the call's value is the
     /// slot's `Present` payload, so the call side of the slot is the presence
-    /// slot over that payload.
+    /// slot over that payload. A checked call representation's slot is the
+    /// one its checked type plans. A representation planned from a stored
+    /// (ConstStore) type records the checked type of the stored root it
+    /// belongs to rather than of its own position, so its slot is built around
+    /// the representation directly (`presenceSlotAroundRep`).
     fn callPresenceSlotForWorkerSlot(self: *Builder, worker_rep_id: TypeRepId, call_rep_id: TypeRepId) Allocator.Error!TypeRepId {
-        if (self.plan.representations.items[@backingInt(worker_rep_id)].presence_slot_present_discriminant == null) return call_rep_id;
+        const worker_rep = self.plan.representations.items[@backingInt(worker_rep_id)];
+        if (worker_rep.presence_slot_present_discriminant == null) return call_rep_id;
         const call_rep = self.plan.representations.items[@backingInt(call_rep_id)];
         if (call_rep.presence_slot_present_discriminant != null) return call_rep_id;
-        return try self.optionalSlotRepresentation(self.moduleForId(call_rep.source_type.module), call_rep.source_type.ty);
+        if (self.plan.repForSourceType(call_rep.source_type) == call_rep_id) {
+            return try self.optionalSlotRepresentation(self.moduleForId(call_rep.source_type.module), call_rep.source_type.ty);
+        }
+        return try self.presenceSlotAroundRep(worker_rep, call_rep_id);
+    }
+
+    /// A presence slot whose Present payload is `payload_rep`, labelled as the
+    /// worker slot `template` is.
+    fn presenceSlotAroundRep(self: *Builder, template: TypeRepresentation, payload_rep: TypeRepId) Allocator.Error!TypeRepId {
+        const entry = try self.rep_presence_slots.getOrPut(payload_rep);
+        if (entry.found_existing) return entry.value_ptr.*;
+        const template_variants = self.plan.tagVariantSlice(template.tag_variants);
+        const present_index: usize = template.presence_slot_present_discriminant.?;
+        if (template_variants.len != 2 or present_index > 1) boxyPlanInvariant("presence slot did not have exactly a Missing and a Present variant");
+        const missing = template_variants[1 - present_index];
+        const present = template_variants[present_index];
+        const payload_source = self.plan.representations.items[@backingInt(payload_rep)].source_type;
+        const child_start: u32 = @intCast(self.plan.children.items.len);
+        try self.plan.children.append(self.allocator, .{
+            .role = .{ .tag_payload = .{ .tag = present.name, .index = 0 } },
+            .source_type = payload_source,
+            .rep = payload_rep,
+        });
+        const variant_start: u32 = @intCast(self.plan.tag_variants.items.len);
+        try self.plan.tag_variants.appendSlice(self.allocator, &.{
+            .{ .name = missing.name, .name_module = missing.name_module },
+            .{ .name = present.name, .name_module = present.name_module, .payloads = .{ .start = child_start, .len = 1 } },
+        });
+        const rep_id: TypeRepId = @fromBackingInt(@intCast(@as(u32, @intCast(self.plan.representations.items.len))));
+        try self.plan.representations.append(self.allocator, .{
+            .source_type = payload_source,
+            .kind = .tag_union,
+            .children = .{ .start = child_start, .len = 1 },
+            .tag_variants = .{ .start = variant_start, .len = 2 },
+            .contains_dynamic = true,
+            .presence_slot_present_discriminant = 1,
+        });
+        entry.value_ptr.* = rep_id;
+        return rep_id;
     }
 
     fn workerPresenceSlotPayloadMatchesUnwrappedCallRep(

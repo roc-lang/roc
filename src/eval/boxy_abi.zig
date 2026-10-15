@@ -239,6 +239,13 @@ const PendingErasedCall = struct {
     /// was pending. Each procedure that returns early replaces it, so it is
     /// the one nearest whoever makes the call.
     conversion: ?PendingConversion,
+    /// The conversion the erased-call runtime skipped when the registered
+    /// callee it invoked left this call pending: from that callee's result
+    /// layout to the layout and result descriptor its own caller called with
+    /// (`callErasedOnce`). It applies after `conversion`, which the callee's
+    /// own procedures skipped, and is replaced by any boundary skipped nearer
+    /// whoever makes the call.
+    callee_boundary: ?PendingConversion = null,
 };
 
 /// A conversion of a pending call's result that a procedure left to whoever
@@ -381,7 +388,7 @@ pub fn roc_boxy_drive_pending(
         if (runtime) |g| enter(g);
         const args_ptr: ?[*]const u8 = if (call.args_len == 0) null else args.items.ptr;
         const arg_descs_ptr: ?[*]const ?*const BoxyTypeDesc = if (arg_descs.items.len == 0) null else arg_descs.items.ptr;
-        if (call.conversion == null and outermost == null and call.site_layout == expected_layout) {
+        if (call.conversion == null and call.callee_boundary == null and outermost == null and call.site_layout == expected_layout) {
             callErasedOnce(call.fn_ptr, ret, args_ptr, call.capture, null, out_desc, call.result_desc, expected_layout, arg_descs_ptr, call.arg_desc_keys_start, call.arg_desc_keys_len, call.arg_layouts_start, call.arg_layouts_len);
             if (tail.pending == null) {
                 if (result_desc) |own| {
@@ -398,7 +405,7 @@ pub fn roc_boxy_drive_pending(
                 var value = site_value;
                 var value_layout = site_layout;
                 var value_desc = site_desc;
-                for ([_]?PendingConversion{ call.conversion, outermost }) |skipped| {
+                for ([_]?PendingConversion{ call.conversion, call.callee_boundary, outermost }) |skipped| {
                     const conversion = skipped orelse continue;
                     const stored_as = if (conversion.keeps_own_desc) value_desc else conversion.desc;
                     const converted = g.runtime.materializeCallResult(hooks(g), value, value_layout, value_desc, stored_as, layoutIdx(conversion.layout)) catch
@@ -1443,9 +1450,13 @@ fn callErasedOnce(
     const worker_result = hooks(g).allocValue(actual_layout) catch abiCrash(g, "erased call result buffer");
     var returned_desc: ?*const anyopaque = @ptrCast(metadata_desc);
     invokeErasedCallableDriving(raw, g.runtime.roc_ops, if (actual_size == 0) null else @ptrCast(worker_result.ptr), invocation_args, invocation_capture, reuse, &returned_desc);
-    // A callee that deferred a call returned no value; the pending call
-    // delivers the result in the caller's layout itself.
-    if (TailStateSelection.get().pending != null) return;
+    // A callee that deferred a call returned no value. Whoever makes the
+    // pending call delivers its result, converted as this boundary would
+    // have converted the callee's own result.
+    if (TailStateSelection.get().pending) |*pending| {
+        pending.callee_boundary = .{ .layout = expected_layout, .desc = result_desc, .keeps_own_desc = false };
+        return;
+    }
     const actual_desc: ?*const BoxyTypeDesc = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null;
     const materialized = g.runtime.materializeCallResult(
         hooks(g),
