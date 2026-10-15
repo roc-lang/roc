@@ -351,10 +351,20 @@ const runtime_observer_fields = [_]RuntimeTargetField{
     .completed_scalar_values,
 };
 
+/// Two 32-byte identities, compared as one 256-bit integer.
+fn sameIdentity(a: *const [32]u8, b: *const [32]u8) bool {
+    return @as(u256, @bitCast(a.*)) == @as(u256, @bitCast(b.*));
+}
+
+fn isRuntimeObserverField(comptime field: RuntimeTargetField) bool {
+    for (runtime_observer_fields) |observer| if (observer == field) return true;
+    return false;
+}
+
 /// Compare the original declaration, never the selected producer capability.
 fn sameRuntimeTarget(expected: lir.CheckedPipeline.TargetConfig, actual: lir.CheckedPipeline.TargetConfig) bool {
     inline for (comptime std.meta.tags(RuntimeTargetField)) |field| {
-        if (comptime std.mem.findScalar(RuntimeTargetField, &runtime_observer_fields, field) != null) continue;
+        if (comptime isRuntimeObserverField(field)) continue;
         if (!std.meta.eql(@field(expected, @tagName(field)), @field(actual, @tagName(field)))) return false;
     }
     return true;
@@ -890,7 +900,7 @@ test "literal type-only projection consumes producer representation without bodi
     for (cold.lir_result.spec_procs.items) |spec| {
         const demand = spec.demand orelse continue;
         for (demand.literal_reads) |read| {
-            if (std.mem.eql(u8, &read.recipe.module, &pending.key.bytes)) {
+            if (sameIdentity(&read.recipe.module, &pending.key.bytes)) {
                 maybe_recipe = read.recipe;
                 break;
             }
@@ -4195,7 +4205,7 @@ pub const MaterializationHeaders = struct {
         var next_header: u32 = 0;
         for (store.getProcSpecs(), 0..) |proc, proc_index| {
             const declaration = proc.root_materialization orelse continue;
-            if (!std.mem.eql(u8, &proc.identity.bytes, &declaration.wrapper_identity) or
+            if (!sameIdentity(&proc.identity.bytes, &declaration.wrapper_identity) or
                 proc.args.len != 0 or proc.abi != .roc or proc.hosted != null)
                 finalizationInvariant("materialization producer did not declare its owned zero-argument Roc ABI");
             const entry = headers.by_identity.getOrPutAssumeCapacity(proc.identity);
@@ -5647,7 +5657,7 @@ fn recordComptimeSiteHits(
             }
         }
         if (site.owner == root_owner and reportsUnusedBranches(compile_time_root.kind) and
-            std.mem.eql(u8, &site.procedure_identity.bytes, &lir_result.store.getProcSpec(root_proc).identity.bytes))
+            sameIdentity(&site.procedure_identity.bytes, &lir_result.store.getProcSpec(root_proc).identity.bytes))
         {
             try coverage.record(site, hit.branch_index);
         }
@@ -5744,7 +5754,7 @@ fn discardUnreachedRootComptimeSites(
 ) void {
     for (0..sites.count()) |raw_site_id| {
         const root_site = sites.get(@fromBackingInt(@intCast(raw_site_id)));
-        if (!std.mem.eql(u8, &root_site.procedure_identity.bytes, &lir_result.store.getProcSpec(root_proc).identity.bytes)) continue;
+        if (!sameIdentity(&root_site.procedure_identity.bytes, &lir_result.store.getProcSpec(root_proc).identity.bytes)) continue;
         if (raw_site_id == @backingInt(failed_site_id)) continue;
         if (comptimeSiteEmpiricalKind(root_site.kind) == null) continue;
         const checked_site = root_site.checked_site orelse continue;

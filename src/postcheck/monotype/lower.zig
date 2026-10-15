@@ -20001,12 +20001,10 @@ const BodyDraftStore = struct {
     /// workspace store. This must run only after lowering has finished: the
     /// discarded maps below are graph-qualified lowering memoization.
     fn commitLiteralLocalContexts(
-        self: *const BodyDraftStore,
         program: *Ast.Program,
         committed_types: *CommittedGraphTypes,
         source: []const DraftLiteralLocalContext,
     ) Allocator.Error![]const Ast.LiteralLocalContext {
-        _ = self;
         const allocator = program.allocator;
         const contexts = try allocator.alloc(Ast.LiteralLocalContext, source.len);
         var initialized: usize = 0;
@@ -20505,7 +20503,7 @@ const BodyDraftStore = struct {
             const identity = try sealedDefIdentity(program, committed_types, seed, ids.typedLocalSpan(def.args), try def.ret.sealCommitted(committed_types));
             const entry = try program.literal_root_by_identity.getOrPut(program.allocator, identity);
             if (!entry.found_existing) {
-                const local_contexts = try self.commitLiteralLocalContexts(program, committed_types, root.recipe.local_contexts);
+                const local_contexts = try BodyDraftStore.commitLiteralLocalContexts(program, committed_types, root.recipe.local_contexts);
                 errdefer {
                     for (local_contexts) |context| program.allocator.free(context.bindings);
                     program.allocator.free(local_contexts);
@@ -20530,7 +20528,7 @@ const BodyDraftStore = struct {
                     },
                 });
             } else if (program.literal_roots.get(@backingInt(entry.value_ptr.*)).declaration_pending) {
-                const local_contexts = try self.commitLiteralLocalContexts(program, committed_types, root.recipe.local_contexts);
+                const local_contexts = try BodyDraftStore.commitLiteralLocalContexts(program, committed_types, root.recipe.local_contexts);
                 errdefer {
                     for (local_contexts) |context| program.allocator.free(context.bindings);
                     program.allocator.free(local_contexts);
