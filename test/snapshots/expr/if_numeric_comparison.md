@@ -50,7 +50,7 @@ NO CHANGE
 (e-if
 	(if-branches
 		(if-branch
-			(e-dispatch-call (method "is_gt") (constraint-fn-var 227)
+			(e-dispatch-call (method "is_gt") (constraint-fn-var 229)
 				(receiver
 					(e-num (value "5")))
 				(args

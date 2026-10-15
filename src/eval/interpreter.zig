@@ -5719,45 +5719,6 @@ pub const Interpreter = struct {
         return self.rocStrToValue(result, ret_layout);
     }
 
-    /// Locate the BadUtf8 variant inside an err tag union that may have been extended via `?`
-    /// to include additional error tags. The Str.from_utf8 layout contract represents BadUtf8
-    /// as a record whose original-index 0 field is the U64 byte index and whose original-index
-    /// 1 field is the one-byte UTF-8 problem tag.
-    fn findBadUtf8Variant(
-        self: *LirInterpreter,
-        inner_tu: *const layout_mod.TagUnionData,
-    ) ?struct { disc: u32, struct_idx: layout_mod.StructIdx } {
-        const inner_v = self.layout_store.getTagUnionVariants(inner_tu);
-        for (0..inner_v.len) |i| {
-            const inner_payload = inner_v.get(@intCast(i)).payload_layout;
-            const unwrapped = self.boxy_runtime.unwrapSingleFieldPayloadLayout(inner_payload) orelse inner_payload;
-            const inner_layout = self.layout_store.getLayout(unwrapped);
-            if (inner_layout.tag != .struct_) continue;
-
-            const struct_idx = inner_layout.getStruct().idx;
-            const struct_data = self.layout_store.getStructData(struct_idx);
-            const fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
-            if (fields.len != 2) continue;
-
-            var has_index_field = false;
-            var has_problem_field = false;
-            for (0..fields.len) |fi| {
-                const field = fields.get(fi);
-                const field_layout = self.layout_store.getLayout(field.layout);
-                const field_size = self.layout_store.layoutSize(field_layout);
-                switch (field.index) {
-                    0 => has_index_field = field_size == 8,
-                    1 => has_problem_field = field_size == 1,
-                    else => {},
-                }
-            }
-            if (has_index_field and has_problem_field) {
-                return .{ .disc = @intCast(i), .struct_idx = struct_idx };
-            }
-        }
-        return null;
-    }
-
     const LowLevelEvalInput = struct {
         op: LIR.LowLevel,
         args: []const Value,
@@ -6079,13 +6040,7 @@ pub const Interpreter = struct {
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
             .str_from_utf8 => blk: {
-                // str_from_utf8(list) -> Try(Str, [BadUtf8 {index: U64, problem: Utf8Problem}, ..])
-                // The C builtin returns FromUtf8Try (a flat struct). We convert it to the Roc
-                // tag union layout using layout-resolved offsets. Note the err tag union has an
-                // open extension (`..`), so at the call site it may be unified with other error
-                // tags from `?` chaining. We must locate the BadUtf8 variant inside that
-                // (possibly multi-variant) inner tag union and write the inner discriminant
-                // when there is more than one inner variant.
+                // str_from_utf8(list) -> Try(Str, { index : U64, problem : Utf8Problem })
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 if (crash_boundary.set() != 0) return self.crashError();
@@ -6093,72 +6048,26 @@ pub const Interpreter = struct {
 
                 const ret_layout_val = self.layout_store.getLayout(ll.ret_layout);
                 if (ret_layout_val.tag != .tag_union) {
-                    return self.runtimeError("str_from_utf8 expected a tag union return layout");
+                    return self.invariantFailedError("str_from_utf8 expected a Try return layout", .{});
                 }
                 const tu_data = self.layout_store.getTagUnionData(ret_layout_val.getTagUnion().idx);
-                const variants = self.layout_store.getTagUnionVariants(tu_data);
-
-                // Discover Ok (Str payload) and Err variant indices from the layout.
-                var ok_disc: ?u32 = null;
-                var err_disc: ?u32 = null;
-                var err_record_idx: ?layout_mod.StructIdx = null;
-                var inner_tu_data_opt: ?*const layout_mod.TagUnionData = null;
-                var inner_bad_utf8_disc: u32 = 0;
-                for (0..variants.len) |i| {
-                    const v_payload = variants.get(@intCast(i)).payload_layout;
-                    const candidate = self.boxy_runtime.unwrapSingleFieldPayloadLayout(v_payload) orelse v_payload;
-                    if (candidate == .str) {
-                        ok_disc = @intCast(i);
-                    } else {
-                        err_disc = @intCast(i);
-                        const err_layout = self.layout_store.getLayout(candidate);
-                        switch (err_layout.tag) {
-                            .struct_ => err_record_idx = err_layout.getStruct().idx,
-                            .tag_union => {
-                                const inner_tu = self.layout_store.getTagUnionData(err_layout.getTagUnion().idx);
-                                inner_tu_data_opt = inner_tu;
-                                const found = self.findBadUtf8Variant(inner_tu);
-                                if (found) |info| {
-                                    err_record_idx = info.struct_idx;
-                                    inner_bad_utf8_disc = info.disc;
-                                }
-                            },
-                            .scalar,
-                            .box,
-                            .box_of_zst,
-                            .erased_box,
-                            .list,
-                            .list_of_zst,
-                            .closure,
-                            .erased_callable,
-                            .zst,
-                            .ptr,
-                            => {},
-                        }
-                    }
+                // `Try`'s `Err` is discriminant 0 and `Ok` is 1; `Err`'s payload is the error record.
+                const err_payload = self.layout_store.getTagUnionVariants(tu_data).get(0).payload_layout;
+                const err_layout = self.layout_store.getLayout(self.boxy_runtime.unwrapSingleFieldPayloadLayout(err_payload) orelse err_payload);
+                if (err_layout.tag != .struct_) {
+                    return self.invariantFailedError("str_from_utf8's error was not a record", .{});
                 }
+                const rec_idx = err_layout.getStruct().idx;
 
                 const val = try self.alloc(ll.ret_layout);
                 @memset(val.ptr[0..tu_data.size.get(self.layout_store.targetUsize())], 0);
-
-                const resolved_ok = ok_disc orelse return self.runtimeError("str_from_utf8: no Ok variant in layout");
-                const resolved_err = err_disc orelse return self.runtimeError("str_from_utf8: no Err variant in layout");
-                const rec_idx = err_record_idx orelse return self.runtimeError("str_from_utf8: could not resolve error record layout");
-
                 if (result.is_ok) {
                     @memcpy(val.ptr[0..@sizeOf(RocStr)], std.mem.asBytes(&result.string));
-                    self.helper.writeTagDiscriminant(val, ll.ret_layout, resolved_ok);
+                    self.helper.writeTagDiscriminant(val, ll.ret_layout, 1);
                 } else {
-                    const index_off = self.layout_store.getStructFieldOffsetByOriginalIndex(rec_idx, 0);
-                    const problem_off = self.layout_store.getStructFieldOffsetByOriginalIndex(rec_idx, 1);
-                    val.offset(index_off).write(u64, result.byte_index);
-                    val.offset(problem_off).write(u8, @backingInt(result.problem_code));
-                    if (inner_tu_data_opt) |inner_tu| {
-                        // The inner tag union sits at offset 0 of the Err payload, which is at
-                        // offset 0 of the outer tag union. Write its discriminant in place.
-                        inner_tu.writeDiscriminant(val.ptr, inner_bad_utf8_disc, self.layout_store.targetUsize());
-                    }
-                    self.helper.writeTagDiscriminant(val, ll.ret_layout, resolved_err);
+                    val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(rec_idx, 0)).write(u64, result.byte_index);
+                    val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(rec_idx, 1)).write(u8, @backingInt(result.problem_code));
+                    self.helper.writeTagDiscriminant(val, ll.ret_layout, 0);
                 }
                 break :blk val;
             },

@@ -3200,39 +3200,6 @@ fn unwrapSingleFieldPayloadLayout(self: *const Self, layout_idx: layout.Idx) ?la
     return field.layout;
 }
 
-fn findBadUtf8Variant(self: *const Self, inner_tu: *const layout.TagUnionData) Allocator.Error!?struct { disc: u32, struct_idx: layout.StructIdx } {
-    const ls = self.getLayoutStore();
-    const variants = ls.getTagUnionVariants(inner_tu);
-    for (0..variants.len) |i| {
-        const payload = variants.get(@intCast(i)).payload_layout;
-        const candidate = self.unwrapSingleFieldPayloadLayout(payload) orelse payload;
-        const payload_layout = ls.getLayout(candidate);
-        if (payload_layout.tag != .struct_) continue;
-
-        const struct_idx = payload_layout.getStruct().idx;
-        const struct_data = ls.getStructData(struct_idx);
-        const fields = ls.struct_fields.sliceRange(struct_data.getFields());
-        if (fields.len != 2) continue;
-
-        var has_index_field = false;
-        var has_problem_field = false;
-        for (0..fields.len) |field_i| {
-            const field = fields.get(field_i);
-            const field_size = try self.layoutStorageByteSize(field.layout);
-            switch (field.index) {
-                0 => has_index_field = field_size == 8,
-                1 => has_problem_field = field_size == 1,
-                else => {},
-            }
-        }
-        if (has_index_field and has_problem_field) {
-            return .{ .disc = @intCast(i), .struct_idx = struct_idx };
-        }
-    }
-
-    return null;
-}
-
 fn shiftBitWidth(layout_idx: layout.Idx) u32 {
     return switch (layout_idx) {
         .i8, .u8 => 8,
@@ -10730,84 +10697,22 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitStrCaselessEqCall(a, b);
         },
         .str_from_utf8 => {
+            // str_from_utf8(list) -> Try(Str, { index : U64, problem : Utf8Problem })
             const ls = self.getLayoutStore();
             const ret_layout_val = ls.getLayout(ll.ret_layout);
             if (ret_layout_val.tag != .tag_union) unreachable;
             const tu_data = ls.getTagUnionData(ret_layout_val.getTagUnion().idx);
             const tu_layout = try WasmLayout.tagUnionLayoutWithStore(ret_layout_val.getTagUnion().idx, ls);
-            const variants = ls.getTagUnionVariants(tu_data);
-            var ok_disc: ?u32 = null;
-            var err_disc: ?u32 = null;
-            var err_record_idx: ?layout.StructIdx = null;
-            var inner_disc_offset: u32 = 0;
-            var inner_disc_size: u32 = 0;
-            var inner_bad_utf8_disc: u32 = 0;
-            for (0..variants.len) |i| {
-                const v_payload = variants.get(@intCast(i)).payload_layout;
-                const candidate = self.unwrapSingleFieldPayloadLayout(v_payload) orelse v_payload;
-                if (candidate == .str) {
-                    ok_disc = @intCast(i);
-                } else {
-                    err_disc = @intCast(i);
-                    const err_layout = ls.getLayout(candidate);
-                    switch (err_layout.tag) {
-                        .struct_ => err_record_idx = err_layout.getStruct().idx,
-                        .tag_union => {
-                            const inner_tu = ls.getTagUnionData(err_layout.getTagUnion().idx);
-                            if (try self.findBadUtf8Variant(inner_tu)) |info| {
-                                err_record_idx = info.struct_idx;
-                                inner_disc_offset = inner_tu.discriminant_offset.get(ls.targetUsize());
-                                inner_disc_size = inner_tu.discriminant_size;
-                                inner_bad_utf8_disc = info.disc;
-                            }
-                        },
-                        .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .closure, .erased_callable, .zst, .ptr => {},
-                    }
-                }
-            }
-            const resolved_ok = ok_disc orelse wasmInvariantFmt(
-                "WasmCodeGen invariant violated: str_from_utf8 had no Ok(Str) variant",
+            // `Try`'s `Err` is discriminant 0; its payload is the error record.
+            const err_payload = ls.getTagUnionVariants(tu_data).get(0).payload_layout;
+            const err_layout = ls.getLayout(self.unwrapSingleFieldPayloadLayout(err_payload) orelse err_payload);
+            if (err_layout.tag != .struct_) wasmInvariantFmt(
+                "WasmCodeGen invariant violated: str_from_utf8's error was not a record",
                 .{},
             );
-            const resolved_err = err_disc orelse wasmInvariantFmt(
-                "WasmCodeGen invariant violated: str_from_utf8 had no Err variant",
-                .{},
-            );
-            const rec_idx = err_record_idx orelse wasmInvariantFmt(
-                "WasmCodeGen invariant violated: str_from_utf8 could not resolve error record layout",
-                .{},
-            );
-            const struct_data = ls.getStructData(rec_idx);
-            const fields = ls.struct_fields.sliceRange(struct_data.getFields());
-            var index_off: ?u32 = null;
-            var problem_off: ?u32 = null;
-            for (0..fields.len) |i| {
-                const field = fields.get(i);
-                const field_layout = ls.getLayout(field.layout);
-                const field_offset = try self.structFieldOffsetByOriginalIndexWasm(rec_idx, field.index);
-                const is_index = switch (field_layout.tag) {
-                    .scalar => field_layout.getScalar().tag == .int and switch (field_layout.getScalar().getInt()) {
-                        .u64, .i64 => true,
-                        .u8, .i8, .u16, .i16, .u32, .i32, .u128, .i128 => false,
-                    },
-                    .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => false,
-                };
-                if (is_index) {
-                    index_off = field_offset;
-                    continue;
-                }
-                if (problem_off == null) problem_off = field_offset;
-            }
-            const resolved_index_off = index_off orelse wasmInvariantFmt(
-                "WasmCodeGen invariant violated: str_from_utf8 could not resolve index offset",
-                .{},
-            );
-            const resolved_problem_off = problem_off orelse wasmInvariantFmt(
-                "WasmCodeGen invariant violated: str_from_utf8 could not resolve problem offset",
-                .{},
-            );
-            const index_offset = resolved_index_off;
-            const problem_offset = resolved_problem_off;
+            const rec_idx = err_layout.getStruct().idx;
+            const index_offset = try self.structFieldOffsetByOriginalIndexWasm(rec_idx, 0);
+            const problem_offset = try self.structFieldOffsetByOriginalIndexWasm(rec_idx, 1);
             const input = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
             const result_offset = try self.allocStackMemory(tu_layout.size, 4);
             switch (self.external_calls) {
@@ -10817,21 +10722,10 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                     const layout_ptr = try self.emitFpOffsetToNewLocal(layout_offset);
 
                     inline for (.{
-                        .{ "ok_tag", @as(u64, resolved_ok) },
-                        .{ "err_tag", @as(u64, resolved_err) },
-                    }) |field| {
-                        try self.emitLocalGet(layout_ptr);
-                        try self.emitI64Const(@intCast(field[1]));
-                        try self.emitStoreOp(.i64, @offsetOf(ResultLayout, field[0]));
-                    }
-                    inline for (.{
-                        .{ "outer_disc_offset", tu_layout.discriminant_offset },
-                        .{ "outer_disc_size", @as(u32, tu_layout.discriminant_size) },
+                        .{ "disc_offset", tu_layout.discriminant_offset },
+                        .{ "disc_size", @as(u32, tu_layout.discriminant_size) },
                         .{ "err_index_offset", index_offset },
                         .{ "err_problem_offset", problem_offset },
-                        .{ "inner_disc_offset", inner_disc_offset },
-                        .{ "inner_disc_size", inner_disc_size },
-                        .{ "inner_bad_utf8_tag", inner_bad_utf8_disc },
                     }) |field| {
                         try self.emitLocalGet(layout_ptr);
                         try self.emitI32Const(@intCast(field[1]));

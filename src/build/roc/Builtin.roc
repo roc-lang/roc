@@ -2748,6 +2748,10 @@ Builtin :: [].{
 		## expect Str.from_utf8([255]).is_err()
 		## ```
 		from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem : Str.Utf8Problem, index : U64 })])
+		from_utf8 = |bytes| match str_from_utf8_raw(bytes) {
+			Ok(str) => Ok(str)
+			Err(problem) => Err(BadUtf8(problem))
+		}
 
 		## Decodes little-endian UTF-16 bytes. Preserves U+FEFF, including at the start.
 		## Returns the first malformed sequence's zero-based byte offset and problem.
@@ -6795,6 +6799,12 @@ Builtin :: [].{
 
 	Num :: {}.{
 
+		# The result of the compiler's numeric comparison and the input of its
+		# list sort (design.md "Builtins Build Their Own Tag Unions"). A nominal
+		# union, so its tags' runtime order is this declaration's own;
+		# `order_relative_to` and `List.sort_with` convert it in Roc.
+		RawOrder := [After, Before, Same]
+
 		## A reusable numeric range description. Range syntax constructs one of these
 		## values; call [Range.iter] to iterate it, or use it directly in a `for` loop.
 		##
@@ -7018,6 +7028,7 @@ Builtin :: [].{
 			## expect U8.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U8, U8 -> [Before, Same, After]
+			order_relative_to = |a, b| order_from_raw(u8_order_raw(a, b))
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -7433,6 +7444,7 @@ Builtin :: [].{
 			## expect U8.from_str("-1") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(U8, [BadNumStr])
+			from_str = |str| u8_from_str(str)
 
 			## Parse a [U8] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -7581,6 +7593,7 @@ Builtin :: [].{
 			## expect U8.to_i8_try(200) == Err(OutOfRange)
 			## ```
 			to_i8_try : U8 -> Try(I8, [OutOfRange])
+			to_i8_try = |num| out_of_range(u8_to_i8_try_raw(num))
 
 			## Convert a [U8] to an [I16]. This widening conversion preserves
 			## every [U8] value exactly.
@@ -7770,6 +7783,7 @@ Builtin :: [].{
 			## expect I8.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I8, I8 -> [Before, Same, After]
+			order_relative_to = |a, b| order_from_raw(i8_order_raw(a, b))
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -8347,6 +8361,7 @@ Builtin :: [].{
 			## expect I8.from_str("200") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(I8, [BadNumStr])
+			from_str = |str| i8_from_str(str)
 
 			## Parse a [I8] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -8458,6 +8473,7 @@ Builtin :: [].{
 			## expect I8.to_u8_try(-1) == Err(OutOfRange)
 			## ```
 			to_u8_try : I8 -> Try(U8, [OutOfRange])
+			to_u8_try = |num| out_of_range(i8_to_u8_try_raw(num))
 
 			## Convert an [I8] to a [U16], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -8479,6 +8495,7 @@ Builtin :: [].{
 			## expect I8.to_u16_try(-1) == Err(OutOfRange)
 			## ```
 			to_u16_try : I8 -> Try(U16, [OutOfRange])
+			to_u16_try = |num| out_of_range(i8_to_u16_try_raw(num))
 
 			## Convert an [I8] to a [U32], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -8500,6 +8517,7 @@ Builtin :: [].{
 			## expect I8.to_u32_try(-1) == Err(OutOfRange)
 			## ```
 			to_u32_try : I8 -> Try(U32, [OutOfRange])
+			to_u32_try = |num| out_of_range(i8_to_u32_try_raw(num))
 
 			## Convert an [I8] to a [U64], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -8521,6 +8539,7 @@ Builtin :: [].{
 			## expect I8.to_u64_try(-1) == Err(OutOfRange)
 			## ```
 			to_u64_try : I8 -> Try(U64, [OutOfRange])
+			to_u64_try = |num| out_of_range(i8_to_u64_try_raw(num))
 
 			## Convert an [I8] to a [U128], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -8540,6 +8559,7 @@ Builtin :: [].{
 			## expect I8.to_u128_try(-1) == Err(OutOfRange)
 			## ```
 			to_u128_try : I8 -> Try(U128, [OutOfRange])
+			to_u128_try = |num| out_of_range(i8_to_u128_try_raw(num))
 
 			# Conversions to floating point (all safe)
 			## Convert an [I8] to an [F32]. Every [I8] value is exactly
@@ -8664,6 +8684,7 @@ Builtin :: [].{
 			## expect U16.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U16, U16 -> [Before, Same, After]
+			order_relative_to = |a, b| order_from_raw(u16_order_raw(a, b))
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -9171,6 +9192,7 @@ Builtin :: [].{
 			## expect U16.from_str("-1") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(U16, [BadNumStr])
+			from_str = |str| u16_from_str(str)
 
 			## Parse a [U16] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -9253,6 +9275,7 @@ Builtin :: [].{
 			## expect U16.to_i8_try(200) == Err(OutOfRange)
 			## ```
 			to_i8_try : U16 -> Try(I8, [OutOfRange])
+			to_i8_try = |num| out_of_range(u16_to_i8_try_raw(num))
 
 			## Convert a [U16] to an [I16], wrapping on overflow. Values from `0` to
 			## `32767` are preserved; values from `32768` to `65535` wrap into the
@@ -9274,6 +9297,7 @@ Builtin :: [].{
 			## expect U16.to_i16_try(40000) == Err(OutOfRange)
 			## ```
 			to_i16_try : U16 -> Try(I16, [OutOfRange])
+			to_i16_try = |num| out_of_range(u16_to_i16_try_raw(num))
 
 			## Convert a [U16] to an [I32]. This widening conversion preserves
 			## every [U16] value exactly.
@@ -9308,6 +9332,7 @@ Builtin :: [].{
 			## expect U16.to_u8_try(300) == Err(OutOfRange)
 			## ```
 			to_u8_try : U16 -> Try(U8, [OutOfRange])
+			to_u8_try = |num| out_of_range(u16_to_u8_try_raw(num))
 
 			## No-op: leave a [U16] unchanged as a [U16].
 			to_u16 : U16 -> U16
@@ -9475,6 +9500,7 @@ Builtin :: [].{
 			## expect I16.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I16, I16 -> [Before, Same, After]
+			order_relative_to = |a, b| order_from_raw(i16_order_raw(a, b))
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -10078,6 +10104,7 @@ Builtin :: [].{
 			## expect I16.from_str("40000") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(I16, [BadNumStr])
+			from_str = |str| i16_from_str(str)
 
 			## Parse a [I16] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -10160,6 +10187,7 @@ Builtin :: [].{
 			## expect I16.to_i8_try(200) == Err(OutOfRange)
 			## ```
 			to_i8_try : I16 -> Try(I8, [OutOfRange])
+			to_i8_try = |num| out_of_range(i16_to_i8_try_raw(num))
 
 			## No-op: leave an [I16] unchanged as an [I16].
 			to_i16 : I16 -> I16
@@ -10206,6 +10234,7 @@ Builtin :: [].{
 			## expect I16.to_u8_try(-1) == Err(OutOfRange)
 			## ```
 			to_u8_try : I16 -> Try(U8, [OutOfRange])
+			to_u8_try = |num| out_of_range(i16_to_u8_try_raw(num))
 
 			## Convert an [I16] to a [U16], wrapping on overflow. Non-negative
 			## values are preserved; negative values wrap into the upper end of the
@@ -10226,6 +10255,7 @@ Builtin :: [].{
 			## expect I16.to_u16_try(-1) == Err(OutOfRange)
 			## ```
 			to_u16_try : I16 -> Try(U16, [OutOfRange])
+			to_u16_try = |num| out_of_range(i16_to_u16_try_raw(num))
 
 			## Convert an [I16] to a [U32], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -10247,6 +10277,7 @@ Builtin :: [].{
 			## expect I16.to_u32_try(-1) == Err(OutOfRange)
 			## ```
 			to_u32_try : I16 -> Try(U32, [OutOfRange])
+			to_u32_try = |num| out_of_range(i16_to_u32_try_raw(num))
 
 			## Convert an [I16] to a [U64], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -10268,6 +10299,7 @@ Builtin :: [].{
 			## expect I16.to_u64_try(-1) == Err(OutOfRange)
 			## ```
 			to_u64_try : I16 -> Try(U64, [OutOfRange])
+			to_u64_try = |num| out_of_range(i16_to_u64_try_raw(num))
 
 			## Convert an [I16] to a [U128], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -10287,6 +10319,7 @@ Builtin :: [].{
 			## expect I16.to_u128_try(-1) == Err(OutOfRange)
 			## ```
 			to_u128_try : I16 -> Try(U128, [OutOfRange])
+			to_u128_try = |num| out_of_range(i16_to_u128_try_raw(num))
 
 			# Conversions to floating point (all safe)
 			## Convert an [I16] to an [F32]. Every [I16] value is exactly
@@ -10410,6 +10443,7 @@ Builtin :: [].{
 			## expect U32.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U32, U32 -> [Before, Same, After]
+			order_relative_to = |a, b| order_from_raw(u32_order_raw(a, b))
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -10917,6 +10951,7 @@ Builtin :: [].{
 			## expect U32.from_str("-1") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(U32, [BadNumStr])
+			from_str = |str| u32_from_str(str)
 
 			## Parse a [U32] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -10999,6 +11034,7 @@ Builtin :: [].{
 			## expect U32.to_i8_try(200) == Err(OutOfRange)
 			## ```
 			to_i8_try : U32 -> Try(I8, [OutOfRange])
+			to_i8_try = |num| out_of_range(u32_to_i8_try_raw(num))
 
 			## Convert a [U32] to an [I16], wrapping on overflow. Values from `0` to
 			## `32767` are preserved; larger values wrap by truncating to the low 16
@@ -11019,6 +11055,7 @@ Builtin :: [].{
 			## expect U32.to_i16_try(40000) == Err(OutOfRange)
 			## ```
 			to_i16_try : U32 -> Try(I16, [OutOfRange])
+			to_i16_try = |num| out_of_range(u32_to_i16_try_raw(num))
 
 			## Convert a [U32] to an [I32], wrapping on overflow. Values from `0` to
 			## `2147483647` are preserved; values from `2147483648` to `4294967295`
@@ -11040,6 +11077,7 @@ Builtin :: [].{
 			## expect U32.to_i32_try(3000000000) == Err(OutOfRange)
 			## ```
 			to_i32_try : U32 -> Try(I32, [OutOfRange])
+			to_i32_try = |num| out_of_range(u32_to_i32_try_raw(num))
 
 			## Convert a [U32] to an [I64]. This widening conversion preserves
 			## every [U32] value exactly.
@@ -11070,6 +11108,7 @@ Builtin :: [].{
 			## expect U32.to_u8_try(300) == Err(OutOfRange)
 			## ```
 			to_u8_try : U32 -> Try(U8, [OutOfRange])
+			to_u8_try = |num| out_of_range(u32_to_u8_try_raw(num))
 
 			## Convert a [U32] to a [U16], wrapping on overflow. Values from `0` to
 			## `65535` are preserved; larger values wrap by truncating to the low 16
@@ -11090,6 +11129,7 @@ Builtin :: [].{
 			## expect U32.to_u16_try(70000) == Err(OutOfRange)
 			## ```
 			to_u16_try : U32 -> Try(U16, [OutOfRange])
+			to_u16_try = |num| out_of_range(u32_to_u16_try_raw(num))
 
 			## No-op: leave a [U32] unchanged as a [U32].
 			to_u32 : U32 -> U32
@@ -11253,6 +11293,7 @@ Builtin :: [].{
 			## expect I32.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I32, I32 -> [Before, Same, After]
+			order_relative_to = |a, b| order_from_raw(i32_order_raw(a, b))
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -11856,6 +11897,7 @@ Builtin :: [].{
 			## expect I32.from_str("3000000000") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(I32, [BadNumStr])
+			from_str = |str| i32_from_str(str)
 
 			## Parse a [I32] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -11938,6 +11980,7 @@ Builtin :: [].{
 			## expect I32.to_i8_try(200) == Err(OutOfRange)
 			## ```
 			to_i8_try : I32 -> Try(I8, [OutOfRange])
+			to_i8_try = |num| out_of_range(i32_to_i8_try_raw(num))
 
 			## Convert an [I32] to an [I16], wrapping on overflow. Values from
 			## `-32768` to `32767` are preserved; other values wrap by truncating
@@ -11958,6 +12001,7 @@ Builtin :: [].{
 			## expect I32.to_i16_try(40000) == Err(OutOfRange)
 			## ```
 			to_i16_try : I32 -> Try(I16, [OutOfRange])
+			to_i16_try = |num| out_of_range(i32_to_i16_try_raw(num))
 
 			## No-op: leave an [I32] unchanged as an [I32].
 			to_i32 : I32 -> I32
@@ -12000,6 +12044,7 @@ Builtin :: [].{
 			## expect I32.to_u8_try(-1) == Err(OutOfRange)
 			## ```
 			to_u8_try : I32 -> Try(U8, [OutOfRange])
+			to_u8_try = |num| out_of_range(i32_to_u8_try_raw(num))
 
 			## Convert an [I32] to a [U16], wrapping on overflow. Values from `0` to
 			## `65535` are preserved; other values wrap by truncating to the low 16
@@ -12020,6 +12065,7 @@ Builtin :: [].{
 			## expect I32.to_u16_try(-1) == Err(OutOfRange)
 			## ```
 			to_u16_try : I32 -> Try(U16, [OutOfRange])
+			to_u16_try = |num| out_of_range(i32_to_u16_try_raw(num))
 
 			## Convert an [I32] to a [U32], wrapping on overflow. Non-negative
 			## values are preserved; negative values wrap into the upper end of the
@@ -12040,6 +12086,7 @@ Builtin :: [].{
 			## expect I32.to_u32_try(-1) == Err(OutOfRange)
 			## ```
 			to_u32_try : I32 -> Try(U32, [OutOfRange])
+			to_u32_try = |num| out_of_range(i32_to_u32_try_raw(num))
 
 			## Convert an [I32] to a [U64], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -12061,6 +12108,7 @@ Builtin :: [].{
 			## expect I32.to_u64_try(-1) == Err(OutOfRange)
 			## ```
 			to_u64_try : I32 -> Try(U64, [OutOfRange])
+			to_u64_try = |num| out_of_range(i32_to_u64_try_raw(num))
 
 			## Convert an [I32] to a [U128], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -12080,6 +12128,7 @@ Builtin :: [].{
 			## expect I32.to_u128_try(-1) == Err(OutOfRange)
 			## ```
 			to_u128_try : I32 -> Try(U128, [OutOfRange])
+			to_u128_try = |num| out_of_range(i32_to_u128_try_raw(num))
 
 			# Conversions to floating point (all safe)
 			## Convert an [I32] to an [F32]. This conversion may round because
@@ -12205,6 +12254,7 @@ Builtin :: [].{
 			## expect U64.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U64, U64 -> [Before, Same, After]
+			order_relative_to = |a, b| order_from_raw(u64_order_raw(a, b))
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -12739,6 +12789,7 @@ Builtin :: [].{
 			## expect U64.from_str("-1") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(U64, [BadNumStr])
+			from_str = |str| u64_from_str(str)
 
 			## Parse a [U64] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -12821,6 +12872,7 @@ Builtin :: [].{
 			## expect U64.to_i8_try(200) == Err(OutOfRange)
 			## ```
 			to_i8_try : U64 -> Try(I8, [OutOfRange])
+			to_i8_try = |num| out_of_range(u64_to_i8_try_raw(num))
 
 			## Convert a [U64] to an [I16], wrapping on overflow. Values from `0` to
 			## `32767` are preserved; larger values wrap by truncating to the low 16
@@ -12841,6 +12893,7 @@ Builtin :: [].{
 			## expect U64.to_i16_try(40000) == Err(OutOfRange)
 			## ```
 			to_i16_try : U64 -> Try(I16, [OutOfRange])
+			to_i16_try = |num| out_of_range(u64_to_i16_try_raw(num))
 
 			## Convert a [U64] to an [I32], wrapping on overflow. Values from `0` to
 			## `2147483647` are preserved; larger values wrap by truncating to the
@@ -12861,6 +12914,7 @@ Builtin :: [].{
 			## expect U64.to_i32_try(3000000000) == Err(OutOfRange)
 			## ```
 			to_i32_try : U64 -> Try(I32, [OutOfRange])
+			to_i32_try = |num| out_of_range(u64_to_i32_try_raw(num))
 
 			## Convert a [U64] to an [I64], wrapping on overflow. Values from `0` to
 			## `9223372036854775807` are preserved; values from `9223372036854775808`
@@ -12883,6 +12937,7 @@ Builtin :: [].{
 			## expect U64.to_i64_try(10000000000000000000) == Err(OutOfRange)
 			## ```
 			to_i64_try : U64 -> Try(I64, [OutOfRange])
+			to_i64_try = |num| out_of_range(u64_to_i64_try_raw(num))
 
 			## Convert a [U64] to an [I128]. This widening conversion preserves
 			## every [U64] value exactly.
@@ -12909,6 +12964,7 @@ Builtin :: [].{
 			## expect U64.to_u8_try(300) == Err(OutOfRange)
 			## ```
 			to_u8_try : U64 -> Try(U8, [OutOfRange])
+			to_u8_try = |num| out_of_range(u64_to_u8_try_raw(num))
 
 			## Convert a [U64] to a [U16], wrapping on overflow. Values from `0` to
 			## `65535` are preserved; larger values wrap by truncating to the low 16
@@ -12929,6 +12985,7 @@ Builtin :: [].{
 			## expect U64.to_u16_try(70000) == Err(OutOfRange)
 			## ```
 			to_u16_try : U64 -> Try(U16, [OutOfRange])
+			to_u16_try = |num| out_of_range(u64_to_u16_try_raw(num))
 
 			## Convert a [U64] to a [U32], wrapping on overflow. Values from `0` to
 			## `4294967295` are preserved; larger values wrap by truncating to the
@@ -12949,6 +13006,7 @@ Builtin :: [].{
 			## expect U64.to_u32_try(5000000000) == Err(OutOfRange)
 			## ```
 			to_u32_try : U64 -> Try(U32, [OutOfRange])
+			to_u32_try = |num| out_of_range(u64_to_u32_try_raw(num))
 
 			## No-op: leave a [U64] unchanged as a [U64].
 			to_u64 : U64 -> U64
@@ -13110,6 +13168,7 @@ Builtin :: [].{
 			## expect I64.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I64, I64 -> [Before, Same, After]
+			order_relative_to = |a, b| order_from_raw(i64_order_raw(a, b))
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -13721,6 +13780,7 @@ Builtin :: [].{
 			## expect I64.from_str("-1") == Ok(-1)
 			## ```
 			from_str : Str -> Try(I64, [BadNumStr])
+			from_str = |str| i64_from_str(str)
 
 			## Parse a [I64] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -13803,6 +13863,7 @@ Builtin :: [].{
 			## expect I64.to_i8_try(200) == Err(OutOfRange)
 			## ```
 			to_i8_try : I64 -> Try(I8, [OutOfRange])
+			to_i8_try = |num| out_of_range(i64_to_i8_try_raw(num))
 
 			## Convert an [I64] to an [I16], wrapping on overflow. Values from
 			## `-32768` to `32767` are preserved; other values wrap by truncating
@@ -13823,6 +13884,7 @@ Builtin :: [].{
 			## expect I64.to_i16_try(40000) == Err(OutOfRange)
 			## ```
 			to_i16_try : I64 -> Try(I16, [OutOfRange])
+			to_i16_try = |num| out_of_range(i64_to_i16_try_raw(num))
 
 			## Convert an [I64] to an [I32], wrapping on overflow. Values from
 			## `-2147483648` to `2147483647` are preserved; other values wrap by
@@ -13844,6 +13906,7 @@ Builtin :: [].{
 			## expect I64.to_i32_try(3000000000) == Err(OutOfRange)
 			## ```
 			to_i32_try : I64 -> Try(I32, [OutOfRange])
+			to_i32_try = |num| out_of_range(i64_to_i32_try_raw(num))
 
 			## No-op: leave an [I64] unchanged as an [I64].
 			to_i64 : I64 -> I64
@@ -13882,6 +13945,7 @@ Builtin :: [].{
 			## expect I64.to_u8_try(-1) == Err(OutOfRange)
 			## ```
 			to_u8_try : I64 -> Try(U8, [OutOfRange])
+			to_u8_try = |num| out_of_range(i64_to_u8_try_raw(num))
 
 			## Convert an [I64] to a [U16], wrapping on overflow. Values from `0` to
 			## `65535` are preserved; other values wrap by truncating to the low 16
@@ -13902,6 +13966,7 @@ Builtin :: [].{
 			## expect I64.to_u16_try(-1) == Err(OutOfRange)
 			## ```
 			to_u16_try : I64 -> Try(U16, [OutOfRange])
+			to_u16_try = |num| out_of_range(i64_to_u16_try_raw(num))
 
 			## Convert an [I64] to a [U32], wrapping on overflow. Values from `0` to
 			## `4294967295` are preserved; other values wrap by truncating to the
@@ -13922,6 +13987,7 @@ Builtin :: [].{
 			## expect I64.to_u32_try(-1) == Err(OutOfRange)
 			## ```
 			to_u32_try : I64 -> Try(U32, [OutOfRange])
+			to_u32_try = |num| out_of_range(i64_to_u32_try_raw(num))
 
 			## Convert an [I64] to a [U64], wrapping on overflow. Non-negative
 			## values are preserved; negative values wrap into the upper end of the
@@ -13942,6 +14008,7 @@ Builtin :: [].{
 			## expect I64.to_u64_try(-1) == Err(OutOfRange)
 			## ```
 			to_u64_try : I64 -> Try(U64, [OutOfRange])
+			to_u64_try = |num| out_of_range(i64_to_u64_try_raw(num))
 
 			## Convert an [I64] to a [U128], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -13961,6 +14028,7 @@ Builtin :: [].{
 			## expect I64.to_u128_try(-1) == Err(OutOfRange)
 			## ```
 			to_u128_try : I64 -> Try(U128, [OutOfRange])
+			to_u128_try = |num| out_of_range(i64_to_u128_try_raw(num))
 
 			# Conversions to floating point (all safe)
 			## Convert an [I64] to an [F32]. This conversion may round because
@@ -14085,6 +14153,7 @@ Builtin :: [].{
 			## expect U128.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U128, U128 -> [Before, Same, After]
+			order_relative_to = |a, b| order_from_raw(u128_order_raw(a, b))
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -14602,6 +14671,7 @@ Builtin :: [].{
 			## expect U128.from_str("-1") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(U128, [BadNumStr])
+			from_str = |str| u128_from_str(str)
 
 			## Parse a [U128] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -14684,6 +14754,7 @@ Builtin :: [].{
 			## expect U128.to_i8_try(200) == Err(OutOfRange)
 			## ```
 			to_i8_try : U128 -> Try(I8, [OutOfRange])
+			to_i8_try = |num| out_of_range(u128_to_i8_try_raw(num))
 
 			## Convert a [U128] to an [I16], wrapping on overflow. Values from `0`
 			## to `32767` are preserved; larger values wrap by truncating to the
@@ -14704,6 +14775,7 @@ Builtin :: [].{
 			## expect U128.to_i16_try(40000) == Err(OutOfRange)
 			## ```
 			to_i16_try : U128 -> Try(I16, [OutOfRange])
+			to_i16_try = |num| out_of_range(u128_to_i16_try_raw(num))
 
 			## Convert a [U128] to an [I32], wrapping on overflow. Values from `0`
 			## to `2147483647` are preserved; larger values wrap by truncating to
@@ -14724,6 +14796,7 @@ Builtin :: [].{
 			## expect U128.to_i32_try(3000000000) == Err(OutOfRange)
 			## ```
 			to_i32_try : U128 -> Try(I32, [OutOfRange])
+			to_i32_try = |num| out_of_range(u128_to_i32_try_raw(num))
 
 			## Convert a [U128] to an [I64], wrapping on overflow. Values from `0`
 			## to `9223372036854775807` are preserved; larger values wrap by
@@ -14745,6 +14818,7 @@ Builtin :: [].{
 			## expect U128.to_i64_try(10000000000000000000) == Err(OutOfRange)
 			## ```
 			to_i64_try : U128 -> Try(I64, [OutOfRange])
+			to_i64_try = |num| out_of_range(u128_to_i64_try_raw(num))
 
 			## Convert a [U128] to an [I128], wrapping on overflow. Values from `0`
 			## to `170141183460469231731687303715884105727` are preserved; larger
@@ -14766,6 +14840,7 @@ Builtin :: [].{
 			## expect U128.to_i128_try(200000000000000000000000000000000000000) == Err(OutOfRange)
 			## ```
 			to_i128_try : U128 -> Try(I128, [OutOfRange])
+			to_i128_try = |num| out_of_range(u128_to_i128_try_raw(num))
 
 			# Conversions to unsigned integers
 
@@ -14788,6 +14863,7 @@ Builtin :: [].{
 			## expect U128.to_u8_try(300) == Err(OutOfRange)
 			## ```
 			to_u8_try : U128 -> Try(U8, [OutOfRange])
+			to_u8_try = |num| out_of_range(u128_to_u8_try_raw(num))
 
 			## Convert a [U128] to a [U16], wrapping on overflow. Values from `0` to
 			## `65535` are preserved; larger values wrap by truncating to the low 16
@@ -14808,6 +14884,7 @@ Builtin :: [].{
 			## expect U128.to_u16_try(70000) == Err(OutOfRange)
 			## ```
 			to_u16_try : U128 -> Try(U16, [OutOfRange])
+			to_u16_try = |num| out_of_range(u128_to_u16_try_raw(num))
 
 			## Convert a [U128] to a [U32], wrapping on overflow. Values from `0` to
 			## `4294967295` are preserved; larger values wrap by truncating to the
@@ -14828,6 +14905,7 @@ Builtin :: [].{
 			## expect U128.to_u32_try(5000000000) == Err(OutOfRange)
 			## ```
 			to_u32_try : U128 -> Try(U32, [OutOfRange])
+			to_u32_try = |num| out_of_range(u128_to_u32_try_raw(num))
 
 			## Convert a [U128] to a [U64], wrapping on overflow. Values from `0` to
 			## `18446744073709551615` are preserved; larger values wrap by truncating
@@ -14844,6 +14922,7 @@ Builtin :: [].{
 			## expect U128.to_u64_try(42) == Ok(42)
 			## ```
 			to_u64_try : U128 -> Try(U64, [OutOfRange])
+			to_u64_try = |num| out_of_range(u128_to_u64_try_raw(num))
 
 			## No-op: leave a [U128] unchanged as a [U128].
 			to_u128 : U128 -> U128
@@ -15003,6 +15082,7 @@ Builtin :: [].{
 			## expect I128.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I128, I128 -> [Before, Same, After]
+			order_relative_to = |a, b| order_from_raw(i128_order_raw(a, b))
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -15624,6 +15704,7 @@ Builtin :: [].{
 			## expect I128.from_str("-1") == Ok(-1)
 			## ```
 			from_str : Str -> Try(I128, [BadNumStr])
+			from_str = |str| i128_from_str(str)
 
 			## Parse a [I128] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -15706,6 +15787,7 @@ Builtin :: [].{
 			## expect I128.to_i8_try(200) == Err(OutOfRange)
 			## ```
 			to_i8_try : I128 -> Try(I8, [OutOfRange])
+			to_i8_try = |num| out_of_range(i128_to_i8_try_raw(num))
 
 			## Convert an [I128] to an [I16], wrapping on overflow. Values from
 			## `-32768` to `32767` are preserved; other values wrap by truncating
@@ -15726,6 +15808,7 @@ Builtin :: [].{
 			## expect I128.to_i16_try(40000) == Err(OutOfRange)
 			## ```
 			to_i16_try : I128 -> Try(I16, [OutOfRange])
+			to_i16_try = |num| out_of_range(i128_to_i16_try_raw(num))
 
 			## Convert an [I128] to an [I32], wrapping on overflow. Values from
 			## `-2147483648` to `2147483647` are preserved; other values wrap by
@@ -15747,6 +15830,7 @@ Builtin :: [].{
 			## expect I128.to_i32_try(3000000000) == Err(OutOfRange)
 			## ```
 			to_i32_try : I128 -> Try(I32, [OutOfRange])
+			to_i32_try = |num| out_of_range(i128_to_i32_try_raw(num))
 
 			## Convert an [I128] to an [I64], wrapping on overflow. Values from
 			## `-9223372036854775808` to `9223372036854775807` are preserved; other
@@ -15764,6 +15848,7 @@ Builtin :: [].{
 			## expect I128.to_i64_try(42) == Ok(42)
 			## ```
 			to_i64_try : I128 -> Try(I64, [OutOfRange])
+			to_i64_try = |num| out_of_range(i128_to_i64_try_raw(num))
 
 			## No-op: leave an [I128] unchanged as an [I128].
 			to_i128 : I128 -> I128
@@ -15798,6 +15883,7 @@ Builtin :: [].{
 			## expect I128.to_u8_try(-1) == Err(OutOfRange)
 			## ```
 			to_u8_try : I128 -> Try(U8, [OutOfRange])
+			to_u8_try = |num| out_of_range(i128_to_u8_try_raw(num))
 
 			## Convert an [I128] to a [U16], wrapping on overflow. Values from `0`
 			## to `65535` are preserved; other values wrap by truncating to the low
@@ -15818,6 +15904,7 @@ Builtin :: [].{
 			## expect I128.to_u16_try(-1) == Err(OutOfRange)
 			## ```
 			to_u16_try : I128 -> Try(U16, [OutOfRange])
+			to_u16_try = |num| out_of_range(i128_to_u16_try_raw(num))
 
 			## Convert an [I128] to a [U32], wrapping on overflow. Values from `0`
 			## to `4294967295` are preserved; other values wrap by truncating to
@@ -15838,6 +15925,7 @@ Builtin :: [].{
 			## expect I128.to_u32_try(-1) == Err(OutOfRange)
 			## ```
 			to_u32_try : I128 -> Try(U32, [OutOfRange])
+			to_u32_try = |num| out_of_range(i128_to_u32_try_raw(num))
 
 			## Convert an [I128] to a [U64], wrapping on overflow. Values from `0`
 			## to `18446744073709551615` are preserved; other values wrap by
@@ -15859,6 +15947,7 @@ Builtin :: [].{
 			## expect I128.to_u64_try(-1) == Err(OutOfRange)
 			## ```
 			to_u64_try : I128 -> Try(U64, [OutOfRange])
+			to_u64_try = |num| out_of_range(i128_to_u64_try_raw(num))
 
 			## Convert an [I128] to a [U128], wrapping on overflow. Non-negative
 			## values are preserved; negative values wrap into the upper end of
@@ -15879,6 +15968,7 @@ Builtin :: [].{
 			## expect I128.to_u128_try(-1) == Err(OutOfRange)
 			## ```
 			to_u128_try : I128 -> Try(U128, [OutOfRange])
+			to_u128_try = |num| out_of_range(i128_to_u128_try_raw(num))
 
 			# Conversions to floating point (all safe)
 			## Convert an [I128] to an [F32]. This conversion may round because
@@ -16066,6 +16156,7 @@ Builtin :: [].{
 			## expect Dec.order_relative_to(3.0, 2.0) == After
 			## ```
 			order_relative_to : Dec, Dec -> [Before, Same, After]
+			order_relative_to = |a, b| order_from_raw(dec_order_raw(a, b))
 
 			## Returns the greater of two [Dec] values.
 			## ```roc
@@ -16785,6 +16876,7 @@ Builtin :: [].{
 			## expect Dec.from_str("not a number") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(Dec, [BadNumStr])
+			from_str = |str| dec_from_str(str)
 
 			## Parse a [Dec] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -17890,6 +17982,7 @@ Builtin :: [].{
 			## expect Try.is_err(F32.from_str("not a number"))
 			## ```
 			from_str : Str -> Try(F32, [BadNumStr])
+			from_str = |str| f32_from_str(str)
 
 			## Parse a [F32] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -18904,6 +18997,7 @@ Builtin :: [].{
 			## expect Try.is_err(F64.from_str("not a number"))
 			## ```
 			from_str : Str -> Try(F64, [BadNumStr])
+			from_str = |str| f64_from_str(str)
 
 			## Parse a [F64] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -24056,30 +24150,69 @@ dict_place_and_shift_up = |buckets, bucket, bucket_index| {
 }
 
 u8_from_str : Str -> Try(U8, [BadNumStr])
+u8_from_str = |str| bad_num_str(u8_from_str_raw(str))
+
+u8_from_str_raw : Str -> Try(U8, {})
 
 i8_from_str : Str -> Try(I8, [BadNumStr])
+i8_from_str = |str| bad_num_str(i8_from_str_raw(str))
+
+i8_from_str_raw : Str -> Try(I8, {})
 
 u16_from_str : Str -> Try(U16, [BadNumStr])
+u16_from_str = |str| bad_num_str(u16_from_str_raw(str))
+
+u16_from_str_raw : Str -> Try(U16, {})
 
 i16_from_str : Str -> Try(I16, [BadNumStr])
+i16_from_str = |str| bad_num_str(i16_from_str_raw(str))
+
+i16_from_str_raw : Str -> Try(I16, {})
 
 u32_from_str : Str -> Try(U32, [BadNumStr])
+u32_from_str = |str| bad_num_str(u32_from_str_raw(str))
+
+u32_from_str_raw : Str -> Try(U32, {})
 
 i32_from_str : Str -> Try(I32, [BadNumStr])
+i32_from_str = |str| bad_num_str(i32_from_str_raw(str))
+
+i32_from_str_raw : Str -> Try(I32, {})
 
 u64_from_str : Str -> Try(U64, [BadNumStr])
+u64_from_str = |str| bad_num_str(u64_from_str_raw(str))
+
+u64_from_str_raw : Str -> Try(U64, {})
 
 i64_from_str : Str -> Try(I64, [BadNumStr])
+i64_from_str = |str| bad_num_str(i64_from_str_raw(str))
+
+i64_from_str_raw : Str -> Try(I64, {})
 
 u128_from_str : Str -> Try(U128, [BadNumStr])
+u128_from_str = |str| bad_num_str(u128_from_str_raw(str))
+
+u128_from_str_raw : Str -> Try(U128, {})
 
 i128_from_str : Str -> Try(I128, [BadNumStr])
+i128_from_str = |str| bad_num_str(i128_from_str_raw(str))
+
+i128_from_str_raw : Str -> Try(I128, {})
 
 dec_from_str : Str -> Try(Dec, [BadNumStr])
+dec_from_str = |str| bad_num_str(dec_from_str_raw(str))
+
+dec_from_str_raw : Str -> Try(Dec, {})
 
 f32_from_str : Str -> Try(F32, [BadNumStr])
+f32_from_str = |str| bad_num_str(f32_from_str_raw(str))
+
+f32_from_str_raw : Str -> Try(F32, {})
 
 f64_from_str : Str -> Try(F64, [BadNumStr])
+f64_from_str = |str| bad_num_str(f64_from_str_raw(str))
+
+f64_from_str_raw : Str -> Try(F64, {})
 
 u8_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : U8 }
 
@@ -24716,7 +24849,7 @@ reverse_order = |order|
 	}
 
 sort_impl : List(item), (item, item -> [Before, Same, After]) -> List(item)
-sort_impl = |list, compare_items| list_sort_with(list, Box.box(compare_items))
+sort_impl = |list, compare_items| list_sort_with(list, Box.box(|a, b| order_to_raw(compare_items(a, b))))
 
 unsigned_plus_try : item, item -> Try(item, [Overflow])
 	where [item.plus_overflows : item, item -> Bool, item.plus_wrap : item, item -> item]
@@ -25858,7 +25991,7 @@ list_clear : List(item) -> List(item)
 
 # Implemented by the compiler. Consumes the list and sorts it stably using the
 # boxed comparator. The comparator allocation is borrowed for the whole call.
-list_sort_with : List(item), Box((item, item -> [Before, Same, After])) -> List(item)
+list_sort_with : List(item), Box((item, item -> Num.RawOrder)) -> List(item)
 
 # Unsafe conversion functions - these return simple records instead of Try types
 # They are low-level operations that get replaced by the compiler
@@ -26308,3 +26441,178 @@ str_from_utf32_be_short : List(U8) -> Str
 
 # Private: the UTF decoders establish validity while producing these bytes.
 str_from_utf8_validated : List(U8) -> Str
+
+# A builtin the compiler implements has no structural tag union in its type
+# (design.md "Builtins Build Their Own Tag Unions"). Each one below is a
+# private helper; the public builtin builds its tag union in Roc from the
+# helper's result, so a caller may use that union at any wider union.
+
+u8_order_raw : U8, U8 -> Num.RawOrder
+
+i8_order_raw : I8, I8 -> Num.RawOrder
+
+u16_order_raw : U16, U16 -> Num.RawOrder
+
+i16_order_raw : I16, I16 -> Num.RawOrder
+
+u32_order_raw : U32, U32 -> Num.RawOrder
+
+i32_order_raw : I32, I32 -> Num.RawOrder
+
+u64_order_raw : U64, U64 -> Num.RawOrder
+
+i64_order_raw : I64, I64 -> Num.RawOrder
+
+u128_order_raw : U128, U128 -> Num.RawOrder
+
+i128_order_raw : I128, I128 -> Num.RawOrder
+
+dec_order_raw : Dec, Dec -> Num.RawOrder
+
+order_from_raw : Num.RawOrder -> [Before, Same, After]
+order_from_raw = |raw| match raw {
+	Num.RawOrder.After => After
+	Num.RawOrder.Before => Before
+	Num.RawOrder.Same => Same
+}
+
+order_to_raw : [Before, Same, After] -> Num.RawOrder
+order_to_raw = |order| match order {
+	After => Num.RawOrder.After
+	Before => Num.RawOrder.Before
+	Same => Num.RawOrder.Same
+}
+
+bad_num_str : Try(a, {}) -> Try(a, [BadNumStr])
+bad_num_str = |raw| match raw {
+	Ok(value) => Ok(value)
+	Err(_) => Err(BadNumStr)
+}
+
+out_of_range : Try(a, {}) -> Try(a, [OutOfRange])
+out_of_range = |raw| match raw {
+	Ok(value) => Ok(value)
+	Err(_) => Err(OutOfRange)
+}
+
+str_from_utf8_raw : List(U8) -> Try(Str, { problem : Str.Utf8Problem, index : U64 })
+
+u8_to_i8_try_raw : U8 -> Try(I8, {})
+
+i8_to_u8_try_raw : I8 -> Try(U8, {})
+
+i8_to_u16_try_raw : I8 -> Try(U16, {})
+
+i8_to_u32_try_raw : I8 -> Try(U32, {})
+
+i8_to_u64_try_raw : I8 -> Try(U64, {})
+
+i8_to_u128_try_raw : I8 -> Try(U128, {})
+
+u16_to_i8_try_raw : U16 -> Try(I8, {})
+
+u16_to_i16_try_raw : U16 -> Try(I16, {})
+
+u16_to_u8_try_raw : U16 -> Try(U8, {})
+
+i16_to_i8_try_raw : I16 -> Try(I8, {})
+
+i16_to_u8_try_raw : I16 -> Try(U8, {})
+
+i16_to_u16_try_raw : I16 -> Try(U16, {})
+
+i16_to_u32_try_raw : I16 -> Try(U32, {})
+
+i16_to_u64_try_raw : I16 -> Try(U64, {})
+
+i16_to_u128_try_raw : I16 -> Try(U128, {})
+
+u32_to_i8_try_raw : U32 -> Try(I8, {})
+
+u32_to_i16_try_raw : U32 -> Try(I16, {})
+
+u32_to_i32_try_raw : U32 -> Try(I32, {})
+
+u32_to_u8_try_raw : U32 -> Try(U8, {})
+
+u32_to_u16_try_raw : U32 -> Try(U16, {})
+
+i32_to_i8_try_raw : I32 -> Try(I8, {})
+
+i32_to_i16_try_raw : I32 -> Try(I16, {})
+
+i32_to_u8_try_raw : I32 -> Try(U8, {})
+
+i32_to_u16_try_raw : I32 -> Try(U16, {})
+
+i32_to_u32_try_raw : I32 -> Try(U32, {})
+
+i32_to_u64_try_raw : I32 -> Try(U64, {})
+
+i32_to_u128_try_raw : I32 -> Try(U128, {})
+
+u64_to_i8_try_raw : U64 -> Try(I8, {})
+
+u64_to_i16_try_raw : U64 -> Try(I16, {})
+
+u64_to_i32_try_raw : U64 -> Try(I32, {})
+
+u64_to_i64_try_raw : U64 -> Try(I64, {})
+
+u64_to_u8_try_raw : U64 -> Try(U8, {})
+
+u64_to_u16_try_raw : U64 -> Try(U16, {})
+
+u64_to_u32_try_raw : U64 -> Try(U32, {})
+
+i64_to_i8_try_raw : I64 -> Try(I8, {})
+
+i64_to_i16_try_raw : I64 -> Try(I16, {})
+
+i64_to_i32_try_raw : I64 -> Try(I32, {})
+
+i64_to_u8_try_raw : I64 -> Try(U8, {})
+
+i64_to_u16_try_raw : I64 -> Try(U16, {})
+
+i64_to_u32_try_raw : I64 -> Try(U32, {})
+
+i64_to_u64_try_raw : I64 -> Try(U64, {})
+
+i64_to_u128_try_raw : I64 -> Try(U128, {})
+
+u128_to_i8_try_raw : U128 -> Try(I8, {})
+
+u128_to_i16_try_raw : U128 -> Try(I16, {})
+
+u128_to_i32_try_raw : U128 -> Try(I32, {})
+
+u128_to_i64_try_raw : U128 -> Try(I64, {})
+
+u128_to_i128_try_raw : U128 -> Try(I128, {})
+
+u128_to_u8_try_raw : U128 -> Try(U8, {})
+
+u128_to_u16_try_raw : U128 -> Try(U16, {})
+
+u128_to_u32_try_raw : U128 -> Try(U32, {})
+
+u128_to_u64_try_raw : U128 -> Try(U64, {})
+
+i128_to_i8_try_raw : I128 -> Try(I8, {})
+
+i128_to_i16_try_raw : I128 -> Try(I16, {})
+
+i128_to_i32_try_raw : I128 -> Try(I32, {})
+
+i128_to_i64_try_raw : I128 -> Try(I64, {})
+
+i128_to_u8_try_raw : I128 -> Try(U8, {})
+
+i128_to_u16_try_raw : I128 -> Try(U16, {})
+
+i128_to_u32_try_raw : I128 -> Try(U32, {})
+
+i128_to_u64_try_raw : I128 -> Try(U64, {})
+
+i128_to_u128_try_raw : I128 -> Try(U128, {})
