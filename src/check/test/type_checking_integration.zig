@@ -55,6 +55,13 @@ const MethodRegistryTestCheckedBodies = struct {
         unreachable;
     }
 
+    pub fn patternIdForSource(
+        _: *const @This(),
+        _: can.CIR.Pattern.Idx,
+    ) ?checked_ids.CheckedPatternId {
+        unreachable;
+    }
+
     pub fn statementIdForSource(
         _: *const @This(),
         _: can.CIR.Statement.Idx,

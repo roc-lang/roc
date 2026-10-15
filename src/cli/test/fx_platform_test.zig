@@ -403,6 +403,30 @@ test "fx platform boxed erased callable host boundary (speed backend)" {
     try runIoSpecTest("--opt=speed", fx_test_specs.host_boxed_fn_boundary_test);
 }
 
+test "fx platform stream left with break is released at loop exit (interpreter)" {
+    try runIoSpecTest("--opt=interpreter", fx_test_specs.loop_break_release_test);
+}
+
+test "fx platform stream left with break is released at loop exit (dev backend)" {
+    try runIoSpecTest("--opt=dev", fx_test_specs.loop_break_release_test);
+}
+
+test "fx platform stream left with break is released at loop exit (speed backend)" {
+    try runIoSpecTest("--opt=speed", fx_test_specs.loop_break_release_test);
+}
+
+test "fx platform value a branch never reads is released at the branch entry (interpreter)" {
+    try runIoSpecTest("--opt=interpreter", fx_test_specs.branch_entry_release_test);
+}
+
+test "fx platform value a branch never reads is released at the branch entry (dev backend)" {
+    try runIoSpecTest("--opt=dev", fx_test_specs.branch_entry_release_test);
+}
+
+test "fx platform value a branch never reads is released at the branch entry (speed backend)" {
+    try runIoSpecTest("--opt=speed", fx_test_specs.branch_entry_release_test);
+}
+
 /// Repro for https://github.com/roc-lang/roc/issues/10770: one boxed callable
 /// stored in two fields of a provided root's result is one heap allocation, so
 /// the host must receive the same erased-callable pointer for both fields.
