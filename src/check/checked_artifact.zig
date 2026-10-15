@@ -18858,7 +18858,7 @@ const EvidencePass = struct {
     /// Whether a variable of the scheme at `scheme_var` extends a tag row that
     /// has labels of its own (`[Closed, ..errs]`). Such a row normalizes to
     /// the same row whether the variable holds those labels or not, so a
-    /// dispatch's normalized callable cannot recover the variable's
+    /// dispatch's normalized callable does not determine the variable's
     /// instantiation.
     fn schemeExtendsLabeledTagRow(self: *EvidencePass, scheme_var: Var) Allocator.Error!bool {
         var visited = std.AutoHashMap(Var, void).init(self.allocator);
