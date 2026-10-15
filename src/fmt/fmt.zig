@@ -2689,7 +2689,11 @@ const Formatter = struct {
                     },
                     1 => {
                         const left = result;
-                        const line_indent = format_context.operator_chain_indent orelse fmt.curr_indent;
+                        // A chain link that breaks before its operator lines up with
+                        // the chain; one that stays on its line keeps that line's
+                        // indentation for the operand that follows.
+                        const operand_indent = fmt.curr_indent;
+                        const line_indent = format_context.operator_chain_indent orelse operand_indent;
                         fmt.curr_indent = line_indent;
                         var pushed = false;
                         if (try fmt.continueAfterMultilineStringLine(left)) {
@@ -2697,8 +2701,9 @@ const Formatter = struct {
                         } else if (multiline and try fmt.flushContinuationComments(op.operator)) {
                             try fmt.pushIndent();
                             pushed = true;
-                        } else if (!is_range_op) {
-                            try fmt.push(' ');
+                        } else {
+                            fmt.curr_indent = operand_indent;
+                            if (!is_range_op) try fmt.push(' ');
                         }
                         try fmt.pushTokenText(op.operator);
                         const right_region = fmt.nodeRegion(@backingInt(op.right));
@@ -5705,6 +5710,17 @@ test "operator chains keep each link at the chain's indentation" {
             "\ta = 1\n" ++
             "\ta == 1\n" ++
             "\t\tand a > 0 and a < 2\n" ++
+            "\t\tand a != 3\n" ++
+            "}\n",
+        // A multiline operand on a link's line indents from that line.
+        "Stair :: [].{}\n" ++
+            "\n" ++
+            "expect {\n" ++
+            "\ta = 1\n" ++
+            "\ta == 1\n" ++
+            "\t\tand a > 0 and [\n" ++
+            "\t\t\ta,\n" ++
+            "\t\t] != []\n" ++
             "\t\tand a != 3\n" ++
             "}\n",
         // Comments before a link sit at the chain's indentation.
