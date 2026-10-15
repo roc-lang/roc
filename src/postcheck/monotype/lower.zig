@@ -52290,10 +52290,12 @@ const BodyContext = struct {
             self.draft,
         );
         defer evidence_ctx.deinit();
-        evidence_ctx.instantiation.closed_types = .{ .leaves = try self.graph.newLeafScope() };
+        const scope = try self.graph.newLeafScope();
+        evidence_ctx.instantiation.closed_types = .{ .leaves = scope };
         const evidence_node = try evidence_ctx.instNode(structural.evidence.callable_ty);
         const constraint_node = try scheme_ctx.instNode(param.callable_ty);
         try relateRequestComponent(self.graph, evidence_node, constraint_node);
+        if (@import("builtin").mode == .debug) try self.graph.debugAssertLeafScopeJoined(scope);
     }
 
     /// Parameters that retain the checked target's exact callable instantiation
@@ -56993,7 +56995,8 @@ const BodyContext = struct {
         );
         defer contract_ctx.deinit();
         contract_ctx.evidence = self.evidence;
-        contract_ctx.instantiation.closed_types = .{ .leaves = try self.graph.newLeafScope() };
+        const scope = try self.graph.newLeafScope();
+        contract_ctx.instantiation.closed_types = .{ .leaves = scope };
         const body_shape_node = try self.bindCodecContractBoundary(
             &contract_ctx,
             derivation,
@@ -57023,6 +57026,7 @@ const BodyContext = struct {
         }
         const instantiated_calls = self.instantiated_codec_calls.items[calls_start..];
         try self.readCodecContractRegion(checked_view, boundary.shape_node, body_shape_node, instantiated_calls);
+        if (@import("builtin").mode == .debug) try self.graph.debugAssertLeafScopeJoined(scope);
         const method_call_slots = try self.codecMethodCallSlots(instantiated_calls);
         // An instantiation that consulted no enclosing evidence is determined
         // by its boundary classes alone, so later uses of this contract at
@@ -65966,7 +65970,7 @@ test "draft specialization lookup preserves family evidence and request identity
 
 test "draft specialization candidates retain insertion order across overflow growth and allocation failure" {
     const Scenario = struct {
-        fn run(allocator: Allocator) (Allocator.Error || error{TestUnexpectedResult})!void {
+        fn run(allocator: Allocator) (Allocator.Error || error{TestExpectedEqual})!void {
             var type_store = Type.Store.init(allocator);
             defer type_store.deinit();
             var name_store = names.NameStore.init(allocator);
@@ -66004,26 +66008,32 @@ test "draft specialization candidates retain insertion order across overflow gro
                         try lookup.add(other, raw_spec);
                         try lookup.add(other, std.math.maxInt(u32));
                     }
-                    try std.testing.expect(lookup.openPairs(prefix).len == 61);
+                    try std.testing.expectEqual(@as(usize, 61), lookup.openPairs(prefix).len);
                     var candidates = lookup.get(address).?;
-                    try std.testing.expect(candidates.next().? == std.math.maxInt(u32));
-                    for (0..20) |i| try std.testing.expect(candidates.next().? == i);
-                    try std.testing.expect(candidates.next() == null);
+                    try std.testing.expectEqual(@as(?u32, std.math.maxInt(u32)), candidates.next());
+                    for (0..20) |i| try std.testing.expectEqual(@as(?u32, @intCast(i)), candidates.next());
+                    try std.testing.expectEqual(@as(?u32, null), candidates.next());
                     for (0..20) |i| {
                         var other = lookup.get(.{ .open = .{
                             .prefix = prefix,
                             .node = other_nodes[i],
                         } }).?;
-                        try std.testing.expect(other.next().? == i);
-                        try std.testing.expect(other.next().? == std.math.maxInt(u32));
-                        try std.testing.expect(other.next() == null);
+                        try std.testing.expectEqual(@as(?u32, @intCast(i)), other.next());
+                        try std.testing.expectEqual(@as(?u32, std.math.maxInt(u32)), other.next());
+                        try std.testing.expectEqual(@as(?u32, null), other.next());
                     }
                 }
             }
         }
     };
     try Scenario.run(std.testing.allocator);
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, Scenario.run, .{});
+    // In-place growth depends on the testing allocator's heap state, which
+    // carries over between runs, so growth goes through fresh allocations.
+    var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
+    std.testing.checkAllAllocationFailures(deterministic.allocator(), Scenario.run, .{}) catch |err| {
+        std.debug.print("allocation-failure check failed: {t}\n", .{err});
+        return err;
+    };
 }
 
 test "draft specialization open lookup follows unions within its prefix" {

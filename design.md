@@ -14174,11 +14174,29 @@ root, and every other component reconnects through the ownership-scope memo.
 The class denotes the same type before and after, so expansion changes no
 snapshot or resolvedness stamp, and it may happen after relations freeze.
 Two unread leaves of one type join without being read; a leaf joined to a
-variable stays unread. Sealing an unread leaf yields its type, and
-containment, resolvedness and uninhabitedness questions about one are
-answered from per-type answers that outlive graph resets, because store types
-are immutable. A specialization therefore pays only for the parts of its
-imported types that it reads, not for their whole depth.
+variable stays unread. Such a join relates the two origins' components only
+when the class is read, but a leaf scope also hands out cells for closed
+types directly, and its cell for a type the joined class holds below its root
+is that class's component in the scope. Below a joined class's root, every
+origin's component of a type, except a nominal's own backing, is that
+origin's memo cell for the type, whatever the path to it. So whenever an
+unread joined class gains an origin, and whenever a leaf scope gains a cell,
+each leaf-scope cell of a type an unread joined class of its scope holds
+below the root is joined with each of that class's origins' memo cells for
+the type. A missing import memo cell is created for the join; a missing
+leaf-scope cell is joined when its scope creates it. That is the join an
+eager relation would have made, and it reads nothing, so class identity
+never depends on whether a class was read. The joins wait until no
+unification is in progress, so they never change a root a unification is
+relating. Whether a type holds another is answered from per-type heights,
+since a type holds only types no taller than itself, and from each type's
+held-type list once a scope has checked a class against enough cells to pay
+for building it. Sealing
+an unread leaf yields its type, and containment, resolvedness and
+uninhabitedness questions about one are answered from per-type answers that
+outlive graph resets, because store types are immutable. A specialization
+therefore pays only for the parts of its imported types that it reads, not
+for their whole depth.
 
 Every context-free procedure-template request defers until the requesting
 graph is final, when its specialization key is stable. Constraints formerly
