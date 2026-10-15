@@ -114,6 +114,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("BuiltinModules.zig"));
     std.testing.refAllDecls(@import("crash_boundary.zig"));
     std.testing.refAllDecls(@import("value.zig"));
+    std.testing.refAllDecls(@import("value_stack.zig"));
     std.testing.refAllDecls(@import("interpreter.zig"));
     std.testing.refAllDecls(@import("host_trampoline.zig"));
     std.testing.refAllDecls(@import("compile_time_finalization.zig"));

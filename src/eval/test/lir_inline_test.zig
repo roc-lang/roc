@@ -13243,3 +13243,63 @@ test "provenance: an overflow inside a TCE loop reports the overflowing line" {
     };
     return error.TestUnexpectedResult;
 }
+
+fn dictInsertLoopInterpreterPeakBytes(lowered: *const lir.CheckedPipeline.LoweredProgram, iterations: u64) (TestError || error{MemoryLeak})!usize {
+    var runtime_env = eval.RuntimeHostEnv.init(std.testing.allocator);
+    defer runtime_env.deinit();
+    var peak_allocator = PeakAllocator{ .child = std.testing.allocator };
+    const allocator = peak_allocator.allocator();
+    {
+        const result = &lowered.lir_result;
+        var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+        defer static_strings.deinit();
+        var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, static_strings.view(), runtime_env.get_ops());
+        defer interpreter.deinit();
+        var n = iterations;
+        const evaluated = try interpreter.eval(.{
+            .proc_id = try rootProc(lowered),
+            .arg_layouts = &.{.u64},
+            .arg_ptr = @ptrCast(&n),
+        });
+        try std.testing.expectEqual(@as(u64, 4), evaluated.value.read(u64));
+    }
+    try runtime_env.checkForLeaks();
+    try std.testing.expectEqual(@as(usize, 0), peak_allocator.current_bytes);
+    return peak_allocator.peak_bytes;
+}
+
+test "issue 12290: interpreter memory does not grow with the number of loop iterations" {
+    // The dict never holds more than four keys, so everything the loop keeps
+    // alive is the same size after 50 iterations as after 5000. The
+    // interpreter's own storage must be too: what one iteration's statements
+    // compute is dead once the next iteration begins.
+    const allocator = std.testing.allocator;
+    const while_source =
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    var $dict = Dict.empty()
+        \\    var $i = 0
+        \\    while $i < n {
+        \\        $dict = $dict.insert($i % 4, $i)
+        \\        $i = $i + 1
+        \\    }
+        \\    $dict.len()
+        \\}
+    ;
+    const fold_source =
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    keys = List.repeat(0, n).map_with_index(|_, i| i)
+        \\    keys.fold(Dict.empty(), |dict, k| dict.insert(k % 4, k)).len()
+        \\}
+    ;
+    for ([_][]const u8{ while_source, fold_source }) |source| {
+        for ([_]lir.CheckedPipeline.InlineMode{ .none, .wrappers }) |inline_mode| {
+            var lowered = try lowerModule(allocator, source, inline_mode);
+            defer lowered.deinit(allocator);
+            const few = try dictInsertLoopInterpreterPeakBytes(&lowered.lowered, 50);
+            const many = try dictInsertLoopInterpreterPeakBytes(&lowered.lowered, 5000);
+            try std.testing.expectEqual(few, many);
+        }
+    }
+}
