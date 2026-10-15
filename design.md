@@ -19413,9 +19413,19 @@ completed plans to rebuild statement chains:
   borrowed param borrows it for the call and drops it at its precise
   lifetime end; needing an owned result from a borrowed return position
   emits one `incref` on the result.
-- switch branches and join regions balance drops exactly as today: a value
-  that dies in one branch and survives another is dropped on the dying
-  branch.
+- switch branches and join regions balance drops: a value that dies in one
+  branch and survives another is dropped on the dying branch, before that
+  branch's first statement. Every successor of a control split (`switch_stmt`,
+  `switch_initialized_payload`, `str_match`, `str_match_set`,
+  `boxy_tag_match`) releases on entry each owned unit that no path from its
+  first statement reads before rebinding. Straight-line code can only end a
+  lifetime at a statement that reads the value, so the split is the one
+  place a value can die without being read. A loop exit is such a successor,
+  so a value the loop held and the code after it never reads is released
+  where the loop is left, whether by its condition or by `break`. The point
+  depends only on liveness, never on whether the path next reaches a join,
+  a jump, or a terminal, so it does not vary with inlining or optimization
+  level.
 
 Emission also emits `free` where it does today (intent marker for a value
 the proc fully releases); `free` keeps its current meaning of decrement plus

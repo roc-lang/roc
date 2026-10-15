@@ -395,15 +395,13 @@ const GroupLivenessIndex = struct {
     ranges: []const Range = &.{},
 
     /// Raw liveness bit -> ownership resource index: the exact inverse of
-    /// `raw_bits`. Absent for procedures without joins and for
-    /// identity-numbered frames.
+    /// `raw_bits`. Absent for identity-numbered frames.
     use_resources: []const u32 = &.{},
 
     fn init(
         allocator: Allocator,
         domain: *const ProcArcDomain,
         solution: *const arc_solve.Solution,
-        index_uses: bool,
     ) ResourceError!GroupLivenessIndex {
         if (domain.group_leaders.len == 0) return .{};
         const raw_bits = try allocator.alloc(u32, domain.resource_locals.len);
@@ -437,13 +435,8 @@ const GroupLivenessIndex = struct {
                 singleton_bit += 1;
             }
         }
-        const use_resources: []u32 = if (index_uses)
-            try allocator.alloc(u32, raw_bits.len)
-        else
-            &.{};
-        if (index_uses) {
-            for (raw_bits, 0..) |raw_bit, resource| use_resources[raw_bit] = @intCast(resource);
-        }
+        const use_resources = try allocator.alloc(u32, raw_bits.len);
+        for (raw_bits, 0..) |raw_bit, resource| use_resources[raw_bit] = @intCast(resource);
         return .{
             .raw_bits = raw_bits,
             .ranges = ranges,
@@ -1454,7 +1447,8 @@ const SolveBodyScope = struct {
 const SolveContext = struct {
     stops: ?*const SolveStop = null,
     body_scope: ?*const SolveBodyScope = null,
-    /// Dead-unit memo of the join region being walked, if any.
+    /// Dead-unit memo of the nearest enclosing join region or branch entry
+    /// on the walk, if any; the reference later memos derive from.
     region_dead: ?*const ?DeadUnits = null,
 };
 
@@ -1464,6 +1458,9 @@ const SolveSegment = struct {
     ctx: SolveContext,
     plan_index: u32,
     plan_version: u32,
+    /// The segment is one successor of a control split. Units it receives
+    /// owned but never reads die at its first statement.
+    branch: bool = false,
 };
 
 const SolveTask = union(enum) {
@@ -1680,6 +1677,9 @@ const ArcPlanTerminal = union(enum) {
 /// different structured ownership contexts.
 const ArcPlan = struct {
     start: LIR.CFStmtId,
+    /// Units a control-split successor receives owned and never reads,
+    /// released before its first statement.
+    entry_releases: std.ArrayList(ReleaseDecision) = .empty,
     steps: std.ArrayList(ArcPlanStep) = .empty,
     step_count: u32 = 0,
     terminal: ArcPlanTerminal = .none,
@@ -1847,7 +1847,9 @@ const Inserter = struct {
     }
 
     fn completeMaterializedPath(self: *Inserter, plan_index: u32, tail: LIR.CFStmtId, result: *LIR.CFStmtId) ResourceError!void {
-        const head = try self.materializeArcPlanSteps(plan_index, tail);
+        const plan = self.arcPlan(plan_index);
+        const steps_head = try self.materializeArcPlanSteps(plan_index, tail);
+        const head = try self.materializeTerminalReleases(plan.entry_releases.items, .{ .stmt = plan.start, .reason = .branch_entry }, steps_head);
         if (plan_index >= self.materialized_plans.len) arcInvariant("ARC materialized path index exceeded its cache");
         if (self.materialized_plans[plan_index]) |existing| {
             if (existing != head) arcInvariant("ARC materialized one structured path inconsistently");
@@ -2500,6 +2502,7 @@ const Inserter = struct {
 
     fn processSolveSegment(self: *Inserter, tasks: *std.ArrayList(SolveTask), segment: *SolveSegment) ResourceError!void {
         if (!self.beginArcPlanUpdate(segment)) return;
+        if (segment.branch) try self.releaseUnreadAtBranchEntry(segment);
         while (true) {
             var stop_entry = segment.ctx.stops;
             while (stop_entry) |entry| : (stop_entry = entry.parent) {
@@ -2806,8 +2809,8 @@ const Inserter = struct {
                 .boxy_tag_match => |tag_match| {
                     const terminal = try self.prepareBoxyTagMatchPlan(segment.plan_index, segment.cursor, tag_match.on_match, tag_match.on_miss);
                     const child_plans = terminal.boxy_tag_match;
-                    try self.pushSolveSegment(tasks, tag_match.on_match, &segment.owned, segment.ctx, child_plans.match_plan);
-                    try self.pushSolveSegment(tasks, tag_match.on_miss, &segment.owned, segment.ctx, child_plans.miss_plan);
+                    try self.pushBranchSolveSegment(tasks, tag_match.on_match, &segment.owned, segment.ctx, child_plans.match_plan);
+                    try self.pushBranchSolveSegment(tasks, tag_match.on_miss, &segment.owned, segment.ctx, child_plans.miss_plan);
                     return;
                 },
                 .assign_call_dict => |assign| {
@@ -2970,17 +2973,17 @@ const Inserter = struct {
                             if (restoration) |restored| {
                                 var branch_owned = try cloneOwnedSetWith(self.solve_allocator, &segment.owned);
                                 try restoreOutcomeResources(&branch_owned, restored.branch_resources[branch_index].items);
-                                try self.pushSolveSegment(tasks, branch.body, &branch_owned, branch_ctx, child_plans.branch_plans[branch_index]);
+                                try self.pushBranchSolveSegment(tasks, branch.body, &branch_owned, branch_ctx, child_plans.branch_plans[branch_index]);
                             } else {
-                                try self.pushSolveSegment(tasks, branch.body, &segment.owned, branch_ctx, child_plans.branch_plans[branch_index]);
+                                try self.pushBranchSolveSegment(tasks, branch.body, &segment.owned, branch_ctx, child_plans.branch_plans[branch_index]);
                             }
                         }
                         if (restoration) |restored| {
                             var default_owned = try cloneOwnedSetWith(self.solve_allocator, &segment.owned);
                             try restoreOutcomeResources(&default_owned, restored.default_resources.items);
-                            try self.pushSolveSegment(tasks, switch_stmt.default_branch, &default_owned, branch_ctx, child_plans.default_plan);
+                            try self.pushBranchSolveSegment(tasks, switch_stmt.default_branch, &default_owned, branch_ctx, child_plans.default_plan);
                         } else {
-                            try self.pushSolveSegment(tasks, switch_stmt.default_branch, &segment.owned, branch_ctx, child_plans.default_plan);
+                            try self.pushBranchSolveSegment(tasks, switch_stmt.default_branch, &segment.owned, branch_ctx, child_plans.default_plan);
                         }
                         return;
                     }
@@ -2993,17 +2996,17 @@ const Inserter = struct {
                         if (restoration) |restored| {
                             var branch_owned = try cloneOwnedSetWith(self.solve_allocator, &segment.owned);
                             try restoreOutcomeResources(&branch_owned, restored.branch_resources[branch_index].items);
-                            try self.pushSolveSegment(tasks, branch.body, &branch_owned, segment.ctx, child_plans.branch_plans[branch_index]);
+                            try self.pushBranchSolveSegment(tasks, branch.body, &branch_owned, segment.ctx, child_plans.branch_plans[branch_index]);
                         } else {
-                            try self.pushSolveSegment(tasks, branch.body, &segment.owned, segment.ctx, child_plans.branch_plans[branch_index]);
+                            try self.pushBranchSolveSegment(tasks, branch.body, &segment.owned, segment.ctx, child_plans.branch_plans[branch_index]);
                         }
                     }
                     if (restoration) |restored| {
                         var default_owned = try cloneOwnedSetWith(self.solve_allocator, &segment.owned);
                         try restoreOutcomeResources(&default_owned, restored.default_resources.items);
-                        try self.pushSolveSegment(tasks, switch_stmt.default_branch, &default_owned, segment.ctx, child_plans.default_plan);
+                        try self.pushBranchSolveSegment(tasks, switch_stmt.default_branch, &default_owned, segment.ctx, child_plans.default_plan);
                     } else {
-                        try self.pushSolveSegment(tasks, switch_stmt.default_branch, &segment.owned, segment.ctx, child_plans.default_plan);
+                        try self.pushBranchSolveSegment(tasks, switch_stmt.default_branch, &segment.owned, segment.ctx, child_plans.default_plan);
                     }
                     return;
                 },
@@ -3023,8 +3026,8 @@ const Inserter = struct {
                     // binding ends with nothing to release.
                     _ = try self.transferForInit(&uninitialized_owned, switch_stmt.payload);
 
-                    try self.pushSolveSegment(tasks, switch_stmt.initialized_branch, &initialized_owned, segment.ctx, child_plans.initialized_plan);
-                    try self.pushSolveSegment(tasks, switch_stmt.uninitialized_branch, &uninitialized_owned, segment.ctx, child_plans.uninitialized_plan);
+                    try self.pushBranchSolveSegment(tasks, switch_stmt.initialized_branch, &initialized_owned, segment.ctx, child_plans.initialized_plan);
+                    try self.pushBranchSolveSegment(tasks, switch_stmt.uninitialized_branch, &uninitialized_owned, segment.ctx, child_plans.uninitialized_plan);
                     return;
                 },
                 .str_match => |str_match| {
@@ -3039,8 +3042,8 @@ const Inserter = struct {
                             .view => |local| try self.placeUnit(&match_owned, local),
                         }
                     }
-                    try self.pushSolveSegment(tasks, str_match.on_match, &match_owned, segment.ctx, child_plans.match_plan);
-                    try self.pushSolveSegment(tasks, str_match.on_miss, &segment.owned, segment.ctx, child_plans.miss_plan);
+                    try self.pushBranchSolveSegment(tasks, str_match.on_match, &match_owned, segment.ctx, child_plans.match_plan);
+                    try self.pushBranchSolveSegment(tasks, str_match.on_miss, &segment.owned, segment.ctx, child_plans.miss_plan);
                     return;
                 },
                 .str_match_set => |str_match_set| {
@@ -3058,9 +3061,9 @@ const Inserter = struct {
                                 .view => |local| try self.placeUnit(&match_owned, local),
                             }
                         }
-                        try self.pushSolveSegment(tasks, arm.on_match, &match_owned, segment.ctx, child_plans.match_plans[arm_index]);
+                        try self.pushBranchSolveSegment(tasks, arm.on_match, &match_owned, segment.ctx, child_plans.match_plans[arm_index]);
                     }
-                    try self.pushSolveSegment(tasks, str_match_set.on_miss, &segment.owned, segment.ctx, child_plans.miss_plan);
+                    try self.pushBranchSolveSegment(tasks, str_match_set.on_miss, &segment.owned, segment.ctx, child_plans.miss_plan);
                     return;
                 },
                 .join => |join_stmt| {
@@ -3816,6 +3819,44 @@ const Inserter = struct {
             .plan_version = metadata.version,
         };
         try tasks.append(self.solve_allocator, .{ .segment = segment });
+    }
+
+    /// Schedules one successor of a control split, whose entry releases the
+    /// units it never reads.
+    fn pushBranchSolveSegment(
+        self: *Inserter,
+        tasks: *std.ArrayList(SolveTask),
+        start: LIR.CFStmtId,
+        owned: *const OwnedSet,
+        ctx: SolveContext,
+        plan_index: u32,
+    ) ResourceError!void {
+        try self.pushSolveSegment(tasks, start, owned, ctx, plan_index);
+        tasks.items[tasks.items.len - 1].segment.branch = true;
+    }
+
+    /// A unit live into a control split but read on none of one successor's
+    /// paths dies where that successor begins. Along straight-line code a
+    /// unit can only stop being live after a statement that reads it, so a
+    /// split is the one place it can stop being live without a read.
+    fn releaseUnreadAtBranchEntry(self: *Inserter, segment: *SolveSegment) ResourceError!void {
+        const plan = self.arcPlan(segment.plan_index);
+        plan.entry_releases.clearRetainingCapacity();
+        const reads = try self.computeReadsBeforeRebind(segment.cursor);
+        const reference: ?*const DeadUnits = if (segment.ctx.region_dead) |region|
+            if (region.*) |*memo| memo else null
+        else
+            null;
+        const memo = try self.solve_allocator.create(?DeadUnits);
+        memo.* = try self.solveDeadUnits(&segment.owned, reads, reference);
+        segment.ctx.region_dead = memo;
+        const dead = &memo.*.?.dead;
+        var dead_iter = dead.iteratorRange(0, dead.bit_len);
+        while (dead_iter.next()) |resource| {
+            const bit: u32 = @intCast(resource);
+            try plan.entry_releases.append(self.solve_allocator, self.releaseDecisionFrom(bit, segment.owned.entryAt(bit)));
+            try segment.owned.putEntry(bit, .{});
+        }
     }
 
     fn scheduleSolveJoinProcess(self: *Inserter, tasks: *std.ArrayList(SolveTask), summary: *JoinSummary) ResourceError!void {
@@ -6318,10 +6359,10 @@ const Inserter = struct {
         /// Each node's liveness row.
         rows: []const Row = &.{},
 
-        fn init(allocator: Allocator, proc_domain: *const ProcArcDomain, solution: *const arc_solve.Solution, index_uses: bool) ResourceError!ReadBeforeRebindGraph {
+        fn init(allocator: Allocator, proc_domain: *const ProcArcDomain, solution: *const arc_solve.Solution) ResourceError!ReadBeforeRebindGraph {
             return .{
                 .allocator = allocator,
-                .group_liveness = try GroupLivenessIndex.init(allocator, proc_domain, solution, index_uses),
+                .group_liveness = try GroupLivenessIndex.init(allocator, proc_domain, solution),
                 .nodes = .empty,
                 .successors = .empty,
                 .liveness = .{ .succ_starts = &.{}, .succs = &.{}, .pred_starts = &.{}, .preds = &.{}, .read_starts = &.{}, .reads = &.{}, .def_starts = &.{}, .defs = &.{}, .bit_len = 0 },
@@ -6479,7 +6520,7 @@ const Inserter = struct {
         const graph_slot = &self.source_liveness.graph;
         if (graph_slot.* != null) return;
         if (self.source_liveness.frozen) arcInvariant("ARC frozen source liveness lacked its prepared graph");
-        graph_slot.* = try ReadBeforeRebindGraph.init(self.source_liveness.allocator, self.domain(), self.solution, self.join_bodies.len != 0 and self.domain().resource_locals.len != 0);
+        graph_slot.* = try ReadBeforeRebindGraph.init(self.source_liveness.allocator, self.domain(), self.solution);
         errdefer {
             graph_slot.* = null;
             self.source_liveness.stmt_node_indices.clearRetainingCapacity();
@@ -9595,7 +9636,7 @@ test "ARC grouped raw liveness agrees with exhaustive resource queries" {
     defer arena.deinit();
     var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, &rc, &indices, f.store.getProcSpecImmediate(proc).frame_locals);
     defer domain.clearGlobalIndices();
-    const grouped = try GroupLivenessIndex.init(arena.allocator(), &domain, &solution, false);
+    const grouped = try GroupLivenessIndex.init(arena.allocator(), &domain, &solution);
     var reads = Row.initEmpty(arena.allocator(), domain.livenessBitLen());
     var expected = @as([locals.len]bool, @splat(false));
     var prng = std.Random.DefaultPrng.init(11127);
@@ -9994,6 +10035,35 @@ test "RC if_then_else: then-only value is decref'd inside the else branch" {
         error.ExpectedRcBeforeStop,
         f.expectReachableRcBefore(then_after, .decref, value, .ret),
     );
+}
+
+test "RC if_then_else: then-only value is released where the else branch begins" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const cond = try f.local(.bool);
+    const value = try f.local(.str);
+    const then_result = try f.local(.i64);
+    const else_result = try f.local(.i64);
+    const result = try f.local(.i64);
+
+    // if cond { result = call(value) } else { result = call() }; return result
+    const ret = try f.ret(result);
+    const then_set = try f.setLocal(result, then_result, .replace_existing, ret);
+    const then_body = try f.assignCall(then_result, &.{value}, then_set);
+    const else_set = try f.setLocal(result, else_result, .replace_existing, ret);
+    const else_body = try f.assignCall(else_result, &.{}, else_set);
+    const if_stmt = try f.switchStmt(cond, then_body, else_body, ret);
+    const body = try f.assignStr(value, "then-only", if_stmt);
+    _ = try f.addProc(&.{cond}, body, .i64);
+    try f.run();
+
+    // The else branch never reads the value, so it dies before the else
+    // branch's call runs rather than at the return.
+    try f.expectRc(value, 0, 1, 0);
+    const if_after = f.walkToSwitch(f.procBody());
+    const else_entry = f.store.getCFStmt(if_after.default_branch);
+    if (else_entry != .decref) return error.TestUnexpectedResult;
+    try testing.expectEqual(value, else_entry.decref.value);
 }
 
 test "RC if_then_else: condition preserves live list owner for branch body" {
@@ -14276,7 +14346,7 @@ test "RC borrow: string match view capture used read-only does not retain source
     try f.expectRc(capture, 0, 0, 0);
 }
 
-test "RC borrow: string match view capture consumed by call retains source" {
+test "RC borrow: string match view capture consumed by call takes the source's unit" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
     const source = try f.local(.str);
@@ -14291,7 +14361,17 @@ test "RC borrow: string match view capture consumed by call retains source" {
 
     try f.run();
 
-    try testing.expectEqual(@as(usize, 1), f.countRc(source, .incref));
+    // The match branch reads the source only through its capture, so the
+    // capture's retain and the source's release at the branch entry cancel:
+    // the capture carries the source's unit into the call. Only the miss
+    // branch releases the source.
+    const entry = f.store.getCFStmt(f.procBody());
+    if (entry != .assign_literal) return error.TestUnexpectedResult;
+    const str_match_stmt = f.store.getCFStmt(entry.assign_literal.next).str_match;
+    try testing.expect(f.store.getCFStmt(str_match_stmt.on_match) == .assign_call);
+    const miss_entry = f.store.getCFStmt(str_match_stmt.on_miss);
+    if (miss_entry != .decref) return error.TestUnexpectedResult;
+    try testing.expectEqual(source, miss_entry.decref.value);
     try f.expectRc(capture, 0, 0, 0);
 }
 
