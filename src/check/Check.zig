@@ -28092,7 +28092,6 @@ const BlockStatementsCheck = struct {
     expected: Expected,
     does_fx: bool = false,
     diverges: bool = false,
-    warn_unreachable: bool = false,
     offset: u32 = 0,
     current: ?StatementCheck = null,
 
@@ -28144,14 +28143,6 @@ fn stepBlockStatements(self: *Self, state: *BlockStatementsCheck, statements: CI
     while (state.offset < statements.span.len) {
         const stmt_idx = self.cir.store.statementAt(statements, state.offset);
         const stmt_var = ModuleEnv.varFrom(stmt_idx);
-        const stmt_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(stmt_idx));
-
-        if (state.warn_unreachable) {
-            _ = try self.problems.appendProblem(.{ .unreachable_code = .{
-                .region = stmt_region,
-            } });
-        }
-
         const stmt = self.cir.store.getStatement(stmt_idx);
         switch (stmt) {
             // A local type declaration's or standalone annotation's var is the
@@ -28780,7 +28771,6 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             }
             if (try self.exprIsAllCrashConditional(expr.expr)) {
                 block_state.diverges = true;
-                block_state.warn_unreachable = true;
             }
             return null;
         },

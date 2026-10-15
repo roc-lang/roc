@@ -12,7 +12,7 @@ const TestEnv = @import("./TestEnv.zig");
 
 /// Check `source` and expect exactly one unreachable-code warning per entry
 /// of `expected`, each covering that source text.
-fn expectUnreachableCode(source: []const u8, expected: []const []const u8) !void {
+fn expectUnreachableCode(source: []const u8, expected: []const []const u8) TestEnv.TestEnvError!void {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
@@ -22,13 +22,11 @@ fn expectUnreachableCode(source: []const u8, expected: []const []const u8) !void
     const source_text = test_env.module_env.getSourceAll();
     var found: usize = 0;
     for (diagnostics) |diagnostic| {
-        switch (diagnostic) {
-            .unreachable_code => |data| {
-                try testing.expect(found < expected.len);
-                try testing.expectEqualStrings(expected[found], source_text[data.region.start.offset..data.region.end.offset]);
-                found += 1;
-            },
-            else => {},
+        if (diagnostic == .unreachable_code) {
+            const region = diagnostic.unreachable_code.region;
+            try testing.expect(found < expected.len);
+            try testing.expectEqualStrings(expected[found], source_text[region.start.offset..region.end.offset]);
+            found += 1;
         }
     }
     try testing.expectEqual(expected.len, found);
@@ -36,7 +34,7 @@ fn expectUnreachableCode(source: []const u8, expected: []const []const u8) !void
 
 /// Count every canonicalization diagnostic and type problem, warnings
 /// included, that checking `source` reports.
-fn countReportedProblems(source: []const u8) !usize {
+fn countReportedProblems(source: []const u8) TestEnv.TestEnvError!usize {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
