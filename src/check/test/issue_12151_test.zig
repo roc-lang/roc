@@ -98,6 +98,22 @@ test "issue 12151: everything after the first statement that never finishes is r
     });
 }
 
+test "issue 12151: an annotated definition after return is reported from its annotation" {
+    const source =
+        \\f = |x| {
+        \\    return x
+        \\    y : U64
+        \\    y = 1
+        \\    y
+        \\}
+    ;
+    try expectUnreachableCode(source, &.{
+        \\y : U64
+        \\    y = 1
+        \\    y
+    });
+}
+
 test "issue 12151: code after an if whose branches all return is reported" {
     const source =
         \\f = |x| {

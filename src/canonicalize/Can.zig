@@ -9521,53 +9521,22 @@ fn finishSingleQuestionBinop(
     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span, .diverges = can_lhs.diverges };
 }
 
-/// Add a statement written in `block`'s own statement sequence, recording the
-/// code that follows a statement which never finishes.
+/// Add a statement written in `block`'s own statement sequence, recording
+/// whether it is the first one that never finishes.
 fn addOwnBlockStatement(self: *Self, block: BlockState, statement: CanonicalizedStatement) std.mem.Allocator.Error!void {
     try self.addBlockStatement(blockContextFromState(block), statement);
-    if (!block.diverged) {
-        block.diverged = statement.diverges;
-    } else if (self.statementRunsCode(statement.idx)) {
-        extendUnreachableRegion(block, self.env.store.getStatementRegion(statement.idx));
-    }
+    if (statement.diverges) block.diverged = true;
 }
 
-fn extendUnreachableRegion(block: BlockState, region: Region) void {
+/// Record `region`, written in `block`, as unreachable when an earlier
+/// statement of the block never finishes.
+fn noteBlockCode(self: *const Self, block: BlockState, region: AST.TokenizedRegion) void {
+    if (!block.diverged) return;
+    const code_region = self.parse_ir.tokenizedRegionToRegion(region);
     block.unreachable_region = if (block.unreachable_region) |existing|
-        .{ .start = existing.start, .end = region.end }
+        .{ .start = existing.start, .end = code_region.end }
     else
-        region;
-}
-
-/// Whether running a statement evaluates code, as opposed to only declaring
-/// something. Malformed statements are excluded: their problem is already
-/// reported.
-fn statementRunsCode(self: *const Self, stmt_idx: Statement.Idx) bool {
-    return switch (self.env.store.getStatement(stmt_idx)) {
-        .s_decl => |decl| self.env.store.getExpr(decl.expr) != .e_anno_only,
-        .s_var,
-        .s_reassign,
-        .s_crash,
-        .s_dbg,
-        .s_expr,
-        .s_expect,
-        .s_for,
-        .s_while,
-        .s_infinite_loop,
-        .s_breakable_loop,
-        .s_break,
-        .s_return,
-        => true,
-        .s_var_uninitialized,
-        .s_import,
-        .s_alias_decl,
-        .s_nominal_decl,
-        .s_where_alias_decl,
-        .s_type_anno,
-        .s_type_var_alias,
-        .s_runtime_error,
-        => false,
-    };
+        code_region;
 }
 
 fn blockContextFromState(block: BlockState) BlockStatementContext {
@@ -9652,11 +9621,8 @@ fn finishBlockState(
         break :blk CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty(), .diverges = false };
     };
 
-    if (block.diverged) {
-        if (maybe_final_expr) |written| extendUnreachableRegion(block, self.env.store.getExprRegion(written.idx));
-        if (block.unreachable_region) |region| {
-            try self.env.pushDiagnostic(.{ .unreachable_code = .{ .region = region } });
-        }
+    if (block.unreachable_region) |region| {
+        try self.env.pushDiagnostic(.{ .unreachable_code = .{ .region = region } });
     }
 
     const final_expr_free_vars_slice = self.scratch_free_vars.sliceFromSpan(final_expr.free_vars);
@@ -12364,6 +12330,14 @@ fn runExprKernel(
             const ast_stmt_idx = work.stmt_idxs[state.next];
             const ast_stmt = self.parse_ir.store.getStatement(ast_stmt_idx);
             if (ast_stmt == .@"return") try self.warnRedundantReturn(@backingInt(ast_stmt_idx), ast_stmt.@"return".region);
+            switch (ast_stmt) {
+                .decl, .expr, .crash, .dbg, .expect, .@"for", .@"while", .@"return", .@"break" => self.noteBlockCode(work, ast_stmt.to_tokenized_region()),
+                // Declaring a var without a value runs no code.
+                .@"var" => |v| if (v.body != null) self.noteBlockCode(work, v.region),
+                // A type annotation runs code only together with the definition
+                // it annotates, which is noted where the two are joined.
+                .type_anno, .import, .file_import, .type_decl, .malformed => {},
+            }
             const next = state.next + 1;
             const ends_block_expr = work.terminal == .block_expr and state.next == work.stmt_idxs.len - 1;
 
@@ -12548,6 +12522,7 @@ fn runExprKernel(
 
                                 if (names_match) {
                                     keep_type_var_scope_for_body = true;
+                                    self.noteBlockCode(work, .{ .start = ta.region.start, .end = decl.region.end });
                                     try self.scheduleBlockDeclContinuation(&stacks, frame_allocator, work, next_i + 1, decl, next_stmt_id, TypeAnnoIdent{
                                         .name = name_ident,
                                         .anno_idx = type_anno_idx,
@@ -12565,6 +12540,7 @@ fn runExprKernel(
                                     false;
 
                                 if (names_match) {
+                                    if (var_stmt.body != null) self.noteBlockCode(work, .{ .start = ta.region.start, .end = var_stmt.region.end });
                                     const var_region = self.parse_ir.tokenizedRegionToRegion(var_stmt.region);
                                     const annotation_idx = try self.env.addAnnotation(CIR.Annotation{
                                         .anno = type_anno_idx,
@@ -15617,7 +15593,7 @@ fn finishTagExprWithArgs(
                         return CanonicalizedExpr{
                             .idx = expr_idx,
                             .free_vars = free_vars_span,
-            .diverges = args_diverge,
+                            .diverges = args_diverge,
                         };
                     },
                     .alias => {

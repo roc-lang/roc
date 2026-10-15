@@ -14,9 +14,26 @@ main! = |_| {
 }
 ~~~
 # EXPECTED
-NIL
+UNREACHABLE CODE - issue_9856_crash_stmt_multiline_string.md:6:5:6:11
 # PROBLEMS
-NIL
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unreachable Code")
+		(region (start 6 5) (end 6 11))
+		(headline
+			(reflow "This code will never run, because the code before it always ends with a ")
+			(annotated code "return")
+			(reflow ", ")
+			(annotated code "crash")
+			(reflow ", or ")
+			(annotated code "break")
+			(reflow ", or loops forever."))
+		(document
+			(source-region (file "issue_9856_crash_stmt_multiline_string.md") (start 6 5) (end 6 11) (annotation error) (line-text "    Ok({})"))
+			(reflow "Remove this code, or change the code before it so that it can finish."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,Underscore,OpBar,OpenCurly,
