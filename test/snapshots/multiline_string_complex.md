@@ -54,11 +54,38 @@ x = {
 }
 ~~~
 # EXPECTED
+EXPECTED PACKAGE PATH - multiline_string_complex.md:4:6:4:17
 TYPE MISMATCH - multiline_string_complex.md:40:6:40:8
 TYPE NOT DETERMINED - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
 ~~~clojure
 (reports
+	(report
+		(severity runtime_error)
+		(title "Expected Package Path")
+		(region (start 4 6) (end 4 17))
+		(headline
+			(reflow "I was parsing a dependency entry, and I expected a string path."))
+		(document
+			(reflow "Normal package dependencies use a string path after the colon. Use ")
+			(annotated code "platform \"...\"")
+			(reflow " only for the single platform entry.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "json: \"../json/main.roc\"")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "\\\\Multiline")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "multiline_string_complex.md") (start 4 6) (end 4 17) (annotation error) (line-text "\t\tx: \\\\Multiline"))))
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")

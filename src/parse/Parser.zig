@@ -1522,7 +1522,7 @@ fn parsePackageHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Id
         .platform = null,
     };
 
-    try self.reportDuplicateShorthands(deps.packages);
+    try self.checkDependencyRecord(deps.packages, deps.platform);
     return try self.store.addHeader(.{ .package = .{
         .exposes = exposed.collection,
         .platform_idx = deps.platform,
@@ -1629,16 +1629,26 @@ fn parseOpenedDependencyRecordTokens(
     } };
 }
 
-/// Report every dependency entry whose shorthand an earlier entry in the same
-/// record already declared. A shorthand names exactly one package or platform,
-/// so a repeated one is a mistake no matter what each entry points at.
+/// Check the rules every entry of a header's dependency record must follow
+/// beyond its syntax, so later stages can read the record without checking:
+///
+/// - A shorthand names exactly one package or platform, so a repeated one is
+///   a mistake no matter what each entry points at.
+/// - Every value is a string literal written out in full. Dependency sources
+///   are read exactly as written, so a punned entry, a non-string value,
+///   interpolation, or an escape sequence would leave the source unknown.
+///   The one exception is a platform entry naming a compiler-owned platform,
+///   which the dependency-record parser has already checked.
 ///
 /// Entries named `roc` are left to `takeRocVersionField`, which reports a
 /// repeated version pin or a dependency using the reserved name on its own.
-fn reportDuplicateShorthands(self: *Parser, packages: AST.Collection.Idx) std.mem.Allocator.Error!void {
+fn checkDependencyRecord(
+    self: *Parser,
+    packages: AST.Collection.Idx,
+    platform_idx: ?AST.RecordField.Idx,
+) std.mem.Allocator.Error!void {
     const collection = self.store.getCollection(packages);
     const fields = self.store.recordFieldSlice(.{ .span = collection.span });
-    if (fields.len < 2) return;
 
     var seen: std.StringHashMapUnmanaged(void) = .{};
     defer seen.deinit(self.gpa);
@@ -1650,6 +1660,26 @@ fn reportDuplicateShorthands(self: *Parser, packages: AST.Collection.Idx) std.me
         if (std.mem.eql(u8, name, roc_version_key)) continue;
         if (seen.getOrPutAssumeCapacity(name).found_existing) {
             try self.pushDiagnostic(.duplicate_package_shorthand, field.region);
+        }
+
+        const value = field.value.asSupplied() orelse {
+            try self.pushDiagnostic(.expected_package_or_platform_colon, .{ .start = field.name + 1, .end = field.name + 2 });
+            continue;
+        };
+        const expr = self.store.getExpr(value);
+        if (expr == .ident and platform_idx != null and field_idx == platform_idx.?) continue;
+        if (expr != .string) {
+            try self.pushDiagnostic(.expected_package_or_platform_string, expr.to_tokenized_region());
+            continue;
+        }
+        for (self.store.exprSlice(expr.string.parts)) |part_idx| {
+            const part = self.store.getExpr(part_idx);
+            const plain = part == .string_part and
+                std.mem.findScalar(u8, self.tokenText(part.string_part.token), '\\') == null;
+            if (!plain) {
+                try self.pushDiagnostic(.dependency_source_not_plain, expr.to_tokenized_region());
+                break;
+            }
         }
     }
 }
@@ -1723,7 +1753,7 @@ fn parseAppHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.Idx {
         .malformed => |malformed| return malformed,
     };
 
-    try self.reportDuplicateShorthands(deps.packages);
+    try self.checkDependencyRecord(deps.packages, deps.platform);
 
     // An app that names no platform gets the built-in Echo platform, the same
     // one a headerless app gets; its packages are its own.
@@ -2322,7 +2352,7 @@ fn parsePlatformHeaderTokens(self: *Parser) std.mem.Allocator.Error!AST.Header.I
         targets = try self.parseTargetsSectionTokens();
     }
 
-    try self.reportDuplicateShorthands(packages);
+    try self.checkDependencyRecord(packages, null);
     return try self.store.addHeader(.{ .platform = .{
         .name = name,
         .requires_entries = requires_entries,

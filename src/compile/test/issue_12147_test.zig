@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const roc_target = @import("roc_target");
+const reporting = @import("reporting");
 
 const BuildEnv = @import("../compile_build.zig").BuildEnv;
 
@@ -93,4 +94,71 @@ test "issue 12147: a header declaring the same package shorthand twice is reject
         }
     }
     try std.testing.expect(error_reports > 0);
+}
+
+test "issue 12147: a dependency's header problem is reported at its location" {
+    // A problem in a dependency's header is reported where it is, with a note
+    // naming the package it keeps from loading, rather than as an unlocated
+    // load failure.
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try tmp_dir.dir.createDirPath(io, "root");
+    try tmp_dir.dir.createDirPath(io, "a");
+    try tmp_dir.dir.writeFile(io, .{
+        .sub_path = "root/main.roc",
+        .data = "package [Root] { a: \"../a/main.roc\" }\n",
+    });
+    try tmp_dir.dir.writeFile(io, .{
+        .sub_path = "root/Root.roc",
+        .data =
+        \\Root := [].{
+        \\    value : Str
+        \\    value = "root"
+        \\}
+        \\
+        ,
+    });
+    try tmp_dir.dir.writeFile(io, .{
+        .sub_path = "a/main.roc",
+        .data =
+        \\package [A] {
+        \\    dep: "../b/main.roc",
+        \\    dep: "../c/main.roc",
+        \\}
+        \\
+        ,
+    });
+
+    const cwd = try tmp_dir.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(cwd);
+    const root_main = try tmp_dir.dir.realPathFileAlloc(io, "root/main.roc", gpa);
+    defer gpa.free(root_main);
+
+    var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    defer build_env.deinit();
+
+    try std.testing.expectError(error.InvalidDependency, build_env.build(root_main));
+
+    const drained = try build_env.drainReports();
+    defer build_env.freeDrainedReports(drained);
+
+    var titles: std.ArrayList([]const u8) = .empty;
+    defer titles.deinit(gpa);
+    var rendered: std.Io.Writer.Allocating = .init(gpa);
+    defer rendered.deinit();
+    for (drained) |module_reports| {
+        for (module_reports.reports) |*report| {
+            try titles.append(gpa, report.title);
+            try reporting.renderReportToPlain(report, &rendered.writer, reporting.ReportingConfig.initForTesting());
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), titles.items.len);
+    try std.testing.expectEqualStrings("Duplicate Package Shorthand", titles.items[0]);
+    // The report shows the offending entry and names the package it blocks.
+    try std.testing.expect(std.mem.find(u8, rendered.written(), "dep: \"../c/main.roc\"") != null);
+    try std.testing.expect(std.mem.find(u8, rendered.written(), "so that package can't be loaded.") != null);
 }

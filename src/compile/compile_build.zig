@@ -40,7 +40,7 @@ const Mode = compile_package.Mode;
 const Allocator = std.mem.Allocator;
 
 /// The set of errors that can occur during a build (including `roc check`).
-pub const BuildError = Allocator.Error || std.Thread.SpawnError || error{ ExpectedPlatformString, ExpectedString, FileNotFound, AccessDenied, StreamTooLong, IoError, InvalidNullByteInPath, PathOutsideWorkspace, UnsupportedHeader, Internal, DownloadFailed, FileError, InvalidUrl, NoCacheDir, NoPackageSource, UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound, InvalidDependency, MissingFilesDirectory, MissingTargetFile, InvalidTargetConfiguration };
+pub const BuildError = Allocator.Error || std.Thread.SpawnError || error{ ExpectedPlatformString, FileNotFound, AccessDenied, StreamTooLong, IoError, InvalidNullByteInPath, PathOutsideWorkspace, UnsupportedHeader, Internal, DownloadFailed, FileError, InvalidUrl, NoCacheDir, NoPackageSource, UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound, InvalidDependency, MissingFilesDirectory, MissingTargetFile, InvalidTargetConfiguration };
 /// Errors that can occur while initializing build inputs.
 pub const InitError = Allocator.Error || BuiltinModules.InitError;
 /// Errors that can occur while compiling discovered modules.
@@ -1462,10 +1462,7 @@ pub const BuildEnv = struct {
         const file = ast.store.getFile();
         const header = ast.store.getHeader(file.header);
 
-        const resolver_root = package_resolution.scanParsedHeader(self.gpa, file_abs, src, ast, header) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.HeaderParseFailed => return error.ExpectedString,
-        };
+        const resolver_root = try package_resolution.scanParsedHeader(self.gpa, file_abs, src, ast, header);
         var info = HeaderInfo{
             .kind = .package,
             .source_file_state = source_read.file_state,
@@ -1730,9 +1727,15 @@ pub const BuildEnv = struct {
         };
     }
 
-    fn emitResolutionFailure(self: *BuildEnv, resolver: *const package_resolution.Resolver) Allocator.Error!void {
-        for (resolver.diagnostics.items) |diagnostic| {
-            try self.emitWorkspaceReport(diagnostic.title, diagnostic.message);
+    fn emitResolutionFailure(self: *BuildEnv, resolver: *package_resolution.Resolver) Allocator.Error!void {
+        for (resolver.diagnostics.items) |*diagnostic| {
+            if (diagnostic.takeLocated()) |located| {
+                var report = located;
+                errdefer report.deinit();
+                try self.sink.emitReport("workspace", "root", report);
+            } else {
+                try self.emitWorkspaceReport(diagnostic.title, diagnostic.message);
+            }
         }
         // Build the sink order so the reports above are drainable:
         // the build aborts here, so nothing else will order them.
