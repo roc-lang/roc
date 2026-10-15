@@ -1433,7 +1433,10 @@ carrying the alias declaration and requested item. Checking follows the solved
 alias backing to its terminal nominal, resolves that nominal's owner by module
 content identity, and performs the exact owner-and-item method lookup. It then
 replaces the source node with the exact target module identity, type node, and
-definition. Alias traversal has no source-text reconstruction or fixed hop
+definition. A method of a type declared in a function body is a local binding,
+so a lookup selecting one is replaced with the local lookup of that binding,
+exactly what naming the method through its own type canonicalizes to, and is
+checked as one. Alias traversal has no source-text reconstruction or fixed hop
 limit; invalid and cyclic aliases must already resolve to the checker error
 type.
 
@@ -4518,15 +4521,18 @@ annotation enumerate the same identity slots (`PredeclaredSlots`), so the
 relation is slot-wise and needs no structural matching: each body slot the
 scheme will quantify stands for the use's copy of the first slot that
 reaches it, a slot the scheme will not quantify is shared, and a slot the
-body closed must be closed in the use's copy too. Each copy is unified
+body closed must be closed in the use's copy too. A shared slot's image is the
+slot itself, whatever earlier uses sharing it made it: a tag row in a record
+field of a value binding is shared by every use (Widenable positions), so an
+earlier use may already have added tags to it. Each copy is unified
 with that image. A relation can pin a receiver, so the boundary runs
 another round after relating any use.
 
 A rejected relation is a Type Mismatch at the use, naming the use's type
 and the definition's final one; the use becomes a runtime error and the
 definition keeps its scheme, as for any other rejected use. A body slot
-solved to anything other than a variable, a closed row, or a row's
-extension is an invariant violation, since the annotation's rigids and
+the scheme quantifies, solved to anything other than a variable, a closed
+row, or a row's extension, is an invariant violation, since the annotation's rigids and
 bounded rows admit nothing else, and a use still unrelated when the module
 finishes checking is one too.
 
@@ -5435,7 +5441,8 @@ value is lowered, the ordinary statement lowering runs inside the tuple's
 initializer, and the initializer ends with the locals that lowering bound. A
 recursive `let` therefore binds one local or a tuple of locals; LIR lowering
 gives each such local a zeroed boxed slot before the initializer runs and
-stores its part of the value once the initializer completes. The store
+stores its part of the value once the initializer completes. A zero-sized
+value's slot is a `box_of_zst`, whose payload is the value's own layout. The store
 addresses the slot's Box itself (`ptr_store` accepts a Box address and borrows
 it), so the slot stays alive through the store even when no callable captured
 it.
@@ -6152,7 +6159,11 @@ locals before the same crash (`beginRuntimeError`). Nested retirements compose:
 the erroneous operand may itself be a runtime error with `evaluated`
 operands, which run before it crashes. The result is that earlier operands
 run, with their `dbg`, effects, and crashes, and the program crashes where
-the erroneous operand is evaluated, in every lowering mode.
+the erroneous operand is evaluated, in every lowering mode. A hoisted root
+containing such a runtime error therefore depends on everything its
+`evaluated` operands read: post-solve pruning walks them like any other
+children, so a root whose operand calls a local procedure that needs its
+declaration context is not kept.
 
 A rejected static dispatch retires its owner by the same rule
 (`replaceRejectedOperationWithRuntimeError`). An owner that dispatches on its
@@ -9490,7 +9501,14 @@ compile-time root. A value's row can still gain tags after a use copied it (a
 generated codec's validation adds its error tags during finalize), so each
 re-opened row is recorded with the row it copies, and once constraints settle
 `Check.propagateValueRowsToWidenedUses` adds every such tag to the copy; a use
-whose type does not admit it is a type mismatch at the use. A row with no
+whose type does not admit it is a type mismatch at the use, and the use is
+retired as a runtime error like any other rejected use, so no erroneous type
+crosses the checked boundary. A tag that a generated codec produces on behalf
+of the value's own annotated definition, which the annotation does not list,
+is not one the value can have: the late audit reports and retires the
+definition (Derived Parser Required-Field Error Composition), so every use
+whose copy lacks the tag is a use of a rejected declaration, retired without
+a report of its own. A row with no
 tags, which asserts that no value has it, is never re-opened.
 
 ### Hosted Try Question Widening Removed
@@ -11528,7 +11546,10 @@ Restrictions:
   both parameters). Judged in `checkPendingDefaults`
   (`checkDefaultParameterConstraints`) immediately after the default
   unifies with an instantiated copy of its field type, BEFORE the
-  defaulting rounds could commit a still-flex parameter copy. Detection
+  defaulting rounds could commit a still-flex parameter copy, and after
+  resolving every pending tuple access whose receiver that check decided
+  (`|pair| pair.0` passed before `pair`'s type is known relates its result
+  to the item only once resolved, which can pin a parameter copy). Detection
   reads the parameter copies the instantiation minted for the
   declaration's rigids (snapshotted from the instantiation's var map,
   which also names the parameter for the report): a copy the default
