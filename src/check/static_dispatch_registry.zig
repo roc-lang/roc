@@ -26,6 +26,7 @@ const Var = types.Var;
 pub const NumericDefaultPhase = types.literal_defaulting.NumericDefaultPhase;
 const CheckedTypeId = checked_ids.CheckedTypeId;
 const CheckedExprId = checked_ids.CheckedExprId;
+const CheckedPatternId = checked_ids.CheckedPatternId;
 const CheckedStatementId = checked_ids.CheckedStatementId;
 const CheckedStringLiteralId = checked_ids.CheckedStringLiteralId;
 const PatternBinderId = checked_ids.PatternBinderId;
@@ -690,11 +691,13 @@ pub const MethodTarget = struct {
     def_idx: CIR.Def.Idx,
     kind: MethodTargetKind,
     callable_ty: CheckedTypeId,
-    /// The method is bound to an exact procedure alias (`method = f`), and
-    /// this target is the procedure the alias chain reaches. A dispatch edge
-    /// instantiates the alias's scheme, so the target's own evidence follows
-    /// from its callable, which that instantiation fixes.
-    reached_through_alias: bool = false,
+    /// The checked binding pattern of the exact procedure alias the method
+    /// is bound to (`method = f`), when this target is the procedure the
+    /// alias chain reaches. A dispatch edge instantiates the alias's scheme,
+    /// so the target's substitution composes through the alias's forwarded
+    /// lookup, and its own evidence follows from its callable, which that
+    /// instantiation fixes.
+    alias_binding: ?CheckedPatternId = null,
 };
 
 /// What resolving an (owner, method) pair against the checked method
@@ -869,7 +872,7 @@ pub const MethodRegistry = struct {
                 continue;
             }
             var referenced_callable_var: ?Var = null;
-            var reached_through_alias = false;
+            var alias_binding: ?CheckedPatternId = null;
             const target_kind: MethodTargetKind = if (generatedStructuralTargetForMethodBinding(module, entry.value)) |generated|
                 .{ .structural = generated }
             else if (local_templates.entryForDef(def_idx)) |template_entry| blk: {
@@ -905,7 +908,12 @@ pub const MethodRegistry = struct {
                 method_owner,
             )) |referenced| blk: {
                 referenced_callable_var = referenced.callable_var;
-                reached_through_alias = std.meta.activeTag(referenced.kind) == .procedure;
+                if (std.meta.activeTag(referenced.kind) == .procedure) {
+                    const pattern = methodBindingPattern(module, entry.value) orelse
+                        base.invariant("checked static dispatch registry invariant violated: a method alias binding had no pattern", .{});
+                    alias_binding = checked_bodies.patternIdForSource(pattern) orelse
+                        base.invariant("checked static dispatch registry invariant violated: a method alias binding pattern was not checked", .{});
+                }
                 break :blk referenced.kind;
             } else
                 // Associated values that resolve to neither a callable nor an
@@ -922,7 +930,7 @@ pub const MethodRegistry = struct {
                     .def_idx = def_idx,
                     .kind = target_kind,
                     .callable_ty = callable_ty,
-                    .reached_through_alias = reached_through_alias,
+                    .alias_binding = alias_binding,
                 },
                 // Inspection calls an override from rendering workers and
                 // generic code that never hold a local procedure's declaration
@@ -1017,6 +1025,19 @@ fn methodBindingExpr(
     const statement_data = module.getStatement(statement);
     if (std.meta.activeTag(statement_data) != .s_decl) return null;
     return statement_data.s_decl.expr;
+}
+
+fn methodBindingPattern(
+    module: TypedCIR.Module,
+    binding: ModuleEnv.MethodBinding,
+) ?CIR.Pattern.Idx {
+    const node_tag = module.nodeTag(binding.type_node_idx);
+    if (node_tag == .def) return module.moduleEnvConst().store.getDef(binding.def_idx).pattern;
+    if (node_tag != .statement_decl) return null;
+    const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(@backingInt(binding.type_node_idx)));
+    const statement_data = module.getStatement(statement);
+    if (std.meta.activeTag(statement_data) != .s_decl) return null;
+    return statement_data.s_decl.pattern;
 }
 
 fn unsupportedGeneratedMethodBinding(
@@ -1655,11 +1676,17 @@ pub const EvidenceTargetInstantiation = union(enum(u8)) {
     monomorphic,
     /// Exact callable relation produced while discharging this edge.
     callable: CheckedTypeId,
+    /// Exact callable relation produced while discharging this edge, which
+    /// instantiated the scheme of the exact procedure alias the target was
+    /// reached through (`MethodTarget.alias_binding`). The node's
+    /// substitution substitutes that alias scope's quantified variables;
+    /// the target's own substitution composes through the alias's forwarded
+    /// lookup.
+    alias: CheckedTypeId,
     /// Checking performed no instantiation of the target's scheme for this
-    /// edge: the target was reached through a procedure alias, or publication
-    /// selected it as the numeric default owner of an unpinned dispatcher. The
-    /// node carries no substitution; specialization relates the target's
-    /// scheme to this callable.
+    /// edge: publication selected it as the numeric default owner of an
+    /// unpinned dispatcher. The node carries no substitution; specialization
+    /// relates the target's scheme to this callable.
     derived_from_callable: CheckedTypeId,
 };
 

@@ -14884,8 +14884,8 @@ point). An alias of a function-valued constant is not a forward; calling it
 calls the evaluated value.
 
 A call through a forwarding alias is a direct call. Monotype enters the
-alias's scope with the call's use-site evidence and requests the lookup's own
-callee there, so the call reaches the aliased procedure's specialization with
+alias's scope with the call's use-site evidence and substitution, and requests
+the lookup's own callee there, so the call reaches the aliased procedure's specialization with
 the evidence the alias's scope composes and keeps that procedure's
 representation; no alias function exists at runtime. The callee's compiler-owned
 roles (call-site intrinsics, iterator procedures, `Str.inspect`, hosted `Try`
@@ -14893,11 +14893,13 @@ adapters) follow the forward to the final procedure. Boxy lowers the same calls
 through the alias's materialized callable value.
 
 A method bound to an exact alias dispatches to the procedure the alias chain
-reaches, and the method target records that it was reached through an alias.
-The dispatch edge instantiates the alias's scheme, whose requirements are not
-the target's, so the target's evidence follows from its instantiated callable
-(`from_callable`) and Monotype instantiates the target's own scheme at the
-dispatch's callable for its substitution.
+reaches, and the method target records the alias binding it was reached
+through. The dispatch edge instantiates the alias's scheme, whose requirements
+are not the target's, so the target's evidence follows from its instantiated
+callable (`from_callable`). The edge's node carries its substitution of the
+alias scope's variables. Monotype seeds the alias's scope with it and
+instantiates the forwarded lookup's own recorded substitution there, alias by
+alias along the chain, which composes the target's substitution exactly.
 
 ### Static Dispatch In Monotype
 
@@ -15248,14 +15250,31 @@ where the boundary verifiers run—a missing or corrupt record is a compiler
 bug reported at the boundary, not a lowering panic.
 
 **Target substitutions.** A direct evidence node either carries the checked
-substitution of its target's scheme or says the substitution derives from its
-callable (`derived_from_callable`). A dispatch edge that checking discharged by
-selecting a target records that instantiation, so its node carries the full
-substitution; such an edge with a polymorphic target and no record is a
-compiler bug reported when checking outputs the module. Checking instantiates nothing for these
-targets, so their nodes derive the substitution from the callable:
-- a target reached through an exact procedure alias, whose edge instantiated
-  the alias's scheme;
+substitution of its target's scheme, carries the substitution of the exact
+procedure alias's scheme the target was reached through (`alias`), or says the
+substitution derives from its callable (`derived_from_callable`). A dispatch
+edge that checking discharged by selecting a target records that
+instantiation, so its node carries the full substitution; such an edge with a
+polymorphic target and no record is a compiler bug reported when checking
+outputs the module. An edge that instantiated an alias's scheme carries that
+scheme's substitution, and Monotype composes the target's from it (see
+"Procedure Aliases").
+
+A recorded substitution is the only authority for a target's quantified
+variables. A tag row extended by a label its extension may also hold
+(`[Closed, ..errs]`, with `errs` holding `Closed`) normalizes to the same row
+whether `errs` is `[]` or `[Closed]`, so relating a target's scheme to a
+dispatch's normalized callable cannot recover the substitution checking chose.
+Every Monotype instantiation of a selected target, for its result type, its
+specialization, or its relation to a `where` requirement, seeds the recorded
+substitution before relating anything. A substitution recorded by the body
+being lowered instantiates in that body's context, sharing the cells its scope
+binds; one carried as evidence from the edge that selected the target in
+another body instantiates in a fresh context of its recording module, and is
+part of the input that keys a `where`-requirement relation's replay summary.
+
+Checking instantiates nothing for these targets, so their nodes derive the
+substitution from the callable:
 - the numeric default owner checking selects for a dispatcher no edge pins;
 - the target checking resolves for a literal conversion that it left
   to each specialization;

@@ -19177,7 +19177,7 @@ const EvidencePass = struct {
                             );
                         }
                         const instantiated_callable = switch (node.instantiation) {
-                            .callable, .derived_from_callable => |callable| callable,
+                            .callable, .alias, .derived_from_callable => |callable| callable,
                             .monomorphic => checkedArtifactInvariant(
                                 "checked generated codec callable evidence had no exact instantiation",
                                 .{},
@@ -19707,6 +19707,9 @@ const EvidencePass = struct {
         if (node.target.kind != .procedure) return;
         const expected_len = switch (node.instantiation) {
             .derived_from_callable => 0,
+            // The substitution covers the alias scope's variables, whose
+            // count Monotype checks against that scope when it composes.
+            .alias => return,
             .monomorphic, .callable => self.procedureEvidenceView(node.target).template.scheme_vars.len,
         };
         if (node.subst.len != expected_len) {
@@ -20387,19 +20390,30 @@ const EvidencePass = struct {
             .procedure => self.procedureEvidenceSchema(target),
             .local_proc, .structural => null,
         };
-        if (target.reached_through_alias) {
+        if (target.alias_binding != null) {
             // The dispatch edge instantiated the alias's scheme, whose
-            // requirements are not the target's. The alias's instantiation
+            // requirements are not the target's. Its record substitutes the
+            // alias scope's variables, and the target's substitution composes
+            // through the alias's forwarded lookup. The alias's instantiation
             // fixes the target's callable, and the target's evidence follows
             // from that callable.
             const callable = callable_ty orelse
                 checkedArtifactInvariant("method target reached through an alias had no checked callable", .{});
+            const subst: artifact_serialize.Span = if (record_idx) |idx| blk: {
+                const module_env = self.module.moduleEnvConst();
+                const record = module_env.scheme_uses.items.items[idx];
+                break :blk try self.appendSiteSubstitution(
+                    @fromBackingInt(@intCast(record.scheme_root)),
+                    module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len],
+                );
+            } else .{};
             return .{ .done = try self.internEvidenceNode(.{
                 .target = target,
                 .dispatcher_ty = dispatcher_ty,
                 .generated_codec_derivation = generated_codec_derivation,
-                .instantiation = .{ .derived_from_callable = callable },
+                .instantiation = .{ .alias = callable },
                 .nested = if (procedure_schema == .none) .{ .resolved = .{} } else .from_callable,
+                .subst = subst,
             }) };
         }
         if (record_idx) |idx| {
@@ -20424,7 +20438,7 @@ const EvidencePass = struct {
             if (self.node_by_record.get(idx)) |memoized| {
                 const existing = self.evidence_nodes.items[@backingInt(memoized)];
                 const callable_matches = switch (existing.instantiation) {
-                    .monomorphic, .derived_from_callable => false,
+                    .monomorphic, .alias, .derived_from_callable => false,
                     .callable => |existing_callable| existing_callable == callable_ty.?,
                 };
                 if (existing.dispatcher_ty != dispatcher_ty or
@@ -33764,7 +33778,7 @@ pub const CheckedModuleArtifact = struct {
                         }
                         const node_callable = switch (node.instantiation) {
                             .monomorphic => return .{ .kind = .generated_codec_call_evidence_invalid, .index = @intCast(i), .method = call.method },
-                            .callable, .derived_from_callable => |callable| callable,
+                            .callable, .alias, .derived_from_callable => |callable| callable,
                         };
                         if (@backingInt(node_callable) >= self.checked_types.payloadCount() or
                             !std.meta.eql(type_view.rootKey(node_dispatcher), type_view.rootKey(call.dispatcher_ty)) or
