@@ -481,7 +481,10 @@ const Pass = struct {
         // A specialization whose procedure was unreachable leaves the table.
         var kept: usize = 0;
         for (self.result.spec_procs.items) |spec_proc| {
-            const new_proc = self.old_to_new[@backingInt(spec_proc.proc)] orelse continue;
+            const new_proc = self.old_to_new[@backingInt(spec_proc.proc)] orelse {
+                if (spec_proc.demand) |demand| demand.deinit(self.result.store.allocator);
+                continue;
+            };
             var remapped = spec_proc;
             remapped.proc = new_proc;
             self.result.spec_procs.items[kept] = remapped;
