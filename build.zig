@@ -1675,6 +1675,12 @@ const wasm_static_lib_carts = [_]WasmStaticLibCart{
     // runtime value. The dev wasm backend must emit a module that
     // validates and runs (#11455).
     .{ .app = "issue_11455_boxed_zst_nominal_payload_static_lib_app.roc", .options = &.{"--opt=dev"}, .output = "issue_11455_boxed_zst_nominal_payload_static_lib_app.wasm", .run_args = &.{ "--expected", "{\"favoritesCount\":14}" } },
+    // Unbounded recursion under a 16 KiB stack must trap out of bounds and
+    // leave static data untouched. The stack occupies the lowest addresses
+    // and grows down toward 0, so nothing can sit below it to be overwritten.
+    // Both backends allocate their own shadow-stack frames.
+    .{ .app = "stack_overflow_traps_static_lib_app.roc", .options = &.{ "--opt=speed", "--wasm-stack-size=16384" }, .output = "stack_overflow_traps_static_lib_app.wasm", .run_args = &.{"--expect-stack-overflow-trap"} },
+    .{ .app = "stack_overflow_traps_static_lib_app.roc", .options = &.{ "--opt=dev", "--wasm-stack-size=16384" }, .output = "stack_overflow_traps_dev_static_lib_app.wasm", .run_args = &.{"--expect-stack-overflow-trap"} },
     .{ .app = "issue_11529_top_level_boxed_function_static_lib_app.roc", .options = &.{ "--opt=dev", "--no-cache" }, .output = "issue_11529_top_level_boxed_function_static_lib_app.wasm", .run_args = &.{ "--expected", "x" } },
 };
 
