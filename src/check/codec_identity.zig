@@ -232,8 +232,17 @@ const ContentDigester = struct {
             },
             .structural => |kind| self.writeU8(@backingInt(kind)),
         }
-        self.writeU8(@intFromBool(target.alias_binding != null));
-        if (target.alias_binding) |pattern| self.writeU32(@backingInt(pattern));
+        self.writeU8(@intFromBool(target.alias != null));
+        if (target.alias) |alias| switch (alias) {
+            .top_level => |pattern| {
+                self.writeU8(0);
+                self.writeU32(@backingInt(pattern));
+            },
+            .local => |local| {
+                self.writeU8(1);
+                self.writeU32(@backingInt(local.lookup));
+            },
+        };
     }
 
     fn writeRefs(self: *ContentDigester, span: Span) Allocator.Error!void {

@@ -18183,6 +18183,10 @@ fn publishLocalMethodDispatchScopes(
 ) void {
     for (method_registry.entries) |*entry| {
         const target = if (entry.target) |*target| target else continue;
+        if (target.alias) |*alias| switch (alias.*) {
+            .local => |*local| local.dispatch_scope = scope_by_checked_expr.get(local.lookup),
+            .top_level => {},
+        };
         if (target.kind != .local_proc) continue;
         const local = &target.kind.local_proc;
 
@@ -20390,7 +20394,7 @@ const EvidencePass = struct {
             .procedure => self.procedureEvidenceSchema(target),
             .local_proc, .structural => null,
         };
-        if (target.alias_binding != null) {
+        if (target.alias != null) {
             // The dispatch edge instantiated the alias's scheme, whose
             // requirements are not the target's. Its record substitutes the
             // alias scope's variables, and the target's substitution composes

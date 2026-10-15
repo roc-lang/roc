@@ -1493,11 +1493,11 @@ const CheckedTargetSubstitution = struct {
     alias: ?TargetAlias = null,
 };
 
-/// An exact procedure alias a method target was reached through: its checked
-/// binding pattern in the module that declares it.
+/// An exact procedure alias a method target was reached through, in the
+/// module that declares it.
 const TargetAlias = struct {
     view: ModuleView,
-    binding: checked.CheckedPatternId,
+    alias: static_dispatch.MethodAlias,
 };
 
 /// A lookup's checked target substitution, by where it was recorded, which
@@ -1952,7 +1952,7 @@ fn checkedTargetSubstitution(site_view: ModuleView, target_view: ModuleView, nod
     const alias: ?TargetAlias = switch (node.instantiation) {
         .alias => .{
             .view = target_view,
-            .binding = node.target.alias_binding orelse
+            .alias = node.target.alias orelse
                 Common.invariant("alias-instantiated evidence named a target with no alias binding"),
         },
         .monomorphic, .callable, .derived_from_callable => null,
@@ -7184,11 +7184,11 @@ const Builder = struct {
         template: checked.CallableEvalTemplateId,
     };
 
-    /// The callable-eval binding of the exact procedure alias a method target
-    /// was reached through.
-    fn callableEvalForAliasBinding(_: *Builder, alias: TargetAlias) CallableEvalUse {
-        for (alias.view.callable_eval_templates.templates) |template| {
-            if (template.pattern == alias.binding) return .{ .view = alias.view, .template = template.id };
+    /// The callable-eval binding of a top-level exact procedure alias, by its
+    /// checked binding pattern.
+    fn callableEvalForAliasBinding(_: *Builder, view: ModuleView, binding: checked.CheckedPatternId) CallableEvalUse {
+        for (view.callable_eval_templates.templates) |template| {
+            if (template.pattern == binding) return .{ .view = view, .template = template.id };
         }
         Common.invariant("method target alias binding had no callable-eval template");
     }
@@ -52708,35 +52708,60 @@ const BodyContext = struct {
     /// alias's forwarded lookup recorded its own substitution over that scope,
     /// so instantiating it in the scope seeded with `alias_subst` composes the
     /// two exactly, alias by alias, up to the procedure the chain reaches.
-    fn substitutionThroughAlias(self: *BodyContext, alias: TargetAlias, alias_subst: SpecSubstitution) Allocator.Error!SpecSubstitution {
-        var use = self.builder.callableEvalForAliasBinding(alias);
+    fn substitutionThroughAlias(self: *BodyContext, target_alias: TargetAlias, alias_subst: SpecSubstitution) Allocator.Error!SpecSubstitution {
+        const Step = union(enum) {
+            callable_eval: Builder.CallableEvalUse,
+            local: struct { view: ModuleView, lookup: checked.CheckedExprId, dispatch_scope: ?checked.DispatchScopeId },
+        };
+        var step: Step = switch (target_alias.alias) {
+            .top_level => |binding| .{ .callable_eval = self.builder.callableEvalForAliasBinding(target_alias.view, binding) },
+            .local => |local| .{ .local = .{ .view = target_alias.view, .lookup = local.lookup, .dispatch_scope = local.dispatch_scope } },
+        };
         var subst = alias_subst;
         while (true) {
-            const view = use.view;
-            const template = view.callable_eval_templates.templates[@backingInt(use.template)];
-            const lookup = template.forwarded_lookup orelse
-                Common.invariant("method target alias binding was not an exact procedure alias");
-            const wrapper = view.entry_wrappers.lookupByRoot(template.root) orelse
-                Common.invariant("callable eval template root had no checked entry wrapper");
-            var alias_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, wrapper.template, self.graph, self.draft);
+            const view, const lookup, const owner_template, const schema = switch (step) {
+                .callable_eval => |use| blk: {
+                    const template = use.view.callable_eval_templates.templates[@backingInt(use.template)];
+                    const wrapper = use.view.entry_wrappers.lookupByRoot(template.root) orelse
+                        Common.invariant("callable eval template root had no checked entry wrapper");
+                    break :blk .{
+                        use.view,
+                        template.forwarded_lookup orelse
+                            Common.invariant("method target alias binding was not an exact procedure alias"),
+                        wrapper.template,
+                        templateSchemaIn(use.view, &use.view.templates.get(wrapper.template.template)),
+                    };
+                },
+                .local => |local| .{
+                    local.view,
+                    local.lookup,
+                    self.owner_template,
+                    self.scopeSchema(local.view, local.dispatch_scope),
+                },
+            };
+            var alias_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, owner_template, self.graph, self.draft);
             defer alias_ctx.deinit();
-            const entry_template = view.templates.get(wrapper.template.template);
-            const schema = templateSchemaIn(view, &entry_template);
             if (subst.len != schema.scheme_vars.len) {
                 Common.invariant("procedure alias substitution length differed from its scope's quantified variables");
             }
             try alias_ctx.seedSubstitution(schema, subst);
-            const lookup_schema = try alias_ctx.useSiteSchema(lookup);
-            const next = try alias_ctx.recordedSiteSubstitution(view, lookup, lookup_schema) orelse
+            const next = try alias_ctx.recordedSiteSubstitution(view, lookup, try alias_ctx.useSiteSchema(lookup)) orelse
                 Common.invariant("procedure alias lookup had no checked substitution");
             const ref_id = view.resolved_refs.lookupIdByCheckedExpr(lookup) orelse
                 Common.invariant("forwarded procedure alias lookup had no resolved value");
-            const proc = switch (view.resolved_refs.records[@backingInt(ref_id)].ref) {
-                .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |proc| proc,
-                .platform_required_proc => |required| required.procedure,
-                .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => Common.invariant("forwarded procedure alias lookup did not name a procedure"),
+            step = switch (view.resolved_refs.records[@backingInt(ref_id)].ref) {
+                .local_proc => |local| if (local.is_alias)
+                    .{ .local = .{ .view = view, .lookup = local.expr, .dispatch_scope = local.dispatch_scope } }
+                else
+                    return next,
+                .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |proc| .{
+                    .callable_eval = self.builder.forwardingCallableEvalForProcedureUse(proc) orelse return next,
+                },
+                .platform_required_proc => |required| .{
+                    .callable_eval = self.builder.forwardingCallableEvalForProcedureUse(required.procedure) orelse return next,
+                },
+                .local_param, .local_value, .local_mutable_version, .pattern_binder, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => Common.invariant("forwarded procedure alias lookup did not name a procedure"),
             };
-            use = self.builder.forwardingCallableEvalForProcedureUse(proc) orelse return next;
             subst = next;
         }
     }

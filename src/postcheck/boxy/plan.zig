@@ -12666,7 +12666,7 @@ const Builder = struct {
         const dispatch_plan = directCallDispatchPlan(call_expr);
         if (dispatchResolutionIsStructural(site_view, dispatch_plan)) return null;
         const node = site_view.static_dispatch_plans.evidenceNode(directDispatchEvidenceNode(site_view, dispatch_plan));
-        if (node.nested != .from_callable or node.subst.len != 0) return null;
+        if (node.nested != .from_callable or carriesTargetSubstitution(node)) return null;
         const call_rep = self.plan.repForSourceType(direct.source_fn_type) orelse
             boxyPlanInvariant("boxy direct call function type was not analyzed");
         return try self.storedUseSchemeRepSubstitutions(self.plan.workers.items[@backingInt(direct.worker)].rep, call_rep);
@@ -15174,7 +15174,7 @@ const Builder = struct {
             const node = view.static_dispatch_plans.evidenceNode(node_id);
             // A target reached through a procedure alias derives its evidence
             // from its callable, related to the call's function type.
-            const relation: ?Span = if (node.nested == .from_callable and node.subst.len == 0) blk: {
+            const relation: ?Span = if (node.nested == .from_callable and !carriesTargetSubstitution(node)) blk: {
                 const call_rep = self.plan.repForSourceType(call.source_fn_type) orelse
                     boxyPlanInvariant("boxy iterator call function type was not analyzed");
                 break :blk try self.storedUseSchemeRepSubstitutions(self.plan.workers.items[@backingInt(call.worker)].rep, call_rep);
@@ -18538,7 +18538,7 @@ const Builder = struct {
         edge: DictionaryMethodEvidence.EvidenceEdge,
     ) Allocator.Error!?Span {
         const node = self.moduleForId(edge.module).static_dispatch_plans.evidenceNode(edge.node);
-        if (node.nested != .from_callable or node.subst.len != 0) return null;
+        if (node.nested != .from_callable or carriesTargetSubstitution(node)) return null;
         const callable_rep = self.plan.repForSourceType(callable_type) orelse
             boxyPlanInvariant("dictionary method callable type was not analyzed");
         return try self.storedUseSchemeRepSubstitutions(self.plan.workers.items[@backingInt(worker_id)].rep, callable_rep);
@@ -18723,9 +18723,20 @@ const Builder = struct {
         }
     }
 
+    /// Whether an evidence node's substitution is its target's. An edge that
+    /// instantiated an exact procedure alias's scheme substitutes that
+    /// alias's variables instead, so its target relates to the callable.
+    fn carriesTargetSubstitution(node: static_dispatch.EvidenceNode) bool {
+        return switch (node.instantiation) {
+            .alias => false,
+            .monomorphic, .callable, .derived_from_callable => node.subst.len != 0,
+        };
+    }
+
     fn evidenceEdgeSiteTypes(view: ModuleView, node_id: static_dispatch.EvidenceNodeId) []const checked.CheckedTypeId {
         const table = view.static_dispatch_plans;
         const node = table.evidenceNode(node_id);
+        if (!carriesTargetSubstitution(node)) return &.{};
         const start: usize = node.subst.start;
         const len: usize = node.subst.len;
         if (start > table.site_substitutions.len or len > table.site_substitutions.len - start) {
