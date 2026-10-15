@@ -164,14 +164,29 @@ pub fn writeOffers(
     discovery: []const DiscoveryEntry,
     materializer_reads: []const MaterializerRead,
 ) WriteError![]u8 {
-    for (specs) |spec| {
-        if (spec.artifact >= set.artifacts.len or set.artifacts[spec.artifact].root_materialization != null)
-            return error.InvalidRootMaterializationDependency;
+    var body = try encodeBody(allocator, set);
+    defer body.deinit();
+    return writeWithBody(allocator, set, &body, specs, discovery, materializer_reads);
+}
+
+/// A set's artifacts encoded for a pack: the pack from its first byte to
+/// where its offers start, and the artifact table that follows the offers.
+/// Packs offering different specs of one set share a body.
+pub const Body = struct {
+    arena: collections.SingleThreadArena,
+    /// Header and artifacts; the namespace and spec count are zero until a
+    /// pack is written from it.
+    bytes: []const u8,
+    /// Each artifact's byte range and edges, in their persistent encoding.
+    table: []const u8,
+
+    pub fn deinit(self: *Body) void {
+        self.arena.deinit();
     }
-    for (specs) |spec| if (spec.demand) |demand| {
-        for (demand.literal_reads) |literal| if (!try literal.recipe.valid(allocator)) return error.InvalidLiteralRecipe;
-    };
-    for (materializer_reads) |entry| if (!try entry.read.recipe.valid(allocator)) return error.InvalidLiteralRecipe;
+};
+
+/// Encode a set's artifacts as a pack body, validating the artifacts.
+pub fn encodeBody(allocator: Allocator, set: *const ProcArtifact.Set) WriteError!Body {
     for (set.artifacts) |artifact| {
         try ProcArtifact.validateRootMaterializations(allocator, artifact);
         if (artifact.root_materialization == null) {
@@ -195,29 +210,28 @@ pub fn writeOffers(
             if (target == .local and target.local >= set.artifacts.len) return error.InvalidCodeTarget;
         }
     };
+    var arena = collections.SingleThreadArena.init(allocator);
+    errdefer arena.deinit();
+    const owned = arena.allocator();
     var names = try ProcArtifact.ContentNames.init(allocator, set);
     defer names.deinit();
     var bytes = std.ArrayList(u8).empty;
-    errdefer bytes.deinit(allocator);
-    var writer = Writer{ .allocator = allocator, .bytes = &bytes };
+    var writer = Writer{ .allocator = owned, .bytes = &bytes };
 
     try writer.raw(magic);
     try writer.word(format_version);
     // The body's content hash names this exact physical graph for every
     // reader, so a reader never hashes the decoded artifacts again.
-    const namespace_offset = bytes.items.len;
     try writer.raw(&(@as([32]u8, @splat(0))));
-    const body_offset = bytes.items.len;
     try writer.word(@intCast(set.artifacts.len));
-    try writer.word(@intCast(specs.len));
+    try writer.word(0);
     // Where the spec table starts, so an index reads the offers without
     // decoding the artifacts before them (`readIndex`).
     const specs_offset_at = bytes.items.len;
     try writer.wide(0);
 
     // Where each artifact's encoding starts, for the index's artifact table.
-    const starts = try allocator.alloc(u64, set.artifacts.len + 1);
-    defer allocator.free(starts);
+    const starts = try owned.alloc(u64, set.artifacts.len + 1);
     for (set.artifacts, 0..) |artifact, index| {
         starts[index] = bytes.items.len;
         try writer.context(artifact.context_contract);
@@ -357,6 +371,70 @@ pub fn writeOffers(
 
     starts[set.artifacts.len] = bytes.items.len;
     std.mem.writeInt(u64, bytes.items[specs_offset_at..][0..8], bytes.items.len, .little);
+
+    var table = std.ArrayList(u8).empty;
+    var table_writer = Writer{ .allocator = owned, .bytes = &table };
+    // The artifact table: each artifact's byte range and the artifacts it
+    // reaches, resolved here once so a reader can select a closure from the
+    // index alone (`closure`).
+    for (starts) |start| try table_writer.wide(start);
+    var graph = try ArtifactClosure.init(allocator, set);
+    defer graph.deinit();
+    var edges = std.ArrayList(u32).empty;
+    defer edges.deinit(allocator);
+    for (set.artifacts, 0..) |artifact, index| {
+        edges.clearRetainingCapacity();
+        var unresolved = false;
+        for (artifact.refs) |ref| try edges.append(allocator, ref.target);
+        for (graph.symbolicTargets(@intCast(index))) |target| {
+            if (target) |node| try edges.append(allocator, node) else unresolved = true;
+        }
+        for (graph.dataTargets(@intCast(index))) |target| {
+            if (target) |node| try edges.append(allocator, node) else unresolved = true;
+        }
+        for (artifact.data) |item| for (item.relocations) |relocation| {
+            if (relocation.function and !relocation.external and relocation.code_target == null) unresolved = true;
+        };
+        std.mem.sort(u32, edges.items, {}, std.sort.asc(u32));
+        var unique: usize = 0;
+        for (edges.items, 0..) |edge, i| {
+            if (i == 0 or edge != edges.items[i - 1]) {
+                edges.items[unique] = edge;
+                unique += 1;
+            }
+        }
+        try table_writer.word(@intCast(unique));
+        for (edges.items[0..unique]) |edge| try table_writer.word(edge);
+        try table_writer.byte(@intFromBool(unresolved));
+    }
+
+    return .{ .arena = arena, .bytes = bytes.items, .table = table.items };
+}
+
+/// Write a pack of `set` from its encoded body with these offers.
+pub fn writeWithBody(
+    allocator: Allocator,
+    set: *const ProcArtifact.Set,
+    body: *const Body,
+    specs: []const SpecEntry,
+    discovery: []const DiscoveryEntry,
+    materializer_reads: []const MaterializerRead,
+) WriteError![]u8 {
+    for (specs) |spec| {
+        if (spec.artifact >= set.artifacts.len or set.artifacts[spec.artifact].root_materialization != null)
+            return error.InvalidRootMaterializationDependency;
+    }
+    for (specs) |spec| if (spec.demand) |demand| {
+        for (demand.literal_reads) |literal| if (!try literal.recipe.valid(allocator)) return error.InvalidLiteralRecipe;
+    };
+    for (materializer_reads) |entry| if (!try entry.read.recipe.valid(allocator)) return error.InvalidLiteralRecipe;
+    var bytes = std.ArrayList(u8).empty;
+    defer bytes.deinit(allocator);
+    var writer = Writer{ .allocator = allocator, .bytes = &bytes };
+    try writer.raw(body.bytes);
+    const namespace_offset = magic.len + 4;
+    const body_offset = namespace_offset + 32;
+    std.mem.writeInt(u32, bytes.items[body_offset + 4 ..][0..4], @intCast(specs.len), .little);
     for (specs) |spec| {
         try writer.raw(&spec.key);
         try writer.word(spec.artifact);
@@ -391,39 +469,7 @@ pub fn writeOffers(
         try writer.context(entry.read);
     }
 
-    // The artifact table: each artifact's byte range and the artifacts it
-    // reaches, resolved here once so a reader can select a closure from the
-    // index alone (`closure`).
-    for (starts) |start| try writer.wide(start);
-    var graph = try ArtifactClosure.init(allocator, set);
-    defer graph.deinit();
-    var edges = std.ArrayList(u32).empty;
-    defer edges.deinit(allocator);
-    for (set.artifacts, 0..) |artifact, index| {
-        edges.clearRetainingCapacity();
-        var unresolved = false;
-        for (artifact.refs) |ref| try edges.append(allocator, ref.target);
-        for (graph.symbolicTargets(@intCast(index))) |target| {
-            if (target) |node| try edges.append(allocator, node) else unresolved = true;
-        }
-        for (graph.dataTargets(@intCast(index))) |target| {
-            if (target) |node| try edges.append(allocator, node) else unresolved = true;
-        }
-        for (artifact.data) |item| for (item.relocations) |relocation| {
-            if (relocation.function and !relocation.external and relocation.code_target == null) unresolved = true;
-        };
-        std.mem.sort(u32, edges.items, {}, std.sort.asc(u32));
-        var unique: usize = 0;
-        for (edges.items, 0..) |edge, i| {
-            if (i == 0 or edge != edges.items[i - 1]) {
-                edges.items[unique] = edge;
-                unique += 1;
-            }
-        }
-        try writer.word(@intCast(unique));
-        for (edges.items[0..unique]) |edge| try writer.word(edge);
-        try writer.byte(@intFromBool(unresolved));
-    }
+    try writer.raw(body.table);
 
     var namespace = std.crypto.hash.Blake3.init(.{});
     namespace.update("roc.native.physical.pack.v1");
@@ -434,7 +480,6 @@ pub fn writeOffers(
     // allocation-failure checks require one allocation sequence per input.
     const owned = try allocator.alloc(u8, bytes.items.len);
     @memcpy(owned, bytes.items);
-    bytes.deinit(allocator);
     return owned;
 }
 

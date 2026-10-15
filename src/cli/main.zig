@@ -412,6 +412,8 @@ const CompileTimeObjectCache = struct {
 
     fn capture(context: *anyopaque, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *const lir.CheckedPipeline.LoweredProgram, retained: *const backend.dev.NativeProcCompiler.Retained, cached_roots: []const backend.dev.LocatedArtifact, observed: bool) Allocator.Error!void {
         const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
+        const capture_started = std.Io.Timestamp.now(self.io, .awake).nanoseconds;
+        defer self.packs.capture_ns += std.Io.Timestamp.now(self.io, .awake).nanoseconds - capture_started;
         std.debug.assert(self.packs.projection_modules == null);
         self.packs.projection_modules = modules;
         defer self.packs.projection_modules = null;
@@ -8972,6 +8974,40 @@ const PackEncodingPlan = struct {
     closure: SpliceClosure,
     eligible: []bool = &.{},
     offer_graph: ?PackOfferGraph = null,
+    /// The serving closure the last owner's offers selected, with its
+    /// encoded pack body, kept for the next owner selecting the same
+    /// artifacts: the owners of one program usually all serve its whole
+    /// closure, and the body is by far the larger part of each pack.
+    serving: ?CachedServing = null,
+
+    const CachedServing = struct {
+        selected: []bool,
+        selection: backend.dev.ArtifactClosure.Selection,
+        body: backend.dev.PackFile.Body,
+
+        fn deinit(self: *CachedServing, allocator: Allocator) void {
+            self.body.deinit();
+            self.selection.deinit();
+            allocator.free(self.selected);
+        }
+    };
+
+    /// The serving closure of `set` marked by `selected`, encoded; the cached
+    /// one when the marks are the same.
+    fn servingFor(self: *PackEncodingPlan, set: *const backend.dev.ProcArtifact.Set, selected: []const bool) (Allocator.Error || backend.dev.PackFile.WriteError)!*CachedServing {
+        if (self.serving) |*cached| {
+            if (std.mem.eql(bool, cached.selected, selected)) return cached;
+            cached.deinit(self.allocator);
+            self.serving = null;
+        }
+        var selection = try backend.dev.ArtifactClosure.selectMarked(self.allocator, set, selected);
+        errdefer selection.deinit();
+        var body = try backend.dev.PackFile.encodeBody(self.allocator, &selection.set);
+        errdefer body.deinit();
+        const marks = try self.allocator.dupe(bool, selected);
+        self.serving = .{ .selected = marks, .selection = selection, .body = body };
+        return &self.serving.?;
+    }
 
     fn init(allocator: Allocator, set: *const backend.dev.ProcArtifact.Set, lowered: *const lir.CheckedPipeline.LoweredProgram) Allocator.Error!PackEncodingPlan {
         var self = PackEncodingPlan{
@@ -9030,6 +9066,7 @@ const PackEncodingPlan = struct {
     }
 
     fn deinit(self: *PackEncodingPlan) void {
+        if (self.serving) |*cached| cached.deinit(self.allocator);
         if (self.offer_graph) |*graph| graph.deinit();
         self.allocator.free(self.eligible);
         self.closure.deinit();
@@ -9368,8 +9405,14 @@ fn packFileBytesFiltered(
     // A pack owns exactly the serving closure, not unrelated evaluator roots.
     // Their source observations may name an app this independent offer never
     // reaches, and must not veto its admission after an app edit.
-    var serving = try backend.dev.ArtifactClosure.selectMarked(allocator, set, selected);
-    defer serving.deinit();
+    const cached = plan.servingFor(set, selected) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidCodeTarget, error.InvalidSourceEventCertificate, error.InvalidLiteralRecipe, error.InvalidRootMaterializationDependency => {
+            std.debug.assert(false); // A validated native producer emitted an invalid context site.
+            unreachable;
+        },
+    };
+    const serving = &cached.selection;
     for (selected_specs.items) |*spec| spec.artifact = serving.old_to_new[spec.artifact].?;
     // Each literal materializer the serving code calls carries its read:
     // this program's own, or the one the carried code's pack recorded.
@@ -9385,7 +9428,7 @@ fn packFileBytesFiltered(
             (if (filter.carried_reads) |carried| carried.get(wrapper) else null) orelse continue;
         try materializer_reads.append(allocator, .{ .wrapper_identity = wrapper, .read = read });
     };
-    return backend.dev.PackFile.writeOffers(allocator, &serving.set, selected_specs.items, &.{}, materializer_reads.items) catch |err| switch (err) {
+    return backend.dev.PackFile.writeWithBody(allocator, &serving.set, &cached.body, selected_specs.items, &.{}, materializer_reads.items) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.InvalidCodeTarget, error.InvalidSourceEventCertificate, error.InvalidLiteralRecipe, error.InvalidRootMaterializationDependency => {
             std.debug.assert(false); // A validated native producer emitted an invalid context site.
@@ -11568,6 +11611,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         // The compile-time evaluator has already spliced its entries; the
         // object compiler asks for the runtime program's afterwards.
         std.debug.print("pack hits: {d} external procs: {d} evaluator artifacts: {d} packs loaded: {d} keys: {d}\n", .{ packs.hits, external_procs, packs.artifacts_served, packs.packs.items.len, packs.specs.count() });
+        std.debug.print("pack admission: {d} ms (decode {d} ms, index {d} ms); capture: {d} ms\n", .{
+            @divTrunc(packs.admit_ns, std.time.ns_per_ms),
+            @divTrunc(packs.decode_ns, std.time.ns_per_ms),
+            @divTrunc(packs.index_ns, std.time.ns_per_ms),
+            @divTrunc(packs.capture_ns, std.time.ns_per_ms),
+        });
     }
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);

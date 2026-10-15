@@ -1203,6 +1203,15 @@ pub const LoadedPacks = struct {
     artifacts: std.AutoHashMap(lir.ProcIdentity, SelectedProcedure),
     /// Specializations served so far.
     hits: u64 = 0,
+    /// Nanoseconds spent admitting closures on lookups, and within that
+    /// decoding artifacts and indexing admitted sets; the store's statistics
+    /// report them (`ROC_PACK_STATS`).
+    admit_ns: i128 = 0,
+    decode_ns: i128 = 0,
+    index_ns: i128 = 0,
+    /// Nanoseconds the compile-time cache spent capturing and encoding this
+    /// program's offers.
+    capture_ns: i128 = 0,
     /// Artifacts handed to a splice so far.
     artifacts_served: u64 = 0,
     /// Set until `indexPacks` runs; lookups before that load the pending
@@ -1429,6 +1438,9 @@ pub const LoadedPacks = struct {
     /// candidate would.
     fn admitKey(self: *LoadedPacks, key: [32]u8, relation: ?[32]u8) LoadError!void {
         if (self.candidates.count() == 0) return;
+        const io = (self.pending orelse unreachable).io;
+        const started = std.Io.Timestamp.now(io, .awake).nanoseconds;
+        defer self.admit_ns += std.Io.Timestamp.now(io, .awake).nanoseconds - started;
         var pending = std.ArrayList([32]u8).empty;
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, key);
@@ -1436,7 +1448,11 @@ pub const LoadedPacks = struct {
             const list = self.candidates.get(next) orelse continue;
             for (list.items) |id| {
                 if (self.specs.contains(.{ .key = next, .platform_requirement_relation = relation })) break;
-                if (try self.admitClosure(id, next, &pending)) try self.indexPacksUnrecorded();
+                if (try self.admitClosure(id, next, &pending)) {
+                    const index_started = std.Io.Timestamp.now(io, .awake).nanoseconds;
+                    defer self.index_ns += std.Io.Timestamp.now(io, .awake).nanoseconds - index_started;
+                    try self.indexPacksUnrecorded();
+                }
             }
         }
     }
@@ -1472,7 +1488,12 @@ pub const LoadedPacks = struct {
             if (!source.position.contains(member)) try added.append(self.allocator, member);
         }
         if (std.c.getenv("ROC_PACK_TRACE") != null) std.debug.print("admit-closure pack={d} key={x} roots={d} members={d} added={d}\n", .{ id, key[0..8], roots.items.len, members.len, added.items.len });
-        try self.decodeMembers(source, added.items);
+        {
+            const io = (self.pending orelse unreachable).io;
+            const decode_started = std.Io.Timestamp.now(io, .awake).nanoseconds;
+            defer self.decode_ns += std.Io.Timestamp.now(io, .awake).nanoseconds - decode_started;
+            try self.decodeMembers(source, added.items);
+        }
         const pack = source.admitted orelse try self.createAdmittedPack(source);
         const base: u32 = @intCast(source.artifact_list.items.len);
         for (added.items, 0..) |member, offset| try source.position.put(self.allocator, member, base + @as(u32, @intCast(offset)));
