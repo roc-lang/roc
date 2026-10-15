@@ -3836,9 +3836,9 @@ const Inserter = struct {
     }
 
     /// A unit live into a control split but read on none of one successor's
-    /// paths dies where that successor begins. Every other death follows a
-    /// statement that reads the unit, so this is the one place a unit can
-    /// die without a read.
+    /// paths dies where that successor begins. Along straight-line code a
+    /// unit can only stop being live after a statement that reads it, so a
+    /// split is the one place it can stop being live without a read.
     fn releaseUnreadAtBranchEntry(self: *Inserter, segment: *SolveSegment) ResourceError!void {
         const plan = self.arcPlan(segment.plan_index);
         plan.entry_releases.clearRetainingCapacity();
