@@ -2136,6 +2136,8 @@ fn appendPlatformDep(
         .nominal_record,
         .nominal_apply,
         .ellipsis,
+        .@"break",
+        .@"return",
         .block,
         .for_expr,
         .malformed,
