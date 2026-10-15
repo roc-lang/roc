@@ -515,6 +515,7 @@ const CustomCase = enum {
     glue_debug_dev,
     glue_dev_without_temp_env,
     glue_plugin_cache_hit,
+    glue_plugin_cache_distinguishes_specs,
     glue_c_header,
     glue_c_header_compiles,
     glue_zig,
@@ -2037,6 +2038,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue command with DebugGlue succeeds with --opt=dev", .body = .{ .custom = .glue_debug_dev } },
     .{ .id = 0, .suite = .glue, .name = "glue command succeeds without temp environment variables", .skip = .{ .windows = "Windows requires TEMP or TMP" }, .body = .{ .custom = .glue_dev_without_temp_env } },
     .{ .id = 0, .suite = .glue, .name = "glue command reuses cached compiler-owned plugin object", .body = .{ .custom = .glue_plugin_cache_hit } },
+    .{ .id = 0, .suite = .glue, .name = "issue 12139: glue plugin cache runs the spec it is given", .body = .{ .custom = .glue_plugin_cache_distinguishes_specs } },
     .{ .id = 0, .suite = .glue, .name = "glue command with CGlue generates expected C header", .body = .{ .custom = .glue_c_header } },
     .{ .id = 0, .suite = .glue, .name = "glue command generated C header compiles with zig cc", .body = .{ .custom = .glue_c_header_compiles } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: ZigGlue succeeds on fx platform", .body = .{ .custom = .glue_zig } },
@@ -4872,6 +4874,7 @@ fn runCustomCase(
         .glue_debug_dev => customGlueDebugDev(io, allocator, &env, &timer, timeout_ms),
         .glue_dev_without_temp_env => customGlueDevWithoutTempEnv(io, allocator, &env, &timer, timeout_ms),
         .glue_plugin_cache_hit => customGluePluginCacheHit(io, allocator, &env, &timer, timeout_ms),
+        .glue_plugin_cache_distinguishes_specs => customGluePluginCacheDistinguishesSpecs(io, allocator, &env, &timer, timeout_ms),
         .glue_c_header => customGlueCHeader(io, allocator, &env, &timer, timeout_ms),
         .glue_c_header_compiles => customGlueCHeaderCompiles(io, allocator, &env, &timer, timeout_ms),
         .glue_zig => customGlueZig(io, allocator, &env, &timer, timeout_ms),
@@ -13662,6 +13665,67 @@ fn customGluePluginCacheHit(io: std.Io, allocator: Allocator, env: *const CaseEn
     }
     if (cache_counts.temps != 0) {
         return customFailure(allocator, timer, "expected no staged glue plugin temp entries to remain, found {d}", .{cache_counts.temps});
+    }
+
+    return null;
+}
+
+/// Repro for https://github.com/roc-lang/roc/issues/12139: with the cache
+/// on, each `roc glue` run executes the spec it was given. Two specs that
+/// differ only in the file they write must each write their own file, and so
+/// must a spec whose source changed since its plugin was cached.
+fn customGluePluginCacheDistinguishesSpecs(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const spec_template =
+        \\app [make_glue] {{ pf: platform glue }}
+        \\
+        \\import pf.Types
+        \\import pf.File
+        \\
+        \\make_glue : List(Types) -> Try(List(File), Str)
+        \\make_glue = |_types| Ok([{{ name: "{s}.txt", content: "{s}\\n" }}])
+        \\
+    ;
+    const Run = struct { spec: []const u8, label: []const u8, out: []const u8 };
+    const runs = [_]Run{
+        .{ .spec = "A.roc", .label = "A", .out = "glue-spec-a" },
+        .{ .spec = "B.roc", .label = "B", .out = "glue-spec-b" },
+        .{ .spec = "A.roc", .label = "C", .out = "glue-spec-a-edited" },
+    };
+
+    for (runs) |run| {
+        const source = std.fmt.allocPrint(allocator, spec_template, .{ run.label, run.label }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to render glue spec {s}: {}", .{ run.spec, err });
+        defer allocator.free(source);
+        if (writeCaseFile(io, allocator, timer, env.dirs.work_dir, run.spec, source)) |failure| return failure;
+
+        const spec_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, run.spec }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate glue spec path: {}", .{err});
+        defer allocator.free(spec_path);
+        const output_dir = createWorkSubdir(io, allocator, env, run.out) catch |err|
+            return customInfraFailure(allocator, timer, "failed to create glue output dir {s}: {}", .{ run.out, err });
+
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "glue", "--opt=dev", spec_path, output_dir, "test/fx/platform/main.roc" },
+            .not_contains = &.{
+                .{ .stream = .stderr, .text = "panic" },
+                .{ .stream = .stderr, .text = "unreachable" },
+            },
+        })) |failure| return failure;
+
+        const expected_name = std.fmt.allocPrint(allocator, "{s}.txt", .{run.label}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate expected glue file name: {}", .{err});
+        defer allocator.free(expected_name);
+        const expected_path = std.fs.path.join(allocator, &.{ output_dir, expected_name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate expected glue file path: {}", .{err});
+        defer allocator.free(expected_path);
+        std.Io.Dir.cwd().access(io, expected_path, .{}) catch {
+            var dir = std.Io.Dir.cwd().openDir(io, output_dir, .{ .iterate = true }) catch |err|
+                return customFailure(allocator, timer, "{s} wrote nothing readable to {s}: {}", .{ run.spec, run.out, err });
+            defer dir.close(io);
+            var it = dir.iterate();
+            const written = if (it.next(io) catch null) |entry| entry.name else "(nothing)";
+            return customFailure(allocator, timer, "glue run of {s} (writing {s}) wrote {s} instead", .{ run.spec, expected_name, written });
+        };
     }
 
     return null;
