@@ -430,10 +430,14 @@ const Binder = struct {
 /// The compiler's own function `name` binds to: a builtin, a runtime symbol
 /// of the in-process host, a boxy runtime function, or a compiler-rt or C
 /// routine. The dict seed is the compile-time evaluator's fixed zero, as it
-/// is in the evaluator's own code.
+/// is in the evaluator's own code: a dict built at compile time records that
+/// it hashes with the zero seed, so the executable that freezes it reads it
+/// with that seed too, while the same object code calls the runtime's seed
+/// when the runtime links it.
 fn compilerFunction(name: []const u8, boxy_native_fns: *const BoxyNativeFnTable) ?usize {
     if (std.mem.eql(u8, name, builtins.source_events.symbol_name)) return builtins.source_events.address();
     if (BuiltinFn.fromSymbolName(name)) |builtin_fn| {
+        if (builtin_fn == .dict_pseudo_seed) return @intFromPtr(&compileTimeDictSeed);
         return builtin_fn.wrapperAddress();
     }
     if (builtins.in_process_host.Symbol.fromName(name)) |symbol| return symbol.address();
@@ -591,12 +595,18 @@ fn writeStub(stub: *[stub_size]u8, target: usize) void {
     } else unreachable;
 }
 
+/// The compile-time evaluator's dict seed (`DictSeedMode.comptime_zero`).
+fn compileTimeDictSeed() callconv(.c) u64 {
+    return 0;
+}
+
 test "compiler functions resolve the same normal builtin runtime symbols" {
     var table: BoxyNativeFnTable = undefined;
     @memset(&table, 0);
     try std.testing.expect(compilerFunction("roc_alloc", &table) != null);
     try std.testing.expect(compilerFunction(BuiltinFn.crash_str.symbolName(), &table) != null);
-    try std.testing.expectEqual(BuiltinFn.dict_pseudo_seed.wrapperAddress(), compilerFunction(BuiltinFn.dict_pseudo_seed.symbolName(), &table).?);
+    try std.testing.expectEqual(@intFromPtr(&compileTimeDictSeed), compilerFunction(BuiltinFn.dict_pseudo_seed.symbolName(), &table).?);
+    try std.testing.expectEqual(@as(u64, 0), compileTimeDictSeed());
     try std.testing.expect(compilerFunction("memcpy", &table) != null);
     try std.testing.expect(compilerFunction("roc__p00", &table) == null);
 }

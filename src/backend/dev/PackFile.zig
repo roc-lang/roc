@@ -653,21 +653,48 @@ pub const Index = struct {
 
 /// Read a pack's offers without decoding its artifacts.
 pub fn readIndex(allocator: Allocator, bytes: []const u8) ReadError!Index {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    errdefer arena.deinit();
-    var reader = Reader{ .bytes = bytes };
+    if (bytes.len < header_len) return error.MalformedPack;
+    const location = try readIndexLocation(bytes[0..header_len]);
+    if (location.specs_offset > bytes.len) return error.MalformedPack;
+    return readIndexAt(allocator, location, bytes[@intCast(location.specs_offset)..]);
+}
+
+/// The length of the fixed header every pack starts with.
+pub const header_len = magic.len + 4 + 32 + 4 + 4 + 8;
+
+/// Where a pack's offers start, read from its header.
+pub const IndexLocation = struct {
+    physical_namespace: [32]u8,
+    artifact_count: u32,
+    spec_count: u32,
+    specs_offset: u64,
+};
+
+/// Read the location of a pack's offers from its first `header_len` bytes.
+pub fn readIndexLocation(header_bytes: []const u8) ReadError!IndexLocation {
+    var reader = Reader{ .bytes = header_bytes };
     const header = try reader.raw(magic.len);
     if (!std.mem.eql(u8, header, magic)) return error.MalformedPack;
     if (try reader.word() != format_version) return error.UnsupportedPackVersion;
-    const physical_namespace = (try reader.raw(32))[0..32].*;
-    const artifact_count = try reader.word();
-    const spec_count = try reader.word();
-    const specs_offset = try reader.wide();
-    if (specs_offset < reader.offset or specs_offset > bytes.len) return error.MalformedPack;
-    reader.offset = @intCast(specs_offset);
-    const offers = try readOffers(allocator, arena.allocator(), &reader, artifact_count, spec_count);
-    if (reader.offset != bytes.len) return error.MalformedPack;
-    return .{ .arena = arena, .physical_namespace = physical_namespace, .offers = offers };
+    const location: IndexLocation = .{
+        .physical_namespace = (try reader.raw(32))[0..32].*,
+        .artifact_count = try reader.word(),
+        .spec_count = try reader.word(),
+        .specs_offset = try reader.wide(),
+    };
+    if (location.specs_offset < header_len) return error.MalformedPack;
+    return location;
+}
+
+/// Read a pack's offers from the bytes from its offers to its end, so a
+/// reader need not read its artifacts.
+pub fn readIndexAt(allocator: Allocator, location: IndexLocation, tail: []const u8) ReadError!Index {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
+    var reader = Reader{ .bytes = tail };
+    const offers = try readOffers(allocator, arena.allocator(), &reader, location.artifact_count, location.spec_count);
+    if (reader.offset != tail.len) return error.MalformedPack;
+    return .{ .arena = arena, .physical_namespace = location.physical_namespace, .offers = offers };
 }
 
 fn readOffers(allocator: Allocator, arena_allocator: Allocator, reader: *Reader, artifact_count: u32, spec_count: u32) ReadError!Offers {

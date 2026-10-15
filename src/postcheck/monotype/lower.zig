@@ -1495,6 +1495,20 @@ const ModuleViewData = struct {
     const_store: *const checked.ConstStore,
     interface_capabilities: *const checked.ModuleInterfaceCapabilities,
     compile_time_root_reads: *const checked.CompileTimeRootReadTable,
+    declaration_identities: *const checked.DeclarationIdentities,
+
+    /// A template's declaration identity as this view lowers it. A pairing
+    /// borrows its platform's identities but lowers the platform's bodies
+    /// against the app it pairs with, so its code generation key joins them.
+    fn templateDeclaration(self: *const ModuleViewData, template: names.CheckedProcedureTemplateId) [32]u8 {
+        const declaration = self.declaration_identities.template(template);
+        const pairing = self.code_generation_key orelse return declaration;
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.monotype.paired-declaration.v1");
+        hasher.update(&declaration);
+        hasher.update(&moduleDigestFromId(pairing).bytes);
+        return hasher.finalResult();
+    }
 };
 
 const ConstNode = struct {
@@ -4723,6 +4737,16 @@ const DraftGeneratedHelperDefEntry = union(enum) {
     }
 };
 
+/// Names a procedure template by its declaration identity.
+const TemplateDeclarations = struct {
+    builder: *Builder,
+
+    pub fn template(self: TemplateDeclarations, template_ref: names.ProcTemplate) [32]u8 {
+        const view = self.builder.moduleForDigest(names.procTemplateModuleDigest(template_ref));
+        return view.templateDeclaration(template_ref.template);
+    }
+};
+
 fn codecContractIdentityDigest(contract: ?Ast.CodecContractIdentity) names.TypeDigest {
     const actual = contract orelse return .{};
     var hasher = TypeDigestHasher.init();
@@ -6040,6 +6064,21 @@ const Builder = struct {
         };
     }
 
+    /// The nominal declaration identities of this program's modules, for
+    /// declaration digests.
+    fn nominalDeclarations(self: *Builder) Type.NominalDeclarations {
+        return .{ .context = self, .nominal_fn = nominalDeclaration };
+    }
+
+    /// The declaration identity of the nominal `source_decl` declares in the
+    /// module whose content identity is `origin_hash`.
+    fn nominalDeclaration(context: *const anyopaque, origin_hash: []const u8, source_decl: u32) ?[32]u8 {
+        const self: *Builder = @ptrCast(@alignCast(@constCast(context)));
+        if (origin_hash.len != 32) return null;
+        const declaring = self.moduleForIdentityHash(origin_hash[0..32]) orelse return null;
+        return declaring.declaration_identities.nominal(source_decl);
+    }
+
     fn declaredModuleForNominal(_: *Builder, _: ModuleView, nominal: checked.CheckedNominalType) names.CheckedModuleDigest {
         return moduleDigestFromId(nominal.owner_module.*);
     }
@@ -6330,11 +6369,19 @@ const Builder = struct {
                     Common.invariant("compile-time manifest lacked its checked root identity");
                 _ = request.procedure_template orelse
                     Common.invariant("compile-time manifest lacked its typed producer template");
-                // No compilation evaluated this root and this one does not
-                // finalize it, so no slot will hold its value: a read
-                // evaluates its body in place (design.md "Demand-Driven
-                // Compile-Time Evaluation").
-                if (view.compile_time_roots.root(root).payload == .unevaluated) continue;
+                // A declared root is one whose slot this program fills by
+                // evaluating it, or is handed by the program that did. No
+                // compilation evaluated an unevaluated root and this one does
+                // not finalize it, so a read evaluates its body in place
+                // (design.md "Demand-Driven Compile-Time Evaluation"); a
+                // completed root's value is stored, so a read restores it in
+                // place, and a program that nothing finalizes against (an
+                // evaluation harness lowering finalized modules) needs no
+                // slot it could never fill.
+                switch (view.compile_time_roots.root(root).payload) {
+                    .unevaluated, .const_node => continue,
+                    .pending, .fn_value, .discarded, .expect, .runtime => {},
+                }
                 const entry = try self.comptime_root_declarations.getOrPut(.{ .module = view.key, .root = root });
                 if (entry.found_existing and !std.meta.eql(entry.value_ptr.*, request)) {
                     Common.invariant("compile-time manifest declared different producers for one root");
@@ -6727,12 +6774,17 @@ const Builder = struct {
         });
     }
 
-    fn declareCachedDemand(self: *Builder, demand: ?Common.CachedCtfeDemand) Allocator.Error!void {
+    /// Declare the storage a cached specialization's served code reads: the
+    /// roots its demand facts read eagerly, the literal roots they read, and
+    /// every other root its closure materializes (`root_uses`), such as one
+    /// read by the body of a lambda it applies.
+    fn declareCachedDemand(self: *Builder, demand: ?Common.CachedCtfeDemand, root_uses: []const Common.CheckedRootUse) Allocator.Error!void {
         const facts = demand orelse return;
         if (!facts.permitsRetirement()) Common.invariant("cached storage declaration has incomplete demand facts");
         for (facts.eager_reads) |read| {
             try self.declareCachedRootReads(&.{.{ .module = read.module, .root = read.root }}, false);
         }
+        try self.declareCachedRootReads(root_uses, false);
         for (facts.literal_reads) |read| try self.declareCachedLiteralStorage(read.recipe);
     }
 
@@ -8170,7 +8222,11 @@ const Builder = struct {
         // A hosted template has no procedure of its own to cache: callers
         // reach the host directly through its declared ABI.
         if (template.target != .hosted and !try self.monoFnTypeMentionsFunction(lower_fn_ty)) {
-            const key = Ast.specIdentityKey(spec_identity);
+            const key = Ast.specIdentityKey(spec_identity, .{
+                .evidence = Ast.fnEvidenceDeclarationDigest(identity_evidence.nodes, identity_evidence.frames, identity_evidence.head, TemplateDeclarations{ .builder = self }),
+                .codec_contract = self.codecContractDeclarationDigest(spec_identity.codec_contract),
+                .request_fn_ty = self.program.types.declarationDigestCached(&self.program.names, spec_identity.request_fn_ty, self.nominalDeclarations(), null),
+            });
             fn_template.spec_key = key;
             if (template.provided_low_level) |op| fn_template.procedure_keyed_by_layout = op.procedureKeyedByLayout();
             if (pack_trace_available and specCensusEnabled()) {
@@ -8186,13 +8242,19 @@ const Builder = struct {
             const settled_discovery = demand == .discovery and body_scheduling == .queued and
                 if (self.spec_cache) |cache| cache.discoverySettled(key.bytes, relation) else false;
             const root_hit = if (settled_discovery) null else if (self.root_use_cache) |cache| cache.lookup(key.bytes, relation) else null;
-            if (root_hit) |hit| fn_template.cached_demand = hit.demand;
+            if (root_hit) |hit| {
+                fn_template.cached_demand = hit.demand;
+                fn_template.cached_root_uses = hit.checked_root_uses;
+            }
             if (!settled_discovery) if (self.spec_cache) |cache| {
                 const same_lookup = if (self.root_use_cache) |root_cache| root_cache.sameProvider(cache) else false;
                 const body_hit = if (same_lookup) root_hit else cache.lookup(key.bytes, relation);
                 if (body_hit) |hit| {
                     fn_template.cached = hit;
-                    if (root_hit == null) fn_template.cached_demand = hit.demand;
+                    if (root_hit == null) {
+                        fn_template.cached_demand = hit.demand;
+                        fn_template.cached_root_uses = hit.checked_root_uses;
+                    }
                     self.count("spec_cache_hits");
                     if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup monotype key={x} hit\n", .{key.bytes[0..8]});
                 } else if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup monotype key={x} miss\n", .{key.bytes[0..8]});
@@ -8751,7 +8813,7 @@ const Builder = struct {
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
 
-        try self.declareCachedDemand(fn_template.cached_demand);
+        try self.declareCachedDemand(fn_template.cached_demand, fn_template.cached_root_uses);
         if (fn_template.cached != null) {
             // The object cache holds this specialization's compiled
             // procedure. The definition keeps its declared shape and no body,
@@ -9897,7 +9959,7 @@ const Builder = struct {
         // Source jobs commit through shards, not hosted completion. Their
         // metadata-only native demand must be declared on this coordinator
         // path too, before Direct LIR can substitute their emitted code.
-        try self.declareCachedDemand(shard.pending.fn_template.cached_demand);
+        try self.declareCachedDemand(shard.pending.fn_template.cached_demand, shard.pending.fn_template.cached_root_uses);
         if (shard.diagnostics_committed) {
             Common.compilerBug("Monotype specialization shard diagnostics were committed more than once");
         }
@@ -11791,6 +11853,7 @@ const Builder = struct {
                 .module = moduleDigestFromId(view.code_generation_key orelse view.key),
                 .proc_base = @backingInt(template_ref.proc_base),
                 .template = @backingInt(template_ref.template),
+                .declaration = view.templateDeclaration(template_ref.template),
             } },
             .method_scope = moduleDigestFromId(self.moduleForId(method_scope).code_generation_key orelse method_scope),
             .evidence_digest = evidence_digest,
@@ -11824,6 +11887,7 @@ const Builder = struct {
                 .owner_fn_digest = .{ .bytes = context_hasher.finalResult() },
                 .site = @backingInt(nested.site),
                 .default_root_module = nested.default_root,
+                .owner_declaration = if (nested.default_root == null) nestedSiteDeclaration(view, nested.owner.template, nested.site) else null,
             } },
             .method_scope = moduleDigestFromId(self.moduleForId(method_scope).code_generation_key orelse method_scope),
             .evidence_digest = evidence_digest,
@@ -11832,6 +11896,30 @@ const Builder = struct {
             .request_fn_ty_digest = request_fn_ty_digest,
             .request_fn_ty = request_fn_ty,
         };
+    }
+
+    /// A nested site's owner's declaration identity and the site's position
+    /// among the owner's sites: the site, without its module-wide id.
+    fn nestedSiteDeclaration(view: ModuleView, owner: names.CheckedProcedureTemplateId, site: names.NestedProcSiteId) ?Ast.NestedSiteDeclaration {
+        const span = view.templates.get(owner).nested_proc_sites;
+        const sites = view.nested_proc_sites.template_refs[span.start..][0..span.len];
+        const position = std.mem.findScalar(names.NestedProcSiteId, sites, site) orelse return null;
+        return .{ .owner = view.templateDeclaration(owner), .position = @intCast(position) };
+    }
+
+    /// `codecContractIdentityDigest` with the contract named by its
+    /// content and its types by declaration.
+    fn codecContractDeclarationDigest(self: *Builder, contract: ?Ast.CodecContractIdentity) names.TypeDigest {
+        const actual = contract orelse return .{};
+        const view = self.moduleForDigest(actual.module);
+        const content = view.static_dispatch_plans.generated_codec_derivations[@backingInt(actual.derivation)].content;
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.monotype.codec_contract.declaration.v1");
+        hasher.update(&content.bytes);
+        hasher.update(&.{@backingInt(actual.kind)});
+        hasher.update(&self.program.types.declarationDigestCached(&self.program.names, actual.constructor_ty, self.nominalDeclarations(), null).bytes);
+        hasher.update(&self.program.types.declarationDigestCached(&self.program.names, actual.shape_ty, self.nominalDeclarations(), null).bytes);
+        return .{ .bytes = hasher.finalResult() };
     }
 
     fn moduleForId(self: *Builder, module_id: checked.ModuleId) ModuleView {
@@ -68478,6 +68566,7 @@ fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
         .const_store = view.const_store,
         .interface_capabilities = view.interface_capabilities,
         .compile_time_root_reads = view.compile_time_root_reads,
+        .declaration_identities = view.declaration_identities,
     };
 }
 

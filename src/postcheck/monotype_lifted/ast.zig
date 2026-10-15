@@ -1364,6 +1364,30 @@ pub const Program = struct {
         return hasher.finalResult();
     }
 
+    /// The source identity of a function whose template carries an object
+    /// cache key (`Mono.FnTemplate.spec_key`): the key, which names the
+    /// specialization by declaration identity, and the lowering choices it
+    /// does not cover. A plain procedure of it is the procedure the cache
+    /// serves under that key, so the two identities agree in every revision
+    /// of the module that leaves its declarations alone. Null for every other
+    /// function, including a SpecConstr clone, whose body is no longer the
+    /// template's.
+    pub fn fnSpecKeyedSourceDigest(self: *Program, fn_id: FnId) std.mem.Allocator.Error!?[TypeDigestHasher.digest_length]u8 {
+        const fn_ = self.getFn(fn_id);
+        const template = fn_.source orelse return null;
+        const key = template.spec_key orelse return null;
+        if (fn_.spec_constr_pattern != null) return null;
+        var hasher = TypeDigestHasher.init();
+        writeIdentityBytes(&hasher, "roc.lifted.fn-spec-keyed-source.v1");
+        hasher.update(&key.bytes);
+        writeIdentityBytes(&hasher, if (fn_.iterator_fusion_scope) "iterator-fusion" else "plain");
+        if (try self.fnReachesPlatformRequirement(fn_id)) {
+            writeIdentityBytes(&hasher, "platform-requirement");
+            hasher.update(&self.platform_requirement_filling.?.relation);
+        }
+        return hasher.finalResult();
+    }
+
     pub fn getFnAt(self: *const Program, index: usize) Fn {
         return self.getFn(@fromBackingInt(@intCast(index)));
     }

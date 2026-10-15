@@ -2941,7 +2941,22 @@ fn evalInterpreterProgramRoots(
     if (const_roots.len != requests.len) {
         finalizationInvariant("LIR lowering returned a different number of compile-time roots than requested");
     }
-    for (const_roots, 0..) |root, i| {
+    var order = try ScheduledRootOrder.build(allocator, module, const_roots, root_ids);
+    defer order.deinit();
+    for (order.cycles.items) |cyclic| {
+        const root = const_roots[cyclic.node];
+        const root_id = root_ids[cyclic.node];
+        try ScheduledRootOrder.failRoot(problem_store, module, &writer, state, &lowered.lir_result.store, root, root_id, cyclic.origin, &had_problem);
+        if (options.publish_shared_slots) {
+            program.slotEnvironment().publishFailureOrigin(lowered, root.owner, .{ .checked = root_id }, cyclic.origin);
+            try program.slotEnvironment().publishFailure(lowered, root.owner, .{ .checked = root_id }, .{ .message = ScheduledRootOrder.cycle_message, .kind = .crash }, .{ .resolve = InterpreterProgram.resolveFunction });
+            program.refreshCallableMetadata();
+        }
+    }
+    // Each root's value is published before the next root runs, so a root
+    // that reads it observes the published value.
+    for (order.order.items) |i| {
+        const root = const_roots[i];
         if (!std.meta.eql(root.request, requests[i])) {
             finalizationInvariant("LIR lowering changed compile-time root request order");
         }
@@ -3678,6 +3693,103 @@ const DevRootJob = struct {
     }
 };
 
+/// The order a batch's roots run in, from `lir.CtfeSchedule`: every root
+/// after the roots whose slots it reads, so a read observes a published
+/// value, and the roots on a dependency cycle set aside, to fail before any
+/// root runs. The checker's request order only separates roots whose
+/// definitions reference each other eagerly; a read inside a lambda the
+/// root's evaluation applies is a dependency its sealed demand facts record.
+const ScheduledRootOrder = struct {
+    allocator: Allocator,
+    order: std.ArrayList(u32) = .empty,
+    cycles: std.ArrayList(CyclicRoot) = .empty,
+
+    const CyclicRoot = struct { node: u32, origin: lir.LIR.ComptimeFailureOrigin };
+    const cycle_message = "cyclic compile-time value dependency";
+
+    fn deinit(self: *ScheduledRootOrder) void {
+        self.order.deinit(self.allocator);
+        self.cycles.deinit(self.allocator);
+    }
+
+    pub fn execute(self: *ScheduledRootOrder, node: u32) FinalizeError!void {
+        try self.order.append(self.allocator, node);
+    }
+
+    pub fn failCycle(self: *ScheduledRootOrder, node: u32, origin: lir.LIR.ComptimeFailureOrigin) FinalizeError!void {
+        try self.cycles.append(self.allocator, .{ .node = node, .origin = origin });
+    }
+
+    /// Schedule one module's batch of requested roots by their demand facts.
+    fn build(allocator: Allocator, module: *const checked.CheckedModuleArtifact, const_roots: []const LirProgram.ConstRootPlan, root_ids: []const checked.ComptimeRootId) FinalizeError!ScheduledRootOrder {
+        const nodes = try allocator.alloc(lir.CtfeSchedule.Node, const_roots.len);
+        defer allocator.free(nodes);
+        for (const_roots, root_ids, nodes) |plan, root_id, *node| {
+            const declaration = module.compile_time_roots.root(root_id);
+            node.* = .{
+                .key = lir.CtfeSchedule.Key.init(module.key.bytes, .{ .checked = root_id }),
+                .guarded = declaration.guarded,
+                .region = devRootSourceRegion(module, declaration),
+                .loc = plan.demand.origin_loc,
+                .demand = plan.demand,
+            };
+        }
+        // A read of a root outside the batch (a literal root, or a root the
+        // checker's request order placed in another batch) is beyond this
+        // schedule, which orders only the roots the batch evaluates.
+        var terminal = std.ArrayList(lir.CtfeSchedule.Key).empty;
+        defer terminal.deinit(allocator);
+        for (const_roots) |plan| {
+            for (plan.demand.reads) |read| {
+                const key = lir.CtfeSchedule.Key.init(read.module.bytes, read.producer);
+                var in_batch = false;
+                for (nodes) |node| if (std.meta.eql(node.key, key)) {
+                    in_batch = true;
+                };
+                if (!in_batch) try terminal.append(allocator, key);
+            }
+        }
+        var schedule = lir.CtfeSchedule.Schedule.build(allocator, nodes, terminal.items) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.MissingDemandProof => finalizationInvariant("compile-time root batch received incomplete producer demand"),
+            error.MissingRootProducer => finalizationInvariant("compile-time root batch read has no declared producer or completed value"),
+            error.DuplicateRootProducer => finalizationInvariant("compile-time root batch received duplicate qualified producers"),
+        };
+        defer schedule.deinit();
+        var order: ScheduledRootOrder = .{ .allocator = allocator };
+        errdefer order.deinit();
+        try schedule.run(&order, FinalizeError);
+        return order;
+    }
+
+    /// Record the failure of a root on a dependency cycle: its payload, its
+    /// problem when it is not guarded, and its published failure.
+    fn failRoot(
+        problem_store: ?*check.problem.Store,
+        module: *checked.CheckedModuleArtifact,
+        writer: *ConstStoreWriter.Writer,
+        state: *RootCompletionState,
+        store: *const lir.LirStore,
+        root: LirProgram.ConstRootPlan,
+        root_id: checked.ComptimeRootId,
+        origin: lir.LIR.ComptimeFailureOrigin,
+        had_problem: *bool,
+    ) FinalizeError!void {
+        const declaration = module.compile_time_roots.root(root_id);
+        const payload = try crashedRootPayload(problem_store, module, declaration, cycle_message, .crash);
+        try rememberGuardedRootFailure(module, root_id, payload, cycle_message, .crash, origin, store);
+        if (!declaration.guarded) if (problem_store) |problems| {
+            _ = try problems.appendProblem(.{ .comptime_crash = .{
+                .message = try problems.putExtraString(cycle_message),
+                .region = devRootSourceRegion(module, declaration),
+                .origin = null,
+            } });
+            had_problem.* = true;
+        };
+        try completeRoot(module, writer, state, root, root_id, declaration, payload);
+    }
+};
+
 const DevRunContext = struct {
     executable: *const backend.ExecutableMemory,
     jobs: []DevRootJob,
@@ -3927,7 +4039,7 @@ const InterpreterProgram = struct {
         child.interpreter = try Interpreter.initWithBoxyTables(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, Interpreter.BoxyTables.fromResult(&lowered.lir_result), self.interpreter.static_strings, child.host.ops());
         errdefer child.interpreter.deinit();
         child.host.bindInterpreter(&child.interpreter);
-        child.interpreter.dict_seed_mode = .runtime;
+        child.interpreter.dict_seed_mode = .comptime_zero;
         child.interpreter.failure_origins = child.slotEnvironment().failure_origins;
         child.interpreter.static_data_ready = self.interpreter.static_data_ready;
         child.refreshCallableMetadata();
@@ -5030,28 +5142,6 @@ fn evalDevProgramRoots(
         _ = boxy_abi.swapActiveRuntime(previous_runtime);
     };
 
-    const execution_started_ns = if (options.timing) |timing| timing.start() else 0;
-    var progress = DevProgressReporter.init(options, jobs[0..jobs_len]);
-    defer progress.deinit();
-    try progress.start();
-    var run_context = DevRunContext{
-        .executable = &native.executable,
-        .jobs = jobs[0..jobs_len],
-        .std_io = options.std_io,
-        .progress_reporter = if (progress.thread == null) null else &progress,
-        .boxy_global_installed = boxy_global_installed,
-    };
-    // Root execution is serial even when compilation uses worker lanes.
-    for (0..jobs_len) |index| devRootWorker(host_allocator, &run_context, index);
-    progress.finish();
-    if (options.timing) |timing| {
-        var suspended_ns: u64 = 0;
-        for (jobs) |job| suspended_ns += job.host.suspended_ns;
-        timing.finishExecution(execution_started_ns, suspended_ns);
-    }
-
-    if (run_context.had_oom.load(.acquire)) return error.OutOfMemory;
-
     const DevResolver = struct {
         codegen: *const backend.HostLirCodeGen,
         store: *const lir.LirStore,
@@ -5082,7 +5172,6 @@ fn evalDevProgramRoots(
         .executable = &native.executable,
     };
 
-    const store_results_started_ns = if (options.timing) |timing| timing.start() else 0;
     var writer = ConstStoreWriter.Writer.init(allocator, module, &lowered.lir_result);
     defer writer.deinit();
     writer.setErasedCallableResolver(.{
@@ -5090,8 +5179,39 @@ fn evalDevProgramRoots(
         .resolve = DevResolver.resolve,
     });
 
+    var order = try ScheduledRootOrder.build(allocator, module, const_roots, root_ids);
+    defer order.deinit();
     var had_problem = false;
-    for (jobs[0..jobs_len]) |*job| {
+    for (order.cycles.items) |cyclic| {
+        const job = &jobs[cyclic.node];
+        try ScheduledRootOrder.failRoot(problem_store, module, &writer, state, &lowered.lir_result.store, job.root, job.root_id, cyclic.origin, &had_problem);
+        if (options.publish_shared_slots) {
+            native.slots.publishFailureOrigin(lowered, job.root.owner, .{ .checked = job.root_id }, cyclic.origin);
+            try native.publishFailure(lowered, job.root.owner, .{ .checked = job.root_id }, .{ .message = ScheduledRootOrder.cycle_message, .kind = .crash });
+        }
+    }
+
+    var progress = DevProgressReporter.init(options, jobs[0..jobs_len]);
+    defer progress.deinit();
+    try progress.start();
+    var run_context = DevRunContext{
+        .executable = &native.executable,
+        .jobs = jobs[0..jobs_len],
+        .std_io = options.std_io,
+        .progress_reporter = if (progress.thread == null) null else &progress,
+        .boxy_global_installed = boxy_global_installed,
+    };
+    // Root execution is serial even when compilation uses worker lanes, and
+    // each root's value is published before the next root runs, so a root
+    // that reads it observes the published value.
+    for (order.order.items) |index| {
+        const execution_started_ns = if (options.timing) |timing| timing.start() else 0;
+        devRootWorker(host_allocator, &run_context, index);
+        if (options.timing) |timing| timing.finishExecution(execution_started_ns, jobs[index].host.suspended_ns);
+        if (run_context.had_oom.load(.acquire)) return error.OutOfMemory;
+
+        const store_results_started_ns = if (options.timing) |timing| timing.start() else 0;
+        const job = &jobs[index];
         const payload: checked.CompileTimeRootPayload = switch (job.result) {
             .pending => finalizationInvariant("dev backend compile-time root was not evaluated"),
             .host_oom => return error.OutOfMemory,
@@ -5146,8 +5266,9 @@ fn evalDevProgramRoots(
         }
 
         try completeRoot(module, &writer, state, job.root, job.root_id, job.compile_time_root, payload);
+        if (options.timing) |timing| timing.finish(store_results_started_ns, .store_results);
     }
-    if (options.timing) |timing| timing.finish(store_results_started_ns, .store_results);
+    progress.finish();
 
     return had_problem;
 }

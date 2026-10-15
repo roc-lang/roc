@@ -230,8 +230,10 @@ pub const FnTemplate = struct {
     cached: ?Common.SpecCacheHit = null,
     /// Storage demand is producer data even when a non-native consumer retains
     /// this body; native late splicing still needs the same root declarations.
-    cached_root_uses: []const Common.CheckedRootUse = &.{},
     cached_demand: ?Common.CachedCtfeDemand = null,
+    /// The checked roots the cached specialization's served code
+    /// materializes, eager reads included (`SpecCacheHit.checked_root_uses`).
+    cached_root_uses: []const Common.CheckedRootUse = &.{},
     /// Set for a closed specialization of a Builtin template whose checked
     /// provided low-level operation is on `LowLevel.procedureKeyedByLayout`'s
     /// allow list. Direct LIR identifies the plain procedure of such a
@@ -279,12 +281,22 @@ pub const HostedId = enum(u32) { _ };
 /// Identifier for a compiler-generated callable in durable specialization identities.
 pub const GeneratedId = enum(u32) { _ };
 
+/// A nested site by its owner template's declaration identity and its
+/// position among the owner's sites.
+pub const NestedSiteDeclaration = struct {
+    owner: [32]u8,
+    position: u32,
+};
+
 /// Stable callable identity used to reuse or cache a specialization.
 pub const CallableIdentity = union(enum(u8)) {
     proc_template: struct {
         module: names.CheckedModuleDigest,
         proc_base: u32,
         template: u32,
+        /// The template's declaration identity, which keys the
+        /// specialization in place of the module and the ids above.
+        declaration: [32]u8,
     },
     nested_site: struct {
         module: names.CheckedModuleDigest,
@@ -296,6 +308,10 @@ pub const CallableIdentity = union(enum(u8)) {
         /// content identity (the site id is relative to THAT module's site
         /// table, so the identity must participate in the callable identity).
         default_root_module: ?names.ModuleContentIdentity = null,
+        /// The site named by its owner's declaration identity, which keys
+        /// the specialization in place of the module and the ids above.
+        /// Null for a default-root site, which the module keys.
+        owner_declaration: ?NestedSiteDeclaration = null,
     },
     hosted: HostedId,
     generated: GeneratedId,
@@ -334,6 +350,16 @@ pub const SpecIdentity = struct {
     request_fn_ty: Type.TypeId,
 };
 
+/// A specialization identity's evidence, codec contract, and request type
+/// with every declaration named by its declaration identity rather than its
+/// module (`check.DeclarationIdentities`), so an edit elsewhere in a module
+/// leaves the key of what does not depend on it alone.
+pub const SpecKeyDeclarations = struct {
+    evidence: EvidenceDigest,
+    codec_contract: names.TypeDigest,
+    request_fn_ty: names.TypeDigest,
+};
+
 /// Content key of a specialization identity: the callable rendered by tag
 /// and content plus every digest field except the requesting method scope.
 /// The scope only decides how
@@ -345,28 +371,31 @@ pub const SpecIdentity = struct {
 /// Because the identity carries no caller provenance, neither does this key:
 /// a call site that reaches this specialization through a transparent alias
 /// computes the same key as one that names the backing type.
-pub fn specIdentityKey(identity: SpecIdentity) names.TypeDigest {
+pub fn specIdentityKey(identity: SpecIdentity, declarations: SpecKeyDeclarations) names.TypeDigest {
     var hasher = TypeDigestHasher.init();
-    hasher.update("roc.monotype.spec-key.v4");
+    hasher.update("roc.monotype.spec-key.v5");
     switch (identity.callable) {
         .proc_template => |template| {
             hasher.update("proc_template");
-            hasher.update(&template.module.bytes);
-            writeU32(&hasher, template.proc_base);
-            writeU32(&hasher, template.template);
+            hasher.update(&template.declaration);
         },
         .nested_site => |site| {
             hasher.update("nested_site");
-            hasher.update(&site.module.bytes);
-            writeU32(&hasher, site.owner_proc_base);
-            writeU32(&hasher, site.owner_template);
             hasher.update(&site.owner_fn_digest.bytes);
-            writeU32(&hasher, site.site);
-            if (site.default_root_module) |module| {
-                hasher.update("default_root");
-                hasher.update(&module.bytes);
+            if (site.owner_declaration) |declaration| {
+                hasher.update(&declaration.owner);
+                writeU32(&hasher, declaration.position);
             } else {
-                hasher.update("no_default_root");
+                hasher.update(&site.module.bytes);
+                writeU32(&hasher, site.owner_proc_base);
+                writeU32(&hasher, site.owner_template);
+                writeU32(&hasher, site.site);
+                if (site.default_root_module) |module| {
+                    hasher.update("default_root");
+                    hasher.update(&module.bytes);
+                } else {
+                    hasher.update("no_default_root");
+                }
             }
         },
         .hosted => |hosted| {
@@ -378,9 +407,9 @@ pub fn specIdentityKey(identity: SpecIdentity) names.TypeDigest {
             writeU32(&hasher, @backingInt(generated));
         },
     }
-    hasher.update(&identity.evidence_digest.bytes);
-    hasher.update(&identity.codec_contract_digest.bytes);
-    hasher.update(&identity.request_fn_ty_digest.bytes);
+    hasher.update(&declarations.evidence.bytes);
+    hasher.update(&declarations.codec_contract.bytes);
+    hasher.update(&declarations.request_fn_ty.bytes);
     return .{ .bytes = hasher.finalResult() };
 }
 
@@ -563,6 +592,92 @@ fn writeFnEvidence(
         writeU32(hasher, frame.roots_len);
     }
     writeOptionalU32(hasher, head);
+}
+
+/// `fnEvidenceDigest` with each procedure target named by its template's
+/// declaration identity, as `resolver.template(template_ref)` returns it,
+/// and generalized scopes by their position relative to the lowest one.
+/// What it cannot name without its module keeps the module.
+pub fn fnEvidenceDeclarationDigest(
+    evidence: []const check.ConstStore.ConstFnEvidence,
+    frames: []const check.ConstStore.ConstFnEvidenceFrame,
+    head: ?u32,
+    resolver: anytype,
+) EvidenceDigest {
+    var hasher = TypeDigestHasher.init();
+    writeBytes(&hasher, "roc.monotype.fn_evidence.declaration.v1");
+    writeU32(&hasher, @intCast(evidence.len));
+    for (evidence) |entry| {
+        writeU8(&hasher, @backingInt(entry));
+        switch (entry) {
+            .target => |target| {
+                writeU32(&hasher, target.callable_contracts);
+                switch (target.method.kind) {
+                    .procedure => |procedure| {
+                        writeBytes(&hasher, "procedure");
+                        writeBytes(&hasher, &resolver.template(procedure.template));
+                    },
+                    .local_proc, .structural => {
+                        writeBytes(&hasher, &target.view.bytes);
+                        writeMethodTarget(&hasher, target.method, target.method_callable_key);
+                    },
+                }
+                writeBytes(&hasher, &target.method_callable_key.bytes);
+                if (target.instantiation) |instantiation| {
+                    writeU8(&hasher, 1);
+                    writeBytes(&hasher, &instantiation.callable_key.bytes);
+                } else writeU8(&hasher, 0);
+                writeU8(&hasher, @backingInt(target.nested));
+                switch (target.nested) {
+                    .resolved => |nested| {
+                        writeU32(&hasher, nested.count);
+                        writeU32(&hasher, nested.subtree_len);
+                    },
+                    .from_callable => {},
+                }
+            },
+            .structural => |structural| {
+                writeU32(&hasher, structural.callable_contracts);
+                writeStructuralDerivation(&hasher, structural.derivation);
+                if (structural.checked) |checked_structural| {
+                    writeU8(&hasher, 1);
+                    if (checked_structural.generated_codec_content) |content| {
+                        writeU8(&hasher, 1);
+                        writeBytes(&hasher, &content.bytes);
+                    } else {
+                        writeU8(&hasher, 0);
+                        writeBytes(&hasher, &checked_structural.view.bytes);
+                    }
+                    writeBytes(&hasher, &checked_structural.dispatcher_key.bytes);
+                    writeBytes(&hasher, &checked_structural.callable_key.bytes);
+                } else writeU8(&hasher, 0);
+            },
+            .from_callable => |use| {
+                writeU32(&hasher, use.callable_contracts);
+                writeU8(&hasher, @intFromBool(use.independent_callable));
+            },
+            .from_scheme => |index| writeU32(&hasher, index),
+            .unreachable_value, .checked_error => {},
+        }
+    }
+    var lowest_scope: u32 = std.math.maxInt(u32);
+    for (frames) |frame| switch (frame.scope_id) {
+        .root => {},
+        .generalized => |scope| lowest_scope = @min(lowest_scope, scope),
+    };
+    writeU32(&hasher, @intCast(frames.len));
+    for (frames) |frame| {
+        writeU8(&hasher, @backingInt(frame.scope_id));
+        switch (frame.scope_id) {
+            .root => {},
+            .generalized => |scope| writeU32(&hasher, scope - lowest_scope),
+        }
+        writeOptionalU32(&hasher, frame.parent);
+        writeU32(&hasher, frame.roots_start);
+        writeU32(&hasher, frame.roots_len);
+    }
+    writeOptionalU32(&hasher, head);
+    return .{ .bytes = hasher.finalResult() };
 }
 
 /// Exact checked-identity equality for retained function evidence. Checked
@@ -2696,7 +2811,7 @@ test "monotype program view exposes read-only side arrays" {
     const fn_id = try program.addFn(testFnSource(unit_ty));
     _ = try program.addSpec(.{
         .identity = .{
-            .callable = .{ .proc_template = .{ .module = .{}, .proc_base = 0, .template = 0 } },
+            .callable = .{ .proc_template = .{ .module = .{}, .proc_base = 0, .template = 0, .declaration = @splat(7) } },
             .method_scope = .{},
             .evidence_digest = fnEvidenceDigest(&.{}, &.{}, null),
             .codec_contract_digest = .{},

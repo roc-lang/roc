@@ -26603,6 +26603,7 @@ pub const PlatformPairing = struct {
                 "interface_capabilities",
                 "top_level_values",
                 "hoisted_constants",
+                "declaration_identities",
                 // Runtime ownership and preparation state, not checked data.
                 "evaluation_state",
                 "serialized_backing",
@@ -32782,6 +32783,7 @@ pub const CheckedModuleArtifact = struct {
     const_store: ConstStore,
     compile_time_debug: CompileTimeDebugStore = .{},
     compile_time_root_reads: CompileTimeRootReadTable = .{},
+    declaration_identities: DeclarationIdentities = .{},
     /// Process-local publication state; cache entries always contain finalized output.
     evaluation_state: enum { prepared, finalized } = .finalized,
     /// Owns the evaluation columns of a finalized artifact that a compilation
@@ -32996,6 +32998,7 @@ pub const CheckedModuleArtifact = struct {
         const_store: ConstStore.Serialized,
         compile_time_debug: CompileTimeDebugStore.Serialized,
         compile_time_root_reads: CompileTimeRootReadTable.Serialized,
+        declaration_identities: DeclarationIdentities.Serialized,
 
         pub const root_contract: collections.serde_validation.RootContract = .{
             .Owner = CheckedModuleArtifact,
@@ -33023,7 +33026,7 @@ pub const CheckedModuleArtifact = struct {
             // contract types add one each, and the single-source-call template
             // list one more. Nested procedure runtime captures add one. The
             // compile-time root read table adds its rows and refs.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 233);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 238);
         }
 
         /// Every field but the inline POD `key` and `module_identity`: the
@@ -34993,6 +34996,7 @@ pub const ImportedModuleView = struct {
     interface_capabilities: *const ModuleInterfaceCapabilities,
     const_store: *const ConstStore,
     compile_time_root_reads: *const CompileTimeRootReadTable = &no_compile_time_root_reads,
+    declaration_identities: *const DeclarationIdentities = &no_declaration_identities,
 
     /// The keys of the modules this module imports directly.
     pub fn directImportKeys(self: ImportedModuleView) []const CheckedModuleArtifactKey {
@@ -35050,6 +35054,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .interface_capabilities = &artifact.interface_capabilities,
         .const_store = &artifact.const_store,
         .compile_time_root_reads = &artifact.compile_time_root_reads,
+        .declaration_identities = &artifact.declaration_identities,
     };
 }
 
@@ -36246,6 +36251,780 @@ pub fn checkedModuleKeyFromTypedModule(
 }
 
 /// Public `publishFromTypedModule` function.
+/// One top-level definition's edit-stable identity, by its CIR definition.
+pub const DefinitionIdentity = extern struct {
+    def: u32,
+    identity: [32]u8,
+};
+
+/// One nominal type declaration's edit-stable identity, by its declaring
+/// statement.
+pub const NominalDeclarationIdentity = extern struct {
+    source_decl: u32,
+    identity: [32]u8,
+};
+
+/// Edit-stable identities of the declarations a checked module publishes,
+/// which object-cache keys are made of instead of the module's key (design.md
+/// "Declaration Identity"). Each identity changes when the source of its
+/// declaration, or of a declaration it reads, changes, and not when the module
+/// changes elsewhere. A declaration whose dependencies publication cannot
+/// name exactly is identified by the module's key instead.
+pub const DeclarationIdentities = struct {
+    /// The module's type environment: the source of its type declarations and
+    /// its imports' type environments.
+    type_identity: [32]u8 = @splat(0),
+    /// By `CheckedProcedureTemplateId`.
+    templates: []const [32]u8 = &.{},
+    /// By `ConstTemplateId`.
+    consts: []const [32]u8 = &.{},
+    /// By `ComptimeRootId`.
+    roots: []const [32]u8 = &.{},
+    /// Sorted by `def`.
+    definitions: []const DefinitionIdentity = &.{},
+    /// Sorted by `source_decl`.
+    nominals: []const NominalDeclarationIdentity = &.{},
+
+    pub const Serialized = extern struct {
+        type_identity: artifact_serialize.SerializedScalar([32]u8, @splat(0)) = .{},
+        templates: SerializedSlice([32]u8) = .{},
+        consts: SerializedSlice([32]u8) = .{},
+        roots: SerializedSlice([32]u8) = .{},
+        definitions: SerializedSlice(DefinitionIdentity) = .{},
+        nominals: SerializedSlice(NominalDeclarationIdentity) = .{},
+        const Serde = artifact_serialize.SliceStoreSerde(DeclarationIdentities, @This());
+        pub const serialize = Serde.serialize;
+        pub const deserialize = Serde.deserialize;
+    };
+
+    pub fn deinit(self: *DeclarationIdentities, allocator: Allocator) void {
+        allocator.free(self.templates);
+        allocator.free(self.consts);
+        allocator.free(self.roots);
+        allocator.free(self.definitions);
+        allocator.free(self.nominals);
+        self.* = .{};
+    }
+
+    /// The identity of the template `id`.
+    pub fn template(self: *const DeclarationIdentities, id: canonical.CheckedProcedureTemplateId) [32]u8 {
+        const index = @backingInt(id);
+        if (index >= self.templates.len) checkedArtifactInvariant("declaration identity requested for an unpublished template", .{});
+        return self.templates[index];
+    }
+
+    /// The identity of the const template `id`.
+    pub fn constTemplate(self: *const DeclarationIdentities, id: ConstTemplateId) [32]u8 {
+        const index = @backingInt(id);
+        if (index >= self.consts.len) checkedArtifactInvariant("declaration identity requested for an unpublished constant", .{});
+        return self.consts[index];
+    }
+
+    /// The identity of the compile-time root `id`.
+    pub fn root(self: *const DeclarationIdentities, id: ComptimeRootId) [32]u8 {
+        const index = @backingInt(id);
+        if (index >= self.roots.len) checkedArtifactInvariant("declaration identity requested for an unpublished compile-time root", .{});
+        return self.roots[index];
+    }
+
+    /// The identity of the top-level definition `def`, when it has one.
+    pub fn definition(self: *const DeclarationIdentities, def: CIR.Def.Idx) ?[32]u8 {
+        const key = @backingInt(def);
+        var low: usize = 0;
+        var high = self.definitions.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const candidate = self.definitions[mid].def;
+            if (candidate == key) return self.definitions[mid].identity;
+            if (candidate < key) low = mid + 1 else high = mid;
+        }
+        return null;
+    }
+
+    /// The identity of the nominal type declared by `source_decl`, when it
+    /// has one.
+    pub fn nominal(self: *const DeclarationIdentities, source_decl: u32) ?[32]u8 {
+        var low: usize = 0;
+        var high = self.nominals.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const candidate = self.nominals[mid].source_decl;
+            if (candidate == source_decl) return self.nominals[mid].identity;
+            if (candidate < source_decl) low = mid + 1 else high = mid;
+        }
+        return null;
+    }
+};
+
+const no_declaration_identities: DeclarationIdentities = .{};
+
+/// The tables declaration identities are computed from.
+const DeclarationIdentityInputs = struct {
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    artifact_key: CheckedModuleArtifactKey,
+    checking_context_identity: *const CheckingContextIdentity,
+    canonical_names: *const canonical.CanonicalNameStore,
+    templates: *const CheckedProcedureTemplateTable,
+    const_templates: *const ConstTemplateTable,
+    compile_time_roots: *const CompileTimeRootTable,
+    entry_wrappers: *const EntryWrapperTable,
+    checked_bodies: *const CheckedBodyStore,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
+    closure_context: ImportedTemplateClosureContext,
+};
+
+/// One top-level definition: the unit a declaration identity is made of.
+const IdentityUnit = struct {
+    def: CIR.Def.Idx,
+    region: base.Region,
+    /// The unit's own source and position.
+    local: [32]u8 = @splat(0),
+    /// Other units this one reads.
+    local_edges: std.ArrayList(u32) = .empty,
+    /// Identities of what this unit reads from other modules.
+    external_edges: std.ArrayList([32]u8) = .empty,
+    /// A dependency publication cannot name exactly.
+    unresolved: bool = false,
+    identity: [32]u8 = @splat(0),
+};
+
+fn identityHashBytes(hasher: *base.Sha256, bytes: []const u8) void {
+    var len: [8]u8 = undefined;
+    std.mem.writeInt(u64, &len, bytes.len, .little);
+    hasher.update(&len);
+    hasher.update(bytes);
+}
+
+fn identityHashU32(hasher: *base.Sha256, value: u32) void {
+    var bytes: [4]u8 = undefined;
+    std.mem.writeInt(u32, &bytes, value, .little);
+    hasher.update(&bytes);
+}
+
+fn identityRegionUnion(regions: []const base.Region) base.Region {
+    var start = regions[0].start.offset;
+    var end = regions[0].end.offset;
+    for (regions[1..]) |region| {
+        start = @min(start, region.start.offset);
+        end = @max(end, region.end.offset);
+    }
+    return base.Region.from_raw_offsets(start, end);
+}
+
+/// The zero-based line holding source offset `offset`.
+fn identityLineOf(line_starts: []const u32, offset: u32) u32 {
+    var low: usize = 0;
+    var high = line_starts.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (line_starts[mid] <= offset) low = mid + 1 else high = mid;
+    }
+    return @intCast(if (low == 0) 0 else low - 1);
+}
+
+/// Compute the declaration identities of a module being published.
+fn computeDeclarationIdentities(inputs: DeclarationIdentityInputs) Allocator.Error!DeclarationIdentities {
+    const allocator = inputs.allocator;
+    const module_env = inputs.module.moduleEnvConst();
+    const source = module_env.getSourceAll();
+    const line_starts = module_env.common.line_starts.items.items;
+    const store = &module_env.store;
+
+    var units = std.ArrayList(IdentityUnit).empty;
+    defer {
+        for (units.items) |*unit| {
+            unit.local_edges.deinit(allocator);
+            unit.external_edges.deinit(allocator);
+        }
+        units.deinit(allocator);
+    }
+    var unit_by_def = std.AutoHashMap(CIR.Def.Idx, u32).init(allocator);
+    defer unit_by_def.deinit();
+    for (store.sliceDefs(module_env.global_value_defs)) |def_idx| {
+        if (unit_by_def.contains(def_idx)) continue;
+        const def = store.getDef(def_idx);
+        var regions: [3]base.Region = undefined;
+        var count: usize = 0;
+        regions[count] = store.getPatternRegion(def.pattern);
+        count += 1;
+        regions[count] = store.getExprRegion(def.expr);
+        count += 1;
+        if (def.annotation) |annotation| {
+            regions[count] = store.getAnnotationRegion(annotation);
+            count += 1;
+        }
+        try unit_by_def.put(def_idx, @intCast(units.items.len));
+        try units.append(allocator, .{ .def = def_idx, .region = identityRegionUnion(regions[0..count]) });
+    }
+    // Units in source order, so a region resolves to the unit containing it.
+    const by_start = try allocator.alloc(u32, units.items.len);
+    defer allocator.free(by_start);
+    for (by_start, 0..) |*slot, index| slot.* = @intCast(index);
+    std.mem.sort(u32, by_start, units.items, struct {
+        fn lessThan(all: []const IdentityUnit, a: u32, b: u32) bool {
+            return all[a].region.start.offset < all[b].region.start.offset;
+        }
+    }.lessThan);
+    const Locator = struct {
+        units: []const IdentityUnit,
+        by_start: []const u32,
+        fn unitFor(self: @This(), region: base.Region) ?u32 {
+            var low: usize = 0;
+            var high = self.by_start.len;
+            while (low < high) {
+                const mid = low + (high - low) / 2;
+                if (self.units[self.by_start[mid]].region.start.offset <= region.start.offset) low = mid + 1 else high = mid;
+            }
+            if (low == 0) return null;
+            const candidate = self.by_start[low - 1];
+            const unit_region = self.units[candidate].region;
+            if (region.end.offset > unit_region.end.offset) return null;
+            return candidate;
+        }
+    };
+    const locator = Locator{ .units = units.items, .by_start = by_start };
+
+    // The module's context: everything a declaration's meaning may depend on
+    // beyond its own source and what it reads.
+    var context_hasher = base.Sha256.init(.{});
+    identityHashBytes(&context_hasher, "roc.decl.module-context.v1");
+    context_hasher.update(&build_options.compiler_artifact_hash);
+    identityHashBytes(&context_hasher, module_env.module_name);
+    identityHashBytes(&context_hasher, @tagName(module_env.module_kind));
+    {
+        // The header precedes every statement and definition.
+        var first: u32 = @intCast(source.len);
+        for (store.sliceStatements(module_env.all_statements)) |statement| {
+            first = @min(first, store.getStatementRegion(statement).start.offset);
+        }
+        for (units.items) |unit| first = @min(first, unit.region.start.offset);
+        identityHashBytes(&context_hasher, source[0..first]);
+    }
+    for (store.sliceStatements(module_env.all_statements)) |statement_idx| {
+        switch (store.getStatement(statement_idx)) {
+            // Definitions, their annotations, and type declarations are units
+            // or the type environment.
+            .s_decl,
+            .s_type_anno,
+            .s_alias_decl,
+            .s_nominal_decl,
+            .s_where_alias_decl,
+            .s_type_var_alias,
+            => {},
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_runtime_error,
+            => {
+                const region = store.getStatementRegion(statement_idx);
+                identityHashBytes(&context_hasher, source[region.start.offset..region.end.offset]);
+            },
+        }
+    }
+    for (module_env.file_dependencies.items.items) |dependency| {
+        identityHashBytes(&context_hasher, module_env.fileDependencyRelativePath(dependency));
+        context_hasher.update(&.{@backingInt(dependency.state)});
+        switch (dependency.state) {
+            .present => context_hasher.update(&dependency.content_hash),
+            .missing, .unreadable => {},
+            .pending => unreachable,
+        }
+    }
+    {
+        const checking = inputs.checking_context_identity;
+        identityHashBytes(&context_hasher, @tagName(checking.validation));
+        context_hasher.update(&.{@intFromBool(checking.platform_requirement_context != null)});
+        if (checking.platform_requirement_context) |key| context_hasher.update(&key.bytes);
+        context_hasher.update(&.{@intFromBool(checking.platform_app_relation != null)});
+        if (checking.platform_app_relation) |key| context_hasher.update(&key.bytes);
+        identityHashU32(&context_hasher, @intCast(checking.explicit_roots.len));
+        for (checking.explicit_roots) |explicit| hashExplicitRootRequestInput(&context_hasher, explicit);
+    }
+    const module_context = context_hasher.finalResult();
+
+    // The type environment: this module's type declarations and its imports'.
+    var type_hasher = base.Sha256.init(.{});
+    identityHashBytes(&type_hasher, "roc.decl.types.v1");
+    type_hasher.update(&build_options.compiler_artifact_hash);
+    identityHashBytes(&type_hasher, module_env.module_name);
+    const type_decls = store.sliceStatements(module_env.type_decls);
+    for (type_decls) |statement_idx| {
+        // A nominal type's associated items are definitions of their own.
+        const whole = store.getStatementRegion(statement_idx);
+        const regions: [2]base.Region = switch (store.getStatement(statement_idx)) {
+            .s_alias_decl => |decl| .{ store.getNodeRegion(@fromBackingInt(@backingInt(decl.header))), store.getTypeAnnoRegion(decl.anno) },
+            .s_nominal_decl => |decl| .{ store.getNodeRegion(@fromBackingInt(@backingInt(decl.header))), store.getTypeAnnoRegion(decl.anno) },
+            .s_decl,
+            .s_var,
+            .s_var_uninitialized,
+            .s_reassign,
+            .s_crash,
+            .s_dbg,
+            .s_expr,
+            .s_expect,
+            .s_for,
+            .s_while,
+            .s_infinite_loop,
+            .s_breakable_loop,
+            .s_break,
+            .s_return,
+            .s_import,
+            .s_where_alias_decl,
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_runtime_error,
+            => .{ whole, whole },
+        };
+        const region = identityRegionUnion(&regions);
+        identityHashBytes(&type_hasher, source[region.start.offset..region.end.offset]);
+    }
+    {
+        var import_types = std.ArrayList([32]u8).empty;
+        defer import_types.deinit(allocator);
+        for (inputs.closure_context.imports) |import| try import_types.append(allocator, import.view.declaration_identities.type_identity);
+        std.mem.sort([32]u8, import_types.items, {}, identityLessThan);
+        for (import_types.items) |identity| type_hasher.update(&identity);
+    }
+    const type_identity = type_hasher.finalResult();
+
+    for (units.items) |*unit| {
+        var hasher = base.Sha256.init(.{});
+        identityHashBytes(&hasher, "roc.decl.unit-local.v1");
+        hasher.update(&module_context);
+        hasher.update(&type_identity);
+        identityHashBytes(&hasher, source[unit.region.start.offset..unit.region.end.offset]);
+        // Compiled code reports source locations, so a unit that moves is a
+        // different unit.
+        identityHashU32(&hasher, unit.region.start.offset);
+        const line = identityLineOf(line_starts, unit.region.start.offset);
+        identityHashU32(&hasher, line);
+        identityHashU32(&hasher, unit.region.start.offset - (if (line < line_starts.len) line_starts[line] else 0));
+        unit.local = hasher.finalResult();
+    }
+
+    // Assign each template, constant, and compile-time root to the unit whose
+    // source it comes from.
+    const template_count = inputs.templates.templates.items.len;
+    const template_units = try allocator.alloc(?u32, template_count);
+    defer allocator.free(template_units);
+    for (template_units, 0..) |*slot, index| {
+        slot.* = templateIdentityUnit(inputs, &unit_by_def, locator, @fromBackingInt(@intCast(index)));
+    }
+    const const_count = inputs.const_templates.templates.items.len;
+    const const_units = try allocator.alloc(?u32, const_count);
+    defer allocator.free(const_units);
+    for (const_units, inputs.const_templates.templates.items) |*slot, const_template| {
+        slot.* = switch (const_template.owner) {
+            .top_level_binding => |owner| locator.unitFor(inputs.checked_bodies.pattern(owner.pattern).source_region),
+            .hoisted_expr => |owner| locator.unitFor(inputs.checked_bodies.expr(owner.expr).source_region),
+        };
+    }
+    const root_count = inputs.compile_time_roots.roots.len;
+    const root_units = try allocator.alloc(?u32, root_count);
+    defer allocator.free(root_units);
+    for (root_units, inputs.compile_time_roots.roots) |*slot, root_entry| {
+        slot.* = locator.unitFor(inputs.checked_bodies.expr(root_entry.expr).source_region);
+    }
+
+    // What each unit reads, from the resolved references and dispatch targets
+    // of every template it owns.
+    var resolver = ImportedTemplateClosureBuilder.init(inputs.closure_context);
+    defer resolver.deinit();
+    for (inputs.templates.templates.items, template_units) |template_entry, maybe_unit| {
+        const unit_index = maybe_unit orelse continue;
+        const unit = &units.items[unit_index];
+        try identityTemplateEdges(inputs, &resolver, unit, template_entry, template_units, const_units);
+    }
+
+    // Merkle identities over the unit graph, one strongly connected component
+    // at a time, dependencies first.
+    try assignUnitIdentities(allocator, units.items, inputs.artifact_key);
+
+    var result: DeclarationIdentities = .{ .type_identity = type_identity };
+    errdefer result.deinit(allocator);
+    result.templates = try identityOrdinals(allocator, "roc.decl.template.v1", units.items, template_units, inputs.artifact_key);
+    result.consts = try identityOrdinals(allocator, "roc.decl.const.v1", units.items, const_units, inputs.artifact_key);
+    result.roots = try identityOrdinals(allocator, "roc.decl.root.v1", units.items, root_units, inputs.artifact_key);
+    {
+        const definitions = try allocator.alloc(DefinitionIdentity, units.items.len);
+        for (definitions, units.items) |*slot, unit| slot.* = .{ .def = @backingInt(unit.def), .identity = unit.identity };
+        std.mem.sort(DefinitionIdentity, definitions, {}, struct {
+            fn lessThan(_: void, a: DefinitionIdentity, b: DefinitionIdentity) bool {
+                return a.def < b.def;
+            }
+        }.lessThan);
+        result.definitions = definitions;
+    }
+    {
+        const nominals = try allocator.alloc(NominalDeclarationIdentity, type_decls.len);
+        for (nominals, type_decls, 0..) |*slot, statement_idx, ordinal| {
+            var hasher = base.Sha256.init(.{});
+            identityHashBytes(&hasher, "roc.decl.nominal.v1");
+            hasher.update(&type_identity);
+            identityHashU32(&hasher, @intCast(ordinal));
+            slot.* = .{ .source_decl = @backingInt(statement_idx), .identity = hasher.finalResult() };
+        }
+        std.mem.sort(NominalDeclarationIdentity, nominals, {}, struct {
+            fn lessThan(_: void, a: NominalDeclarationIdentity, b: NominalDeclarationIdentity) bool {
+                return a.source_decl < b.source_decl;
+            }
+        }.lessThan);
+        result.nominals = nominals;
+    }
+    return result;
+}
+
+fn identityLessThan(_: void, a: [32]u8, b: [32]u8) bool {
+    return std.mem.order(u8, &a, &b) == .lt;
+}
+
+/// The unit a template's source belongs to, or null when publication cannot
+/// name it.
+fn templateIdentityUnit(
+    inputs: DeclarationIdentityInputs,
+    unit_by_def: *const std.AutoHashMap(CIR.Def.Idx, u32),
+    locator: anytype,
+    id: canonical.CheckedProcedureTemplateId,
+) ?u32 {
+    const template_entry = inputs.templates.get(id);
+    const store = &inputs.module.moduleEnvConst().store;
+    const proc_base = inputs.canonical_names.procBase(template_entry.proc_base);
+    if (proc_base.nested_proc_site) |site| {
+        if (!std.mem.eql(u8, &site.owner_template.artifact.bytes, &inputs.artifact_key.bytes)) return null;
+        return templateIdentityUnit(inputs, unit_by_def, locator, site.owner_template.template);
+    }
+    if (proc_base.source_def_idx) |raw_def| {
+        const def_idx: CIR.Def.Idx = @fromBackingInt(raw_def);
+        if (unit_by_def.get(def_idx)) |unit| return unit;
+        return locator.unitFor(store.getExprRegion(store.getDef(def_idx).expr));
+    }
+    switch (template_entry.body) {
+        .entry_wrapper => {
+            for (inputs.entry_wrappers.wrappers.items) |wrapper| {
+                if (wrapper.template.template != id) continue;
+                return locator.unitFor(inputs.checked_bodies.expr(inputs.compile_time_roots.root(wrapper.root).expr).source_region);
+            }
+            return null;
+        },
+        .checked_body, .intrinsic_wrapper, .unimplemented => {},
+    }
+    for (inputs.templates.promoted) |promoted| {
+        if (promoted.template.template != id) continue;
+        return locator.unitFor(store.getPatternRegion(promoted.pattern));
+    }
+    return null;
+}
+
+/// Record what `template_entry` reads as edges of `unit`.
+fn identityTemplateEdges(
+    inputs: DeclarationIdentityInputs,
+    resolver: *ImportedTemplateClosureBuilder,
+    unit: *IdentityUnit,
+    template_entry: CheckedProcedureTemplate,
+    template_units: []const ?u32,
+    const_units: []const ?u32,
+) Allocator.Error!void {
+    const allocator = inputs.allocator;
+    const local_artifact = artifactRef(inputs.artifact_key);
+    const refs = inputs.resolved_value_refs;
+    const span = template_entry.resolved_value_refs;
+    for (refs.template_refs[span.start..][0..span.len]) |ref_id| {
+        const ref = refs.records[@backingInt(ref_id)].ref;
+        switch (ref) {
+            .local_param,
+            .local_value,
+            .local_mutable_version,
+            .pattern_binder,
+            .local_proc,
+            => {},
+            .top_level_const, .selected_hoisted_const => {
+                const const_ref = resolver.constRefForResolvedValueRef(ref).?;
+                if (!const_ref.artifact.eql(inputs.artifact_key)) {
+                    unit.unresolved = true;
+                    continue;
+                }
+                const target = const_units[@backingInt(const_ref.template)] orelse {
+                    unit.unresolved = true;
+                    continue;
+                };
+                try unit.local_edges.append(allocator, target);
+            },
+            .imported_const => |const_use| {
+                const view = identityImportView(inputs, const_use.const_ref.artifact) orelse {
+                    unit.unresolved = true;
+                    continue;
+                };
+                try unit.external_edges.append(allocator, view.declaration_identities.constTemplate(const_use.const_ref.template));
+            },
+            .imported_proc => |proc_use| switch (proc_use.binding) {
+                .imported => |imported| {
+                    const view = identityImportView(inputs, imported.artifact) orelse {
+                        unit.unresolved = true;
+                        continue;
+                    };
+                    const identity = view.declaration_identities.definition(imported.def) orelse {
+                        unit.unresolved = true;
+                        continue;
+                    };
+                    try unit.external_edges.append(allocator, identity);
+                },
+                .top_level, .hosted, .platform_required => unit.unresolved = true,
+            },
+            .top_level_proc, .promoted_top_level_proc, .hosted_proc => {
+                if (resolver.templateForResolvedValueRef(ref)) |target_ref| {
+                    try identityTemplateRefEdge(inputs, unit, target_ref, local_artifact, template_units);
+                } else if (resolver.callableEvalBindingForResolvedRef(ref)) |callable| {
+                    const callable_template = inputs.closure_context.callable_eval_template_table.get(callable);
+                    const wrapper = entryWrapperForRoot(inputs.entry_wrappers, callable_template.root);
+                    try identityTemplateRefEdge(inputs, unit, wrapper.template, local_artifact, template_units);
+                } else unit.unresolved = true;
+            },
+            .platform_required_declaration,
+            .platform_required_checked_error,
+            .platform_required_const,
+            .platform_required_proc,
+            => unit.unresolved = true,
+        }
+    }
+    const plans = inputs.static_dispatch_plans;
+    const plan_span = template_entry.static_dispatch_plans;
+    for (plans.template_refs[plan_span.start..][0..plan_span.len]) |plan_id| {
+        const plan = plans.plans[@backingInt(plan_id)];
+        switch (plan.resolution) {
+            .direct_closed, .direct_parametric => |direct| try identityEvidenceNodeEdges(inputs, unit, direct.evidence, local_artifact, template_units),
+            .direct_pending => |node| try identityEvidenceNodeEdges(inputs, unit, node, local_artifact, template_units),
+            .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
+        }
+    }
+}
+
+fn identityEvidenceNodeEdges(
+    inputs: DeclarationIdentityInputs,
+    unit: *IdentityUnit,
+    node_id: static_dispatch.EvidenceNodeId,
+    local_artifact: canonical.ArtifactRef,
+    template_units: []const ?u32,
+) Allocator.Error!void {
+    const plans = inputs.static_dispatch_plans;
+    const node = plans.evidence_nodes[@backingInt(node_id)];
+    switch (node.target.kind) {
+        .procedure => |procedure| try identityTemplateRefEdge(inputs, unit, procedure.template, local_artifact, template_units),
+        .local_proc, .structural => {},
+    }
+    switch (node.nested) {
+        .resolved => |span| for (plans.evidence_refs[span.start..][0..span.len]) |evidence| switch (evidence.resolution) {
+            .direct => |nested| try identityEvidenceNodeEdges(inputs, unit, nested, local_artifact, template_units),
+            .constraint, .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
+        },
+        .from_callable => {},
+    }
+}
+
+fn identityTemplateRefEdge(
+    inputs: DeclarationIdentityInputs,
+    unit: *IdentityUnit,
+    target: canonical.ProcedureTemplateRef,
+    local_artifact: canonical.ArtifactRef,
+    template_units: []const ?u32,
+) Allocator.Error!void {
+    if (std.mem.eql(u8, &target.artifact.bytes, &local_artifact.bytes)) {
+        const target_unit = template_units[@backingInt(target.template)] orelse {
+            unit.unresolved = true;
+            return;
+        };
+        try unit.local_edges.append(inputs.allocator, target_unit);
+        return;
+    }
+    const view = identityImportView(inputs, checkedArtifactKeyFromArtifactRef(target.artifact)) orelse {
+        unit.unresolved = true;
+        return;
+    };
+    try unit.external_edges.append(inputs.allocator, view.declaration_identities.template(target.template));
+}
+
+fn identityImportView(inputs: DeclarationIdentityInputs, key: anytype) ?*const ImportedModuleView {
+    const bytes: [32]u8 = key.bytes;
+    for (inputs.closure_context.imports) |*import| {
+        if (std.mem.eql(u8, &import.key.bytes, &bytes)) return &import.view;
+    }
+    for (inputs.closure_context.available_artifacts) |*view| {
+        if (std.mem.eql(u8, &view.key.bytes, &bytes)) return view;
+    }
+    return null;
+}
+
+/// Give every unit its Merkle identity. Tarjan's algorithm yields the
+/// strongly connected components with every component's dependencies before
+/// it.
+fn assignUnitIdentities(allocator: Allocator, units: []IdentityUnit, artifact_key: CheckedModuleArtifactKey) Allocator.Error!void {
+    const unvisited = std.math.maxInt(u32);
+    const index_of = try allocator.alloc(u32, units.len);
+    defer allocator.free(index_of);
+    @memset(index_of, unvisited);
+    const lowlink = try allocator.alloc(u32, units.len);
+    defer allocator.free(lowlink);
+    const on_stack = try allocator.alloc(bool, units.len);
+    defer allocator.free(on_stack);
+    @memset(on_stack, false);
+    const component_of = try allocator.alloc(u32, units.len);
+    defer allocator.free(component_of);
+    @memset(component_of, unvisited);
+    var stack = std.ArrayList(u32).empty;
+    defer stack.deinit(allocator);
+    const Frame = struct { unit: u32, next_edge: u32 };
+    var frames = std.ArrayList(Frame).empty;
+    defer frames.deinit(allocator);
+    var members = std.ArrayList(u32).empty;
+    defer members.deinit(allocator);
+    var next_index: u32 = 0;
+    var next_component: u32 = 0;
+
+    for (0..units.len) |start| {
+        if (index_of[start] != unvisited) continue;
+        try frames.append(allocator, .{ .unit = @intCast(start), .next_edge = 0 });
+        index_of[start] = next_index;
+        lowlink[start] = next_index;
+        next_index += 1;
+        try stack.append(allocator, @intCast(start));
+        on_stack[start] = true;
+        while (frames.items.len != 0) {
+            const frame = &frames.items[frames.items.len - 1];
+            const current = frame.unit;
+            const edges = units[current].local_edges.items;
+            if (frame.next_edge < edges.len) {
+                const target = edges[frame.next_edge];
+                frame.next_edge += 1;
+                if (index_of[target] == unvisited) {
+                    index_of[target] = next_index;
+                    lowlink[target] = next_index;
+                    next_index += 1;
+                    try stack.append(allocator, target);
+                    on_stack[target] = true;
+                    try frames.append(allocator, .{ .unit = target, .next_edge = 0 });
+                } else if (on_stack[target]) {
+                    lowlink[current] = @min(lowlink[current], index_of[target]);
+                }
+                continue;
+            }
+            _ = frames.pop();
+            if (frames.items.len != 0) {
+                const parent = frames.items[frames.items.len - 1].unit;
+                lowlink[parent] = @min(lowlink[parent], lowlink[current]);
+            }
+            if (lowlink[current] != index_of[current]) continue;
+            members.clearRetainingCapacity();
+            while (true) {
+                const member = stack.pop().?;
+                on_stack[member] = false;
+                component_of[member] = next_component;
+                try members.append(allocator, member);
+                if (member == current) break;
+            }
+            // Members in source order: a component's identity does not depend
+            // on the order the search reached them.
+            std.mem.sort(u32, members.items, units, struct {
+                fn lessThan(all: []const IdentityUnit, a: u32, b: u32) bool {
+                    return all[a].region.start.offset < all[b].region.start.offset;
+                }
+            }.lessThan);
+            var unresolved = false;
+            for (members.items) |member| unresolved = unresolved or units[member].unresolved;
+            var hasher = base.Sha256.init(.{});
+            identityHashBytes(&hasher, "roc.decl.component.v1");
+            if (unresolved) hasher.update(&artifact_key.bytes);
+            identityHashU32(&hasher, @intCast(members.items.len));
+            for (members.items) |member| {
+                const unit = &units[member];
+                hasher.update(&unit.local);
+                // Edges out of the component carry their targets' identities;
+                // edges within it, the target's position in it.
+                var outside = std.ArrayList([32]u8).empty;
+                defer outside.deinit(allocator);
+                var inside = std.ArrayList(u32).empty;
+                defer inside.deinit(allocator);
+                for (unit.local_edges.items) |target| {
+                    if (component_of[target] == next_component) {
+                        try inside.append(allocator, @intCast(std.mem.findScalar(u32, members.items, target).?));
+                    } else {
+                        try outside.append(allocator, units[target].identity);
+                    }
+                }
+                try outside.appendSlice(allocator, unit.external_edges.items);
+                std.mem.sort([32]u8, outside.items, {}, identityLessThan);
+                std.mem.sort(u32, inside.items, {}, std.sort.asc(u32));
+                identityHashU32(&hasher, @intCast(outside.items.len));
+                var previous: ?[32]u8 = null;
+                for (outside.items) |identity| {
+                    if (previous) |seen| if (std.mem.eql(u8, &seen, &identity)) continue;
+                    hasher.update(&identity);
+                    previous = identity;
+                }
+                identityHashU32(&hasher, @intCast(inside.items.len));
+                var previous_inside: ?u32 = null;
+                for (inside.items) |position| {
+                    if (previous_inside == position) continue;
+                    identityHashU32(&hasher, position);
+                    previous_inside = position;
+                }
+            }
+            const component = hasher.finalResult();
+            for (members.items, 0..) |member, position| {
+                var unit_hasher = base.Sha256.init(.{});
+                identityHashBytes(&unit_hasher, "roc.decl.unit.v1");
+                unit_hasher.update(&component);
+                identityHashU32(&unit_hasher, @intCast(position));
+                units[member].identity = unit_hasher.finalResult();
+            }
+            next_component += 1;
+        }
+    }
+}
+
+/// One identity per item, made of its unit's identity and its ordinal among
+/// that unit's items in id order. An item with no unit is identified by the
+/// module's key.
+fn identityOrdinals(
+    allocator: Allocator,
+    comptime domain: []const u8,
+    units: []const IdentityUnit,
+    item_units: []const ?u32,
+    artifact_key: CheckedModuleArtifactKey,
+) Allocator.Error![]const [32]u8 {
+    const result = try allocator.alloc([32]u8, item_units.len);
+    errdefer allocator.free(result);
+    const next_ordinal = try allocator.alloc(u32, units.len);
+    defer allocator.free(next_ordinal);
+    @memset(next_ordinal, 0);
+    for (result, item_units, 0..) |*slot, maybe_unit, index| {
+        var hasher = base.Sha256.init(.{});
+        identityHashBytes(&hasher, domain);
+        if (maybe_unit) |unit| {
+            hasher.update(&units[unit].identity);
+            identityHashU32(&hasher, next_ordinal[unit]);
+            next_ordinal[unit] += 1;
+        } else {
+            hasher.update(&artifact_key.bytes);
+            identityHashU32(&hasher, @intCast(index));
+        }
+        slot.* = hasher.finalResult();
+    }
+    return result;
+}
+
+/// Public `publishFromTypedModule` function.
 pub fn publishFromTypedModule(
     allocator: Allocator,
     modules: *const TypedCIR.Modules,
@@ -36752,6 +37531,22 @@ pub fn publishFromTypedModule(
         .imports = inputs.imports,
         .available_artifacts = inputs.available_artifacts,
     };
+    var declaration_identities = try computeDeclarationIdentities(.{
+        .allocator = allocator,
+        .module = module,
+        .artifact_key = artifact_key,
+        .checking_context_identity = &checking_context_identity,
+        .canonical_names = &canonical_names,
+        .templates = &checked_procedure_templates,
+        .const_templates = &const_templates,
+        .compile_time_roots = &compile_time_roots,
+        .entry_wrappers = &entry_wrappers,
+        .checked_bodies = checked_bodies,
+        .resolved_value_refs = &resolved_value_refs,
+        .static_dispatch_plans = &static_dispatch_plans,
+        .closure_context = closure_context,
+    });
+    errdefer declaration_identities.deinit(allocator);
     var exported_procedure_templates = try ExportedProcedureTemplateTable.fromModule(
         closure_context,
         module,
@@ -36923,6 +37718,7 @@ pub fn publishFromTypedModule(
         .hoisted_constants = hoisted_constants,
         .const_templates = const_templates,
         .const_store = checked_const_store,
+        .declaration_identities = declaration_identities,
         .evaluation_state = .prepared,
     };
     checked_const_store = ConstStore.init(allocator);

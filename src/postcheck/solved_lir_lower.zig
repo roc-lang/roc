@@ -317,16 +317,20 @@ pub fn runBorrowed(
     defer allocator.free(source_digests);
     const layout_keyed_source_digests = try allocator.alloc(?proc_identity.Identity, solved.lifted.fnCount());
     defer allocator.free(layout_keyed_source_digests);
-    for (source_digests, layout_keyed_source_digests, 0..) |*digest, *layout_keyed, index| {
+    const spec_keyed_source_digests = try allocator.alloc(?proc_identity.Identity, solved.lifted.fnCount());
+    defer allocator.free(spec_keyed_source_digests);
+    for (source_digests, layout_keyed_source_digests, spec_keyed_source_digests, 0..) |*digest, *layout_keyed, *spec_keyed, index| {
         const fn_id: Lifted.FnId = @fromBackingInt(@as(u32, @intCast(index)));
         digest.* = try solved.lifted.fnSourceDigest(fn_id);
         layout_keyed.* = solved.lifted.fnLayoutKeyedSourceDigest(fn_id);
+        spec_keyed.* = try solved.lifted.fnSpecKeyedSourceDigest(fn_id);
     }
 
     var lowerer = try Lowerer.init(allocator, target_usize, solved, options);
     errdefer lowerer.deinit();
     lowerer.source_digests = source_digests;
     lowerer.layout_keyed_source_digests = layout_keyed_source_digests;
+    lowerer.spec_keyed_source_digests = spec_keyed_source_digests;
 
     try lowerer.result.store.setSourceFiles(solved.lifted.sourceFiles());
     try lowerer.result.setLoweringModules(solved.lifted.loweringModules());
@@ -780,6 +784,9 @@ const Lowerer = struct {
     /// `Lifted.Program.fnLayoutKeyedSourceDigest` per lifted function,
     /// borrowed for the whole lowering; see `layoutKeyedIdentity`.
     layout_keyed_source_digests: []const ?proc_identity.Identity = &.{},
+    /// `Lifted.Program.fnSpecKeyedSourceDigest` per lifted function,
+    /// borrowed for the whole lowering; see `procIdentity`.
+    spec_keyed_source_digests: []const ?proc_identity.Identity = &.{},
     /// Content digests of committed layouts, for layout-keyed procedure
     /// identities. Rebuilt whenever the layout store interns another
     /// recursive graph, since a new graph key can rename an existing layout.
@@ -5542,6 +5549,12 @@ const Lowerer = struct {
             if (self.layout_keyed_source_digests[@backingInt(spec.source)]) |source_digest| {
                 return try self.layoutKeyedIdentity(source_digest, entry.args, entry.ret);
             }
+            if (self.spec_keyed_source_digests[@backingInt(spec.source)]) |source_digest| {
+                var hasher = base.TypeDigestHasher.init();
+                hasher.update("roc.proc.spec-keyed.v1");
+                hasher.update(&source_digest);
+                return .{ .bytes = hasher.finalResult() };
+            }
         }
         return try self.specIdentity(spec);
     }
@@ -6131,12 +6144,15 @@ const Lowerer = struct {
     }
 
     /// A retired body this program links calls the materializer of every
-    /// checked root it reads eagerly. Declare each one's slot and accessor
-    /// from the storage request Monotype declared when it retired the body,
-    /// and keep them through completed-value adoption.
+    /// checked root its served code materializes: the roots it reads eagerly
+    /// and the roots the rest of its closure reads, such as the body of a
+    /// lambda it applies, which no eager read of its own reaches. Declare each
+    /// one's slot and accessor from the storage request Monotype declared
+    /// when it retired the body, and keep them through completed-value
+    /// adoption.
     fn declareRetiredBodyReads(self: *Lowerer, hit: Common.SpecCacheHit) Common.LowerError!void {
         const demand = hit.demand orelse Common.invariant("retired body was linked without its demand facts");
-        if (demand.eager_reads.len == 0) return;
+        if (demand.eager_reads.len == 0 and hit.checked_root_uses.len == 0) return;
         if (self.retired_read_requests.count() == 0) {
             for (self.solved.layout_requests.items, 0..) |request, index| {
                 const root = request.comptime_root orelse continue;
@@ -6149,23 +6165,28 @@ const Lowerer = struct {
                 if (!entry.found_existing) entry.value_ptr.* = @intCast(index);
             }
         }
-        for (demand.eager_reads) |read| {
-            const index = self.retired_read_requests.get(.{ .module = read.module, .root = read.root }) orelse
-                Common.invariant("retired body reads a checked root that has no declared storage request");
-            const request = self.solved.layout_requests.items[index];
-            const root = request.comptime_root orelse unreachable;
-            const ty = try self.lowerType(request.ty);
-            const root_layout = try self.layoutOfType(ty);
-            const slot = try self.comptimeValueSlot(root, ty, root_layout);
-            self.result.static_data_values.items[@backingInt(slot)].retired_read = true;
-            _ = try self.comptimeRootAccessor(.{
-                .loc = .none,
-                .region = .zero(),
-                .inline_scope = .none,
-                .outer = .none,
-                .mode = .derived,
-            }, slot, root, ty, root_layout);
-        }
+        for (demand.eager_reads) |read| try self.declareRetiredRead(.{ .module = read.module, .root = read.root });
+        for (hit.checked_root_uses) |use| try self.declareRetiredRead(use);
+    }
+
+    /// Declare the slot and accessor of one checked root a retired body's
+    /// served code materializes.
+    fn declareRetiredRead(self: *Lowerer, use: Common.CheckedRootUse) Common.LowerError!void {
+        const index = self.retired_read_requests.get(use) orelse
+            Common.invariant("retired body reads a checked root that has no declared storage request");
+        const request = self.solved.layout_requests.items[index];
+        const root = request.comptime_root orelse unreachable;
+        const ty = try self.lowerType(request.ty);
+        const root_layout = try self.layoutOfType(ty);
+        const slot = try self.comptimeValueSlot(root, ty, root_layout);
+        self.result.static_data_values.items[@backingInt(slot)].retired_read = true;
+        _ = try self.comptimeRootAccessor(.{
+            .loc = .none,
+            .region = .zero(),
+            .inline_scope = .none,
+            .outer = .none,
+            .mode = .derived,
+        }, slot, root, ty, root_layout);
     }
 
     /// The procedure that reads compile-time value slot `id`, which holds

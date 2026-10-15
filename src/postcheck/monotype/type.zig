@@ -61,6 +61,20 @@ pub const IteratorTopology = struct {
     rest_field: names.RecordFieldNameId,
 };
 
+/// The declaration identities of nominal types
+/// (`checked.DeclarationIdentities.nominal`), by declaring module content
+/// identity and declaring statement, which declaration digests name nominals
+/// by. A null answer means the declaration has none, and the digest names it
+/// by its module.
+pub const NominalDeclarations = struct {
+    context: *const anyopaque,
+    nominal_fn: *const fn (context: *const anyopaque, module_identity: []const u8, source_decl: u32) ?[32]u8,
+
+    pub fn nominal(self: NominalDeclarations, module_identity: []const u8, source_decl: u32) ?[32]u8 {
+        return self.nominal_fn(self.context, module_identity, source_decl);
+    }
+};
+
 /// Named type definition owner.
 pub const TypeDef = struct {
     /// Deep content identity of the declaring module (dense id in the owning
@@ -310,6 +324,7 @@ pub const Store = struct {
     specialization_digests: StoreList(?names.TypeDigest, "specialization_digests"),
     equality_digests: StoreList(?names.TypeDigest, "equality_digests"),
     representation_digests: StoreList(?names.TypeDigest, "representation_digests"),
+    declaration_digests: StoreList(?names.TypeDigest, "declaration_digests"),
     /// Newly reserved recursive slots may be referenced while their content is
     /// being built, but they are not observable types until filled. Filled
     /// nodes are immutable, which makes their cached digests permanently valid.
@@ -404,6 +419,7 @@ pub const Store = struct {
             .specialization_digests = .empty,
             .equality_digests = .empty,
             .representation_digests = .empty,
+            .declaration_digests = .empty,
             .constructing = .empty,
             .unfinished_type_count = 0,
             .active_transaction = null,
@@ -434,7 +450,7 @@ pub const Store = struct {
         if (!self.frozen) Common.invariant("Monotype type cloning requires a frozen graph");
         var result = Store.init(allocator);
         errdefer result.deinit();
-        inline for (.{ "types", "named_nodes", "erased_digests", "type_digests", "specialization_digests", "equality_digests", "representation_digests", "constructing", "iterator_interface_cache", "generated_private_cache", "spans", "fields", "tags", "declared_fields" }) |field| {
+        inline for (.{ "types", "named_nodes", "erased_digests", "type_digests", "specialization_digests", "equality_digests", "representation_digests", "declaration_digests", "constructing", "iterator_interface_cache", "generated_private_cache", "spans", "fields", "tags", "declared_fields" }) |field| {
             try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
         }
         // Traversal history is local, but every cloned type still needs a slot
@@ -541,6 +557,7 @@ pub const Store = struct {
         self.constructing.deinit(self.allocator);
         self.equality_digests.deinit(self.allocator);
         self.representation_digests.deinit(self.allocator);
+        self.declaration_digests.deinit(self.allocator);
         self.specialization_digests.deinit(self.allocator);
         self.type_digests.deinit(self.allocator);
         self.types.deinit(self.allocator);
@@ -678,6 +695,8 @@ pub const Store = struct {
         errdefer _ = self.equality_digests.pop();
         try self.representation_digests.append(self.allocator, null);
         errdefer _ = self.representation_digests.pop();
+        try self.declaration_digests.append(self.allocator, null);
+        errdefer _ = self.declaration_digests.pop();
         try self.constructing.append(self.allocator, false);
         errdefer _ = self.constructing.pop();
         try self.iterator_interface_cache.append(self.allocator, null);
@@ -999,6 +1018,7 @@ pub const Store = struct {
         specialization_digests: []?names.TypeDigest,
         equality_digests: []?names.TypeDigest,
         representation_digests: []?names.TypeDigest,
+        declaration_digests: []?names.TypeDigest,
         spans: []TypeId,
         fields: []Field,
         tags: []Tag,
@@ -1034,6 +1054,11 @@ pub const Store = struct {
                 source.representation_digests.unsafeRawItemsForView()[begin.types..end.types],
             );
             errdefer allocator.free(representation_digests);
+            const declaration_digests = try allocator.dupe(
+                ?names.TypeDigest,
+                source.declaration_digests.unsafeRawItemsForView()[begin.types..end.types],
+            );
+            errdefer allocator.free(declaration_digests);
             const spans = try allocator.dupe(
                 TypeId,
                 source.spans.unsafeRawItemsForView()[begin.spans..end.spans],
@@ -1062,6 +1087,7 @@ pub const Store = struct {
                 .specialization_digests = specialization_digests,
                 .equality_digests = equality_digests,
                 .representation_digests = representation_digests,
+                .declaration_digests = declaration_digests,
                 .spans = spans,
                 .fields = fields,
                 .tags = tags,
@@ -1100,6 +1126,7 @@ pub const Store = struct {
             );
             try destination.equality_digests.ensureTotalCapacity(destination.allocator, self.end.types);
             try destination.representation_digests.ensureTotalCapacity(destination.allocator, self.end.types);
+            try destination.declaration_digests.ensureTotalCapacity(destination.allocator, self.end.types);
             try destination.constructing.ensureTotalCapacity(destination.allocator, self.end.types);
             try destination.iterator_interface_cache.ensureTotalCapacity(
                 destination.allocator,
@@ -1151,6 +1178,10 @@ pub const Store = struct {
                     @backingInt(added),
                     self.representation_digests[offset],
                 );
+                destination.declaration_digests.set(
+                    @backingInt(added),
+                    self.declaration_digests[offset],
+                );
             }
             std.debug.assert(std.meta.eql(destination.epochBoundary(), self.end));
         }
@@ -1170,6 +1201,7 @@ pub const Store = struct {
             self.allocator.free(self.fields);
             self.allocator.free(self.spans);
             self.allocator.free(self.representation_digests);
+            self.allocator.free(self.declaration_digests);
             self.allocator.free(self.equality_digests);
             self.allocator.free(self.specialization_digests);
             self.allocator.free(self.type_digests);
@@ -1190,6 +1222,7 @@ pub const Store = struct {
         std.debug.assert(self.specialization_digests.len() == self.types.len());
         std.debug.assert(self.equality_digests.len() == self.types.len());
         std.debug.assert(self.representation_digests.len() == self.types.len());
+        std.debug.assert(self.declaration_digests.len() == self.types.len());
         std.debug.assert(begin.types <= end.types and end.types <= self.types.len());
         std.debug.assert(begin.spans <= end.spans and end.spans <= self.spans.len());
         std.debug.assert(begin.fields <= end.fields and end.fields <= self.fields.len());
@@ -1262,6 +1295,7 @@ pub const Store = struct {
         specialization_digests_len: usize,
         equality_digests_len: usize,
         representation_digests_len: usize,
+        declaration_digests_len: usize,
         constructing_len: usize,
         unfinished_type_count: usize,
         iterator_interface_cache_len: usize,
@@ -1282,6 +1316,7 @@ pub const Store = struct {
             .specialization_digests_len = self.specialization_digests.len(),
             .equality_digests_len = self.equality_digests.len(),
             .representation_digests_len = self.representation_digests.len(),
+            .declaration_digests_len = self.declaration_digests.len(),
             .constructing_len = self.constructing.len(),
             .unfinished_type_count = self.unfinished_type_count,
             .iterator_interface_cache_len = self.iterator_interface_cache.len(),
@@ -1307,6 +1342,7 @@ pub const Store = struct {
         self.specialization_digests.restoreLen(mark_.specialization_digests_len);
         self.equality_digests.restoreLen(mark_.equality_digests_len);
         self.representation_digests.restoreLen(mark_.representation_digests_len);
+        self.declaration_digests.restoreLen(mark_.declaration_digests_len);
         self.constructing.restoreLen(mark_.constructing_len);
         self.unfinished_type_count = mark_.unfinished_type_count;
         self.iterator_interface_cache.restoreLen(mark_.iterator_interface_cache_len);
@@ -1864,7 +1900,7 @@ pub const Store = struct {
         // digest its source already computed. Seeding the copies lets the
         // commit intern them by lookup instead of hashing each one again.
         for (closure.items, reserved) |source_ty, destination_ty| {
-            inline for (.{ NamedDigestMode.full, NamedDigestMode.identity_only, NamedDigestMode.equality, NamedDigestMode.representation }) |mode| {
+            inline for (.{ NamedDigestMode.full, NamedDigestMode.identity_only, NamedDigestMode.equality, NamedDigestMode.representation, NamedDigestMode.declaration }) |mode| {
                 if (source.cachedDigest(source_ty, mode)) |digest| self.setCachedDigest(destination_ty, mode, digest);
             }
         }
@@ -2575,7 +2611,7 @@ pub const Store = struct {
     }
 
     pub fn verify(self: *const Store, name_store: *const names.NameStore) ?VerifyError {
-        if (self.specialization_digests.len() != self.types.len() or self.equality_digests.len() != self.types.len() or self.representation_digests.len() != self.types.len()) {
+        if (self.specialization_digests.len() != self.types.len() or self.equality_digests.len() != self.types.len() or self.representation_digests.len() != self.types.len() or self.declaration_digests.len() != self.types.len()) {
             return .type_digest_count_mismatch;
         }
         return self.view().verify(name_store);
@@ -2615,6 +2651,20 @@ pub const Store = struct {
         stats: ?*DigestStats,
     ) names.TypeDigest {
         return self.computeDigest(name_store, ty, .equality, stats) catch digestOutOfMemory();
+    }
+
+    /// `equalityDigest`, with each nominal named by its declaration identity:
+    /// equal across module edits that leave the types' declarations alone.
+    /// Object-cache keys use it; in-program equivalence uses
+    /// `equalityDigest`.
+    pub fn declarationDigestCached(
+        self: *Store,
+        name_store: *const names.NameStore,
+        ty: TypeId,
+        declarations: NominalDeclarations,
+        stats: ?*DigestStats,
+    ) names.TypeDigest {
+        return self.computeDigestWith(name_store, ty, .declaration, declarations, stats) catch digestOutOfMemory();
     }
 
     /// Digest of a type's stored content without its checked provenance
@@ -3061,6 +3111,9 @@ pub const Store = struct {
         identity_only,
         equality,
         representation,
+        /// Equality, with each nominal named by its declaration identity
+        /// rather than its module: what object-cache keys are made of.
+        declaration,
     };
 
     /// Versioned digest-domain prefix written at the start of every node
@@ -3072,6 +3125,7 @@ pub const Store = struct {
             .identity_only => "roc.monotype.type.interface.v3",
             .equality => "roc.monotype.type.equality.v3",
             .representation => "roc.monotype.type.representation.v1",
+            .declaration => "roc.monotype.type.declaration.v1",
         };
     }
 
@@ -3099,6 +3153,7 @@ pub const Store = struct {
             .identity_only => self.specialization_digests.unsafeRawItemsForView(),
             .equality => self.equality_digests.unsafeRawItemsForView(),
             .representation => self.representation_digests.unsafeRawItemsForView(),
+            .declaration => self.declaration_digests.unsafeRawItemsForView(),
         };
         if (index >= slots.len) return null;
         return slots[index];
@@ -3117,11 +3172,12 @@ pub const Store = struct {
             .identity_only => self.specialization_digests.set(index, digest),
             .equality => self.equality_digests.set(index, digest),
             .representation => self.representation_digests.set(index, digest),
+            .declaration => self.declaration_digests.set(index, digest),
         }
     }
 
     fn digestType(self: *const Store, raw_ty: TypeId, mode: NamedDigestMode) TypeId {
-        if (mode != .equality) return raw_ty;
+        if (mode != .equality and mode != .declaration) return raw_ty;
         var ty = raw_ty;
         while (true) {
             const content = self.get(ty);
@@ -3150,6 +3206,20 @@ pub const Store = struct {
         mode: NamedDigestMode,
         requested_stats: ?*DigestStats,
     ) std.mem.Allocator.Error!names.TypeDigest {
+        return self.computeDigestWith(name_store, ty, mode, null, requested_stats);
+    }
+
+    /// `computeDigest`, with the nominal declaration identities the
+    /// declaration mode names nominals by.
+    fn computeDigestWith(
+        self: *Store,
+        name_store: *const names.NameStore,
+        ty: TypeId,
+        mode: NamedDigestMode,
+        declarations: ?NominalDeclarations,
+        requested_stats: ?*DigestStats,
+    ) std.mem.Allocator.Error!names.TypeDigest {
+        if (mode == .declaration and declarations == null) Common.invariant("Monotype declaration digest requested without nominal declarations");
         const stats = requested_stats orelse self.digest_stats;
         if (stats) |sink| sink.root_requests += 1;
         self.requireConstructed(ty);
@@ -3166,7 +3236,7 @@ pub const Store = struct {
                 return digest;
             }
         }
-        var engine = DigestEngine.init(self, name_store, stats);
+        var engine = DigestEngine.init(self, name_store, declarations, stats);
         defer engine.deinit();
         const digest = try engine.run(digest_ty, mode);
         // Equality unwraps aliases; cache the answer on the original query
@@ -3195,6 +3265,7 @@ pub const Store = struct {
     fn encodeTypeNode(
         self: *const Store,
         name_store: *const names.NameStore,
+        declarations: ?NominalDeclarations,
         sink: anytype,
         ty: TypeId,
         mode: NamedDigestMode,
@@ -3207,11 +3278,20 @@ pub const Store = struct {
             },
             .named => |named| {
                 try sink.writeBytes("named");
-                try sink.writeBytes(&named.named_type.module.bytes);
-                if (mode == .full or mode == .identity_only) try sink.writeU32(@backingInt(named.named_type.ty));
-                try sink.writeBytes(name_store.moduleIdentityBytes(named.def.module));
-                try sinkOptionalU32(sink, named.def.source_decl);
-                if (mode != .equality or named.def.source_decl == null) {
+                const declaration: ?[32]u8 = if (mode == .declaration) if (named.def.source_decl) |source_decl|
+                    declarations.?.nominal(name_store.moduleIdentityBytes(named.def.module), source_decl)
+                else
+                    null else null;
+                if (declaration) |identity| {
+                    try sink.writeBytes("declaration");
+                    try sink.writeBytes(&identity);
+                } else {
+                    try sink.writeBytes(&named.named_type.module.bytes);
+                    if (mode == .full or mode == .identity_only) try sink.writeU32(@backingInt(named.named_type.ty));
+                    try sink.writeBytes(name_store.moduleIdentityBytes(named.def.module));
+                    try sinkOptionalU32(sink, named.def.source_decl);
+                }
+                if ((mode != .equality and mode != .declaration) or named.def.source_decl == null) {
                     try sink.writeBytes(name_store.typeNameText(named.def.type_name));
                 }
                 try sinkOptionalDigest(sink, named.def.generated);
@@ -3238,12 +3318,12 @@ pub const Store = struct {
                     } else {
                         try sink.writeBytes("specialization-named-identity");
                     },
-                    .equality => if (specializationUsesBacking(named.backing)) {
+                    .equality, .declaration => if (specializationUsesBacking(named.backing)) {
                         try sink.writeBytes("equality-generated-backing");
                         const backing = named.backing orelse unreachable;
                         try sink.writeBytes(@tagName(backing.use));
                         try sink.writeBytes(@tagName(backing.authority));
-                        try sink.child(backing.ty, .equality);
+                        try sink.child(backing.ty, mode);
                     } else {
                         try sink.writeBytes("equality-named-identity");
                     },
@@ -3278,7 +3358,7 @@ pub const Store = struct {
                 for (0..tag_slice.len) |index| {
                     const tag = GuardedList.at(tag_slice, index);
                     try sink.writeBytes(name_store.tagLabelText(tag.name));
-                    if (mode != .equality) try sink.writeBytes(name_store.tagLabelText(tag.checked_name));
+                    if (mode != .equality and mode != .declaration) try sink.writeBytes(name_store.tagLabelText(tag.checked_name));
                     try self.encodeTypeSpan(sink, tag.payloads, mode);
                 }
             },
@@ -3385,6 +3465,7 @@ pub const Store = struct {
     const DigestEngine = struct {
         store: *Store,
         name_store: *const names.NameStore,
+        declarations: ?NominalDeclarations,
         gpa: std.mem.Allocator,
         stats: ?*DigestStats,
         nodes: std.ArrayList(DigestNode),
@@ -3456,11 +3537,12 @@ pub const Store = struct {
             }
         };
 
-        fn init(store: *Store, name_store: *const names.NameStore, stats: ?*DigestStats) DigestEngine {
+        fn init(store: *Store, name_store: *const names.NameStore, declarations: ?NominalDeclarations, stats: ?*DigestStats) DigestEngine {
             const kept = &store.digest_storage;
             if (kept.in_use) return .{
                 .store = store,
                 .name_store = name_store,
+                .declarations = declarations,
                 .gpa = store.allocator,
                 .stats = stats,
                 .nodes = .empty,
@@ -3476,6 +3558,7 @@ pub const Store = struct {
             const engine: DigestEngine = .{
                 .store = store,
                 .name_store = name_store,
+                .declarations = declarations,
                 .gpa = store.allocator,
                 .stats = stats,
                 .nodes = kept.nodes,
@@ -3541,8 +3624,12 @@ pub const Store = struct {
         }
 
         fn nodeKey(ty: TypeId, mode: NamedDigestMode) u64 {
-            return (@as(u64, @backingInt(ty)) << 2) | @as(u64, @backingInt(mode));
+            comptime std.debug.assert(@typeInfo(NamedDigestMode).@"enum".field_names.len <= 1 << mode_bits);
+            return (@as(u64, @backingInt(ty)) << mode_bits) | @as(u64, @backingInt(mode));
         }
+
+        /// Bits of a node key that hold its digest mode.
+        const mode_bits = 3;
 
         fn internNode(self: *DigestEngine, raw_ty: TypeId, mode: NamedDigestMode) std.mem.Allocator.Error!u32 {
             const ty = self.store.digestType(raw_ty, mode);
@@ -3574,7 +3661,7 @@ pub const Store = struct {
             const link_start: u32 = @intCast(self.link_pool.items.len);
             const scalar_start = self.scalar_bytes.items.len;
             const sink = CollectSink{ .engine = self };
-            try self.store.encodeTypeNode(self.name_store, sink, ty, mode);
+            try self.store.encodeTypeNode(self.name_store, self.declarations, sink, ty, mode);
             const node = &self.nodes.items[index];
             node.link_start = link_start;
             node.link_len = @intCast(self.link_pool.items.len - link_start);
@@ -5012,6 +5099,7 @@ test "monotype cross-store import is atomic under allocation failure" {
             specialization_digests: usize,
             equality_digests: usize,
             representation_digests: usize,
+            declaration_digests: usize,
             constructing: usize,
             iterator_interface_cache: usize,
             generated_private_cache: usize,
@@ -5028,6 +5116,7 @@ test "monotype cross-store import is atomic under allocation failure" {
                     .specialization_digests = store.specialization_digests.len(),
                     .equality_digests = store.equality_digests.len(),
                     .representation_digests = store.representation_digests.len(),
+                    .declaration_digests = store.declaration_digests.len(),
                     .constructing = store.constructing.len(),
                     .iterator_interface_cache = store.iterator_interface_cache.len(),
                     .generated_private_cache = store.generated_private_cache.len(),

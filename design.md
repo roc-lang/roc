@@ -2376,11 +2376,15 @@ checked program and the command, never from cache state. Discovery roots
 ("Demand-Driven Compile-Time Specialization") exist only without an LSS
 runtime consumer, so a demand-driven compilation never has them.
 
-Monotype declares every requested compile-time root up front: it reserves the
-root's entry template, so a read anywhere, including in a parallel worker's
-body draft, binds the root's real function id from the declaration table. A
-declared root's queued body is parked instead of entering the specialization
-queue. Demand is reachability over committed definitions: a definition
+Monotype declares every requested compile-time root this program may fill a
+slot for up front: it reserves the root's entry template, so a read anywhere,
+including in a parallel worker's body draft, binds the root's real function id
+from the declaration table. A root whose value an earlier compilation stored
+and a root no compilation evaluated are not declared; their reads stand for
+the value as described below, so a program that nothing finalizes against
+(an evaluation harness lowering finalized modules) never holds a slot it
+could not fill. A declared root's queued body is parked instead of entering
+the specialization queue. Demand is reachability over committed definitions: a definition
 references the definitions its body names and reads the roots its body reads,
 whether through a slot or as an expression standing for the root's value,
 and a slot read's initializer is representation evidence, not a call, so the
@@ -5394,6 +5398,16 @@ temporary dependency edges while sorting, but it must discard those edges before
 the checked module is finalized. The durable checked module data stores only the
 roots, the sorted request stream, stored `ConstStore` payloads, and sparse
 lookup indexes.
+
+The request order separates only roots whose definitions reference each other
+eagerly; a root whose evaluation applies a lambda that reads another root
+depends on it just as much, and only the root's sealed demand facts (Direct
+LIR's `CtfeDemandFacts`) record that. Finalization therefore never runs a
+batch of same-module roots in request order: it schedules each batch with
+`lir.CtfeSchedule` from those facts, publishes every root's value before the
+next root runs, and fails every root on a dependency cycle before any root
+runs, exactly as the whole-program schedule does. A read of a root outside the
+batch is beyond that schedule: the batch orders only the roots it evaluates.
 
 Canonicalization outputs the initial exact strict-demand edges between top-level
 definitions. Literal conversions remain leaves in that initial relation because
@@ -14852,9 +14866,10 @@ reach one specialization through differently annotated call sites disagree—one
 key naming two procedure identities.
 
 A procedure identity hashes its source specialization, ABI choices, and solved
-argument, result, and capture types; the one exception is the plain procedure
-of a layout-keyed Builtin template, which hashes layouts instead (see "Layout-Keyed
-Builtin Procedures"). It excludes the outer function's callable
+argument, result, and capture types. Two plain procedures are exceptions: that
+of a layout-keyed Builtin template hashes layouts instead (see "Layout-Keyed
+Builtin Procedures"), and that of a template with an object-cache key hashes
+the key (below). It excludes the outer function's callable
 set: that set describes the contexts where the function value flows, while the
 selected source and captures already identify the procedure being compiled.
 Passing a closed imported function beside another lambda must not change its
@@ -14863,6 +14878,40 @@ nested in arguments, results, and captures remain part of identity because they
 determine runtime representations and dispatch inside the procedure. Function
 value type digests retain their complete callable sets, including when reached
 recursively from those nested positions.
+
+`specIdentityKey` names a specialization by declaration, not by module. The
+checker publishes `DeclarationIdentities` for every module: each top-level
+definition's identity is a Merkle hash of its own source text and position, the
+module's header and non-definition statements, its checking context, and the
+identities of every declaration it references, combined over strongly connected
+groups. Templates, constants, and roots take their definition's identity plus
+their ordinal within it; nominals take the module's type identity (every type
+declaration and the imported type identities) plus their ordinal. The key uses
+a template's identity where the module key and template id would otherwise go,
+procedure targets in dispatch evidence by their template's identity, and
+nominals in the request type by their declaration identity
+(`Type.Store.declarationDigestCached`, which takes the identities as an
+explicit `NominalDeclarations` argument: they are program data, never stored on
+a `TypeDef`). A pairing lowers its platform's bodies against one app, so its
+code-generation key joins every template identity it lowers. A definition whose
+references cannot all be named by declaration carries its artifact key, which
+only costs reuse.
+
+An edit to one definition therefore leaves the keys of everything that does not
+reach it unchanged, and the store keeps every revision's packs beside each
+other under the module's placement. The plain procedure of a keyed template
+takes its procedure identity from that key and the lowering choices it does not
+cover (iterator fusion, platform-requirement relation), so a cached caller's
+references to it resolve in every revision that leaves its declarations alone.
+Demand facts still name module-scoped roots and expressions, so an offer whose
+facts name a module the program does not contain is not offered: those ids
+mean nothing in any other revision, and a current module's key covers its
+imports' keys. A consumer that links a served closure declares storage and an
+accessor for every checked root that closure materializes
+(`SpecCacheHit.checked_root_uses`), not only for the hit's own eager reads: a
+lambda body inside the closure reads roots no eager read of the keyed caller
+reaches, and in another revision nothing else in the program need declare
+them.
 
 A compiler-generated body retains its own source key. A field-names iterator
 step, a structural parser or encoder runtime, and a

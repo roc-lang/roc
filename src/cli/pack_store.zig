@@ -157,22 +157,21 @@ pub const Store = struct {
         self.roc_ctx.writeStderr(message) catch {};
     }
 
-    /// The code packs filed under a module identity for one code-generation key:
-    /// its complete pack and its partial offers. Packs an earlier revision of
-    /// the module wrote stay on disk but offer nothing this revision can use,
-    /// since every offer they hold is keyed by that revision's specializations.
-    pub fn loadIdentity(self: *const Store, io: std.Io, packs: *LoadedPacks, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8) LoadedPacks.LoadError!void {
+    /// The code packs filed under a module placement, from every revision
+    /// of the module: offers are keyed by declaration, so an earlier
+    /// revision's packs serve whatever an edit left alone.
+    pub fn loadIdentity(self: *const Store, io: std.Io, packs: *LoadedPacks, origin: compile.BuildEnv.PackOrigin, identity: [32]u8) LoadedPacks.LoadError!void {
         const dir = try self.identityDir(origin, identity);
         defer self.allocator.free(dir);
-        try packs.loadDirIntoFor(io, dir, .cache_offers, key);
+        try packs.loadStoreDir(io, dir);
     }
 
-    /// Index the discovery summaries filed under a module identity for one
-    /// code-generation key, without reading its code packs.
-    pub fn loadDiscoveryIdentity(self: *const Store, io: std.Io, packs: *LoadedPacks, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8) LoadedPacks.LoadError!void {
+    /// Index the discovery summaries filed under a module placement, from
+    /// every revision of the module, without reading its code packs.
+    pub fn loadDiscoveryIdentity(self: *const Store, io: std.Io, packs: *LoadedPacks, origin: compile.BuildEnv.PackOrigin, identity: [32]u8) LoadedPacks.LoadError!void {
         const dir = try self.identityDir(origin, identity);
         defer self.allocator.free(dir);
-        try packs.loadDiscoveryDir(io, dir, key);
+        try packs.loadDiscoveryDir(io, dir);
     }
 };
 
@@ -1245,9 +1244,11 @@ pub const LoadedPacks = struct {
     candidates: std.AutoHashMapUnmanaged([32]u8, std.ArrayListUnmanaged(u32)) = .empty,
 
     const StorePack = struct {
-        /// Owned until the pack is admitted.
-        bytes: ?[]u8,
+        /// The pack until it is admitted: its bytes, or the file holding them.
+        contents: union(enum) { bytes: []u8, path: []u8, admitted },
         index: PackFile.Index,
+        /// The bytes `index` was read from when they are not `contents`.
+        index_bytes: ?[]u8 = null,
     };
 
     const Deferred = struct {
@@ -1291,25 +1292,14 @@ pub const LoadedPacks = struct {
     /// Read every `.rpk` file in `dir_path`, in name order, without indexing.
     pub fn loadDirInto(self: *LoadedPacks, io: std.Io, dir_path: []const u8, input: Input) LoadError!void {
         std.debug.assert(self.state == .pending);
-        self.loadDirIntoUnrecorded(io, dir_path, input, null) catch |err| {
+        self.loadDirIntoUnrecorded(io, dir_path, input) catch |err| {
             @atomicStore(@TypeOf(self.state), &self.state, .unavailable, .release);
             self.failure = err;
             return err;
         };
     }
 
-    /// `loadDirInto`, reading only the packs written for `key`.
-    pub fn loadDirIntoFor(self: *LoadedPacks, io: std.Io, dir_path: []const u8, input: Input, key: [32]u8) LoadError!void {
-        std.debug.assert(self.state == .pending);
-        self.loadDirIntoUnrecorded(io, dir_path, input, key) catch |err| {
-            @atomicStore(@TypeOf(self.state), &self.state, .unavailable, .release);
-            self.failure = err;
-            return err;
-        };
-    }
-
-    fn loadDirIntoUnrecorded(self: *LoadedPacks, io: std.Io, dir_path: []const u8, input: Input, only_key: ?[32]u8) LoadError!void {
-        const key_hex: ?[64]u8 = if (only_key) |key| std.fmt.bytesToHex(key, .lower) else null;
+    fn loadDirIntoUnrecorded(self: *LoadedPacks, io: std.Io, dir_path: []const u8, input: Input) LoadError!void {
         const allocator = self.allocator;
         var names = std.ArrayList([]u8).empty;
         defer {
@@ -1327,7 +1317,6 @@ pub const LoadedPacks = struct {
                 const entry = (entries.next(io) catch return error.PackDirectoryUnreadable) orelse break;
                 if (entry.kind != .file) continue;
                 if (!std.mem.endsWith(u8, entry.name, ".rpk")) continue;
-                if (key_hex) |hex| if (!packNameForKey(entry.name, &hex)) continue;
                 try names.ensureUnusedCapacity(allocator, 1);
                 names.appendAssumeCapacity(try allocator.dupe(u8, entry.name));
             }
@@ -1359,17 +1348,6 @@ pub const LoadedPacks = struct {
         }
     }
 
-    /// Whether a pack file name is the complete pack (`<key>.rpk`) or a
-    /// partial offer (`partial-<key>-<content>.rpk`) of `key`.
-    fn packNameForKey(name: []const u8, key_hex: []const u8) bool {
-        const stem = name[0 .. name.len - ".rpk".len];
-        if (std.mem.eql(u8, stem, key_hex)) return true;
-        const prefix = "partial-";
-        if (!std.mem.startsWith(u8, stem, prefix)) return false;
-        const rest = stem[prefix.len..];
-        return rest.len > key_hex.len and std.mem.startsWith(u8, rest, key_hex) and rest[key_hex.len] == '-';
-    }
-
     fn appendPack(self: *LoadedPacks, bytes: []const u8) LoadError!void {
         var pack = try PackFile.read(self.allocator, bytes);
         errdefer pack.deinit();
@@ -1397,7 +1375,7 @@ pub const LoadedPacks = struct {
             const list = entry.value_ptr;
             if (list.items.len == 0 or list.items[list.items.len - 1] != id) try list.append(self.allocator, id);
         }
-        try self.store_packs.append(self.allocator, .{ .bytes = bytes, .index = index });
+        try self.store_packs.append(self.allocator, .{ .contents = .{ .bytes = bytes }, .index = index });
     }
 
     /// Admit every source offering `key`, and transitively the sources
@@ -1412,8 +1390,20 @@ pub const LoadedPacks = struct {
             const list = self.candidates.get(next) orelse continue;
             for (list.items) |id| {
                 const source = &self.store_packs.items[id];
-                const bytes = source.bytes orelse continue;
-                source.bytes = null;
+                const bytes = switch (source.contents) {
+                    .admitted => continue,
+                    .bytes => |bytes| bytes,
+                    .path => |path| read: {
+                        defer self.allocator.free(path);
+                        source.contents = .admitted;
+                        const io = (self.pending orelse unreachable).io;
+                        break :read std.Io.Dir.cwd().readFileAlloc(io, path, self.allocator, .limited(1024 * 1024 * 1024)) catch |err| switch (err) {
+                            error.OutOfMemory => return error.OutOfMemory,
+                            else => return error.PackDirectoryUnreadable,
+                        };
+                    },
+                };
+                source.contents = .admitted;
                 defer self.allocator.free(bytes);
                 try self.appendPack(bytes);
                 admitted_any = true;
@@ -1458,8 +1448,7 @@ pub const LoadedPacks = struct {
 
     /// Read every discovery pack in `dir_path` filed for `key` and index its
     /// summaries. Unreadable files are cache misses.
-    pub fn loadDiscoveryDir(self: *LoadedPacks, io: std.Io, dir_path: []const u8, key: [32]u8) LoadError!void {
-        const key_hex = std.fmt.bytesToHex(key, .lower);
+    pub fn loadDiscoveryDir(self: *LoadedPacks, io: std.Io, dir_path: []const u8) LoadError!void {
         var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch |err| switch (err) {
             error.FileNotFound => return,
             else => return error.PackDirectoryUnreadable,
@@ -1469,7 +1458,7 @@ pub const LoadedPacks = struct {
         while (true) {
             const entry = (entries.next(io) catch return error.PackDirectoryUnreadable) orelse break;
             if (entry.kind != .file) continue;
-            if (!discoveryNameForKey(entry.name, &key_hex)) continue;
+            if (!isDiscoveryName(entry.name)) continue;
             const bytes = dir.readFileAlloc(io, entry.name, self.allocator, .limited(1024 * 1024 * 1024)) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => return error.PackDirectoryUnreadable,
@@ -1492,14 +1481,72 @@ pub const LoadedPacks = struct {
     }
 
     /// Whether a pack file name is a discovery pack
-    /// (`discovery-<key>-<content>.rpk`) of `key`.
-    fn discoveryNameForKey(name: []const u8, key_hex: []const u8) bool {
-        if (!std.mem.endsWith(u8, name, ".rpk")) return false;
-        const stem = name[0 .. name.len - ".rpk".len];
-        const prefix = "discovery-";
-        if (!std.mem.startsWith(u8, stem, prefix)) return false;
-        const rest = stem[prefix.len..];
-        return rest.len > key_hex.len and std.mem.startsWith(u8, rest, key_hex) and rest[key_hex.len] == '-';
+    /// (`discovery-<key>-<content>.rpk`).
+    fn isDiscoveryName(name: []const u8) bool {
+        return std.mem.endsWith(u8, name, ".rpk") and std.mem.startsWith(u8, name, "discovery-");
+    }
+
+    /// Register every code pack in `dir_path`, from every revision of its
+    /// module, reading only each pack's header and offers. Offers are keyed
+    /// by declaration, so a pack an earlier revision wrote still serves the
+    /// specializations an edit left alone; the pack's artifacts are read
+    /// when a lookup selects one of its offers.
+    pub fn loadStoreDir(self: *LoadedPacks, io: std.Io, dir_path: []const u8) LoadError!void {
+        const allocator = self.allocator;
+        var names = std.ArrayList([]u8).empty;
+        defer {
+            for (names.items) |name| allocator.free(name);
+            names.deinit(allocator);
+        }
+        {
+            var dir = std.Io.Dir.cwd().openDir(io, dir_path, .{ .iterate = true }) catch |err| switch (err) {
+                error.FileNotFound => return,
+                else => return error.PackDirectoryUnreadable,
+            };
+            defer dir.close(io);
+            var entries = dir.iterate();
+            while (true) {
+                const entry = (entries.next(io) catch return error.PackDirectoryUnreadable) orelse break;
+                if (entry.kind != .file) continue;
+                if (!std.mem.endsWith(u8, entry.name, ".rpk") or isDiscoveryName(entry.name)) continue;
+                try names.ensureUnusedCapacity(allocator, 1);
+                names.appendAssumeCapacity(try allocator.dupe(u8, entry.name));
+            }
+        }
+        std.mem.sort([]u8, names.items, {}, nameLessThan);
+        for (names.items) |name| {
+            const path = try std.fs.path.join(allocator, &.{ dir_path, name });
+            var path_owned = true;
+            defer if (path_owned) allocator.free(path);
+            const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return error.PackDirectoryUnreadable;
+            defer file.close(io);
+            var header: [PackFile.header_len]u8 = undefined;
+            const header_read = file.readPositionalAll(io, &header, 0) catch return error.PackDirectoryUnreadable;
+            if (header_read != header.len) return error.MalformedPack;
+            const location = PackFile.readIndexLocation(&header) catch |err| switch (err) {
+                error.UnsupportedPackVersion => continue,
+                error.OutOfMemory, error.MalformedPack => return err,
+            };
+            const length = file.length(io) catch return error.PackDirectoryUnreadable;
+            if (location.specs_offset > length) return error.MalformedPack;
+            const tail = try allocator.alloc(u8, @intCast(length - location.specs_offset));
+            var tail_owned = true;
+            defer if (tail_owned) allocator.free(tail);
+            const tail_read = file.readPositionalAll(io, tail, location.specs_offset) catch return error.PackDirectoryUnreadable;
+            if (tail_read != tail.len) return error.MalformedPack;
+            var index = try PackFile.readIndexAt(allocator, location, tail);
+            errdefer index.deinit();
+            const id: u32 = @intCast(self.store_packs.items.len);
+            for (index.offers.specs) |spec| {
+                const entry = try self.candidates.getOrPut(allocator, spec.key);
+                if (!entry.found_existing) entry.value_ptr.* = .empty;
+                const list = entry.value_ptr;
+                if (list.items.len == 0 or list.items[list.items.len - 1] != id) try list.append(allocator, id);
+            }
+            try self.store_packs.append(allocator, .{ .contents = .{ .path = path }, .index = index, .index_bytes = tail });
+            path_owned = false;
+            tail_owned = false;
+        }
     }
 
     /// Own a copy of a prepared program's module set, so that its first code
@@ -1529,15 +1576,31 @@ pub const LoadedPacks = struct {
     }
 
     fn loadPendingDiscovery(self: *LoadedPacks, pending: Pending, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) LoadError!void {
-        if (pending.build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
-            try pending.store.loadDiscoveryIdentity(pending.io, self, placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes);
-        }
+        const placements = try self.pendingPlacements(pending, root_artifact);
+        defer self.allocator.free(placements);
+        for (placements) |placement| try pending.store.loadDiscoveryIdentity(pending.io, self, placement.origin, placement.identity);
+    }
+
+    /// The placements of the root module and every module it lowers against,
+    /// each once: a placement holds every revision of its module's packs.
+    fn pendingPlacements(self: *LoadedPacks, pending: Pending, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) LoadError![]compile.BuildEnv.PackPlacement {
+        var placements = std.ArrayList(compile.BuildEnv.PackPlacement).empty;
+        errdefer placements.deinit(self.allocator);
+        var seen = std.AutoHashMap([32]u8, void).init(self.allocator);
+        defer seen.deinit();
         const artifacts = try pending.build_env.collectVisibleArtifacts(self.allocator, root_artifact);
         defer self.allocator.free(artifacts);
+        try placements.ensureTotalCapacity(self.allocator, artifacts.len + 1);
+        if (pending.build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
+            try seen.put(placement.identity, {});
+            placements.appendAssumeCapacity(placement);
+        }
         for (artifacts) |artifact| {
             const placement = pending.build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
-            try pending.store.loadDiscoveryIdentity(pending.io, self, placement.origin, placement.identity, artifact.codeGenerationKey().bytes);
+            if ((try seen.getOrPut(placement.identity)).found_existing) continue;
+            placements.appendAssumeCapacity(placement);
         }
+        return placements.toOwnedSlice(self.allocator);
     }
 
     fn recordFailure(self: *LoadedPacks, err: LoadError) LoadError {
@@ -1590,6 +1653,7 @@ pub const LoadedPacks = struct {
                 if (!closed[spec.artifact]) continue;
                 if (root.callable_contract == null) continue;
                 demand.literal_reads = summaries[spec.artifact].literal_reads;
+                if (!self.factsNameCurrentModules(demand, summaries[spec.artifact].checked_roots, spec.comptime_root_reads)) continue;
                 const hit: Common.SpecCacheHit = .{
                     .identity = identity.bytes,
                     .demand = demand,
@@ -1693,6 +1757,9 @@ pub const LoadedPacks = struct {
         // is not classified by which consumer first demanded its procedures.
         if (artifact.root_materialization != null) return false;
         for (artifact.materializations) |dependency| {
+            // An earlier revision's packs declare that revision's
+            // materializers, which this program does not provide.
+            if (self.checkedArtifact(dependency.materialization.module) == null) return false;
             if (!self.materializers.contains(dependency.materialization.wrapper_identity)) return false;
         }
         for (artifact.source_events) |certificate| {
@@ -1996,6 +2063,35 @@ pub const LoadedPacks = struct {
         try reads.put(.{ .producer = producer, .cause = digest }, read);
     }
 
+    /// Whether every module an offer's demand facts name is in the program
+    /// being built. Offers are keyed by declaration, so a pack an earlier
+    /// revision of a module wrote can offer a specialization whose facts
+    /// name that revision's roots and expressions; those ids mean nothing in
+    /// any other revision. A module's key covers its imports' keys, so a
+    /// current module's ids name current declarations throughout.
+    fn factsNameCurrentModules(
+        self: *const LoadedPacks,
+        demand: lir.Program.CachedCtfeDemand,
+        checked_roots: []const Common.CheckedRootUse,
+        comptime_root_reads: []const lir.CheckedPipeline.ComptimeRootRead,
+    ) bool {
+        for (demand.eager_reads) |read| {
+            if (self.checkedArtifact(read.module) == null) return false;
+            if (read.cause.module) |module| if (self.checkedArtifact(module) == null) return false;
+        }
+        for (demand.literal_reads) |read| {
+            if (read.cause.module) |module| if (self.checkedArtifact(module) == null) return false;
+            const recipe = read.recipe;
+            if (self.checkedArtifact(recipe.module) == null or
+                self.checkedArtifact(recipe.method_scope) == null or
+                self.checkedArtifact(recipe.owner_template.artifact.bytes) == null) return false;
+            for (recipe.local_contexts) |context| if (self.checkedArtifact(context.module) == null) return false;
+        }
+        for (checked_roots) |use| if (self.checkedArtifact(use.module) == null) return false;
+        for (comptime_root_reads) |read| if (self.checkedArtifact(read.module) == null) return false;
+        return true;
+    }
+
     fn checkedArtifact(self: *const LoadedPacks, identity: [32]u8) ?*const check.CheckedArtifact.CheckedModuleArtifact {
         if (self.checked_root) |root| if (std.mem.eql(u8, &root.key.bytes, &identity)) return root;
         const pending = self.pending orelse return null;
@@ -2269,15 +2365,9 @@ pub const LoadedPacks = struct {
     }
 
     fn loadPending(self: *LoadedPacks, pending: Pending, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) LoadError!void {
-        if (pending.build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
-            try pending.store.loadIdentity(pending.io, self, placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes);
-        }
-        const artifacts = try pending.build_env.collectVisibleArtifacts(self.allocator, root_artifact);
-        defer self.allocator.free(artifacts);
-        for (artifacts) |artifact| {
-            const placement = pending.build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
-            try pending.store.loadIdentity(pending.io, self, placement.origin, placement.identity, artifact.codeGenerationKey().bytes);
-        }
+        const placements = try self.pendingPlacements(pending, root_artifact);
+        defer self.allocator.free(placements);
+        for (placements) |placement| try pending.store.loadIdentity(pending.io, self, placement.origin, placement.identity);
     }
 
     pub fn deinit(self: *LoadedPacks) void {
@@ -2295,7 +2385,11 @@ pub const LoadedPacks = struct {
         for (self.staged.items) |bytes| self.allocator.free(bytes);
         self.staged.deinit(self.allocator);
         for (self.store_packs.items) |*source| {
-            if (source.bytes) |bytes| self.allocator.free(bytes);
+            switch (source.contents) {
+                .bytes, .path => |owned| self.allocator.free(owned),
+                .admitted => {},
+            }
+            if (source.index_bytes) |bytes| self.allocator.free(bytes);
             source.index.deinit();
         }
         self.store_packs.deinit(self.allocator);
