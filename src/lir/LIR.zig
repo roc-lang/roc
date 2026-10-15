@@ -384,6 +384,9 @@ pub const RcReason = enum(u8) {
     jump_balance,
     /// `ArcPlanTerminal.join.releases`: owned state minus the join entry keep.
     join_entry_balance,
+    /// `ArcPlan.entry_releases`: owned state a control-split successor never
+    /// reads.
+    branch_entry,
     /// `ArcPlanTerminal.terminal.releases`: owned state not kept past a
     /// terminal statement.
     scope_exit,
