@@ -583,17 +583,15 @@ fn writeDiscriminant(out: [*]u8, offset: u32, size: u32, value: u64) void {
     }
 }
 
-/// Public value `StrFromUtf8Layout`.
+/// Where `roc_builtins_str_from_utf8_result` writes its result: a
+/// `Try(Str, { index : U64, problem : Utf8Problem })`, whose `Err` is
+/// discriminant 0 and `Ok` is 1 (design.md "Builtins Build Their Own Tag
+/// Unions").
 pub const StrFromUtf8Layout = extern struct {
-    ok_tag: u64,
-    err_tag: u64,
-    outer_disc_offset: u32,
-    outer_disc_size: u32,
+    disc_offset: u32,
+    disc_size: u32,
     err_index_offset: u32,
     err_problem_offset: u32,
-    inner_disc_offset: u32,
-    inner_disc_size: u32,
-    inner_bad_utf8_tag: u32,
 };
 
 /// Converts a UTF-8 byte list to a RocStr, writing the full result union (string or error details) to an output buffer.
@@ -604,14 +602,13 @@ pub fn roc_builtins_str_from_utf8_result(out: [*]u8, list_bytes: ?[*]u8, list_le
 
     if (result.is_ok) {
         utils.writeAs(RocStr, out, result.string, @src());
-        writeDiscriminant(out, layout.outer_disc_offset, layout.outer_disc_size, layout.ok_tag);
+        writeDiscriminant(out, layout.disc_offset, layout.disc_size, 1);
         return;
     }
 
     utils.writeAs(u64, out + layout.err_index_offset, result.byte_index, @src());
     utils.writeAs(u8, out + layout.err_problem_offset, @backingInt(result.problem_code), @src());
-    writeDiscriminant(out, layout.inner_disc_offset, layout.inner_disc_size, layout.inner_bad_utf8_tag);
-    writeDiscriminant(out, layout.outer_disc_offset, layout.outer_disc_size, layout.err_tag);
+    writeDiscriminant(out, layout.disc_offset, layout.disc_size, 0);
 }
 
 /// Wrapper: strEscapeAndQuote(RocStr, *RocOps) -> RocStr

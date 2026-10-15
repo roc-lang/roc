@@ -2472,6 +2472,36 @@ A root that no compilation evaluated, in a module this compilation does not
 finalize, has no slot to read; a program that reads it evaluates its body in
 place, as a pack program does.
 
+## Builtins Build Their Own Tag Unions
+
+If a builtin function's type contains a structural tag union anywhere—in its
+result, its arguments, or a callback's result—the builtin is implemented in
+plain Roc code for that tag union. No exceptions. When the builtin needs work
+that Roc code cannot do, that work is a private helper the compiler
+implements (a low-level operation), and the helper's type contains no
+structural tag union: its tag-union-shaped results are nominal (`Try`, or a
+private nominal such as `Num.RawOrder`) or have no tags at all (`Try(I64, {})`,
+a record). The public builtin converts between the helper's type and its own
+tag unions in Roc.
+
+The reason is that a structural tag union in an output position is open for the
+builtin's callers: `I64.from_str(s)?` may sit in a function returning
+`Try(I64, [AboveLimit, BadNumStr])`, and the call is then specialized at that
+wider union, whose runtime representation numbers its tags differently. Roc
+code that constructs `Err(BadNumStr)` constructs it in whatever union the
+specialization requests, but compiler-implemented code writes a fixed
+representation and cannot know which union it is writing into. Keeping
+structural tag unions out of every compiler-implemented type removes that
+mismatch at the source: a backend only ever writes or reads a representation
+whose tags the helper's own nominal declaration fixes, so no backend, layout
+search, or checker coercion has to recover which tag it meant. The same holds
+for tag unions a helper reads, such as a sort comparator's result: the public
+builtin converts the caller's union into the helper's nominal one.
+
+`src/check/test/builtin_low_level_types_test.zig` walks the type of every
+Builtin definition the compiler implements and fails on any structural tag
+union.
+
 ## Backend Builtins
 
 Backend builtin linking is part of backend code generation, not a later repair

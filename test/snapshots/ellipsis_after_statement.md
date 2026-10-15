@@ -357,7 +357,7 @@ after_ellipsis = |_| {
 			(e-block
 				(s-let
 					(p-underscore)
-					(e-call (constraint-fn-var 351)
+					(e-call (constraint-fn-var 353)
 						(e-lookup-local
 							(p-assign (ident "f")))
 						(e-num (value "1"))))
