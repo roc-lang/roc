@@ -873,7 +873,7 @@ lambda_arg = |f| f(|_| ...)
 		(e-lambda
 			(args
 				(p-assign (ident "f")))
-			(e-call (constraint-fn-var 562)
+			(e-call (constraint-fn-var 564)
 				(e-lookup-local
 					(p-assign (ident "f")))
 				(e-not-implemented)
@@ -942,7 +942,7 @@ lambda_arg = |f| f(|_| ...)
 				(s-let
 					(p-assign (ident "#interp_0"))
 					(e-not-implemented))
-				(e-interpolation (constraint-fn-var 583) (dispatcher-var 98)
+				(e-interpolation (constraint-fn-var 585) (dispatcher-var 98)
 					(first
 						(e-literal (string "a ")))
 					(parts
@@ -1044,7 +1044,7 @@ lambda_arg = |f| f(|_| ...)
 		(e-lambda
 			(args
 				(p-assign (ident "a")))
-			(e-dispatch-call (method "plus") (constraint-fn-var 617)
+			(e-dispatch-call (method "plus") (constraint-fn-var 619)
 				(receiver
 					(e-not-implemented))
 				(args
@@ -1055,7 +1055,7 @@ lambda_arg = |f| f(|_| ...)
 		(e-lambda
 			(args
 				(p-assign (ident "a")))
-			(e-dispatch-call (method "plus") (constraint-fn-var 619)
+			(e-dispatch-call (method "plus") (constraint-fn-var 621)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "a"))))
@@ -1076,7 +1076,7 @@ lambda_arg = |f| f(|_| ...)
 		(e-lambda
 			(args
 				(p-assign (ident "a")))
-			(e-dispatch-call (method "plus") (constraint-fn-var 624)
+			(e-dispatch-call (method "plus") (constraint-fn-var 626)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "a"))))
@@ -1128,8 +1128,8 @@ lambda_arg = |f| f(|_| ...)
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 656)
-				(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18273") (target-def "18273"))
+			(e-call (constraint-fn-var 658)
+				(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18292") (target-def "18292"))
 				(e-not-implemented))))
 	(d-let
 		(p-assign (ident "question"))
@@ -1177,7 +1177,7 @@ lambda_arg = |f| f(|_| ...)
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 701)
+			(e-call (constraint-fn-var 703)
 				(e-not-implemented)
 				(e-num (value "1")))))
 	(d-let
@@ -1185,7 +1185,7 @@ lambda_arg = |f| f(|_| ...)
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-dispatch-call (method "range_inclusive_to") (constraint-fn-var 714)
+			(e-dispatch-call (method "range_inclusive_to") (constraint-fn-var 716)
 				(receiver
 					(e-num (value "1")))
 				(args
@@ -1280,7 +1280,7 @@ lambda_arg = |f| f(|_| ...)
 		(e-lambda
 			(args
 				(p-assign (ident "f")))
-			(e-call (constraint-fn-var 823)
+			(e-call (constraint-fn-var 825)
 				(e-lookup-local
 					(p-assign (ident "f")))
 				(e-lambda

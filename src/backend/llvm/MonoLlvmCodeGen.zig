@@ -506,15 +506,10 @@ pub const MonoLlvmCodeGen = struct {
     };
 
     const StrFromUtf8LayoutInfo = struct {
-        ok_tag: u32,
-        err_tag: u32,
-        outer_disc_offset: u32,
-        outer_disc_size: u32,
+        disc_offset: u32,
+        disc_size: u32,
         err_index_offset: u32,
         err_problem_offset: u32,
-        inner_disc_offset: u32,
-        inner_disc_size: u32,
-        inner_bad_utf8_tag: u32,
     };
 
     const StrSplitLayoutInfo = struct {
@@ -10159,15 +10154,10 @@ pub const MonoLlvmCodeGen = struct {
             "str_from_utf8_layout",
         );
 
-        try self.storeRawInt(layout_ptr, 0, .i64, info.ok_tag, 8);
-        try self.storeRawInt(layout_ptr, 8, .i64, info.err_tag, 8);
-        try self.storeRawInt(layout_ptr, 16, .i32, info.outer_disc_offset, 4);
-        try self.storeRawInt(layout_ptr, 20, .i32, info.outer_disc_size, 4);
-        try self.storeRawInt(layout_ptr, 24, .i32, info.err_index_offset, 4);
-        try self.storeRawInt(layout_ptr, 28, .i32, info.err_problem_offset, 4);
-        try self.storeRawInt(layout_ptr, 32, .i32, info.inner_disc_offset, 4);
-        try self.storeRawInt(layout_ptr, 36, .i32, info.inner_disc_size, 4);
-        try self.storeRawInt(layout_ptr, 40, .i32, info.inner_bad_utf8_tag, 4);
+        const ResultLayout = builtins.dev_wrappers.StrFromUtf8Layout;
+        inline for (.{ "disc_offset", "disc_size", "err_index_offset", "err_problem_offset" }) |field| {
+            try self.storeRawInt(layout_ptr, @offsetOf(ResultLayout, field), .i32, @field(info, field), 4);
+        }
 
         var call_args = try self.rocListArgs1(arg);
         defer call_args.deinit(self.allocator);
@@ -12412,72 +12402,21 @@ pub const MonoLlvmCodeGen = struct {
         return variants.get(discriminant).payload_layout;
     }
 
+    /// Where `str_from_utf8` writes into its `Try(Str, { index : U64, problem :
+    /// Utf8Problem })` result, whose `Err` is discriminant 0.
     fn resolveStrFromUtf8Layout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) Error!StrFromUtf8LayoutInfo {
         const ret_layout_val = self.layoutValue(layout_idx);
         if (ret_layout_val.tag != .tag_union) return error.CompilationFailed;
         const tu_data = self.layouts().getTagUnionData(ret_layout_val.getTagUnion().idx);
-        const variants = self.layouts().getTagUnionVariants(tu_data);
-
-        var ok_disc: ?u32 = null;
-        var err_disc: ?u32 = null;
-        var err_record_idx: ?layout.StructIdx = null;
-        var inner_disc_offset: u32 = 0;
-        var inner_disc_size: u32 = 0;
-        var inner_bad_utf8_disc: u32 = 0;
-
-        for (0..variants.len) |i| {
-            const payload = variants.get(@intCast(i)).payload_layout;
-            const candidate = self.unwrapSingleFieldPayloadLayout(payload) orelse payload;
-            if (candidate == .str) {
-                ok_disc = @intCast(i);
-                continue;
-            }
-
-            err_disc = @intCast(i);
-            const err_layout = self.layoutValue(candidate);
-            if (err_layout.tag == .struct_) {
-                err_record_idx = err_layout.getStruct().idx;
-            } else if (err_layout.tag == .tag_union) {
-                const inner_tu = self.layouts().getTagUnionData(err_layout.getTagUnion().idx);
-                if (self.findBadUtf8Variant(inner_tu)) |info| {
-                    err_record_idx = info.struct_idx;
-                    inner_disc_offset = inner_tu.discriminant_offset.get(self.layouts().targetUsize());
-                    inner_disc_size = inner_tu.discriminant_size;
-                    inner_bad_utf8_disc = info.disc;
-                }
-            }
-        }
-
-        const rec_idx = err_record_idx orelse return error.CompilationFailed;
-        const struct_data = self.layouts().getStructData(rec_idx);
-        const fields = self.layouts().struct_fields.sliceRange(struct_data.getFields());
-        var index_offset: ?u32 = null;
-        var problem_offset: ?u32 = null;
-        for (0..fields.len) |i| {
-            const field = fields.get(i);
-            const field_layout = self.layoutValue(field.layout);
-            const field_size = self.layoutByteSize(field.layout);
-            const field_offset = self.layouts().getStructFieldOffsetByOriginalIndex(rec_idx, field.index);
-            const is_index = field_layout.tag == .scalar and
-                field_layout.getScalar().tag == .int and
-                (field_layout.getScalar().getInt() == .u64 or field_layout.getScalar().getInt() == .i64);
-            if (is_index and field_size == 8) {
-                index_offset = field_offset;
-            } else if (field_size == 1) {
-                problem_offset = field_offset;
-            }
-        }
-
+        const err_payload = self.layouts().getTagUnionVariants(tu_data).get(0).payload_layout;
+        const err_layout = self.layoutValue(self.unwrapSingleFieldPayloadLayout(err_payload) orelse err_payload);
+        if (err_layout.tag != .struct_) return error.CompilationFailed;
+        const rec_idx = err_layout.getStruct().idx;
         return .{
-            .ok_tag = ok_disc orelse return error.CompilationFailed,
-            .err_tag = err_disc orelse return error.CompilationFailed,
-            .outer_disc_offset = tu_data.discriminant_offset.get(self.layouts().targetUsize()),
-            .outer_disc_size = tu_data.discriminant_size,
-            .err_index_offset = index_offset orelse return error.CompilationFailed,
-            .err_problem_offset = problem_offset orelse return error.CompilationFailed,
-            .inner_disc_offset = inner_disc_offset,
-            .inner_disc_size = inner_disc_size,
-            .inner_bad_utf8_tag = inner_bad_utf8_disc,
+            .disc_offset = tu_data.discriminant_offset.get(self.layouts().targetUsize()),
+            .disc_size = tu_data.discriminant_size,
+            .err_index_offset = self.layouts().getStructFieldOffsetByOriginalIndex(rec_idx, 0),
+            .err_problem_offset = self.layouts().getStructFieldOffsetByOriginalIndex(rec_idx, 1),
         };
     }
 
@@ -12549,38 +12488,6 @@ pub const MonoLlvmCodeGen = struct {
         const field = fields.get(0);
         if (field.index != 0) return null;
         return field.layout;
-    }
-
-    fn findBadUtf8Variant(self: *MonoLlvmCodeGen, inner_tu: *const layout.TagUnionData) ?struct { disc: u32, struct_idx: layout.StructIdx } {
-        const variants = self.layouts().getTagUnionVariants(inner_tu);
-        for (0..variants.len) |i| {
-            const payload = variants.get(@intCast(i)).payload_layout;
-            const candidate = self.unwrapSingleFieldPayloadLayout(payload) orelse payload;
-            const payload_layout = self.layoutValue(candidate);
-            if (payload_layout.tag != .struct_) continue;
-
-            const struct_idx = payload_layout.getStruct().idx;
-            const struct_data = self.layouts().getStructData(struct_idx);
-            const fields = self.layouts().struct_fields.sliceRange(struct_data.getFields());
-            if (fields.len != 2) continue;
-
-            var has_index_field = false;
-            var has_problem_field = false;
-            for (0..fields.len) |field_i| {
-                const field = fields.get(field_i);
-                const field_size = self.layoutByteSize(field.layout);
-                switch (field.index) {
-                    0 => has_index_field = field_size == 8,
-                    1 => has_problem_field = field_size == 1,
-                    else => {},
-                }
-            }
-            if (has_index_field and has_problem_field) {
-                return .{ .disc = @intCast(i), .struct_idx = struct_idx };
-            }
-        }
-
-        return null;
     }
 
     fn resolveStructBase(self: *MonoLlvmCodeGen, source: LocalId) Error!ResolvedBase {

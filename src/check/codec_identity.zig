@@ -191,7 +191,7 @@ const ContentDigester = struct {
         self.writeU8(@backingInt(std.meta.activeTag(node.instantiation)));
         switch (node.instantiation) {
             .monomorphic => {},
-            .callable, .derived_from_callable => |ty| try self.writeType(ty),
+            .callable, .alias, .derived_from_callable => |ty| try self.writeType(ty),
         }
         const subst = self.table.site_substitutions[node.subst.start..][0..node.subst.len];
         self.writeU32(@intCast(subst.len));
@@ -232,7 +232,17 @@ const ContentDigester = struct {
             },
             .structural => |kind| self.writeU8(@backingInt(kind)),
         }
-        self.writeU8(@intFromBool(target.reached_through_alias));
+        self.writeU8(@intFromBool(target.alias != null));
+        if (target.alias) |alias| switch (alias) {
+            .top_level => |pattern| {
+                self.writeU8(0);
+                self.writeU32(@backingInt(pattern));
+            },
+            .local => |local| {
+                self.writeU8(1);
+                self.writeU32(@backingInt(local.lookup));
+            },
+        };
     }
 
     fn writeRefs(self: *ContentDigester, span: Span) Allocator.Error!void {
@@ -477,6 +487,7 @@ const Comparer = struct {
                     switch (a.instantiation) {
                         .monomorphic => {},
                         .callable => |ty| try self.typesPair(ty, b.instantiation.callable),
+                        .alias => |ty| try self.typesPair(ty, b.instantiation.alias),
                         .derived_from_callable => |ty| try self.typesPair(ty, b.instantiation.derived_from_callable),
                     }
                     const left_subst = self.table.site_substitutions[a.subst.start..][0..a.subst.len];

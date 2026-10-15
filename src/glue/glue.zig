@@ -302,7 +302,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
             &types_list,
             result_buf.ptr,
             &runtime_env,
-            root_artifact.key,
+            root_artifact.executableIdentity(),
             args,
             roc_ctx,
             std_io,
@@ -529,7 +529,7 @@ fn buildGlueSpecPluginFileInner(
     var spec = try compileGlueSpec(gpa, stderr, glue_spec, false, report_config, .lss, std_io);
     defer spec.deinit(gpa);
 
-    const stamp = gluePluginStamp(spec.root_artifact.key, .lss);
+    const stamp = gluePluginStamp(spec.root_artifact.executableIdentity(), .lss);
     const object = try buildGluePlugin(gpa, &spec.lowered, spec.glue_proc, spec.arg_layouts, stamp, opt, std_io);
     defer gpa.free(object);
     std.Io.Dir.cwd().writeFile(std_io, .{ .sub_path = output_path, .data = object }) catch return error.CompilationFailed;
@@ -577,15 +577,15 @@ fn runGlueSpecPlugin(
     types_list: *RocList,
     result_ptr: [*]u8,
     runtime_env: *eval_mod.RuntimeHostEnv,
-    root_artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
+    executable_identity: [32]u8,
     args: GlueArgs,
     roc_ctx: compile.CoreCtx,
     std_io: std.Io,
 ) GlueError!void {
     if (builtin.target.os.tag == .freestanding) return error.GluePluginUnavailable;
 
-    const stamp = gluePluginStamp(root_artifact_key, args.specialization_strategy);
-    var plugin: ?BuiltGluePlugin = try getOrBuildGluePlugin(gpa, lowered, glue_proc, arg_layouts, root_artifact_key, stamp, args, roc_ctx, std_io);
+    const stamp = gluePluginStamp(executable_identity, args.specialization_strategy);
+    var plugin: ?BuiltGluePlugin = try getOrBuildGluePlugin(gpa, lowered, glue_proc, arg_layouts, executable_identity, stamp, args, roc_ctx, std_io);
     defer if (plugin) |built| built.deinit(gpa);
 
     var lib = blk: {
@@ -615,7 +615,7 @@ fn runGlueSpecPlugin(
             first.deinit(gpa);
             plugin = null;
 
-            plugin = try getOrBuildGluePlugin(gpa, lowered, glue_proc, arg_layouts, root_artifact_key, stamp, args, roc_ctx, std_io);
+            plugin = try getOrBuildGluePlugin(gpa, lowered, glue_proc, arg_layouts, executable_identity, stamp, args, roc_ctx, std_io);
             break :blk try loadVerifiedGluePlugin(gpa, stderr, plugin.?, &stamp, true);
         };
     };
@@ -672,7 +672,7 @@ fn getOrBuildGluePlugin(
     lowered: *lir.CheckedPipeline.LoweredProgram,
     glue_proc: lir.LirProcSpecId,
     arg_layouts: []const layout.Idx,
-    root_artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
+    executable_identity: [32]u8,
     stamp: GluePluginStampV1,
     args: GlueArgs,
     roc_ctx: compile.CoreCtx,
@@ -687,7 +687,7 @@ fn getOrBuildGluePlugin(
         return .{ .bytes = try buildGluePlugin(gpa, lowered, glue_proc, arg_layouts, stamp, args.opt, std_io), .cache_path = null };
     }
 
-    const cache_path = gluePluginCachePath(gpa, root_artifact_key, stamp, args.opt, roc_ctx) catch |err| switch (err) {
+    const cache_path = gluePluginCachePath(gpa, executable_identity, stamp, args.opt, roc_ctx) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.NoHomeDirectory,
         => return error.BuildEnvInit,
@@ -851,7 +851,7 @@ fn targetPtrWidthBits(target_usize: base.target.TargetUsize) u8 {
 
 fn gluePluginCachePath(
     allocator: Allocator,
-    root_artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
+    executable_identity: [32]u8,
     stamp: GluePluginStampV1,
     opt: GlueOpt,
     roc_ctx: compile.CoreCtx,
@@ -860,7 +860,7 @@ fn gluePluginCachePath(
     const version_dir = try config.getVersionCacheDir(allocator);
     defer allocator.free(version_dir);
 
-    const digest = gluePluginOutputHash(root_artifact_key, stamp);
+    const digest = gluePluginOutputHash(executable_identity, stamp);
     const digest_hex = std.fmt.bytesToHex(digest, .lower);
     const filename = try std.fmt.allocPrint(allocator, "{s}{s}", .{ digest_hex[0..], objectExtension() });
     defer allocator.free(filename);
@@ -894,10 +894,10 @@ fn deleteGluePluginCacheEntry(plugin: BuiltGluePlugin, std_io: std.Io) void {
     std.Io.Dir.cwd().deleteFile(std_io, std.mem.sliceTo(path, 0)) catch {};
 }
 
-fn gluePluginOutputHash(root_artifact_key: CheckedArtifact.CheckedModuleArtifactKey, stamp: GluePluginStampV1) [32]u8 {
+fn gluePluginOutputHash(executable_identity: [32]u8, stamp: GluePluginStampV1) [32]u8 {
     var hasher = std.crypto.hash.Blake3.init(.{});
     hashTaggedBytes(&hasher, "purpose", "roc-glue-plugin-object-v1");
-    hashTaggedBytes(&hasher, "root-artifact-key", &root_artifact_key.bytes);
+    hashTaggedBytes(&hasher, "executable-identity", &executable_identity);
     hashTaggedBytes(&hasher, "stamp", std.mem.asBytes(&stamp));
     var digest: [32]u8 = undefined;
     hasher.final(&digest);
@@ -905,7 +905,7 @@ fn gluePluginOutputHash(root_artifact_key: CheckedArtifact.CheckedModuleArtifact
 }
 
 fn gluePluginStamp(
-    root_artifact_key: CheckedArtifact.CheckedModuleArtifactKey,
+    executable_identity: [32]u8,
     specialization_strategy: base.SpecializationStrategy,
 ) GluePluginStampV1 {
     return .{
@@ -917,16 +917,14 @@ fn gluePluginStamp(
         .target_hash = hashTarget(),
         .compiler_hash = hashCompiler(),
         .glue_platform_hash = compile.compiler_platforms.sourceHash(.glue),
-        .artifact_input_hash = root_artifact_key.bytes,
+        .artifact_input_hash = executable_identity,
     };
 }
 
 test "glue plugin output hash includes specialization strategy" {
-    const artifact_key: CheckedArtifact.CheckedModuleArtifactKey = .{
-        .bytes = @as([32]u8, @splat(0x5a)),
-    };
-    const lss_hash = gluePluginOutputHash(artifact_key, gluePluginStamp(artifact_key, .lss));
-    const boxy_hash = gluePluginOutputHash(artifact_key, gluePluginStamp(artifact_key, .boxy));
+    const executable_identity: [32]u8 = @splat(0x5a);
+    const lss_hash = gluePluginOutputHash(executable_identity, gluePluginStamp(executable_identity, .lss));
+    const boxy_hash = gluePluginOutputHash(executable_identity, gluePluginStamp(executable_identity, .boxy));
     try std.testing.expect(!std.mem.eql(u8, &lss_hash, &boxy_hash));
 }
 

@@ -100,7 +100,7 @@ NO CHANGE
 					(p-assign (ident "#interp_0"))
 					(e-lookup-local
 						(p-assign (ident "name"))))
-				(e-interpolation (constraint-fn-var 248) (dispatcher-var 9)
+				(e-interpolation (constraint-fn-var 250) (dispatcher-var 9)
 					(first
 						(e-literal (string "hi ")))
 					(parts
@@ -109,7 +109,7 @@ NO CHANGE
 						(e-literal (string "")))))))
 	(d-let
 		(p-assign (ident "ok"))
-		(e-call (constraint-fn-var 267)
+		(e-call (constraint-fn-var 269)
 			(e-lookup-local
 				(p-assign (ident "greet")))
 			(e-string
@@ -118,7 +118,7 @@ NO CHANGE
 			(ty-lookup (name "Str") (builtin))))
 	(d-let
 		(p-assign (ident "bad"))
-		(e-call (constraint-fn-var 277)
+		(e-call (constraint-fn-var 279)
 			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-typed-int (value "42") (type "U64")))
 		(annotation
