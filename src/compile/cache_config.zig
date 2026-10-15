@@ -319,7 +319,7 @@ pub const Constants = struct {
     ///      field of their own.
     /// 150: Module environments record row-coerced results in place of
     ///      row-coerced callees and closed-result definitions.
-    pub const CACHE_VERSION = 150;
+    pub const CACHE_VERSION = 151;
 };
 
 /// Configuration for the Roc cache system.

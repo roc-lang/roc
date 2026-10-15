@@ -4594,9 +4594,9 @@ listed above, `...` and `crash` stubs (with their dedicated hint), and a
 rejected binding used at two types (a list, a function value called at two
 types, a local, and a top-level binding used from two functions), each with
 exactly one error; an unannotated weak value used at two types is an ordinary
-mismatch. Using a top-level value at two wider tag unions is not two types:
-the value keeps its one type, and each use widens it (Value Rows: Local
-Values Share, Top-Level Values Widen At Each Use).
+mismatch. Using an unannotated top-level value at two wider tag unions is not
+two types either: its uses share one row and widen it together (Value Rows:
+Uses Share One Row).
 `test/echo/value_annotation_not_polymorphic.roc` runs a program past its
 unreached rejected bindings until it reaches one and crashes there, and
 `test/echo/issue_12016_stored_branch_lambdas.roc` runs the stored lambdas.
@@ -8734,7 +8734,7 @@ rules:
 | --- | --- | --- |
 | A FUNCTION signature | A quantified flex in the generalized scheme, instantiated fresh at every call | Each caller may use the result at a wider union, independently of every other caller |
 | A LOCAL VALUE binding | ONE weak flex shared by every use in the enclosing body | Uses may widen the shared row, and what accumulates is what every use sees |
-| A TOP-LEVEL VALUE binding | None after the definition: the row is closed at the definition, at exactly the tags the definition produces | Each use may use the value at a wider union, independently of every other use, through a widening conversion (Value Rows: Local Values Share, Top-Level Values Widen At Each Use) |
+| A TOP-LEVEL VALUE binding | ONE weak flex shared by every use in the module, bounded by the annotation, closed when the module finishes checking | Nothing: the row lists exactly the annotation's tags at every use, and a use needing another tag is a mismatch at the use (Value Rows: Uses Share One Row) |
 | A HOST-BOUNDARY annotation (a hosted lambda, a `provides` def, a platform `requires` type) | None: the row is generated exactly as written (`AnnotationGenCtx.opening = .as_written`) | Nothing |
 
 A value binding generalizes only when its right-hand side does (Value
@@ -8857,10 +8857,10 @@ The two VALUE rows treat an inferred value (`x = Boom`) and an annotated one
 alike: the value's body is bounded by the audit, and writing `..` on a value
 is rejected (Value Bindings Generalize By Expression), because a value cannot
 quantify a row. A local value's shared row behaves like any inferred local
-row and is sealed by Monotype's row defaults. A top-level value's row closes
-at its definition, and its uses widen; Value Rows: Local Values Share,
-Top-Level Values Widen At Each Use states that rule and why each alternative
-was rejected.
+row and is sealed by Monotype's row defaults. A top-level value's row is
+shared by its module's uses and closes when the module finishes checking;
+Value Rows: Uses Share One Row states that rule and why each alternative was
+rejected.
 
 An ALIAS carries its implicit row variables as hidden ordinary rigid
 parameters. `MyResult(a) : Try(a, [MyError])` has an additional internal
@@ -9189,10 +9189,9 @@ host-specific rewrite was and why this is not it. A non-hosted implementation
 with a closed result row selected by generic dispatch is widened by the same
 join (`test/cli/WidenClosedImpl.roc` and its siblings).
 
-A top-level value's uses, in its own module and in every importer, widen
-through the same coercion applied to a value rather than to a call result
-(Value Rows: Local Values Share, Top-Level Values Widen At Each Use).
-`test/cli/ForwardedClosedRowSubsumption.roc` runs a forwarding and a
+A read of a top-level value is never widened this way: its rows are the
+value's own, shared by every use in its module (Value Rows: Uses Share One
+Row). `test/cli/ForwardedClosedRowSubsumption.roc` runs a forwarding and a
 constructing definition with one signature, each called at a wider union.
 
 #### Row Coercion Primitive
@@ -9201,10 +9200,10 @@ The lowering half of row widening is a checker-stamped expression,
 `row_coerce { value }` in checked bodies (`CheckedExprData.row_coerce`), whose
 own type is the wider row a value is used at and whose child keeps its own
 closed row. No CIR form lowers to it; checked-body construction stamps it for
-the two checker records that ask for it: a use of a top-level value
-(`ModuleEnv.RowCoercedUse`; Value Rows: Local Values Share, Top-Level Values
-Widen At Each Use) and a value with a closed row flowing into an annotated
-function's result (`ModuleEnv.RowCoercedResult`; Row Subsumption).
+the one checker record that asks for it: a value with a closed row flowing
+into an annotated function's result (`ModuleEnv.RowCoercedResult`; Row
+Subsumption). A read of a top-level value is never one (Value Rows: Uses
+Share One Row).
 
 The node converts nothing. It marks a place where the child's rows and the
 node's rows flow together, and every lowering makes them ONE row there (Row
@@ -9275,7 +9274,7 @@ entry: the primitive mutates no solved type graph.
 A row join makes two structural tag rows one row. Wherever a value whose type
 holds row `A` flows into a position whose type holds row `B`—a closed value
 into an annotated function's open result, a `return` or a `?` into its
-function's result, a top-level value into one of its uses—the compiler does
+function's result—the compiler does
 not convert the value. After type checking it gives `A` and `B` the same set
 of tags, and so the same discriminant numbering and the same representation,
 and the value is correct at its destination as it is. It is the row analogue
@@ -9316,10 +9315,24 @@ Solved where the call's result flows. The LIR builder lowers a `row_widen` as
 its child into the destination and asserts the two solved types are
 value-encoding equivalent, and a tag-union boundary asserts both sides list
 the same tags: no LIR re-tags a value. A top-level value's compile-time root
-joins its reads the same way: Lambda Solved unifies every `comptime_value`
-read with the root's return (`unifyComptimeValueRead`), so a read at a wider
-row widens the root's row in that program and the root's slot is laid out at
-the joined row, which evaluation then fills.
+and its reads are one type: Lambda Solved unifies every `comptime_value` read
+with the root's return (`unifyComptimeValueRead`), and since a read is at the
+value's own row (Value Rows: Uses Share One Row) the relation only ties the
+read to the root's slot.
+
+A join follows a value, so Lambda Solved must hold one node per OCCURRENCE of
+a row-bearing type, not one per type. Its lazy Monotype leaves share clones
+to save work: a callable-free type used to be one node wherever it occurred,
+and within one expanded type every occurrence of one sub-type was one node.
+Both ties are kept only for types that cannot change under unification
+(`Solver.isCloneInvariant`: no callable slot, no tag row) and, within a
+clone context, for rows that lie on a cycle, whose back-references the tie
+exists for. A callable-free type holding a tag row and reaching no cycle is
+POSITIONAL (`Solver.LeafSharing`): each occurrence is its own leaf, in no
+context. Otherwise two unrelated unions that both receive a value of one
+narrower type would be joined through it by type identity rather than by
+flow, and one tag label standing in both with two payload types would then
+be unified.
 
 **`.boxy`.** Boxy plans a representation per checked type identity, and its
 planner computes the joins before planning any type (`computeRowJoins`, in
@@ -9333,11 +9346,27 @@ share one representation: the least identity is elected the set's representative
 (`chooseRowJoinRepresentatives`, so the choice depends on the program alone),
 `beginCheckedType` plans every other ground member as the representative's
 representation, and a representative tag row's representation lists every
-member's tags (`planJoinedTagUnionRep`). An open row keeps Boxy's dynamic
+member's tags (`planJoinedTagUnionRep`). Identities join through their
+aliases, since an alias names its backing's representation. Checked types are
+shared by structure, so a join set collects every flow of a type rather than
+one value's flows; a set whose ground members do not agree in shape—one tag
+label at two payload types or arities, or two kinds of type—has no one
+representation (`rowJoinSetCompatible`) and gets no representative: its
+members keep their own, and a value crossing between two of them crosses
+Boxy's representation boundary. An open row keeps Boxy's dynamic
 representation and connects the ground types on either side of it; a value
 crossing into it crosses Boxy's ordinary concrete-to-dynamic boundary, as every
 value stored at a dynamic representation does. A `where` result opened per use
 is such an open row, so a dispatch edge needs no seed of its own.
+
+**One value, two rows that disagree.** A join needs the rows it unites to
+agree on every tag they share, and a value has one representation. A
+top-level value is one stored constant, so its uses share one row and a use
+whose row disagrees with the others is a type mismatch (Value Rows: Uses
+Share One Row); the checker decides it, and lowering never meets two rows for
+one value that it cannot unite. A function's result does not have this
+problem either: Monotype specializes a template per request, so each caller's
+row joins its own specialization.
 
 **The host boundary.** A host is compiled before the Roc program against the
 rows its declarations wrote, so a host row cannot join a wider one. Every tag
@@ -9356,85 +9385,59 @@ Function In Where Clause", `hosted_where_requirement`) rather than relating
 the two rows. These are the only rows that do not join, and every one of them
 is a type error the checker decides.
 
-### Value Rows: Local Values Share, Top-Level Values Widen At Each Use
+### Value Rows: Uses Share One Row
 
 A value binding (one that does not generalize; Value Bindings Generalize By
-Expression) has exactly one type and is evaluated once. What differs between
-local and top-level values is how its uses relate to an implicitly open tag
-row in that type: `e = Boom`, `e : [Boom]`, `cfg = { mode: Fast }`.
+Expression) has exactly one type and is evaluated once. Its tag rows follow
+one rule whether the value is local or top-level:
 
-- A LOCAL value's open row is one weak flex shared by every use in the
-  enclosing body. Uses that need wider unions widen the shared row, and the
-  union that accumulates is the value's one type. Two uses that need
-  different CLOSED unions (`pastel : [Purple, Mauve] -> Str` and
-  `vibrant : [Purple, Orange] -> Str` both applied to `color = Purple`) are a
-  type mismatch, exactly as Roc RFC 0010 specifies for this program.
-- A TOP-LEVEL value's type is its annotation when it has one, and otherwise
-  the type its right-hand side produces, with every still-open row closed at
-  the definition: `e = Boom` is `[Boom]`, `e = if c A else B` is `[A, B]`.
-  The value is evaluated once, at that type, at compile time. EVERY use,
-  including uses in the defining module, may use it at a wider union: the use
-  relates to its own copy of the value's type, in which each widenable row
-  has a fresh extension, and records that it is a widening of the
-  definition's value. Lowering joins the value's row with the use's
-  (`row_widen`; Row Joins): the one evaluated value is at every use's union
-  as it is, because those unions are one row.
+- An UNANNOTATED value's open row is one weak flex shared by every use in the
+  enclosing scope. Uses that need wider unions widen the shared row, and the
+  union that accumulates is the value's one type: `e = Boom` read where
+  `[Boom, Zed, ..]` is accepted and matched against `Aa` is `[Aa, Boom, Zed]`.
+  Two uses that need different CLOSED unions (`pastel : [Purple, Mauve] -> Str`
+  and `vibrant : [Purple, Orange] -> Str` both applied to `color = Purple`)
+  are a type mismatch at the second use, exactly as Roc RFC 0010 specifies;
+  the fix is a tag written at each use or an annotation on the value.
+- An ANNOTATED value's rows are the annotation's, closed as written, and no
+  use widens them: `e : [Boom]` is `[Boom]` at every use, and a use that
+  needs `[A, Boom]` is a type mismatch at the use. The annotation is how an
+  author pins a value's row.
+- When a module finishes checking, every still-open tag row anywhere in a
+  top-level value's type closes (`Check.closeTopLevelValueRows`, beside the
+  annotation-minted rows `Check.closeWeakValueImplicitOpenExts` closes).
+  Nothing outside the module can widen the row, so the closed type is the one
+  importers read, exactly (`e_lookup_external` relates the use to the imported
+  value's type with no copy), and the one the value is evaluated at. A row
+  whose tail a scheme quantified, or that carries a constraint the empty row
+  does not discharge, is left alone.
 
-The typing is the one Roc RFC 0011 ("Union Refinement") describes as a
-coercion that unpacks each tag and repacks it in the wider union, the
-transformation a user would otherwise write by hand as a `match` that rebuilds
-each tag. Here nothing is repacked: the value's row and the use's row are one
-row, so the use reads the value as it is. It is the value form of the join Row
-Subsumption describes for call results.
+A use of a top-level value is therefore never a widening of the value: no
+`row_coerce` node and no `ModuleEnv` record exist for value uses. Where a
+value with a closed row flows into an annotated function's RESULT, Row
+Subsumption applies as to any other value: the result relates to a widening
+copy, the function's result is wider, and the value's own row is untouched.
 
-Widening never makes a value polymorphic. Only tag rows widen; a value whose
-type has any other weak variable (`empty = []`) still has that variable
-decided once, by the module's uses, and the value is still computed once.
-Widening a use is not re-evaluating the value, so nothing in its definition
-(`dbg`, `expect`, `crash`, or work) runs once per use or once per type.
+#### Why uses share rather than widen copies
 
-#### Why top-level uses widen
+The alternative is a widening copy per use: each use relates to its own copy
+of the value's type with a fresh extension, so the value's type never depends
+on how its module uses it and an importer can widen it freely. That rule made
+every use a conversion site. Under Row Joins a use's row and the value's row
+become one row, and one value has one representation, so two uses whose rows
+disagree on a shared tag's payload (`[Shared, Conflict({ a : U64 })]` and
+`[Shared, Conflict({ b : Str })]` for one `shared_value : [Shared]`) have no
+representation at all. Sharing decides that program in the checker, as a type
+mismatch at the second use, which is where every other disagreement between
+two uses of one value is already decided.
 
-Without widening, a top-level value's row must be shared by its module's uses
-and closed when the module finishes checking. That rule has four defects, and
-widening at each use removes all of them:
-
-- The value's type depends on how its own module happens to use it. Adding or
-  deleting an unrelated use inside the module changes the type every importer
-  sees, and with it whether importers type-check.
-- The value's type depends on checking order. A consumer that inspects the
-  row before a later use widens it (a match checked for exhaustiveness, a
-  dispatch resolution) observes a different type from one that inspects it
-  afterwards.
-- An importer can never widen the value. It sees whatever the defining module
-  accumulated, so a constant its module never uses is exported as a single-tag
-  union, which is almost never what an importer can use.
-- The module and its importers disagree about one value's type: the module
-  sees an open shared row while it is checked, importers a closed one.
-
-With widening, a top-level value's type is fixed by its definition alone, the
-same in its module and in every importer, independent of use order; each use
-widens independently; and the value is still computed exactly once.
-
-Uses in the defining module widen too, rather than sharing a row as local
-uses do. If they shared a row, the value's type would again depend on how its
-own module uses it, and importers would see that accumulated type instead of
-the type the definition produces.
-
-#### Why local values share
-
-Every use of a local value is in one body, visible to the checker at once, and
-the value's type never reaches another module: it leaves the body only
-through the function's own result or a capture, whose types the function
-decides. A shared row therefore has none of the top-level defects, and uses
-that widen it keep tag constants useful (`e = Boom` is never stuck as
-`[Boom]`). The one program sharing rejects that widening would accept is two
-uses needing different closed unions; RFC 0010 judges that rare and accepts
-the type error, whose fix is to write the tag at each use. Sharing needs no
-conversion, so a local value never pays a runtime conversion, including for
-rows inside a `List`. A definition moved from a body to the top level keeps
-type-checking; one moved the other way can stop type-checking only in that
-two-closed-uses case.
+Sharing also keeps a value's representation a function of its own module: the
+row importers read is the row the module closed, which is what compile-time
+evaluation and its cache already assume (a root's type is fixed by its
+declaring module). The costs the copy-per-use rule was chosen to avoid are
+accepted: a value's type depends on how its own module uses it, and an
+importer cannot widen an imported value. An importer that needs a wider union
+rebuilds the tag or asks for the annotation it needs.
 
 #### Rejected alternatives
 
@@ -9446,8 +9449,12 @@ two-closed-uses case.
   finalization program evaluates more than once; and a use inside a stored
   closure's runtime body recomputes the value on every call. Roc RFC 0010
   rejects generalizing values precisely because a value's computation must
-  not multiply with its uses. Converting one value gives every use the type it
-  needs with none of these costs.
+  not multiply with its uses.
+- A widening copy per use with a conversion at each read (the rule this one
+  replaces), or with the value materialized once per read layout at compile
+  time. The first converts at runtime; the second needs the frozen-image
+  freezer to re-encode a constant into another union layout and still has no
+  answer for a value that is not a compile-time constant.
 - Closing an unannotated value's row at its definition and giving uses no way
   to widen it. `e = Boom` would be `[Boom]` everywhere, and single-tag unions
   are almost useless, so tags would be unusable as constants without
@@ -9455,46 +9462,6 @@ two-closed-uses case.
 - Requiring an annotation on a value other modules can import. Roc never
   requires an annotation on any declaration other than a platform-host
   boundary.
-- Widening local values at each use as well. Sharing already serves every
-  local use but the accepted two-closed-uses case, without a conversion.
-
-#### Widenable positions
-
-The set of positions a use may widen is the reach of the row coercion (Row
-Coercion Primitive, above): the value's root row, every row that is a tag
-payload of a reached row, and every row behind the backing of a named type
-that has one, such as a `Try`'s error row. A reached row joins the use's row;
-no container is rebuilt. A row in a record field, a tuple item, a `List`
-or `Box` item, a function argument or result, or an argument of a named type
-without a backing is outside the reach: every use of the value shares it, and
-a use that needs it at another type is a type mismatch. Roc RFC 0011 likewise
-refines only the levels of a union a repack reaches.
-
-Checking implements this at each use of a checked top-level value, in its
-own module (`e_lookup_local`) and in an importer (`e_lookup_external`, for an
-imported value that is not a binding scheme). `Check.computeCoercionReach`
-marks the positions of the value's type the coercion reaches, and
-`Check.widenedValueUseVar` builds the use's copy: every reached tag union, its
-tags' payloads copied through the reach, under a fresh open extension, and
-every other variable shared with the value. A reached alias is copied as its
-widened backing. When the copy differs from the value's type, the use relates
-to the copy and checking records it (`ModuleEnv.RowCoercedUse`: the use and
-the value's own type); checked-body construction lowers each recorded use as a
-`row_coerce` whose child is the lookup at the value's own type, and the
-resolved value reference follows the coercion to that child. A use whose
-value's type has no reached tag union, such as a callable value, relates to
-the value's type itself. Because no use relates to the value's own rows,
-every still-open row the coercion reaches in a top-level value's type closes
-when the module finishes checking, whether or not the value is annotated
-(`Check.closeTopLevelValueRows`, beside the annotation-minted rows
-`Check.closeWeakValueImplicitOpenExts` closes), without any use observing it;
-the closed type is the one the value is evaluated at, so the value stays a
-compile-time root. A value's row can still gain tags after a use copied it (a
-generated codec's validation adds its error tags during finalize), so each
-re-opened row is recorded with the row it copies, and once constraints settle
-`Check.propagateValueRowsToWidenedUses` adds every such tag to the copy; a use
-whose type does not admit it is a type mismatch at the use. A row with no
-tags, which asserts that no value has it, is never re-opened.
 
 ### Hosted Try Question Widening Removed
 
@@ -10191,8 +10158,8 @@ polymorphic. A top-level value is computed once, at one type, so once the
 module solves, each open row in its data whose tail carries only these
 constraints is grounded to the empty row by unifying the tail with it
 (`Check.closeValueRowTailsCarryingDerivations`), as every row of a top-level
-value closes at its definition (Value Rows: Local Values Share, Top-Level
-Values Widen At Each Use). A function's tail is left open: it
+value closes when its module finishes checking (Value Rows: Uses Share One
+Row). A function's tail is left open: it
 generalizes, and each instantiation supplies its row. Displayed in an output position, such a tail is implicit openness
 like an unconstrained one.
 

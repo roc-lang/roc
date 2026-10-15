@@ -9698,12 +9698,23 @@ const Builder = struct {
     }
 
     /// Put `a` and `b` in one join set and queue their matching components.
-    fn joinIdentities(self: *Builder, work: *std.ArrayList([2]CheckedTypeIdentity), a: CheckedTypeIdentity, b: CheckedTypeIdentity) Allocator.Error!void {
+    /// A join set holds types resolved through their aliases: an alias names
+    /// the representation of its backing, so the backing is what joins, and
+    /// an alias member would otherwise be elected to stand for a type that is
+    /// not alias-wrapped.
+    fn joinIdentities(self: *Builder, work: *std.ArrayList([2]CheckedTypeIdentity), raw_a: CheckedTypeIdentity, raw_b: CheckedTypeIdentity) Allocator.Error!void {
+        const a = self.resolvedRowJoinIdentity(raw_a);
+        const b = self.resolvedRowJoinIdentity(raw_b);
         const root_a = try self.rowJoinRoot(a);
         const root_b = try self.rowJoinRoot(b);
         if (typeRefEql(root_a, root_b)) return;
         try self.row_joins.put(root_b, root_a);
         try self.appendRowJoinComponents(work, a, b);
+    }
+
+    /// `identity` through its aliases.
+    fn resolvedRowJoinIdentity(self: *Builder, identity: CheckedTypeIdentity) CheckedTypeIdentity {
+        return .{ .module = identity.module, .ty = resolvedRowJoinPayload(self.moduleForId(identity.module), identity.ty).ty };
     }
 
     /// The root of `identity`'s join set, entering it as its own set when it
@@ -9781,7 +9792,10 @@ const Builder = struct {
                         if (!std.mem.eql(u8, text_a, rowJoinTagText(tag_b))) continue;
                         const args_a = tag_a.tag.argsSlice(tag_a.view.checked_types);
                         const args_b = tag_b.tag.argsSlice(tag_b.view.checked_types);
-                        if (args_a.len != args_b.len) boxyPlanInvariant("joined tag rows held one tag at two payload arities");
+                        // One label at two arities makes the set incompatible
+                        // (`rowJoinSetCompatible`); its members keep their own
+                        // representations.
+                        if (args_a.len != args_b.len) break;
                         for (args_a, args_b) |arg_a, arg_b| try work.append(self.allocator, .{ typeRef(tag_a.view, arg_a), typeRef(tag_b.view, arg_b) });
                         break;
                     }
@@ -9867,11 +9881,21 @@ const Builder = struct {
         };
     }
 
-    /// Elect, for every join set with at least two ground members, the
-    /// member every other ground member binds to: the least identity, so the
-    /// choice depends on the program alone.
+    const RowJoinGroups = std.AutoHashMap(CheckedTypeIdentity, std.ArrayListUnmanaged(CheckedTypeIdentity));
+    const RowJoinCompatibility = enum { checking, compatible, incompatible };
+
+    /// Elect, for every compatible join set with at least two ground members,
+    /// the member every other ground member binds to: the least identity, so
+    /// the choice depends on the program alone.
+    ///
+    /// Checked types are shared by structure, so a join set collects every
+    /// flow of a type, not one value's flows. Two unrelated unions can then
+    /// meet through a narrower type they both receive while naming one tag at
+    /// two payload types, and such a set has no one representation
+    /// (`rowJoinSetCompatible`): its members keep their own, and a value
+    /// crossing between two of them crosses Boxy's representation boundary.
     fn chooseRowJoinRepresentatives(self: *Builder) Allocator.Error!void {
-        var groups = std.AutoHashMap(CheckedTypeIdentity, std.ArrayListUnmanaged(CheckedTypeIdentity)).init(self.allocator);
+        var groups = RowJoinGroups.init(self.allocator);
         defer {
             var it = groups.valueIterator();
             while (it.next()) |group| group.deinit(self.allocator);
@@ -9888,14 +9912,166 @@ const Builder = struct {
             if (!entry.found_existing) entry.value_ptr.* = .empty;
             try entry.value_ptr.append(self.allocator, identity);
         }
-        var it = groups.valueIterator();
-        while (it.next()) |group| {
+        var compatibility = std.AutoHashMap(CheckedTypeIdentity, RowJoinCompatibility).init(self.allocator);
+        defer compatibility.deinit();
+        var roots = std.ArrayList(CheckedTypeIdentity).empty;
+        defer roots.deinit(self.allocator);
+        var root_keys = groups.keyIterator();
+        while (root_keys.next()) |root| try roots.append(self.allocator, root.*);
+        for (roots.items) |root| {
+            const group = groups.getPtr(root).?;
             if (group.items.len < 2) continue;
+            if (!try self.rowJoinSetCompatible(root, &groups, &compatibility)) continue;
             std.mem.sort(CheckedTypeIdentity, group.items, {}, rowJoinIdentityLessThan);
             const representative = group.items[0];
             for (group.items) |member| try self.row_join_representative.put(member, representative);
             try self.row_join_members.put(representative, try self.allocator.dupe(CheckedTypeIdentity, group.items));
         }
+    }
+
+    /// Whether every ground member of the join set rooted at `root` has one
+    /// shape: the same kind of type, the same labels, fields, arities or
+    /// nominal declaration, and at every matching position a compatible join
+    /// set. A set reached again while it is being checked is a recursive type
+    /// and is compatible as far as that path decides.
+    fn rowJoinSetCompatible(
+        self: *Builder,
+        root: CheckedTypeIdentity,
+        groups: *const RowJoinGroups,
+        compatibility: *std.AutoHashMap(CheckedTypeIdentity, RowJoinCompatibility),
+    ) Allocator.Error!bool {
+        if (compatibility.get(root)) |known| return known != .incompatible;
+        const members = (groups.getPtr(root) orelse return true).items;
+        if (members.len < 2) return true;
+        try compatibility.put(root, .checking);
+        const compatible = try self.rowJoinMembersCompatible(members, groups, compatibility);
+        try compatibility.put(root, if (compatible) .compatible else .incompatible);
+        return compatible;
+    }
+
+    fn rowJoinMembersCompatible(
+        self: *Builder,
+        members: []const CheckedTypeIdentity,
+        groups: *const RowJoinGroups,
+        compatibility: *std.AutoHashMap(CheckedTypeIdentity, RowJoinCompatibility),
+    ) Allocator.Error!bool {
+        const first_view = self.moduleForId(members[0].module);
+        const first = resolvedRowJoinPayload(first_view, members[0].ty);
+        switch (first.payload) {
+            .tag_union, .empty_tag_union => {
+                var first_tags = std.ArrayList(RowJoinTag).empty;
+                defer first_tags.deinit(self.allocator);
+                _ = try self.collectRowJoinTags(first_view, first.ty, &first_tags);
+                for (members[1..]) |member| {
+                    const view = self.moduleForId(member.module);
+                    const resolved = resolvedRowJoinPayload(view, member.ty);
+                    if (resolved.payload != .tag_union and resolved.payload != .empty_tag_union) return false;
+                    var tags = std.ArrayList(RowJoinTag).empty;
+                    defer tags.deinit(self.allocator);
+                    _ = try self.collectRowJoinTags(view, resolved.ty, &tags);
+                    for (tags.items) |tag| {
+                        const text = rowJoinTagText(tag);
+                        for (first_tags.items) |first_tag| {
+                            if (!std.mem.eql(u8, text, rowJoinTagText(first_tag))) continue;
+                            const args = tag.tag.argsSlice(tag.view.checked_types);
+                            const first_args = first_tag.tag.argsSlice(first_tag.view.checked_types);
+                            if (args.len != first_args.len) return false;
+                            for (args, first_args) |arg, first_arg| {
+                                if (!try self.rowJoinPairCompatible(typeRef(tag.view, arg), typeRef(first_tag.view, first_arg), groups, compatibility)) return false;
+                            }
+                            break;
+                        }
+                    }
+                }
+                return true;
+            },
+            .record => |first_record| {
+                for (members[1..]) |member| {
+                    const view = self.moduleForId(member.module);
+                    const resolved = resolvedRowJoinPayload(view, member.ty);
+                    if (resolved.payload != .record) return false;
+                    const record = resolved.payload.record;
+                    if (record.fields.len != first_record.fields.len) return false;
+                    const first_names = first_view.canonical_names orelse boxyPlanInvariant("joined record had no resolved field labels");
+                    const names = view.canonical_names orelse boxyPlanInvariant("joined record had no resolved field labels");
+                    for (record.fields, first_record.fields) |field, first_field| {
+                        if (!std.mem.eql(u8, names.recordFieldLabelText(field.name), first_names.recordFieldLabelText(first_field.name))) return false;
+                        if (!try self.rowJoinPairCompatible(typeRef(view, field.ty), typeRef(first_view, first_field.ty), groups, compatibility)) return false;
+                    }
+                }
+                return true;
+            },
+            .tuple => |first_items| {
+                for (members[1..]) |member| {
+                    const view = self.moduleForId(member.module);
+                    const resolved = resolvedRowJoinPayload(view, member.ty);
+                    if (resolved.payload != .tuple) return false;
+                    const items = resolved.payload.tuple;
+                    if (items.len != first_items.len) return false;
+                    for (items, first_items) |item, first_item| {
+                        if (!try self.rowJoinPairCompatible(typeRef(view, item), typeRef(first_view, first_item), groups, compatibility)) return false;
+                    }
+                }
+                return true;
+            },
+            .nominal => |first_nominal| {
+                for (members[1..]) |member| {
+                    const view = self.moduleForId(member.module);
+                    const resolved = resolvedRowJoinPayload(view, member.ty);
+                    if (resolved.payload != .nominal) return false;
+                    const nominal = resolved.payload.nominal;
+                    const names = view.canonical_names orelse boxyPlanInvariant("joined nominal had no resolved names");
+                    const first_names = first_view.canonical_names orelse boxyPlanInvariant("joined nominal had no resolved names");
+                    if (nominal.source_decl != first_nominal.source_decl) return false;
+                    if (!std.mem.eql(u8, names.moduleIdentityBytes(nominal.origin_module), first_names.moduleIdentityBytes(first_nominal.origin_module))) return false;
+                    if (nominal.args.len != first_nominal.args.len) return false;
+                    for (nominal.args, first_nominal.args) |arg, first_arg| {
+                        if (!try self.rowJoinPairCompatible(typeRef(view, arg), typeRef(first_view, first_arg), groups, compatibility)) return false;
+                    }
+                }
+                return true;
+            },
+            .function => |first_function| {
+                for (members[1..]) |member| {
+                    const view = self.moduleForId(member.module);
+                    const resolved = resolvedRowJoinPayload(view, member.ty);
+                    if (resolved.payload != .function) return false;
+                    const function = resolved.payload.function;
+                    if (function.args.len != first_function.args.len) return false;
+                    for (function.args, first_function.args) |arg, first_arg| {
+                        if (!try self.rowJoinPairCompatible(typeRef(view, arg), typeRef(first_view, first_arg), groups, compatibility)) return false;
+                    }
+                    if (!try self.rowJoinPairCompatible(typeRef(view, function.ret), typeRef(first_view, first_function.ret), groups, compatibility)) return false;
+                }
+                return true;
+            },
+            .empty_record => {
+                for (members[1..]) |member| {
+                    if (resolvedRowJoinPayload(self.moduleForId(member.module), member.ty).payload != .empty_record) return false;
+                }
+                return true;
+            },
+            .pending, .err, .flex, .rigid, .alias => unreachable,
+        }
+    }
+
+    /// Whether two matching positions of two joined types share one
+    /// representation: the same identity, or two members of one compatible
+    /// join set.
+    fn rowJoinPairCompatible(
+        self: *Builder,
+        a: CheckedTypeIdentity,
+        b: CheckedTypeIdentity,
+        groups: *const RowJoinGroups,
+        compatibility: *std.AutoHashMap(CheckedTypeIdentity, RowJoinCompatibility),
+    ) Allocator.Error!bool {
+        const resolved_a = self.resolvedRowJoinIdentity(a);
+        const resolved_b = self.resolvedRowJoinIdentity(b);
+        if (typeRefEql(resolved_a, resolved_b)) return true;
+        const root_a = try self.rowJoinRoot(resolved_a);
+        const root_b = try self.rowJoinRoot(resolved_b);
+        if (!typeRefEql(root_a, root_b)) return false;
+        return try self.rowJoinSetCompatible(root_a, groups, compatibility);
     }
 
     /// The representation of a tag row that is a join set's representative member:
@@ -14904,7 +15080,12 @@ const Builder = struct {
                     try self.collectStoredRepSubstitutions(child.rep, stored_rep_id, out, seen);
                     continue;
                 },
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .list_elem, .box_payload => boxyPlanInvariant("stored capture representation had no child matching its checked binder representation"),
+                // A checked row joined with the rows its values flow into
+                // (design.md "Row Joins") may list tags the stored row lacks;
+                // a stored value never carries one of them, so there is
+                // nothing beneath it to substitute.
+                .tag_payload => continue,
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .tuple_elem, .function_arg, .function_ret, .list_elem, .box_payload => boxyPlanInvariant("stored capture representation had no child matching its checked binder representation"),
             };
             try self.collectStoredRepSubstitutions(child.rep, stored_child.rep, out, seen);
         }

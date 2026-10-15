@@ -184,6 +184,12 @@ const Solver = struct {
     /// reachable from it. The forced-dynamic scan materializes exactly these
     /// leaves so the named nodes it must mark exist in the solved store.
     contains_forced_dynamic: []bool,
+    /// Per lifted Monotype: whether a structural tag union is reachable from
+    /// it. Rows join where values flow (design.md "Row Joins"), so a clone of
+    /// such a type is mutable state of the uses it was made for, and every use
+    /// materializes its own; sharing one clone would join every row of that
+    /// Monotype across the program by type identity rather than by flow.
+    contains_tag_row: []bool,
     /// Finalization's clone of each lifted Monotype, shared by every
     /// untouched leaf of it.
     shared_clones: collections.DenseMap(MonoType.TypeId, Type.TypeVarId),
@@ -352,6 +358,7 @@ const Solver = struct {
         const masks = try computeReachabilityMasks(allocator, lifted.types);
         errdefer allocator.free(masks.contains_callable);
         errdefer allocator.free(masks.contains_forced_dynamic);
+        errdefer allocator.free(masks.contains_tag_row);
         errdefer allocator.free(masks.reaches_cycle);
 
         return .{
@@ -374,6 +381,7 @@ const Solver = struct {
             .active_private_evidence_relations = UnifyPairSet.init(allocator),
             .contains_callable = masks.contains_callable,
             .contains_forced_dynamic = masks.contains_forced_dynamic,
+            .contains_tag_row = masks.contains_tag_row,
             .shared_clones = collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(allocator),
             .leaf_origins = collections.DenseMap(Type.TypeVarId, MonoType.TypeId).init(allocator),
             .leaf_contexts = .empty,
@@ -424,6 +432,7 @@ const Solver = struct {
         self.allocator.free(self.reaches_cycle);
         self.shared_clones.deinit();
         self.leaf_origins.deinit();
+        self.allocator.free(self.contains_tag_row);
         self.allocator.free(self.contains_forced_dynamic);
         self.allocator.free(self.contains_callable);
         self.comptime_read_tys.deinit(self.allocator);
@@ -1759,21 +1768,24 @@ const Solver = struct {
     /// to their existing vars, so a recursive Monotype materializes as the
     /// same cyclic graph an eager clone produced.
     fn expandMonoRoot(self: *Solver, root: Type.TypeVarId, leaf: MonoLeaf) Allocator.Error!Type.Content {
+        const sharing = self.leafSharing(leaf.id);
         const ctx: u32 = if (leaf.ctx != Type.no_leaf_context) leaf.ctx else blk: {
-            if (self.isCallableFree(leaf.id)) break :blk try self.sharedLeafContext();
+            if (sharing == .shared) break :blk try self.sharedLeafContext();
             break :blk try self.newLeafContext();
         };
         // Expanding or joining a registered leaf retires it from its
         // context's unexpanded leaves.
         self.retireContextLeaf(leaf);
-        if (self.leaf_contexts.items[ctx].get(leaf.id)) |existing| {
-            const existing_root = self.program.types.rootCompressed(existing);
-            if (existing_root != root) {
-                self.program.types.set(root, .{ .link = existing_root });
-                return try self.resolvedContentAt(existing_root);
+        if (sharing != .positional) {
+            if (self.leaf_contexts.items[ctx].get(leaf.id)) |existing| {
+                const existing_root = self.program.types.rootCompressed(existing);
+                if (existing_root != root) {
+                    self.program.types.set(root, .{ .link = existing_root });
+                    return try self.resolvedContentAt(existing_root);
+                }
+            } else {
+                try self.leaf_contexts.items[ctx].put(leaf.id, root);
             }
-        } else {
-            try self.leaf_contexts.items[ctx].put(leaf.id, root);
         }
         var cloner = TypeCloner.init(self);
         cloner.lazy_ctx = ctx;
@@ -1785,10 +1797,42 @@ const Solver = struct {
     }
 
     /// Whether clones of this Monotype carry no callable slot and no
-    /// forced-dynamic iterator, so every clone of it solves identically.
+    /// forced-dynamic iterator.
     fn isCallableFree(self: *const Solver, ty: MonoType.TypeId) bool {
         const raw_id = @backingInt(ty);
         return !self.contains_callable[raw_id] and !self.contains_forced_dynamic[raw_id];
+    }
+
+    /// Whether every clone of this Monotype solves identically: it is
+    /// callable-free and holds no tag row, so unification never changes it
+    /// and one shared clone serves every use.
+    fn isCloneInvariant(self: *const Solver, ty: MonoType.TypeId) bool {
+        return self.isCallableFree(ty) and !self.contains_tag_row[@backingInt(ty)];
+    }
+
+    /// How the lazy leaves of one Monotype relate to each other.
+    const LeafSharing = enum {
+        /// Clone-invariant: one clone, in the shared context, serves every
+        /// occurrence in the program.
+        shared,
+        /// Callable-free, holding a tag row, and reaching no cycle: each
+        /// occurrence is its own clone, in no context, and its own expansion
+        /// opens a context of its own. Rows join where values flow (design.md
+        /// "Row Joins"), and two occurrences of one Monotype are two positions
+        /// whose values flow to different places; tying them would join every
+        /// row either reaches. No cycle can lead back to the occurrence, so
+        /// nothing needs the tie.
+        positional,
+        /// Callable-bearing, or a row that lies on a cycle: occurrences within
+        /// one clone context are one clone, which ties a recursive type's
+        /// back-references to the var they recur into.
+        context,
+    };
+
+    fn leafSharing(self: *const Solver, ty: MonoType.TypeId) LeafSharing {
+        if (self.isCloneInvariant(ty)) return .shared;
+        if (self.isCallableFree(ty) and !self.reaches_cycle[@backingInt(ty)]) return .positional;
+        return .context;
     }
 
     /// Give a build lists from the pool, or empty ones.
@@ -2169,12 +2213,13 @@ const Solver = struct {
         if (self.program.types.get(self.program.types.rootCompressed(read_ty)) == .unbound) {
             try self.unify(read_ty, try self.lowerTypeFresh(read_mono));
         }
-        // A read's rows and its root's rows are one row (design.md "Row
-        // Joins"), so a read at a wider row widens the root's type in this
-        // program, and the root's slot is laid out at that joined type. A read
-        // whose type has neither a callable slot nor a tag row takes nothing
-        // from its root, but the relation is then between one shared leaf and
-        // itself and costs nothing.
+        // Monotype sealed a type with no callable slot and no tag row, so a
+        // read of one has no Lambda Solved evidence to take from its root. A
+        // read whose type holds a tag row is unified with the root: the two
+        // rows are one row (design.md "Row Joins"), so a read at a wider row
+        // widens the root's type in this program, and the root's slot is laid
+        // out at that joined type.
+        if (self.isCloneInvariant(read_mono)) return;
         const root_ty = self.inferredExpr(initializer);
         const initializer_expr = self.lifted.exprs[@backingInt(initializer)];
         if (initializer_expr.data != .call_proc) return self.unify(read_ty, root_ty);
@@ -2345,7 +2390,9 @@ const Solver = struct {
     /// Monotype reaches a cycle. A cyclic Monotype keeps the ordinary
     /// relation, which joins the class's distinct cells at the positions the
     /// clone ties back together; so does an uninhabited one, whose class
-    /// selection differs. Callable-free leaves already share one clone.
+    /// selection differs. A clone-invariant leaf already shares one clone,
+    /// and a positional leaf (`LeafSharing.positional`) materializes through
+    /// the ordinary relation, which joins its rows where its value flows.
     fn linkUntouchedLeafToInstance(
         self: *Solver,
         leaf_root: Type.TypeVarId,
@@ -3340,6 +3387,14 @@ const Solver = struct {
         // Every right tag already sits in the left row: the merge is the
         // left row itself.
         if (merged.items.len == lhs.count()) return lhs;
+        // A row's tags are ordered by label, as Monotype orders them, so two
+        // rows holding the same tags are one representation.
+        const name_store = self.lifted.names;
+        std.mem.sort(Type.Tag, merged.items, name_store, struct {
+            fn lessThan(store: @TypeOf(name_store), a: Type.Tag, b: Type.Tag) bool {
+                return store.tagLabelTextLessThan(a.name, b.name);
+            }
+        }.lessThan);
         return try self.program.types.addTags(merged.items);
     }
 
@@ -3643,13 +3698,15 @@ const LeafContextShape = struct {
 const ReachabilityMasks = struct {
     contains_callable: []bool,
     contains_forced_dynamic: []bool,
+    contains_tag_row: []bool,
     reaches_cycle: []bool,
 };
 
 /// Reverse-reachability over the lifted Monotype store: from `func` and
-/// `erased` nodes (types whose clones need fresh callable slots) and from
+/// `erased` nodes (types whose clones need fresh callable slots), from
 /// forced-dynamic iterator named nodes (leaves the forced-dynamic scan must
-/// materialize).
+/// materialize), and from structural tag unions (types whose clones join
+/// where their values flow).
 fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Error!ReachabilityMasks {
     const count = types.types.len;
     const flags = try allocator.alloc(bool, count);
@@ -3761,6 +3818,23 @@ fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Erro
             try work.append(allocator, parent);
         }
     }
+    const rows = try allocator.alloc(bool, count);
+    errdefer allocator.free(rows);
+    @memset(rows, false);
+    for (0..types.types.len) |index| {
+        const content = types.get(@fromBackingInt(@intCast(index)));
+        if (std.meta.activeTag(content) == .tag_union) {
+            rows[index] = true;
+            try work.append(allocator, @intCast(index));
+        }
+    }
+    while (work.pop()) |index| {
+        for (parents[parent_starts[index]..parent_starts[index + 1]]) |parent| {
+            if (rows[parent]) continue;
+            rows[parent] = true;
+            try work.append(allocator, parent);
+        }
+    }
     const cycle = try allocator.alloc(bool, count);
     errdefer allocator.free(cycle);
     try markCycleMembers(allocator, parents, parent_starts, cycle);
@@ -3774,7 +3848,7 @@ fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Erro
             try work.append(allocator, parent);
         }
     }
-    return .{ .contains_callable = flags, .contains_forced_dynamic = forced, .reaches_cycle = cycle };
+    return .{ .contains_callable = flags, .contains_forced_dynamic = forced, .contains_tag_row = rows, .reaches_cycle = cycle };
 }
 
 /// Mark every lifted Monotype that lies on a cycle: a member of a strongly
@@ -4100,12 +4174,20 @@ const TypeCloner = struct {
     /// descending; null when it must be cloned.
     fn existingClone(self: *TypeCloner, ty: MonoType.TypeId) Allocator.Error!?Type.TypeVarId {
         if (self.lazy_ctx) |parent_ctx| {
-            // A callable-free child is the same shared clone wherever it
-            // occurs, exactly as a callable-free root is: it has no callable
-            // slot to solve, so unifying two of its occurrences reaches one
-            // var instead of walking two copies of its structure.
+            // A clone-invariant child is the same shared clone wherever it
+            // occurs, exactly as a clone-invariant root is: it has nothing to
+            // solve, so unifying two of its occurrences reaches one var
+            // instead of walking two copies of its structure. A positional
+            // child (`LeafSharing.positional`) is a fresh leaf at every
+            // occurrence, registered in no context.
             const callable_free = self.solver.isCallableFree(ty);
-            const ctx = if (callable_free) try self.solver.sharedLeafContext() else parent_ctx;
+            const sharing = self.solver.leafSharing(ty);
+            if (sharing == .positional) {
+                const created = try self.solver.program.types.add(.{ .mono = .{ .id = ty, .ctx = Type.no_leaf_context } });
+                try self.solver.leaf_origins.put(created, ty);
+                return created;
+            }
+            const ctx = if (sharing == .shared) try self.solver.sharedLeafContext() else parent_ctx;
             const map = &self.solver.leaf_contexts.items[ctx];
             const shape = &self.solver.leaf_context_shapes.items[ctx];
             if (!callable_free) {
@@ -4122,7 +4204,9 @@ const TypeCloner = struct {
             const created = try self.solver.program.types.add(.{ .mono = .{ .id = ty, .ctx = ctx } });
             try self.solver.leaf_origins.put(created, ty);
             try map.put(ty, created);
-            if (!callable_free) shape.unexpanded += 1;
+            // Every leaf registered outside the shared context is retired
+            // when it expands or joins a class (`retireContextLeaf`).
+            if (sharing != .shared) shape.unexpanded += 1;
             return created;
         }
         if (self.map.get(ty)) |cached| return cached;

@@ -1115,8 +1115,9 @@ pub const Store = struct {
         try self.setDesc(resolved.desc_idx, desc);
     }
 
-    /// End the bound on a row every use shares: a weak value binding's row is
-    /// bounded only while its own right-hand side is checked.
+    /// End the bound on a row: a platform-required definition's rows are
+    /// released where the platform relates them, and a bound an enclosing
+    /// release cleared is applied again for the owners that still hold it.
     pub fn clearBoundedRowExt(self: *Self, target_var: Var) Allocator.Error!void {
         const resolved = try self.resolveWriteTarget(target_var);
         var desc = resolved.desc;

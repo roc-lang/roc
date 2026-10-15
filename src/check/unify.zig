@@ -948,20 +948,21 @@ const Unifier = struct {
         return self.types_store.resolveVar(var_).desc.flags.bounded_row_ext;
     }
 
-    /// Whether a row reaches a bounded extension along its extension chain,
-    /// so that tags added at the end of the chain would extend it.
-    fn rowChainIsBounded(self: *Self, tag_union: TagUnion) bool {
+    /// The bounded extension a row reaches along its extension chain, so that
+    /// tags added at the end of the chain would extend it; null when the chain
+    /// reaches none.
+    fn boundedExtOfRow(self: *Self, tag_union: TagUnion) ?Var {
         var ext = tag_union.ext;
         var remaining = self.types_store.len();
         while (remaining > 0) : (remaining -= 1) {
-            if (self.isBoundedRowExt(ext)) return true;
+            if (self.isBoundedRowExt(ext)) return self.types_store.resolveVar(ext).var_;
             switch (self.types_store.resolveVar(ext).desc.content) {
                 .alias => |alias| ext = self.types_store.getAliasBackingVar(alias),
                 .structure => |flat_type| switch (flat_type) {
                     .tag_union => |next| ext = next.ext,
-                    .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return false,
+                    .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return null,
                 },
-                .flex, .rigid, .field_presence, .err => return false,
+                .flex, .rigid, .field_presence, .err => return null,
             }
         }
         base.invariant("checker invariant violated: a tag row's extension chain is cyclic", .{});
@@ -991,7 +992,7 @@ const Unifier = struct {
     /// a tagless row hands the bound to that row's own extension.
     fn refuseTagsIntoBoundedExt(self: *Self, ext: ResolvedVarDesc, other: Var) Error!void {
         if (ext.desc.content != .flex or !ext.desc.flags.bounded_row_ext) return;
-        if (self.firstRowTag(other)) |tag| return self.refuseBoundedRowTag(tag);
+        if (self.firstRowTag(other)) |tag| return self.refuseBoundedRowTag(tag, ext.var_);
         if (self.rowTail(other)) |tail| try self.types_store.markBoundedRowExt(tail);
     }
 
@@ -1017,9 +1018,9 @@ const Unifier = struct {
         base.invariant("checker invariant violated: a tag row's extension chain is cyclic", .{});
     }
 
-    fn refuseBoundedRowTag(self: *Self, tag: Ident.Idx) Error!void {
+    fn refuseBoundedRowTag(self: *Self, tag: Ident.Idx, ext: Var) Error!void {
         if (self.scratch.bounded_row_violation == null) {
-            self.scratch.bounded_row_violation = .{ .tag = tag };
+            self.scratch.bounded_row_violation = .{ .tag = tag, .ext = ext };
         }
         return error.TypeMismatch;
     }
@@ -3213,11 +3214,15 @@ const Unifier = struct {
         }
         // A bounded annotation row refuses unlisted tags exactly as a closed
         // row does, and for the same reason this check precedes any merge.
-        if ((tags_ext == .b_extends_a or tags_ext == .both_extend) and self.rowChainIsBounded(a_tag_union)) {
-            return self.refuseBoundedRowTag(self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b)[0].name);
+        if (tags_ext == .b_extends_a or tags_ext == .both_extend) {
+            if (self.boundedExtOfRow(a_tag_union)) |bounded_ext| {
+                return self.refuseBoundedRowTag(self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b)[0].name, bounded_ext);
+            }
         }
-        if ((tags_ext == .a_extends_b or tags_ext == .both_extend) and self.rowChainIsBounded(b_tag_union)) {
-            return self.refuseBoundedRowTag(self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a)[0].name);
+        if (tags_ext == .a_extends_b or tags_ext == .both_extend) {
+            if (self.boundedExtOfRow(b_tag_union)) |bounded_ext| {
+                return self.refuseBoundedRowTag(self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a)[0].name, bounded_ext);
+            }
         }
 
         // Unify tags (recursion guard in unifyGuarded prevents infinite loops,
@@ -4083,9 +4088,11 @@ fn ChainDuplicate(comptime kind: RowKind) type {
     };
 }
 
-/// A tag a unification refused to add to a bounded annotation extension.
+/// A tag a unification refused to add to a bounded annotation extension, and
+/// that extension.
 pub const BoundedRowViolation = struct {
     tag: Ident.Idx,
+    ext: Var,
 };
 
 /// An unordered pair of resolved type descriptors.

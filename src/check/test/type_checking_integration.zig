@@ -9941,36 +9941,98 @@ test "check type - polarity - annotated value body is bounded" {
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
-test "check type - polarity - each use of a top-level value widens it independently" {
-    // A top-level value has one type, and each use relates to its own
-    // widening copy of it (design.md "Value Rows: Local Values Share,
-    // Top-Level Values Widen At Each Use"): `use_a` needs `e` at `[A, Boom]`
-    // and `use_b` at `[B, Boom]`, and neither use changes `e`'s type or
-    // constrains the other.
+test "check type - value rows - an annotated top-level value keeps its row at every use" {
+    // An annotated value's row is the annotation's, closed as written, and no
+    // use widens it (design.md "Value Rows: Uses Share One Row"): `e` is
+    // `[Boom]`, and a `match` whose patterns name `A` is a mismatch at the
+    // use, reported as the use's own mismatch rather than as `e` producing `A`.
+    const source =
+        \\e : [Boom]
+        \\e = Boom
+        \\
+        \\describe = match e {
+        \\    Boom => "boom"
+        \\    A => "a"
+        \\    _ => "other"
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - value rows - returning an annotated top-level value widens the function's result" {
+    // Flowing into an annotated function's result is not a use of `e` at a
+    // wider union: the result relates to a widening copy (design.md "Row
+    // Subsumption"), so `use_a`'s result is `[A, Boom]` while `e` stays
+    // `[Boom]`.
     const source =
         \\e : [Boom]
         \\e = Boom
         \\
         \\use_a : Str -> [A, Boom]
         \\use_a = |_| e
-        \\
-        \\use_b : Str -> [B, Boom]
-        \\use_b = |_| e
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
     try test_env.assertNoErrors();
+    try test_env.assertDefType("e", "[Boom]");
 }
 
-test "check type - polarity - an importer widens a top-level value its module also widens" {
-    // `choice` uses `e` at `[A, Boom]` through its own widening copy, so `e`'s
-    // type stays `[Boom]`, and an importer widens that type at its own use
-    // (design.md "Value Rows: Local Values Share, Top-Level Values Widen At
-    // Each Use").
+test "check type - value rows - an unannotated top-level value's row is shared by its uses" {
+    // Every use of `e` in its module widens one row (design.md "Value Rows:
+    // Uses Share One Row"): a `match` naming `Zed` and a call where
+    // `[Aa, Boom, ..]` is accepted leave `e` at `[Aa, Boom, Zed]`, which the
+    // module closes when it finishes.
+    const source =
+        \\e = Boom
+        \\
+        \\first : [Aa, Boom, ..] -> Str
+        \\first = |tag| match tag {
+        \\    Aa => "aa"
+        \\    Boom => "boom"
+        \\    _ => "other"
+        \\}
+        \\
+        \\second = match e {
+        \\    Boom => "boom"
+        \\    Zed => "zed"
+        \\    _ => "other"
+        \\}
+        \\
+        \\both = "${first(e)} ${second}"
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("e", "[Aa, Boom, Zed]");
+}
+
+test "check type - value rows - two uses at different closed unions are a mismatch" {
+    // One shared row cannot be both closed unions (design.md "Value Rows:
+    // Uses Share One Row"), exactly as for a local value: the second use is
+    // the mismatch, and the fix is a tag written at each use or an
+    // annotation on the value.
+    const source =
+        \\e = Boom
+        \\
+        \\first : [Boom, Zed] -> Str
+        \\first = |_| "first"
+        \\
+        \\last : [Aa, Boom] -> Str
+        \\last = |_| "last"
+        \\
+        \\both = "${first(e)} ${last(e)}"
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - value rows - an importer reads a top-level value at its closed row" {
+    // `choice` widens `e`'s shared row to `[A, Boom]`, and the module closes it
+    // there, so an importer reads `e : [A, Boom]` exactly (design.md "Value
+    // Rows: Uses Share One Row"): a use at that row is accepted and a use
+    // needing `C` is a mismatch at the importer.
     const source_lib =
         \\module [e, choice]
         \\
-        \\e : [Boom]
         \\e = Boom
         \\
         \\choice = if Bool.True e else A
@@ -9978,26 +10040,36 @@ test "check type - polarity - an importer widens a top-level value its module al
     var lib_env = try TestEnv.init("Lib", source_lib);
     defer lib_env.deinit();
     try std.testing.expectEqual(@as(usize, 0), try lib_env.typeProblemCount());
+    try lib_env.assertDefTypeOptions("e", "[A, Boom]", .{ .allow_type_errors = false, .allow_can_errors = true });
 
-    const source_main =
+    const source_same =
+        \\import Lib
+        \\
+        \\same : [A, Boom]
+        \\same = Lib.e
+    ;
+    var same_env = try TestEnv.initWithImport("Same", source_same, "Lib", &lib_env);
+    defer same_env.deinit();
+    try same_env.assertNoErrors();
+
+    const source_wider =
         \\import Lib
         \\
         \\wider : [A, Boom, C]
         \\wider = Lib.e
     ;
-    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
-    defer main_env.deinit();
-    try main_env.assertNoErrors();
+    var wider_env = try TestEnv.initWithImport("Wider", source_wider, "Lib", &lib_env);
+    defer wider_env.deinit();
+    try std.testing.expect(try wider_env.typeProblemCount() > 0);
 }
 
-test "check type - polarity - a defaulted field use may widen a weak value row" {
-    // A defaulted record field's default expression is an ordinary USE SITE,
-    // so it may widen the weak row of the value it names—exactly like the
-    // accepted first use in the test above. It is checked later than every
-    // other use (`checkPendingDefaults` is the first pass of `finalizeTypes`,
-    // after the whole def pass), and the late implicit-open-ext replay
-    // (`Check.runLateImplicitOpenExtAudit`) used to read the row after that
-    // widening and blame `e` for producing `A`, which `e = Boom` cannot.
+test "check type - polarity - a defaulted field use of an annotated value keeps its row" {
+    // A defaulted record field's default expression is an ordinary USE SITE
+    // of `e`, and `e : [Boom]` is closed at every use (design.md "Value Rows:
+    // Uses Share One Row"), so a field typed `[A, Boom]` cannot default to it.
+    // The use is checked later than every other use (`checkPendingDefaults`
+    // is the first pass of `finalizeTypes`), and the report is the use's own
+    // mismatch rather than a claim that `e` produces `A`.
     const source =
         \\e : [Boom]
         \\e = Boom
@@ -10006,7 +10078,7 @@ test "check type - polarity - a defaulted field use may widen a weak value row" 
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
-    try test_env.assertNoErrors();
+    try test_env.assertOneTypeError("Type Mismatch");
 }
 
 test "check type - polarity - a defaulted field use at the annotated width is clean" {

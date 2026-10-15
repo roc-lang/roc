@@ -749,12 +749,12 @@ coercion_reach_stack: std.ArrayListUnmanaged(Var) = .empty,
 coercion_reach_seen: std.AutoHashMapUnmanaged(Var, void) = .empty,
 coercion_outside_stack: std.ArrayListUnmanaged(Var) = .empty,
 coercion_outside_seen: std.AutoHashMapUnmanaged(Var, void) = .empty,
-/// Scratch for `widenedValueUseVar`: each reached variable's copy.
+/// Scratch for `widenedReachCopy`: each reached variable's copy.
 widened_use_copies: std.AutoHashMapUnmanaged(Var, Var) = .empty,
 /// Whether the copy in progress re-opens only rows whose tail is closed
 /// (`widenedClosedRowsCopy`), leaving every open row shared.
 widen_closed_rows_only: bool = false,
-/// Scratch for `widenedValueUseVar`: one row's tags, gathered along its
+/// Scratch for `widenedReachCopy`: one row's tags, gathered along its
 /// extension chain.
 widened_use_tags: std.ArrayListUnmanaged(types_mod.Tag) = .empty,
 /// Every row a use's widening copy re-opened, paired with the value's row it
@@ -775,6 +775,12 @@ bounding_annotation: ?CIR.Annotation.Idx = null,
 /// whole class, and rows of different definitions can share one class, so
 /// releasing one definition's bound restores every bound still owned there.
 bounded_row_marks: std.ArrayListUnmanaged(BoundedRowMark) = .empty,
+/// The annotations whose definitions' bodies are being checked, innermost
+/// last. A bounded-row refusal inside one of these bodies, of a row one of
+/// these annotations owns, is the body producing a tag its annotation does
+/// not list; any other refusal is an ordinary mismatch of a use
+/// (`mismatchContext`).
+body_annotations: std.ArrayListUnmanaged(CIR.Annotation.Idx) = .empty,
 /// Scoped sink owned by the alias declaration currently being constructed.
 alias_hidden_exts: ?*std.ArrayListUnmanaged(Var) = null,
 nominal_positions: std.AutoHashMapUnmanaged(NominalPositionKey, ?[]annotation_positions.Positions) = .empty,
@@ -1635,6 +1641,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .implicit_open_exts = .keyed,
     .bounding_annotation = .lexical,
     .bounded_row_marks = .keyed,
+    .body_annotations = .lexical,
     .alias_hidden_exts = .lexical,
     .nominal_positions = .keyed,
     .annotation_implicit_open_exts = .keyed,
@@ -7158,11 +7165,15 @@ fn exprAtVar(self: *const Self, var_: Var) ?CIR.Expr.Idx {
 /// The context the relation just rejected reports under. A relation the
 /// unifier rejected because it would add a tag to a bounded annotation row
 /// reports that tag at the expression that produced it (design.md
-/// "Polarity"). Reading the refusal consumes it, so it describes only the
-/// report of the relation that made it.
+/// "Polarity") when the definition the annotation bounds is the one being
+/// checked. Outside that body check the row belongs to a value the relation
+/// merely uses (design.md "Value Rows: Uses Share One Row"), and the
+/// rejection is the ordinary mismatch of the use. Reading the refusal
+/// consumes it, so it describes only the report of the relation that made it.
 fn mismatchContext(self: *Self, ctx: problem.Context, actual: Var) problem.Context {
     const violation = self.unify_scratch.bounded_row_violation orelse return ctx;
     self.unify_scratch.bounded_row_violation = null;
+    if (!self.boundedExtRefusalIsProduction(violation.ext)) return ctx;
     const raw_actual = @backingInt(actual);
     const actual_is_pattern = raw_actual < self.cir.store.nodes.len() and
         isPatternNodeTag(self.cir.store.nodes.get(@fromBackingInt(@intCast(raw_actual))).tag);
@@ -17548,7 +17559,7 @@ fn beginDef(self: *Self, state: *DefActivity, env: *Env) std.mem.Allocator.Error
     if (def_is_function or group_prechecked) try self.activateSchemeOwner(scheme_owner);
     // The annotation bounds the definition's body: a tag it produces beyond
     // an implicitly opened union is an error (design.md "Polarity").
-    state.saved.?.bounding_annotation = self.beginBoundedAnnotationRows(self.appliedAnnotation(def.pattern, def.annotation));
+    state.saved.?.bounding_annotation = try self.beginBoundedAnnotationRows(self.appliedAnnotation(def.pattern, def.annotation));
     state.stage = .body;
     return .{ .push = .{ .expr = try self.newExprKernelActivity(.{ .expr = def.expr, .expected = def_expectation, .function_owner = def.expr }) } };
 }
@@ -20304,15 +20315,20 @@ const CodecRowDemand = struct {
 /// (design.md "Polarity"). The rows are minted when the body pass generates
 /// the annotation, which `boundAnnotationRows` marks. Returns the bound an
 /// enclosing definition's body check is waiting to apply.
-fn beginBoundedAnnotationRows(self: *Self, annotation: ?CIR.Annotation.Idx) ?CIR.Annotation.Idx {
+fn beginBoundedAnnotationRows(self: *Self, annotation: ?CIR.Annotation.Idx) std.mem.Allocator.Error!?CIR.Annotation.Idx {
     const saved = self.bounding_annotation;
     self.bounding_annotation = annotation;
+    if (annotation) |annotation_idx| try self.body_annotations.append(self.gpa, annotation_idx);
     return saved;
 }
 
-/// End a definition's body check. A definition whose type generalizes keeps
-/// its rows bounded: its uses instantiate fresh copies, which they may widen.
-/// A weak value binding's row is shared by every use, so its bound ends here.
+/// End a definition's body check. The annotation's rows stay bounded: a
+/// definition whose type generalizes has uses that instantiate fresh copies,
+/// which they may widen, and a weak value binding's rows are the annotation's
+/// at every use (design.md "Value Rows: Uses Share One Row"), so a use that
+/// needs a tag the annotation does not list is a mismatch at the use. A
+/// platform-required definition's bound is released where the platform
+/// relates it, since the platform uses the definition as a caller does.
 fn endBoundedAnnotationRows(
     self: *Self,
     saved: ?CIR.Annotation.Idx,
@@ -20320,15 +20336,50 @@ fn endBoundedAnnotationRows(
     generalizes: bool,
 ) std.mem.Allocator.Error!void {
     self.bounding_annotation = saved;
-    if (generalizes) return;
-    try self.releaseBoundedAnnotationRows(annotation orelse return);
+    if (annotation) |annotation_idx| {
+        const popped = self.body_annotations.pop() orelse base.invariant("checker invariant violated: a body check ended with no annotation on the stack", .{});
+        if (popped != annotation_idx) base.invariant("checker invariant violated: body annotations ended out of order", .{});
+        if (!generalizes) {
+            for (self.bounded_row_marks.items) |*mark| {
+                if (mark.owner == annotation_idx) mark.weak_value_checked = true;
+            }
+        }
+    }
 }
 
 /// An extension one annotation's bound covers.
 const BoundedRowMark = struct {
     owner: CIR.Annotation.Idx,
     ext: Var,
+    /// The owner is a weak value binding whose body check has ended: its
+    /// rows are the annotation's at every use (design.md "Value Rows: Uses
+    /// Share One Row"), so a refusal at one of them is a use's mismatch. A
+    /// definition that generalizes keeps producing its rows at every use,
+    /// which instantiates them, so a refusal there is the definition's.
+    weak_value_checked: bool = false,
 };
+
+/// Whether a refusal to add a tag to the bounded extension `ext` is the
+/// definition that owns the row producing a tag its annotation does not
+/// list: the row belongs to an annotation whose body is being checked
+/// (`body_annotations`), or to a definition that generalizes. One of that
+/// annotation's marks reaches `ext` along its extension chain.
+fn boundedExtRefusalIsProduction(self: *Self, ext: Var) bool {
+    const target = self.types.resolveVar(ext).var_;
+    for (self.bounded_row_marks.items) |mark| {
+        const in_body = for (self.body_annotations.items) |body| {
+            if (body == mark.owner) break true;
+        } else false;
+        if (!in_body and mark.weak_value_checked) continue;
+        var current = mark.ext;
+        var remaining = self.types.len();
+        while (remaining > 0) : (remaining -= 1) {
+            if (self.types.resolveVar(current).var_ == target) return true;
+            current = self.boundedRowChainNext(current) orelse break;
+        }
+    }
+    return false;
+}
 
 fn boundAnnotationRows(self: *Self, annotation_idx: CIR.Annotation.Idx) std.mem.Allocator.Error!void {
     const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return;
@@ -20598,22 +20649,6 @@ fn nominalIsBuiltinTry(self: *const Self, nominal: types_mod.NominalType) bool {
     return nominal.originIsBuiltin() and nominal.sourceDeclOptional() == self.builtinTrySourceDecl();
 }
 
-/// The type a use of a top-level value relates to (design.md "Value Rows:
-/// Local Values Share, Top-Level Values Widen At Each Use"): a copy of the
-/// value's type in which every tag union the row coercion reaches has a fresh
-/// open extension, whether the value's own row is open or closed, so the use
-/// may need the value at any wider union without changing the value's type.
-/// Every position outside the reach, and every variable that is not a reached
-/// row, is shared with the value, so those stay one type for every use. Null
-/// when the coercion reaches no tag union, so the use relates to the value's
-/// type itself.
-fn widenedValueUseVar(self: *Self, value_var: Var, env: *Env, region: Region) std.mem.Allocator.Error!?Var {
-    try self.computeCoercionReach(value_var);
-    self.widened_use_copies.clearRetainingCapacity();
-    const copy = try self.widenedReachCopy(value_var, env, region);
-    return if (copy == self.types.resolveVar(value_var).var_) null else copy;
-}
-
 /// Whether the row coercion may widen the row at `var_`: a position it
 /// reaches and no position outside it shares.
 fn coercionMayWiden(self: *const Self, var_: Var) bool {
@@ -20621,7 +20656,7 @@ fn coercionMayWiden(self: *const Self, var_: Var) bool {
     return self.coercion_reach_seen.contains(root) and !self.coercion_outside_seen.contains(root);
 }
 
-/// One reached variable's copy for `widenedValueUseVar`; the variable itself
+/// One reached variable's copy for `widenedReachCopy`; the variable itself
 /// when nothing under it widens. Copies are shared through
 /// `widened_use_copies`. The walk keeps an explicit stack, since a value's type
 /// can nest tag payloads arbitrarily deep, and builds each copy after its
@@ -20752,8 +20787,10 @@ fn widenedRowCopy(self: *Self, row: Var, env: *Env, region: Region) std.mem.Allo
             },
             .flex => {
                 // A row that is still open is shared with whatever else holds
-                // it; only a closed row needs its own re-opened copy.
-                if (self.widen_closed_rows_only) return self.types.resolveVar(row).var_;
+                // it; only a row that cannot gain a tag needs its own re-opened
+                // copy: a closed one, or one an annotation bounds (an annotated
+                // value's row, which closes when its module finishes).
+                if (self.widen_closed_rows_only and !resolved.desc.flags.bounded_row_ext) return self.types.resolveVar(row).var_;
                 break;
             },
             .rigid, .err, .field_presence => return self.types.resolveVar(row).var_,
@@ -20806,7 +20843,11 @@ const ResultWidening = struct {
 };
 
 /// The widening copy for the value `expr_idx` produces, or null when its type
-/// reaches no closed row and the expression relates at its own type.
+/// reaches no closed row and the expression relates at its own type. A read
+/// of a top-level value with a closed row is widened like any other closed
+/// value flowing into a result: the copy widens the function's result, and
+/// the value's own row is untouched (design.md "Value Rows: Uses Share One
+/// Row").
 fn widenResultValue(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env) std.mem.Allocator.Error!?ResultWidening {
     const rows_start: u32 = @intCast(self.widened_use_rows.items.len);
     const wide_var = try self.widenedClosedRowsCopy(
@@ -20982,12 +21023,12 @@ const WidenedUseRow = struct {
     settled: bool = false,
 };
 
-/// Add to every use's widened copy each tag its value's row gained after the
-/// use copied it, with the value's own payloads, so the copy still lists
-/// every tag the value can have (design.md "Value Rows: Local Values Share,
-/// Top-Level Values Widen At Each Use"). A use whose type no longer admits
-/// such a tag is a type mismatch at the use. Returns whether any copy gained
-/// a tag, since unifying one can introduce constraints of its own.
+/// Add to every widening copy each tag its value's row gained after the copy
+/// was made, with the value's own payloads, so the copy still lists every tag
+/// the value can have (design.md "Row Subsumption"). A result whose type no
+/// longer admits such a tag is a type mismatch at the result. Returns whether
+/// any copy gained a tag, since unifying one can introduce constraints of its
+/// own.
 fn propagateValueRowsToWidenedUses(self: *Self, env: *Env) std.mem.Allocator.Error!bool {
     var changed = false;
     var missing: std.ArrayListUnmanaged(types_mod.Tag) = .empty;
@@ -21319,42 +21360,68 @@ fn definitionBodyExpr(self: *const Self, rhs: CIR.Expr.Idx) CIR.Expr.Idx {
     }
 }
 
-/// Close every still-open row a top-level value's type reaches through the
-/// row coercion, annotated or not: the value is evaluated once, at the type
-/// its definition produces (design.md "Value Rows: Local Values Share,
-/// Top-Level Values Widen At Each Use"), and no use relates to these rows,
-/// since each use widens a copy. A row outside the reach is shared by every
-/// use and is sealed by Monotype's row defaults, and a row whose tail carries
-/// a constraint the empty row does not discharge, or that a scheme
-/// quantified, is left alone.
+/// After the module solves, close every still-open tag row anywhere in a
+/// top-level value's type (design.md "Value Rows: Uses Share One Row"). The
+/// module's uses have widened the shared rows as far as they will; nothing
+/// outside the module can widen them, so the closed type is the one importers
+/// read and the one the value is evaluated at. A row whose tail is
+/// quantified with a scheme, or carries constraints the row default does not
+/// discharge, is left alone.
 fn closeTopLevelValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    const stack = &self.type_visit_stack;
+    var tails: std.ArrayListUnmanaged(Var) = .empty;
+    defer tails.deinit(self.gpa);
     for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
         const def = self.cir.store.getDef(def_idx);
         if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) continue;
         const pattern_var = ModuleEnv.varFrom(def.pattern);
         if (self.isBindingSchemeVar(pattern_var)) continue;
-        try self.computeCoercionReach(pattern_var);
         // Collect first: closing a tail unifies, which must not run while the
-        // reach set is being iterated.
-        var tails: std.ArrayListUnmanaged(Var) = .empty;
-        defer tails.deinit(self.gpa);
-        var reached = self.coercion_reach_seen.keyIterator();
-        while (reached.next()) |row_ptr| {
-            const row = self.types.resolveVar(row_ptr.*);
-            const ext = switch (row.desc.content) {
-                .structure => |flat| switch (flat) {
-                    .tag_union => |union_| union_.ext,
-                    .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => continue,
+        // type is being walked.
+        tails.clearRetainingCapacity();
+        const stack_base = stack.items.len;
+        defer stack.items.len = stack_base;
+        self.var_set.clearRetainingCapacity();
+        try stack.append(self.gpa, pattern_var);
+        while (stack.items.len > stack_base) {
+            const resolved = self.types.resolveVar(stack.pop().?);
+            if (self.var_set.contains(resolved.var_)) continue;
+            try self.var_set.put(resolved.var_, {});
+            switch (resolved.desc.content) {
+                .flex, .rigid, .field_presence, .err => {},
+                .alias => |alias| {
+                    try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                    try stack.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
                 },
-                .alias, .flex, .rigid, .field_presence, .err => continue,
-            };
-            if (self.coercion_outside_seen.contains(row.var_)) continue;
-            const tail = self.types.resolveVar(ext);
-            if (self.coercion_outside_seen.contains(tail.var_)) continue;
-            if (tail.desc.content != .flex) continue;
-            if (tail.desc.rank == .generalized) continue;
-            if (!self.rowDefaultDischargesConstraints(tail.desc.content.flex.constraints)) continue;
-            try tails.append(self.gpa, tail.var_);
+                .structure => |flat| switch (flat) {
+                    .tag_union => |tag_union| {
+                        for (self.types.getTagsSlice(tag_union.tags).items(.args)) |tag_args| {
+                            try stack.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+                        }
+                        const tail = self.types.resolveVar(self.tagRowTail(resolved.var_));
+                        if (tail.desc.content == .flex and
+                            tail.desc.rank != .generalized and
+                            self.rowDefaultDischargesConstraints(tail.desc.content.flex.constraints))
+                        {
+                            try tails.append(self.gpa, tail.var_);
+                        }
+                        try stack.append(self.gpa, tag_union.ext);
+                    },
+                    .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                        try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                        try stack.append(self.gpa, func.ret);
+                    },
+                    .record => |record| {
+                        for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                            try stack.append(self.gpa, presence.typeVar());
+                        }
+                        try stack.append(self.gpa, record.ext);
+                    },
+                    .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                    .empty_record, .empty_tag_union => {},
+                },
+            }
         }
         for (tails.items) |tail| {
             const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, self.getRegionAt(tail));
@@ -27010,20 +27077,12 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                     try self.instantiateVarOrphan(pat_var, env, env.rank(), .use_last_var)
                 else
                     pat_var;
-                // A use of a checked top-level value relates to a widening
-                // copy of the value's type, and reads the value through a
-                // row coercion (design.md "Value Rows: Local Values Share,
-                // Top-Level Values Widen At Each Use").
-                const widened_use_var = if (mb_processing_def) |processing_def|
-                    if (processing_def.status == .processed) try self.widenedValueUseVar(use_var, env, expr_region) else null
-                else
-                    null;
-                if (widened_use_var) |widened| {
-                    _ = try self.unify(expr_var, widened, env);
-                    try self.cir.recordRowCoercedUse(ModuleEnv.nodeIdxFrom(expr_idx), pat_var);
-                } else {
-                    _ = try self.unify(expr_var, use_var, env);
-                }
+                // A use of a top-level value relates to the value's own type
+                // (design.md "Value Rows: Uses Share One Row"): an
+                // unannotated value's still-open rows are shared by every use
+                // in the module and widen together, and an annotated value's
+                // rows are the annotation's.
+                _ = try self.unify(expr_var, use_var, env);
                 if (mb_processing_def) |processing_def| {
                     try self.recordSharedSchemeUse(
                         @backingInt(expr_idx),
@@ -27064,19 +27123,11 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                         .{ .explicit = expr_region },
                         .{ .value_use = expr_idx },
                     );
-                    // A use of an imported value that is not a binding scheme
-                    // widens exactly as a use in its own module does (design.md
-                    // "Value Rows: Local Values Share, Top-Level Values Widen
-                    // At Each Use"); a scheme's instantiation already has
-                    // fresh rows.
-                    const is_value = !ext_ref.other_cir.nodeIsBindingScheme(ext_ref.other_cir_node_idx);
-                    const widened_use_var = if (is_value) try self.widenedValueUseVar(ext_instantiated_var, env, expr_region) else null;
-                    if (widened_use_var) |widened| {
-                        _ = try self.unify(expr_var, widened, env);
-                        try self.cir.recordRowCoercedUse(ModuleEnv.nodeIdxFrom(expr_idx), ext_instantiated_var);
-                    } else {
-                        _ = try self.unify(expr_var, ext_instantiated_var, env);
-                    }
+                    // An imported value is read at the type its module
+                    // exported, every row of which closed when that module
+                    // finished checking (design.md "Value Rows: Uses Share
+                    // One Row"); a scheme's instantiation has fresh rows.
+                    _ = try self.unify(expr_var, ext_instantiated_var, env);
                 }
             } else {
                 try self.markErroneous(expr_var);
@@ -28359,7 +28410,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
                 self.suppress_generalize_expr = decl_stmt.expr;
                 try self.activateSchemeOwner(decl_pattern_var);
             }
-            decl.saved_bounding_annotation = self.beginBoundedAnnotationRows(self.appliedAnnotation(decl_stmt.pattern, decl_stmt.anno));
+            decl.saved_bounding_annotation = try self.beginBoundedAnnotationRows(self.appliedAnnotation(decl_stmt.pattern, decl_stmt.anno));
             return .{ .expr = decl_stmt.expr, .expected = decl.expectation };
         },
         .s_var => |var_stmt| {
