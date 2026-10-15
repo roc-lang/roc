@@ -252,6 +252,7 @@ fn expectStackOverflowTrap(wasm: *const WasmInterface, arena: std.mem.Allocator)
     }
 
     const memory = wasm.memory.buffer();
+    // spellchecker:ignore-next-line
     for (wasm.module_def.datas.items, 0..) |data, index| {
         if (data.mode != .Active) continue;
         const offset: usize = @as(u32, @bitCast(data.offset.?.Value.val.I32));
