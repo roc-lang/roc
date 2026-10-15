@@ -49,6 +49,11 @@ const TestOptions = struct {
     /// always printed, so pairing an iterator cart with its noiter twin makes
     /// the minted-adapter premium (iter bytes minus noiter bytes) visible in CI.
     max_bytes: ?usize = null,
+    /// When set, `wasm_main` must exhaust the shadow stack and trap with an
+    /// out-of-bounds memory access, leaving every active data segment intact.
+    /// The stack occupies the lowest addresses and grows down toward 0, so an
+    /// overflow must trap before it can write anything outside the stack.
+    expect_stack_overflow_trap: bool = false,
 };
 
 /// Host import implementations for the WASM module.
@@ -234,6 +239,30 @@ fn callWasmMain(wasm: *const WasmInterface, allocator: std.mem.Allocator) anyerr
     return wasm_memory[result_ptr .. result_ptr + result_len];
 }
 
+/// Call wasm_main(), require it to trap on a shadow-stack overflow, and then
+/// require every active data segment to still hold its initial bytes.
+fn expectStackOverflowTrap(wasm: *const WasmInterface, arena: std.mem.Allocator) ?[]const u8 {
+    var params: [0]bytebox.Val = undefined;
+    var returns: [1]bytebox.Val = undefined;
+    if (wasm.module_instance.invoke(wasm.wasm_main_handle, &params, &returns, .{})) |_| {
+        return "wasm_main returned instead of trapping on stack overflow";
+    } else |err| switch (err) {
+        error.TrapOutOfBoundsMemoryAccess => {},
+        else => return std.fmt.allocPrint(arena, "Expected an out-of-bounds memory trap from stack overflow, got {}", .{err}) catch "Wrong trap",
+    }
+
+    const memory = wasm.memory.buffer();
+    for (wasm.module_def.datas.items, 0..) |data, index| {
+        if (data.mode != .Active) continue;
+        const offset: usize = @as(u32, @bitCast(data.offset.?.Value.val.I32));
+        const bytes = data.bytes.items;
+        if (!std.mem.eql(u8, memory[offset .. offset + bytes.len], bytes)) {
+            return std.fmt.allocPrint(arena, "Stack overflow overwrote data segment {d} at [{d}, {d})", .{ index, offset, offset + bytes.len }) catch "Data segment overwritten";
+        }
+    }
+    return null;
+}
+
 /// Run a single test case.
 fn runTest(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_path: []const u8, expected_output: []const u8, options: TestOptions) TestResult {
     if (std.Io.Dir.cwd().readFileAlloc(io, wasm_path, arena, .unlimited)) |bytes| {
@@ -267,6 +296,13 @@ fn runTest(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, wasm_pa
                 .message = std.fmt.allocPrint(arena, "Counter reset failed: {}", .{err}) catch "Counter reset failed",
             };
         };
+    }
+
+    if (options.expect_stack_overflow_trap) {
+        if (expectStackOverflowTrap(&wasm, arena)) |message| {
+            return .{ .name = wasm_path, .passed = false, .message = message };
+        }
+        return .{ .name = wasm_path, .passed = true, .message = "OK" };
     }
 
     const result = callWasmMain(&wasm, arena) catch |err| {
@@ -358,6 +394,8 @@ pub fn main(init: std.process.Init) anyerror!void {
             std.debug.print("  --assert-alloc-balanced  Assert canonical roc_alloc and roc_dealloc counts match\n", .{});
             std.debug.print("  --min-allocs N       Minimum canonical roc_alloc count when counting allocations\n", .{});
             std.debug.print("  --max-allocs N       Maximum canonical roc_alloc count when counting allocations\n", .{});
+            std.debug.print("  --max-bytes N        Maximum .wasm file size in bytes\n", .{});
+            std.debug.print("  --expect-stack-overflow-trap  Require wasm_main to trap on stack overflow without touching static data\n", .{});
             std.debug.print("  --help               Display this help message\n", .{});
             return;
         } else if (std.mem.eql(u8, arg, "--wasm-path")) {
@@ -370,6 +408,8 @@ pub fn main(init: std.process.Init) anyerror!void {
                 std.debug.print("Error: --expected requires an argument\n", .{});
                 return;
             };
+        } else if (std.mem.eql(u8, arg, "--expect-stack-overflow-trap")) {
+            options.expect_stack_overflow_trap = true;
         } else if (std.mem.eql(u8, arg, "--assert-alloc-balanced")) {
             options.assert_alloc_balanced = true;
         } else if (std.mem.eql(u8, arg, "--min-allocs")) {
@@ -409,7 +449,11 @@ pub fn main(init: std.process.Init) anyerror!void {
 
     std.debug.print("=== WASM Static Library Test ===\n", .{});
     std.debug.print("WASM file: {s}\n", .{wasm_path});
-    std.debug.print("Expected output: \"{s}\"\n\n", .{expected_output});
+    if (options.expect_stack_overflow_trap) {
+        std.debug.print("Expecting a stack overflow trap\n\n", .{});
+    } else {
+        std.debug.print("Expected output: \"{s}\"\n\n", .{expected_output});
+    }
 
     const result = runTest(gpa, arena, init.io, wasm_path, expected_output, options);
 
