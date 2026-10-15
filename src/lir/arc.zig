@@ -10061,10 +10061,9 @@ test "RC if_then_else: then-only value is released where the else branch begins"
     // branch's call runs rather than at the return.
     try f.expectRc(value, 0, 1, 0);
     const if_after = f.walkToSwitch(f.procBody());
-    switch (f.store.getCFStmt(if_after.default_branch)) {
-        .decref => |decref| try testing.expectEqual(value, decref.value),
-        else => return error.TestUnexpectedResult,
-    }
+    const else_entry = f.store.getCFStmt(if_after.default_branch);
+    if (else_entry != .decref) return error.TestUnexpectedResult;
+    try testing.expectEqual(value, else_entry.decref.value);
 }
 
 test "RC if_then_else: condition preserves live list owner for branch body" {
@@ -14366,15 +14365,13 @@ test "RC borrow: string match view capture consumed by call takes the source's u
     // capture's retain and the source's release at the branch entry cancel:
     // the capture carries the source's unit into the call. Only the miss
     // branch releases the source.
-    const str_match_stmt = switch (f.store.getCFStmt(f.procBody())) {
-        .assign_literal => |assign| f.store.getCFStmt(assign.next).str_match,
-        else => return error.TestUnexpectedResult,
-    };
+    const entry = f.store.getCFStmt(f.procBody());
+    if (entry != .assign_literal) return error.TestUnexpectedResult;
+    const str_match_stmt = f.store.getCFStmt(entry.assign_literal.next).str_match;
     try testing.expect(f.store.getCFStmt(str_match_stmt.on_match) == .assign_call);
-    switch (f.store.getCFStmt(str_match_stmt.on_miss)) {
-        .decref => |decref| try testing.expectEqual(source, decref.value),
-        else => return error.TestUnexpectedResult,
-    }
+    const miss_entry = f.store.getCFStmt(str_match_stmt.on_miss);
+    if (miss_entry != .decref) return error.TestUnexpectedResult;
+    try testing.expectEqual(source, miss_entry.decref.value);
     try f.expectRc(capture, 0, 0, 0);
 }
 
