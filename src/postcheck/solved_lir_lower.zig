@@ -9276,7 +9276,17 @@ const Lowerer = struct {
         const payload_layout = switch (target_content.tag) {
             .box => target_content.getIdx(),
             .box_of_zst => try self.layoutOfType(ty),
-            else => Common.invariant("recursive Monotype let statement must bind a boxed runtime layout"),
+            .scalar,
+            .list,
+            .list_of_zst,
+            .struct_,
+            .closure,
+            .erased_callable,
+            .zst,
+            .tag_union,
+            .ptr,
+            .erased_box,
+            => Common.invariant("recursive Monotype let statement must bind a boxed runtime layout"),
         };
         return .{
             .ty = ty,
