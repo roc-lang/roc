@@ -13596,7 +13596,7 @@ const Builder = struct {
             const value_ty = try sealer.sealNode(prepared.value_node);
             const entry = try prepared_methods.getOrPut(value_ty);
             if (entry.found_existing) {
-                if (!std.meta.eql(entry.value_ptr.*, prepared.callee)) {
+                if (!try self.preparedCalleesSpecializeTogether(body_draft, sealer, entry.value_ptr.*, prepared.callee)) {
                     Common.invariant("one sealed inspect type had multiple prepared method callees");
                 }
             } else {
@@ -13637,6 +13637,40 @@ const Builder = struct {
         }
     }
 
+    /// Whether two callees prepared for components that seal to one type are
+    /// one specialization. A callee is prepared while its component's type
+    /// may still be open, so components that only settle to the same type
+    /// later request separate drafts. Specializations are keyed by their
+    /// sealed request interface, so drafts of one template with equal
+    /// evidence and codec contract whose requests seal to one type are one
+    /// specialization, and emission may call either.
+    fn preparedCalleesSpecializeTogether(
+        self: *Builder,
+        body_draft: *BodyDraftStore,
+        sealer: *GraphTypeFinals,
+        left: DraftFnSlot,
+        right: DraftFnSlot,
+    ) Allocator.Error!bool {
+        if (std.meta.eql(left, right)) return true;
+        const left_fn = switch (left.local) {
+            .draft => |fn_id| fn_id,
+            .final => return false,
+        };
+        const right_fn = switch (right.local) {
+            .draft => |fn_id| fn_id,
+            .final => return false,
+        };
+        const left_index = body_draft.template_spec_by_fn.get(left_fn) orelse return false;
+        const right_index = body_draft.template_spec_by_fn.get(right_fn) orelse return false;
+        const left_spec = &body_draft.template_specs.items[left_index];
+        const right_spec = &body_draft.template_specs.items[right_index];
+        if (!std.meta.eql(left_spec.template_ref, right_spec.template_ref)) return false;
+        if (!optionalTypeDigestEql(left_spec.lexical_context_key, right_spec.lexical_context_key)) return false;
+        if (!draftCodecContractSpecializationEql(left_spec.codec_contract, right_spec.codec_contract)) return false;
+        if (!try specEvidenceVectorEql(self.allocator, left_spec.evidence, right_spec.evidence)) return false;
+        return try sealer.sealNode(left_spec.request_fn_node) == try sealer.sealNode(right_spec.request_fn_node);
+    }
+
     fn emitDraftStructuralEq(
         self: *Builder,
         body_draft: *BodyDraftStore,
@@ -13662,7 +13696,7 @@ const Builder = struct {
             const component_ty = try sealer.sealNode(planned.node);
             const entry = try method_calls.getOrPut(component_ty);
             if (entry.found_existing) {
-                if (!std.meta.eql(entry.value_ptr.*, planned.callee)) {
+                if (!try self.preparedCalleesSpecializeTogether(body_draft, sealer, entry.value_ptr.*, planned.callee)) {
                     Common.invariant("deferred structural equality plan assigned two callees to one component type");
                 }
             } else {

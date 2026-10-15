@@ -15273,6 +15273,15 @@ binds; one carried as evidence from the edge that selected the target in
 another body instantiates in a fresh context of its recording module, and is
 part of the input that keys a `where`-requirement relation's replay summary.
 
+An independent use of shared evidence (an inferred requirement used at more
+than one type) carries the slot's substitution only when a recorded
+where-method use proves its signature copy shares every non-marker leaf with
+the slot's. Otherwise it instantiates the target at its own callable, which is
+exact only when that callable fixes every quantified variable
+(`callable_determines_scheme`): a target whose scheme has a variable extending
+a tag row with labels of its own records a checked contract for each such use,
+whose substitution the use instantiates under.
+
 Checking instantiates nothing for these targets, so their nodes derive the
 substitution from the callable:
 - the numeric default owner checking selects for a dispatcher no edge pins;
@@ -23433,6 +23442,15 @@ its planned inspect workers and descriptor method slots. Inspectable nominal
 wrappers are explicitly destructured before calling a backing vector's method.
 Statically known SIMD inspection is an ordinary direct procedure call, with
 normal specialization reuse and inlining decisions.
+
+A method callee prepared before relation freeze for deferred inspection or a
+deferred structural derivation is requested while its component's type may
+still be open, so components that settle to one type only later can hold
+separate drafts. A specialization is keyed by its sealed request interface:
+deferred emission calls one prepared callee per sealed type and requires every
+other callee prepared for that type to be a draft of the same template, with
+equal evidence, codec contract and lexical context, whose request seals to the
+same type.
 
 SIMD inspection appends lane text directly into the result string without
 materializing lane or string lists. Eight- and sixteen-lane results always
