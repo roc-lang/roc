@@ -1210,7 +1210,7 @@ pub const LoadedPacks = struct {
     checked_root: ?*const check.CheckedArtifact.CheckedModuleArtifact = null,
     /// Owned projections of immutable checked producer records. Previously
     /// admitted objects never borrow authority from a retiring BuildEnv entry.
-    authority_arena: std.heap.ArenaAllocator,
+    authority_arena: collections.SingleThreadArena,
     sources: std.AutoHashMap([32]u8, SourceAuthority),
     sites: std.AutoHashMap(SiteKey, SiteAuthority),
     literals: std.AutoHashMap(AuthorityKey, LiteralAuthority),
@@ -1236,23 +1236,35 @@ pub const LoadedPacks = struct {
     /// Packs a program published while code packs were still unloaded,
     /// indexed with them when they load.
     staged: std.ArrayListUnmanaged([]u8) = .empty,
-    /// Store packs read but not yet decoded. A lookup that selects one of a
-    /// pack's offers decodes and admits it, with the packs offering the
-    /// literal producers its offers read.
+    /// Store packs, indexed but with their artifacts undecoded. A lookup
+    /// that selects one of a pack's offers decodes and admits the closure
+    /// of that offer alone, with the closures of the literal producers it
+    /// reads from the packs offering them.
     store_packs: std.ArrayListUnmanaged(StorePack) = .empty,
     /// The store packs offering each key, in load order.
     candidates: std.AutoHashMapUnmanaged([32]u8, std.ArrayListUnmanaged(u32)) = .empty,
 
     const StorePack = struct {
-        /// The pack until it is admitted: its bytes, or the file holding them.
-        contents: union(enum) { bytes: []u8, path: []u8, admitted },
+        /// The pack's bytes, or the file holding them.
+        contents: union(enum) { bytes: []u8, path: []u8 },
         index: PackFile.Index,
         /// The bytes `index` was read from when they are not `contents`.
         index_bytes: ?[]u8 = null,
+        /// The artifacts decoded so far, by their index in the pack. Each
+        /// decodes once, however many admitted closures hold it.
+        decoded: std.AutoHashMapUnmanaged(u32, backend.dev.ProcArtifact.Artifact) = .empty,
+        /// Owns every decoded artifact's contents for the rest of the load.
+        arena: collections.SingleThreadArena,
+        /// The offers (by root artifact) whose closures were admitted or
+        /// found unservable.
+        admitted_roots: std.AutoHashMapUnmanaged(u32, void) = .empty,
+        /// Whether an admitted closure carried the pack's discovery
+        /// summaries, which the first one does.
+        discovery_indexed: bool = false,
     };
 
     const Deferred = struct {
-        arena: std.heap.ArenaAllocator,
+        arena: collections.SingleThreadArena,
         modules: lir.CheckedPipeline.CheckedModuleSet,
         root: *const check.CheckedArtifact.CheckedModuleArtifact,
     };
@@ -1269,7 +1281,7 @@ pub const LoadedPacks = struct {
         return .{
             .allocator = allocator,
             .packs = .empty,
-            .authority_arena = std.heap.ArenaAllocator.init(allocator),
+            .authority_arena = collections.SingleThreadArena.init(allocator),
             .sources = std.AutoHashMap([32]u8, SourceAuthority).init(allocator),
             .sites = std.AutoHashMap(SiteKey, SiteAuthority).init(allocator),
             .literals = std.AutoHashMap(AuthorityKey, LiteralAuthority).init(allocator),
@@ -1375,11 +1387,16 @@ pub const LoadedPacks = struct {
             const list = entry.value_ptr;
             if (list.items.len == 0 or list.items[list.items.len - 1] != id) try list.append(self.allocator, id);
         }
-        try self.store_packs.append(self.allocator, .{ .contents = .{ .bytes = bytes }, .index = index });
+        try self.store_packs.append(self.allocator, .{
+            .contents = .{ .bytes = bytes },
+            .index = index,
+            .arena = collections.SingleThreadArena.init(self.allocator),
+        });
     }
 
-    /// Admit every source offering `key`, and transitively the sources
-    /// offering the literal producers their offers read, then index them.
+    /// Admit the closure of every offer of `key` in the store packs offering
+    /// it, and transitively the closures of the literal producers those
+    /// offers read, then index them.
     fn admitKey(self: *LoadedPacks, key: [32]u8) LoadError!void {
         if (self.candidates.count() == 0) return;
         var pending = std.ArrayList([32]u8).empty;
@@ -1389,31 +1406,120 @@ pub const LoadedPacks = struct {
         while (pending.pop()) |next| {
             const list = self.candidates.get(next) orelse continue;
             for (list.items) |id| {
-                const source = &self.store_packs.items[id];
-                const bytes = switch (source.contents) {
-                    .admitted => continue,
-                    .bytes => |bytes| bytes,
-                    .path => |path| read: {
-                        defer self.allocator.free(path);
-                        source.contents = .admitted;
-                        const io = (self.pending orelse unreachable).io;
-                        break :read std.Io.Dir.cwd().readFileAlloc(io, path, self.allocator, .limited(1024 * 1024 * 1024)) catch |err| switch (err) {
-                            error.OutOfMemory => return error.OutOfMemory,
-                            else => return error.PackDirectoryUnreadable,
-                        };
-                    },
-                };
-                source.contents = .admitted;
-                defer self.allocator.free(bytes);
-                try self.appendPack(bytes);
-                admitted_any = true;
-                for (source.index.offers.specs) |spec| if (spec.demand) |demand| {
-                    for (demand.literal_reads) |read| try pending.append(self.allocator, read.recipe.producer_key);
-                };
-                for (source.index.offers.materializer_reads) |entry| try pending.append(self.allocator, entry.read.recipe.producer_key);
+                if (try self.admitClosure(id, next, &pending)) admitted_any = true;
             }
         }
         if (admitted_any) try self.indexPacksUnrecorded();
+    }
+
+    /// Admit the closure of store pack `id`'s offers of `key` that are not
+    /// admitted yet, as a set of its own: the artifacts the offers reach,
+    /// renumbered densely, naming their definitions by their index in the
+    /// pack so every closure of one pack names a shared definition alike.
+    /// The set offers every spec of the pack whose artifact it holds, and
+    /// queues the literal producers those offers and the pack's
+    /// materializer reads name. Returns whether a set was admitted.
+    fn admitClosure(self: *LoadedPacks, id: u32, key: [32]u8, pending: *std.ArrayList([32]u8)) LoadError!bool {
+        const source = &self.store_packs.items[id];
+        const offers = source.index.offers;
+        var roots = std.ArrayList(u32).empty;
+        defer roots.deinit(self.allocator);
+        for (offers.specs) |spec| {
+            if (!std.mem.eql(u8, &spec.key, &key)) continue;
+            if (source.admitted_roots.contains(spec.artifact)) continue;
+            try roots.append(self.allocator, spec.artifact);
+        }
+        if (roots.items.len == 0) return false;
+        const members = (try PackFile.closure(self.allocator, &source.index, roots.items)) orelse {
+            // A closure with an unresolved reference serves nothing, as it
+            // would not after whole-pack admission either.
+            for (roots.items) |root| try source.admitted_roots.put(self.allocator, root, {});
+            return false;
+        };
+        defer self.allocator.free(members);
+        try self.decodeMembers(source, members);
+
+        var arena = collections.SingleThreadArena.init(self.allocator);
+        errdefer arena.deinit();
+        const a = arena.allocator();
+        const remap = try self.allocator.alloc(?u32, offers.artifacts.len);
+        defer self.allocator.free(remap);
+        @memset(remap, null);
+        for (members, 0..) |member, new| remap[member] = @intCast(new);
+        const artifacts = try a.alloc(backend.dev.ProcArtifact.Artifact, members.len);
+        for (members, artifacts) |member, *artifact| {
+            artifact.* = source.decoded.get(member) orelse unreachable;
+            const refs = try a.dupe(backend.dev.ProcArtifact.Reference, artifact.refs);
+            for (refs) |*ref| ref.target = remap[ref.target] orelse return error.MalformedPack;
+            artifact.refs = refs;
+            const data = try a.dupe(backend.dev.ProcArtifact.DataItem, artifact.data);
+            for (data) |*item| {
+                const relocations = try a.dupe(backend.dev.ProcArtifact.DataRelocation, item.relocations);
+                for (relocations) |*relocation| if (relocation.code_target) |*target| {
+                    if (target.* == .local) target.local = remap[target.local] orelse return error.MalformedPack;
+                };
+                item.relocations = relocations;
+            }
+            artifact.data = data;
+        }
+        var specs = std.ArrayList(PackFile.SpecEntry).empty;
+        for (offers.specs) |spec| {
+            const new = remap[spec.artifact] orelse continue;
+            var entry = spec;
+            entry.artifact = new;
+            try specs.append(a, entry);
+            try source.admitted_roots.put(self.allocator, spec.artifact, {});
+            if (spec.demand) |demand| for (demand.literal_reads) |read| try pending.append(self.allocator, read.recipe.producer_key);
+        }
+        for (offers.materializer_reads) |entry| try pending.append(self.allocator, entry.read.recipe.producer_key);
+        const discovery: []const PackFile.DiscoveryEntry = if (source.discovery_indexed) &.{} else offers.discovery;
+        source.discovery_indexed = true;
+        const owner = try self.allocator.create(PackFile.Pack);
+        errdefer self.allocator.destroy(owner);
+        owner.* = .{
+            .set = .{
+                .arena = arena,
+                .artifacts = artifacts,
+                .physical_namespace = source.index.physical_namespace,
+                .definitions = try a.dupe(u32, members),
+            },
+            .specs = specs.items,
+            .discovery = discovery,
+            .materializer_reads = offers.materializer_reads,
+        };
+        try self.packs.append(self.allocator, owner);
+        return true;
+    }
+
+    /// Decode the members of a closure `source` has not decoded yet, from
+    /// its bytes or from their ranges of its file.
+    fn decodeMembers(self: *LoadedPacks, source: *StorePack, members: []const u32) LoadError!void {
+        const table = source.index.offers.artifacts;
+        const count: u32 = @intCast(table.len);
+        switch (source.contents) {
+            .bytes => |bytes| for (members) |member| {
+                if (source.decoded.contains(member)) continue;
+                const entry = table[member];
+                if (entry.end > bytes.len) return error.MalformedPack;
+                const artifact = try PackFile.readArtifactAt(self.allocator, source.arena.allocator(), bytes[@intCast(entry.start)..@intCast(entry.end)], count);
+                try source.decoded.put(self.allocator, member, artifact);
+            },
+            .path => |path| {
+                const io = (self.pending orelse unreachable).io;
+                const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return error.PackDirectoryUnreadable;
+                defer file.close(io);
+                for (members) |member| {
+                    if (source.decoded.contains(member)) continue;
+                    const entry = table[member];
+                    const buffer = try self.allocator.alloc(u8, @intCast(entry.end - entry.start));
+                    defer self.allocator.free(buffer);
+                    const read = file.readPositionalAll(io, buffer, entry.start) catch return error.PackDirectoryUnreadable;
+                    if (read != buffer.len) return error.MalformedPack;
+                    const artifact = try PackFile.readArtifactAt(self.allocator, source.arena.allocator(), buffer, count);
+                    try source.decoded.put(self.allocator, member, artifact);
+                }
+            },
+        }
     }
 
     /// Retain newly produced normal objects in the same serving universe.
@@ -1543,7 +1649,12 @@ pub const LoadedPacks = struct {
                 const list = entry.value_ptr;
                 if (list.items.len == 0 or list.items[list.items.len - 1] != id) try list.append(allocator, id);
             }
-            try self.store_packs.append(allocator, .{ .contents = .{ .path = path }, .index = index, .index_bytes = tail });
+            try self.store_packs.append(allocator, .{
+                .contents = .{ .path = path },
+                .index = index,
+                .index_bytes = tail,
+                .arena = collections.SingleThreadArena.init(allocator),
+            });
             path_owned = false;
             tail_owned = false;
         }
@@ -1552,7 +1663,7 @@ pub const LoadedPacks = struct {
     /// Own a copy of a prepared program's module set, so that its first code
     /// lookup can load packs and admit them against it.
     pub fn deferLoad(self: *LoadedPacks, modules: lir.CheckedPipeline.CheckedModuleSet, root: *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error!void {
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        var arena = collections.SingleThreadArena.init(self.allocator);
         errdefer arena.deinit();
         var copied = modules;
         copied.imports = try arena.allocator().dupe(check.CheckedArtifact.ImportedModuleView, modules.imports);
@@ -1670,7 +1781,7 @@ pub const LoadedPacks = struct {
                 };
                 const physical: backend.dev.LirCodeGenMod.PhysicalProvision = .{
                     .graph = closure.physical_namespace,
-                    .definition = spec.artifact,
+                    .definition = pack.set.physicalDefinition(spec.artifact),
                 };
                 const artifact_entry = try self.artifacts.getOrPut(identity);
                 if (artifact_entry.found_existing) {
@@ -1701,7 +1812,7 @@ pub const LoadedPacks = struct {
     /// missing exact offers backwards once; recursive groups remain closed when
     /// all their declarations and physical definitions are present.
     fn certifyLiteralOffers(self: *LoadedPacks) Allocator.Error!void {
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        var arena = collections.SingleThreadArena.init(self.allocator);
         defer arena.deinit();
         const a = arena.allocator();
         const keys = try a.alloc(OfferKey, self.specs.count());
@@ -2394,10 +2505,12 @@ pub const LoadedPacks = struct {
         for (self.store_packs.items) |*source| {
             switch (source.contents) {
                 .bytes, .path => |owned| self.allocator.free(owned),
-                .admitted => {},
             }
             if (source.index_bytes) |bytes| self.allocator.free(bytes);
             source.index.deinit();
+            source.decoded.deinit(self.allocator);
+            source.admitted_roots.deinit(self.allocator);
+            source.arena.deinit();
         }
         self.store_packs.deinit(self.allocator);
         var lists = self.candidates.valueIterator();

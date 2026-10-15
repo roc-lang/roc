@@ -15,12 +15,13 @@ const collections = @import("collections");
 const lir = @import("lir");
 const ProcArtifact = @import("ProcArtifact.zig");
 const RelocationMod = @import("Relocation.zig");
+const ArtifactClosure = @import("ArtifactClosure.zig");
 
 const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 25;
+pub const format_version: u32 = 26;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// artifact holding its procedure, and the ownership signature and
@@ -214,7 +215,11 @@ pub fn writeOffers(
     const specs_offset_at = bytes.items.len;
     try writer.wide(0);
 
-    for (set.artifacts) |artifact| {
+    // Where each artifact's encoding starts, for the index's artifact table.
+    const starts = try allocator.alloc(u64, set.artifacts.len + 1);
+    defer allocator.free(starts);
+    for (set.artifacts, 0..) |artifact, index| {
+        starts[index] = bytes.items.len;
         try writer.context(artifact.context_contract);
         try writer.context(artifact.context_dependencies);
         try writer.context(artifact.context_complete);
@@ -350,6 +355,7 @@ pub fn writeOffers(
         }
     }
 
+    starts[set.artifacts.len] = bytes.items.len;
     std.mem.writeInt(u64, bytes.items[specs_offset_at..][0..8], bytes.items.len, .little);
     for (specs) |spec| {
         try writer.raw(&spec.key);
@@ -385,11 +391,51 @@ pub fn writeOffers(
         try writer.context(entry.read);
     }
 
+    // The artifact table: each artifact's byte range and the artifacts it
+    // reaches, resolved here once so a reader can select a closure from the
+    // index alone (`closure`).
+    for (starts) |start| try writer.wide(start);
+    var graph = try ArtifactClosure.init(allocator, set);
+    defer graph.deinit();
+    var edges = std.ArrayList(u32).empty;
+    defer edges.deinit(allocator);
+    for (set.artifacts, 0..) |artifact, index| {
+        edges.clearRetainingCapacity();
+        var unresolved = false;
+        for (artifact.refs) |ref| try edges.append(allocator, ref.target);
+        for (graph.symbolicTargets(@intCast(index))) |target| {
+            if (target) |node| try edges.append(allocator, node) else unresolved = true;
+        }
+        for (graph.dataTargets(@intCast(index))) |target| {
+            if (target) |node| try edges.append(allocator, node) else unresolved = true;
+        }
+        for (artifact.data) |item| for (item.relocations) |relocation| {
+            if (relocation.function and !relocation.external and relocation.code_target == null) unresolved = true;
+        };
+        std.mem.sort(u32, edges.items, {}, std.sort.asc(u32));
+        var unique: usize = 0;
+        for (edges.items, 0..) |edge, i| {
+            if (i == 0 or edge != edges.items[i - 1]) {
+                edges.items[unique] = edge;
+                unique += 1;
+            }
+        }
+        try writer.word(@intCast(unique));
+        for (edges.items[0..unique]) |edge| try writer.word(edge);
+        try writer.byte(@intFromBool(unresolved));
+    }
+
     var namespace = std.crypto.hash.Blake3.init(.{});
     namespace.update("roc.native.physical.pack.v1");
     namespace.update(bytes.items[body_offset..]);
     namespace.final(bytes.items[namespace_offset..][0..32]);
-    return try bytes.toOwnedSlice(allocator);
+    // Copied rather than shrunk in place: whether the child allocator can
+    // shrink a buffer in place is not a property of the encoding, and the
+    // allocation-failure checks require one allocation sequence per input.
+    const owned = try allocator.alloc(u8, bytes.items.len);
+    @memcpy(owned, bytes.items);
+    bytes.deinit(allocator);
+    return owned;
 }
 
 /// Decode a pack. Every slice in the result is owned by the pack's arena.
@@ -408,7 +454,44 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
     const specs_offset = try reader.wide();
 
     const artifacts = try arena_allocator.alloc(ProcArtifact.Artifact, artifact_count);
-    for (artifacts) |*artifact| {
+    const starts = try allocator.alloc(u64, artifact_count + 1);
+    defer allocator.free(starts);
+    for (artifacts, starts[0..artifact_count]) |*artifact, *start| {
+        start.* = reader.offset;
+        artifact.* = try readArtifact(&reader, allocator, arena_allocator, artifact_count);
+    }
+    starts[artifact_count] = reader.offset;
+
+    for (artifacts) |artifact| {
+        if (artifact.root_materialization != null) continue;
+        for (artifact.refs) |reference| {
+            if (artifacts[reference.target].root_materialization != null) return error.MalformedPack;
+        }
+    }
+    if (reader.offset != specs_offset) return error.MalformedPack;
+    const offers = try readOffers(allocator, arena_allocator, &reader, artifact_count, spec_count, specs_offset);
+    for (offers.specs) |spec| {
+        if (artifacts[spec.artifact].root_materialization != null) return error.MalformedPack;
+    }
+    for (offers.artifacts, starts[0..artifact_count], starts[1..]) |entry, start, end| {
+        if (entry.start != start or entry.end != end) return error.MalformedPack;
+    }
+    const specs = offers.specs;
+    const discovery = offers.discovery;
+    const materializer_reads = offers.materializer_reads;
+    if (reader.offset != bytes.len) return error.MalformedPack;
+
+    return .{
+        .set = .{ .arena = arena, .artifacts = artifacts, .physical_namespace = physical_namespace },
+        .specs = specs,
+        .discovery = discovery,
+        .materializer_reads = materializer_reads,
+    };
+}
+
+/// Decode one artifact at the reader's position.
+fn readArtifact(reader: *Reader, allocator: Allocator, arena_allocator: Allocator, artifact_count: u32) ReadError!ProcArtifact.Artifact {
+    {
         const context_contract = try reader.context(?@import("LirCodeGen.zig").FragmentContract, arena_allocator);
         const context_dependencies = try reader.context(?@import("LirCodeGen.zig").FragmentContextDependencies, arena_allocator);
         const context_complete = try reader.context(bool, arena_allocator);
@@ -569,7 +652,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
                 .relocations = data_relocations,
             };
         }
-        artifact.* = .{
+        const artifact: ProcArtifact.Artifact = .{
             .kind = kind,
             .source_events = source_events,
             .root_materialization = root_materialization,
@@ -587,8 +670,8 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
             .context_complete = context_complete,
             .callable_contract = callable_contract,
         };
-        ProcArtifact.validateCodePatches(artifact.*) catch return error.MalformedPack;
-        ProcArtifact.validateRootMaterializations(allocator, artifact.*) catch |err| switch (err) {
+        ProcArtifact.validateCodePatches(artifact) catch return error.MalformedPack;
+        ProcArtifact.validateRootMaterializations(allocator, artifact) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.InvalidRootMaterializationDependency => return error.MalformedPack,
         };
@@ -597,7 +680,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
         }
         if (artifact.source_events.len != 0) {
             const contract = artifact.context_contract orelse return error.MalformedPack;
-            ProcArtifact.validateSourceEventCertificates(allocator, artifact.*, contract.target.toCpuArch().endian()) catch |err| switch (err) {
+            ProcArtifact.validateSourceEventCertificates(allocator, artifact, contract.target.toCpuArch().endian()) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.InvalidSourceEventCertificate => return error.MalformedPack,
             };
@@ -606,43 +689,37 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
                 if (relocation.kind == .function and std.mem.eql(u8, relocation.name, @import("builtins").source_events.symbol_name)) return error.MalformedPack;
             }
         }
+        return artifact;
     }
-
-    for (artifacts) |artifact| {
-        if (artifact.root_materialization != null) continue;
-        for (artifact.refs) |reference| {
-            if (artifacts[reference.target].root_materialization != null) return error.MalformedPack;
-        }
-    }
-    if (reader.offset != specs_offset) return error.MalformedPack;
-    const offers = try readOffers(allocator, arena_allocator, &reader, artifact_count, spec_count);
-    for (offers.specs) |spec| {
-        if (artifacts[spec.artifact].root_materialization != null) return error.MalformedPack;
-    }
-    const specs = offers.specs;
-    const discovery = offers.discovery;
-    const materializer_reads = offers.materializer_reads;
-    if (reader.offset != bytes.len) return error.MalformedPack;
-
-    return .{
-        .set = .{ .arena = arena, .artifacts = artifacts, .physical_namespace = physical_namespace },
-        .specs = specs,
-        .discovery = discovery,
-        .materializer_reads = materializer_reads,
-    };
 }
 
-/// The offers a pack makes, decoded without its artifacts.
+/// What a pack's index says about one artifact without decoding it: where
+/// its encoding lies in the pack, and which artifacts it reaches directly
+/// through set-local references, symbolic references the writer resolved to
+/// a definition in the pack, and the code targets of its data.
+pub const IndexArtifact = struct {
+    start: u64,
+    end: u64,
+    /// Ascending, without repeats.
+    edges: []const u32,
+    /// Whether a reference of this artifact resolves to nothing in the pack,
+    /// which admission rejects along with every closure containing it.
+    unresolved: bool,
+};
+
+/// The offers a pack makes, decoded without its artifacts, with the
+/// artifact table that lets a reader decode only a closure of them.
 pub const Offers = struct {
     specs: []const SpecEntry,
     discovery: []const DiscoveryEntry,
     materializer_reads: []const MaterializerRead,
+    artifacts: []const IndexArtifact,
 };
 
 /// A pack's offers, read without decoding its artifacts. Each spec names an
 /// artifact by index; `read` checks the artifact itself.
 pub const Index = struct {
-    arena: std.heap.ArenaAllocator,
+    arena: collections.SingleThreadArena,
     physical_namespace: [32]u8,
     offers: Offers,
 
@@ -689,15 +766,15 @@ pub fn readIndexLocation(header_bytes: []const u8) ReadError!IndexLocation {
 /// Read a pack's offers from the bytes from its offers to its end, so a
 /// reader need not read its artifacts.
 pub fn readIndexAt(allocator: Allocator, location: IndexLocation, tail: []const u8) ReadError!Index {
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     errdefer arena.deinit();
     var reader = Reader{ .bytes = tail };
-    const offers = try readOffers(allocator, arena.allocator(), &reader, location.artifact_count, location.spec_count);
+    const offers = try readOffers(allocator, arena.allocator(), &reader, location.artifact_count, location.spec_count, location.specs_offset);
     if (reader.offset != tail.len) return error.MalformedPack;
     return .{ .arena = arena, .physical_namespace = location.physical_namespace, .offers = offers };
 }
 
-fn readOffers(allocator: Allocator, arena_allocator: Allocator, reader: *Reader, artifact_count: u32, spec_count: u32) ReadError!Offers {
+fn readOffers(allocator: Allocator, arena_allocator: Allocator, reader: *Reader, artifact_count: u32, spec_count: u32, specs_offset: u64) ReadError!Offers {
     const specs = try arena_allocator.alloc(SpecEntry, spec_count);
     for (specs) |*spec| {
         spec.* = .{
@@ -757,7 +834,77 @@ fn readOffers(allocator: Allocator, arena_allocator: Allocator, reader: *Reader,
         };
         if (!try entry.read.recipe.valid(allocator)) return error.MalformedPack;
     }
-    return .{ .specs = specs, .discovery = discovery, .materializer_reads = materializer_reads };
+    const artifacts = try arena_allocator.alloc(IndexArtifact, artifact_count);
+    var previous_end: u64 = header_len;
+    for (artifacts) |*entry| {
+        entry.start = try reader.wide();
+        if (entry.start != previous_end) return error.MalformedPack;
+        entry.end = try reader.wide();
+        if (entry.end < entry.start) return error.MalformedPack;
+        previous_end = entry.end;
+        // The next artifact starts where this one ends.
+        reader.offset -= 8;
+    }
+    // The table's final offset is where the offers start.
+    if (try reader.wide() != specs_offset) return error.MalformedPack;
+    for (artifacts) |*entry| {
+        const edges = try arena_allocator.alloc(u32, try reader.word());
+        for (edges, 0..) |*edge, i| {
+            edge.* = try reader.word();
+            if (edge.* >= artifact_count) return error.MalformedPack;
+            if (i != 0 and edge.* <= edges[i - 1]) return error.MalformedPack;
+        }
+        entry.edges = edges;
+        entry.unresolved = switch (try reader.byte()) {
+            0 => false,
+            1 => true,
+            else => return error.MalformedPack,
+        };
+    }
+    return .{ .specs = specs, .discovery = discovery, .materializer_reads = materializer_reads, .artifacts = artifacts };
+}
+
+/// Every artifact a set of roots reaches in `index`, ascending, or null when
+/// one of them has a reference that resolves to nothing in the pack: such a
+/// closure cannot be served, as whole-pack admission would also find.
+pub fn closure(allocator: Allocator, index: *const Index, roots: []const u32) Allocator.Error!?[]u32 {
+    const artifacts = index.offers.artifacts;
+    const seen = try allocator.alloc(bool, artifacts.len);
+    defer allocator.free(seen);
+    @memset(seen, false);
+    var stack = std.ArrayList(u32).empty;
+    defer stack.deinit(allocator);
+    var members = std.ArrayList(u32).empty;
+    errdefer members.deinit(allocator);
+    for (roots) |root| {
+        if (seen[root]) continue;
+        seen[root] = true;
+        try stack.append(allocator, root);
+    }
+    while (stack.pop()) |node| {
+        if (artifacts[node].unresolved) {
+            members.deinit(allocator);
+            return null;
+        }
+        try members.append(allocator, node);
+        for (artifacts[node].edges) |edge| {
+            if (seen[edge]) continue;
+            seen[edge] = true;
+            try stack.append(allocator, edge);
+        }
+    }
+    std.mem.sort(u32, members.items, {}, std.sort.asc(u32));
+    return try members.toOwnedSlice(allocator);
+}
+
+/// Decode the one artifact whose encoding is exactly `bytes` (an entry of
+/// the index's artifact table). Every slice of the result is owned by
+/// `arena_allocator`.
+pub fn readArtifactAt(allocator: Allocator, arena_allocator: Allocator, bytes: []const u8, artifact_count: u32) ReadError!ProcArtifact.Artifact {
+    var reader = Reader{ .bytes = bytes };
+    const artifact = try readArtifact(&reader, allocator, arena_allocator, artifact_count);
+    if (reader.offset != bytes.len) return error.MalformedPack;
+    return artifact;
 }
 
 const Writer = struct {
@@ -943,6 +1090,69 @@ const Reader = struct {
         return try allocator.dupe(u8, try self.raw(len));
     }
 };
+
+test "pack index selects closures and decodes their artifacts alone" {
+    const allocator = std.testing.allocator;
+    const leaf = ProcArtifact.Artifact{
+        .kind = .{ .proc = lir.ProcIdentity.forTest(1) },
+        .code = "\xc3",
+        .entry = 0,
+        .frame = null,
+        .refs = &.{},
+        .relocations = &.{},
+        .data = &.{},
+        .callable_contract = @as([32]u8, @splat(1)),
+        .context_contract = .{
+            .target = .x64musl,
+            .cpu_level = .default,
+            .hot_reload = false,
+            .default_platform_runtime = false,
+        },
+        .context_dependencies = .{},
+    };
+    var caller = leaf;
+    caller.kind = .{ .proc = lir.ProcIdentity.forTest(2) };
+    caller.code = "\xe8\x00\x00\x00\x00\xc3";
+    caller.refs = &.{.{ .site = 1, .form = .call, .target = 0, .delta = 0, .veneer = null }};
+    var symbolic = leaf;
+    symbolic.kind = .{ .proc = lir.ProcIdentity.forTest(3) };
+    symbolic.code = "\xe8\x00\x00\x00\x00\xc3";
+    symbolic.symbolic_refs = &.{.{ .site = 1, .form = .call, .veneer = null, .target = .{ .proc = lir.ProcIdentity.forTest(1) } }};
+    var dangling = leaf;
+    dangling.kind = .{ .proc = lir.ProcIdentity.forTest(4) };
+    dangling.code = "\xe8\x00\x00\x00\x00\xc3";
+    dangling.symbolic_refs = &.{.{ .site = 1, .form = .call, .veneer = null, .target = .{ .proc = lir.ProcIdentity.forTest(99) } }};
+    var artifacts = [_]ProcArtifact.Artifact{ leaf, caller, symbolic, dangling };
+    const set = ProcArtifact.Set{ .arena = collections.SingleThreadArena.init(allocator), .artifacts = &artifacts };
+    const bytes = try write(allocator, &set, &.{});
+    defer allocator.free(bytes);
+
+    var index = try readIndex(allocator, bytes);
+    defer index.deinit();
+    const table = index.offers.artifacts;
+    try std.testing.expectEqual(@as(usize, 4), table.len);
+    try std.testing.expectEqual(@as(u64, header_len), table[0].start);
+    for (table[0..3], table[1..]) |previous, next| try std.testing.expectEqual(previous.end, next.start);
+    try std.testing.expectEqualSlices(u32, &.{}, table[0].edges);
+    try std.testing.expectEqualSlices(u32, &.{0}, table[1].edges);
+    try std.testing.expectEqualSlices(u32, &.{0}, table[2].edges);
+    try std.testing.expect(!table[2].unresolved);
+    try std.testing.expect(table[3].unresolved);
+
+    const of_caller = (try closure(allocator, &index, &.{1})) orelse return error.TestUnexpectedResult;
+    defer allocator.free(of_caller);
+    try std.testing.expectEqualSlices(u32, &.{ 0, 1 }, of_caller);
+    const of_both = (try closure(allocator, &index, &.{ 2, 1 })) orelse return error.TestUnexpectedResult;
+    defer allocator.free(of_both);
+    try std.testing.expectEqualSlices(u32, &.{ 0, 1, 2 }, of_both);
+    try std.testing.expect((try closure(allocator, &index, &.{3})) == null);
+
+    var arena = collections.SingleThreadArena.init(allocator);
+    defer arena.deinit();
+    const decoded = try readArtifactAt(allocator, arena.allocator(), bytes[@intCast(table[1].start)..@intCast(table[1].end)], @intCast(table.len));
+    try std.testing.expectEqualDeep(caller, decoded);
+    try std.testing.expectError(error.MalformedPack, readArtifactAt(allocator, arena.allocator(), bytes[@intCast(table[1].start) .. @as(usize, @intCast(table[1].end)) - 1], @intCast(table.len)));
+}
 
 test "pack ownership survives input destruction and allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testOwnedPack, .{});

@@ -529,12 +529,12 @@ const CompileTimeObjectCache = struct {
             errdefer self.allocator.free(bytes);
             // Stage only offers owned by this immutable checked module. App
             // edits must not hide an imported helper in the old app namespace.
-            var decoded = backend.dev.PackFile.read(self.allocator, bytes) catch |err| switch (err) {
+            var index = backend.dev.PackFile.readIndex(self.allocator, bytes) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.MalformedPack, error.UnsupportedPackVersion => unreachable,
             };
-            defer decoded.deinit();
-            if (decoded.specs.len == 0) {
+            defer index.deinit();
+            if (index.offers.specs.len == 0) {
                 self.allocator.free(bytes);
                 continue;
             }

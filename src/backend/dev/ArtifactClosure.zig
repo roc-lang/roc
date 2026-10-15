@@ -204,7 +204,7 @@ fn visit(self: *Self, index: u32) Allocator.Error!void {
 /// numbered caller-before-callee, so consumers union callee facts once in
 /// reverse order. Recursive procedures share a component, not provisional facts.
 pub const Components = struct {
-    arena: std.heap.ArenaAllocator,
+    arena: collections.SingleThreadArena,
     nodes: []const u32,
     callees: []const []const u32,
 
@@ -215,7 +215,7 @@ pub const Components = struct {
 
 /// Condense the serving graph into its strongly connected components.
 pub fn components(self: *const Self) Allocator.Error!Components {
-    var arena = std.heap.ArenaAllocator.init(self.allocator);
+    var arena = collections.SingleThreadArena.init(self.allocator);
     errdefer arena.deinit();
     const a = arena.allocator();
     const count = self.set.artifacts.len;

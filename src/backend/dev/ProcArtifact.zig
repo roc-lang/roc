@@ -366,9 +366,19 @@ pub const Set = struct {
     /// recorded one, as a decoded pack does. Otherwise `ArtifactClosure`
     /// derives it from the artifacts.
     physical_namespace: ?[32]u8 = null,
+    /// For a set holding part of the graph `physical_namespace` names (a
+    /// closure decoded from a pack), each artifact's index in that whole
+    /// graph, so two such sets name a shared definition the same way. Null
+    /// when the set is the whole graph.
+    definitions: ?[]const u32 = null,
 
     pub fn deinit(self: *Set) void {
         self.arena.deinit();
+    }
+
+    /// The index of artifact `index` in the physical graph the set belongs to.
+    pub fn physicalDefinition(self: *const Set, index: u32) u32 {
+        return if (self.definitions) |definitions| definitions[index] else index;
     }
 };
 
@@ -1645,7 +1655,7 @@ pub fn spliceIndexed(
     for (roots) |root| try stack.append(allocator, root);
     while (stack.pop()) |index| {
         if (placed.contains(index)) continue;
-        const provision: LirCodeGenMod.PhysicalProvision = .{ .graph = graph.physical_namespace, .definition = index };
+        const provision: LirCodeGenMod.PhysicalProvision = .{ .graph = graph.physical_namespace, .definition = set.physicalDefinition(index) };
         if (codegen.physical_provisions.get(provision)) |start| {
             try placed.putNoClobber(index, start);
             continue;
@@ -1687,7 +1697,7 @@ pub fn spliceIndexed(
         // as belonging to this program. Session append does preserve lines.
         try appendMetadata(CG, codegen, artifact, start, false, false);
         try placed.putNoClobber(index, start);
-        try codegen.physical_provisions.putNoClobber(codegen.allocator, .{ .graph = graph.physical_namespace, .definition = index }, start);
+        try codegen.physical_provisions.putNoClobber(codegen.allocator, .{ .graph = graph.physical_namespace, .definition = set.physicalDefinition(index) }, start);
         for (artifact.relocations) |relocation| {
             const symbol = try codegen.internSymbolName(relocation.name, relocation.scope);
             const offset: u64 = start + relocation.offset;
