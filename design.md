@@ -1085,7 +1085,7 @@ checker recovery. The recovery rules:
   rejected exactly as one selecting an annotation-only declaration is: its
   constraint callable is never related to the erroneous type, which would
   otherwise reach the instantiation that the dispatch belongs to while every
-  type that instantiation's owner publishes stays error-free.
+  type that instantiation's owner outputs stays error-free.
 - A pattern matched against an erroneous value binds nothing, because the
   value crashes before any pattern sees it. This is one rule wherever a
   pattern meets a value: a binding whose right-hand side is erroneous, every
@@ -1148,15 +1148,15 @@ checker recovery. The recovery rules:
   unification grounds it, yet it still belongs to the expression's relation
   over its operands and fails at that expression, exactly as if the receiver
   had been known (`Check.own_dispatch_exprs`, exact by callable identity, so
-  a copy that instantiation or import makes is never one). The obligations its
+  a copy that instantiation or import makes is never one). The requirements its
   resolution queues inherit no failure expression from the entry that carried
-  it. An obligation derived from such a dispatch, a requirement its selected
+  it. A requirement derived from such a dispatch, a requirement its selected
   target's instantiation left behind or a component relation of a structural
   comparison, belongs to the same relation and fails at the expression,
   whichever later unification grounds it: `x == x` over a list whose items a
   later use makes functions reports the missing equality at `x == x`, as when
   the items were known. A `for` loop's own `iter` and `next` dispatches have
-  no expression to own a relation, so an obligation derived from them (a
+  no expression to own a relation, so a requirement derived from them (a
   requirement of the selected `iter` target) keeps the relation that queued
   it, but it reports at the loop's iterable (`Check.loop_dispatch_iterables`)
   and retires no expression: the loop's checked iterator evidence carries the
@@ -2346,6 +2346,17 @@ would make a program's compile-time-evaluability depend on a compiler build
 constant rather than on the program itself, and would let Debug and release
 builds disagree about whether the same program compiles.
 
+The interpreter's own memory is bounded by what the program keeps alive, never
+by how many statements it has run. Each procedure activation owns storage for
+its frame locals and its `ptr_alloca` cells on a frame stack, and releases it
+when the activation ends or is replaced by a frame-replacing call; assigning a
+local copies the value into that storage. What a statement computes before
+storing its result lives in a scratch stack that the next statement of the same
+frame releases. A value that outlives its frame—a procedure's result, a
+frame-replacing call's arguments, a deferred erased call—is copied out before
+the frame ends. Roc heap data is unaffected: it is owned by the explicit LIR
+reference counts.
+
 ### Demand-Driven Compile-Time Evaluation
 
 A build evaluates only the compile-time roots its program demands. A root is
@@ -2464,6 +2475,36 @@ recorded output evaluates and observes what lowering the program would have.
 A root that no compilation evaluated, in a module this compilation does not
 finalize, has no slot to read; a program that reads it evaluates its body in
 place, as a pack program does.
+
+## Builtins Build Their Own Tag Unions
+
+If a builtin function's type contains a structural tag union anywhere—in its
+result, its arguments, or a callback's result—the builtin is implemented in
+plain Roc code for that tag union. No exceptions. When the builtin needs work
+that Roc code cannot do, that work is a private helper the compiler
+implements (a low-level operation), and the helper's type contains no
+structural tag union: its tag-union-shaped results are nominal (`Try`, or a
+private nominal such as `Num.RawOrder`) or have no tags at all (`Try(I64, {})`,
+a record). The public builtin converts between the helper's type and its own
+tag unions in Roc.
+
+The reason is that a structural tag union in an output position is open for the
+builtin's callers: `I64.from_str(s)?` may sit in a function returning
+`Try(I64, [AboveLimit, BadNumStr])`, and the call is then specialized at that
+wider union, whose runtime representation numbers its tags differently. Roc
+code that constructs `Err(BadNumStr)` constructs it in whatever union the
+specialization requests, but compiler-implemented code writes a fixed
+representation and cannot know which union it is writing into. Keeping
+structural tag unions out of every compiler-implemented type removes that
+mismatch at the source: a backend only ever writes or reads a representation
+whose tags the helper's own nominal declaration fixes, so no backend, layout
+search, or checker coercion has to recover which tag it meant. The same holds
+for tag unions a helper reads, such as a sort comparator's result: the public
+builtin converts the caller's union into the helper's nominal one.
+
+`src/check/test/builtin_low_level_types_test.zig` walks the type of every
+Builtin definition the compiler implements and fails on any structural tag
+union.
 
 ## Backend Builtins
 
@@ -6902,16 +6943,16 @@ equivalent contracts shares one worker.
 
 That interned identity is local to one checked module, so each class also
 carries a content digest that is its identity across modules. The digest is a
-SHA-256 of a canonical depth-first encoding of the class's first member's proof
+SHA-256 of a fixed-order depth-first encoding of the class's first member's proof
 graph. Contracts and evidence nodes are numbered by first visit, so shared and
-cyclic references encode as back-references. Each type encodes as its canonical
+cyclic references encode as back-references. Each type encodes as its type
 key followed by the joint first-visit numbers of its variables in key order, so
 cross-root sharing is part of the digest. Methods encode by name. A procedure
-target encodes by its owning artifact's refs, a local procedure target by its
-lexical site within the recording artifact, and a structural target by its
-kind, which with the edge's dispatcher fixes its implementation. A target's
+target encodes by its owning checked module's refs, a local procedure target by
+its lexical site within the recording checked module, and a structural target by
+its kind, which with the edge's dispatcher fixes its implementation. A target's
 module index, definition index, and callable type are relative to whichever
-artifact registered it, so the encoding writes none of them.
+checked module registered it, so the encoding writes none of them.
 Structural evidence that names a contract identifies it by this digest instead
 of by the module that recorded the edge. A generic codec function that callers
 in several modules use at one record type is therefore one specialization. A
@@ -14354,11 +14395,29 @@ root, and every other component reconnects through the ownership-scope memo.
 The class denotes the same type before and after, so expansion changes no
 snapshot or resolvedness stamp, and it may happen after relations freeze.
 Two unread leaves of one type join without being read; a leaf joined to a
-variable stays unread. Sealing an unread leaf yields its type, and
-containment, resolvedness and uninhabitedness questions about one are
-answered from per-type answers that outlive graph resets, because store types
-are immutable. A specialization therefore pays only for the parts of its
-imported types that it reads, not for their whole depth.
+variable stays unread. Such a join relates the two origins' components only
+when the class is read, but a leaf scope also hands out cells for closed
+types directly, and its cell for a type the joined class holds below its root
+is that class's component in the scope. Below a joined class's root, every
+origin's component of a type, except a nominal's own backing, is that
+origin's memo cell for the type, whatever the path to it. So whenever an
+unread joined class gains an origin, and whenever a leaf scope gains a cell,
+each leaf-scope cell of a type an unread joined class of its scope holds
+below the root is joined with each of that class's origins' memo cells for
+the type. A missing import memo cell is created for the join; a missing
+leaf-scope cell is joined when its scope creates it. That is the join an
+eager relation would have made, and it reads nothing, so class identity
+never depends on whether a class was read. The joins wait until no
+unification is in progress, so they never change a root a unification is
+relating. Whether a type holds another is answered from per-type heights,
+since a type holds only types no taller than itself, and from each type's
+held-type list once a scope has checked a class against enough cells to pay
+for building it. Sealing
+an unread leaf yields its type, and containment, resolvedness and
+uninhabitedness questions about one are answered from per-type answers that
+outlive graph resets, because store types are immutable. A specialization
+therefore pays only for the parts of its imported types that it reads, not
+for their whole depth.
 
 Every context-free procedure-template request defers until the requesting
 graph is final, when its specialization key is stable. Constraints formerly
@@ -20150,6 +20209,22 @@ rediscover the benefit from field reads or uniqueness checks. The base emission
 keeps the borrowed schedule untouched, and the parameter's residual field
 domain is committed only in the emissions that apply its takes, so an emission
 that skips them releases the parameter whole.
+Because that owned variant is mandatory for a dying argument, a direct-call
+argument at a borrowed position whose parameter-benefit bit is set is an owned
+operand for take solving, exactly like an argument at an owned position: a
+field read flowing into it is consuming, so a container holding several
+refcounted fields hands that field over by a take and the call selects the
+owned variant. Without this, `{ list: acc.list, dict: acc.dict.insert(k, v) }`
+would pass the dict borrowed while the dying record still held it, and every
+insert would copy. That demand needs the callee's benefits to be final before
+the caller's takes are solved, so takes are solved one call-graph component at
+a time, callees first, and each component outputs its parameter benefits
+(its parameter containers, projected containers rooted at its parameters,
+complete field and tag payload reads of its parameters, and forwarding to beneficial callee
+positions) before any caller is solved. Procedures sharing statements form one
+node of that graph. A recursive component whose own new benefits demand a
+further argument retracts its committed plans and solves again; demand only
+grows, so this terminates, and a non-recursive component solves once.
 Admission of those mandatory owned variants uses the same definition-sensitive
 ownership-place query as complete payload transfers: scalar shell reads and
 uses after an explicit rebind do not retain the argument's old stored units.
@@ -20245,8 +20320,9 @@ initializations, field-read and ownership-place edges, and direct calls)
 depends only on its own statement. These inputs are gathered
 in fixed-width statement-id ranges as executor tasks and concatenated in range
 order, so the coordinator sees them in ascending statement order. The place
-edge of a read that materialization rewrites into an alias is recomputed from
-the rewritten read.
+edge of a read that materialization will rewrite into an alias is the alias
+edge to its committed representative, derived from the plan before the store
+is rewritten.
 Divergent reads remain separate places. This canonicalization is justified only
 by the committed field or tag-payload operation and explicit CFG dominance; it
 never equates layouts or values heuristically. A borrowed struct produced by

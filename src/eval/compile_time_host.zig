@@ -552,8 +552,8 @@ const TestEventResolver = struct {
 
     fn site(_: *const anyopaque, descriptor: *const SourceEvents.Site, branches: []align(1) const SourceEvents.Region) lir.LIR.ComptimeSiteId {
         std.debug.assert(descriptor.has_checked_site == 1 and descriptor.checked_site == 41);
-        std.debug.assert(std.mem.eql(u8, &descriptor.checked_module, &@as([32]u8, @splat(3))));
-        std.debug.assert(std.mem.eql(u8, &descriptor.procedure_identity, &@as([32]u8, @splat(4))));
+        std.debug.assert(@as(u256, @bitCast(descriptor.checked_module)) == @as(u256, @bitCast(@as([32]u8, @splat(3)))));
+        std.debug.assert(@as(u256, @bitCast(descriptor.procedure_identity)) == @as(u256, @bitCast(@as([32]u8, @splat(4)))));
         std.debug.assert(branches.len == 1 and branches[0].start == 32 and branches[0].end == 39);
         return @fromBackingInt(@intCast(21));
     }
