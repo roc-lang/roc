@@ -263,6 +263,8 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         .{ "list_move_in_unsafe", .list_map_write_unsafe },
         .{ "list_owned_unique", .list_owned_unique },
         .{ "list_item_size_at_most", .list_item_size_at_most },
+        .{ "plus_infallible", .num_int_add_proven_cannot_overflow },
+        .{ "minus_infallible", .num_int_sub_proven_cannot_overflow },
         .{ "dict_pseudo_seed", .dict_pseudo_seed },
         .{ "hasher_finish", .hasher_finish },
         .{ "Builtin.Hasher.write_bool", .hasher_write_bool },

@@ -18593,9 +18593,10 @@ addition that follows; for multiplication it costs a hardware division.
 `num_int_add_proven_cannot_overflow` and its siblings are the one place in the
 family where an incorrect claim produces undefined behavior rather than a wrong
 answer, because they assert no-wraparound to the backend optimizer. They are
-minted exclusively by the range prover, which proves the result stays in range
-before rewriting. Source lowering never produces them, and neither does any
-other pass.
+minted by the range prover, which proves the result stays in range before
+rewriting, and by nothing else except the builtin-private declarations
+described below. Lowering of user source never produces them, and neither does
+any other pass.
 
 This rule binds compiler-synthesized arithmetic too. A LIR pass that constructs
 an add directly emits the wrapping member and leaves the proof to the prover,
@@ -18604,9 +18605,24 @@ synthesis site is a claim that decays as the surrounding pass changes, and its
 failure mode is undefined behavior rather than a detectably wrong result. The
 range prover proves the result stays in range or the operation remains checked.
 
+The one other source of the proven form is the builtin module's own Roc code.
+`Builtin.roc` declares `plus_infallible` and `minus_infallible`, which
+canonicalize straight to the proven add and subtract, and they are private to
+that file: no user-facing operation, method, or exposed function is one of
+them, and user code cannot name them. Their only callers are the per-item loops
+of the list sort, where the result is an index of a slot that exists or a count
+of items that exist, and where the operands are bounded by the loop's own guard
+rather than by anything the range prover would have to rediscover on every
+compile. Each use site states the invariant that bounds it, in a comment where
+the enclosing condition does not already make it plain, so a reviewer can check
+the claim locally; a claim that needs the whole algorithm to verify belongs on
+checked arithmetic instead. The debug-build interpreter check below applies to
+these calls as it does to the prover's, so the builtin tests audit every one of
+them.
+
 Under a debug build the interpreter evaluates the proven forms in a wider type
 and panics if one actually overflows, so every evaluation test doubles as an
-audit of the prover's claims.
+audit of the prover's claims and of the builtin sort's.
 
 ### What the prover does with the family
 

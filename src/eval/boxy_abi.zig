@@ -47,7 +47,6 @@ const BoxyTypeDesc = LirProgram.BoxyTypeDesc;
 const BoxyDict = LirProgram.BoxyDict;
 const RocList = builtins.list.RocList;
 
-
 /// Native addresses of all Boxy C-ABI wrappers, indexed by `BoxyBuiltinFn`.
 pub const BoxyNativeFnTable = backend.LirCodeGenMod.BoxyNativeFnTable;
 
