@@ -1394,22 +1394,24 @@ pub const LoadedPacks = struct {
         });
     }
 
-    /// Admit the closure of every offer of `key` in the store packs offering
-    /// it, and transitively the closures of the literal producers those
-    /// offers read, then index them.
-    fn admitKey(self: *LoadedPacks, key: [32]u8) LoadError!void {
+    /// Admit closures of the offers of `key` from the store packs offering
+    /// it, in load order, until an offer serves the lookup for `relation`,
+    /// and transitively the same for the literal producers the admitted
+    /// offers read. The first offer admitted for a key is the one the index
+    /// keeps, so stopping once it is present serves what admitting every
+    /// candidate would.
+    fn admitKey(self: *LoadedPacks, key: [32]u8, relation: ?[32]u8) LoadError!void {
         if (self.candidates.count() == 0) return;
         var pending = std.ArrayList([32]u8).empty;
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, key);
-        var admitted_any = false;
         while (pending.pop()) |next| {
             const list = self.candidates.get(next) orelse continue;
             for (list.items) |id| {
-                if (try self.admitClosure(id, next, &pending)) admitted_any = true;
+                if (self.specs.contains(.{ .key = next, .platform_requirement_relation = relation })) break;
+                if (try self.admitClosure(id, next, &pending)) try self.indexPacksUnrecorded();
             }
         }
-        if (admitted_any) try self.indexPacksUnrecorded();
     }
 
     /// Admit the closure of store pack `id`'s offers of `key` that are not
@@ -2548,7 +2550,7 @@ pub const LoadedPacks = struct {
             self.projection_modules = deferred.modules;
         };
         defer self.projection_modules = saved_modules;
-        self.admitKey(key) catch |err| {
+        self.admitKey(key, current_relation) catch |err| {
             self.unavailable(err);
             return null;
         };
