@@ -2333,8 +2333,10 @@ structural tag unions out of every compiler-implemented type removes that
 mismatch at the source: a backend only ever writes or reads a representation
 whose tags the helper's own nominal declaration fixes, so no backend, layout
 search, or checker coercion has to recover which tag it meant. The same holds
-for tag unions a helper reads, such as a sort comparator's result: the public
-builtin converts the caller's union into the helper's nominal one.
+for tag unions a helper would read: a builtin that calls back into Roc code
+whose result is a structural tag union is written in Roc itself, as the list
+sort is (see "List Sorting"), so its comparator's `[Before, Same, After]` never
+crosses into compiler-implemented code.
 
 `src/check/test/builtin_low_level_types_test.zig` walks the type of every
 Builtin definition the compiler implements and fails on any structural tag
@@ -12918,12 +12920,6 @@ representation. Worker error-row boxes are not builtin result slots, and
 changing only the outer `Try` layout does not describe its nested payload
 storage.
 
-The sort low-level calls its boxed comparator through a planned ABI
-representation: the comparator's arguments keep their worker representation and
-its ordering result is that closed union in its host representation. Lowering
-wraps a comparator whose representation differs from that ABI in an adapter
-before the call.
-
 The host ABI is independent of lowering strategy. `.boxy` changes only private
 Roc implementation procedures. Any LIR root whose checked root metadata has
 `RootAbi.platform` or `RootAbi.hosted`, and any provided static data export,
@@ -16845,7 +16841,9 @@ constant false value or an `assign_low_level` with explicit
 item layout that the lowerer used for that decision. ARC emission and body
 cloning preserve it, so downstream LIR consumers with their own storage
 representations read it there and never reconstruct the transform's return
-type to recover it.
+type to recover it. `list_item_size_at_most` needs no such metadata: outside
+a folded match (see "In-Place List Transforms") each backend answers it from
+the item layout it builds for and the bound operand.
 
 A low-level operation whose checked result type is the builtin `Try` (the
 typed numeric `*_from_str` parsers, the checked numeric `*_try` conversions,
@@ -20932,27 +20930,35 @@ representations are not interchangeable or the optimization is disabled
 (`TargetConfig.list_in_place_map`, on for `--opt=size`/`--opt=speed`, off for
 dev, interpreter, and compile-time evaluation), so ineligible map
 and update specializations never carry dead in-place machinery and dev builds
-lower exactly the copy path. Both direct lowerers identify the compiler
-operation from producer IR and consume its typed numeral/wildcard arms; neither
-infers the site from source names or resulting LIR shape. The fold
-uses the same representation-eligibility decision as the primitive. Different
+lower exactly the copy path. The fold is one instance of a layout-resolved
+match: a `match` whose scrutinee calls a Builtin wrapper of a low-level whose
+answer committed layouts decide (`list_map_can_reuse`, whose decided answer is
+only ever 0, and `list_item_size_at_most`, which the list sort matches on to
+pick between sorting items and sorting their indices), over guard-free,
+binding-free numeral and wildcard arms. Both direct lowerers identify the
+compiler operation from producer IR and keep only the arm the decided answer
+selects; neither infers the site from source names or resulting LIR shape. The
+fold uses the same layout decision as the primitive. Different
 fully concrete types may keep the branch when their layouts are
 interchangeable; descriptor-bearing types may keep it only when their
 descriptor representation identity is the same. The debug Lambda Mono
 materializer runs before layout selection and cannot recompute that decision;
-instead, direct lowering records each statically resolved match site as
-explicit data and the verifier replays the record, so the two derivations
-demand the same set of functions without the materializer ever consulting
-layouts. A wrong record can only misplace dead code, never a runtime check—the
-primitive's own lowering independently gates the runtime path—and a fold
-regression surfaces as a Debug stride assertion in the backends rather than as
-silent dead code.
+instead, direct lowering records each statically resolved match site, with
+the answer it assumed, as explicit data and the verifier replays the record, so
+the two derivations demand the same set of functions without the materializer
+ever consulting layouts. A wrong record can only misplace dead code, never a
+runtime check—the primitive's own lowering independently gates the runtime
+path—and a fold regression surfaces as a Debug stride assertion in the
+backends rather than as silent dead code.
 
 Inside an eligible in-place loop, `list_map_extract_unsafe` moves one item's
 ownership out of the buffer and `list_map_write_unsafe` moves the transform's
 result into the vacated slot. Neither performs RC work: the extracted item is an
 ordinary owned local, so ARC places its release according to the transform's
 solved convention, and the certifier checks the loop like any other code.
+`list_move_out_unsafe` and `list_move_in_unsafe` are the same two operations
+declared for a list whose item type does not change; the list sort below is
+built from them.
 Between the two ops the slot holds stale bytes and the buffer is typed by the
 output item while later slots still hold input items. For
 descriptor-governed items, the descriptor representation condition
@@ -20961,6 +20967,41 @@ unobservable because no cleanup path walks live values—`crash` is fatal and
 leaks by design—and the loop itself is the only holder of the buffer (the
 runtime count of 1 proved there were no other counted handles, and a live borrow
 of the list would have forced the copy path through an owned capture's incref).
+
+### List Sorting
+
+`List.sort_with` and the other sorts are Roc code in `Builtin.roc`: a port of
+Fluxsort (stable partitioning around a pivot, finished with quadsort's
+branchless parity merges) whose comparator is an ordinary function argument.
+Every call site's comparator is therefore a direct, inlinable call, and no
+comparator result ever crosses into compiler-implemented code.
+
+The sort consumes its list. It transfers the list's ownership unit with
+`list_map_prepare_reuse` and asks `list_owned_unique` whether the buffer is
+uniquely owned and not a slice; a shared or sliced list is copied once, and
+from then on the sort rearranges a unique buffer in place. Lists shorter than
+32 items are insertion sorted with no scratch at all. Longer lists allocate one
+scratch list with capacity for every item, which stays at length zero for the
+whole sort, so releasing it never releases an item. Items wider than 96 bytes
+are sorted through a list of their indices and permuted once at the end; the
+`match` on `list_item_size_at_most` that picks this path is a layout-resolved
+match, so only the chosen path's functions are demanded for each item type.
+
+Items travel between slots of the two lists through `list_move_out_unsafe` and
+`list_move_in_unsafe`, which copy an item's bytes and do no refcount work. A
+slot an item was moved out of keeps its bytes, and the algorithm, not ARC,
+decides which slot holds the live copy: pivots and median samples are extra
+bytewise copies that are never released, and the moves of a block are the
+same bytes landing in a new slot. The invariant the Roc code maintains is that
+every path through the sort ends with the list holding exactly one copy of
+each item it started with, whatever the comparator answers. Merges count how
+many items each run still holds instead of trusting the comparator to stop at
+a run's end, and partitions move every item back into the list before they
+return, so a comparator that contradicts itself yields some permutation of the
+input rather than a duplicated or dropped refcounted item. ARC sees only
+borrowed reads for comparisons (`list_get_unsafe`) and the two lists flowing
+through the helpers as owned values; it inserts no refcount operations in the
+sort's loops.
 
 ### Destination-Passing Results and Allocation Reuse
 

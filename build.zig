@@ -2127,7 +2127,12 @@ pub fn build(b: *std.Build) void {
 
     // Generate compiled_builtins.zig with hardcoded Builtin module.
     // The embedded blobs are copied by Zig at compile time into 16-byte-aligned
-    // static storage, so runtime code can build views over them directly.
+    // static storage, so runtime code can build views over them directly. The
+    // storage keeps the embedded file's own type (a sentinel-terminated byte
+    // array): initializing it from the file is then a reuse of the embedded
+    // bytes, whereas coercing them to a plain byte array makes the compiler
+    // build the 40 MB value element by element, which takes seconds, holds
+    // about 1.5 GB, and crashes zig 0.17.0 once the blobs pass about 45 MB.
     //
     // A root module that declares `roc_compressed_builtins` (see
     // `addCompressedBuiltins`) embeds zstd frames instead: the blobs are about
@@ -2143,14 +2148,14 @@ pub fn build(b: *std.Build) void {
         \\const slack = if (compressed) std.compress.zstd.block_size_max else 0;
         \\
         \\const builtin_bin_raw = @embedFile("Builtin.bin");
-        \\var builtin_bin_storage: [builtin_bin_raw.len + slack]u8 align(16) =
+        \\var builtin_bin_storage: (if (compressed) [builtin_bin_raw.len + slack]u8 else [builtin_bin_raw.len:0]u8) align(16) =
         \\    if (compressed) @splat(0) else builtin_bin_raw.*;
         \\pub const builtin_bin: *align(16) [builtin_bin_raw.len]u8 = builtin_bin_storage[0..builtin_bin_raw.len];
         \\const builtin_source_raw = @embedFile("Builtin.roc");
         \\var builtin_source_storage: [builtin_source_raw.len + slack]u8 = @splat(0);
         \\pub const builtin_source = if (compressed) builtin_source_storage[0..builtin_source_raw.len] else builtin_source_raw;
         \\const builtin_artifact_bin_raw = @embedFile("Builtin.artifact.bin");
-        \\var builtin_artifact_bin_storage: [builtin_artifact_bin_raw.len + slack]u8 align(16) =
+        \\var builtin_artifact_bin_storage: (if (compressed) [builtin_artifact_bin_raw.len + slack]u8 else [builtin_artifact_bin_raw.len:0]u8) align(16) =
         \\    if (compressed) @splat(0) else builtin_artifact_bin_raw.*;
         \\pub const builtin_artifact_bin: *align(16) [builtin_artifact_bin_raw.len]u8 = builtin_artifact_bin_storage[0..builtin_artifact_bin_raw.len];
         \\

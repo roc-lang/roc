@@ -47,8 +47,6 @@ const BoxyTypeDesc = LirProgram.BoxyTypeDesc;
 const BoxyDict = LirProgram.BoxyDict;
 const RocList = builtins.list.RocList;
 
-const NativeRcIncFn = builtins.rc_callback_abi.RcIncrefFn;
-const NativeRcDropFn = builtins.rc_callback_abi.RcDecrefFn;
 
 /// Native addresses of all Boxy C-ABI wrappers, indexed by `BoxyBuiltinFn`.
 pub const BoxyNativeFnTable = backend.LirCodeGenMod.BoxyNativeFnTable;
@@ -972,21 +970,6 @@ const BoxyListElementContext = struct {
     elements_refcounted: bool,
 };
 
-const NativeListElementContext = struct {
-    incref: NativeRcIncFn,
-    decref: NativeRcDropFn,
-};
-
-fn nativeListElementIncref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
-    const ctx: *const NativeListElementContext = @ptrCast(@alignCast(context orelse unreachable));
-    ctx.incref(element, 1);
-}
-
-fn nativeListElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
-    const ctx: *const NativeListElementContext = @ptrCast(@alignCast(context orelse unreachable));
-    ctx.decref(element);
-}
-
 fn boxyListElementIncref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
     const ctx: *const BoxyListElementContext = @ptrCast(@alignCast(context orelse return));
     const value = if (element) |ptr| Value{ .ptr = ptr } else Value.zst;
@@ -1037,42 +1020,6 @@ fn boxyListElementContext(
         .elem_desc = elem_desc,
         .elements_refcounted = hooks(g).layoutContainsRc(resolved_elem_layout),
     };
-}
-
-const BoxySortContext = struct {
-    g: *GlobalBoxyRuntime,
-    registered: RegisteredErasedProc,
-    raw: *const anyopaque,
-    invocation_capture: [*]u8,
-    elem_layouts: [2]layout_mod.Idx,
-    descs: []const ?*const BoxyTypeDesc,
-    keys: []const LIR.ErasedArgDescKey,
-};
-
-fn invokeBoxySortComparator(context_bytes: ?*anyopaque, _: [*]u8, args: [*]u8) callconv(.c) u8 {
-    const context: *BoxySortContext = @ptrCast(@alignCast(context_bytes orelse unreachable));
-    const invocation_args = prepareErasedInvocationArgsWithKeys(
-        context.g,
-        context.registered,
-        args,
-        &context.elem_layouts,
-        if (context.descs.len == 0) null else context.descs.ptr,
-        context.keys,
-    );
-    const result_size = context.g.runtime.helper.sizeOf(context.registered.ret_layout);
-    if (result_size != 1) abiCrash(context.g, "list comparator ordering layout");
-    var ordering: u8 = undefined;
-    var returned_desc: ?*const anyopaque = null;
-    invokeErasedCallable(
-        context.raw,
-        context.g.runtime.roc_ops,
-        @ptrCast(&ordering),
-        invocation_args,
-        context.invocation_capture,
-        null,
-        &returned_desc,
-    );
-    return ordering;
 }
 
 /// Register the native callee and return layout for one dictionary worker
@@ -2066,116 +2013,6 @@ pub fn roc_boxy_list_reverse(
         update_mode,
         &builtins.list.copy_fallback,
         ctx.g.runtime.roc_ops,
-    );
-}
-
-/// Stable Fluxsort whose erased comparator is invoked with its registered
-/// argument/return layouts and the list element descriptor.
-pub fn roc_boxy_list_sort_with(
-    out: *RocList,
-    list_bytes: ?[*]u8,
-    list_len: usize,
-    list_cap: usize,
-    callable: [*]u8,
-    alignment: u32,
-    element_width: usize,
-    elements_refcounted: bool,
-    element_incref: ?NativeRcIncFn,
-    element_decref: ?NativeRcDropFn,
-    elem_layout: u32,
-    list_desc: ?*const BoxyTypeDesc,
-    update_mode: builtins.utils.UpdateMode,
-) callconv(.c) void {
-    const g = requireGlobal();
-    enter(g);
-    defer leave(g);
-    var elem_ctx_storage: BoxyListElementContext = undefined;
-    const elem_ctx: ?*BoxyListElementContext = if (list_desc) |desc| blk: {
-        elem_ctx_storage = boxyListElementContext(g, desc, elem_layout);
-        break :blk &elem_ctx_storage;
-    } else null;
-    const payload = builtins.erased_callable.payloadPtr(callable);
-    const raw: *const anyopaque = @ptrCast(payload.callable_fn_ptr);
-    const registered = g.erased_procs.get(@intFromPtr(raw)) orelse
-        abiCrash(g, "unregistered list comparator");
-    const offsets_start: usize = registered.arg_desc_offsets.start;
-    const offsets_end = offsets_start + registered.arg_desc_offsets.len;
-    if (offsets_end > g.runtime.boxy_tables.erased_arg_desc_offsets.len) {
-        abiCrash(g, "list comparator descriptor offsets");
-    }
-    const offsets = g.runtime.boxy_tables.erased_arg_desc_offsets[offsets_start..offsets_end];
-    const keys = g.value_scratch.allocator().alloc(LIR.ErasedArgDescKey, offsets.len) catch
-        abiCrash(g, "list comparator descriptor keys");
-    const descs = g.value_scratch.allocator().alloc(?*const BoxyTypeDesc, offsets.len) catch
-        abiCrash(g, "list comparator descriptors");
-    var key_count: usize = 0;
-    for (offsets) |offset| {
-        if (offset.key.arg_index >= 2 or offset.key.descriptor_index != 0 or elem_ctx == null) {
-            abiCrash(g, "list comparator descriptor shape");
-        }
-        var seen = false;
-        for (keys[0..key_count]) |key| seen = seen or std.meta.eql(key, offset.key);
-        if (!seen) {
-            keys[key_count] = offset.key;
-            descs[key_count] = elem_ctx.?.elem_desc;
-            key_count += 1;
-        }
-    }
-    const used_keys = keys[0..key_count];
-    const used_descs = descs[0..key_count];
-    const capture = builtins.erased_callable.capturePtr(callable);
-    const invocation_capture = erasedInvocationCaptureWithKeys(
-        g,
-        registered,
-        capture,
-        if (used_descs.len == 0) null else used_descs.ptr,
-        used_keys,
-    );
-    var sort_ctx = BoxySortContext{
-        .g = g,
-        .registered = registered,
-        .raw = raw,
-        .invocation_capture = invocation_capture,
-        .elem_layouts = .{ layoutIdx(elem_layout), layoutIdx(elem_layout) },
-        .descs = used_descs,
-        .keys = used_keys,
-    };
-    var native_ctx: NativeListElementContext = undefined;
-    const rc_context: ?*anyopaque = if (elem_ctx) |ctx|
-        @ptrCast(ctx)
-    else if (elements_refcounted) blk: {
-        native_ctx = .{
-            .incref = element_incref orelse abiCrash(g, "missing list element incref"),
-            .decref = element_decref orelse abiCrash(g, "missing list element decref"),
-        };
-        break :blk @ptrCast(&native_ctx);
-    } else null;
-    const inc: builtins.list.Inc = if (elem_ctx != null)
-        &boxyListElementIncref
-    else if (elements_refcounted)
-        &nativeListElementIncref
-    else
-        @ptrCast(&builtins.utils.rcNone);
-    const dec: builtins.list.Dec = if (elem_ctx != null)
-        &boxyListElementDecref
-    else if (elements_refcounted)
-        &nativeListElementDecref
-    else
-        @ptrCast(&builtins.utils.rcNone);
-    out.* = builtins.list.listSortWithInvoker(
-        .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
-        callable,
-        alignment,
-        element_width,
-        elements_refcounted,
-        rc_context,
-        inc,
-        rc_context,
-        dec,
-        update_mode,
-        @ptrCast(&sort_ctx),
-        &invokeBoxySortComparator,
-        g.runtime.roc_ops,
     );
 }
 

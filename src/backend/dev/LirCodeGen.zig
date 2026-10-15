@@ -408,7 +408,6 @@ pub const BoxyBuiltinFn = enum {
     list_set,
     list_swap,
     list_reverse,
-    list_sort_with,
     list_reserve,
     list_reserve_for_append,
     list_release_excess_capacity,
@@ -458,7 +457,6 @@ pub const BoxyBuiltinFn = enum {
             .list_sublist, .list_set, .list_swap => &.{ p, p, p, p, 4, p, p, p, 4, p, 1 },
             .list_replace => &.{ p, p, p, p, 4, p, p, p, p, 4, p, 1 },
             .list_reverse, .list_release_excess_capacity => &.{ p, p, p, p, 4, p, 4, p, 1 },
-            .list_sort_with => &.{ p, p, p, p, p, 4, p, 1, p, p, 4, p, 1 },
             .static_desc,
             .static_dict,
             .dict_method_hidden_desc,
@@ -1842,13 +1840,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_plus, .num_minus, .num_times => unreachable,
                 // LIR lowering splits this into an alias and `list_prefetch`.
                 .list_prefetched => unreachable,
-                .list_sort_with => {
-                    if (args.len != 2) unreachable;
-                    const list_local = GuardedList.at(args, 0);
-                    const list_loc = try self.emitValueLocal(list_local);
-                    const callable_loc = try self.emitValueLocal(GuardedList.at(args, 1));
-                    return try self.generateListSortWith(list_local, list_loc, callable_loc, ll);
-                },
                 // A hint only; this backend emits no code for it.
                 .list_prefetch => return .{ .immediate_i64 = 0 },
                 .list_len => {
@@ -2279,6 +2270,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_map_can_reuse));
 
                     return try self.boolRetReg();
+                },
+                .list_item_size_at_most => {
+                    // list_item_size_at_most(list, bound) -> U8: whether this
+                    // target's item layout fits the bound.
+                    std.debug.assert(args.len == 2);
+                    const ls = self.layout_store;
+                    const list_layout_val = ls.getLayout(self.valueLayout(GuardedList.at(args, 0)));
+                    const elem_size: u32 = if (list_layout_val.tag == .list_of_zst)
+                        0
+                    else
+                        ls.layoutSizeAlign(ls.getLayout(list_layout_val.getIdx())).size;
+                    const bound_loc = try self.emitValueLocal(GuardedList.at(args, 1));
+                    const bound_reg = try self.ensureInGeneralReg(bound_loc);
+                    const size_reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(size_reg, elem_size);
+                    const result_reg = try self.allocTempGeneral();
+                    try self.codegen.emitCmp(.w64, result_reg, size_reg, bound_reg, condCode(.below_or_equal));
+                    self.freeGenerals(.{ size_reg, bound_reg });
+                    return .{ .general_reg = result_reg };
                 },
                 .list_map_cast_unsafe => {
                     // Same bits, new element type: copy the list struct through.
@@ -6259,13 +6269,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_take_first,
                 .list_take_last,
                 .list_reverse,
-                .list_sort_with,
                 .list_reserve,
                 .list_reserve_for_append,
                 .list_release_excess_capacity,
                 .list_clear,
                 .list_map_prepare_reuse,
                 .list_map_can_reuse,
+                .list_item_size_at_most,
                 .list_map_cast_unsafe,
                 .list_map_extract_unsafe,
                 .list_map_write_unsafe,
@@ -7870,39 +7880,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return listStackAt(result_offset);
         }
 
-        fn generateListSortWith(self: *Self, list_local: LocalId, list_loc: ValueLocation, callable_loc: ValueLocation, ll: anytype) Allocator.Error!ValueLocation {
-            const ls = self.layout_store;
-            const list_abi = builtinInternalListAbi(ls, "dev.generateListSortWith.builtin_list_abi", ll.ret_layout);
-            const list_off = try self.ensureOnStack(list_loc, roc_list_size);
-            const result_offset = self.codegen.allocStackSlot(roc_list_size);
-            if (list_abi.elem_size_align.size == 0) {
-                const tr = try self.allocTempGeneral();
-                inline for (.{ 0, 8, 16 }) |offset| {
-                    try self.emitLoad(.w64, tr, frame_ptr, list_off + offset);
-                    try self.emitStore(.w64, frame_ptr, result_offset + offset, tr);
-                }
-                self.codegen.freeGeneral(tr);
-                return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
-            }
-            const callable_off = try self.ensureOnStack(callable_loc, 8);
-            const rc = try self.listElemRc(list_abi, .incref_and_decref, &.{list_local}, ll.target);
-            const update: ListCallArg = .{ .imm = updateModeImmForArg0(ll.unique_args) };
-            // The sort wrapper takes both the element callbacks and the element
-            // layout and descriptor; the set the elements do not use is zero.
-            switch (rc) {
-                .boxy => try self.callListBuiltin(list_abi, rc, &.{
-                    .{ .lea = result_offset }, .{ .list = list_off }, .{ .mem = callable_off }, .elem_abi,
-                    .{ .imm = 1 },             .{ .imm = 0 },         .{ .imm = 0 },            .elem_rc,
-                    update,
-                }, null, .list_sort_with),
-                .callbacks => try self.callListBuiltin(list_abi, rc, &.{
-                    .{ .lea = result_offset }, .{ .list = list_off },                                                .{ .mem = callable_off }, .elem_abi,
-                    .elem_rc,                  .{ .imm = @backingInt(list_abi.elem_layout_idx orelse unreachable) }, .{ .imm = 0 },            update,
-                }, null, .list_sort_with),
-            }
-            return listStackAt(result_offset);
-        }
-
         /// Call a list reserve wrapper: `boxy_fn` for descriptor-governed
         /// elements, `builtin_fn` otherwise.
         fn callListReserveOp(self: *Self, list_local: LocalId, list_loc: ValueLocation, spare_loc: ValueLocation, ll: anytype, boxy_fn: BoxyBuiltinFn, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
@@ -8513,7 +8490,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (op != .list_concat and op != .list_prepend and op != .list_set and op != .list_set_in_place_unsafe and
                 op != .list_swap and
                 op != .list_take_first and op != .list_take_last and op != .list_sublist and
-                op != .list_drop_at and op != .list_reverse and op != .list_sort_with and
+                op != .list_drop_at and op != .list_reverse and
                 op != .list_reserve and op != .list_reserve_for_append and op != .list_release_excess_capacity and op != .list_clear) return null;
             const abi = builtinInternalListAbi(self.layout_store, "dev.stack_plan.list_abi", self.localLayout(s.target));
             if (abi.elem_size_align.size == 0) return null;

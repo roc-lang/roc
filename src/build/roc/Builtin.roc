@@ -6799,10 +6799,10 @@ Builtin :: [].{
 
 	Num :: {}.{
 
-		# The result of the compiler's numeric comparison and the input of its
-		# list sort (design.md "Builtins Build Their Own Tag Unions"). A nominal
-		# union, so its tags' runtime order is this declaration's own;
-		# `order_relative_to` and `List.sort_with` convert it in Roc.
+		# The result of the compiler's numeric comparison (design.md "Builtins
+		# Build Their Own Tag Unions"). A nominal union, so its tags' runtime
+		# order is this declaration's own; `order_relative_to` converts it in
+		# Roc.
 		RawOrder := [After, Before, Same]
 
 		## A reusable numeric range description. Range syntax constructs one of these
@@ -24848,8 +24848,1807 @@ reverse_order = |order|
 		After => Before
 	}
 
+# ---------------------------------------------------------------------------
+# List sorting
+#
+# `sort_impl` is Fluxsort written in Roc: a stable sort that partitions large
+# lists around a pivot and finishes the pieces with quadsort, a merge sort
+# built from branchless parity merges. Every call site's comparator is a
+# direct call here, so the backend can inline it into the loops.
+#
+# The sort works on two lists. `items` is the list being sorted: it is unique
+# (either `list_owned_unique` said so or `sort_impl` copied it), so it is
+# rearranged in place. `swap` is scratch: a list with capacity for every item
+# that stays at length zero for the whole sort, so freeing it never releases
+# an item. Items travel between slots of these two lists through
+# `list_move_out_unsafe` and `list_move_in_unsafe`, which copy an item's bytes
+# and do no refcount work. A slot an item was moved out of keeps its bytes
+# until something overwrites it, and the algorithm decides which slot holds
+# the live copy; every path through the sort ends with `items` holding
+# exactly one copy of each item it started with, however the comparator
+# answers, so the sort never duplicates or drops a refcounted item. Merges
+# count how many items each run still holds instead of trusting the
+# comparator to stop at a run's end, and partitions move every item back
+# into `items` before they return.
+#
+# Pivots are read with `list_get_unsafe`, so they own nothing, and the extra
+# copies of sampled items that pivot selection makes in a dead stretch of a
+# buffer are left behind as dead bytes.
+# ---------------------------------------------------------------------------
+
+# Lists shorter than this are sorted in place with no scratch list.
+sort_scratchless_len : U64
+sort_scratchless_len = 32
+
+# Lists shorter than this are quadsorted instead of partitioned.
+sort_quadsort_len : U64
+sort_quadsort_len = 132
+
+# A partition this short is finished with quadsort.
+flux_out : U64
+flux_out = 96
+
+# Partitions whose quarters exceed this many items always quadsort, to stay
+# within cache.
+quad_cache : U64
+quad_cache = 262144
+
 sort_impl : List(item), (item, item -> [Before, Same, After]) -> List(item)
-sort_impl = |list, compare_items| list_sort_with(list, Box.box(|a, b| order_to_raw(compare_items(a, b))))
+sort_impl = |list, compare_items| {
+	len = List.len(list)
+	if len < 2 {
+		return list
+	}
+	prepared = list_map_prepare_reuse(list)
+	items = match list_owned_unique(prepared) {
+		1 => prepared
+		_ => {
+			var $copy = List.with_capacity(len)
+			for item in prepared {
+				$copy = list_append_unsafe($copy, item)
+			}
+			$copy
+		}
+	}
+	# Items wider than 96 bytes are sorted through a list of their indices, so
+	# the sort moves indices instead of the items and moves each item once at
+	# the end. The bound is a literal so that lowering can decide this match
+	# from the item layout and keep only the arm it selects.
+	match list_item_size_at_most(items, 96) {
+		0 => sort_wide(items, compare_items)
+		_ => sort_direct(items, compare_items)
+	}
+}
+
+# Sorts a unique list of narrow items.
+sort_direct : List(item), (item, item -> [Before, Same, After]) -> List(item)
+sort_direct = |items, compare_items| {
+	len = List.len(items)
+	if len < sort_scratchless_len {
+		sort_insertion(items, compare_items)
+	} else {
+		swap = List.with_capacity(len)
+		(sorted, _) = if len < sort_quadsort_len {
+			quadsort(items, swap, compare_items)
+		} else {
+			flux_sort(items, swap, compare_items)
+		}
+		sorted
+	}
+}
+
+# Sorts a unique list of wide items by sorting their indices and then
+# permuting the items once.
+sort_wide : List(item), (item, item -> [Before, Same, After]) -> List(item)
+sort_wide = |items, compare_items| {
+	len = List.len(items)
+	var $order = List.with_capacity(len)
+	var $index = 0
+	while $index < len {
+		$order = list_append_unsafe($order, $index)
+		$index = $index + 1
+	}
+	sorted_order = sort_direct($order, |left, right| compare_items(list_get_unsafe(items, left), list_get_unsafe(items, right)))
+	sort_apply_order(items, sorted_order)
+}
+
+# Rearranges `items` so that slot `k` holds the item that was at `order[k]`,
+# following each cycle of the permutation and marking visited slots in `order`.
+sort_apply_order : List(item), List(U64) -> List(item)
+sort_apply_order = |items, order| {
+	len = List.len(order)
+	var $items = items
+	var $order = order
+	var $cycle_start = 0
+	while $cycle_start < len {
+		first_source = list_get_unsafe($order, $cycle_start)
+		if first_source != $cycle_start {
+			displaced = list_move_out_unsafe($items, $cycle_start)
+			var $dest = $cycle_start
+			var $source = first_source
+			while $source != $cycle_start {
+				$items = list_move_in_unsafe($items, $dest, list_move_out_unsafe($items, $source))
+				$order = list_move_in_unsafe($order, $dest, $dest)
+				$dest = $source
+				$source = list_get_unsafe($order, $dest)
+			}
+			$items = list_move_in_unsafe($items, $dest, displaced)
+			$order = list_move_in_unsafe($order, $dest, $dest)
+		}
+		$cycle_start = $cycle_start + 1
+	}
+	$items
+}
+
+# Stable binary insertion sort, in place with no scratch.
+sort_insertion : List(item), (item, item -> [Before, Same, After]) -> List(item)
+sort_insertion = |items, compare_items| {
+	len = List.len(items)
+	var $items = items
+	var $index = 1
+	while $index < len {
+		if sort_after($items, $index - 1, $index, compare_items) {
+			item = list_move_out_unsafe($items, $index)
+			# The item at index - 1 is known to order after `item`; find the
+			# first slot before it that does too, so equal items keep their
+			# order.
+			var $low = 0
+			var $high = $index - 1
+			while $low < $high {
+				mid = $low + ($high - $low) // 2
+				if compare_items(list_get_unsafe($items, mid), item) == After {
+					$high = mid
+				} else {
+					$low = mid + 1
+				}
+			}
+			var $slot = $index
+			while $slot > $low {
+				$items = sort_copy($items, $slot, $slot - 1)
+				$slot = $slot - 1
+			}
+			$items = list_move_in_unsafe($items, $low, item)
+		}
+		$index = $index + 1
+	}
+	$items
+}
+
+# Whether the item at `left` orders after the item at `right`.
+sort_after : List(item), U64, U64, (item, item -> [Before, Same, After]) -> Bool
+sort_after = |list, left, right, compare_items|
+	compare_items(list_get_unsafe(list, left), list_get_unsafe(list, right)) == After
+
+# Whether `left[left_index]` orders after `right[right_index]`.
+sort_after_across : List(item), U64, List(item), U64, (item, item -> [Before, Same, After]) -> Bool
+sort_after_across = |left, left_index, right, right_index, compare_items|
+	compare_items(list_get_unsafe(left, left_index), list_get_unsafe(right, right_index)) == After
+
+# Copies the item at `from` into slot `to` of the same list.
+sort_copy : List(item), U64, U64 -> List(item)
+sort_copy = |list, to, from| list_move_in_unsafe(list, to, list_move_out_unsafe(list, from))
+
+# Copies `count` items from `src[from..]` into `dest[to..]`.
+sort_copy_range : List(item), U64, List(item), U64, U64 -> List(item)
+sort_copy_range = |dest, to, src, from, count| {
+	var $dest = dest
+	var $offset = 0
+	while $offset < count {
+		$dest = list_move_in_unsafe($dest, to + $offset, list_move_out_unsafe(src, from + $offset))
+		$offset = $offset + 1
+	}
+	$dest
+}
+
+# Copies `count` items from `list[from..]` into `list[to..]`; the ranges may
+# overlap.
+sort_copy_range_within : List(item), U64, U64, U64 -> List(item)
+sort_copy_range_within = |list, to, from, count| {
+	var $list = list
+	var $offset = 0
+	if to <= from {
+		while $offset < count {
+			$list = sort_copy($list, to + $offset, from + $offset)
+			$offset = $offset + 1
+		}
+	} else {
+		$offset = count
+		while $offset > 0 {
+			$offset = $offset - 1
+			$list = sort_copy($list, to + $offset, from + $offset)
+		}
+	}
+	$list
+}
+
+# Swaps the items at `index` and `index + 1` when the first orders after the
+# second, without branching on the comparison. Returns 1 when it swapped.
+sort_swap_if_after : List(item), U64, (item, item -> [Before, Same, After]) -> (List(item), U64)
+sort_swap_if_after = |list, index, compare_items| {
+	swapped = if sort_after(list, index, index + 1, compare_items) 1 else 0
+	later = list_move_out_unsafe(list, index + 1 - swapped)
+	shifted = sort_copy(list, index, index + swapped)
+	(list_move_in_unsafe(shifted, index + 1, later), swapped)
+}
+
+# Exchanges the items at `start + 1` and `start + 2`.
+swap_middle_pair : List(item), U64 -> List(item)
+swap_middle_pair = |items, start| {
+	middle = list_move_out_unsafe(items, start + 1)
+	shifted = sort_copy(items, start + 1, start + 2)
+	list_move_in_unsafe(shifted, start + 2, middle)
+}
+
+# ---- Merges ----------------------------------------------------------------
+#
+# Each merge reads two adjacent sorted runs from `src` and writes the merged
+# run to `dest`, a different list. A merge that scans from both ends shares
+# one pair of remaining-item counts between the scans and never takes from a
+# run the counts say is empty, so a comparator that contradicts itself cannot
+# make a scan run past its run's end.
+
+# Takes one item from the head of the left or right run into `dest[dest_index]`.
+# At least one run must still have items.
+sort_merge_head : List(item), U64, List(item), U64, U64, Bool, Bool, (item, item -> [Before, Same, After]) -> { dest : List(item), took_left : Bool }
+sort_merge_head = |dest, dest_index, src, left_head, right_head, left_available, right_available, compare_items| {
+	# A spent run's head is past its end, so compare the live run against
+	# itself and ignore the answer.
+	probe_left = if left_available left_head else right_head
+	probe_right = if right_available right_head else left_head
+	lte = compare_items(list_get_unsafe(src, probe_left), list_get_unsafe(src, probe_right)) != After
+	took_left = if !right_available True else if !left_available False else lte
+	from = if took_left left_head else right_head
+	{ dest: list_move_in_unsafe(dest, dest_index, list_move_out_unsafe(src, from)), took_left }
+}
+
+# Takes one item from the tail of the left or right run into `dest[dest_index]`.
+# `left_end` and `right_end` are exclusive. At least one run must still have items.
+sort_merge_tail : List(item), U64, List(item), U64, U64, Bool, Bool, (item, item -> [Before, Same, After]) -> { dest : List(item), took_left : Bool }
+sort_merge_tail = |dest, dest_index, src, left_end, right_end, left_available, right_available, compare_items| {
+	probe_left = if left_available left_end.minus_wrap(1) else right_end.minus_wrap(1)
+	probe_right = if right_available right_end.minus_wrap(1) else left_end.minus_wrap(1)
+	gt = compare_items(list_get_unsafe(src, probe_left), list_get_unsafe(src, probe_right)) == After
+	took_left = if !right_available True else if !left_available False else gt
+	from = (if took_left left_end else right_end) - 1
+	{ dest: list_move_in_unsafe(dest, dest_index, list_move_out_unsafe(src, from)), took_left }
+}
+
+# Merges the runs `src[src_start..][..left_len]` and the `right_len` items after
+# it into `dest[dest_start..]`, scanning from both ends at once. The runs'
+# lengths are equal or differ by one.
+parity_merge : List(item), U64, List(item), U64, U64, U64, (item, item -> [Before, Same, After]) -> (List(item), List(item))
+parity_merge = |dest, dest_start, src, src_start, left_len, right_len, compare_items| {
+	var $dest = dest
+	var $left_head = src_start
+	var $right_head = src_start + left_len
+	var $left_end = $right_head
+	var $right_end = $right_head + right_len
+	var $dest_head = dest_start
+	var $dest_end = dest_start + left_len + right_len
+	var $left_remaining = left_len
+	var $right_remaining = right_len
+	# The two scans write every slot of the merged run exactly once. When the
+	# left run is shorter, the head scan covers the middle slot by itself.
+	var $head_steps = if left_len < right_len left_len + 1 else left_len
+	var $tail_steps = left_len + right_len - $head_steps
+	while $head_steps > 0 {
+		step = sort_merge_head($dest, $dest_head, src, $left_head, $right_head, $left_remaining != 0, $right_remaining != 0, compare_items)
+		$dest = step.dest
+		took = if step.took_left 1 else 0
+		$left_head = $left_head + took
+		$right_head = $right_head + 1 - took
+		$left_remaining = $left_remaining - took
+		$right_remaining = $right_remaining + took - 1
+		$dest_head = $dest_head + 1
+		$head_steps = $head_steps - 1
+		if $tail_steps > 0 {
+			$dest_end = $dest_end - 1
+			tail = sort_merge_tail($dest, $dest_end, src, $left_end, $right_end, $left_remaining != 0, $right_remaining != 0, compare_items)
+			$dest = tail.dest
+			took_tail = if tail.took_left 1 else 0
+			$left_end = $left_end - took_tail
+			$right_end = $right_end + took_tail - 1
+			$left_remaining = $left_remaining - took_tail
+			$right_remaining = $right_remaining + took_tail - 1
+			$tail_steps = $tail_steps - 1
+		}
+	}
+	($dest, src)
+}
+
+# Merges two adjacent sorted runs from `src` into `dest`, moving stretches
+# of items that all order one way in blocks of eight.
+cross_merge : List(item), U64, List(item), U64, U64, U64, (item, item -> [Before, Same, After]) -> (List(item), List(item))
+cross_merge = |dest, dest_start, src, src_start, left_len, right_len, compare_items| {
+	var $dest = dest
+	var $left_head = src_start
+	var $right_head = src_start + left_len
+	var $left_end = $right_head
+	var $right_end = $right_head + right_len
+
+	# Similar lengths and random-looking data merge best with the branchless
+	# parity merge.
+	if left_len + 1 >= right_len and right_len + 1 >= left_len and left_len >= 32 {
+		if sort_after(src, $left_head + 15, $right_head, compare_items) and !sort_after(src, $left_head, $right_head + 15, compare_items) and sort_after(src, $left_end - 1, $right_end - 16, compare_items) and !sort_after(src, $left_end - 16, $right_end - 1, compare_items) {
+			return parity_merge(dest, dest_start, src, src_start, left_len, right_len, compare_items)
+		}
+	}
+
+	var $dest_head = dest_start
+	var $dest_end = dest_start + left_len + right_len
+	pairs_per_batch : U64
+	pairs_per_batch = 8
+
+	while $left_head < $left_end and $right_head < $right_end {
+		# A block move that leaves a run with at most nine items starts the
+		# loop over.
+		var $restart = False
+		if $left_head + 9 < $left_end {
+			# Eight items at the left head all order before the right head.
+			while !$restart and !sort_after(src, $left_head + 7, $right_head, compare_items) {
+				$dest = sort_copy_range($dest, $dest_head, src, $left_head, 8)
+				$dest_head = $dest_head + 8
+				$left_head = $left_head + 8
+				if $left_head + 9 >= $left_end {
+					$restart = True
+				}
+			}
+			# Eight items at the left tail all order after the right tail.
+			while !$restart and sort_after(src, $left_end - 8, $right_end - 1, compare_items) {
+				$dest_end = $dest_end - 8
+				$left_end = $left_end - 8
+				$dest = sort_copy_range($dest, $dest_end, src, $left_end, 8)
+				if $left_head + 9 >= $left_end {
+					$restart = True
+				}
+			}
+		}
+		if !$restart and $right_head + 9 < $right_end {
+			# Eight items at the right head all order before the left head.
+			while !$restart and sort_after(src, $left_head, $right_head + 7, compare_items) {
+				$dest = sort_copy_range($dest, $dest_head, src, $right_head, 8)
+				$dest_head = $dest_head + 8
+				$right_head = $right_head + 8
+				if $right_head + 9 >= $right_end {
+					$restart = True
+				}
+			}
+			# Eight items at the right tail all order after the left tail.
+			while !$restart and !sort_after(src, $left_end - 1, $right_end - 8, compare_items) {
+				$dest_end = $dest_end - 8
+				$right_end = $right_end - 8
+				$dest = sort_copy_range($dest, $dest_end, src, $right_end, 8)
+				if $right_head + 9 >= $right_end {
+					$restart = True
+				}
+			}
+		}
+		if !$restart {
+			if $dest_end - $dest_head < 16 {
+				break
+			}
+			# Sixteen items from both ends at once.
+			var $pair = 0
+			while $pair < pairs_per_batch and $left_head < $left_end and $right_head < $right_end {
+				head = sort_merge_head($dest, $dest_head, src, $left_head, $right_head, True, True, compare_items)
+				$dest = head.dest
+				took = if head.took_left 1 else 0
+				$left_head = $left_head + took
+				$right_head = $right_head + 1 - took
+				$dest_head = $dest_head + 1
+				if $left_head < $left_end and $right_head < $right_end {
+					$dest_end = $dest_end - 1
+					tail = sort_merge_tail($dest, $dest_end, src, $left_end, $right_end, True, True, compare_items)
+					$dest = tail.dest
+					took_tail = if tail.took_left 1 else 0
+					$left_end = $left_end - took_tail
+					$right_end = $right_end + took_tail - 1
+				}
+				$pair = $pair + 1
+			}
+		}
+	}
+
+	# One run is spent, or fewer than sixteen items remain.
+	while $left_head < $left_end and $right_head < $right_end {
+		head = sort_merge_head($dest, $dest_head, src, $left_head, $right_head, True, True, compare_items)
+		$dest = head.dest
+		took = if head.took_left 1 else 0
+		$left_head = $left_head + took
+		$right_head = $right_head + 1 - took
+		$dest_head = $dest_head + 1
+	}
+	$dest = sort_copy_range($dest, $dest_head, src, $left_head, $left_end - $left_head)
+	$dest_head = $dest_head + $left_end - $left_head
+	$dest = sort_copy_range($dest, $dest_head, src, $right_head, $right_end - $right_head)
+	($dest, src)
+}
+
+# One tail merge step with the left run in `items` (ending before `left_end`)
+# and the right run in `swap` (ending before `right_end`); both runs have an
+# item. Writes the later of the two tails to `items[dest_index]`.
+sort_merge_tail_across : List(item), U64, U64, List(item), U64, (item, item -> [Before, Same, After]) -> { items : List(item), took_left : Bool }
+sort_merge_tail_across = |items, dest_index, left_end, swap, right_end, compare_items| {
+	took_left = sort_after_across(items, left_end - 1, swap, right_end - 1, compare_items)
+	if took_left {
+		{ items: sort_copy(items, dest_index, left_end - 1), took_left }
+	} else {
+		{ items: list_move_in_unsafe(items, dest_index, list_move_out_unsafe(swap, right_end - 1)), took_left }
+	}
+}
+
+# One head merge step with the left run in `swap` (starting at `left_head`)
+# and the right run in `items` (starting at `right_head`); both runs have an
+# item. Writes the earlier of the two heads to `items[dest_index]`.
+sort_merge_head_across : List(item), U64, List(item), U64, U64, (item, item -> [Before, Same, After]) -> { items : List(item), took_left : Bool }
+sort_merge_head_across = |items, dest_index, swap, left_head, right_head, compare_items| {
+	took_left = !sort_after_across(swap, left_head, items, right_head, compare_items)
+	if took_left {
+		{ items: list_move_in_unsafe(items, dest_index, list_move_out_unsafe(swap, left_head)), took_left }
+	} else {
+		{ items: sort_copy(items, dest_index, right_head), took_left }
+	}
+}
+
+# ---- Small sorts -----------------------------------------------------------
+
+# Sorts `items[start..][..len]` for `len < 8`.
+tiny_sort : List(item), U64, U64, List(item), (item, item -> [Before, Same, After]) -> (List(item), List(item))
+tiny_sort = |items, start, len, swap, compare_items| {
+	match len {
+		2 => {
+			(sorted, _) = sort_swap_if_after(items, start, compare_items)
+			(sorted, swap)
+		}
+		3 => {
+			(first, _) = sort_swap_if_after(items, start, compare_items)
+			(second, _) = sort_swap_if_after(first, start + 1, compare_items)
+			(third, _) = sort_swap_if_after(second, start, compare_items)
+			(third, swap)
+		}
+		4 => (parity_swap_four(items, start, compare_items), swap)
+		5 => (parity_swap_five(items, start, compare_items), swap)
+		6 => parity_swap_six(items, start, swap, compare_items)
+		7 => parity_swap_seven(items, start, swap, compare_items)
+		_ => (items, swap)
+	}
+}
+
+parity_swap_four : List(item), U64, (item, item -> [Before, Same, After]) -> List(item)
+parity_swap_four = |items, start, compare_items| {
+	(first, _) = sort_swap_if_after(items, start, compare_items)
+	(second, _) = sort_swap_if_after(first, start + 2, compare_items)
+	if sort_after(second, start + 1, start + 2, compare_items) {
+		third = swap_middle_pair(second, start)
+		(fourth, _) = sort_swap_if_after(third, start, compare_items)
+		(fifth, _) = sort_swap_if_after(fourth, start + 2, compare_items)
+		(sixth, _) = sort_swap_if_after(fifth, start + 1, compare_items)
+		sixth
+	} else {
+		second
+	}
+}
+
+parity_swap_five : List(item), U64, (item, item -> [Before, Same, After]) -> List(item)
+parity_swap_five = |items, start, compare_items| {
+	(first, _) = sort_swap_if_after(items, start, compare_items)
+	(second, _) = sort_swap_if_after(first, start + 2, compare_items)
+	(third, swapped_a) = sort_swap_if_after(second, start + 1, compare_items)
+	(fourth, swapped_b) = sort_swap_if_after(third, start + 3, compare_items)
+	if swapped_a + swapped_b != 0 {
+		(fifth, _) = sort_swap_if_after(fourth, start, compare_items)
+		(sixth, _) = sort_swap_if_after(fifth, start + 2, compare_items)
+		(seventh, _) = sort_swap_if_after(sixth, start + 1, compare_items)
+		(eighth, _) = sort_swap_if_after(seventh, start + 3, compare_items)
+		(ninth, _) = sort_swap_if_after(eighth, start, compare_items)
+		(tenth, _) = sort_swap_if_after(ninth, start + 2, compare_items)
+		tenth
+	} else {
+		fourth
+	}
+}
+
+parity_swap_six : List(item), U64, List(item), (item, item -> [Before, Same, After]) -> (List(item), List(item))
+parity_swap_six = |items, start, swap, compare_items| {
+	(first, _) = sort_swap_if_after(items, start, compare_items)
+	(second, _) = sort_swap_if_after(first, start + 1, compare_items)
+	(third, _) = sort_swap_if_after(second, start + 4, compare_items)
+	(fourth, _) = sort_swap_if_after(third, start + 3, compare_items)
+	if !sort_after(fourth, start + 2, start + 3, compare_items) {
+		(fifth, _) = sort_swap_if_after(fourth, start, compare_items)
+		(sixth, _) = sort_swap_if_after(fifth, start + 4, compare_items)
+		return (sixth, swap)
+	}
+	# Order each half of three in swap, then merge the halves back.
+	first_gt = if sort_after(fourth, start, start + 1, compare_items) 1 else 0
+	swap_a = list_move_in_unsafe(swap, 0, list_move_out_unsafe(fourth, start + first_gt))
+	swap_b = list_move_in_unsafe(swap_a, 1, list_move_out_unsafe(fourth, start + 1 - first_gt))
+	swap_c = list_move_in_unsafe(swap_b, 2, list_move_out_unsafe(fourth, start + 2))
+	second_gt = if sort_after(fourth, start + 4, start + 5, compare_items) 1 else 0
+	swap_d = list_move_in_unsafe(swap_c, 4, list_move_out_unsafe(fourth, start + 4 + second_gt))
+	swap_e = list_move_in_unsafe(swap_d, 5, list_move_out_unsafe(fourth, start + 5 - second_gt))
+	swap_f = list_move_in_unsafe(swap_e, 3, list_move_out_unsafe(fourth, start + 3))
+	parity_merge(fourth, start, swap_f, 0, 3, 3, compare_items)
+}
+
+parity_swap_seven : List(item), U64, List(item), (item, item -> [Before, Same, After]) -> (List(item), List(item))
+parity_swap_seven = |items, start, swap, compare_items| {
+	(first, _) = sort_swap_if_after(items, start, compare_items)
+	(second, _) = sort_swap_if_after(first, start + 2, compare_items)
+	(third, _) = sort_swap_if_after(second, start + 4, compare_items)
+	(fourth, swapped_a) = sort_swap_if_after(third, start + 1, compare_items)
+	(fifth, swapped_b) = sort_swap_if_after(fourth, start + 3, compare_items)
+	(sixth, swapped_c) = sort_swap_if_after(fifth, start + 5, compare_items)
+	if swapped_a + swapped_b + swapped_c == 0 {
+		return (sixth, swap)
+	}
+	(seventh, _) = sort_swap_if_after(sixth, start + 4, compare_items)
+	# Order a run of three and a run of four in swap, then merge them back.
+	first_gt = if sort_after(seventh, start, start + 1, compare_items) 1 else 0
+	swap_a = list_move_in_unsafe(swap, 0, list_move_out_unsafe(seventh, start + first_gt))
+	swap_b = list_move_in_unsafe(swap_a, 1, list_move_out_unsafe(seventh, start + 1 - first_gt))
+	swap_c = list_move_in_unsafe(swap_b, 2, list_move_out_unsafe(seventh, start + 2))
+	second_gt = if sort_after(seventh, start + 3, start + 4, compare_items) 1 else 0
+	swap_d = list_move_in_unsafe(swap_c, 3, list_move_out_unsafe(seventh, start + 3 + second_gt))
+	swap_e = list_move_in_unsafe(swap_d, 4, list_move_out_unsafe(seventh, start + 4 - second_gt))
+	third_gt = if sort_after(seventh, start + 5, start + 6, compare_items) 1 else 0
+	swap_f = list_move_in_unsafe(swap_e, 5, list_move_out_unsafe(seventh, start + 5 + third_gt))
+	swap_g = list_move_in_unsafe(swap_f, 6, list_move_out_unsafe(seventh, start + 6 - third_gt))
+	parity_merge(seventh, start, swap_g, 0, 3, 4, compare_items)
+}
+
+# Sorts `items[start..][..len]` for `len < 96` using `swap[0..][..len]` as scratch.
+tail_swap : List(item), U64, U64, List(item), (item, item -> [Before, Same, After]) -> (List(item), List(item))
+tail_swap = |items, start, len, swap, compare_items| {
+	if len < 8 {
+		return tiny_sort(items, start, len, swap, compare_items)
+	}
+	half1 = len // 2
+	quad1 = half1 // 2
+	quad2 = half1 - quad1
+	half2 = len - half1
+	quad3 = half2 // 2
+	quad4 = half2 - quad3
+	(items_a, swap_a) = tail_swap(items, start, quad1, swap, compare_items)
+	(items_b, swap_b) = tail_swap(items_a, start + quad1, quad2, swap_a, compare_items)
+	(items_c, swap_c) = tail_swap(items_b, start + half1, quad3, swap_b, compare_items)
+	(items_d, swap_d) = tail_swap(items_c, start + half1 + quad3, quad4, swap_c, compare_items)
+	if !sort_after(items_d, start + quad1 - 1, start + quad1, compare_items) and !sort_after(items_d, start + half1 - 1, start + half1, compare_items) and !sort_after(items_d, start + half1 + quad3 - 1, start + half1 + quad3, compare_items) {
+		return (items_d, swap_d)
+	}
+	(swap_e, items_e) = parity_merge(swap_d, 0, items_d, start, quad1, quad2, compare_items)
+	(swap_f, items_f) = parity_merge(swap_e, half1, items_e, start + half1, quad3, quad4, compare_items)
+	parity_merge(items_f, start, swap_f, 0, half1, half2, compare_items)
+}
+
+# Reverses `items[start..=end]`.
+quad_reversal : List(item), U64, U64 -> List(item)
+quad_reversal = |items, start, end| {
+	var $items = items
+	var $low = start
+	var $high = end
+	while $low < $high {
+		low_item = list_move_out_unsafe($items, $low)
+		$items = sort_copy($items, $low, $high)
+		$items = list_move_in_unsafe($items, $high, low_item)
+		$low = $low + 1
+		$high = $high - 1
+	}
+	$items
+}
+
+# ---- Quadsort --------------------------------------------------------------
+
+# Merges the four sorted pairs in `items[start..][..8]` into one sorted run of
+# eight, through `swap[0..][..8]`.
+quad_swap_merge : List(item), U64, List(item), (item, item -> [Before, Same, After]) -> (List(item), List(item))
+quad_swap_merge = |items, start, swap, compare_items| {
+	(swap_a, items_a) = parity_merge(swap, 0, items, start, 2, 2, compare_items)
+	(swap_b, items_b) = parity_merge(swap_a, 4, items_a, start + 4, 2, 2, compare_items)
+	parity_merge(items_b, start, swap_b, 0, 4, 4, compare_items)
+}
+
+# Orders the four pairs in `items[start..][..8]`; `v1`..`v4` are 1 for a pair
+# whose first item orders after its second.
+quad_swap_pairs : List(item), U64, U64, U64, U64, U64 -> List(item)
+quad_swap_pairs = |items, start, v1, v2, v3, v4| {
+	a = list_move_out_unsafe(items, start + 1 - v1)
+	items_a = list_move_in_unsafe(sort_copy(items, start, start + v1), start + 1, a)
+	b = list_move_out_unsafe(items_a, start + 3 - v2)
+	items_b = list_move_in_unsafe(sort_copy(items_a, start + 2, start + 2 + v2), start + 3, b)
+	c = list_move_out_unsafe(items_b, start + 5 - v3)
+	items_c = list_move_in_unsafe(sort_copy(items_b, start + 4, start + 4 + v3), start + 5, c)
+	d = list_move_out_unsafe(items_c, start + 7 - v4)
+	list_move_in_unsafe(sort_copy(items_c, start + 6, start + 6 + v4), start + 7, d)
+}
+
+# Turns `items[start..][..len]` into sorted runs of 32 items (and a sorted tail),
+# recognizing already ordered and reversed stretches. Returns `sorted` when the
+# whole range was one reversed run and is now sorted.
+quad_swap : List(item), U64, U64, List(item), (item, item -> [Before, Same, After]) -> { items : List(item), swap : List(item), sorted : Bool }
+quad_swap = |items, start, len, swap, compare_items| {
+	var $items = items
+	var $swap = swap
+	var $block = start
+	var $reverse_head = start
+	var $count = len // 8
+	var $skip_tail_swap = False
+	# The run the previous block of eight continued, if any.
+	var $run = NoRun
+	var $done = False
+	while !$done {
+		match $run {
+			NoRun => {
+				if $count == 0 {
+					$done = True
+				} else {
+					$count = $count - 1
+					v1 = if sort_after($items, $block, $block + 1, compare_items) 1 else 0
+					v2 = if sort_after($items, $block + 2, $block + 3, compare_items) 1 else 0
+					v3 = if sort_after($items, $block + 4, $block + 5, compare_items) 1 else 0
+					v4 = if sort_after($items, $block + 6, $block + 7, compare_items) 1 else 0
+					pairs = v1 + v2 + v3 + v4
+					if pairs == 0 {
+						if !sort_after($items, $block + 1, $block + 2, compare_items) and !sort_after($items, $block + 3, $block + 4, compare_items) and !sort_after($items, $block + 5, $block + 6, compare_items) {
+							$run = Ordered
+						} else {
+							(merged, scratch) = quad_swap_merge($items, $block, $swap, compare_items)
+							$items = merged
+							$swap = scratch
+						}
+					} else if pairs == 4 and sort_after($items, $block + 1, $block + 2, compare_items) and sort_after($items, $block + 3, $block + 4, compare_items) and sort_after($items, $block + 5, $block + 6, compare_items) {
+						$reverse_head = $block
+						$run = Reversed
+					} else {
+						(merged, scratch) = quad_swap_merge(quad_swap_pairs($items, $block, v1, v2, v3, v4), $block, $swap, compare_items)
+						$items = merged
+						$swap = scratch
+					}
+					$block = $block + 8
+				}
+			}
+			Ordered => {
+				# The previous block was ordered; see whether this one continues it.
+				if $count == 0 {
+					$done = True
+				} else {
+					$count = $count - 1
+					v1 = if sort_after($items, $block, $block + 1, compare_items) 1 else 0
+					v2 = if sort_after($items, $block + 2, $block + 3, compare_items) 1 else 0
+					v3 = if sort_after($items, $block + 4, $block + 5, compare_items) 1 else 0
+					v4 = if sort_after($items, $block + 6, $block + 7, compare_items) 1 else 0
+					pairs = v1 + v2 + v3 + v4
+					if pairs != 0 {
+						if pairs == 4 and sort_after($items, $block + 1, $block + 2, compare_items) and sort_after($items, $block + 3, $block + 4, compare_items) and sort_after($items, $block + 5, $block + 6, compare_items) {
+							$reverse_head = $block
+							$run = Reversed
+						} else {
+							(merged, scratch) = quad_swap_merge(quad_swap_pairs($items, $block, v1, v2, v3, v4), $block, $swap, compare_items)
+							$items = merged
+							$swap = scratch
+							$run = NoRun
+						}
+					} else if !sort_after($items, $block + 1, $block + 2, compare_items) and !sort_after($items, $block + 3, $block + 4, compare_items) and !sort_after($items, $block + 5, $block + 6, compare_items) {
+						# Still ordered.
+					} else {
+						(merged, scratch) = quad_swap_merge($items, $block, $swap, compare_items)
+						$items = merged
+						$swap = scratch
+						$run = NoRun
+					}
+					$block = $block + 8
+				}
+			}
+			Reversed => {
+				# The previous block was reversed; see whether this one continues it.
+				if $count == 0 {
+					# Reverse the run, including the tail if it continues it.
+					rem = len % 8
+					tail_reversed = (rem < 7 or sort_after($items, $block + 5, $block + 6, compare_items)) and (rem < 6 or sort_after($items, $block + 4, $block + 5, compare_items)) and (rem < 5 or sort_after($items, $block + 3, $block + 4, compare_items)) and (rem < 4 or sort_after($items, $block + 2, $block + 3, compare_items)) and (rem < 3 or sort_after($items, $block + 1, $block + 2, compare_items)) and (rem < 2 or sort_after($items, $block, $block + 1, compare_items)) and (rem < 1 or sort_after($items, $block - 1, $block, compare_items))
+					if tail_reversed {
+						$items = quad_reversal($items, $reverse_head, $block + rem - 1)
+						if $reverse_head == start {
+							return { items: $items, swap: $swap, sorted: True }
+						}
+						$skip_tail_swap = True
+					} else {
+						$items = quad_reversal($items, $reverse_head, $block - 1)
+					}
+					$done = True
+				} else {
+					$count = $count - 1
+					# 1 for a pair that is in order, so not reversed.
+					u1 = if sort_after($items, $block, $block + 1, compare_items) 0 else 1
+					u2 = if sort_after($items, $block + 2, $block + 3, compare_items) 0 else 1
+					u3 = if sort_after($items, $block + 4, $block + 5, compare_items) 0 else 1
+					u4 = if sort_after($items, $block + 6, $block + 7, compare_items) 0 else 1
+					ordered_pairs = u1 + u2 + u3 + u4
+					if ordered_pairs == 0 and sort_after($items, $block - 1, $block, compare_items) and sort_after($items, $block + 1, $block + 2, compare_items) and sort_after($items, $block + 3, $block + 4, compare_items) and sort_after($items, $block + 5, $block + 6, compare_items) {
+						# Still reversed, across the block boundary too.
+					} else {
+						$items = quad_reversal($items, $reverse_head, $block - 1)
+						if ordered_pairs == 4 and !sort_after($items, $block + 1, $block + 2, compare_items) and !sort_after($items, $block + 3, $block + 4, compare_items) and !sort_after($items, $block + 5, $block + 6, compare_items) {
+							$run = Ordered
+						} else if ordered_pairs == 0 and sort_after($items, $block + 1, $block + 2, compare_items) and sort_after($items, $block + 3, $block + 4, compare_items) and sort_after($items, $block + 5, $block + 6, compare_items) {
+							$reverse_head = $block
+						} else {
+							# An unordered block: order its pairs in place, then
+							# merge them unless they already form a sorted run.
+							$items = quad_swap_pairs($items, $block, 1 - u1, 1 - u2, 1 - u3, 1 - u4)
+							if sort_after($items, $block + 1, $block + 2, compare_items) or sort_after($items, $block + 3, $block + 4, compare_items) or sort_after($items, $block + 5, $block + 6, compare_items) {
+								(merged, scratch) = quad_swap_merge($items, $block, $swap, compare_items)
+								$items = merged
+								$swap = scratch
+							}
+							$run = NoRun
+						}
+					}
+					$block = $block + 8
+				}
+			}
+		}
+	}
+	if !$skip_tail_swap {
+		(tail_items, tail_scratch) = tail_swap($items, $block, len % 8, $swap, compare_items)
+		$items = tail_items
+		$swap = tail_scratch
+	}
+
+	# Merge runs of eight into runs of 32.
+	$block = start
+	$count = len // 32
+	while $count > 0 {
+		$count = $count - 1
+		if sort_after($items, $block + 7, $block + 8, compare_items) or sort_after($items, $block + 15, $block + 16, compare_items) or sort_after($items, $block + 23, $block + 24, compare_items) {
+			(swap_a, items_a) = parity_merge($swap, 0, $items, $block, 8, 8, compare_items)
+			(swap_b, items_b) = parity_merge(swap_a, 16, items_a, $block + 16, 8, 8, compare_items)
+			(items_c, swap_c) = parity_merge(items_b, $block, swap_b, 0, 16, 16, compare_items)
+			$items = items_c
+			$swap = swap_c
+		}
+		$block = $block + 32
+	}
+	# A tail of more than eight items holds several runs to merge.
+	if len % 32 > 8 {
+		(tail_items, tail_scratch) = tail_merge($items, $block, len % 32, $swap, 32, 8, compare_items)
+		$items = tail_items
+		$swap = tail_scratch
+	}
+	{ items: $items, swap: $swap, sorted: False }
+}
+
+# Merges `items[start..][..len]`, made of sorted runs of `block_len` items,
+# into runs four times as long while they fit in `swap[0..][..swap_len]`.
+# Returns the length of the sorted runs left behind.
+quad_merge : List(item), U64, U64, List(item), U64, U64, (item, item -> [Before, Same, After]) -> { items : List(item), swap : List(item), block_len : U64 }
+quad_merge = |items, start, len, swap, swap_len, block_len, compare_items| {
+	var $items = items
+	var $swap = swap
+	var $block_len = block_len * 4
+	end = start + len
+	while $block_len <= len and $block_len <= swap_len {
+		var $block = start
+		var $more = True
+		while $more {
+			(merged, scratch) = quad_merge_block($items, $block, $swap, $block_len // 4, compare_items)
+			$items = merged
+			$swap = scratch
+			$block = $block + $block_len
+			if $block + $block_len > end {
+				$more = False
+			}
+		}
+		(tail_items, tail_scratch) = tail_merge($items, $block, end - $block, $swap, swap_len, $block_len // 4, compare_items)
+		$items = tail_items
+		$swap = tail_scratch
+		$block_len = $block_len * 4
+	}
+	(final_items, final_swap) = tail_merge($items, start, len, $swap, swap_len, $block_len // 4, compare_items)
+	{ items: final_items, swap: final_swap, block_len: $block_len // 2 }
+}
+
+# Merges four adjacent sorted runs of `block_len` items at `items[start..]`.
+quad_merge_block : List(item), U64, List(item), U64, (item, item -> [Before, Same, After]) -> (List(item), List(item))
+quad_merge_block = |items, start, swap, block_len, compare_items| {
+	block2 = start + block_len
+	block3 = block2 + block_len
+	block4 = block3 + block_len
+	in_order_1_2 = !sort_after(items, block2 - 1, block2, compare_items)
+	in_order_3_4 = !sort_after(items, block4 - 1, block4, compare_items)
+	if in_order_1_2 and in_order_3_4 {
+		if !sort_after(items, block3 - 1, block3, compare_items) {
+			return (items, swap)
+		}
+		swap_all = sort_copy_range(swap, 0, items, start, block_len * 4)
+		return cross_merge(items, start, swap_all, 0, block_len * 2, block_len * 2, compare_items)
+	}
+	(swap_a, items_a) = if in_order_1_2 {
+		(sort_copy_range(swap, 0, items, start, block_len * 2), items)
+	} else {
+		cross_merge(swap, 0, items, start, block_len, block_len, compare_items)
+	}
+	(swap_b, items_b) = if in_order_3_4 {
+		(sort_copy_range(swap_a, block_len * 2, items_a, block3, block_len * 2), items_a)
+	} else {
+		cross_merge(swap_a, block_len * 2, items_a, block3, block_len, block_len, compare_items)
+	}
+	cross_merge(items_b, start, swap_b, 0, block_len * 2, block_len * 2, compare_items)
+}
+
+# Merges the sorted runs of `block_len` items in `items[start..][..len]` into
+# longer and longer runs while they fit in `swap[0..][..swap_len]`.
+tail_merge : List(item), U64, U64, List(item), U64, U64, (item, item -> [Before, Same, After]) -> (List(item), List(item))
+tail_merge = |items, start, len, swap, swap_len, block_len, compare_items| {
+	var $items = items
+	var $swap = swap
+	var $block_len = block_len
+	end = start + len
+	while $block_len < len and $block_len <= swap_len {
+		var $block = start
+		while $block + $block_len < end {
+			merge_len = if $block + $block_len * 2 < end $block_len * 2 else end - $block
+			(merged, scratch) = partial_backwards_merge($items, $block, merge_len, $swap, swap_len, $block_len, compare_items)
+			$items = merged
+			$swap = scratch
+			$block = $block + $block_len * 2
+		}
+		$block_len = $block_len * 2
+	}
+	($items, $swap)
+}
+
+# Merges the sorted run `items[start..][..block_len]` with the sorted run after
+# it (ending at `start + len`), at most as long as the first, from the tail back
+# to the head. The right run moves to swap first.
+partial_backwards_merge : List(item), U64, U64, List(item), U64, U64, (item, item -> [Before, Same, After]) -> (List(item), List(item))
+partial_backwards_merge = |items, start, len, swap, swap_len, block_len, compare_items| {
+	if len == block_len {
+		return (items, swap)
+	}
+	if !sort_after(items, start + block_len - 1, start + block_len, compare_items) {
+		return (items, swap)
+	}
+	right_len = len - block_len
+	if len <= swap_len and right_len >= 64 {
+		# Plenty of scratch: merge into swap and copy back.
+		(merged_swap, source) = cross_merge(swap, 0, items, start, block_len, right_len, compare_items)
+		return (sort_copy_range(source, start, merged_swap, 0, len), merged_swap)
+	}
+
+	var $swap = sort_copy_range(swap, 0, items, start + block_len, right_len)
+	var $items = items
+	# Exclusive ends of the unmerged part of each run; the left run starts at
+	# `start`, the right run (now in swap) at 0.
+	var $left_end = start + block_len
+	var $right_end = right_len
+	var $dest_end = start + len
+	pairs_per_batch : U64
+	pairs_per_batch = 8
+
+	# Blocks of sixteen while both runs have more than seventeen items left.
+	var $exit = False
+	while !$exit and $left_end > start + 17 and $right_end > 17 {
+		# Sixteen items at the right tail all order at or after the left tail.
+		while !$exit and !sort_after_across($items, $left_end - 1, $swap, $right_end - 16, compare_items) {
+			$dest_end = $dest_end - 16
+			$right_end = $right_end - 16
+			$items = sort_copy_range($items, $dest_end, $swap, $right_end, 16)
+			if $right_end <= 17 {
+				$exit = True
+			}
+		}
+		# Sixteen items at the left tail all order after the right tail.
+		while !$exit and sort_after_across($items, $left_end - 16, $swap, $right_end - 1, compare_items) {
+			$dest_end = $dest_end - 16
+			$left_end = $left_end - 16
+			$items = sort_copy_range_within($items, $dest_end, $left_end, 16)
+			if $left_end <= start + 17 {
+				$exit = True
+			}
+		}
+		if !$exit {
+			# Up to eight rounds taking two items from whichever run can give
+			# them, or one from each.
+			var $loops = pairs_per_batch
+			while $loops > 0 {
+				$loops = $loops - 1
+				if !sort_after_across($items, $left_end - 1, $swap, $right_end - 2, compare_items) {
+					$dest_end = $dest_end - 2
+					$right_end = $right_end - 2
+					$items = sort_copy_range($items, $dest_end, $swap, $right_end, 2)
+				} else if sort_after_across($items, $left_end - 2, $swap, $right_end - 1, compare_items) {
+					$dest_end = $dest_end - 2
+					$left_end = $left_end - 2
+					$items = sort_copy_range_within($items, $dest_end, $left_end, 2)
+				} else {
+					lte = !sort_after_across($items, $left_end - 1, $swap, $right_end - 1, compare_items)
+					right_slot = if lte $dest_end - 1 else $dest_end - 2
+					left_slot = if lte $dest_end - 2 else $dest_end - 1
+					$items = list_move_in_unsafe($items, right_slot, list_move_out_unsafe($swap, $right_end - 1))
+					$right_end = $right_end - 1
+					$items = sort_copy($items, left_slot, $left_end - 1)
+					$left_end = $left_end - 1
+					$dest_end = $dest_end - 2
+					step = sort_merge_tail_across($items, $dest_end - 1, $left_end, $swap, $right_end, compare_items)
+					$items = step.items
+					took = if step.took_left 1 else 0
+					$left_end = $left_end - took
+					$right_end = $right_end + took - 1
+					$dest_end = $dest_end - 1
+				}
+			}
+		}
+	}
+
+	# Two at a time while both runs have more than two items left.
+	while $right_end > 2 and $left_end > start + 2 {
+		if !sort_after_across($items, $left_end - 1, $swap, $right_end - 2, compare_items) {
+			$dest_end = $dest_end - 2
+			$right_end = $right_end - 2
+			$items = sort_copy_range($items, $dest_end, $swap, $right_end, 2)
+		} else if sort_after_across($items, $left_end - 2, $swap, $right_end - 1, compare_items) {
+			$dest_end = $dest_end - 2
+			$left_end = $left_end - 2
+			$items = sort_copy_range_within($items, $dest_end, $left_end, 2)
+		} else {
+			lte = !sort_after_across($items, $left_end - 1, $swap, $right_end - 1, compare_items)
+			right_slot = if lte $dest_end - 1 else $dest_end - 2
+			left_slot = if lte $dest_end - 2 else $dest_end - 1
+			$items = list_move_in_unsafe($items, right_slot, list_move_out_unsafe($swap, $right_end - 1))
+			$right_end = $right_end - 1
+			$items = sort_copy($items, left_slot, $left_end - 1)
+			$left_end = $left_end - 1
+			$dest_end = $dest_end - 2
+			step = sort_merge_tail_across($items, $dest_end - 1, $left_end, $swap, $right_end, compare_items)
+			$items = step.items
+			took = if step.took_left 1 else 0
+			$left_end = $left_end - took
+			$right_end = $right_end + took - 1
+			$dest_end = $dest_end - 1
+		}
+	}
+
+	# The tail, one item at a time.
+	while $right_end > 0 and $left_end > start {
+		step = sort_merge_tail_across($items, $dest_end - 1, $left_end, $swap, $right_end, compare_items)
+		$items = step.items
+		took = if step.took_left 1 else 0
+		$left_end = $left_end - took
+		$right_end = $right_end + took - 1
+		$dest_end = $dest_end - 1
+	}
+	# Whatever remains of the right run goes back; the left run is already in
+	# place.
+	$items = sort_copy_range($items, start, $swap, 0, $right_end)
+	($items, $swap)
+}
+
+# Merges the sorted run `items[start..][..block_len]` with the sorted run after
+# it (ending at `start + len`), from the head forward. The left run moves to
+# swap first.
+partial_forward_merge : List(item), U64, U64, List(item), U64, (item, item -> [Before, Same, After]) -> (List(item), List(item))
+partial_forward_merge = |items, start, len, swap, block_len, compare_items| {
+	if len == block_len {
+		return (items, swap)
+	}
+	if !sort_after(items, start + block_len - 1, start + block_len, compare_items) {
+		return (items, swap)
+	}
+	var $swap = sort_copy_range(swap, 0, items, start, block_len)
+	var $items = items
+	var $left_head = 0
+	left_end = block_len
+	var $right_head = start + block_len
+	right_end = start + len
+	var $dest_head = start
+
+	# Two at a time while both runs have more than two items left.
+	while $left_head + 2 < left_end and $right_head + 2 < right_end {
+		if sort_after_across($swap, $left_head, $items, $right_head + 1, compare_items) {
+			$items = sort_copy_range_within($items, $dest_head, $right_head, 2)
+			$dest_head = $dest_head + 2
+			$right_head = $right_head + 2
+		} else if !sort_after_across($swap, $left_head + 1, $items, $right_head, compare_items) {
+			$items = sort_copy_range($items, $dest_head, $swap, $left_head, 2)
+			$dest_head = $dest_head + 2
+			$left_head = $left_head + 2
+		} else {
+			lte = !sort_after_across($swap, $left_head, $items, $right_head, compare_items)
+			right_slot = if lte $dest_head + 1 else $dest_head
+			left_slot = if lte $dest_head else $dest_head + 1
+			$items = sort_copy($items, right_slot, $right_head)
+			$right_head = $right_head + 1
+			$items = list_move_in_unsafe($items, left_slot, list_move_out_unsafe($swap, $left_head))
+			$left_head = $left_head + 1
+			$dest_head = $dest_head + 2
+			step = sort_merge_head_across($items, $dest_head, $swap, $left_head, $right_head, compare_items)
+			$items = step.items
+			took = if step.took_left 1 else 0
+			$left_head = $left_head + took
+			$right_head = $right_head + 1 - took
+			$dest_head = $dest_head + 1
+		}
+	}
+
+	while $left_head < left_end and $right_head < right_end {
+		step = sort_merge_head_across($items, $dest_head, $swap, $left_head, $right_head, compare_items)
+		$items = step.items
+		took = if step.took_left 1 else 0
+		$left_head = $left_head + took
+		$right_head = $right_head + 1 - took
+		$dest_head = $dest_head + 1
+	}
+	# Whatever remains of the left run goes back; the right run is already in
+	# place.
+	$items = sort_copy_range($items, $dest_head, $swap, $left_head, left_end - $left_head)
+	($items, $swap)
+}
+
+# Merges the sorted runs of `block_len` items in `items[start..][..len]` into
+# one sorted run, using `swap[0..][..swap_len]` and in-place rotations when a
+# merge does not fit in swap.
+rotate_merge : List(item), U64, U64, List(item), U64, U64, (item, item -> [Before, Same, After]) -> (List(item), List(item))
+rotate_merge = |items, start, len, swap, swap_len, block_len, compare_items| {
+	if block_len <= len and len <= block_len * 2 and len - block_len <= swap_len {
+		return partial_backwards_merge(items, start, len, swap, swap_len, block_len, compare_items)
+	}
+	var $items = items
+	var $swap = swap
+	var $block_len = block_len
+	end = start + len
+	while $block_len < len {
+		var $block = start
+		while $block + $block_len < end {
+			right_len = if $block + $block_len * 2 < end $block_len else end - $block - $block_len
+			(merged, scratch) = rotate_merge_block($items, $block, $swap, swap_len, $block_len, right_len, compare_items)
+			$items = merged
+			$swap = scratch
+			$block = $block + $block_len * 2
+		}
+		$block_len = $block_len * 2
+	}
+	($items, $swap)
+}
+
+# Merges the sorted run `items[start..][..left_block]` with the sorted run of
+# `right` items after it, with only `swap[0..][..swap_len]` as scratch.
+rotate_merge_block : List(item), U64, List(item), U64, U64, U64, (item, item -> [Before, Same, After]) -> (List(item), List(item))
+rotate_merge_block = |items, start, swap, swap_len, initial_left_block, initial_right, compare_items| {
+	if !sort_after(items, start + initial_left_block - 1, start + initial_left_block, compare_items) {
+		return (items, swap)
+	}
+	right_block = initial_left_block // 2
+	left_block = initial_left_block - right_block
+	# How many items of the right run order before the first item of the
+	# left run's second half.
+	left = monobound_binary_first(items, start + left_block + right_block, initial_right, list_get_unsafe(items, start + left_block), compare_items)
+	right = initial_right - left
+
+	var $items = items
+	var $swap = swap
+	if left != 0 {
+		if left_block + left <= swap_len {
+			$swap = sort_copy_range($swap, 0, $items, start, left_block)
+			$swap = sort_copy_range($swap, left_block, $items, start + left_block + right_block, left)
+			$items = sort_copy_range_within($items, start + left + left_block, start + left_block, right_block)
+			(merged, scratch) = cross_merge($items, start, $swap, 0, left_block, left, compare_items)
+			$items = merged
+			$swap = scratch
+		} else {
+			(rotated, scratch) = trinity_rotation($items, start + left_block, right_block + left, $swap, swap_len, right_block)
+			$items = rotated
+			$swap = scratch
+			unbalanced = left * 2 < left_block or left_block * 2 < left
+			(merged, merged_swap) = if unbalanced and left <= swap_len {
+				partial_backwards_merge($items, start, left_block + left, $swap, swap_len, left_block, compare_items)
+			} else if unbalanced and left_block <= swap_len {
+				partial_forward_merge($items, start, left_block + left, $swap, left_block, compare_items)
+			} else {
+				rotate_merge_block($items, start, $swap, swap_len, left_block, left, compare_items)
+			}
+			$items = merged
+			$swap = merged_swap
+		}
+	}
+	if right != 0 {
+		unbalanced = right * 2 < right_block or right_block * 2 < right
+		(merged, merged_swap) = if (unbalanced and right <= swap_len) or right + right_block <= swap_len {
+			partial_backwards_merge($items, start + left_block + left, right_block + right, $swap, swap_len, right_block, compare_items)
+		} else if unbalanced and left_block <= swap_len {
+			partial_forward_merge($items, start + left_block + left, right_block + right, $swap, right_block, compare_items)
+		} else {
+			rotate_merge_block($items, start + left_block + left, $swap, swap_len, right_block, right, compare_items)
+		}
+		$items = merged
+		$swap = merged_swap
+	}
+	($items, $swap)
+}
+
+# The number of items in the sorted run `items[start..][..len]` that order
+# before `value`, found by a cache-friendly binary search.
+monobound_binary_first : List(item), U64, U64, item, (item, item -> [Before, Same, After]) -> U64
+monobound_binary_first = |items, start, len, value, compare_items| {
+	var $top = len
+	var $end = start + len
+	while $top > 1 {
+		mid = $top // 2
+		if compare_items(value, list_get_unsafe(items, $end - mid)) != After {
+			$end = $end - mid
+		}
+		$top = $top - mid
+	}
+	if $top > 0 and compare_items(value, list_get_unsafe(items, $end - 1)) != After {
+		$end = $end - 1
+	}
+	$end - start
+}
+
+# Exchanges the adjacent ranges `items[start..][..left_len]` and the
+# `len - left_len` items after it, using at most `swap_len` items of swap.
+trinity_rotation : List(item), U64, U64, List(item), U64, U64 -> (List(item), List(item))
+trinity_rotation = |items, start, len, swap, full_swap_len, left_len| {
+	right_len = len - left_len
+	swap_len = if full_swap_len > 65536 65536 else full_swap_len
+	var $items = items
+	var $swap = swap
+	if left_len < right_len {
+		if left_len <= swap_len {
+			$swap = sort_copy_range($swap, 0, $items, start, left_len)
+			$items = sort_copy_range_within($items, start, start + left_len, right_len)
+			$items = sort_copy_range($items, start + right_len, $swap, 0, left_len)
+		} else {
+			bridge = right_len - left_len
+			if bridge <= swap_len and bridge > 3 {
+				# Move the middle of the range aside, exchange the two
+				# equal-length ends, and put the middle back.
+				$swap = sort_copy_range($swap, 0, $items, start + left_len, bridge)
+				var $b = start + left_len
+				var $c = start + right_len
+				var $d = $c + left_len
+				var $remaining = left_len
+				while $remaining > 0 {
+					$remaining = $remaining - 1
+					$c = $c - 1
+					$d = $d - 1
+					$items = sort_copy($items, $c, $d)
+					$b = $b - 1
+					$items = sort_copy($items, $d, $b)
+				}
+				$items = sort_copy_range($items, start, $swap, 0, bridge)
+			} else {
+				$items = rotate_in_place($items, start, left_len, right_len)
+			}
+		}
+	} else if right_len < left_len {
+		if right_len <= swap_len {
+			$swap = sort_copy_range($swap, 0, $items, start + left_len, right_len)
+			$items = sort_copy_range_within($items, start + right_len, start, left_len)
+			$items = sort_copy_range($items, start, $swap, 0, right_len)
+		} else {
+			bridge = left_len - right_len
+			if bridge <= swap_len and bridge > 3 {
+				$swap = sort_copy_range($swap, 0, $items, start + right_len, bridge)
+				var $a = start
+				var $b = start + left_len
+				var $c = start + right_len
+				var $remaining = right_len
+				while $remaining > 0 {
+					$remaining = $remaining - 1
+					$items = sort_copy($items, $c, $a)
+					$c = $c + 1
+					$items = sort_copy($items, $a, $b)
+					$a = $a + 1
+					$b = $b + 1
+				}
+				$items = sort_copy_range($items, start + len - bridge, $swap, 0, bridge)
+			} else {
+				$items = rotate_in_place($items, start, left_len, right_len)
+			}
+		}
+	} else {
+		var $left = start
+		var $right = start + left_len
+		var $remaining = left_len
+		while $remaining > 0 {
+			$remaining = $remaining - 1
+			moved = list_move_out_unsafe($items, $left)
+			$items = sort_copy($items, $left, $right)
+			$items = list_move_in_unsafe($items, $right, moved)
+			$left = $left + 1
+			$right = $right + 1
+		}
+	}
+	($items, $swap)
+}
+
+# Exchanges adjacent ranges with no scratch at all: reverse both, then
+# reverse the whole.
+rotate_in_place : List(item), U64, U64, U64 -> List(item)
+rotate_in_place = |items, start, left_len, right_len| {
+	len = left_len + right_len
+	reversed_left = if left_len > 1 { quad_reversal(items, start, start + left_len - 1) } else { items }
+	reversed_right = if right_len > 1 { quad_reversal(reversed_left, start + left_len, start + len - 1) } else { reversed_left }
+	quad_reversal(reversed_right, start, start + len - 1)
+}
+
+# Quadsort for `items[start..][..len]` with `swap[0..][..swap_len]` as scratch.
+quadsort_swap : List(item), U64, U64, List(item), U64, (item, item -> [Before, Same, After]) -> (List(item), List(item))
+quadsort_swap = |items, start, len, swap, swap_len, compare_items| {
+	if len < 96 {
+		return tail_swap(items, start, len, swap, compare_items)
+	}
+	swapped = quad_swap(items, start, len, swap, compare_items)
+	if swapped.sorted {
+		return (swapped.items, swapped.swap)
+	}
+	merged = quad_merge(swapped.items, start, len, swapped.swap, swap_len, 32, compare_items)
+	rotate_merge(merged.items, start, len, merged.swap, swap_len, merged.block_len, compare_items)
+}
+
+# Quadsort for a whole list of at least 32 items.
+quadsort : List(item), List(item), (item, item -> [Before, Same, After]) -> (List(item), List(item))
+quadsort = |items, swap, compare_items| {
+	len = List.len(items)
+	swapped = quad_swap(items, 0, len, swap, compare_items)
+	if swapped.sorted {
+		return (swapped.items, swapped.swap)
+	}
+	merged = quad_merge(swapped.items, 0, len, swapped.swap, len, 32, compare_items)
+	rotate_merge(merged.items, 0, len, merged.swap, len, merged.block_len, compare_items)
+}
+
+# ---- Fluxsort --------------------------------------------------------------
+
+# Sorts a whole list of at least 132 items: measures how ordered its four
+# quarters are, partitions or quadsorts each accordingly, and merges them.
+flux_sort : List(item), List(item), (item, item -> [Before, Same, After]) -> (List(item), List(item))
+flux_sort = |items, swap, compare_items| {
+	len = List.len(items)
+	half1 = len // 2
+	quad1 = half1 // 2
+	quad2 = half1 - quad1
+	half2 = len - half1
+	quad3 = half2 // 2
+	quad4 = half2 - quad3
+
+	var $items = items
+	var $swap = swap
+	# Cursors walking each quarter in step; each ends on its quarter's last item.
+	var $a = 0
+	var $b = quad1
+	var $c = half1
+	var $d = half1 + quad3
+
+	var $streaks_a = 0
+	var $streaks_b = 0
+	var $streaks_c = 0
+	var $streaks_d = 0
+	var $balance_a = 0
+	var $balance_b = 0
+	var $balance_c = 0
+	var $balance_d = 0
+
+	if quad1 < quad2 {
+		$balance_b = $balance_b + (if sort_after($items, $b, $b + 1, compare_items) 1 else 0)
+		$b = $b + 1
+	}
+	if quad1 < quad3 {
+		$balance_c = $balance_c + (if sort_after($items, $c, $c + 1, compare_items) 1 else 0)
+		$c = $c + 1
+	}
+	if quad1 < quad4 {
+		$balance_d = $balance_d + (if sort_after($items, $d, $d + 1, compare_items) 1 else 0)
+		$d = $d + 1
+	}
+
+	var $count = len
+	while $count > 132 {
+		var $sum_a = 0
+		var $sum_b = 0
+		var $sum_c = 0
+		var $sum_d = 0
+		var $step = 0
+		while $step < 32 {
+			$sum_a = $sum_a + (if sort_after($items, $a, $a + 1, compare_items) 1 else 0)
+			$a = $a + 1
+			$sum_b = $sum_b + (if sort_after($items, $b, $b + 1, compare_items) 1 else 0)
+			$b = $b + 1
+			$sum_c = $sum_c + (if sort_after($items, $c, $c + 1, compare_items) 1 else 0)
+			$c = $c + 1
+			$sum_d = $sum_d + (if sort_after($items, $d, $d + 1, compare_items) 1 else 0)
+			$d = $d + 1
+			$step = $step + 1
+		}
+		$balance_a = $balance_a + $sum_a
+		$balance_b = $balance_b + $sum_b
+		$balance_c = $balance_c + $sum_c
+		$balance_d = $balance_d + $sum_d
+		streak_a = if $sum_a == 0 or $sum_a == 32 1 else 0
+		streak_b = if $sum_b == 0 or $sum_b == 32 1 else 0
+		streak_c = if $sum_c == 0 or $sum_c == 32 1 else 0
+		streak_d = if $sum_d == 0 or $sum_d == 32 1 else 0
+		$streaks_a = $streaks_a + streak_a
+		$streaks_b = $streaks_b + streak_b
+		$streaks_c = $streaks_c + streak_c
+		$streaks_d = $streaks_d + streak_d
+		if $count > 516 and streak_a + streak_b + streak_c + streak_d == 0 {
+			# Random-looking everywhere: skip ahead, assuming half the pairs
+			# are out of order.
+			$balance_a = $balance_a + 48
+			$a = $a + 96
+			$balance_b = $balance_b + 48
+			$b = $b + 96
+			$balance_c = $balance_c + 48
+			$c = $c + 96
+			$balance_d = $balance_d + 48
+			$d = $d + 96
+			$count = $count - 384
+		}
+		$count = $count - 128
+	}
+	while $count > 7 {
+		$balance_a = $balance_a + (if sort_after($items, $a, $a + 1, compare_items) 1 else 0)
+		$a = $a + 1
+		$balance_b = $balance_b + (if sort_after($items, $b, $b + 1, compare_items) 1 else 0)
+		$b = $b + 1
+		$balance_c = $balance_c + (if sort_after($items, $c, $c + 1, compare_items) 1 else 0)
+		$c = $c + 1
+		$balance_d = $balance_d + (if sort_after($items, $d, $d + 1, compare_items) 1 else 0)
+		$d = $d + 1
+		$count = $count - 4
+	}
+
+	if $balance_a + $balance_b + $balance_c + $balance_d == 0 {
+		# Every quarter is ordered; if the boundaries are too, so is the list.
+		if !sort_after($items, $a, $a + 1, compare_items) and !sort_after($items, $b, $b + 1, compare_items) and !sort_after($items, $c, $c + 1, compare_items) {
+			return ($items, $swap)
+		}
+	}
+
+	reversed_a = quad1 - $balance_a == 1
+	reversed_b = quad2 - $balance_b == 1
+	reversed_c = quad3 - $balance_c == 1
+	reversed_d = quad4 - $balance_d == 1
+	if reversed_a or reversed_b or reversed_c or reversed_d {
+		# Reverse runs that span whole quarters, including across quarter
+		# boundaries that continue the run.
+		span1 = reversed_a and reversed_b and sort_after($items, $a, $a + 1, compare_items)
+		span2 = reversed_b and reversed_c and sort_after($items, $b, $b + 1, compare_items)
+		span3 = reversed_c and reversed_d and sort_after($items, $c, $c + 1, compare_items)
+		if span1 and span2 and span3 {
+			return (quad_reversal($items, 0, $d), $swap)
+		}
+		if span1 and span2 {
+			$items = quad_reversal($items, 0, $c)
+			$balance_a = 0
+			$balance_b = 0
+			$balance_c = 0
+		} else if span2 and span3 {
+			$items = quad_reversal($items, $a + 1, $d)
+			$balance_b = 0
+			$balance_c = 0
+			$balance_d = 0
+		} else {
+			if span1 {
+				$items = quad_reversal($items, 0, $b)
+				$balance_a = 0
+				$balance_b = 0
+			}
+			if span2 {
+				$items = quad_reversal($items, $a + 1, $c)
+				$balance_b = 0
+				$balance_c = 0
+			}
+			if span3 {
+				$items = quad_reversal($items, $b + 1, $d)
+				$balance_c = 0
+				$balance_d = 0
+			}
+		}
+		if reversed_a and $balance_a != 0 {
+			$items = quad_reversal($items, 0, $a)
+			$balance_a = 0
+		}
+		if reversed_b and $balance_b != 0 {
+			$items = quad_reversal($items, $a + 1, $b)
+			$balance_b = 0
+		}
+		if reversed_c and $balance_c != 0 {
+			$items = quad_reversal($items, $b + 1, $c)
+			$balance_c = 0
+		}
+		if reversed_d and $balance_d != 0 {
+			$items = quad_reversal($items, $c + 1, $d)
+			$balance_d = 0
+		}
+	}
+
+	# A quarter that is at least a quarter ordered is quadsorted; the rest are
+	# partitioned. Quarters too large for the cache are always quadsorted.
+	streak_threshold = len // 512
+	ordered_a = $streaks_a > streak_threshold or quad1 > quad_cache
+	ordered_b = $streaks_b > streak_threshold or quad1 > quad_cache
+	ordered_c = $streaks_c > streak_threshold or quad1 > quad_cache
+	ordered_d = $streaks_d > streak_threshold or quad1 > quad_cache
+
+	if !ordered_a and !ordered_b and !ordered_c and !ordered_d {
+		return flux_partition($items, $swap, 0, len, False, compare_items)
+	}
+	# Adjacent unordered quarters are partitioned together.
+	if !ordered_a and !ordered_b and !ordered_c {
+		(items_abc, swap_abc) = flux_partition($items, $swap, 0, half1 + quad3, False, compare_items)
+		(items_d, swap_d) = if $balance_d != 0 { quadsort_swap(items_abc, $c + 1, quad4, swap_abc, len, compare_items) } else { (items_abc, swap_abc) }
+		$items = items_d
+		$swap = swap_d
+	} else if !ordered_b and !ordered_c and !ordered_d {
+		(items_a, swap_a) = if $balance_a != 0 { quadsort_swap($items, 0, quad1, $swap, len, compare_items) } else { ($items, $swap) }
+		(items_bcd, swap_bcd) = flux_partition(items_a, swap_a, $a + 1, quad2 + half2, False, compare_items)
+		$items = items_bcd
+		$swap = swap_bcd
+	} else if !ordered_a and !ordered_b {
+		(items_ab, swap_ab) = flux_partition($items, $swap, 0, half1, False, compare_items)
+		(items_c, swap_c) = if ordered_c {
+			if $balance_c != 0 { quadsort_swap(items_ab, $b + 1, quad3, swap_ab, len, compare_items) } else { (items_ab, swap_ab) }
+		} else {
+			flux_partition(items_ab, swap_ab, $b + 1, quad3, False, compare_items)
+		}
+		(items_d, swap_d) = if ordered_d {
+			if $balance_d != 0 { quadsort_swap(items_c, $c + 1, quad4, swap_c, len, compare_items) } else { (items_c, swap_c) }
+		} else {
+			flux_partition(items_c, swap_c, $c + 1, quad4, False, compare_items)
+		}
+		$items = items_d
+		$swap = swap_d
+	} else if !ordered_c and !ordered_d {
+		(items_a, swap_a) = if ordered_a {
+			if $balance_a != 0 { quadsort_swap($items, 0, quad1, $swap, len, compare_items) } else { ($items, $swap) }
+		} else {
+			flux_partition($items, $swap, 0, quad1, False, compare_items)
+		}
+		(items_b, swap_b) = if ordered_b {
+			if $balance_b != 0 { quadsort_swap(items_a, $a + 1, quad2, swap_a, len, compare_items) } else { (items_a, swap_a) }
+		} else {
+			flux_partition(items_a, swap_a, $a + 1, quad2, False, compare_items)
+		}
+		(items_cd, swap_cd) = flux_partition(items_b, swap_b, $b + 1, half2, False, compare_items)
+		$items = items_cd
+		$swap = swap_cd
+	} else if !ordered_b and !ordered_c {
+		(items_a, swap_a) = if $balance_a != 0 { quadsort_swap($items, 0, quad1, $swap, len, compare_items) } else { ($items, $swap) }
+		(items_bc, swap_bc) = flux_partition(items_a, swap_a, $a + 1, quad2 + quad3, False, compare_items)
+		(items_d, swap_d) = if $balance_d != 0 { quadsort_swap(items_bc, $c + 1, quad4, swap_bc, len, compare_items) } else { (items_bc, swap_bc) }
+		$items = items_d
+		$swap = swap_d
+	} else {
+		(items_a, swap_a) = if ordered_a {
+			if $balance_a != 0 { quadsort_swap($items, 0, quad1, $swap, len, compare_items) } else { ($items, $swap) }
+		} else {
+			flux_partition($items, $swap, 0, quad1, False, compare_items)
+		}
+		(items_b, swap_b) = if ordered_b {
+			if $balance_b != 0 { quadsort_swap(items_a, $a + 1, quad2, swap_a, len, compare_items) } else { (items_a, swap_a) }
+		} else {
+			flux_partition(items_a, swap_a, $a + 1, quad2, False, compare_items)
+		}
+		(items_c, swap_c) = if ordered_c {
+			if $balance_c != 0 { quadsort_swap(items_b, $b + 1, quad3, swap_b, len, compare_items) } else { (items_b, swap_b) }
+		} else {
+			flux_partition(items_b, swap_b, $b + 1, quad3, False, compare_items)
+		}
+		(items_d, swap_d) = if ordered_d {
+			if $balance_d != 0 { quadsort_swap(items_c, $c + 1, quad4, swap_c, len, compare_items) } else { (items_c, swap_c) }
+		} else {
+			flux_partition(items_c, swap_c, $c + 1, quad4, False, compare_items)
+		}
+		$items = items_d
+		$swap = swap_d
+	}
+
+	# Merge the four sorted quarters: pairs into swap, then halves back.
+	if !sort_after($items, $a, $a + 1, compare_items) {
+		if !sort_after($items, $c, $c + 1, compare_items) {
+			if !sort_after($items, $b, $b + 1, compare_items) {
+				return ($items, $swap)
+			}
+			$swap = sort_copy_range($swap, 0, $items, 0, len)
+		} else {
+			(swap_cd, items_cd) = cross_merge($swap, half1, $items, half1, quad3, quad4, compare_items)
+			$items = items_cd
+			$swap = sort_copy_range(swap_cd, 0, $items, 0, half1)
+		}
+	} else {
+		if !sort_after($items, $c, $c + 1, compare_items) {
+			$swap = sort_copy_range($swap, half1, $items, half1, half2)
+			(swap_ab, items_ab) = cross_merge($swap, 0, $items, 0, quad1, quad2, compare_items)
+			$items = items_ab
+			$swap = swap_ab
+		} else {
+			(swap_cd, items_cd) = cross_merge($swap, half1, $items, half1, quad3, quad4, compare_items)
+			(swap_ab, items_ab) = cross_merge(swap_cd, 0, items_cd, 0, quad1, quad2, compare_items)
+			$items = items_ab
+			$swap = swap_ab
+		}
+	}
+	cross_merge($items, 0, $swap, 0, half1, half2, compare_items)
+}
+
+# Sorts `len` items by partitioning around successive pivots. The items are
+# in `items[start..][..len]`, or in `swap[0..][..len]` when `x_in_swap` is
+# set; either way they end up sorted in `items[start..][..len]`.
+flux_partition : List(item), List(item), U64, U64, Bool, (item, item -> [Before, Same, After]) -> (List(item), List(item))
+flux_partition = |items, swap, start, initial_len, x_in_swap, compare_items| {
+	var $items = items
+	var $swap = swap
+	var $len = initial_len
+	var $x_in_swap = x_in_swap
+	var $first = True
+	# Only read once `$first` is False, so this placeholder is never compared.
+	var $prev_pivot = if x_in_swap { list_get_unsafe(swap, 0) } else { list_get_unsafe(items, start) }
+	while True {
+		(pivot, generic, items_m, swap_m) = if $len <= 2048 {
+			(median_of_nine_pivot($items, $swap, start, $len, $x_in_swap, compare_items), False, $items, $swap)
+		} else {
+			median_of_cube_root($items, $swap, start, $len, $x_in_swap, compare_items)
+		}
+		$items = items_m
+		$swap = swap_m
+		if generic {
+			# Mostly identical items: quadsort handles those well.
+			if $x_in_swap {
+				$items = sort_copy_range($items, start, $swap, 0, $len)
+			}
+			return quadsort_swap($items, start, $len, $swap, $len, compare_items)
+		}
+		if !$first and compare_items($prev_pivot, pivot) != After {
+			# The pivot equals the previous one, so everything left is between
+			# the two: a reverse partition finishes the job.
+			return flux_reverse_partition($items, $swap, start, $len, pivot, compare_items)
+		}
+		partitioned = flux_default_partition($items, $swap, start, $len, $x_in_swap, pivot, compare_items)
+		$items = partitioned.items
+		$swap = partitioned.swap
+		if partitioned.sorted {
+			return ($items, $swap)
+		}
+		kept = partitioned.kept
+		moved = $len - kept
+		# The `moved` items after the pivot are in swap; the `kept` items at
+		# or before it are in place.
+		if kept <= moved // 32 or moved <= flux_out {
+			if moved == 0 {
+				return flux_reverse_partition($items, $swap, start, kept, pivot, compare_items)
+			}
+			$items = sort_copy_range($items, start + kept, $swap, 0, moved)
+			(sorted_tail, swap_tail) = quadsort_swap($items, start + kept, moved, $swap, moved, compare_items)
+			$items = sorted_tail
+			$swap = swap_tail
+		} else {
+			(sorted_tail, swap_tail) = flux_partition($items, $swap, start + kept, moved, True, compare_items)
+			$items = sorted_tail
+			$swap = swap_tail
+		}
+		if moved <= kept // 32 or kept <= flux_out {
+			if kept <= flux_out {
+				return quadsort_swap($items, start, kept, $swap, kept, compare_items)
+			}
+			return flux_reverse_partition($items, $swap, start, kept, pivot, compare_items)
+		}
+		$len = kept
+		$x_in_swap = False
+		$first = False
+		$prev_pivot = pivot
+	}
+}
+
+# Moves the items of `x` (see `flux_partition`) that do not order after the
+# pivot into `items[start..]`, in order, and the rest into `swap[0..]`, in
+# order. When the data looks mostly sorted it finishes with quadsort instead
+# and reports `sorted`; otherwise `kept` is the number of items in `items`.
+flux_default_partition : List(item), List(item), U64, U64, Bool, item, (item, item -> [Before, Same, After]) -> { items : List(item), swap : List(item), kept : U64, sorted : Bool }
+flux_default_partition = |items, swap, start, len, x_in_swap, pivot, compare_items| {
+	var $items = items
+	var $swap = swap
+	var $kept = start
+	var $moved = 0
+	var $x = if x_in_swap 0 else start
+	var $run = 0
+	var $block = 8
+	# Each item is written to both destinations and only the right one's
+	# cursor advances, so the comparison never has to be branched on. The
+	# stray copy lands in a slot the sort no longer reads.
+	while $block <= len {
+		var $step = 0
+		while $step < 8 {
+			item = if x_in_swap { list_move_out_unsafe($swap, $x) } else { list_move_out_unsafe($items, $x) }
+			keep = if compare_items(item, pivot) != After 1 else 0
+			$items = list_move_in_unsafe($items, $kept, item)
+			$swap = list_move_in_unsafe($swap, $moved, list_move_out_unsafe($items, $kept))
+			$kept = $kept + keep
+			$moved = $moved + 1 - keep
+			$x = $x + 1
+			$step = $step + 1
+		}
+		if $kept == start or $moved == 0 {
+			$run = $block
+		}
+		$block = $block + 8
+	}
+	var $rest = len % 8
+	while $rest > 0 {
+		item = if x_in_swap { list_move_out_unsafe($swap, $x) } else { list_move_out_unsafe($items, $x) }
+		keep = if compare_items(item, pivot) != After 1 else 0
+		$items = list_move_in_unsafe($items, $kept, item)
+		$swap = list_move_in_unsafe($swap, $moved, list_move_out_unsafe($items, $kept))
+		$kept = $kept + keep
+		$moved = $moved + 1 - keep
+		$x = $x + 1
+		$rest = $rest - 1
+	}
+	kept = $kept - start
+	if $run <= len // 4 or kept == len {
+		# Not very ordered (keep partitioning), or a pivot nothing ordered
+		# after.
+		return { items: $items, swap: $swap, kept, sorted: False }
+	}
+	# Mostly ordered: put the moved items back and quadsort both parts.
+	$items = sort_copy_range($items, start + kept, $swap, 0, $moved)
+	(items_tail, swap_tail) = quadsort_swap($items, start + kept, $moved, $swap, $moved, compare_items)
+	(items_head, swap_head) = quadsort_swap(items_tail, start, kept, swap_tail, kept, compare_items)
+	{ items: items_head, swap: swap_head, kept, sorted: True }
+}
+
+# Partitions `items[start..][..len]`, all of which order at or before the
+# pivot, into the items the pivot orders after (kept in place) and the rest
+# (equal to the pivot), then sorts the first group.
+flux_reverse_partition : List(item), List(item), U64, U64, item, (item, item -> [Before, Same, After]) -> (List(item), List(item))
+flux_reverse_partition = |items, swap, start, len, pivot, compare_items| {
+	var $items = items
+	var $swap = swap
+	var $kept = start
+	var $moved = 0
+	var $x = start
+	while $x < start + len {
+		item = list_move_out_unsafe($items, $x)
+		keep = if compare_items(pivot, item) == After 1 else 0
+		$items = list_move_in_unsafe($items, $kept, item)
+		$swap = list_move_in_unsafe($swap, $moved, list_move_out_unsafe($items, $kept))
+		$kept = $kept + keep
+		$moved = $moved + 1 - keep
+		$x = $x + 1
+	}
+	kept = $kept - start
+	$items = sort_copy_range($items, $kept, $swap, 0, $moved)
+	if $moved <= kept // 16 or kept <= flux_out {
+		return quadsort_swap($items, start, kept, $swap, kept, compare_items)
+	}
+	flux_partition($items, $swap, start, kept, False, compare_items)
+}
+
+# ---- Pivot selection -------------------------------------------------------
+
+# The item that orders in the middle of nine evenly spaced items of `x`.
+median_of_nine_pivot : List(item), List(item), U64, U64, Bool, (item, item -> [Before, Same, After]) -> item
+median_of_nine_pivot = |items, swap, start, len, x_in_swap, compare_items| {
+	x_start = if x_in_swap 0 else start
+	offset = len // 9
+	sample = |k| if x_in_swap { list_get_unsafe(swap, x_start + k * offset) } else { list_get_unsafe(items, x_start + k * offset) }
+	(low_a, high_a) = sort_trim_four(sample(0), sample(1), sample(2), sample(3), compare_items)
+	(low_b, high_b) = sort_trim_four(sample(4), sample(5), sample(6), sample(7), compare_items)
+	(low_c, high_c) = sort_trim_four(low_b, low_a, high_a, sample(8), compare_items)
+	sort_median_of_three(high_b, low_c, high_c, compare_items)
+}
+
+# The second- and third-ordered of four items.
+sort_trim_four : item, item, item, item, (item, item -> [Before, Same, After]) -> (item, item)
+sort_trim_four = |a, b, c, d, compare_items| {
+	(low_ab, high_ab) = if compare_items(a, b) == After { (b, a) } else { (a, b) }
+	(low_cd, high_cd) = if compare_items(c, d) == After { (d, c) } else { (c, d) }
+	high_of_lows = if compare_items(low_ab, low_cd) == After { low_ab } else { low_cd }
+	low_of_highs = if compare_items(high_ab, high_cd) == After { high_cd } else { high_ab }
+	(low_of_highs, high_of_lows)
+}
+
+sort_median_of_three : item, item, item, (item, item -> [Before, Same, After]) -> item
+sort_median_of_three = |a, b, c, compare_items| {
+	a_after_b = compare_items(a, b) == After
+	a_after_c = compare_items(a, c) == After
+	if a_after_b != a_after_c {
+		# `a` is between the other two.
+		return a
+	}
+	# `a` is the greatest or the least, so the median is the greater of the
+	# other two when `a` is the least and the lesser when it is the greatest.
+	b_after_c = compare_items(b, c) == After
+	if b_after_c == a_after_b { b } else { c }
+}
+
+# Chooses a pivot for a large partition from about the cube root of its items,
+# copied into the free part of whichever list does not hold them and sorted
+# there. `generic` is set when every sample is equal to every other, which
+# signals a list of mostly identical items.
+median_of_cube_root : List(item), List(item), U64, U64, Bool, (item, item -> [Before, Same, After]) -> (item, Bool, List(item), List(item))
+median_of_cube_root = |items, swap, start, len, x_in_swap, compare_items| {
+	var $samples = 32
+	while len > $samples * $samples * $samples {
+		$samples = $samples * 2
+	}
+	samples = $samples
+	stride = len // samples
+	# The samples are copied into the other list, whose first `len` slots are
+	# free: when the items are in swap, their old slots in `items` are dead,
+	# and when they are in `items`, swap holds nothing yet.
+	if x_in_swap {
+		var $items = items
+		var $k = 0
+		while $k < samples {
+			$items = list_move_in_unsafe($items, start + $k, list_move_out_unsafe(swap, stride // 2 + $k * stride))
+			$k = $k + 1
+		}
+		sorted = sort_within($items, start, samples, start + samples, compare_items)
+		generic = !sort_after(sorted, start + samples - 1, start, compare_items)
+		(list_get_unsafe(sorted, start + samples // 2), generic, sorted, swap)
+	} else {
+		var $swap = swap
+		var $k = 0
+		while $k < samples {
+			$swap = list_move_in_unsafe($swap, $k, list_move_out_unsafe(items, start + stride // 2 + $k * stride))
+			$k = $k + 1
+		}
+		sorted = sort_within($swap, 0, samples, samples, compare_items)
+		generic = !sort_after(sorted, samples - 1, 0, compare_items)
+		(list_get_unsafe(sorted, samples // 2), generic, items, sorted)
+	}
+}
+
+# Stable merge sort of `list[start..][..count]` using `list[scratch..][..count]`
+# as scratch, for the pivot samples.
+sort_within : List(item), U64, U64, U64, (item, item -> [Before, Same, After]) -> List(item)
+sort_within = |list, start, count, scratch, compare_items| {
+	var $list = list
+	var $run = 1
+	var $from = start
+	var $to = scratch
+	while $run < count {
+		var $offset = 0
+		while $offset < count {
+			left_len = if $offset + $run < count $run else count - $offset
+			right_len = if $offset + $run * 2 < count $run else count - $offset - left_len
+			$list = merge_runs_within($list, $to + $offset, $from + $offset, left_len, right_len, compare_items)
+			$offset = $offset + $run * 2
+		}
+		swapped_from = $to
+		$to = $from
+		$from = swapped_from
+		$run = $run * 2
+	}
+	if $from != start {
+		$list = sort_copy_range_within($list, start, $from, count)
+	}
+	$list
+}
+
+# Merges two adjacent sorted runs at `list[from..]` into `list[to..]`.
+merge_runs_within : List(item), U64, U64, U64, U64, (item, item -> [Before, Same, After]) -> List(item)
+merge_runs_within = |list, to, from, left_len, right_len, compare_items| {
+	var $list = list
+	var $left = from
+	left_end = from + left_len
+	var $right = left_end
+	right_end = left_end + right_len
+	var $dest = to
+	while $left < left_end and $right < right_end {
+		take_left = !sort_after($list, $left, $right, compare_items)
+		source = if take_left $left else $right
+		$list = sort_copy($list, $dest, source)
+		$left = $left + (if take_left 1 else 0)
+		$right = $right + (if take_left 0 else 1)
+		$dest = $dest + 1
+	}
+	$list = sort_copy_range_within($list, $dest, $left, left_end - $left)
+	$dest = $dest + left_end - $left
+	sort_copy_range_within($list, $dest, $right, right_end - $right)
+}
 
 unsigned_plus_try : item, item -> Try(item, [Overflow])
 	where [item.plus_overflows : item, item -> Bool, item.plus_wrap : item, item -> item]
@@ -25956,6 +27755,28 @@ list_map_extract_unsafe : List(output), U64 -> input
 # No bounds checks.
 list_map_write_unsafe : List(output), U64, output -> List(output)
 
+# Implemented by the compiler: the same operation as list_map_extract_unsafe
+# for a list whose item type does not change. Moves the item at the index out
+# of a uniquely owned list's buffer, doing no refcount work; the slot keeps
+# stale bytes until list_move_in_unsafe refills it. No bounds checks.
+list_move_out_unsafe : List(item), U64 -> item
+
+# Implemented by the compiler: the same operation as list_map_write_unsafe
+# for a list whose item type does not change. Stores an owned item into the
+# slot at the index, doing no refcount work. No bounds checks.
+list_move_in_unsafe : List(item), U64, item -> List(item)
+
+# Implemented by the compiler. Returns 1 (otherwise 0) when the list is
+# uniquely owned, not a seamless slice, and has an allocation, so its buffer
+# may be rewritten in place. Reads the refcount without changing it; a list
+# the compiler proved unique makes it a constant 1.
+list_owned_unique : List(item) -> U64
+
+# Implemented by the compiler. Returns 1 (otherwise 0) when the list's item
+# layout occupies at most the given number of bytes. Decided from the item
+# layout, so a `match` on it keeps only the arm the answer selects.
+list_item_size_at_most : List(item), U64 -> U8
+
 # Implemented by the compiler, ensures at least spare additional items of capacity
 list_reserve : List(item), U64 -> List(item)
 
@@ -25989,9 +27810,6 @@ list_release_excess_capacity : List(item) -> List(item)
 # its capacity when the list is uniquely owned
 list_clear : List(item) -> List(item)
 
-# Implemented by the compiler. Consumes the list and sorts it stably using the
-# boxed comparator. The comparator allocation is borrowed for the whole call.
-list_sort_with : List(item), Box((item, item -> Num.RawOrder)) -> List(item)
 
 # Unsafe conversion functions - these return simple records instead of Try types
 # They are low-level operations that get replaced by the compiler
@@ -26474,13 +28292,6 @@ order_from_raw = |raw| match raw {
 	Num.RawOrder.After => After
 	Num.RawOrder.Before => Before
 	Num.RawOrder.Same => Same
-}
-
-order_to_raw : [Before, Same, After] -> Num.RawOrder
-order_to_raw = |order| match order {
-	After => Num.RawOrder.After
-	Before => Num.RawOrder.Before
-	Same => Num.RawOrder.Same
 }
 
 bad_num_str : Try(a, {}) -> Try(a, [BadNumStr])
