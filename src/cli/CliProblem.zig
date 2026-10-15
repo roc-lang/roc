@@ -236,6 +236,13 @@ pub const CliProblem = union(enum) {
         target: []const u8,
     },
 
+    /// The link needed symbols in the compiler's own namespace that nothing
+    /// defined, which only a compiler bug can cause
+    undefined_compiler_symbols: struct {
+        symbols: []const []const u8,
+        target_format: []const u8,
+    },
+
     /// The platform's host inputs do not define symbols the app references
     missing_host_symbols: struct {
         symbols: []const []const u8,
@@ -393,6 +400,7 @@ pub const CliProblem = union(enum) {
             .compilation_failed,
             .unreported_error,
             .linker_failed,
+            .undefined_compiler_symbols,
             .missing_host_symbols,
             => .fatal,
 
@@ -457,6 +465,7 @@ pub const CliProblem = union(enum) {
             .compilation_failed => |info| try createCompilationFailedReport(allocator, info),
             .unreported_error => |info| try createUnreportedErrorReport(allocator, info),
             .linker_failed => |info| try createLinkerFailedReport(allocator, info),
+            .undefined_compiler_symbols => |info| try createUndefinedCompilerSymbolsReport(allocator, info),
             .missing_host_symbols => |info| try createMissingHostSymbolsReport(allocator, info),
             .object_compilation_failed => |info| try createObjectCompilationFailedReport(allocator, info),
             .shim_generation_failed => |info| try createShimGenerationFailedReport(allocator, info),
@@ -771,6 +780,27 @@ fn createMissingHostSymbolsReport(allocator: Allocator, info: anytype) Allocator
     return report;
 }
 
+fn createUndefinedCompilerSymbolsReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The {s} link needed these symbols, which only the Roc compiler defines, and nothing defined them.", .{info.target_format});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Compiler Bug", headline, .fatal);
+
+    for (info.symbols) |symbol| {
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(symbol, .emphasized);
+    }
+    try report.document.addLineBreaks(2);
+    try report.document.addText("This is a bug in the Roc compiler, not in your program. Please report it at:");
+    try report.document.addLineBreak();
+    try report.document.addText("  ");
+    try report.document.addAnnotated("https://github.com/roc-lang/roc/issues", .emphasized);
+    try report.document.addLineBreaks(2);
+    try report.document.addText("Including the linker output above and the command you ran will help.");
+
+    return report;
+}
+
 fn createLinkerFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     return createErrorNameReport(allocator, "Linker Failed", "The linker failed while building for target {s}.", .{info.target}, .fatal, @errorName(info.err));
 }
@@ -943,6 +973,7 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
         error.Timeout,
         error.TypeCheckingFailed,
         error.UnbundleFailed,
+        error.UndefinedCompilerSymbols,
         error.Unexpected,
         error.UnexpectedEnd,
         error.UnexpectedEndOfStream,

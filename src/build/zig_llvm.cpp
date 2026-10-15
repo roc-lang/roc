@@ -53,6 +53,10 @@
 #include <llvm/Support/TimeProfiler.h>
 #include <llvm/Support/Timer.h>
 #include <llvm/Support/raw_ostream.h>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#include <vector>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Target/TargetOptions.h>
 #include <llvm/Target/CodeGenCWrappers.h>
@@ -776,32 +780,60 @@ namespace lld {
     }
 }
 
+// Runs one LLD frontend in process. LLD writes its diagnostics (errors and
+// warnings alike) to the stream it is handed, and the Zig side wants them as
+// data rather than as text that already went to the process's stderr: it
+// prints them itself and reads the undefined symbols out of them. The copy is
+// released with ZigLLDFreeDiagnostics.
 static bool runLldDriver(lld::Driver driver, int argc, const char **argv,
-                         bool can_exit_early, bool disable_output) {
+                         bool can_exit_early, bool disable_output,
+                         const char **diagnostics, size_t *diagnostics_len) {
     std::vector<const char *> args(argv, argv + argc);
+    std::string captured;
+    llvm::raw_string_ostream diagnostics_stream(captured);
 
     // A frontend link allocates the CommonLinkerContext that unsafeLldMain
     // normally destroys. Roc invokes the frontend directly, so release it here
     // before another in-process link can observe the previous driver's state.
-    const bool success = driver(args, llvm::outs(), llvm::errs(), can_exit_early, disable_output);
+    const bool success = driver(args, llvm::outs(), diagnostics_stream, can_exit_early, disable_output);
     lld::CommonLinkerContext::destroy();
+    diagnostics_stream.flush();
+
+    char *copy = static_cast<char *>(malloc(captured.size() + 1));
+    if (copy == nullptr) {
+        *diagnostics = nullptr;
+        *diagnostics_len = 0;
+        return success;
+    }
+    memcpy(copy, captured.data(), captured.size());
+    copy[captured.size()] = 0;
+    *diagnostics = copy;
+    *diagnostics_len = captured.size();
     return success;
 }
 
-bool ZigLLDLinkCOFF(int argc, const char **argv, bool can_exit_early, bool disable_output) {
-    return runLldDriver(&lld::coff::link, argc, argv, can_exit_early, disable_output);
+void ZigLLDFreeDiagnostics(const char *diagnostics) {
+    free(const_cast<char *>(diagnostics));
 }
 
-bool ZigLLDLinkELF(int argc, const char **argv, bool can_exit_early, bool disable_output) {
-    return runLldDriver(&lld::elf::link, argc, argv, can_exit_early, disable_output);
+bool ZigLLDLinkCOFF(int argc, const char **argv, bool can_exit_early, bool disable_output,
+                    const char **diagnostics, size_t *diagnostics_len) {
+    return runLldDriver(&lld::coff::link, argc, argv, can_exit_early, disable_output, diagnostics, diagnostics_len);
 }
 
-bool ZigLLDLinkMachO(int argc, const char **argv, bool can_exit_early, bool disable_output) {
-    return runLldDriver(&lld::macho::link, argc, argv, can_exit_early, disable_output);
+bool ZigLLDLinkELF(int argc, const char **argv, bool can_exit_early, bool disable_output,
+                   const char **diagnostics, size_t *diagnostics_len) {
+    return runLldDriver(&lld::elf::link, argc, argv, can_exit_early, disable_output, diagnostics, diagnostics_len);
 }
 
-bool ZigLLDLinkWasm(int argc, const char **argv, bool can_exit_early, bool disable_output) {
-    return runLldDriver(&lld::wasm::link, argc, argv, can_exit_early, disable_output);
+bool ZigLLDLinkMachO(int argc, const char **argv, bool can_exit_early, bool disable_output,
+                     const char **diagnostics, size_t *diagnostics_len) {
+    return runLldDriver(&lld::macho::link, argc, argv, can_exit_early, disable_output, diagnostics, diagnostics_len);
+}
+
+bool ZigLLDLinkWasm(int argc, const char **argv, bool can_exit_early, bool disable_output,
+                    const char **diagnostics, size_t *diagnostics_len) {
+    return runLldDriver(&lld::wasm::link, argc, argv, can_exit_early, disable_output, diagnostics, diagnostics_len);
 }
 
 static_assert((FloatABI::ABIType)ZigLLVMFloatABI_Default == FloatABI::ABIType::Default, "");

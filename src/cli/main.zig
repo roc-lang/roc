@@ -3716,10 +3716,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         };
 
         linker.link(ctx, link_config) catch |err| {
-            return ctx.fail(.{ .linker_failed = .{
-                .err = err,
-                .target = @tagName(platform_link.target),
-            } });
+            return failLink(ctx, err, @tagName(platform_link.target));
         };
 
         // After building, hardlink to cache for future runs
@@ -4338,10 +4335,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
         };
 
         linker.link(ctx, link_config) catch |err| {
-            return ctx.fail(.{ .linker_failed = .{
-                .err = err,
-                .target = @tagName(selected_target),
-            } });
+            return failLink(ctx, err, @tagName(selected_target));
         };
 
         deleteExistingCacheFile(ctx, exe_cache_path);
@@ -9974,10 +9968,7 @@ fn writeSealedWasmObject(
     }
     const composed_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_app_composed_wasm32.o" });
     linker.linkWasmObjectsRelocatable(ctx, composed_path, compiler_inputs.items) catch |err| {
-        return ctx.fail(.{ .linker_failed = .{
-            .err = err,
-            .target = "wasm32",
-        } });
+        return failLink(ctx, err, "wasm32");
     };
 
     const composed_bytes = try std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, composed_path, ctx.gpa, .unlimited);
@@ -10409,10 +10400,7 @@ fn linkWasmOutput(
         .scratch_dir = scratch_dir,
     };
     linker.link(ctx, link_config) catch |err| {
-        return ctx.fail(.{ .linker_failed = .{
-            .err = err,
-            .target = link_inputs.target_name,
-        } });
+        return failLink(ctx, err, link_inputs.target_name);
     };
 }
 
@@ -10969,6 +10957,32 @@ fn buildOutputBasePath(ctx: *CliCtx, args: cli_args.BuildArgs) Allocator.Error![
     return base.module_path.getModuleNameAlloc(ctx.arena, args.path);
 }
 
+/// Records a failed link as a CLI problem. A link that failed on undefined
+/// compiler symbols has already recorded the compiler bug it is.
+fn failLink(ctx: *CliCtx, err: linker.LinkError, target: []const u8) CliError {
+    return switch (err) {
+        error.UndefinedCompilerSymbols => error.CliError,
+        error.LinkFailed,
+        error.OutOfMemory,
+        error.InvalidArguments,
+        error.LLVMNotAvailable,
+        => ctx.fail(.{ .linker_failed = .{
+            .err = err,
+            .target = target,
+        } }),
+    };
+}
+
+/// Removes whatever a previous build left at the output path before this
+/// build does anything else, so a build that fails cannot leave the earlier
+/// program behind looking like its result.
+fn removeStaleBuildOutput(ctx: *CliCtx, final_output_path: []const u8) CliError!void {
+    std.Io.Dir.cwd().deleteFile(ctx.io.std_io, final_output_path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return ctx.fail(.{ .file_write_failed = .{ .path = final_output_path, .err = err } }),
+    };
+}
+
 /// Final output path for `roc build`: an explicit `--output` is used as-is,
 /// otherwise the target's default extension for `link_type` is appended.
 fn buildFinalOutputPath(
@@ -11214,6 +11228,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     }
 
     const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
+    try removeStaleBuildOutput(ctx, final_output_path);
 
     build_env.setTarget(target);
     build_env.setRuntimeLowering(checkedRuntimeLoweringConfig(
@@ -11376,10 +11391,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
 
             linker.link(ctx, link_config) catch |err| {
                 reporter.fail();
-                return ctx.fail(.{ .linker_failed = .{
-                    .err = err,
-                    .target = link_inputs.target_name,
-                } });
+                return failLink(ctx, err, link_inputs.target_name);
             };
         }
         reporter.end();
@@ -11443,6 +11455,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     const code_generation_phase_name = devBackendPhaseName(target_arch);
 
     const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
+    try removeStaleBuildOutput(ctx, final_output_path);
 
     build_env.setTarget(target);
     // `ROC_DEV_PACK_HITS` names a directory of pack files to serve closed
@@ -11750,10 +11763,7 @@ fn linkNativeBuild(
 
         linker.link(ctx, link_config) catch |err| {
             reporter.fail();
-            return ctx.fail(.{ .linker_failed = .{
-                .err = err,
-                .target = link_inputs.target_name,
-            } });
+            return failLink(ctx, err, link_inputs.target_name);
         };
     }
     reporter.end();
@@ -12024,6 +12034,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     const target_arch = target.toCpuArch();
     const target_os = target.toOsTag();
     const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
+    try removeStaleBuildOutput(ctx, final_output_path);
 
     build_env.setTarget(target);
     build_env.setRuntimeLowering(checkedRuntimeLoweringConfig(
@@ -12173,10 +12184,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
 
         linker.link(ctx, link_config) catch |err| {
             reporter.fail();
-            return ctx.fail(.{ .linker_failed = .{
-                .err = err,
-                .target = link_inputs.target_name,
-            } });
+            return failLink(ctx, err, link_inputs.target_name);
         };
     }
     reporter.end();
