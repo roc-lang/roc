@@ -947,7 +947,7 @@ checker recovery. The recovery rules:
   rejected exactly as one selecting an annotation-only declaration is: its
   constraint callable is never related to the erroneous type, which would
   otherwise reach the instantiation that the dispatch belongs to while every
-  type that instantiation's owner publishes stays error-free.
+  type that instantiation's owner outputs stays error-free.
 - A pattern matched against an erroneous value binds nothing, because the
   value crashes before any pattern sees it. This is one rule wherever a
   pattern meets a value: a binding whose right-hand side is erroneous, every
@@ -1010,15 +1010,15 @@ checker recovery. The recovery rules:
   unification grounds it, yet it still belongs to the expression's relation
   over its operands and fails at that expression, exactly as if the receiver
   had been known (`Check.own_dispatch_exprs`, exact by callable identity, so
-  a copy that instantiation or import makes is never one). The obligations its
+  a copy that instantiation or import makes is never one). The requirements its
   resolution queues inherit no failure expression from the entry that carried
-  it. An obligation derived from such a dispatch, a requirement its selected
+  it. A requirement derived from such a dispatch, a requirement its selected
   target's instantiation left behind or a component relation of a structural
   comparison, belongs to the same relation and fails at the expression,
   whichever later unification grounds it: `x == x` over a list whose items a
   later use makes functions reports the missing equality at `x == x`, as when
   the items were known. A `for` loop's own `iter` and `next` dispatches have
-  no expression to own a relation, so an obligation derived from them (a
+  no expression to own a relation, so a requirement derived from them (a
   requirement of the selected `iter` target) keeps the relation that queued
   it, but it reports at the loop's iterable (`Check.loop_dispatch_iterables`)
   and retires no expression: the loop's checked iterator evidence carries the
@@ -6737,16 +6737,16 @@ equivalent contracts shares one worker.
 
 That interned identity is local to one checked module, so each class also
 carries a content digest that is its identity across modules. The digest is a
-SHA-256 of a canonical depth-first encoding of the class's first member's proof
+SHA-256 of a fixed-order depth-first encoding of the class's first member's proof
 graph. Contracts and evidence nodes are numbered by first visit, so shared and
-cyclic references encode as back-references. Each type encodes as its canonical
+cyclic references encode as back-references. Each type encodes as its type
 key followed by the joint first-visit numbers of its variables in key order, so
 cross-root sharing is part of the digest. Methods encode by name. A procedure
-target encodes by its owning artifact's refs, a local procedure target by its
-lexical site within the recording artifact, and a structural target by its
-kind, which with the edge's dispatcher fixes its implementation. A target's
+target encodes by its owning checked module's refs, a local procedure target by
+its lexical site within the recording checked module, and a structural target by
+its kind, which with the edge's dispatcher fixes its implementation. A target's
 module index, definition index, and callable type are relative to whichever
-artifact registered it, so the encoding writes none of them.
+checked module registered it, so the encoding writes none of them.
 Structural evidence that names a contract identifies it by this digest instead
 of by the module that recorded the edge. A generic codec function that callers
 in several modules use at one record type is therefore one specialization. A
@@ -19968,9 +19968,9 @@ owned variant. Without this, `{ list: acc.list, dict: acc.dict.insert(k, v) }`
 would pass the dict borrowed while the dying record still held it, and every
 insert would copy. That demand needs the callee's benefits to be final before
 the caller's takes are solved, so takes are solved one call-graph component at
-a time, callees first, and each component publishes its parameter benefits
+a time, callees first, and each component outputs its parameter benefits
 (its parameter containers, projected containers rooted at its parameters,
-complete projections of its parameters, and forwarding to beneficial callee
+complete field and tag payload reads of its parameters, and forwarding to beneficial callee
 positions) before any caller is solved. Procedures sharing statements form one
 node of that graph. A recursive component whose own new benefits demand a
 further argument retracts its committed plans and solves again; demand only
