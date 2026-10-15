@@ -841,10 +841,6 @@ const InlineAnalyzer = struct {
                     for (0..payloads.len) |index| try stack.append(self.allocator, .{ .role = .operand, .expr = GuardedList.at(payloads, index) });
                 },
                 .nominal => |backing| try stack.append(self.allocator, .{ .role = .body, .expr = backing }),
-                // A low-level builtin's body widens its operation's declared
-                // row into the function's result (design.md "Low-Level Result
-                // Rows"): one re-tag of the value the operation produced.
-                .row_widen => |widen| try stack.append(self.allocator, .{ .role = .body, .expr = widen.value }),
                 .if_ => |if_| {
                     const branches = lifted.ifBranchSpan(if_.branches);
                     if (branches.len != 1) return false;
@@ -855,7 +851,7 @@ const InlineAnalyzer = struct {
                     if (lifted.stmtSpan(block.statements).len != 0) return false;
                     try stack.append(self.allocator, .{ .role = .body, .expr = block.final_expr });
                 },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .list, .tuple, .record, .record_update, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => return false,
             }
         }
         return true;

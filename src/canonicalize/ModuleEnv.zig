@@ -870,21 +870,17 @@ pub const RowCoercedCallee = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
-/// An expression whose checked type is a widening of the type of the value it
-/// produces. Two kinds are recorded: a use of a top-level value, whose
-/// checked type gives every tag union the row coercion reaches from the root
-/// a fresh extension (design.md "Value Rows: Local Values Share, Top-Level
-/// Values Widen At Each Use"), and a low-level builtin's operation, whose
-/// checked type is its function's annotated result while the operation
-/// produces only the tags that annotation lists (design.md "Low-Level Result
-/// Rows"). Recorded by checking; checked-body construction lowers the
-/// expression as a `row_coerce` whose child is the value at `value_var`.
+/// One use of a top-level value whose checked type is a widening copy of the
+/// value's own type: every tag union the row coercion reaches from the root
+/// has a fresh extension (design.md "Value Rows: Local Values Share, Top-Level
+/// Values Widen At Each Use"). Recorded by checking; checked-body construction
+/// lowers the use as a `row_coerce` whose child reads the value at
+/// `value_var`.
 pub const RowCoercedUse = extern struct {
-    /// The expression node (`Node.Idx`): a lookup or a low-level operation.
+    /// The use's lookup expression node (`Node.Idx`).
     node_idx: u32,
     /// The value's own type in this module (`Var`): the definition's pattern
-    /// var, the imported value's local copy, or the operation's closed
-    /// result.
+    /// var, or the imported value's local copy.
     value_var: u32,
 
     /// The checked module's sorted table of row-coerced uses.
@@ -4547,9 +4543,8 @@ pub fn rowCoercedCallee(self: *const Self, node_idx: Node.Idx) ?RowCoercedCallee
     return findSortedByNode(RowCoercedCallee, self.row_coerced_callees.items.items, @backingInt(node_idx));
 }
 
-/// Record that the expression at `node_idx` produces its value at
-/// `value_var` through a row coercion (`RowCoercedUse`). Checker-produced
-/// metadata.
+/// Record that the use at `node_idx` reads the value at `value_var` through a
+/// row coercion (`RowCoercedUse`). Checker-produced use metadata.
 pub fn recordRowCoercedUse(self: *Self, node_idx: Node.Idx, value_var: types_mod.Var) std.mem.Allocator.Error!void {
     try upsertSortedByNode(
         RowCoercedUse,
@@ -4559,8 +4554,8 @@ pub fn recordRowCoercedUse(self: *Self, node_idx: Node.Idx, value_var: types_mod
     );
 }
 
-/// The value's own type for a row-coerced expression at `node_idx`, if
-/// checking recorded the expression as one (`RowCoercedUse`).
+/// The value's own type for a row-coerced use at `node_idx`, if checking
+/// recorded the use as one (`RowCoercedUse`).
 pub fn rowCoercedUseValueVar(self: *const Self, node_idx: Node.Idx) ?types_mod.Var {
     const entry = findSortedByNode(
         RowCoercedUse,
