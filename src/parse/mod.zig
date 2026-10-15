@@ -122,6 +122,29 @@ pub fn header(gpa: Allocator, env: *CommonEnv) Allocator.Error!*AST {
     return try runTokenDispatch(gpa, env, headerRootNode);
 }
 
+/// Whether the header of a file parsed by `file` has no syntax errors, so its
+/// kind and dependencies can be read from `ast` even when the rest of the file
+/// has syntax errors.
+///
+/// A file rejected by source policy (see `AST.source_rejected`) has no usable
+/// header wherever the offending text is: nothing it declares, such as a
+/// dependency to download, is acted on.
+pub fn fileHeaderIsUsable(gpa: Allocator, ast: *const AST) Allocator.Error!bool {
+    if (ast.source_rejected) return false;
+    const file_header = ast.store.getHeader(ast.store.getFile().header);
+    if (file_header == .malformed) return false;
+    if (ast.headerHasTokenizeErrors(file_header)) return false;
+    if (ast.parse_diagnostics.items.len == 0) return true;
+
+    // A file's header is parsed before anything after it, so parsing the
+    // header alone yields exactly the diagnostics the header contributed.
+    var header_env = try CommonEnv.init(gpa, ast.env.source);
+    defer header_env.deinit(gpa);
+    const header_ast = try header(gpa, &header_env);
+    defer header_ast.deinit();
+    return header_ast.parse_diagnostics.items.len == 0;
+}
+
 fn statementRootNode(parser: *Parser) Allocator.Error!u32 {
     const idx = try parser.runStatement();
     return @backingInt(idx);
@@ -1342,5 +1365,33 @@ test "issue 4140: assignment recovery belongs only to record syntax" {
         const stmt = ast.store.getStatement(ast.store.statementSlice(ast.store.getFile().statements)[0]);
         const body = ast.store.getExpr(stmt.decl.body);
         try std.testing.expectEqual(case.is_record, body == .record);
+    }
+}
+
+test "fileHeaderIsUsable ignores syntax errors after the header" {
+    const gpa = std.testing.allocator;
+    const cases = [_]struct { source: []const u8, usable: bool }{
+        // Headerless file, broken body.
+        .{ .source = "main! = |_args| {\n    echo!(\"hello world\n    Ok({})\n}\n", .usable = true },
+        // Header, broken body: a parse error and a tokenizer error.
+        .{ .source = "app [main!] { pf: platform \"pf.roc\" }\n\nmain! = |_args| {\n    echo!(\"hello world\n    Ok({}\n}\n", .usable = true },
+        // Parse error in the header.
+        .{ .source = "app [main!] { pf: platform \"pf.roc\"\n\nmain! = |_args| Ok({})\n", .usable = false },
+        // Tokenizer error in the header.
+        .{ .source = "app [main!] { pf: platform \"pf.roc }\n\nmain! = |_args| Ok({})\n", .usable = false },
+        // A bidirectional control after the header rejects the whole source.
+        .{ .source = "app [main!] { pf: platform \"pf.roc\" }\n\nmain! = |_args| Ok({}) # \u{202E}\n", .usable = false },
+        .{ .source = "main! = |_args| Ok({}) # \u{202E}\n", .usable = false },
+        // A malformed header.
+        .{ .source = "app main! { pf: platform \"pf.roc\" }\n\nmain! = |_args| Ok({})\n", .usable = false },
+    };
+    for (cases) |case| {
+        var env = try CommonEnv.init(gpa, case.source);
+        defer env.deinit(gpa);
+        const ast = try file(gpa, &env);
+        defer ast.deinit();
+
+        try std.testing.expect(ast.tokenize_diagnostics.items.len + ast.parse_diagnostics.items.len > 0);
+        try std.testing.expectEqual(case.usable, try fileHeaderIsUsable(gpa, ast));
     }
 }

@@ -66,6 +66,7 @@ const module_discovery = @import("module_discovery.zig");
 // Actor model components
 const coordinator_mod = @import("coordinator.zig");
 const Coordinator = coordinator_mod.Coordinator;
+const DiscoveredParse = @import("messages.zig").DiscoveredParse;
 const roc_target = @import("roc_target");
 const targets_config_mod = @import("targets_config.zig");
 
@@ -332,6 +333,15 @@ pub const BuildEnv = struct {
     /// identity, derived once when the entry is set.
     entry_module_logical_path: ?[]const u8 = null,
 
+    /// Source files dependency discovery read and parsed in full that the
+    /// coordinator compiles as modules: the discovery root, a separate entry
+    /// module, and the selected platform's root. `compileDiscovered` hands
+    /// each to its module's parse task, so these files are read and parsed
+    /// once per build.
+    discovered_root_parse: ?DiscoveredParse = null,
+    discovered_entry_parse: ?DiscoveredParse = null,
+    discovered_platform_parse: ?DiscoveredParse = null,
+
     pub fn init(gpa: Allocator, mode: Mode, max_threads: usize, target: roc_target.RocTarget, cwd: []const u8, std_io: std.Io) InitError!BuildEnv {
         // Allocate builtin modules on heap to prevent moves that would invalidate internal pointers
         const builtin_modules = try gpa.create(BuiltinModules);
@@ -438,6 +448,9 @@ pub const BuildEnv = struct {
         if (self.discovered_root_dir) |rd| self.gpa.free(rd);
         if (self.entry_module_abs) |entry| self.gpa.free(@constCast(entry));
         if (self.entry_module_logical_path) |logical| self.gpa.free(@constCast(logical));
+        replaceDiscoveredParse(&self.discovered_root_parse, null);
+        replaceDiscoveredParse(&self.discovered_entry_parse, null);
+        replaceDiscoveredParse(&self.discovered_platform_parse, null);
         // discovered_pkg_name is borrowed from the packages map key.
 
         if (comptime trace_build) {
@@ -691,10 +704,21 @@ pub const BuildEnv = struct {
         const root_abs = try self.makeAbsolute(root_file);
         defer self.gpa.free(root_abs);
 
-        const kind = self.peekPackageKind(root_abs) catch null;
+        // A root that cannot be read is reported by whichever discovery below
+        // reads it.
+        var root_parse: ?DiscoveredParse = blk: {
+            const source_read = self.readSourceFile(root_abs) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.FileNotFound, error.AccessDenied, error.StreamTooLong, error.IoError => break :blk null,
+            };
+            break :blk try self.parseSource(root_abs, source_read);
+        };
+        defer if (root_parse) |parsed| parsed.deinit();
+
+        const kind = if (root_parse) |parsed| try headerPackageKind(self.gpa, parsed.ast) else null;
         const carries_packages = kind == .app or kind == .default_app or kind == .package or kind == .platform;
         if (carries_packages) {
-            try self.discoverDependencies(root_file);
+            try self.discoverDependenciesParsed(root_file, takeDiscoveredParse(&root_parse));
             return;
         }
 
@@ -702,7 +726,7 @@ pub const BuildEnv = struct {
             const main_abs = try self.makeAbsolute(main_path);
             defer self.gpa.free(main_abs);
             if (std.mem.eql(u8, root_abs, main_abs)) {
-                try self.discoverDependencies(root_file);
+                try self.discoverDependenciesParsed(root_file, takeDiscoveredParse(&root_parse));
             } else {
                 // The main file is the discovery root here, so its bundle
                 // provenance—not the checked file's—is the root identity.
@@ -714,6 +738,7 @@ pub const BuildEnv = struct {
                     self.root_url = try package_source.UrlSource.init(self.gpa, main_url.view());
                 }
                 try self.discoverWithMain(root_file, main_path);
+                replaceDiscoveredParse(&self.discovered_entry_parse, takeDiscoveredParse(&root_parse));
             }
             return;
         }
@@ -723,28 +748,18 @@ pub const BuildEnv = struct {
             defer self.gpa.free(main_abs);
             if (!std.mem.eql(u8, root_abs, main_abs)) {
                 try self.discoverWithMain(root_file, main_abs);
+                replaceDiscoveredParse(&self.discovered_entry_parse, takeDiscoveredParse(&root_parse));
                 return;
             }
         }
 
-        try self.discoverDependencies(root_file);
+        try self.discoverDependenciesParsed(root_file, takeDiscoveredParse(&root_parse));
     }
 
-    /// Silently read the package/header kind of `file_abs` without emitting reports.
-    /// Returns null when the file cannot be read or parsed.
-    fn peekPackageKind(self: *BuildEnv, file_abs: []const u8) Allocator.Error!?PackageKind {
-        const src = self.readFile(file_abs) catch return null;
-        defer self.gpa.free(src);
-
-        var env = try ModuleEnv.init(self.gpa, src);
-        defer env.deinit();
-
-        try env.common.calcLineStarts(self.gpa);
-
-        const ast = try parse.file(self.gpa, &env.common);
-        defer ast.deinit();
-
-        if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) {
+    /// The package kind a parsed file's header declares, or null when the
+    /// header has syntax errors.
+    fn headerPackageKind(gpa: Allocator, ast: *const parse.AST) Allocator.Error!?PackageKind {
+        if (ast.hasErrors() and !try parse.fileHeaderIsUsable(gpa, ast)) {
             return null;
         }
 
@@ -760,6 +775,17 @@ pub const BuildEnv = struct {
             .default_app => .default_app,
             .malformed => null,
         };
+    }
+
+    fn takeDiscoveredParse(slot: *?DiscoveredParse) ?DiscoveredParse {
+        const taken = slot.*;
+        slot.* = null;
+        return taken;
+    }
+
+    fn replaceDiscoveredParse(slot: *?DiscoveredParse, parsed: ?DiscoveredParse) void {
+        if (slot.*) |old| old.deinit();
+        slot.* = parsed;
     }
 
     fn setDiscoveredEntryModule(self: *BuildEnv, root_file: []const u8) BuildError!void {
@@ -917,7 +943,15 @@ pub const BuildEnv = struct {
     /// shorthands. Does NOT init the Coordinator, allowing the caller to inspect
     /// discovered state (e.g., TargetsConfig) and change the target before compilation.
     pub fn discoverDependencies(self: *BuildEnv, root_file: []const u8) BuildError!void {
-        // Parse root file header
+        try self.discoverDependenciesParsed(root_file, null);
+    }
+
+    /// `discoverDependencies` for a root that may already be parsed; this
+    /// takes ownership of `root_parse`.
+    fn discoverDependenciesParsed(self: *BuildEnv, root_file: []const u8, root_parse: ?DiscoveredParse) BuildError!void {
+        var unused_root_parse = root_parse;
+        defer if (unused_root_parse) |parsed| parsed.deinit();
+
         const root_abs = try self.makeAbsolute(root_file);
         // Store immediately so deinit() frees on any subsequent error
         self.discovered_root_abs = root_abs;
@@ -926,8 +960,12 @@ pub const BuildEnv = struct {
 
         try self.addWorkspaceRoot(root_dir);
 
-        var header_info = try self.parseHeaderDeps(root_abs);
+        var header_info = if (takeDiscoveredParse(&unused_root_parse)) |parsed|
+            try self.headerInfo(parsed)
+        else
+            try self.parseHeaderDeps(root_abs);
         defer header_info.deinit(self.gpa);
+        replaceDiscoveredParse(&self.discovered_root_parse, takeDiscoveredParse(&header_info.parsed));
 
         // Absolute platform specs are rejected for every command, matching the
         // run path, so a project cannot pass `roc check` and then fail on its
@@ -1152,7 +1190,11 @@ pub const BuildEnv = struct {
         try coord.start();
 
         // Queue initial parse task
-        try coord.enqueueParseTask(pkg_name, root_id);
+        if (takeDiscoveredParse(&self.discovered_root_parse)) |parsed| {
+            try coord.enqueueDiscoveredParseTask(pkg_name, root_id, parsed);
+        } else {
+            try coord.enqueueParseTask(pkg_name, root_id);
+        }
 
         if (self.entry_module_abs) |entry_file| {
             if (!std.mem.eql(u8, entry_file, pkg_root_file)) {
@@ -1170,7 +1212,11 @@ pub const BuildEnv = struct {
                     entry_module.depth = 0;
                     coord_pkg.remaining_modules += 1;
                     coord.total_remaining += 1;
-                    try coord.enqueueParseTask(pkg_name, entry_id);
+                    if (takeDiscoveredParse(&self.discovered_entry_parse)) |parsed| {
+                        try coord.enqueueDiscoveredParseTask(pkg_name, entry_id, parsed);
+                    } else {
+                        try coord.enqueueParseTask(pkg_name, entry_id);
+                    }
                 }
             }
         }
@@ -1192,7 +1238,11 @@ pub const BuildEnv = struct {
                         platform_coord_pkg.root_module_id = plat_root_id;
                         platform_coord_pkg.remaining_modules += 1;
                         coord.total_remaining += 1;
-                        try coord.enqueueParseTask(platform_name, plat_root_id);
+                        if (takeDiscoveredParse(&self.discovered_platform_parse)) |parsed| {
+                            try coord.enqueueDiscoveredParseTask(platform_name, plat_root_id, parsed);
+                        } else {
+                            try coord.enqueueParseTask(platform_name, plat_root_id);
+                        }
                         if (comptime trace_build) {
                             std.debug.print("[BUILD] Queued platform root module: {s} in package {s}\n", .{ plat_module_name, platform_name });
                         }
@@ -1200,6 +1250,11 @@ pub const BuildEnv = struct {
                 }
             }
         }
+
+        // A discovered parse whose module was not queued above belongs to a
+        // module this coordinator already compiled.
+        replaceDiscoveredParse(&self.discovered_entry_parse, null);
+        replaceDiscoveredParse(&self.discovered_platform_parse, null);
 
         // Run coordinator loop. On failure, still move whatever reports have
         // accumulated into the ordered sink so callers can drain and render
@@ -1350,8 +1405,11 @@ pub const BuildEnv = struct {
         provides_entries: std.ArrayListUnmanaged(ProvidesEntry) = .empty,
         /// Targets configuration extracted from platform header
         targets_config: ?targets_config_mod.TargetsConfig = null,
+        /// The file this header was read from, parsed in full.
+        parsed: ?DiscoveredParse = null,
 
         fn deinit(self: *HeaderInfo, gpa: Allocator) void {
+            if (self.parsed) |parsed| parsed.deinit();
             if (self.targets_config) |tc| tc.deinit(gpa);
             self.resolver_root.deinit(gpa);
             self.public_surface.deinit(gpa);
@@ -1390,11 +1448,12 @@ pub const BuildEnv = struct {
         info.public_surface = surface;
     }
 
+    /// Read and parse `file_path` in full, then read its header. A file that
+    /// cannot be read is reported here.
     fn parseHeaderDeps(self: *BuildEnv, file_path: []const u8) BuildError!HeaderInfo {
-        // Read source
         const file_abs = try std.fs.path.resolve(self.gpa, &.{file_path});
         defer self.gpa.free(file_abs);
-        const source_read = self.readHeaderSourceFile(file_abs) catch |err| {
+        const source_read = self.readSourceFile(file_abs) catch |err| {
             const report = blk: switch (err) {
                 error.FileNotFound => {
                     const headline = try std.fmt.allocPrint(self.gpa, "I could not find the file {s}.", .{file_abs});
@@ -1423,20 +1482,24 @@ pub const BuildEnv = struct {
             self.sink.tryEmit();
             return err;
         };
-        const src = source_read.source;
-        defer self.gpa.free(src);
+        return try self.headerInfo(try self.parseSource(file_abs, source_read));
+    }
 
-        var env = try ModuleEnv.init(self.gpa, src);
-        defer env.deinit();
+    /// Read the kind and dependencies from the header of `parsed`, which the
+    /// returned info takes ownership of.
+    ///
+    /// Only syntax errors in the header stop this. Syntax errors after it are
+    /// reported, along with everything later stages find, when the
+    /// coordinator compiles the file.
+    fn headerInfo(self: *BuildEnv, parsed: DiscoveredParse) BuildError!HeaderInfo {
+        errdefer parsed.deinit();
+        const file_abs = parsed.path;
+        const src = parsed.module_env.common.source;
+        const ast = parsed.ast;
 
-        try env.common.calcLineStarts(self.gpa);
-
-        const ast = try parse.file(self.gpa, &env.common);
-        defer ast.deinit();
-
-        // Check for parse errors - if any exist, we cannot proceed
-        if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) {
-            // Convert diagnostics to reports and emit them
+        if (ast.hasErrors() and !try parse.fileHeaderIsUsable(self.gpa, ast)) {
+            // The header names no kind or dependencies to build from, so the
+            // file's syntax errors are the build's only reports.
             // Use placeholder package name since we haven't determined it yet
             const pkg_name = "main";
             const module_name = file_abs;
@@ -1446,7 +1509,7 @@ pub const BuildEnv = struct {
                 try self.sink.emitReport(pkg_name, module_name, report);
             }
             for (ast.parse_diagnostics.items) |diagnostic| {
-                const report = try ast.parseDiagnosticToReport(&env.common, diagnostic, self.gpa, file_abs);
+                const report = try ast.parseDiagnosticToReport(&parsed.module_env.common, diagnostic, self.gpa, file_abs);
                 try self.sink.emitReport(pkg_name, module_name, report);
             }
 
@@ -1468,7 +1531,7 @@ pub const BuildEnv = struct {
         };
         var info = HeaderInfo{
             .kind = .package,
-            .source_file_state = source_read.file_state,
+            .source_file_state = parsed.source_file_state,
             .resolver_root = resolver_root,
         };
         errdefer info.deinit(self.gpa);
@@ -1504,7 +1567,7 @@ pub const BuildEnv = struct {
                     error.OutOfMemory => return error.OutOfMemory,
                     error.InvalidTargetPath => {
                         const pkg_name = "main";
-                        const report = try path_diagnostic.toReport(self.gpa, &env.common, file_abs);
+                        const report = try path_diagnostic.toReport(self.gpa, &parsed.module_env.common, file_abs);
                         try self.sink.emitReport(pkg_name, file_abs, report);
                         try self.sink.buildOrder(&[_][]const u8{pkg_name}, &[_][]const u8{file_abs}, &[_]u32{0});
                         self.sink.tryEmit();
@@ -1532,7 +1595,31 @@ pub const BuildEnv = struct {
             .malformed => return error.UnsupportedHeader,
         }
 
+        info.parsed = parsed;
         return info;
+    }
+
+    /// Parse `source_read`, which this takes ownership of, read from
+    /// `file_abs`, exactly as the coordinator's parse task would, so that task
+    /// can take the result over.
+    fn parseSource(self: *BuildEnv, file_abs: []const u8, source_read: SourceRead) Allocator.Error!DiscoveredParse {
+        const allocator = Coordinator.workerAllocatorFor(self.gpa, self.mode);
+        errdefer allocator.free(source_read.source);
+        const path = try allocator.dupe(u8, file_abs);
+        errdefer allocator.free(path);
+        const env = try allocator.create(ModuleEnv);
+        errdefer allocator.destroy(env);
+        env.* = try ModuleEnv.init(allocator, source_read.source);
+        errdefer env.deinit();
+        try env.initCIRFields(base.module_path.getModuleName(path));
+        try env.common.calcLineStarts(allocator);
+        const ast = try parse.file(allocator, &env.common);
+        return .{
+            .path = path,
+            .module_env = env,
+            .ast = ast,
+            .source_file_state = source_read.file_state,
+        };
     }
 
     fn makeAbsolute(self: *BuildEnv, path: []const u8) Allocator.Error![]u8 {
@@ -1540,48 +1627,27 @@ pub const BuildEnv = struct {
         return try std.fs.path.resolve(self.gpa, &.{ self.cwd, path });
     }
 
-    fn readFile(self: *BuildEnv, path: []const u8) (Allocator.Error || error{FileNotFound})![]u8 {
-        const data = self.filesystem.readFile(path, self.gpa) catch |err| switch (err) {
-            error.FileNotFound => return error.FileNotFound,
-            error.OutOfMemory => return error.OutOfMemory,
-            error.AccessDenied,
-            error.IoError,
-            error.StreamTooLong,
-            => return error.FileNotFound,
-        };
-
-        // Normalize line endings (CRLF -> LF) for consistent cross-platform behavior.
-        return base.source_utils.normalizeLineEndingsRealloc(self.gpa, data);
-    }
-
     const SourceRead = struct {
         source: []u8,
         file_state: ?watch_inputs.State,
     };
 
-    fn readHeaderSourceFile(self: *BuildEnv, path: []const u8) (Allocator.Error || error{ FileNotFound, AccessDenied, StreamTooLong, IoError })!SourceRead {
-        if (!self.track_watch_inputs) {
-            return .{
-                .source = try self.readFile(path),
-                .file_state = null,
-            };
-        }
-
-        return try self.readSourceFileWithState(path);
-    }
-
-    fn readSourceFileWithState(self: *BuildEnv, path: []const u8) (Allocator.Error || error{ FileNotFound, AccessDenied, StreamTooLong, IoError })!SourceRead {
-        const data = self.filesystem.readFile(path, self.gpa) catch |err| switch (err) {
+    /// Read a source file with the allocator the coordinator's workers use for
+    /// module sources, so its parse can be handed to the coordinator.
+    fn readSourceFile(self: *BuildEnv, path: []const u8) (Allocator.Error || error{ FileNotFound, AccessDenied, StreamTooLong, IoError })!SourceRead {
+        const allocator = Coordinator.workerAllocatorFor(self.gpa, self.mode);
+        const data = self.filesystem.readFile(path, allocator) catch |err| switch (err) {
             error.FileNotFound => return error.FileNotFound,
             error.AccessDenied => return error.AccessDenied,
             error.StreamTooLong => return error.StreamTooLong,
             error.IoError => return error.IoError,
             error.OutOfMemory => return error.OutOfMemory,
         };
-        const file_state: watch_inputs.State = .{ .hash = watch_inputs.hashBytes(data) };
+        const file_state: ?watch_inputs.State = if (self.track_watch_inputs) .{ .hash = watch_inputs.hashBytes(data) } else null;
 
-        const source = base.source_utils.normalizeLineEndingsRealloc(self.gpa, data) catch |err| {
-            self.gpa.free(data);
+        // Normalize line endings (CRLF -> LF) for consistent cross-platform behavior.
+        const source = base.source_utils.normalizeLineEndingsRealloc(allocator, data) catch |err| {
+            allocator.free(data);
             return err;
         };
 
@@ -1825,6 +1891,9 @@ pub const BuildEnv = struct {
 
             var child_info = try self.parseHeaderDeps(package.root_file);
             defer child_info.deinit(self.gpa);
+            if (resolved.selected_platform_index == @as(u32, @intCast(i))) {
+                replaceDiscoveredParse(&self.discovered_platform_parse, takeDiscoveredParse(&child_info.parsed));
+            }
 
             if (self.packages.getPtr(package_keys.identity(i))) |child_pkg| {
                 if (package.kind == .platform and child_pkg.provides_entries.items.len == 0) {

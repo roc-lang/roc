@@ -1902,11 +1902,8 @@ pub fn scanHeaderSource(
         return error.HeaderParseFailed;
     }
 
-    const header_end_offset = headerEndOffset(ast, header);
-    for (ast.tokenize_diagnostics.items) |diagnostic| {
-        if (diagnostic.region.start.offset < header_end_offset) {
-            return error.HeaderParseFailed;
-        }
+    if (ast.headerHasTokenizeErrors(header)) {
+        return error.HeaderParseFailed;
     }
 
     return scanParsedHeader(allocator, root_file_abs, src, ast, header);
@@ -1976,17 +1973,6 @@ fn sha256Bytes(bytes: []const u8) [32]u8 {
     var hasher = base.Sha256.init(.{});
     hasher.update(bytes);
     return hasher.finalResult();
-}
-
-fn headerEndOffset(ast: *const parse.AST, header: parse.AST.Header) u32 {
-    const region = header.to_tokenized_region();
-    if (region.end <= region.start) return 0;
-
-    const token_count: u32 = @intCast(ast.tokens.tokens.len);
-    if (token_count == 0) return 0;
-
-    const last_token = @min(region.end - 1, token_count - 1);
-    return ast.tokens.resolve(last_token).end.offset;
 }
 
 /// Record a header's platform field as its platform edge: a path or URL
