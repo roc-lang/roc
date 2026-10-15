@@ -32825,6 +32825,23 @@ pub const CheckedModuleArtifact = struct {
         );
     }
 
+    /// The identity of the program this artifact roots when it is an
+    /// executable root. A paired platform keeps its own module `key`, so the
+    /// app it was paired with is named only by `platform_app_relation`; this
+    /// identity covers both, and an unpaired root is named by its key alone.
+    pub fn executableIdentity(self: *const CheckedModuleArtifact) [32]u8 {
+        var hasher = base.Sha256.init(.{});
+        hasher.update("roc-executable-identity");
+        hasher.update(&self.key.bytes);
+        if (self.checking_context_identity.platform_app_relation) |relation| {
+            hasher.update(&[_]u8{1});
+            hasher.update(&relation.bytes);
+        } else {
+            hasher.update(&[_]u8{0});
+        }
+        return hasher.finalResult();
+    }
+
     /// A platform with declared app requirements is runtime-lowerable only
     /// after checking has published its exact app relation.
     pub fn hasUnboundPlatformRequirements(self: *const CheckedModuleArtifact) bool {

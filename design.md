@@ -14340,11 +14340,29 @@ root, and every other component reconnects through the ownership-scope memo.
 The class denotes the same type before and after, so expansion changes no
 snapshot or resolvedness stamp, and it may happen after relations freeze.
 Two unread leaves of one type join without being read; a leaf joined to a
-variable stays unread. Sealing an unread leaf yields its type, and
-containment, resolvedness and uninhabitedness questions about one are
-answered from per-type answers that outlive graph resets, because store types
-are immutable. A specialization therefore pays only for the parts of its
-imported types that it reads, not for their whole depth.
+variable stays unread. Such a join relates the two origins' components only
+when the class is read, but a leaf scope also hands out cells for closed
+types directly, and its cell for a type the joined class holds below its root
+is that class's component in the scope. Below a joined class's root, every
+origin's component of a type, except a nominal's own backing, is that
+origin's memo cell for the type, whatever the path to it. So whenever an
+unread joined class gains an origin, and whenever a leaf scope gains a cell,
+each leaf-scope cell of a type an unread joined class of its scope holds
+below the root is joined with each of that class's origins' memo cells for
+the type. A missing import memo cell is created for the join; a missing
+leaf-scope cell is joined when its scope creates it. That is the join an
+eager relation would have made, and it reads nothing, so class identity
+never depends on whether a class was read. The joins wait until no
+unification is in progress, so they never change a root a unification is
+relating. Whether a type holds another is answered from per-type heights,
+since a type holds only types no taller than itself, and from each type's
+held-type list once a scope has checked a class against enough cells to pay
+for building it. Sealing
+an unread leaf yields its type, and containment, resolvedness and
+uninhabitedness questions about one are answered from per-type answers that
+outlive graph resets, because store types are immutable. A specialization
+therefore pays only for the parts of its imported types that it reads, not
+for their whole depth.
 
 Every context-free procedure-template request defers until the requesting
 graph is final, when its specialization key is stable. Constraints formerly
@@ -20101,6 +20119,22 @@ rediscover the benefit from field reads or uniqueness checks. The base emission
 keeps the borrowed schedule untouched, and the parameter's residual field
 domain is committed only in the emissions that apply its takes, so an emission
 that skips them releases the parameter whole.
+Because that owned variant is mandatory for a dying argument, a direct-call
+argument at a borrowed position whose parameter-benefit bit is set is an owned
+operand for take solving, exactly like an argument at an owned position: a
+field read flowing into it is consuming, so a container holding several
+refcounted fields hands that field over by a take and the call selects the
+owned variant. Without this, `{ list: acc.list, dict: acc.dict.insert(k, v) }`
+would pass the dict borrowed while the dying record still held it, and every
+insert would copy. That demand needs the callee's benefits to be final before
+the caller's takes are solved, so takes are solved one call-graph component at
+a time, callees first, and each component publishes its parameter benefits
+(its parameter containers, projected containers rooted at its parameters,
+complete projections of its parameters, and forwarding to beneficial callee
+positions) before any caller is solved. Procedures sharing statements form one
+node of that graph. A recursive component whose own new benefits demand a
+further argument retracts its committed plans and solves again; demand only
+grows, so this terminates, and a non-recursive component solves once.
 Admission of those mandatory owned variants uses the same definition-sensitive
 ownership-place query as complete payload transfers: scalar shell reads and
 uses after an explicit rebind do not retain the argument's old stored units.
@@ -20196,8 +20230,9 @@ initializations, field-read and ownership-place edges, and direct calls)
 depends only on its own statement. These inputs are gathered
 in fixed-width statement-id ranges as executor tasks and concatenated in range
 order, so the coordinator sees them in ascending statement order. The place
-edge of a read that materialization rewrites into an alias is recomputed from
-the rewritten read.
+edge of a read that materialization will rewrite into an alias is the alias
+edge to its committed representative, derived from the plan before the store
+is rewritten.
 Divergent reads remain separate places. This canonicalization is justified only
 by the committed field or tag-payload operation and explicit CFG dominance; it
 never equates layouts or values heuristically. A borrowed struct produced by
