@@ -1746,6 +1746,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .deprecated_number_suffix,
         .trailing_try_suffix,
         .redundant_return,
+        .unreachable_code,
         => false,
         .not_implemented,
         .exposed_but_not_implemented,

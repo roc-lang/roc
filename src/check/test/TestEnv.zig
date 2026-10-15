@@ -641,6 +641,33 @@ pub fn assertLastDefType(self: *TestEnv, expected: []const u8) TestEnvError!void
     try testing.expectEqualStrings(expected, self.type_writer.get());
 }
 
+/// Like `assertLastDefType`, but canonicalization must report exactly the
+/// diagnostics `expected_can_diagnostics`, in order, and type checking must
+/// report no problems.
+pub fn assertLastDefTypeWithCanDiagnostics(
+    self: *TestEnv,
+    expected: []const u8,
+    expected_can_diagnostics: []const std.meta.Tag(CIR.Diagnostic),
+) TestEnvError!void {
+    try self.assertNoParseProblems();
+
+    const diagnostics = try self.module_env.getDiagnostics();
+    defer self.gpa.free(diagnostics);
+    try testing.expectEqual(expected_can_diagnostics.len, diagnostics.len);
+    for (diagnostics, expected_can_diagnostics) |diagnostic, expected_tag| {
+        try testing.expectEqual(expected_tag, std.meta.activeTag(diagnostic));
+    }
+    try testing.expectEqual(@as(usize, 0), self.checker.problems.problems.items.len);
+
+    try testing.expect(self.module_env.all_defs.span.len > 0);
+    const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
+    const last_def_idx = defs_slice[defs_slice.len - 1];
+    const last_def_var = ModuleEnv.varFrom(last_def_idx);
+
+    try self.type_writer.write(last_def_var, .wrap);
+    try testing.expectEqualStrings(expected, self.type_writer.get());
+}
+
 /// Like `assertLastDefType`, but the module must also produce warning-severity
 /// type problems—and ONLY warnings—whose report titles match
 /// `expected_warning_titles` exactly, in order. (Plain pass-mode fails on ANY

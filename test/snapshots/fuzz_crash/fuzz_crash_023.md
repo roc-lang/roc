@@ -254,6 +254,7 @@ NAME NOT IN SCOPE - fuzz_crash_023.md:188:22:188:25
 NAME NOT IN SCOPE - fuzz_crash_023.md:189:26:189:33
 NAME NOT IN SCOPE - fuzz_crash_023.md:189:34:189:38
 DOES NOT EXIST - fuzz_crash_023.md:193:4:193:13
+UNREACHABLE CODE - fuzz_crash_023.md:154:2:195:3
 UNUSED VARIABLE - fuzz_crash_023.md:164:2:164:18
 UNUSED VARIABLE - fuzz_crash_023.md:178:2:178:8
 UNUSED VARIABLE - fuzz_crash_023.md:178:47:178:71
@@ -841,6 +842,21 @@ TYPE NOT DETERMINED - fuzz_crash_023.md:189:26:189:66
 			(reflow " does not exist."))
 		(document
 			(source-region (file "fuzz_crash_023.md") (start 193 4) (end 193 13) (annotation error) (line-text "\t\t\tNum.toStr(number) # Comment after string interpolation expr"))))
+	(report
+		(severity warning)
+		(title "Unreachable Code")
+		(region (start 154 2) (end 195 3))
+		(headline
+			(reflow "This code will never run, because the code before it always ends with a ")
+			(annotated code "return")
+			(reflow ", ")
+			(annotated code "crash")
+			(reflow ", or ")
+			(annotated code "break")
+			(reflow ", or loops forever."))
+		(document
+			(source-region (file "fuzz_crash_023.md") (start 154 2) (end 195 3) (annotation error) (line-text "\t...\n\tmatch_time(\n\t\t..., # Single args with comment\n\t)\n\tsome_func(\n\t\tdbg # After debug\n\t\t\t42, # After debug expr\n\t)\n\tcrash # Comment after crash keyword\n\t\t\"Unreachable!\" # Comment after crash statement\n\ttag_with_payload = Ok(number)\n\tinterpolated = \"Hello, ${world}\"\n\tlist = [\n\t\tadd_one(\n\t\t\tdbg # After dbg in list\n\t\t\t\tnumber, # after dbg expr as arg\n\t\t), # Comment one\n\t\t456, # Comment two\n\t\t789, # Comment three\n\t]\n\tfor n in list {\n\t\tStdout.line!(\"Adding ${n} to ${number}\")\n\t\tnumber = number + n\n\t}\n\trecord = { foo: 123, bar: \"Hello\", ;az: tag, qux: Ok(world), punned }\n\ttuple = (123, \"World\", tag, Ok(world), (nested, tuple), [1, 2, 3])\n\tmultiline_tuple = (\n\t\t123,\n\t\t\"World\",\n\t\ttag1,\n\t\tOk(world), # This one has a comment\n\t\t(nested, tuple),\n\t\t[1, 2, 3],\n\t)\n\tbin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5\n\tstatic_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?\n\tStdout.line!(interpolated)?\n\tStdout.line!(\n\t\t\"How about ${ # Comment after string interpolation open\n\t\t\tNum.toStr(number) # Comment after string interpolation expr\n\t\t} as a string?\",\n\t)"))
+			(reflow "Remove this code, or change the code before it so that it can finish.")))
 	(report
 		(severity warning)
 		(title "Unused Variable")

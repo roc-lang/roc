@@ -36167,6 +36167,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .diag_trailing_try_suffix,
             .diag_return_outside_fn,
             .diag_redundant_return,
+            .diag_unreachable_code,
             .diag_control_flow_in_expect,
             .diag_var_reassigned_in_expect,
             .diag_mutually_recursive_type_aliases,

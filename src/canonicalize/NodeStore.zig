@@ -450,6 +450,7 @@ const copied_diagnostic_shapes = [_]DiagnosticShape{
     .{ .cir = "infinite_loop_never_exits", .tag = .diag_infinite_loop_never_exits, .payload = null, .names = &.{} },
     .{ .cir = "trailing_try_suffix", .tag = .diag_trailing_try_suffix, .payload = null, .names = &.{} },
     .{ .cir = "redundant_return", .tag = .diag_redundant_return, .payload = null, .names = &.{} },
+    .{ .cir = "unreachable_code", .tag = .diag_unreachable_code, .payload = null, .names = &.{} },
     .{ .cir = "range_op_chained", .tag = .diag_range_op_chained, .payload = null, .names = &.{} },
     .{ .cir = "ident_already_in_scope", .tag = .diag_ident_already_in_scope, .payload = "diag_single_ident", .names = &.{"ident"} },
     .{ .cir = "provided_value_is_required", .tag = .diag_provided_value_is_required, .payload = "diag_single_ident", .names = &.{"ident"} },
@@ -749,6 +750,7 @@ const DiagnosticNodeTag = enum {
     diag_trailing_try_suffix,
     diag_return_outside_fn,
     diag_redundant_return,
+    diag_unreachable_code,
     diag_control_flow_in_expect,
     diag_var_reassigned_in_expect,
     diag_mutually_recursive_type_aliases,
@@ -1228,7 +1230,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 93;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 94;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
@@ -5273,6 +5275,7 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         .infinite_loop_never_exits,
         .trailing_try_suffix,
         .redundant_return,
+        .unreachable_code,
         .return_outside_fn,
         .control_flow_in_expect,
         .var_reassigned_in_expect,
@@ -5445,6 +5448,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_trailing_try_suffix,
         .diag_return_outside_fn,
         .diag_redundant_return,
+        .diag_unreachable_code,
         .diag_control_flow_in_expect,
         .diag_var_reassigned_in_expect,
         .diag_deprecated_number_suffix,
