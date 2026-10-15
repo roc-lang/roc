@@ -2,7 +2,8 @@
 # Each call below reaches `transaction`, whose callback row `[..errs]` is
 # extended by `Closed` in its result, with a callback whose own errors include
 # `Closed`: through `?` on another method, through a `where` requirement used
-# twice, and through exact procedure aliases called as methods and qualified.
+# twice, through an inferred requirement used at two types, and through exact
+# procedure aliases called as methods and qualified.
 Shapes := [Db].{
 	transaction : Shapes, (() -> Try(a, [..errs])) -> Try(a, [Closed, ..errs])
 	transaction = |_db, body| Ok(body()?)
@@ -38,6 +39,22 @@ through_where = |db, closed| {
 
 expect through_where(Shapes.Db, Bool.False) == Ok("doneagain")
 expect through_where(Shapes.Db, Bool.True) == Err(Closed)
+
+through_inferred = |db, closed| {
+	text = db.transaction(|| if closed { Err(Closed) } else { Ok("done") })
+	number = db.transaction(|| if closed { Err(Closed) } else { Ok(5.U64) })
+	(text, number)
+}
+
+expect {
+	(text, number) = through_inferred(Shapes.Db, Bool.True)
+	text == Err(Closed) and number == Err(Closed)
+}
+
+expect {
+	(text, number) = through_inferred(Shapes.Db, Bool.False)
+	text == Ok("done") and number == Ok(5)
+}
 
 closing : Bool -> (() -> Try(Str, [Closed]))
 closing = |closed| || if closed { Err(Closed) } else { Ok("done") }

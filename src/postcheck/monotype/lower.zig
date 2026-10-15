@@ -1933,7 +1933,20 @@ const TargetEvidenceSource = union(enum) {
     materialized_contract: []const SpecEvidence,
 };
 
-fn carriedSubstitution(substitution: ?CheckedTargetSubstitution) ?LookupSubstitution {
+/// The carried substitution an evidence-dependent dispatch instantiates its
+/// target under. Shared evidence carries the substitution of whichever
+/// same-name relation the caller materialized. An independent relation with
+/// no contract of its own instantiates the target at its own types, unless a
+/// recorded where-method use proves its signature copy shares every
+/// non-marker leaf with the slot's, so the slot's substitution is its own.
+fn dependentCallableSubstitution(
+    dependent: anytype,
+    entry: SpecEvidence,
+    substitution: ?CheckedTargetSubstitution,
+) ?LookupSubstitution {
+    if (dependent.independent_callable and
+        !dependent.reuse_slot_nested_evidence and
+        selectCallableContract(entry, dependent.callable_contract) == null) return null;
     return if (substitution) |carried| .{ .carried = carried } else null;
 }
 
@@ -52842,7 +52855,7 @@ const BodyContext = struct {
                                 null
                             else
                                 target.instantiation,
-                            .substitution = carriedSubstitution(target.substitution),
+                            .substitution = dependentCallableSubstitution(dependent, entry, target.substitution),
                             .local_proc_context = target.local_proc_context,
                         },
                     },
@@ -63268,7 +63281,7 @@ const BodyContext = struct {
                         null
                     else
                         target.instantiation,
-                    .substitution = carriedSubstitution(target.substitution),
+                    .substitution = dependentCallableSubstitution(dependent, entry, target.substitution),
                     .local_proc_context = target.local_proc_context,
                 },
                 .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => Common.invariant("iterator dispatch evidence was not a resolved callable target"),
