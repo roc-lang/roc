@@ -395,15 +395,13 @@ const GroupLivenessIndex = struct {
     ranges: []const Range = &.{},
 
     /// Raw liveness bit -> ownership resource index: the exact inverse of
-    /// `raw_bits`. Absent for procedures without joins and for
-    /// identity-numbered frames.
+    /// `raw_bits`. Absent for identity-numbered frames.
     use_resources: []const u32 = &.{},
 
     fn init(
         allocator: Allocator,
         domain: *const ProcArcDomain,
         solution: *const arc_solve.Solution,
-        index_uses: bool,
     ) ResourceError!GroupLivenessIndex {
         if (domain.group_leaders.len == 0) return .{};
         const raw_bits = try allocator.alloc(u32, domain.resource_locals.len);
@@ -437,13 +435,8 @@ const GroupLivenessIndex = struct {
                 singleton_bit += 1;
             }
         }
-        const use_resources: []u32 = if (index_uses)
-            try allocator.alloc(u32, raw_bits.len)
-        else
-            &.{};
-        if (index_uses) {
-            for (raw_bits, 0..) |raw_bit, resource| use_resources[raw_bit] = @intCast(resource);
-        }
+        const use_resources = try allocator.alloc(u32, raw_bits.len);
+        for (raw_bits, 0..) |raw_bit, resource| use_resources[raw_bit] = @intCast(resource);
         return .{
             .raw_bits = raw_bits,
             .ranges = ranges,
@@ -6366,10 +6359,10 @@ const Inserter = struct {
         /// Each node's liveness row.
         rows: []const Row = &.{},
 
-        fn init(allocator: Allocator, proc_domain: *const ProcArcDomain, solution: *const arc_solve.Solution, index_uses: bool) ResourceError!ReadBeforeRebindGraph {
+        fn init(allocator: Allocator, proc_domain: *const ProcArcDomain, solution: *const arc_solve.Solution) ResourceError!ReadBeforeRebindGraph {
             return .{
                 .allocator = allocator,
-                .group_liveness = try GroupLivenessIndex.init(allocator, proc_domain, solution, index_uses),
+                .group_liveness = try GroupLivenessIndex.init(allocator, proc_domain, solution),
                 .nodes = .empty,
                 .successors = .empty,
                 .liveness = .{ .succ_starts = &.{}, .succs = &.{}, .pred_starts = &.{}, .preds = &.{}, .read_starts = &.{}, .reads = &.{}, .def_starts = &.{}, .defs = &.{}, .bit_len = 0 },
@@ -6527,7 +6520,7 @@ const Inserter = struct {
         const graph_slot = &self.source_liveness.graph;
         if (graph_slot.* != null) return;
         if (self.source_liveness.frozen) arcInvariant("ARC frozen source liveness lacked its prepared graph");
-        graph_slot.* = try ReadBeforeRebindGraph.init(self.source_liveness.allocator, self.domain(), self.solution, self.join_bodies.len != 0 and self.domain().resource_locals.len != 0);
+        graph_slot.* = try ReadBeforeRebindGraph.init(self.source_liveness.allocator, self.domain(), self.solution);
         errdefer {
             graph_slot.* = null;
             self.source_liveness.stmt_node_indices.clearRetainingCapacity();
@@ -9643,7 +9636,7 @@ test "ARC grouped raw liveness agrees with exhaustive resource queries" {
     defer arena.deinit();
     var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, &rc, &indices, f.store.getProcSpecImmediate(proc).frame_locals);
     defer domain.clearGlobalIndices();
-    const grouped = try GroupLivenessIndex.init(arena.allocator(), &domain, &solution, false);
+    const grouped = try GroupLivenessIndex.init(arena.allocator(), &domain, &solution);
     var reads = Row.initEmpty(arena.allocator(), domain.livenessBitLen());
     var expected = @as([locals.len]bool, @splat(false));
     var prng = std.Random.DefaultPrng.init(11127);
