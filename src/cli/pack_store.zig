@@ -1759,7 +1759,7 @@ pub const LoadedPacks = struct {
         for (artifact.materializations) |dependency| {
             // An earlier revision's packs declare that revision's
             // materializers, which this program does not provide.
-            if (self.checkedArtifact(dependency.materialization.module) == null) return false;
+            if (self.hasProgram() and self.checkedArtifact(dependency.materialization.module) == null) return false;
             if (!self.materializers.contains(dependency.materialization.wrapper_identity)) return false;
         }
         for (artifact.source_events) |certificate| {
@@ -2075,6 +2075,7 @@ pub const LoadedPacks = struct {
         checked_roots: []const Common.CheckedRootUse,
         comptime_root_reads: []const lir.CheckedPipeline.ComptimeRootRead,
     ) bool {
+        if (!self.hasProgram()) return true;
         for (demand.eager_reads) |read| {
             if (self.checkedArtifact(read.module) == null) return false;
             if (read.cause.module) |module| if (self.checkedArtifact(module) == null) return false;
@@ -2090,6 +2091,12 @@ pub const LoadedPacks = struct {
         for (checked_roots) |use| if (self.checkedArtifact(use.module) == null) return false;
         for (comptime_root_reads) |read| if (self.checkedArtifact(read.module) == null) return false;
         return true;
+    }
+
+    /// Whether a program's modules are in view. Only a store's packs hold
+    /// earlier revisions of a module; an explicit pack set is taken as given.
+    fn hasProgram(self: *const LoadedPacks) bool {
+        return self.pending != null or self.checked_root != null;
     }
 
     fn checkedArtifact(self: *const LoadedPacks, identity: [32]u8) ?*const check.CheckedArtifact.CheckedModuleArtifact {
