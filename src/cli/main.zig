@@ -506,8 +506,11 @@ const CompileTimeObjectCache = struct {
         var set = try backend.dev.ProcArtifact.combine(self.allocator, sets.items);
         defer set.deinit();
         try backend.dev.ProcArtifact.bindProducedReferences(&set, fresh_count, helper_roots.items);
+        const combined_at = std.Io.Timestamp.now(self.io, .awake).nanoseconds;
+        self.packs.capture_combine_ns += combined_at - capture_started;
         var encoding = try PackEncodingPlan.init(self.allocator, &set, lowered);
         defer encoding.deinit();
+        self.packs.capture_plan_ns += std.Io.Timestamp.now(self.io, .awake).nanoseconds - combined_at;
         const requester = check.CheckedArtifact.ModuleId{ .bytes = artifact.key.bytes };
         const builtin_owner = check.CheckedArtifact.ModuleId{ .bytes = build_env.builtin_modules.checked_artifact.key.bytes };
         var owners = std.AutoHashMap([32]u8, void).init(self.allocator);
@@ -521,6 +524,7 @@ const CompileTimeObjectCache = struct {
             const owner = check.CheckedArtifact.ModuleId{ .bytes = owner_bytes.* };
             const producer = if (owner.eql(requester)) artifact else self.declaredArtifact(owner.bytes) orelse continue;
             const placement = build_env.packPlacementForArtifactKey(producer.key) orelse continue;
+            const encode_started = std.Io.Timestamp.now(self.io, .awake).nanoseconds;
             const bytes = try packFileBytesFiltered(self.allocator, &set, lowered, .{
                 .carried_reads = &self.packs.materializer_reads,
                 .generated_roots = generated,
@@ -529,6 +533,9 @@ const CompileTimeObjectCache = struct {
                 .builtin_owner = builtin_owner,
             }, &encoding);
             errdefer self.allocator.free(bytes);
+            const encoded_at = std.Io.Timestamp.now(self.io, .awake).nanoseconds;
+            self.packs.capture_encode_ns += encoded_at - encode_started;
+            defer self.packs.capture_stage_ns += std.Io.Timestamp.now(self.io, .awake).nanoseconds - encoded_at;
             // Stage only offers owned by this immutable checked module. App
             // edits must not hide an imported helper in the old app namespace.
             var index = backend.dev.PackFile.readIndex(self.allocator, bytes) catch |err| switch (err) {
@@ -11611,11 +11618,15 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         // The compile-time evaluator has already spliced its entries; the
         // object compiler asks for the runtime program's afterwards.
         std.debug.print("pack hits: {d} external procs: {d} evaluator artifacts: {d} packs loaded: {d} keys: {d}\n", .{ packs.hits, external_procs, packs.artifacts_served, packs.packs.items.len, packs.specs.count() });
-        std.debug.print("pack admission: {d} ms (decode {d} ms, index {d} ms); capture: {d} ms\n", .{
+        std.debug.print("pack admission: {d} ms (decode {d} ms, index {d} ms); capture: {d} ms (combine {d} ms, plan {d} ms, encode {d} ms, stage {d} ms)\n", .{
             @divTrunc(packs.admit_ns, std.time.ns_per_ms),
             @divTrunc(packs.decode_ns, std.time.ns_per_ms),
             @divTrunc(packs.index_ns, std.time.ns_per_ms),
             @divTrunc(packs.capture_ns, std.time.ns_per_ms),
+            @divTrunc(packs.capture_combine_ns, std.time.ns_per_ms),
+            @divTrunc(packs.capture_plan_ns, std.time.ns_per_ms),
+            @divTrunc(packs.capture_encode_ns, std.time.ns_per_ms),
+            @divTrunc(packs.capture_stage_ns, std.time.ns_per_ms),
         });
     }
 

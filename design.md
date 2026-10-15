@@ -764,14 +764,19 @@ A store pack is read as its index alone: the offers at its tail and an artifact
 table giving each artifact's byte range and the artifacts it reaches (set-local
 references, symbolic references the writer resolved to a definition in the
 pack, and the code targets of its data). A lookup that selects one of a pack's
-offers decodes exactly the closure of that offer's root over the table, and
-admits that closure as a set of its own: certified, then indexed, with every
-spec of the pack whose artifact the set holds. A closure containing an artifact
-whose reference resolves to nothing in the pack is not admitted, as whole-pack
-admission would also decline it. A pack's artifacts decode once however many
-closures hold them, and each such set names its definitions by their index in
-the pack (`ProcArtifact.Set.definitions`), so placement recognizes a definition
-two closures of one pack both reach as one physical provision. The
+offers decodes exactly the closure of that offer's root over the table and
+admits it into the one set admitted from that pack, which grows by the
+artifacts the closure adds; a key's candidate packs are tried in load order
+and left alone once an offer serves the lookup. The set names its definitions
+by their index in the pack (`ProcArtifact.Set.definitions`) and carries the
+table's edges, so indexing computes the components, serving demand, and
+admission of the artifacts a set gained over those edges alone, with the
+artifacts indexed earlier taking part only as settled callees: an artifact's
+serving facts depend on its closure, and nothing an admitted artifact reaches
+arrives later. A closure containing an artifact whose reference resolves to
+nothing in the pack is not admitted, as whole-pack admission would also decline
+it. Packs with different offers of one program's closure share one encoded
+body (`PackFile.Body`). The
 producer supplies its checked module capability directly; an unpublished app
 artifact is not a reason to delay loading until after specialization. Exact
 checked-root layout/role certificates come from a type-only projection through
