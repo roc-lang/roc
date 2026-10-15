@@ -2193,6 +2193,17 @@ would make a program's compile-time-evaluability depend on a compiler build
 constant rather than on the program itself, and would let Debug and release
 builds disagree about whether the same program compiles.
 
+The interpreter's own memory is bounded by what the program keeps alive, never
+by how many statements it has run. Each procedure activation owns storage for
+its frame locals and its `ptr_alloca` cells on a frame stack, and releases it
+when the activation ends or is replaced by a frame-replacing call; assigning a
+local copies the value into that storage. What a statement computes before
+storing its result lives in a scratch stack that the next statement of the same
+frame releases. A value that outlives its frame—a procedure's result, a
+frame-replacing call's arguments, a deferred erased call—is copied out before
+the frame ends. Roc heap data is unaffected: it is owned by the explicit LIR
+reference counts.
+
 ### Demand-Driven Compile-Time Evaluation
 
 A build evaluates only the compile-time roots its program demands. A root is
