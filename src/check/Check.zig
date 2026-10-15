@@ -21373,9 +21373,7 @@ fn annoIsAnonymousOpenExt(self: *const Self, ext_anno_idx: CIR.TypeAnno.Idx) boo
 /// owns it. Null when this compilation has no builtin module to resolve
 /// against, in which case nothing can be the builtin `Try`.
 fn builtinTrySourceDecl(self: *const Self) ?u32 {
-    if (self.isCheckingBuiltinModuleDirectly()) {
-        return @backingInt(self.findLocalTypeDeclByName(self.cir.idents.@"try") orelse return null);
-    }
+    if (self.isCheckingBuiltinModuleDirectly()) return self.sourceDeclForBuiltinNominal(.try_type);
     const indices = self.builtin_ctx.builtin_indices orelse return null;
     return @backingInt(indices.try_type);
 }

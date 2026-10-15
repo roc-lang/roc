@@ -2310,6 +2310,36 @@ A build reports the compile-time failures of the roots it evaluates. A
 failure in a root no build demands is reported by `roc check`, which
 evaluates every root, including those a cache entry left unevaluated.
 
+## Builtins Build Their Own Tag Unions
+
+If a builtin function's type contains a structural tag union anywhere—in its
+result, its arguments, or a callback's result—the builtin is implemented in
+plain Roc code for that tag union. No exceptions. When the builtin needs work
+that Roc code cannot do, that work is a private helper the compiler
+implements (a low-level operation), and the helper's type contains no
+structural tag union: its tag-union-shaped results are nominal (`Try`, or a
+private nominal such as `Num.RawOrder`) or have no tags at all (`Try(I64, {})`,
+a record). The public builtin converts between the helper's type and its own
+tag unions in Roc.
+
+The reason is that a structural tag union in an output position is open for the
+builtin's callers: `I64.from_str(s)?` may sit in a function returning
+`Try(I64, [AboveLimit, BadNumStr])`, and the call is then specialized at that
+wider union, whose runtime representation numbers its tags differently. Roc
+code that constructs `Err(BadNumStr)` constructs it in whatever union the
+specialization requests, but compiler-implemented code writes a fixed
+representation and cannot know which union it is writing into. Keeping
+structural tag unions out of every compiler-implemented type removes that
+mismatch at the source: a backend only ever writes or reads a representation
+whose tags the helper's own nominal declaration fixes, so no backend, layout
+search, or checker coercion has to recover which tag it meant. The same holds
+for tag unions a helper reads, such as a sort comparator's result: the public
+builtin converts the caller's union into the helper's nominal one.
+
+`src/check/test/builtin_low_level_types_test.zig` walks the type of every
+Builtin definition the compiler implements and fails on any structural tag
+union.
+
 ## Backend Builtins
 
 Backend builtin linking is part of backend code generation, not a later repair
@@ -14913,8 +14943,8 @@ point). An alias of a function-valued constant is not a forward; calling it
 calls the evaluated value.
 
 A call through a forwarding alias is a direct call. Monotype enters the
-alias's scope with the call's use-site evidence and requests the lookup's own
-callee there, so the call reaches the aliased procedure's specialization with
+alias's scope with the call's use-site evidence and substitution, and requests
+the lookup's own callee there, so the call reaches the aliased procedure's specialization with
 the evidence the alias's scope composes and keeps that procedure's
 representation; no alias function exists at runtime. The callee's compiler-owned
 roles (call-site intrinsics, iterator procedures, `Str.inspect`, hosted `Try`
@@ -14922,11 +14952,13 @@ adapters) follow the forward to the final procedure. Boxy lowers the same calls
 through the alias's materialized callable value.
 
 A method bound to an exact alias dispatches to the procedure the alias chain
-reaches, and the method target records that it was reached through an alias.
-The dispatch edge instantiates the alias's scheme, whose requirements are not
-the target's, so the target's evidence follows from its instantiated callable
-(`from_callable`) and Monotype instantiates the target's own scheme at the
-dispatch's callable for its substitution.
+reaches, and the method target records the alias binding it was reached
+through. The dispatch edge instantiates the alias's scheme, whose requirements
+are not the target's, so the target's evidence follows from its instantiated
+callable (`from_callable`). The edge's node carries its substitution of the
+alias scope's variables. Monotype seeds the alias's scope with it and
+instantiates the forwarded lookup's own recorded substitution there, alias by
+alias along the chain, which composes the target's substitution exactly.
 
 ### Static Dispatch In Monotype
 
@@ -15277,14 +15309,40 @@ where the boundary verifiers run—a missing or corrupt record is a compiler
 bug reported at the boundary, not a lowering panic.
 
 **Target substitutions.** A direct evidence node either carries the checked
-substitution of its target's scheme or says the substitution derives from its
-callable (`derived_from_callable`). A dispatch edge that checking discharged by
-selecting a target records that instantiation, so its node carries the full
-substitution; such an edge with a polymorphic target and no record is a
-compiler bug reported when checking outputs the module. Checking instantiates nothing for these
-targets, so their nodes derive the substitution from the callable:
-- a target reached through an exact procedure alias, whose edge instantiated
-  the alias's scheme;
+substitution of its target's scheme, carries the substitution of the exact
+procedure alias's scheme the target was reached through (`alias`), or says the
+substitution derives from its callable (`derived_from_callable`). A dispatch
+edge that checking discharged by selecting a target records that
+instantiation, so its node carries the full substitution; such an edge with a
+polymorphic target and no record is a compiler bug reported when checking
+outputs the module. An edge that instantiated an alias's scheme carries that
+scheme's substitution, and Monotype composes the target's from it (see
+"Procedure Aliases").
+
+A recorded substitution is the only authority for a target's quantified
+variables. A tag row extended by a label its extension may also hold
+(`[Closed, ..errs]`, with `errs` holding `Closed`) normalizes to the same row
+whether `errs` is `[]` or `[Closed]`, so relating a target's scheme to a
+dispatch's normalized callable cannot recover the substitution checking chose.
+Every Monotype instantiation of a selected target, for its result type, its
+specialization, or its relation to a `where` requirement, seeds the recorded
+substitution before relating anything. A substitution recorded by the body
+being lowered instantiates in that body's context, sharing the cells its scope
+binds; one carried as evidence from the edge that selected the target in
+another body instantiates in a fresh context of its recording module, and is
+part of the input that keys a `where`-requirement relation's replay summary.
+
+An independent use of shared evidence (an inferred requirement used at more
+than one type) carries the slot's substitution only when a recorded
+where-method use proves its signature copy shares every non-marker leaf with
+the slot's. Otherwise it instantiates the target at its own callable, which is
+exact only when that callable fixes every quantified variable
+(`callable_determines_scheme`): a target whose scheme has a variable extending
+a tag row with labels of its own records a checked contract for each such use,
+whose substitution the use instantiates under.
+
+Checking instantiates nothing for these targets, so their nodes derive the
+substitution from the callable:
 - the numeric default owner checking selects for a dispatcher no edge pins;
 - the target checking resolves for a literal conversion that it left
   to each specialization;
@@ -19355,9 +19413,19 @@ completed plans to rebuild statement chains:
   borrowed param borrows it for the call and drops it at its precise
   lifetime end; needing an owned result from a borrowed return position
   emits one `incref` on the result.
-- switch branches and join regions balance drops exactly as today: a value
-  that dies in one branch and survives another is dropped on the dying
-  branch.
+- switch branches and join regions balance drops: a value that dies in one
+  branch and survives another is dropped on the dying branch, before that
+  branch's first statement. Every successor of a control split (`switch_stmt`,
+  `switch_initialized_payload`, `str_match`, `str_match_set`,
+  `boxy_tag_match`) releases on entry each owned unit that no path from its
+  first statement reads before rebinding. Straight-line code can only end a
+  lifetime at a statement that reads the value, so the split is the one
+  place a value can die without being read. A loop exit is such a successor,
+  so a value the loop held and the code after it never reads is released
+  where the loop is left, whether by its condition or by `break`. The point
+  depends only on liveness, never on whether the path next reaches a join,
+  a jump, or a terminal, so it does not vary with inlining or optimization
+  level.
 
 Emission also emits `free` where it does today (intent marker for a value
 the proc fully releases); `free` keeps its current meaning of decrement plus
@@ -23443,6 +23511,15 @@ its planned inspect workers and descriptor method slots. Inspectable nominal
 wrappers are explicitly destructured before calling a backing vector's method.
 Statically known SIMD inspection is an ordinary direct procedure call, with
 normal specialization reuse and inlining decisions.
+
+A method callee prepared before relation freeze for deferred inspection or a
+deferred structural derivation is requested while its component's type may
+still be open, so components that settle to one type only later can hold
+separate drafts. A specialization is keyed by its sealed request interface:
+deferred emission calls one prepared callee per sealed type and requires every
+other callee prepared for that type to be a draft of the same template, with
+equal evidence, codec contract and lexical context, whose request seals to the
+same type.
 
 SIMD inspection appends lane text directly into the result string without
 materializing lane or string lists. Eight- and sixteen-lane results always
