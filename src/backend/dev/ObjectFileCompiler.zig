@@ -1395,10 +1395,10 @@ test "ObjectFileCompiler static value cells carry frozen constants and bind cons
         // No source descriptor, backing, symbol names, LIR or layout owners remain.
         const bytes = serialized: {
             defer result.deinit();
-            break :serialized try PackFile.write(allocator, &result.artifacts.?, &.{});
+            break :serialized try PackFile.write(allocator, &result.artifacts.?, &.{}, PackFile.test_version_hash);
         };
         defer allocator.free(bytes);
-        var pack = try PackFile.read(allocator, bytes);
+        var pack = try PackFile.read(allocator, bytes, PackFile.test_version_hash);
         defer pack.deinit();
         try std.testing.expectEqual(@as(usize, 1), pack.set.artifacts.len);
         const artifact = pack.set.artifacts[0];

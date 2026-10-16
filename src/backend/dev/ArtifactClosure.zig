@@ -979,7 +979,10 @@ pub fn selectMarked(allocator: Allocator, source: *const ProcArtifact.Set, marke
 }
 
 test "artifact closure selection owns context graphs and rebases cyclic references" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, testSelection, .{});
+    // Whether the testing allocator grows a block in place depends on its
+    // neighbours, so the check runs over an allocator that never does.
+    var deterministic = collections.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), testSelection, .{});
 }
 
 fn testSelection(allocator: Allocator) (@import("PackFile.zig").WriteError || @import("PackFile.zig").ReadError || error{ TestUnexpectedResult, TestExpectedEqual })!void {
@@ -1050,9 +1053,9 @@ fn testSelection(allocator: Allocator) (@import("PackFile.zig").WriteError || @i
     try std.testing.expectEqual(@as(u32, 1), selected.set.artifacts[0].refs[0].target);
     try std.testing.expectEqual(@as(u32, 1), selected.set.artifacts[1].refs[0].target);
     const PackFile = @import("PackFile.zig");
-    const bytes = try PackFile.write(allocator, &selected.set, &.{});
+    const bytes = try PackFile.write(allocator, &selected.set, &.{}, PackFile.test_version_hash);
     defer allocator.free(bytes);
-    var decoded = try PackFile.read(allocator, bytes);
+    var decoded = try PackFile.read(allocator, bytes, PackFile.test_version_hash);
     defer decoded.deinit();
     try std.testing.expectEqualDeep(selected.set.artifacts, decoded.set.artifacts);
 }

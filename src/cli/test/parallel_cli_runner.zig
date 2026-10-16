@@ -8551,10 +8551,18 @@ fn verifyDependentPlatformCache(
         return customInfraFailure(allocator, timer, "failed to read platform cache entry: {}", .{err})) |entry|
     {
         if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".rpk")) continue;
-        const bytes = cache.readFileAlloc(io, entry.path, allocator, .limited(1024 * 1024 * 1024)) catch |err|
+        const unaligned = cache.readFileAlloc(io, entry.path, allocator, .limited(1024 * 1024 * 1024)) catch |err|
             return customInfraFailure(allocator, timer, "failed to read platform pack: {}", .{err});
+        defer allocator.free(unaligned);
+        const bytes = allocator.alignedAlloc(u8, TestPackFile.alignment, unaligned.len) catch |err|
+            return customInfraFailure(allocator, timer, "failed to align platform pack: {}", .{err});
         defer allocator.free(bytes);
-        var pack = TestPackFile.read(allocator, bytes) catch |err|
+        @memcpy(bytes, unaligned);
+        if (bytes.len < @sizeOf(TestPackFile.Header)) return customInfraFailure(allocator, timer, "platform pack is shorter than its header", .{});
+        // The pack was written by the compiler under test; its own stamp is
+        // the version to read it by.
+        const header: *const TestPackFile.Header = @ptrCast(bytes.ptr);
+        var pack = TestPackFile.read(allocator, bytes, header.version_hash) catch |err|
             return customInfraFailure(allocator, timer, "failed to decode platform pack: {}", .{err});
         defer pack.deinit();
         for (pack.specs) |spec| {

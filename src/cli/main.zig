@@ -306,7 +306,7 @@ const CompileTimeObjectCache = struct {
     const Publication = struct {
         placement: BuildEnv.PackPlacement,
         key: [32]u8,
-        bytes: []u8,
+        bytes: backend.dev.PackFile.Bytes,
         /// A pack of discovery summaries, filed apart from code packs.
         discovery: bool = false,
     };
@@ -373,7 +373,7 @@ const CompileTimeObjectCache = struct {
             .allocator = self.allocator,
             .io = self.io,
             .store = store,
-            .packs = pack_store.LoadedPacks.init(self.allocator),
+            .packs = pack_store.LoadedPacks.init(self.allocator, store.version_hash),
             .policy = policy,
             .policy_registry = self,
             .declared_root = modules.root.module,
@@ -531,19 +531,18 @@ const CompileTimeObjectCache = struct {
                 .checked_owner = owner,
                 .requester = requester,
                 .builtin_owner = builtin_owner,
-            }, &encoding);
+            }, &encoding, self.store.version_hash);
             errdefer self.allocator.free(bytes);
             const encoded_at = std.Io.Timestamp.now(self.io, .awake).nanoseconds;
             self.packs.capture_encode_ns += encoded_at - encode_started;
             defer self.packs.capture_stage_ns += std.Io.Timestamp.now(self.io, .awake).nanoseconds - encoded_at;
             // Stage only offers owned by this immutable checked module. App
             // edits must not hide an imported helper in the old app namespace.
-            var index = backend.dev.PackFile.readIndex(self.allocator, bytes) catch |err| switch (err) {
+            const offered = backend.dev.PackFile.View.init(bytes, self.store.version_hash) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.MalformedPack, error.UnsupportedPackVersion => unreachable,
             };
-            defer index.deinit();
-            if (index.offers.specs.len == 0) {
+            if (offered.specCount() == 0) {
                 self.allocator.free(bytes);
                 continue;
             }
@@ -582,19 +581,14 @@ const CompileTimeObjectCache = struct {
             const owner = check.CheckedArtifact.ModuleId{ .bytes = owner_bytes };
             const producer = if (owner.eql(requester)) artifact else self.declaredArtifact(owner.bytes) orelse continue;
             const placement = build_env.packPlacementForArtifactKey(producer.key) orelse continue;
-            const bytes = backend.dev.PackFile.writeOffers(self.allocator, &empty, &.{}, entries.items, &.{}) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                // Lowering produces valid recipes, and an empty set has no
-                // artifact to reject.
-                error.InvalidCodeTarget, error.InvalidSourceEventCertificate, error.InvalidLiteralRecipe, error.InvalidRootMaterializationDependency => unreachable,
-            };
+            const bytes = try backend.dev.PackFile.writeOffers(self.allocator, &empty, &.{}, entries.items, &.{}, self.store.version_hash);
             errdefer self.allocator.free(bytes);
             try self.stageDiscoveryPublication(placement, producer.codeGenerationKey().bytes, bytes);
         }
     }
 
     /// On success, owns the publication bytes.
-    fn stageDiscoveryPublication(self: *CompileTimeObjectCache, placement: BuildEnv.PackPlacement, key: [32]u8, bytes: []u8) Allocator.Error!void {
+    fn stageDiscoveryPublication(self: *CompileTimeObjectCache, placement: BuildEnv.PackPlacement, key: [32]u8, bytes: backend.dev.PackFile.Bytes) Allocator.Error!void {
         std.debug.assert(!self.packs.revoked);
         if (self.packs.state != .unavailable) {
             self.packs.retainDiscovery(bytes) catch |err| switch (err) {
@@ -611,7 +605,7 @@ const CompileTimeObjectCache = struct {
     }
 
     /// On success, owns the publication bytes independently of decoded objects.
-    fn stagePublication(self: *CompileTimeObjectCache, placement: BuildEnv.PackPlacement, key: [32]u8, bytes: []u8) Allocator.Error!void {
+    fn stagePublication(self: *CompileTimeObjectCache, placement: BuildEnv.PackPlacement, key: [32]u8, bytes: backend.dev.PackFile.Bytes) Allocator.Error!void {
         std.debug.assert(!self.packs.revoked);
         // A later consumer borrows these exact objects now; accepting the
         // program controls only disk publication. An unavailable external cache
@@ -780,8 +774,9 @@ test "normal native capture serves both consumers the same exact objects before 
             .roc_ctx = CoreCtx.testing(allocator, allocator),
             .root = try allocator.dupe(u8, "unused-cache"),
             .verbose = false,
+            .version_hash = backend.dev.PackFile.test_version_hash,
         },
-        .packs = pack_store.LoadedPacks.init(allocator),
+        .packs = pack_store.LoadedPacks.init(allocator, backend.dev.PackFile.test_version_hash),
         .prepared = true,
     };
     defer cache.store.deinit();
@@ -801,7 +796,7 @@ test "normal native capture serves both consumers the same exact objects before 
         .rc_ret_unique = false,
         .rc_ret_unique_fields = 0,
         .rc_ret_conditions = &.{},
-    }});
+    }}, backend.dev.PackFile.test_version_hash);
     cache.stagePublication(.{ .origin = .local, .identity = @as([32]u8, @splat(1)) }, key, bytes) catch |err| {
         allocator.free(bytes);
         return err;
@@ -854,8 +849,9 @@ test "rejected checking discards staged CTFE publication ownership without IO" {
             .roc_ctx = CoreCtx.testing(allocator, allocator),
             .root = root,
             .verbose = false,
+            .version_hash = backend.dev.PackFile.test_version_hash,
         },
-        .packs = pack_store.LoadedPacks.init(allocator),
+        .packs = pack_store.LoadedPacks.init(allocator, backend.dev.PackFile.test_version_hash),
     };
     defer CompileTimeObjectCache.deinit(cache);
     const bytes = try allocator.dupe(u8, "staged bytes");
@@ -902,7 +898,7 @@ fn sharedCompileTimeObjectCache(build_env: *BuildEnv, target: RocTarget, policy:
         .allocator = cache.allocator,
         .io = cache.io,
         .store = store,
-        .packs = pack_store.LoadedPacks.init(cache.allocator),
+        .packs = pack_store.LoadedPacks.init(cache.allocator, store.version_hash),
         .policy = policy,
         .policy_registry = cache,
     };
@@ -926,7 +922,7 @@ fn attachCompileTimeObjectCache(ctx: *CliCtx, build_env: *BuildEnv, verbose: boo
         .allocator = ctx.gpa,
         .io = ctx.io.std_io,
         .store = store,
-        .packs = pack_store.LoadedPacks.init(ctx.gpa),
+        .packs = pack_store.LoadedPacks.init(ctx.gpa, store.version_hash),
     };
     // One heap-owned collection supplies both lookup offers and splice artifacts.
     // Runtime sharing must retain this exact provider, not merely its host domain.
@@ -8717,7 +8713,7 @@ fn writePackObjects(
             return error.NativeCompilationFailed;
         };
         if (pack.compiled.artifacts) |*set| {
-            const pack_bytes = try packFileBytes(ctx.gpa, set, &pack.lowered);
+            const pack_bytes = try packFileBytes(ctx.gpa, set, &pack.lowered, compile.cache_versioning.entryVersionHash(.native_pack));
             defer ctx.gpa.free(pack_bytes);
             const pack_path = try std.fmt.allocPrint(ctx.arena, "{s}.pack.{s}.rpk", .{ final_output_path, file_name });
             backend.writeFileWindowsAvSafe(ctx.io.std_io, pack_path, pack_bytes) catch {
@@ -8894,7 +8890,7 @@ fn writePacksToStore(
     if (app_artifacts) |set| {
         if (build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
             if (!try store.has(placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes)) {
-                const bytes = try packFileBytes(ctx.gpa, set, app_lowered);
+                const bytes = try packFileBytes(ctx.gpa, set, app_lowered, store.version_hash);
                 defer ctx.gpa.free(bytes);
                 store.write(placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes, bytes) catch |err| {
                     std.log.warn("object cache could not store the program's pack: {}", .{err});
@@ -8928,7 +8924,7 @@ fn writePacksToStore(
         var pack = try compileModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args, target);
         defer pack.deinit();
         const set = &(pack.compiled.artifacts orelse continue);
-        const bytes = try packFileBytes(ctx.gpa, set, &pack.lowered);
+        const bytes = try packFileBytes(ctx.gpa, set, &pack.lowered, store.version_hash);
         defer ctx.gpa.free(bytes);
         store.write(origin, identity, artifact.codeGenerationKey().bytes, bytes) catch |err| {
             std.log.warn("object cache could not store a module's pack: {}", .{err});
@@ -8943,8 +8939,9 @@ fn packFileBytes(
     allocator: Allocator,
     set: *const backend.dev.ProcArtifact.Set,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
-) Allocator.Error![]u8 {
-    return packFileBytesFiltered(allocator, set, lowered, .{}, null);
+    version_hash: [32]u8,
+) Allocator.Error!backend.dev.PackFile.Bytes {
+    return packFileBytesFiltered(allocator, set, lowered, .{}, null, version_hash);
 }
 
 fn cachePublicationOwner(owner: ?check.CheckedArtifact.ModuleId, requester: check.CheckedArtifact.ModuleId, builtin_owner: check.CheckedArtifact.ModuleId) ?check.CheckedArtifact.ModuleId {
@@ -9001,7 +8998,7 @@ const PackEncodingPlan = struct {
 
     /// The serving closure of `set` marked by `selected`, encoded; the cached
     /// one when the marks are the same.
-    fn servingFor(self: *PackEncodingPlan, set: *const backend.dev.ProcArtifact.Set, selected: []const bool) (Allocator.Error || backend.dev.PackFile.WriteError)!*CachedServing {
+    fn servingFor(self: *PackEncodingPlan, set: *const backend.dev.ProcArtifact.Set, selected: []const bool) Allocator.Error!*CachedServing {
         if (self.serving) |*cached| {
             if (std.mem.eql(bool, cached.selected, selected)) return cached;
             cached.deinit(self.allocator);
@@ -9289,7 +9286,8 @@ fn packFileBytesFiltered(
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     filter: PackOfferFilter,
     shared: ?*PackEncodingPlan,
-) Allocator.Error![]u8 {
+    version_hash: [32]u8,
+) Allocator.Error!backend.dev.PackFile.Bytes {
     var owned: ?PackEncodingPlan = null;
     defer if (owned) |*plan| plan.deinit();
     const plan = shared orelse blk: {
@@ -9412,13 +9410,7 @@ fn packFileBytesFiltered(
     // A pack owns exactly the serving closure, not unrelated evaluator roots.
     // Their source observations may name an app this independent offer never
     // reaches, and must not veto its admission after an app edit.
-    const cached = plan.servingFor(set, selected) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.InvalidCodeTarget, error.InvalidSourceEventCertificate, error.InvalidLiteralRecipe, error.InvalidRootMaterializationDependency => {
-            std.debug.assert(false); // A validated native producer emitted an invalid context site.
-            unreachable;
-        },
-    };
+    const cached = try plan.servingFor(set, selected);
     const serving = &cached.selection;
     for (selected_specs.items) |*spec| spec.artifact = serving.old_to_new[spec.artifact].?;
     // Each literal materializer the serving code calls carries its read:
@@ -9435,13 +9427,7 @@ fn packFileBytesFiltered(
             (if (filter.carried_reads) |carried| carried.get(wrapper) else null) orelse continue;
         try materializer_reads.append(allocator, .{ .wrapper_identity = wrapper, .read = read });
     };
-    return backend.dev.PackFile.writeWithBody(allocator, &serving.set, &cached.body, selected_specs.items, &.{}, materializer_reads.items) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.InvalidCodeTarget, error.InvalidSourceEventCertificate, error.InvalidLiteralRecipe, error.InvalidRootMaterializationDependency => {
-            std.debug.assert(false); // A validated native producer emitted an invalid context site.
-            unreachable;
-        },
-    };
+    return backend.dev.PackFile.writeWithBody(allocator, &serving.set, &cached.body, selected_specs.items, &.{}, materializer_reads.items, version_hash);
 }
 
 /// The LIR fingerprint of one procedure of `lowered`, which is the same in
@@ -11516,7 +11502,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     defer if (own_packs) |*packs| packs.deinit();
     var loaded_packs: ?*pack_store.LoadedPacks = null;
     if (std.c.getenv("ROC_DEV_PACK_HITS")) |dir_z| {
-        own_packs = pack_store.LoadedPacks.loadDir(ctx.gpa, ctx.io.std_io, std.mem.span(dir_z)) catch |err| {
+        own_packs = pack_store.LoadedPacks.loadDir(ctx.gpa, ctx.io.std_io, std.mem.span(dir_z), compile.cache_versioning.entryVersionHash(.native_pack)) catch |err| {
             std.log.err("failed to load packs from {s}: {}", .{ std.mem.span(dir_z), err });
             return error.NativeCompilationFailed;
         };
@@ -11551,7 +11537,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
                 return error.NativeCompilationFailed;
             };
             object_store = &own_store.?;
-            own_packs = pack_store.LoadedPacks.init(ctx.gpa);
+            own_packs = pack_store.LoadedPacks.init(ctx.gpa, object_store.?.version_hash);
             own_packs.?.pending = .{ .store = object_store.?, .io = ctx.io.std_io, .build_env = &build_env };
             loaded_packs = &own_packs.?;
         }

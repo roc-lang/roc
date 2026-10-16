@@ -760,14 +760,26 @@ header data and its owned backing graph. Failure guards remain ordinary code
 across success, failure and completed-image continuation, preserving procedure
 identity, revisions and object bytes.
 
-A store pack is read as its index alone: the offers at its tail and an artifact
-table giving each artifact's byte range and the artifacts it reaches (set-local
-references, symbolic references the writer resolved to a definition in the
-pack, and the code targets of its data). A lookup that selects one of a pack's
-offers decodes exactly the closure of that offer's root over the table and
-admits it into the one set admitted from that pack, which grows by the
-artifacts the closure adds; a key's candidate packs are tried in load order
-and left alone once an offer serves the lookup. The set names its definitions
+A store pack is a memory image (`PackFile.Serialized`, a serialization root
+under "Cache Admission Versioning") read the way a checked module is read: the
+file is mapped, its header's entry-version hash is compared, and its columns
+are the live tables, fixed-width rows whose cross-references are row indices
+and whose byte strings are ranges into one blob, relocated by one base per
+column. Nothing is decoded or validated to reach an artifact: code, data,
+names and descriptors are the mapped bytes, read where they lie. The writer is
+this compiler, so the shape of what it wrote is a compiler invariant, asserted
+in debug builds at write time and trusted afterwards; a read's only
+release-mode checks are the header's hash and the bounds of each column and
+row range, which admitting any cache entry costs. Offer metadata whose shape
+nests (storage-demand facts, literal recipes) travels as opaque field-wise
+blobs decoded only for the offers a lookup admits. The image's artifact rows
+give each artifact's edges (set-local references, symbolic references the
+writer resolved to a definition in the pack, and the code targets of its
+data). A lookup that selects one of a pack's offers walks exactly the closure
+of that offer's root over those rows and admits it into the one set admitted
+from that pack, which grows by the artifacts the closure adds; a key's
+candidate packs are tried in load order and left alone once an offer serves
+the lookup. The set names its definitions
 by their index in the pack (`ProcArtifact.Set.definitions`) and carries the
 table's edges, so indexing computes the components, serving demand, and
 admission of the artifacts a set gained over those edges alone, with the
@@ -4309,7 +4321,8 @@ bytes.
 
 A serialization root is a `Serialized` type whose bytes are admitted from outside
 the running compiler: `ModuleEnv.Serialized`, the checked module's `Serialized`
-layout, and `PlatformPairing.Serialized`. Each root declares a `root_contract`
+layout, `PlatformPairing.Serialized`, and the object cache's pack image
+`PackFile.Serialized`. Each root declares a `root_contract`
 (`collections.serde_validation.RootContract`) naming its owner type and every
 owner field it deliberately does not persist, every serialized field with no
 owner field, and every rename. A root's layout fingerprint
@@ -4320,9 +4333,11 @@ root that could silently drop it. There is no way to fingerprint an unregistered
 type, and an unfingerprinted type is admitted by no cache entry.
 
 `compile/cache_versioning.zig` is the only place fingerprints are composed. Each
-cache entry kind (checked module, platform pairing, canonicalized module) has one
-entry-version hash folding the kind's domain tag, its envelope and record format
-versions, and the fingerprint of every root its bodies hold. Entry headers carry
+cache entry kind (checked module, platform pairing, canonicalized module, native
+pack) has one entry-version hash folding the kind's domain tag, its envelope and
+record format versions, and the fingerprint of every root its bodies hold. The
+native pack's hash also names the store directory its packs live in, so a
+compiler never lists another layout's packs. Entry headers carry
 that hash, and admission compares it and nothing else, so a fingerprint not folded
 there guards no entry. The builtin blob's trailer is the single fingerprint of
 the checked module's `Serialized` layout, compared directly.

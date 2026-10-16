@@ -15,6 +15,7 @@
 const std = @import("std");
 const can = @import("can");
 const check = @import("check");
+const backend = @import("backend");
 
 const canonicalized_cache_entry = @import("canonicalized_cache_entry.zig");
 const Constants = @import("cache_config.zig").Constants;
@@ -32,6 +33,8 @@ pub const Entry = enum {
     /// One module's canonicalization output: an env body and the encoded
     /// parse-stage record.
     canonicalized_module,
+    /// One module's pack of native procedure artifacts and offers.
+    native_pack,
 };
 
 /// Layout fingerprint of `ModuleEnv.Serialized`.
@@ -44,6 +47,9 @@ const checked_envelope_version: u32 = 13;
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order.
 const canonicalized_envelope_version: u32 = 3;
+
+/// Layout fingerprint of the pack image's root (`backend.dev.PackFile.Serialized`).
+pub const native_pack_layout: [32]u8 = check.rootLayoutVersionHash(backend.dev.PackFile.Serialized, 1);
 
 /// The running compiler's admission hash for `entry`.
 pub fn entryVersionHash(comptime entry: Entry) [32]u8 {
@@ -62,6 +68,11 @@ pub fn entryVersionHash(comptime entry: Entry) [32]u8 {
             "roc-canonicalized-module-entry-v1",
             &.{ canonicalized_envelope_version, canonicalized_cache_entry.format_version },
             &.{module_env_layout},
+        ),
+        .native_pack => compose(
+            "roc-native-pack-entry-v1",
+            &.{backend.dev.PackFile.envelope_version},
+            &.{native_pack_layout},
         ),
     };
 }

@@ -18,8 +18,8 @@ const CoreCtx = ctx_mod.CoreCtx;
 const SourceEvents = @import("builtins").source_events;
 
 /// The pack files of one compiler build, target, and optimization level,
-/// under the cache root: `objects-v<format>/<target>-<opt>/<local|pkg>/<module
-/// identity>/<artifact key>.rpk`. Packs are filed by module identity so an
+/// under the cache root: `objects-<entry-version hash prefix>/<target>-<opt>/
+/// <local|pkg>/<module identity>/<artifact key>.rpk`. Packs are filed by module identity so an
 /// edited module's previous packs stay beside its new one until the sweep
 /// removes them, which is what lets unchanged specializations hit across an
 /// edit. Every file is a pure function of the module and its transitive
@@ -30,6 +30,9 @@ pub const Store = struct {
     roc_ctx: CoreCtx,
     root: []u8,
     verbose: bool,
+    /// The entry-version hash this compiler stamps on the packs it writes and
+    /// admits packs by.
+    version_hash: [32]u8,
 
     pub const InitError = Allocator.Error || error{NoHomeDirectory};
 
@@ -38,9 +41,10 @@ pub const Store = struct {
         defer allocator.free(version_dir);
         const mode = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ @tagName(target), opt_name });
         defer allocator.free(mode);
-        const namespace = std.fmt.comptimePrint("objects-v{d}", .{PackFile.format_version});
+        const version_hash = compile.cache_versioning.entryVersionHash(.native_pack);
+        const namespace = "objects-" ++ std.fmt.bytesToHex(version_hash[0..8].*, .lower);
         const root = try std.fs.path.join(allocator, &.{ version_dir, namespace, mode });
-        return .{ .allocator = allocator, .roc_ctx = cache_config.roc_ctx, .root = root, .verbose = cache_config.verbose };
+        return .{ .allocator = allocator, .roc_ctx = cache_config.roc_ctx, .root = root, .verbose = cache_config.verbose, .version_hash = version_hash };
     }
 
     pub fn deinit(self: *Store) void {
@@ -218,7 +222,7 @@ test "object cache interleaved writers expose only complete final bytes" {
     const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
     defer allocator.free(root);
     const base = CoreCtx.default(allocator, allocator, io);
-    var store = Store{ .allocator = allocator, .roc_ctx = base, .root = try allocator.dupe(u8, root), .verbose = false };
+    var store = Store{ .allocator = allocator, .roc_ctx = base, .root = try allocator.dupe(u8, root), .verbose = false, .version_hash = PackFile.test_version_hash };
     defer store.deinit();
     var hook = Hook{ .store = &store, .base = base };
     store.roc_ctx.ctx = &hook;
@@ -255,6 +259,7 @@ test "partial object publications are additive and do not occupy the complete ke
     defer allocator.free(root);
     var store = Store{
         .allocator = allocator,
+        .version_hash = PackFile.test_version_hash,
         .roc_ctx = CoreCtx.default(allocator, allocator, io),
         .root = try allocator.dupe(u8, root),
         .verbose = false,
@@ -320,14 +325,14 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
         .rc_ret_unique = false,
         .rc_ret_unique_fields = 0,
         .rc_ret_conditions = &.{},
-    }});
+    }}, PackFile.test_version_hash);
     defer allocator.free(bytes);
     const incompatible = try allocator.dupe(u8, bytes);
     defer allocator.free(incompatible);
-    std.mem.writeInt(u32, incompatible[4..8], PackFile.format_version + 1, .little);
+    incompatible[16] +%= 1;
     const Attempt = struct {
         fn run(failing: Allocator, dir_path: []const u8, expected_key: [32]u8, expected_identity: lir.ProcIdentity) (LoadedPacks.LoadError || error{ TestExpectedEqual, TestUnexpectedResult, TestExpectedError, TestUnexpectedError })!void {
-            var packs = LoadedPacks.init(failing);
+            var packs = LoadedPacks.init(failing, PackFile.test_version_hash);
             defer packs.deinit();
             packs.loadDirInto(std.testing.io, dir_path, .cache_offers) catch |err|
                 return rejected(&packs, expected_key, expected_identity, err);
@@ -367,13 +372,13 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
         // layout, so the failure check runs over an allocator that refuses it.
         var deterministic = collections.DeterministicAllocator.init(allocator);
         try std.testing.checkAllAllocationFailures(deterministic.allocator(), Attempt.run, .{ dir_path, key, identity });
-        try std.testing.expectError(error.UnsupportedPackVersion, LoadedPacks.loadDir(allocator, io, dir_path));
+        try std.testing.expectError(error.UnsupportedPackVersion, LoadedPacks.loadDir(allocator, io, dir_path, PackFile.test_version_hash));
     }
     try tmp.dir.createDirPath(io, "malformed");
     try tmp.dir.writeFile(io, .{ .sub_path = "malformed/broken.rpk", .data = "not a pack" });
     const malformed_path = try tmp.dir.realPathFileAlloc(io, "malformed", allocator);
     defer allocator.free(malformed_path);
-    var malformed = LoadedPacks.init(allocator);
+    var malformed = LoadedPacks.init(allocator, PackFile.test_version_hash);
     defer malformed.deinit();
     try std.testing.expectError(error.MalformedPack, malformed.loadDirInto(io, malformed_path, .cache_offers));
     try std.testing.expectEqual(error.MalformedPack, malformed.failure.?);
@@ -389,7 +394,7 @@ test "object cache semantic offers select compatible relations in either order" 
     const second_relation = @as([32]u8, @splat(32));
     const Attempt = struct {
         fn run(allocator: Allocator, reverse: bool) (LoadedPacks.LoadError || PackFile.WriteError || error{ TestExpectedEqual, TestUnexpectedResult })!void {
-            var packs = LoadedPacks.init(allocator);
+            var packs = LoadedPacks.init(allocator, PackFile.test_version_hash);
             defer packs.deinit();
             for (0..3) |position| {
                 const index = if (reverse) 2 - position else position;
@@ -427,7 +432,7 @@ test "object cache semantic offers select compatible relations in either order" 
                 };
                 var specs = [_]PackFile.SpecEntry{ spec, spec };
                 specs[1].key = mixed_key;
-                const bytes = try PackFile.write(allocator, &set, &specs);
+                const bytes = try PackFile.write(allocator, &set, &specs, PackFile.test_version_hash);
                 defer allocator.free(bytes);
                 try packs.appendPack(bytes);
             }
@@ -467,7 +472,7 @@ test "normal native offers attest one exact physical definition and fixed metada
     const first_key = @as([32]u8, @splat(72));
     const second_key = @as([32]u8, @splat(73));
     const Producer = struct {
-        fn bytes(a: Allocator, proc_identity: lir.ProcIdentity, key: [32]u8, code: []const u8, borrowed: u64) PackFile.WriteError![]u8 {
+        fn bytes(a: Allocator, proc_identity: lir.ProcIdentity, key: [32]u8, code: []const u8, borrowed: u64) PackFile.WriteError!PackFile.Bytes {
             const set = backend.dev.ProcArtifact.Set{
                 .arena = collections.SingleThreadArena.init(a),
                 .artifacts = &.{.{
@@ -492,7 +497,7 @@ test "normal native offers attest one exact physical definition and fixed metada
                 .rc_ret_unique = false,
                 .rc_ret_unique_fields = 0,
                 .rc_ret_conditions = &.{},
-            }});
+            }}, PackFile.test_version_hash);
         }
     };
     const first_bytes = try Producer.bytes(allocator, identity, first_key, "\xc3", 0);
@@ -502,7 +507,7 @@ test "normal native offers attest one exact physical definition and fixed metada
         .{ .code = "\x90\xc3", .borrowed = 0, .accepted = false },
         .{ .code = "\xc3", .borrowed = 1, .accepted = false },
     }) |candidate| {
-        var packs = LoadedPacks.init(allocator);
+        var packs = LoadedPacks.init(allocator, PackFile.test_version_hash);
         defer packs.deinit();
         try packs.retain(first_bytes);
         const splice = packs.spliceSource();
@@ -521,7 +526,7 @@ test "normal native offers attest one exact physical definition and fixed metada
 
 test "normal native retained objects keep borrowed exact graphs stable while the universe grows" {
     const allocator = std.testing.allocator;
-    var packs = LoadedPacks.init(allocator);
+    var packs = LoadedPacks.init(allocator, PackFile.test_version_hash);
     defer packs.deinit();
     var first: ?backend.dev.LocatedArtifact = null;
     for (0..32) |index| {
@@ -547,6 +552,7 @@ test "normal native retained objects keep borrowed exact graphs stable while the
         if (index == 0) {
             artifacts[0].code = "\xe8\x00\x00\x00\x00\xc3";
             artifacts[0].refs = &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0 }};
+            artifacts[0].context_contract = .{ .target = .x64musl, .cpu_level = .default, .hot_reload = false, .default_platform_runtime = false };
         }
         const set = backend.dev.ProcArtifact.Set{
             .arena = collections.SingleThreadArena.init(allocator),
@@ -563,7 +569,7 @@ test "normal native retained objects keep borrowed exact graphs stable while the
             .rc_ret_unique = false,
             .rc_ret_unique_fields = 0,
             .rc_ret_conditions = &.{},
-        }});
+        }}, PackFile.test_version_hash);
         defer allocator.free(bytes);
         try packs.retain(bytes);
         const splice = packs.spliceSource();
@@ -647,10 +653,10 @@ test "normal native source certificates reload only against current checked auth
         .rc_ret_unique = false,
         .rc_ret_unique_fields = 0,
         .rc_ret_conditions = &.{},
-    }});
+    }}, PackFile.test_version_hash);
     defer allocator.free(bytes);
     for ([_]bool{ false, true }) |stale| {
-        var packs = LoadedPacks.init(allocator);
+        var packs = LoadedPacks.init(allocator, PackFile.test_version_hash);
         defer packs.deinit();
         owner.key.module_identity_hash = if (stale) @splat(36) else @splat(32);
         packs.checked_root = &owner;
@@ -725,7 +731,7 @@ test "normal native site and literal certificates attest exact checked semantic 
     }};
     for (&sites, 0..) |*site, index| site.id = @fromBackingInt(@intCast(index));
     owner.exhaustiveness_sites = .{ .sites = &sites };
-    var packs = LoadedPacks.init(allocator);
+    var packs = LoadedPacks.init(allocator, PackFile.test_version_hash);
     defer packs.deinit();
     packs.checked_root = &owner;
     var certificate = backend.dev.ProcArtifact.SourceEventCertificate{
@@ -897,7 +903,7 @@ pub const Pending = struct {
 test "pack checked materializer projection uses actual pending inputs and survives source retirement" {
     const allocator = std.testing.allocator;
     const eval = @import("eval");
-    var packs = LoadedPacks.init(allocator);
+    var packs = LoadedPacks.init(allocator, PackFile.test_version_hash);
     defer packs.deinit();
     const declaration = authority: {
         var builtin_modules = try eval.BuiltinModules.init(allocator);
@@ -932,7 +938,7 @@ test "pack checked materializer projection uses actual pending inputs and surviv
         // The producer is not in Builtin's visibility and has no published
         // BuildEnv entry. Only the caller's actual prepared input contains it.
         for ([_]bool{ false, true }) |as_relation| {
-            var projected = LoadedPacks.init(allocator);
+            var projected = LoadedPacks.init(allocator, PackFile.test_version_hash);
             defer projected.deinit();
             const producer_views = [_]check.CheckedModule.ImportedModuleView{
                 check.CheckedArtifact.importedView(&resources.checked_artifact),
@@ -1011,7 +1017,7 @@ test "pack checked materializer projection uses actual pending inputs and surviv
 
 test "pack checked materializer demand is shared across recursive callers and rejects only its closure" {
     const allocator = std.testing.allocator;
-    var packs = LoadedPacks.init(allocator);
+    var packs = LoadedPacks.init(allocator, PackFile.test_version_hash);
     defer packs.deinit();
     const declaration = lir.Program.RootMaterialization{
         .module = @splat(1),
@@ -1054,7 +1060,7 @@ test "pack literal projection retains producer declarations after source retirem
     const allocator = std.testing.allocator;
     const eval = @import("eval");
     const checked = check.CheckedArtifact;
-    var packs = LoadedPacks.init(allocator);
+    var packs = LoadedPacks.init(allocator, PackFile.test_version_hash);
     defer packs.deinit();
     const declaration = authority: {
         var builtin_modules = try eval.BuiltinModules.init(allocator);
@@ -1192,6 +1198,8 @@ pub const LoadedPacks = struct {
     };
 
     allocator: Allocator,
+    /// The entry-version hash packs are admitted by.
+    version_hash: [32]u8,
     packs: std.ArrayList(*PackFile.Pack),
     /// Indexing state of each pack in `packs`, in the same order.
     pack_states: std.ArrayListUnmanaged(Indexed) = .empty,
@@ -1259,7 +1267,7 @@ pub const LoadedPacks = struct {
     deferred: ?Deferred = null,
     /// Packs a program published while code packs were still unloaded,
     /// indexed with them when they load.
-    staged: std.ArrayListUnmanaged([]u8) = .empty,
+    staged: std.ArrayListUnmanaged(PackFile.Bytes) = .empty,
     /// Store packs, indexed but with their artifacts undecoded. A lookup
     /// that selects one of a pack's offers decodes and admits the closure
     /// of that offer alone, with the closures of the literal producers it
@@ -1269,11 +1277,12 @@ pub const LoadedPacks = struct {
     candidates: std.AutoHashMapUnmanaged([32]u8, std.ArrayListUnmanaged(u32)) = .empty,
 
     const StorePack = struct {
-        /// The pack's bytes, or the file holding them.
-        contents: union(enum) { bytes: []u8, path: []u8 },
-        index: PackFile.Index,
-        /// The bytes `index` was read from when they are not `contents`.
-        index_bytes: ?[]u8 = null,
+        /// The pack image: bytes this process owns, or the mapped file.
+        contents: union(enum) { bytes: PackFile.Bytes, mapped: CoreCtx.MappedFile },
+        view: PackFile.View,
+        /// The literal reads behind the pack's materializers, decoded once
+        /// into `arena` when the pack's set is created.
+        materializer_reads: []const PackFile.MaterializerRead = &.{},
         /// The artifacts decoded so far, by their index in the pack. Each
         /// decodes once, however many admitted closures hold it.
         decoded: std.AutoHashMapUnmanaged(u32, backend.dev.ProcArtifact.Artifact) = .empty,
@@ -1325,9 +1334,10 @@ pub const LoadedPacks = struct {
         explicit_packs,
     };
 
-    pub fn init(allocator: Allocator) LoadedPacks {
+    pub fn init(allocator: Allocator, version_hash: [32]u8) LoadedPacks {
         return .{
             .allocator = allocator,
+            .version_hash = version_hash,
             .packs = .empty,
             .authority_arena = collections.SingleThreadArena.init(allocator),
             .sources = std.AutoHashMap([32]u8, SourceAuthority).init(allocator),
@@ -1341,8 +1351,8 @@ pub const LoadedPacks = struct {
     }
 
     /// Load every `.rpk` file in `dir_path` and index the result.
-    pub fn loadDir(allocator: Allocator, io: std.Io, dir_path: []const u8) LoadError!LoadedPacks {
-        var self = LoadedPacks.init(allocator);
+    pub fn loadDir(allocator: Allocator, io: std.Io, dir_path: []const u8, version_hash: [32]u8) LoadError!LoadedPacks {
+        var self = LoadedPacks.init(allocator, version_hash);
         errdefer self.deinit();
         try self.loadDirInto(io, dir_path, .explicit_packs);
         try self.indexPacks();
@@ -1386,10 +1396,7 @@ pub const LoadedPacks = struct {
         for (names.items) |name| {
             const path = try std.fs.path.join(allocator, &.{ dir_path, name });
             defer allocator.free(path);
-            const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024 * 1024)) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => return error.PackDirectoryUnreadable,
-            };
+            const bytes = try readPackFile(allocator, io, path);
             if (input == .cache_offers) {
                 self.addSource(bytes) catch |err| switch (err) {
                     error.UnsupportedPackVersion => continue,
@@ -1408,8 +1415,8 @@ pub const LoadedPacks = struct {
         }
     }
 
-    fn appendPack(self: *LoadedPacks, bytes: []const u8) LoadError!void {
-        var pack = try PackFile.read(self.allocator, bytes);
+    fn appendPack(self: *LoadedPacks, bytes: []align(PackFile.alignment.toByteUnits()) const u8) LoadError!void {
+        var pack = try PackFile.read(self.allocator, bytes, self.version_hash);
         errdefer pack.deinit();
         const owner = try self.allocator.create(PackFile.Pack);
         errdefer self.allocator.destroy(owner);
@@ -1424,25 +1431,46 @@ pub const LoadedPacks = struct {
 
     /// Register a store pack's offers without decoding its artifacts. Takes
     /// ownership of `bytes`, also on failure.
-    fn addSource(self: *LoadedPacks, bytes: []u8) LoadError!void {
-        var index = PackFile.readIndex(self.allocator, bytes) catch |err| {
-            self.allocator.free(bytes);
-            return err;
-        };
-        errdefer index.deinit();
+    fn addSource(self: *LoadedPacks, bytes: PackFile.Bytes) LoadError!void {
         errdefer self.allocator.free(bytes);
+        const view = try PackFile.View.init(bytes, self.version_hash);
+        try self.registerSource(.{ .bytes = bytes }, view);
+    }
+
+    /// Register a viewed pack's offers as candidates without reading its
+    /// artifacts.
+    fn registerSource(self: *LoadedPacks, contents: @FieldType(StorePack, "contents"), view: PackFile.View) LoadError!void {
         const id: u32 = @intCast(self.store_packs.items.len);
-        for (index.offers.specs) |spec| {
-            const entry = try self.candidates.getOrPut(self.allocator, spec.key);
+        for (0..view.specCount()) |index| {
+            const entry = try self.candidates.getOrPut(self.allocator, view.specKey(index));
             if (!entry.found_existing) entry.value_ptr.* = .empty;
             const list = entry.value_ptr;
             if (list.items.len == 0 or list.items[list.items.len - 1] != id) try list.append(self.allocator, id);
         }
         try self.store_packs.append(self.allocator, .{
-            .contents = .{ .bytes = bytes },
-            .index = index,
+            .contents = contents,
+            .view = view,
             .arena = collections.SingleThreadArena.init(self.allocator),
         });
+    }
+
+    /// Read a whole pack file into memory aligned for viewing.
+    fn readPackFile(allocator: Allocator, io: std.Io, path: []const u8) LoadError!PackFile.Bytes {
+        const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return error.PackDirectoryUnreadable;
+        defer file.close(io);
+        const length = file.length(io) catch return error.PackDirectoryUnreadable;
+        const bytes = try allocator.alignedAlloc(u8, PackFile.alignment, @intCast(length));
+        errdefer allocator.free(bytes);
+        const read = file.readPositionalAll(io, bytes, 0) catch return error.PackDirectoryUnreadable;
+        if (read != bytes.len) return error.MalformedPack;
+        return bytes;
+    }
+
+    /// The clock the admission timers read: the store's, when a store is in
+    /// view; explicit pack sets are not timed.
+    fn now(self: *const LoadedPacks) i128 {
+        const pending = self.pending orelse return 0;
+        return std.Io.Timestamp.now(pending.io, .awake).nanoseconds;
     }
 
     /// Admit closures of the offers of `key` from the store packs offering
@@ -1453,9 +1481,8 @@ pub const LoadedPacks = struct {
     /// candidate would.
     fn admitKey(self: *LoadedPacks, key: [32]u8, relation: ?[32]u8) LoadError!void {
         if (self.candidates.count() == 0) return;
-        const io = (self.pending orelse unreachable).io;
-        const started = std.Io.Timestamp.now(io, .awake).nanoseconds;
-        defer self.admit_ns += std.Io.Timestamp.now(io, .awake).nanoseconds - started;
+        const started = self.now();
+        defer self.admit_ns += self.now() - started;
         var pending = std.ArrayList([32]u8).empty;
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, key);
@@ -1464,8 +1491,8 @@ pub const LoadedPacks = struct {
             for (list.items) |id| {
                 if (self.specs.contains(.{ .key = next, .platform_requirement_relation = relation })) break;
                 if (try self.admitClosure(id, next, &pending)) {
-                    const index_started = std.Io.Timestamp.now(io, .awake).nanoseconds;
-                    defer self.index_ns += std.Io.Timestamp.now(io, .awake).nanoseconds - index_started;
+                    const index_started = self.now();
+                    defer self.index_ns += self.now() - index_started;
                     try self.indexPacksUnrecorded();
                 }
             }
@@ -1481,16 +1508,17 @@ pub const LoadedPacks = struct {
     /// the pack's materializer reads name. Returns whether the set grew.
     fn admitClosure(self: *LoadedPacks, id: u32, key: [32]u8, pending: *std.ArrayList([32]u8)) LoadError!bool {
         const source = &self.store_packs.items[id];
-        const offers = source.index.offers;
+        const view = &source.view;
         var roots = std.ArrayList(u32).empty;
         defer roots.deinit(self.allocator);
-        for (offers.specs) |spec| {
-            if (!std.mem.eql(u8, &spec.key, &key)) continue;
-            if (source.admitted_roots.contains(spec.artifact)) continue;
-            try roots.append(self.allocator, spec.artifact);
+        for (0..view.specCount()) |index| {
+            if (!std.mem.eql(u8, &view.specKey(index), &key)) continue;
+            const artifact = view.specArtifact(index);
+            if (source.admitted_roots.contains(artifact)) continue;
+            try roots.append(self.allocator, artifact);
         }
         if (roots.items.len == 0) return false;
-        const members = (try PackFile.closure(self.allocator, &source.index, roots.items)) orelse {
+        const members = (try view.closure(self.allocator, roots.items)) orelse {
             // A closure with an unresolved reference serves nothing, as it
             // would not after whole-pack admission either.
             for (roots.items) |root| try source.admitted_roots.put(self.allocator, root, {});
@@ -1504,9 +1532,8 @@ pub const LoadedPacks = struct {
         }
         if (std.c.getenv("ROC_PACK_TRACE") != null) std.debug.print("admit-closure pack={d} key={x} roots={d} members={d} added={d}\n", .{ id, key[0..8], roots.items.len, members.len, added.items.len });
         {
-            const io = (self.pending orelse unreachable).io;
-            const decode_started = std.Io.Timestamp.now(io, .awake).nanoseconds;
-            defer self.decode_ns += std.Io.Timestamp.now(io, .awake).nanoseconds - decode_started;
+            const decode_started = self.now();
+            defer self.decode_ns += self.now() - decode_started;
             try self.decodeMembers(source, added.items);
         }
         const pack = source.admitted orelse try self.createAdmittedPack(source);
@@ -1518,11 +1545,11 @@ pub const LoadedPacks = struct {
         try source.edge_list.ensureUnusedCapacity(self.allocator, added.items.len);
         try source.unresolved_list.ensureUnusedCapacity(self.allocator, added.items.len);
         for (added.items) |member| {
-            const table_entry = offers.artifacts[member];
-            const callees = try a.alloc(u32, table_entry.edges.len);
-            for (table_entry.edges, callees) |edge, *callee| callee.* = source.position.get(edge) orelse return error.MalformedPack;
+            const pack_edges = view.edges(member);
+            const callees = try a.alloc(u32, pack_edges.len);
+            for (pack_edges, callees) |edge, *callee| callee.* = source.position.get(edge) orelse return error.MalformedPack;
             source.edge_list.appendAssumeCapacity(callees);
-            source.unresolved_list.appendAssumeCapacity(table_entry.unresolved);
+            source.unresolved_list.appendAssumeCapacity(view.unresolved(member));
             var artifact = source.decoded.get(member) orelse unreachable;
             const refs = try a.dupe(backend.dev.ProcArtifact.Reference, artifact.refs);
             for (refs) |*ref| ref.target = source.position.get(ref.target) orelse return error.MalformedPack;
@@ -1539,16 +1566,17 @@ pub const LoadedPacks = struct {
             source.artifact_list.appendAssumeCapacity(artifact);
             source.definition_list.appendAssumeCapacity(member);
         }
-        for (offers.specs) |spec| {
-            if (source.admitted_roots.contains(spec.artifact)) continue;
-            const new = source.position.get(spec.artifact) orelse continue;
-            var entry = spec;
+        for (0..view.specCount()) |index| {
+            const root = view.specArtifact(index);
+            if (source.admitted_roots.contains(root)) continue;
+            const new = source.position.get(root) orelse continue;
+            var entry = try view.spec(index, source.arena.allocator());
             entry.artifact = new;
             try source.spec_list.append(self.allocator, entry);
-            try source.admitted_roots.put(self.allocator, spec.artifact, {});
-            if (spec.demand) |demand| for (demand.literal_reads) |read| try pending.append(self.allocator, read.recipe.producer_key);
+            try source.admitted_roots.put(self.allocator, root, {});
+            if (entry.demand) |demand| for (demand.literal_reads) |read| try pending.append(self.allocator, read.recipe.producer_key);
         }
-        for (offers.materializer_reads) |entry| try pending.append(self.allocator, entry.read.recipe.producer_key);
+        for (source.materializer_reads) |entry| try pending.append(self.allocator, entry.read.recipe.producer_key);
         pack.set.artifacts = source.artifact_list.items;
         pack.set.definitions = source.definition_list.items;
         pack.specs = source.spec_list.items;
@@ -1561,18 +1589,19 @@ pub const LoadedPacks = struct {
     /// the packs, so that its first growth indexes the pack's discovery
     /// summaries and materializer reads along with its artifacts.
     fn createAdmittedPack(self: *LoadedPacks, source: *StorePack) LoadError!*PackFile.Pack {
+        source.materializer_reads = try source.view.materializerReads(source.arena.allocator());
         const owner = try self.allocator.create(PackFile.Pack);
         errdefer self.allocator.destroy(owner);
         owner.* = .{
             .set = .{
                 .arena = collections.SingleThreadArena.init(self.allocator),
                 .artifacts = &.{},
-                .physical_namespace = source.index.physical_namespace,
+                .physical_namespace = source.view.physicalNamespace(),
                 .definitions = &.{},
             },
             .specs = &.{},
-            .discovery = source.index.offers.discovery,
-            .materializer_reads = source.index.offers.materializer_reads,
+            .discovery = try source.view.discovery(source.arena.allocator()),
+            .materializer_reads = source.materializer_reads,
             .edges = &.{},
             .unresolved = &.{},
         };
@@ -1584,46 +1613,26 @@ pub const LoadedPacks = struct {
         return owner;
     }
 
-    /// Decode the members of a closure `source` has not decoded yet, from
-    /// its bytes or from their ranges of its file.
+    /// Read the members of a closure `source` has not read yet out of its
+    /// image. An artifact's code, data and names stay the image's bytes.
     fn decodeMembers(self: *LoadedPacks, source: *StorePack, members: []const u32) LoadError!void {
-        const table = source.index.offers.artifacts;
-        const count: u32 = @intCast(table.len);
-        switch (source.contents) {
-            .bytes => |bytes| for (members) |member| {
-                if (source.decoded.contains(member)) continue;
-                const entry = table[member];
-                if (entry.end > bytes.len) return error.MalformedPack;
-                const artifact = try PackFile.readArtifactAt(self.allocator, source.arena.allocator(), bytes[@intCast(entry.start)..@intCast(entry.end)], count);
-                try source.decoded.put(self.allocator, member, artifact);
-            },
-            .path => |path| {
-                const io = (self.pending orelse unreachable).io;
-                const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return error.PackDirectoryUnreadable;
-                defer file.close(io);
-                for (members) |member| {
-                    if (source.decoded.contains(member)) continue;
-                    const entry = table[member];
-                    const buffer = try self.allocator.alloc(u8, @intCast(entry.end - entry.start));
-                    defer self.allocator.free(buffer);
-                    const read = file.readPositionalAll(io, buffer, entry.start) catch return error.PackDirectoryUnreadable;
-                    if (read != buffer.len) return error.MalformedPack;
-                    const artifact = try PackFile.readArtifactAt(self.allocator, source.arena.allocator(), buffer, count);
-                    try source.decoded.put(self.allocator, member, artifact);
-                }
-            },
+        for (members) |member| {
+            if (source.decoded.contains(member)) continue;
+            const artifact = try source.view.artifact(member, source.arena.allocator());
+            try source.decoded.put(self.allocator, member, artifact);
         }
     }
 
     /// Retain newly produced normal objects in the same serving universe.
     /// Disk publication remains a separate accepted-checking transaction.
-    pub fn retain(self: *LoadedPacks, bytes: []const u8) LoadError!void {
+    pub fn retain(self: *LoadedPacks, bytes: []align(PackFile.alignment.toByteUnits()) const u8) LoadError!void {
         std.debug.assert(!self.revoked);
         if (self.state == .unavailable) return self.failure.?;
         // A store's code packs load at the first code lookup, and these join
         // them then; nothing before that could look them up.
         if (self.pending != null) {
-            const owned = try self.allocator.dupe(u8, bytes);
+            const owned = try self.allocator.alignedAlloc(u8, PackFile.alignment, bytes.len);
+            @memcpy(owned, bytes);
             switch (self.state) {
                 .pending => try self.staged.append(self.allocator, owned),
                 .ready => {
@@ -1640,7 +1649,7 @@ pub const LoadedPacks = struct {
     }
 
     /// Index a published pack of discovery summaries.
-    pub fn retainDiscovery(self: *LoadedPacks, bytes: []const u8) LoadError!void {
+    pub fn retainDiscovery(self: *LoadedPacks, bytes: []align(PackFile.alignment.toByteUnits()) const u8) LoadError!void {
         std.debug.assert(!self.revoked);
         try self.indexDiscoveryBytes(bytes);
     }
@@ -1658,10 +1667,9 @@ pub const LoadedPacks = struct {
             const entry = (entries.next(io) catch return error.PackDirectoryUnreadable) orelse break;
             if (entry.kind != .file) continue;
             if (!isDiscoveryName(entry.name)) continue;
-            const bytes = dir.readFileAlloc(io, entry.name, self.allocator, .limited(1024 * 1024 * 1024)) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => return error.PackDirectoryUnreadable,
-            };
+            const path = try std.fs.path.join(self.allocator, &.{ dir_path, entry.name });
+            defer self.allocator.free(path);
+            const bytes = try readPackFile(self.allocator, io, path);
             defer self.allocator.free(bytes);
             self.indexDiscoveryBytes(bytes) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
@@ -1671,8 +1679,8 @@ pub const LoadedPacks = struct {
         }
     }
 
-    fn indexDiscoveryBytes(self: *LoadedPacks, bytes: []const u8) LoadError!void {
-        var pack = try PackFile.read(self.allocator, bytes);
+    fn indexDiscoveryBytes(self: *LoadedPacks, bytes: []align(PackFile.alignment.toByteUnits()) const u8) LoadError!void {
+        var pack = try PackFile.read(self.allocator, bytes, self.version_hash);
         defer pack.deinit();
         for (pack.discovery) |entry| {
             try self.discovery.put(self.allocator, .{ .key = entry.key, .platform_requirement_relation = entry.platform_requirement_relation }, {});
@@ -1715,41 +1723,31 @@ pub const LoadedPacks = struct {
         std.mem.sort([]u8, names.items, {}, nameLessThan);
         for (names.items) |name| {
             const path = try std.fs.path.join(allocator, &.{ dir_path, name });
-            var path_owned = true;
-            defer if (path_owned) allocator.free(path);
-            const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return error.PackDirectoryUnreadable;
-            defer file.close(io);
-            var header: [PackFile.header_len]u8 = undefined;
-            const header_read = file.readPositionalAll(io, &header, 0) catch return error.PackDirectoryUnreadable;
-            if (header_read != header.len) return error.MalformedPack;
-            const location = PackFile.readIndexLocation(&header) catch |err| switch (err) {
-                error.UnsupportedPackVersion => continue,
-                error.OutOfMemory, error.MalformedPack => return err,
-            };
-            const length = file.length(io) catch return error.PackDirectoryUnreadable;
-            if (location.specs_offset > length) return error.MalformedPack;
-            const tail = try allocator.alloc(u8, @intCast(length - location.specs_offset));
-            var tail_owned = true;
-            defer if (tail_owned) allocator.free(tail);
-            const tail_read = file.readPositionalAll(io, tail, location.specs_offset) catch return error.PackDirectoryUnreadable;
-            if (tail_read != tail.len) return error.MalformedPack;
-            var index = try PackFile.readIndexAt(allocator, location, tail);
-            errdefer index.deinit();
-            const id: u32 = @intCast(self.store_packs.items.len);
-            for (index.offers.specs) |spec| {
-                const entry = try self.candidates.getOrPut(allocator, spec.key);
-                if (!entry.found_existing) entry.value_ptr.* = .empty;
-                const list = entry.value_ptr;
-                if (list.items.len == 0 or list.items[list.items.len - 1] != id) try list.append(allocator, id);
+            defer allocator.free(path);
+            const store = (self.pending orelse unreachable).store;
+            // The image is mapped where the host allows; otherwise read whole.
+            if (store.roc_ctx.mapFilePrivate(path)) |mapped| {
+                var mapped_owned = true;
+                defer if (mapped_owned) mapped.unmap();
+                comptime std.debug.assert(std.heap.page_size_min >= PackFile.alignment.toByteUnits());
+                const bytes: []align(PackFile.alignment.toByteUnits()) const u8 = @alignCast(mapped.bytes());
+                const view = PackFile.View.init(bytes, self.version_hash) catch |err| switch (err) {
+                    error.UnsupportedPackVersion => continue,
+                    error.OutOfMemory, error.MalformedPack => return err,
+                };
+                try self.registerSource(.{ .mapped = mapped }, view);
+                mapped_owned = false;
+            } else {
+                const bytes = try readPackFile(allocator, io, path);
+                var bytes_owned = true;
+                defer if (bytes_owned) allocator.free(bytes);
+                const view = PackFile.View.init(bytes, self.version_hash) catch |err| switch (err) {
+                    error.UnsupportedPackVersion => continue,
+                    error.OutOfMemory, error.MalformedPack => return err,
+                };
+                try self.registerSource(.{ .bytes = bytes }, view);
+                bytes_owned = false;
             }
-            try self.store_packs.append(allocator, .{
-                .contents = .{ .path = path },
-                .index = index,
-                .index_bytes = tail,
-                .arena = collections.SingleThreadArena.init(allocator),
-            });
-            path_owned = false;
-            tail_owned = false;
         }
     }
 
@@ -2707,10 +2705,9 @@ pub const LoadedPacks = struct {
         self.staged.deinit(self.allocator);
         for (self.store_packs.items) |*source| {
             switch (source.contents) {
-                .bytes, .path => |owned| self.allocator.free(owned),
+                .bytes => |owned| self.allocator.free(owned),
+                .mapped => |mapped| mapped.unmap(),
             }
-            if (source.index_bytes) |bytes| self.allocator.free(bytes);
-            source.index.deinit();
             source.decoded.deinit(self.allocator);
             source.admitted_roots.deinit(self.allocator);
             source.position.deinit(self.allocator);
@@ -2811,7 +2808,7 @@ pub const LoadedPacks = struct {
 
 test "pack literal offers require the full transitive exact producer closure" {
     const allocator = std.testing.allocator;
-    var packs = LoadedPacks.init(allocator);
+    var packs = LoadedPacks.init(allocator, PackFile.test_version_hash);
     defer packs.deinit();
     const Fixture = struct {
         fn read(key: [32]u8, identity: [32]u8) lir.Program.CachedLiteralRead {
@@ -2961,9 +2958,9 @@ test "pack machine callee literals close empty caller demand and recursive SCCs"
                 Fixture.spec(@splat(34), 2, &.{}),
                 Fixture.spec(@splat(31), 3, &.{}),
             };
-            const bytes = try PackFile.write(allocator, &set, specs[0..if (mode == 0) 3 else 4]);
+            const bytes = try PackFile.write(allocator, &set, specs[0..if (mode == 0) 3 else 4], PackFile.test_version_hash);
             defer allocator.free(bytes);
-            var packs = LoadedPacks.init(allocator);
+            var packs = LoadedPacks.init(allocator, PackFile.test_version_hash);
             defer packs.deinit();
             try packs.retain(bytes);
             const caller_key = LoadedPacks.OfferKey{ .key = @splat(32), .platform_requirement_relation = null };
@@ -2989,7 +2986,7 @@ test "pack machine callee literals close empty caller demand and recursive SCCs"
 
 test "pack literal materializers require a recipe in their own serving closure" {
     const allocator = std.testing.allocator;
-    var packs = LoadedPacks.init(allocator);
+    var packs = LoadedPacks.init(allocator, PackFile.test_version_hash);
     defer packs.deinit();
     const read = testLiteralRead(@splat(41), lir.ProcIdentity.forTest(141).bytes);
     var other_cause = read;
