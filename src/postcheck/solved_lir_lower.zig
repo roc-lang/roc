@@ -587,6 +587,13 @@ const ComptimeValueRequest = struct {
 /// distinct types, so neither is what decides whether two demands are the
 /// same demand. The structural digest selects the candidate and exact
 /// representation equivalence confirms it.
+/// A checked root as one of the program's read expressions reads it, at the
+/// read's solved type.
+const ReadStorage = struct {
+    root: Common.ComptimeValueRoot,
+    ty: SolvedType.TypeVarId,
+};
+
 const ComptimeRootKey = struct {
     module: [32]u8,
     root: LIR.ComptimeProducer,
@@ -892,6 +899,11 @@ const Lowerer = struct {
     /// The solved storage request Monotype declared for each checked root a
     /// retired body reads, by position in `solved.layout_requests`.
     retired_read_requests: std.AutoHashMapUnmanaged(Common.CheckedRootUse, u32) = .empty,
+    /// Each checked root some body of the program reads, with the read's
+    /// root and type, built on the first identity hit: an identity-served
+    /// body's storage is declared from the reads of the body it replaces,
+    /// which Monotype lowered.
+    root_read_types: ?std.AutoHashMapUnmanaged(Common.CheckedRootUse, ReadStorage) = null,
     comptime_failure_slots: std.AutoHashMap(ComptimeFailureKey, LIR.StaticDataId),
     static_initializer_queue: std.ArrayList(StaticInitializerEntry),
     packed_plans: collections.DenseMap(layout.Idx, lir_core.PackedData.Plan),
@@ -1308,6 +1320,7 @@ const Lowerer = struct {
         self.comptime_read_shares_root.deinit(self.allocator);
         self.comptime_root_slots.deinit();
         self.retired_read_requests.deinit(self.allocator);
+        if (self.root_read_types) |*types| types.deinit(self.allocator);
         self.comptime_failure_slots.deinit();
         self.layout_owner_types.deinit();
         self.deinitNamedLayoutIndex();
@@ -1395,6 +1408,7 @@ const Lowerer = struct {
         self.comptime_read_shares_root = .empty;
         self.comptime_root_slots = std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot).init(self.allocator);
         self.retired_read_requests = .empty;
+        self.root_read_types = null;
         self.comptime_failure_slots = std.AutoHashMap(ComptimeFailureKey, LIR.StaticDataId).init(self.allocator);
         self.comptime_site_map = &.{};
         self.loop_stack = .empty;
@@ -3080,6 +3094,23 @@ const Lowerer = struct {
         } else if (pack_trace_available and self.spec_cache != null and packTraceEnabled()) {
             if (source_fn.source) |template| if (template.spec_key) |key| std.debug.print("lookup direct-lir key={x} skipped comptime={} plain={} cached={}\n", .{ key.bytes[0..8], self.comptime_phase, plain_spec, cached != null });
         }
+        // A procedure with a body to lower may instead link the code a pack
+        // offers under the identity just assigned (design.md "Identity
+        // Offers"). The offer's facts replace the body's reads and ARC
+        // signature the way a keyed hit's do.
+        const identity_contract = source_fn.source != null and spec.abi == .finite and !spec.return_reuse.enabled() and
+            literal_producer == null and (try self.hostedProcForSource(source_fn.source)) == null;
+        var identity_hit = false;
+        if (cached == null and identity_contract and source_fn.body == .roc and (!self.comptime_phase or self.comptime_closure_hits)) {
+            if (self.spec_cache) |cache| {
+                if (cache.lookupIdentity(identity.bytes, relation)) |hit| {
+                    if (!std.mem.eql(u8, &hit.identity, &identity.bytes)) Common.invariant("identity offer named a different procedure identity");
+                    cached = hit;
+                    identity_hit = true;
+                }
+                if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup identity {s} {s}\n", .{ &identity.symbolHex(), if (identity_hit) "hit" else "miss" });
+            }
+        }
         if (plain_spec) if (literal_producer) |root| if (root.recipe) |recipe| if (recipe.required_native_identity) |required| {
             if (!std.mem.eql(u8, &required, &identity.bytes)) Common.invariant("declared literal producer's prepared object identity differed from its recipe");
             const hit = cached orelse Common.invariant("retired literal-bearing consumer has no declared native producer object");
@@ -3187,7 +3218,20 @@ const Lowerer = struct {
             }
         }
         try self.procs_by_identity.putNoClobber(identity, fn_id);
-        if (cached) |hit| try self.declareRetiredBodyReads(hit);
+        if (cached) |hit| {
+            if (identity_hit) try self.declareIdentityHitReads(hit) else try self.declareRetiredBodyReads(hit);
+        }
+        // A body lowered here and a body served from a pack are both offered
+        // by identity, the latter with its producer's code.
+        if (identity_contract and (source_fn.body == .roc or cached != null)) if (source_fn.source) |template| {
+            try self.result.identity_offers.append(self.allocator, .{
+                .proc = proc,
+                .owner = checkedSpecOwner(template),
+                .platform_requirement_relation = dependency_relation,
+                .demand = try self.cachedDemand(spec.source),
+                .frozen_fn = if (template.frozen_fn) |frozen| @backingInt(frozen) else null,
+            });
+        };
         if (source_fn.source) |template| {
             if (template.spec_key) |key| {
                 // A program that keeps its keyed specializations lowers each
@@ -6153,18 +6197,7 @@ const Lowerer = struct {
     fn declareRetiredBodyReads(self: *Lowerer, hit: Common.SpecCacheHit) Common.LowerError!void {
         const demand = hit.demand orelse Common.invariant("retired body was linked without its demand facts");
         if (demand.eager_reads.len == 0 and hit.checked_root_uses.len == 0) return;
-        if (self.retired_read_requests.count() == 0) {
-            for (self.solved.layout_requests.items, 0..) |request, index| {
-                const root = request.comptime_root orelse continue;
-                const checked_root = switch (root.root) {
-                    .checked => |checked_root| checked_root,
-                    .literal => continue,
-                };
-                const use = Common.CheckedRootUse{ .module = root.module.bytes, .root = @backingInt(checked_root) };
-                const entry = try self.retired_read_requests.getOrPut(self.allocator, use);
-                if (!entry.found_existing) entry.value_ptr.* = @intCast(index);
-            }
-        }
+        if (self.retired_read_requests.count() == 0) try self.indexRetiredReadRequests();
         for (demand.eager_reads) |read| try self.declareRetiredRead(.{ .module = read.module, .root = read.root });
         for (hit.checked_root_uses) |use| try self.declareRetiredRead(use);
     }
@@ -6176,7 +6209,12 @@ const Lowerer = struct {
             Common.invariant("retired body reads a checked root that has no declared storage request");
         const request = self.solved.layout_requests.items[index];
         const root = request.comptime_root orelse unreachable;
-        const ty = try self.lowerType(request.ty);
+        try self.declareRetiredStorage(root, try self.lowerType(request.ty));
+    }
+
+    /// Declare the slot and accessor of checked root `root` at `ty`, which a
+    /// retired body's served code materializes.
+    fn declareRetiredStorage(self: *Lowerer, root: Common.ComptimeValueRoot, ty: Type.TypeId) Common.LowerError!void {
         const root_layout = try self.layoutOfType(ty);
         const slot = try self.comptimeValueSlot(root, ty, root_layout);
         self.result.static_data_values.items[@backingInt(slot)].retired_read = true;
@@ -6187,6 +6225,66 @@ const Lowerer = struct {
             .outer = .none,
             .mode = .derived,
         }, slot, root, ty, root_layout);
+    }
+
+    /// A body served by identity (design.md "Identity Offers") is one
+    /// Monotype lowered, so every checked root its served code materializes
+    /// is read by some body of this program: by a body with a storage
+    /// request Monotype declared, or by a read expression, whose type is the
+    /// root's representation. Declare each one's slot and accessor from
+    /// whichever the program has.
+    fn declareIdentityHitReads(self: *Lowerer, hit: Common.SpecCacheHit) Common.LowerError!void {
+        const demand = hit.demand orelse Common.invariant("identity-served body was linked without its demand facts");
+        if (demand.eager_reads.len == 0 and hit.checked_root_uses.len == 0) return;
+        if (self.retired_read_requests.count() == 0) try self.indexRetiredReadRequests();
+        for (demand.eager_reads) |read| try self.declareIdentityRead(.{ .module = read.module, .root = read.root });
+        for (hit.checked_root_uses) |use| try self.declareIdentityRead(use);
+    }
+
+    fn declareIdentityRead(self: *Lowerer, use: Common.CheckedRootUse) Common.LowerError!void {
+        if (self.retired_read_requests.contains(use)) return self.declareRetiredRead(use);
+        const types = try self.rootReadTypes();
+        const storage = types.get(use) orelse
+            Common.invariant("identity-served body materializes a checked root that no body of the program reads");
+        try self.declareRetiredStorage(storage.root, try self.lowerType(storage.ty));
+    }
+
+    /// The storage requests Monotype declared for checked roots, by root.
+    fn indexRetiredReadRequests(self: *Lowerer) Allocator.Error!void {
+        for (self.solved.layout_requests.items, 0..) |request, index| {
+            const root = request.comptime_root orelse continue;
+            const checked_root = switch (root.root) {
+                .checked => |checked_root| checked_root,
+                .literal => continue,
+            };
+            const use = Common.CheckedRootUse{ .module = root.module.bytes, .root = @backingInt(checked_root) };
+            const entry = try self.retired_read_requests.getOrPut(self.allocator, use);
+            if (!entry.found_existing) entry.value_ptr.* = @intCast(index);
+        }
+    }
+
+    /// The checked roots the program's read expressions read, each with the
+    /// first read's root and type. Reads attached to a function node are a
+    /// cached body's, whose storage Monotype requested.
+    fn rootReadTypes(self: *Lowerer) Allocator.Error!*const std.AutoHashMapUnmanaged(Common.CheckedRootUse, ReadStorage) {
+        if (self.root_read_types == null) {
+            var types: std.AutoHashMapUnmanaged(Common.CheckedRootUse, ReadStorage) = .empty;
+            errdefer types.deinit(self.allocator);
+            const expr_count = self.solved.lifted.exprsView().len;
+            for (self.solved.ctfe_demand.reads.items) |read| {
+                const checked_root = switch (read.root.root) {
+                    .checked => |checked_root| checked_root,
+                    .literal => continue,
+                };
+                const node = @backingInt(read.node);
+                if (node >= expr_count) continue;
+                const use = Common.CheckedRootUse{ .module = read.root.module.bytes, .root = @backingInt(checked_root) };
+                const entry = try types.getOrPut(self.allocator, use);
+                if (!entry.found_existing) entry.value_ptr.* = .{ .root = read.root, .ty = self.solved.expr_tys.items[node] };
+            }
+            self.root_read_types = types;
+        }
+        return &self.root_read_types.?;
     }
 
     /// The procedure that reads compile-time value slot `id`, which holds

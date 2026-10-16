@@ -950,6 +950,23 @@ pub const SpecProc = struct {
     demand: ?CachedCtfeDemand = null,
 };
 
+/// A procedure offered to the object cache under its own identity
+/// (`LIR.ProcIdentity`), which is final once Direct LIR assigns it and the
+/// same in every program that lowers the procedure identically. A later
+/// program that assigns the same identity to a procedure it is about to lower
+/// links this procedure's code instead (design.md "Identity Offers").
+pub const IdentityOffer = struct {
+    proc: LIR.LirProcSpecId,
+    /// Checked template owner, as `SpecProc.owner`.
+    owner: ?checked.ModuleId = null,
+    /// As `SpecProc.platform_requirement_relation`.
+    platform_requirement_relation: ?[32]u8 = null,
+    demand: ?CachedCtfeDemand = null,
+    /// The Monotype function this procedure was lowered from, under which
+    /// Monotype recorded what its code reads of compile-time evaluation.
+    frozen_fn: ?u32 = null,
+};
+
 /// A specialization lowered only for discovery whose discovery, through every
 /// body it reaches, registered only literal roots that converted without an
 /// error or a message, under the specialization key it was reserved for. A
@@ -974,6 +991,9 @@ pub const Result = struct {
     /// the specialization's own procedure is listed, never SpecConstr clones
     /// or capture-bearing variants of it.
     spec_procs: std.ArrayList(SpecProc) = .empty,
+    /// Every procedure this program lowered from a function template that
+    /// the object cache may serve by identity.
+    identity_offers: std.ArrayList(IdentityOffer) = .empty,
     /// Discovery summaries of the specializations this program lowered only
     /// for discovery.
     discovery_summaries: std.ArrayList(DiscoverySummary) = .empty,
@@ -1082,6 +1102,8 @@ pub const Result = struct {
         self.root_procs.deinit(allocator);
         for (self.spec_procs.items) |spec| if (spec.demand) |demand| demand.deinit(allocator);
         self.spec_procs.deinit(allocator);
+        for (self.identity_offers.items) |offer| if (offer.demand) |demand| demand.deinit(allocator);
+        self.identity_offers.deinit(allocator);
         self.discovery_summaries.deinit(allocator);
         for (self.literal_materializer_reads.values()) |read| read.recipe.deinit(allocator);
         self.literal_materializer_reads.deinit(allocator);

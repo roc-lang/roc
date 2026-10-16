@@ -15019,6 +15019,50 @@ lambda body inside the closure reads roots no eager read of the keyed caller
 reaches, and in another revision nothing else in the program need declare
 them.
 
+#### Identity Offers
+
+A specialization key exists only for a request whose type mentions no function:
+with a function in the request, the body depends on the program's lambda sets,
+which Monotype does not know at reservation. Such a procedure still has a
+`ProcIdentity` once Direct LIR assigns it, after lambda solving, and that
+identity names the same code in every program. So every procedure lowered from
+a template whose artifact carries a callable contract (finite ABI, no erased
+return reuse, not hosted, not a literal producer) is offered a second way: under
+its identity (`lir.Program.IdentityOffer`, `PackFile.SpecEntry.by_identity`),
+with the same serving facts a keyed offer carries (demand, compile-time root
+reads recorded per Monotype function in `SpecComptimeReads.fn_rows`, platform
+relation, refcount signature) and under the same conditions (no ownership
+variants demandable, not inlined at calls, no tail group, serving closure
+eligible, compile-time roots read but never evaluated in place). An identity
+offer of a procedure whose code reads literal roots is not made: an identity
+hit declares storage from the reads of the body it replaces, which name checked
+roots only.
+
+The consumer asks at the identity point: `finalizeFnProc`, after
+`procIdentity`, for a procedure with a body to lower that no keyed hit retired,
+under the same compile-time closure gate as the keyed Direct LIR lookup
+(`SpecCacheLookup.lookupIdentity`, `LoadedPacks.findIdentity`, which admits the
+closure of the store packs offering that identity and serves an offer only for
+the relation it depends on). A hit becomes the same `external` stub a keyed hit
+becomes: the body and everything reached only through it are not lowered, ARC
+takes the offer's signature as fixed, and the object compiler and the
+compile-time evaluator splice the offer's closure by identity. The storage an
+identity hit needs is declared from this program: Monotype lowered the body, so
+every checked root the served closure materializes is read by some body of the
+program, either through a storage request Monotype declared (a retired body's
+reads) or through a read expression, whose solved type is the root's
+representation (`declareIdentityHitReads`); a root with neither is a compiler
+invariant, since identity equality means the served closure reads what the
+replaced body reads. Identity hits cannot replace Monotype, closure lifting,
+SpecConstr or lambda solving for the procedures they serve, because the identity
+is computed from their output; they remove Direct LIR body lowering, the LIR
+passes, ARC emission, static data and codegen for the served closures.
+
+Call variants a later pass derives (`arc-variant`, ReturnSlot and StrAppend
+clones) are never identity offers: the first are withheld with their base when
+demandable, the others hash a program-local index and are created after the
+identity point.
+
 A compiler-generated body retains its own source key. A field-names iterator
 step, a structural parser or encoder runtime, and a
 generated encoder callback have no checked declaration to name, so the producer

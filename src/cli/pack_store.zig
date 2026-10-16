@@ -524,6 +524,83 @@ test "normal native offers attest one exact physical definition and fixed metada
     }
 }
 
+test "identity offers serve lookups by identity for the relation they depend on" {
+    const allocator = std.testing.allocator;
+    const callee_identity = lir.ProcIdentity.forTest(81);
+    const caller_identity = lir.ProcIdentity.forTest(82);
+    const relation: [32]u8 = @splat(83);
+    const Producer = struct {
+        fn bytes(a: Allocator, callee: lir.ProcIdentity, caller: lir.ProcIdentity, caller_relation: ?[32]u8) PackFile.WriteError!PackFile.Bytes {
+            const leaf = backend.dev.ProcArtifact.Artifact{
+                .kind = .{ .proc = callee },
+                .code = "\xc3",
+                .entry = 0,
+                .frame = null,
+                .refs = &.{},
+                .relocations = &.{},
+                .data = &.{},
+                .callable_contract = @as([32]u8, @splat(1)),
+                .context_contract = .{ .target = .x64musl, .cpu_level = .default, .hot_reload = false, .default_platform_runtime = false },
+                .context_dependencies = .{},
+            };
+            var head = leaf;
+            head.kind = .{ .proc = caller };
+            head.code = "\xe8\x00\x00\x00\x00\xc3";
+            head.refs = &.{.{ .site = 1, .form = .call, .target = 0, .delta = 0, .veneer = null }};
+            const set = backend.dev.ProcArtifact.Set{
+                .arena = collections.SingleThreadArena.init(a),
+                .artifacts = &.{ leaf, head },
+            };
+            const facts = PackFile.SpecEntry{
+                .key = callee.bytes,
+                .by_identity = true,
+                .artifact = 0,
+                .demand = .{ .complete = true },
+                .rc_borrowed_params = 0,
+                .rc_ret_borrowed = false,
+                .rc_ret_lenders = 0,
+                .rc_read_only_params = 0,
+                .rc_ret_unique = false,
+                .rc_ret_unique_fields = 0,
+                .rc_ret_conditions = &.{},
+            };
+            var caller_offer = facts;
+            caller_offer.key = caller.bytes;
+            caller_offer.artifact = 1;
+            caller_offer.platform_requirement_relation = caller_relation;
+            caller_offer.rc_borrowed_params = 1;
+            return PackFile.write(a, &set, &.{ facts, caller_offer }, PackFile.test_version_hash);
+        }
+    };
+    const bytes = try Producer.bytes(allocator, callee_identity, caller_identity, relation);
+    var packs = LoadedPacks.init(allocator, PackFile.test_version_hash);
+    defer packs.deinit();
+    // A store pack is registered by its offers alone.
+    try packs.addSource(bytes);
+    packs.state = .ready;
+    try std.testing.expectEqual(@as(usize, 0), packs.packs.items.len);
+    const lookup = packs.specCacheLookup();
+    // Nothing is offered under these bytes as a specialization key.
+    try std.testing.expect(lookup.lookup(caller_identity.bytes, relation) == null);
+    // The caller's code depends on the relation; the callee's does not.
+    try std.testing.expect(lookup.lookupIdentity(caller_identity.bytes, null) == null);
+    try std.testing.expect(lookup.lookupIdentity(caller_identity.bytes, @splat(84)) == null);
+    const caller_hit = lookup.lookupIdentity(caller_identity.bytes, relation) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualSlices(u8, &caller_identity.bytes, &caller_hit.identity);
+    try std.testing.expectEqual(@as(u64, 1), caller_hit.rc_borrowed_params);
+    // Admitting the caller's closure admitted the callee, which serves on its own.
+    try std.testing.expectEqual(@as(usize, 1), packs.packs.items.len);
+    try std.testing.expectEqual(@as(usize, 2), packs.packs.items[0].set.artifacts.len);
+    const callee_hit = lookup.lookupIdentity(callee_identity.bytes, null) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u64, 0), callee_hit.rc_borrowed_params);
+    try std.testing.expectEqual(@as(u64, 2), packs.identity_hits);
+    // The splice finds both by identity.
+    const splice = packs.spliceSource();
+    try std.testing.expect(splice.find(splice.context, caller_identity) != null);
+    try std.testing.expect(splice.find(splice.context, callee_identity) != null);
+    try std.testing.expect(splice.find(splice.context, lir.ProcIdentity.forTest(85)) == null);
+}
+
 test "normal native retained objects keep borrowed exact graphs stable while the universe grows" {
     const allocator = std.testing.allocator;
     var packs = LoadedPacks.init(allocator, PackFile.test_version_hash);
@@ -1275,6 +1352,13 @@ pub const LoadedPacks = struct {
     store_packs: std.ArrayListUnmanaged(StorePack) = .empty,
     /// The store packs offering each key, in load order.
     candidates: std.AutoHashMapUnmanaged([32]u8, std.ArrayListUnmanaged(u32)) = .empty,
+    /// The store packs offering each procedure identity, in load order.
+    identity_candidates: std.AutoHashMapUnmanaged([32]u8, std.ArrayListUnmanaged(u32)) = .empty,
+    /// Procedures served by identity so far, counted within `hits`.
+    identity_hits: u64 = 0,
+
+    /// What an offer is filed under (`PackFile.SpecEntry.by_identity`).
+    const OfferKind = enum { key, identity };
 
     const StorePack = struct {
         /// The pack image: bytes this process owns, or the mapped file.
@@ -1442,7 +1526,8 @@ pub const LoadedPacks = struct {
     fn registerSource(self: *LoadedPacks, contents: @FieldType(StorePack, "contents"), view: PackFile.View) LoadError!void {
         const id: u32 = @intCast(self.store_packs.items.len);
         for (0..view.specCount()) |index| {
-            const entry = try self.candidates.getOrPut(self.allocator, view.specKey(index));
+            const candidates = if (view.specByIdentity(index)) &self.identity_candidates else &self.candidates;
+            const entry = try candidates.getOrPut(self.allocator, view.specKey(index));
             if (!entry.found_existing) entry.value_ptr.* = .empty;
             const list = entry.value_ptr;
             if (list.items.len == 0 or list.items[list.items.len - 1] != id) try list.append(self.allocator, id);
@@ -1473,23 +1558,32 @@ pub const LoadedPacks = struct {
         return std.Io.Timestamp.now(pending.io, .awake).nanoseconds;
     }
 
-    /// Admit closures of the offers of `key` from the store packs offering
-    /// it, in load order, until an offer serves the lookup for `relation`,
-    /// and transitively the same for the literal producers the admitted
-    /// offers read. The first offer admitted for a key is the one the index
-    /// keeps, so stopping once it is present serves what admitting every
-    /// candidate would.
-    fn admitKey(self: *LoadedPacks, key: [32]u8, relation: ?[32]u8) LoadError!void {
-        if (self.candidates.count() == 0) return;
+    /// Admit closures of the offers of `key` (a specialization key, or a
+    /// procedure identity for `.identity`) from the store packs offering it,
+    /// in load order, until an offer serves the lookup for `relation`, and
+    /// transitively the same for the literal producers the admitted offers
+    /// read. The first offer admitted for a key is the one the index keeps,
+    /// so stopping once it is present serves what admitting every candidate
+    /// would.
+    fn admitKey(self: *LoadedPacks, kind: OfferKind, key: [32]u8, relation: ?[32]u8) LoadError!void {
+        if (self.candidates.count() == 0 and self.identity_candidates.count() == 0) return;
         const started = self.now();
         defer self.admit_ns += self.now() - started;
-        var pending = std.ArrayList([32]u8).empty;
+        var pending = std.ArrayList(PendingOffer).empty;
         defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, key);
+        try pending.append(self.allocator, .{ .kind = kind, .key = key });
         while (pending.pop()) |next| {
-            const list = self.candidates.get(next) orelse continue;
+            const candidates = switch (next.kind) {
+                .key => &self.candidates,
+                .identity => &self.identity_candidates,
+            };
+            const list = candidates.get(next.key) orelse continue;
             for (list.items) |id| {
-                if (self.specs.contains(.{ .key = next, .platform_requirement_relation = relation })) break;
+                const served = switch (next.kind) {
+                    .key => self.specs.contains(.{ .key = next.key, .platform_requirement_relation = relation }),
+                    .identity => self.artifacts.contains(.{ .bytes = next.key }),
+                };
+                if (served) break;
                 if (try self.admitClosure(id, next, &pending)) {
                     const index_started = self.now();
                     defer self.index_ns += self.now() - index_started;
@@ -1499,6 +1593,8 @@ pub const LoadedPacks = struct {
         }
     }
 
+    const PendingOffer = struct { kind: OfferKind, key: [32]u8 };
+
     /// Admit the closure of store pack `id`'s offers of `key` that are not
     /// admitted yet, into the one set admitted from that pack: the
     /// artifacts the offers reach that the set lacks are appended to it,
@@ -1506,12 +1602,14 @@ pub const LoadedPacks = struct {
     /// the pack. The set offers every spec of the pack whose artifact it
     /// holds, and admission queues the literal producers those offers and
     /// the pack's materializer reads name. Returns whether the set grew.
-    fn admitClosure(self: *LoadedPacks, id: u32, key: [32]u8, pending: *std.ArrayList([32]u8)) LoadError!bool {
+    fn admitClosure(self: *LoadedPacks, id: u32, offer: PendingOffer, pending: *std.ArrayList(PendingOffer)) LoadError!bool {
         const source = &self.store_packs.items[id];
         const view = &source.view;
+        const key = offer.key;
         var roots = std.ArrayList(u32).empty;
         defer roots.deinit(self.allocator);
         for (0..view.specCount()) |index| {
+            if (view.specByIdentity(index) != (offer.kind == .identity)) continue;
             if (!std.mem.eql(u8, &view.specKey(index), &key)) continue;
             const artifact = view.specArtifact(index);
             if (source.admitted_roots.contains(artifact)) continue;
@@ -1574,9 +1672,9 @@ pub const LoadedPacks = struct {
             entry.artifact = new;
             try source.spec_list.append(self.allocator, entry);
             try source.admitted_roots.put(self.allocator, root, {});
-            if (entry.demand) |demand| for (demand.literal_reads) |read| try pending.append(self.allocator, read.recipe.producer_key);
+            if (entry.demand) |demand| for (demand.literal_reads) |read| try pending.append(self.allocator, .{ .kind = .key, .key = read.recipe.producer_key });
         }
-        for (source.materializer_reads) |entry| try pending.append(self.allocator, entry.read.recipe.producer_key);
+        for (source.materializer_reads) |entry| try pending.append(self.allocator, .{ .kind = .key, .key = entry.read.recipe.producer_key });
         pack.set.artifacts = source.artifact_list.items;
         pack.set.definitions = source.definition_list.items;
         pack.specs = source.spec_list.items;
@@ -1896,6 +1994,7 @@ pub const LoadedPacks = struct {
                     .graph = physical_namespace,
                     .definition = pack.set.physicalDefinition(spec.artifact),
                 };
+                if (spec.by_identity and !std.mem.eql(u8, &spec.key, &identity.bytes)) return error.MalformedPack;
                 const artifact_entry = try self.artifacts.getOrPut(identity);
                 if (artifact_entry.found_existing) {
                     // Logical identity cannot redirect a hit to a physical
@@ -1909,6 +2008,8 @@ pub const LoadedPacks = struct {
                         .hit = hit,
                     };
                 }
+                // An identity offer serves lookups by identity alone.
+                if (spec.by_identity) continue;
                 const gop = try self.specs.getOrPut(.{
                     .key = spec.key,
                     .platform_requirement_relation = spec.platform_requirement_relation,
@@ -2722,6 +2823,9 @@ pub const LoadedPacks = struct {
         var lists = self.candidates.valueIterator();
         while (lists.next()) |list| list.deinit(self.allocator);
         self.candidates.deinit(self.allocator);
+        var identity_lists = self.identity_candidates.valueIterator();
+        while (identity_lists.next()) |list| list.deinit(self.allocator);
+        self.identity_candidates.deinit(self.allocator);
         for (self.packs.items) |pack| {
             pack.deinit();
             self.allocator.destroy(pack);
@@ -2736,7 +2840,7 @@ pub const LoadedPacks = struct {
 
     /// The lookup Monotype consults at reservation.
     pub fn specCacheLookup(self: *LoadedPacks) Common.SpecCacheLookup {
-        return .{ .context = @ptrCast(self), .find = findSpec, .find_discovery = findDiscovery };
+        return .{ .context = @ptrCast(self), .find = findSpec, .find_discovery = findDiscovery, .find_identity = findIdentity };
     }
 
     /// The artifact source the object compiler splices from.
@@ -2759,7 +2863,7 @@ pub const LoadedPacks = struct {
             self.projection_modules = deferred.modules;
         };
         defer self.projection_modules = saved_modules;
-        self.admitKey(key, current_relation) catch |err| {
+        self.admitKey(.key, key, current_relation) catch |err| {
             self.unavailable(err);
             return null;
         };
@@ -2773,6 +2877,37 @@ pub const LoadedPacks = struct {
             if (!(self.semantic_valid.get(selected) orelse false)) return null;
         };
         self.hits += 1;
+        return hit;
+    }
+
+    /// The offer of the procedure with `identity`, admitting its closure
+    /// from the store packs offering it (design.md "Identity Offers").
+    fn findIdentity(context: *anyopaque, identity: [32]u8, current_relation: ?[32]u8) ?Common.SpecCacheHit {
+        const self: *LoadedPacks = @ptrCast(@alignCast(context));
+        if (self.revoked) return null;
+        while (!self.load_mutex.tryLock()) std.atomic.spinLoopHint();
+        defer self.load_mutex.unlock();
+        self.ensureLoadedLocked();
+        if (self.state != .ready) return null;
+        const saved_modules = self.projection_modules;
+        if (saved_modules == null) if (self.deferred) |deferred| {
+            self.projection_modules = deferred.modules;
+        };
+        defer self.projection_modules = saved_modules;
+        self.admitKey(.identity, identity, current_relation) catch |err| {
+            self.unavailable(err);
+            return null;
+        };
+        const selected = self.artifacts.get(.{ .bytes = identity }) orelse return null;
+        const hit = selected.hit;
+        // Code that depends on a platform/app relation serves only that
+        // relation; independent code serves every program.
+        if (hit.platform_requirement_relation) |relation| {
+            const current = current_relation orelse return null;
+            if (!std.mem.eql(u8, &relation, &current)) return null;
+        }
+        self.hits += 1;
+        self.identity_hits += 1;
         return hit;
     }
 

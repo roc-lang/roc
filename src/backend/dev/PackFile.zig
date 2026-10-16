@@ -351,6 +351,9 @@ pub const SpecRow = extern struct {
     has_demand: u8,
     rc_ret_borrowed: u8,
     rc_ret_unique: u8,
+    /// `SpecEntry.by_identity`.
+    by_identity: u8,
+    reserved: [7]u8,
 };
 
 /// A compile-time root the served code reads (`ComptimeRootRead`).
@@ -444,7 +447,12 @@ pub const Serialized = extern struct {
 /// uniqueness facts ARC solved for that procedure, which the linking program
 /// adopts as fixed.
 pub const SpecEntry = struct {
+    /// The specialization key the offer serves, or, for an identity offer,
+    /// the identity of the procedure it offers (design.md "Identity
+    /// Offers").
     key: [32]u8,
+    /// Whether `key` is a procedure identity rather than a specialization key.
+    by_identity: bool = false,
     artifact: u32,
     /// Null is an authoritative independent summary, not missing metadata.
     platform_requirement_relation: ?[32]u8 = null,
@@ -833,6 +841,7 @@ pub fn writeWithBody(
     for (specs) |spec| {
         var row = std.mem.zeroes(SpecRow);
         row.key = spec.key;
+        row.by_identity = @intFromBool(spec.by_identity);
         row.artifact = spec.artifact;
         if (spec.platform_requirement_relation) |relation| {
             row.has_relation = 1;
@@ -1033,6 +1042,13 @@ fn debugValidateArtifacts(allocator: Allocator, set: *const ProcArtifact.Set) vo
 fn debugValidateOffers(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const SpecEntry, materializer_reads: []const MaterializerRead) void {
     for (specs) |spec| {
         std.debug.assert(spec.artifact < set.artifacts.len and set.artifacts[spec.artifact].root_materialization == null);
+        if (spec.by_identity) {
+            // An identity offer names the procedure it offers, whose code
+            // reads no literal roots.
+            const root = set.artifacts[spec.artifact];
+            std.debug.assert(root.kind == .proc and std.mem.eql(u8, &root.kind.proc.bytes, &spec.key));
+            std.debug.assert(spec.demand != null and spec.demand.?.literal_reads.len == 0);
+        }
         if (spec.demand) |demand| for (demand.literal_reads) |literal| {
             const valid = literal.recipe.valid(allocator) catch |err| std.debug.panic("{}", .{err});
             std.debug.assert(valid);
@@ -1114,9 +1130,15 @@ pub const View = struct {
         return self.columns.specs.len;
     }
 
-    /// The key offer `index` serves.
+    /// The key offer `index` serves: a specialization key, or the offered
+    /// procedure's identity when `specByIdentity`.
     pub fn specKey(self: *const View, index: usize) [32]u8 {
         return self.columns.specs[index].key;
+    }
+
+    /// Whether offer `index` is an identity offer (`SpecEntry.by_identity`).
+    pub fn specByIdentity(self: *const View, index: usize) bool {
+        return self.columns.specs[index].by_identity != 0;
     }
 
     /// The artifact offer `index` names.
@@ -1299,6 +1321,7 @@ pub const View = struct {
         for (rows(RootReadRow, c.root_reads, row.root_reads), root_reads) |read_row, *out| out.* = .{ .module = read_row.module, .root = read_row.root };
         return .{
             .key = row.key,
+            .by_identity = row.by_identity != 0,
             .artifact = row.artifact,
             .platform_requirement_relation = if (row.has_relation != 0) row.relation else null,
             .demand = if (row.has_demand != 0) try self.decode(lir.Program.CachedCtfeDemand, row.demand, arena) else null,
@@ -1472,6 +1495,45 @@ test "pack image round-trips every artifact field and offer" {
     const again = try writeOffers(allocator, &set, &specs, &discovery, &.{}, version);
     defer allocator.free(again);
     try std.testing.expectEqualSlices(u8, bytes, again);
+}
+
+test "pack image offers a procedure by identity" {
+    const allocator = std.testing.allocator;
+    const version: [32]u8 = @splat(9);
+    const identity = lir.ProcIdentity.forTest(6);
+    var artifacts = [_]ProcArtifact.Artifact{.{
+        .kind = .{ .proc = identity },
+        .code = "\xc3",
+        .entry = 0,
+        .frame = null,
+        .refs = &.{},
+        .relocations = &.{},
+        .data = &.{},
+        .callable_contract = @as([32]u8, @splat(1)),
+    }};
+    const set = ProcArtifact.Set{ .arena = collections.SingleThreadArena.init(allocator), .artifacts = &artifacts };
+    const specs = [_]SpecEntry{.{
+        .key = identity.bytes,
+        .by_identity = true,
+        .artifact = 0,
+        .demand = .{ .complete = true },
+        .comptime_root_reads = &.{.{ .module = @splat(4), .root = 2 }},
+        .rc_borrowed_params = 1,
+        .rc_ret_borrowed = false,
+        .rc_ret_lenders = 0,
+        .rc_read_only_params = 1,
+        .rc_ret_unique = true,
+        .rc_ret_unique_fields = 0,
+        .rc_ret_conditions = &.{},
+    }};
+    const bytes = try writeOffers(allocator, &set, &specs, &.{}, &.{}, version);
+    defer allocator.free(bytes);
+    const view = try View.init(bytes, version);
+    try std.testing.expect(view.specByIdentity(0));
+    try std.testing.expectEqualSlices(u8, &identity.bytes, &view.specKey(0));
+    var decoded = try read(allocator, bytes, version);
+    defer decoded.deinit();
+    try std.testing.expectEqualDeep(specs[0], decoded.specs[0]);
 }
 
 test "pack image selects closures and reads their artifacts alone" {

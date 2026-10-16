@@ -426,6 +426,7 @@ const CompileTimeObjectCache = struct {
         defer self.allocator.free(keyed);
         @memset(keyed, false);
         for (lowered.lir_result.spec_procs.items) |spec| keyed[@backingInt(spec.proc)] = true;
+        for (lowered.lir_result.identity_offers.items) |offer| keyed[@backingInt(offer.proc)] = true;
         const generated = try self.allocator.alloc(bool, keyed.len);
         defer self.allocator.free(generated);
         @memset(generated, false);
@@ -518,6 +519,10 @@ const CompileTimeObjectCache = struct {
         for (lowered.lir_result.spec_procs.items) |spec| {
             if (!generated[@backingInt(spec.proc)]) continue;
             if (cachePublicationOwner(spec.owner, requester, builtin_owner)) |owner| try owners.put(owner.bytes, {});
+        }
+        for (lowered.lir_result.identity_offers.items) |offer| {
+            if (!generated[@backingInt(offer.proc)]) continue;
+            if (cachePublicationOwner(offer.owner, requester, builtin_owner)) |owner| try owners.put(owner.bytes, {});
         }
         var owner_keys = owners.keyIterator();
         while (owner_keys.next()) |owner_bytes| {
@@ -632,8 +637,9 @@ const CompileTimeObjectCache = struct {
         defer if (stats) {
             // Diagnostic output, like the build's: an ordinary check leaves
             // stderr empty.
-            std.debug.print("compile-time object cache: hits {d} artifacts {d} packs {d} keys {d}; store {d} ms\n", .{
+            std.debug.print("compile-time object cache: hits {d} (by identity {d}) artifacts {d} packs {d} keys {d}; store {d} ms\n", .{
                 self.packs.hits,
+                self.packs.identity_hits,
                 self.packs.artifacts_served,
                 self.packs.packs.items.len,
                 self.packs.specs.count(),
@@ -9428,6 +9434,49 @@ fn packFileBytesFiltered(
             .rc_ret_conditions = try GuardedList.dupe(conditions_arena.allocator(), u32, lowered.lir_result.store.getU32Span(proc.rc_ret_conditions)),
         });
     }
+    // Every procedure lowered from a template is offered under its identity
+    // as well (design.md "Identity Offers"), under the same conditions.
+    for (lowered.lir_result.identity_offers.items) |offer| {
+        var requested = true;
+        if (filter.checked_owner) |owner| {
+            const declared = if (filter.requester) |requester|
+                cachePublicationOwner(offer.owner, requester, filter.builtin_owner.?)
+            else
+                offer.owner;
+            requested = if (declared) |placement| owner.eql(placement) else false;
+        }
+        if (filter.generated_roots) |generated| requested = requested and generated[@backingInt(offer.proc)];
+        const demand = offer.demand orelse unreachable;
+        if (!demand.permitsRetirement() or demand.literal_reads.len != 0) continue;
+        const proc = procs[@backingInt(offer.proc)];
+        const artifact = plan.artifact_by_proc.get(offer.proc) orelse continue;
+        const entry_reads = if (offer.frozen_fn) |frozen_fn| comptime_reads.getFn(frozen_fn) else lir.CheckedPipeline.SpecComptimeReads.Lookup{ .offerable = true, .reads = &.{} };
+        if (!entry_reads.offerable or proc.rc_variant_demandable or proc.inlined_at_calls or proc.tail_group != null or !plan.eligible[artifact]) {
+            withheld += 1;
+            continue;
+        }
+        // An identity offer names the procedure's own artifact; a producer
+        // whose artifact is another definition's is not offered by identity.
+        const definition = set.artifacts[artifact];
+        if (definition.kind != .proc or !std.mem.eql(u8, &definition.kind.proc.bytes, &proc.identity.bytes) or definition.callable_contract == null) continue;
+        if (requested) try roots.append(allocator, @intCast(specs.items.len));
+        if (trace) std.debug.print("offer-identity {s} {s}\n", .{ &proc.identity.symbolHex(), lowered.lir_result.store.procDebugName(offer.proc) orelse "" });
+        try specs.append(allocator, .{
+            .key = proc.identity.bytes,
+            .by_identity = true,
+            .artifact = artifact,
+            .demand = offer.demand,
+            .platform_requirement_relation = offer.platform_requirement_relation,
+            .comptime_root_reads = entry_reads.reads,
+            .rc_borrowed_params = proc.rc_borrowed_params,
+            .rc_ret_borrowed = proc.rc_ret_borrowed,
+            .rc_ret_lenders = proc.rc_ret_lenders,
+            .rc_read_only_params = proc.rc_read_only_params,
+            .rc_ret_unique = proc.rc_ret_unique,
+            .rc_ret_unique_fields = proc.rc_ret_unique_fields,
+            .rc_ret_conditions = try GuardedList.dupe(conditions_arena.allocator(), u32, lowered.lir_result.store.getU32Span(proc.rc_ret_conditions)),
+        });
+    }
     if (plan.offer_graph == null) plan.offer_graph = try PackOfferGraph.init(allocator, plan, specs.items);
     const graph = &plan.offer_graph.?;
     var selected_specs = std.ArrayList(backend.dev.PackFile.SpecEntry).empty;
@@ -11632,7 +11681,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         }
         // The compile-time evaluator has already spliced its entries; the
         // object compiler asks for the runtime program's afterwards.
-        std.debug.print("pack hits: {d} external procs: {d} evaluator artifacts: {d} packs loaded: {d} keys: {d}\n", .{ packs.hits, external_procs, packs.artifacts_served, packs.packs.items.len, packs.specs.count() });
+        std.debug.print("pack hits: {d} (by identity {d}) external procs: {d} evaluator artifacts: {d} packs loaded: {d} keys: {d}\n", .{ packs.hits, packs.identity_hits, external_procs, packs.artifacts_served, packs.packs.items.len, packs.specs.count() });
         printPackTimings(&packs);
     }
 

@@ -454,6 +454,10 @@ pub const SpecCacheLookup = struct {
     /// Whether the provider holds a settled discovery outcome for the
     /// specialization (`lir.Program.DiscoverySummary`).
     find_discovery: ?*const fn (context: *anyopaque, key: [32]u8, current_relation: ?[32]u8) bool = null,
+    /// The provider's offer of the procedure with this identity, asked by
+    /// Direct LIR once it has assigned the identity to a procedure it is
+    /// about to lower (design.md "Identity Offers").
+    find_identity: ?*const fn (context: *anyopaque, identity: [32]u8, current_relation: ?[32]u8) ?SpecCacheHit = null,
 
     pub fn discoverySettled(self: SpecCacheLookup, key: [32]u8, current_relation: ?[32]u8) bool {
         const find = self.find_discovery orelse return false;
@@ -464,6 +468,17 @@ pub const SpecCacheLookup = struct {
     /// expose the same immutable offer and artifact collection to both readers.
     pub fn sameProvider(self: SpecCacheLookup, other: SpecCacheLookup) bool {
         return self.context == other.context and self.find == other.find;
+    }
+
+    /// The offer of the procedure with `identity`, if the provider holds one
+    /// whose code reads no literal roots: an identity offer declares storage
+    /// from the reads of the body it replaces, which names checked roots only.
+    pub fn lookupIdentity(self: SpecCacheLookup, identity: [32]u8, current_relation: ?[32]u8) ?SpecCacheHit {
+        const find = self.find_identity orelse return null;
+        const hit = find(self.context, identity, current_relation) orelse return null;
+        const demand = hit.demand orelse return null;
+        if (!demand.permitsRetirement() or demand.literal_reads.len != 0) return null;
+        return hit;
     }
 
     pub fn lookup(self: SpecCacheLookup, key: [32]u8, current_relation: ?[32]u8) ?SpecCacheHit {

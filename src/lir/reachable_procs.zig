@@ -491,6 +491,18 @@ const Pass = struct {
             kept += 1;
         }
         self.result.spec_procs.shrinkRetainingCapacity(kept);
+        var kept_offers: usize = 0;
+        for (self.result.identity_offers.items) |offer| {
+            const new_proc = self.old_to_new[@backingInt(offer.proc)] orelse {
+                if (offer.demand) |demand| demand.deinit(self.result.store.allocator);
+                continue;
+            };
+            var remapped = offer;
+            remapped.proc = new_proc;
+            self.result.identity_offers.items[kept_offers] = remapped;
+            kept_offers += 1;
+        }
+        self.result.identity_offers.shrinkRetainingCapacity(kept_offers);
     }
 
     fn remapConstRoots(self: *Pass) void {
