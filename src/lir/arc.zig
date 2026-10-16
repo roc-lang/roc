@@ -2137,56 +2137,56 @@ const Inserter = struct {
         all_rc_fields_absent: bool,
     ) ResourceError!LIR.U32Span {
         if (absent_mask == 0 and !all_rc_fields_absent) return .empty();
-        const source = switch (assign.op) {
-            .local => |local| local,
+        switch (assign.op) {
+            .local => |source| if (self.store.getLocal(source).layout_idx != self.store.getLocal(assign.target).layout_idx) {
+                arcInvariant("ARC attached representation-shell fields to a layout-changing alias");
+            },
+            .field => if (self.dismantles.viewOf(assign.target) == null) {
+                arcInvariant("ARC attached representation-shell fields to a field read that is no view");
+            },
             .discriminant,
-            .field,
             .tag_payload,
             .tag_payload_struct,
             .list_reinterpret,
             .nominal,
             => arcInvariant("ARC attached representation-shell fields to a non-local alias"),
-        };
-        if (self.store.getLocal(source).layout_idx != self.store.getLocal(assign.target).layout_idx) {
-            arcInvariant("ARC attached representation-shell fields to a layout-changing alias");
         }
+        const target_layout = self.store.getLocal(assign.target).layout_idx;
+        if (self.layouts.getLayout(target_layout).tag != .struct_) arcInvariant("ARC representation shell did not have struct layout");
         if (all_rc_fields_absent) {
             if (absent_mask != 0) arcInvariant("ARC representation-shell alias mixed full and residual absent-field domains");
-            const source_layout = self.layouts.getLayout(self.store.getLocal(source).layout_idx);
-            if (source_layout.tag != .struct_) arcInvariant("ARC full representation shell did not have struct layout");
-            const info = self.layouts.getStructInfo(source_layout);
-            var count: usize = 0;
-            for (0..info.fields.len) |index| {
-                const field = info.fields.get(@intCast(index));
-                if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(field.layout))) continue;
-                count += 1;
-            }
-            const semantic_fields = try self.emission_allocator.alloc(u32, count);
-            var next_field: usize = 0;
-            for (0..info.fields.len) |index| {
-                const field = info.fields.get(@intCast(index));
-                if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(field.layout))) continue;
-                semantic_fields[next_field] = field.index;
-                next_field += 1;
-            }
-            return try self.store.addU32Span(semantic_fields);
+            var slots = std.ArrayList(layout_mod.Store.RcSlot).empty;
+            defer slots.deinit(self.emission_allocator);
+            try self.layouts.appendRcSlots(self.emission_allocator, target_layout, 0, &slots);
+            const absent = try self.emission_allocator.alloc(u32, slots.items.len);
+            defer self.emission_allocator.free(absent);
+            for (slots.items, absent) |slot, *entry| entry.* = slot.slot;
+            return try self.store.addU32Span(absent);
         }
 
-        const container = self.dismantleFor(self.unitOf(source)) orelse
-            arcInvariant("ARC residual representation-shell alias has no committed field domain");
-        if ((absent_mask & ~container.full_mask) != 0) {
-            arcInvariant("ARC representation-shell alias exceeded its committed field domain");
-        }
-
-        var semantic_fields: [64]u32 = undefined;
+        var absent: [64]u32 = undefined;
         var count: usize = 0;
-        for (container.fields) |field| {
-            const field_mask = @as(u64, 1) << @intCast(field.field_idx);
-            if ((absent_mask & field_mask) == 0) continue;
-            semantic_fields[count] = field.field_idx;
+        var bits = absent_mask;
+        while (bits != 0) : (bits &= bits - 1) {
+            absent[count] = @ctz(bits);
             count += 1;
         }
-        return try self.store.addU32Span(semantic_fields[0..count]);
+        return try self.store.addU32Span(absent[0..count]);
+    }
+
+    /// The slots of `view` its container no longer holds on this path,
+    /// numbered in the view's own slot space.
+    fn viewShellAbsentMask(self: *const Inserter, owned: *const OwnedSet, view: LIR.LocalId) u64 {
+        const placement = self.dismantles.viewOf(view) orelse arcInvariant("ARC view shell query named a local that is no view");
+        const root_unit = self.unitOf(placement.root);
+        const container = self.dismantleFor(root_unit) orelse return 0;
+        const absent = if (owned.contains(root_unit))
+            container.full_mask & ~owned.residualMask(root_unit)
+        else
+            container.full_mask;
+        const count = self.layouts.ownershipSlotCount(self.store.getLocal(view).layout_idx);
+        const range = if (count >= 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(count)) - 1;
+        return (absent >> @intCast(placement.base)) & range;
     }
 
     fn materializeArcPlanStep(self: *Inserter, step: *const ArcPlanStep, tail: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
@@ -2520,7 +2520,15 @@ const Inserter = struct {
             switch (stmt) {
                 .assign_ref => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    if (assign.op == .local and
+                    if (assign.op == .field and self.dismantles.viewOf(assign.target) != null and self.isBindingBorrowed(assign.target)) {
+                        // A view copies its container's representation,
+                        // including slots already given away on this path.
+                        step.residual_shell_absent_mask = self.viewShellAbsentMask(&segment.owned, assign.target);
+                    } else if (assign.op == .local and self.dismantles.viewOf(assign.op.local) != null and
+                        self.store.getLocal(assign.op.local).layout_idx == self.store.getLocal(assign.target).layout_idx)
+                    {
+                        step.residual_shell_absent_mask = self.viewShellAbsentMask(&segment.owned, assign.op.local);
+                    } else if (assign.op == .local and
                         self.store.getLocal(assign.op.local).layout_idx == self.store.getLocal(assign.target).layout_idx and
                         self.layouts.getLayout(self.store.getLocal(assign.op.local).layout_idx).tag == .struct_ and
                         self.localContainsRefcounted(assign.op.local))
@@ -5196,21 +5204,23 @@ const Inserter = struct {
         return self.solution.isUniqueUnder(local, self.current_sig.unique_params);
     }
 
-    /// True when another operand of the same statement belongs to this
-    /// argument's borrow group, so the group is still live at the statement
-    /// even though no later statement uses it.
+    /// True when another operand of the same statement reads this
+    /// argument's ownership place in the current emission, so the place is
+    /// still live at the statement even though no later statement uses it.
+    /// Field takes give their targets places of their own, so two takes of
+    /// different fields of one container never share.
     fn groupSharesOtherOperand(
         self: *const Inserter,
         locals: anytype,
         position: usize,
         local: LIR.LocalId,
     ) bool {
-        const leader = self.solution.leaderOf(local);
+        const place = self.ownershipPlaceLeader(local);
         for (0..GuardedList.borrowLen(locals)) |j| {
             if (j == position) continue;
             const other = GuardedList.at(locals, j);
             if (other == local) return true;
-            if (self.solution.leaderOf(other) == leader) return true;
+            if (self.ownershipPlaceLeader(other) == place) return true;
         }
         return false;
     }
@@ -7164,20 +7174,67 @@ const Inserter = struct {
         cause: RcCause,
         next: LIR.CFStmtId,
     ) ResourceError!LIR.CFStmtId {
+        return try self.releaseResidualSlots(local, fields_source, container.layout_idx, 0, container.full_mask, residual_mask, cause, next);
+    }
+
+    /// Release the residual slots of the struct `source`, whose slots start
+    /// at `slot_base` among the container's. A field holding only residual slots
+    /// is taken whole into a temporary and released through its layout's
+    /// helper; a struct field holding some is read as a view, marked with
+    /// the slots it no longer holds, and released slot by slot.
+    fn releaseResidualSlots(
+        self: *Inserter,
+        local: LIR.LocalId,
+        source: LIR.LocalId,
+        layout_idx: layout_mod.Idx,
+        slot_base: u32,
+        full_mask: u64,
+        residual_mask: u64,
+        cause: RcCause,
+        next: LIR.CFStmtId,
+    ) ResourceError!LIR.CFStmtId {
         const atomicity = self.rcAtomicity(local);
+        const info = self.layouts.getStructInfo(self.layouts.getLayout(layout_idx));
         var tail = next;
-        var index = container.fields.len;
+        var index = info.fields.len;
         while (index > 0) {
             index -= 1;
-            const field = container.fields[index];
-            const field_mask = @as(u64, 1) << @intCast(field.field_idx);
-            if ((residual_mask & field_mask) == 0) continue;
-            const rc = self.rcHelperForLayout(.decref, field.layout_idx);
+            const field = info.fields.get(@intCast(index));
+            if (field.is_padding) continue;
+            if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(field.layout))) continue;
+            const first = slot_base + self.layouts.ownershipSlotBase(layout_idx, field.index);
+            const count = self.layouts.ownershipSlotCount(field.layout);
+            const range = (if (count >= 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(count)) - 1) << @intCast(first);
+            const field_slots = full_mask & range;
+            const field_residual = residual_mask & field_slots;
+            if (field_residual == 0) continue;
+            const temp = try self.store.addLocal(.{ .layout_idx = field.layout });
+            try self.dismantle_temps.append(self.emission_allocator, temp);
+            const read_op: LIR.RefOp = .{ .field = .{
+                .source = source,
+                .field_idx = @intCast(field.index),
+            } };
+            if (field_residual != field_slots) {
+                tail = try self.releaseResidualSlots(local, temp, field.layout, first, full_mask, residual_mask, cause, tail);
+                var absent: [64]u32 = undefined;
+                var absent_count: usize = 0;
+                var bits = (field_slots & ~field_residual) >> @intCast(first);
+                while (bits != 0) : (bits &= bits - 1) {
+                    absent[absent_count] = @ctz(bits);
+                    absent_count += 1;
+                }
+                tail = try self.store.addCFStmt(.{ .assign_ref = .{
+                    .target = temp,
+                    .op = read_op,
+                    .residual_shell_absent_fields = try self.store.addU32Span(absent[0..absent_count]),
+                    .next = tail,
+                } }, self.dismantleOrigin(cause, local));
+                continue;
+            }
+            const rc = self.rcHelperForLayout(.decref, field.layout);
             if (self.layouts.rcHelperPlan(rc) == .noop) {
                 arcInvariant("ARC dismantle selected a noop RC helper for a refcounted residual field");
             }
-            const temp = try self.store.addLocal(.{ .layout_idx = field.layout_idx });
-            try self.dismantle_temps.append(self.emission_allocator, temp);
             tail = try self.store.addCFStmt(.{ .decref = .{
                 .value = temp,
                 .rc = LIR.RcHelper.fromConcrete(rc),
@@ -7186,10 +7243,7 @@ const Inserter = struct {
             } }, self.rcOrigin(cause, .decref, local));
             tail = try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = temp,
-                .op = .{ .field = .{
-                    .source = fields_source,
-                    .field_idx = @intCast(field.field_idx),
-                } },
+                .op = read_op,
                 .take_kind = .take,
                 .next = tail,
             } }, self.dismantleOrigin(cause, local));

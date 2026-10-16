@@ -2992,6 +2992,89 @@ pub const Store = struct {
         };
     }
 
+    /// The number of ownership slots a value of this layout occupies inside a
+    /// struct. Every layout but a struct holding refcounted data is one slot,
+    /// padding spacers included. A struct holding refcounted data numbers its
+    /// fields' slots by semantic index, a refcounted struct field expanding
+    /// into its own slots in place: a field's first slot is its semantic
+    /// index plus the extra slots of the expanded fields before it. A flat
+    /// struct's slots are therefore exactly its semantic field indices, and
+    /// a refcounted struct nested in a field covers a contiguous slot range.
+    /// ARC field takes, residual releases, and residual shells name stored
+    /// units by slot.
+    pub fn ownershipSlotCount(self: *const Self, layout_idx: Idx) u32 {
+        const l = self.getLayout(layout_idx);
+        if (l.tag != .struct_ or !self.layoutContainsRefcounted(l)) return 1;
+        const info = self.getStructInfo(l);
+        var end: u32 = 0;
+        var extra: u32 = 0;
+        for (0..info.fields.len) |i| {
+            const field = info.fields.get(@intCast(i));
+            end = @max(end, field.index + 1);
+            if (!field.is_padding) extra += self.ownershipSlotCount(field.layout) - 1;
+        }
+        return end + extra;
+    }
+
+    /// The first ownership slot of a struct's field, by semantic index.
+    pub fn ownershipSlotBase(self: *const Self, struct_layout_idx: Idx, field_index: u32) u32 {
+        const info = self.getStructInfo(self.getLayout(struct_layout_idx));
+        var slot_base = field_index;
+        for (0..info.fields.len) |i| {
+            const field = info.fields.get(@intCast(i));
+            if (field.index >= field_index or field.is_padding) continue;
+            slot_base += self.ownershipSlotCount(field.layout) - 1;
+        }
+        return slot_base;
+    }
+
+    /// One ownership slot that holds refcounted data: a slot whose layout is
+    /// not a refcounted struct (those expand into their own slots).
+    pub const RcSlot = struct {
+        slot: u32,
+        layout: Idx,
+    };
+
+    /// Append the refcounted ownership slots of a struct layout, in slot
+    /// order, numbered from `slot_base`.
+    pub fn appendRcSlots(
+        self: *const Self,
+        allocator: std.mem.Allocator,
+        struct_layout_idx: Idx,
+        slot_base: u32,
+        out: *std.ArrayList(RcSlot),
+    ) std.mem.Allocator.Error!void {
+        const start = out.items.len;
+        try self.appendRcSlotsUnordered(allocator, struct_layout_idx, slot_base, out);
+        std.sort.pdq(RcSlot, out.items[start..], {}, rcSlotLessThan);
+    }
+
+    fn appendRcSlotsUnordered(
+        self: *const Self,
+        allocator: std.mem.Allocator,
+        struct_layout_idx: Idx,
+        slot_base: u32,
+        out: *std.ArrayList(RcSlot),
+    ) std.mem.Allocator.Error!void {
+        const info = self.getStructInfo(self.getLayout(struct_layout_idx));
+        for (0..info.fields.len) |i| {
+            const field = info.fields.get(@intCast(i));
+            if (field.is_padding) continue;
+            const field_layout = self.getLayout(field.layout);
+            if (!self.layoutContainsRefcounted(field_layout)) continue;
+            const field_base = slot_base + self.ownershipSlotBase(struct_layout_idx, field.index);
+            if (field_layout.tag == .struct_) {
+                try self.appendRcSlotsUnordered(allocator, field.layout, field_base, out);
+            } else {
+                try out.append(allocator, .{ .slot = field_base, .layout = field.layout });
+            }
+        }
+    }
+
+    fn rcSlotLessThan(_: void, a: RcSlot, b: RcSlot) bool {
+        return a.slot < b.slot;
+    }
+
     /// Compute whether a struct contains refcounted data from its already-committed
     /// field layouts. Used to populate `StructData.contains_refcounted` at commit time.
     fn computeStructContainsRefcounted(self: *const Self, fields: []const StructField) bool {

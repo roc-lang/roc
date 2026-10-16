@@ -64,6 +64,35 @@ pub const Set = struct {
         return result;
     }
 
+    /// Whether the two sets share a field.
+    pub fn intersects(self: Set, other: Set) bool {
+        if (self.low & other.low != 0) return true;
+        const left = self.high orelse return false;
+        const right = other.high orelse return false;
+        var entries = right.words.iterator();
+        while (entries.next()) |entry| {
+            if (left.words.get(entry.index) & entry.value != 0) return true;
+        }
+        return false;
+    }
+
+    /// The union of both sets. Use an arena that outlives every snapshot
+    /// sharing the result.
+    pub fn withAll(self: Set, allocator: std.mem.Allocator, other: Set) std.mem.Allocator.Error!Set {
+        var result = self;
+        result.low |= other.low;
+        if (other.high) |high| {
+            var entries = high.words.iterator();
+            while (entries.next()) |entry| {
+                var bits = entry.value;
+                while (bits != 0) : (bits &= bits - 1) {
+                    result = try result.withField(allocator, @intCast(@as(u64, entry.index) * 64 + @ctz(bits)));
+                }
+            }
+        }
+        return result;
+    }
+
     pub fn isSingleton(self: Set, field: u32) bool {
         const count: usize = @as(usize, @popCount(self.low)) + if (self.high) |high| high.count else @as(usize, 0);
         return count == 1 and self.contains(field);

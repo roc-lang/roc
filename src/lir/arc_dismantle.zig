@@ -188,13 +188,6 @@ pub fn projectionOwnsAllRc(
     }
 }
 
-/// One committed refcounted field place of a dismantlable container.
-pub const FieldPlace = struct {
-    /// Original field index, as `assign_ref .field` addresses it.
-    field_idx: u32,
-    layout_idx: layout_mod.Idx,
-};
-
 /// The payload view a tag-union container dismantles through: its fields are
 /// the view struct's, and its residual release reads the discriminant fresh
 /// and releases the variant's residual fields through that same view. One
@@ -205,19 +198,33 @@ pub const PayloadView = struct {
     tag_discriminant: u32,
 };
 
-/// Committed field-place domain for one dismantlable container. Residual
+/// Committed field-place domain for one dismantlable container: the
+/// refcounted ownership slots of its struct layout (see
+/// `layout.Store.ownershipSlotCount`), one mask bit per slot. Residual
 /// ownership is path state in ARC, not a global property of this descriptor.
 pub const Container = struct {
-    fields: []const FieldPlace,
+    /// The struct layout whose ownership slots the masks number: the
+    /// container's own, or its payload view's for a tag union.
+    layout_idx: layout_mod.Idx,
     full_mask: u64,
     /// Set for a tag-union container, whose fields belong to this view.
     payload_view: ?PayloadView = null,
 };
 
-/// Exact resource-place transfer performed by one field read.
+/// Exact resource-place transfer performed by one field read: the ownership
+/// slots of `root` the read's result carries away.
 pub const Take = struct {
     root: LIR.LocalId,
     field_mask: u64,
+};
+
+/// A borrowed struct read out of a dismantlable container. It holds no unit:
+/// its field reads are reads of the container's slots starting at `base`,
+/// and its representation names slots the container may already have given
+/// away, which ARC records on its definition as a residual shell.
+pub const View = struct {
+    root: LIR.LocalId,
+    base: u32,
 };
 
 /// One direct-call argument whose owned unit came from an exact aggregate
@@ -280,6 +287,9 @@ pub const Dismantles = struct {
     /// Later complete projections rewritten to explicit aliases of the
     /// dominating projected container that owns their representation.
     projection_aliases: collections.DenseMap(LIR.LocalId, LIR.LocalId),
+    /// Views into committed containers, keyed by the view binding: borrowed
+    /// struct field reads and borrowed pure aliases of them.
+    views: collections.DenseMap(LIR.LocalId, View),
 
     pub fn deinit(self: *Dismantles) void {
         const gpa = self.arena.child_allocator;
@@ -291,6 +301,7 @@ pub const Dismantles = struct {
         self.projection_units.deinit();
         self.complete_takes.deinit();
         self.projection_aliases.deinit();
+        self.views.deinit();
         self.arena.deinit();
     }
 
@@ -351,6 +362,10 @@ pub const Dismantles = struct {
     pub fn projectionAliasRoot(self: *const Dismantles, local: LIR.LocalId) ?LIR.LocalId {
         return self.projection_aliases.get(local);
     }
+
+    pub fn viewOf(self: *const Dismantles, local: LIR.LocalId) ?View {
+        return self.views.get(local);
+    }
 };
 
 fn dismantleInvariant(comptime message: []const u8) noreturn {
@@ -365,12 +380,20 @@ const State = enum(u8) {
     /// Borrowed pure same-value alias of a candidate; reads through it
     /// attribute to the root container.
     transparent_alias,
+    /// Borrowed struct read out of a candidate, or a borrowed pure alias of
+    /// one; reads through it attribute to the root container's slots from
+    /// the view's base.
+    view,
 };
 
 const Read = struct {
     stmt: LIR.CFStmtId,
     target: LIR.LocalId,
-    field_idx: u32,
+    /// The root container's ownership slots the read's result holds.
+    mask: u64,
+    /// The read defines a view: its result reads the container's slots in
+    /// place instead of holding them.
+    view: bool = false,
 };
 
 /// A complete field read of a root that dominance canonicalized to an
@@ -449,8 +472,14 @@ const Analysis = struct {
     /// Dismantling may only claim units that the emitter can release.
     rc_local: []const bool,
     state: []State,
-    /// Root container local per transparent alias, `no_index` otherwise.
+    /// Root container local per transparent alias or view, `no_index`
+    /// otherwise.
     alias_root: []u32,
+    /// First root slot of each view.
+    view_base: []u32,
+    /// Targets of refcounted reads through a view. Each is a read of the
+    /// view's root in its own right, so the view's borrow forest skips it.
+    read_through_view: []bool,
     /// Tag-union root per ownership-complete borrowed payload view,
     /// `no_index` otherwise. Such a view is the struct candidate through
     /// which the union dismantles; its unit is the root's.
@@ -506,6 +535,8 @@ const Analysis = struct {
         self.union_roots.deinit(self.gpa);
         self.gpa.free(self.view_root);
         self.gpa.free(self.alias_root);
+        self.gpa.free(self.view_base);
+        self.gpa.free(self.read_through_view);
         self.gpa.free(self.mention_heads);
         self.mention_edges.deinit(self.gpa);
         self.gpa.free(self.state);
@@ -586,11 +617,12 @@ const Analysis = struct {
         if (self.solution.isJoinParam(local) and !self.explicit_init_join[local_index]) return false;
         if (self.solution.maybeUninitializedCondition(local) != null) return false;
 
+        // Every ownership slot needs a residual mask bit.
+        if (self.layouts.ownershipSlotCount(self.store.getLocal(local).layout_idx) > 64) return false;
         const info = self.layouts.getStructInfo(local_layout);
         var any_rc = false;
         for (0..info.fields.len) |i| {
             const field = info.fields.get(@intCast(i));
-            if (field.index >= 64) return false;
             if (self.layouts.layoutContainsRefcounted(self.layouts.getLayout(field.layout))) {
                 any_rc = true;
                 // A residual field is released through its layout's RC
@@ -612,7 +644,7 @@ const Analysis = struct {
     fn entryOf(self: *Analysis, local: LIR.LocalId) Error!?*Candidate {
         const index = @backingInt(local);
         switch (self.state[index]) {
-            .ineligible, .transparent_alias => return null,
+            .ineligible, .transparent_alias, .view => return null,
             .candidate => return self.candidates.getPtr(index).?,
             .unknown => {
                 if (!try self.passesGate(local)) {
@@ -633,10 +665,14 @@ const Analysis = struct {
         if (self.projected_container[index] != no_index and self.projected_container[index] != index) {
             return @fromBackingInt(@intCast(self.projected_container[index]));
         }
-        if (self.state[index] == .transparent_alias) {
+        if (self.state[index] == .transparent_alias or self.state[index] == .view) {
             return @fromBackingInt(@intCast(self.alias_root[index]));
         }
         return local;
+    }
+
+    fn isView(self: *const Analysis, local: LIR.LocalId) bool {
+        return self.state[@backingInt(local)] == .view;
     }
 
     fn disqualify(self: *Analysis, local: LIR.LocalId) void {
@@ -664,6 +700,9 @@ const Analysis = struct {
     fn useWhole(self: *Analysis, stmt: LIR.CFStmtId, local: LIR.LocalId) Error!void {
         try self.noteMention(stmt, local);
         try self.touchUnion(local);
+        // A view's other uses are borrow observations of its slots, which
+        // its borrow forest replays against the root's takes.
+        if (self.isView(local)) return;
         self.disqualify(local);
     }
 
@@ -673,6 +712,7 @@ const Analysis = struct {
     fn useWholeAt(self: *Analysis, local: LIR.LocalId, stmt: LIR.CFStmtId) Error!void {
         try self.noteMention(stmt, local);
         try self.touchUnion(local);
+        if (self.isView(local)) return;
         const root = self.resolveRoot(local);
         const candidate = (try self.entryOf(root)) orelse return;
         try candidate.whole_uses.append(self.gpa, stmt);
@@ -731,7 +771,7 @@ const Analysis = struct {
     fn noteDef(self: *Analysis, local: LIR.LocalId, stmt: LIR.CFStmtId) Error!void {
         const index = @backingInt(local);
         if (self.projected_container[index] != no_index and self.projected_container[index] != index) return;
-        if (self.state[index] == .transparent_alias) {
+        if (self.state[index] == .transparent_alias or self.state[index] == .view) {
             // A second definition of an alias re-points it; the root can no
             // longer attribute its reads.
             self.disqualify(local);
@@ -762,23 +802,59 @@ const Analysis = struct {
         }
     }
 
-    fn noteFieldRead(self: *Analysis, stmt: LIR.CFStmtId, source: LIR.LocalId, field_idx: u32, target: LIR.LocalId) Error!void {
+    /// Records a field read of `source`, and returns whether it defined a
+    /// view, whose definition is then already recorded.
+    fn noteFieldRead(self: *Analysis, stmt: LIR.CFStmtId, source: LIR.LocalId, field_idx: u32, target: LIR.LocalId) Error!bool {
+        const target_index = @backingInt(target);
+        const through_view = self.isView(source);
         // A refcounted field read through a borrowed source observes the
         // source's stored unit at the read itself when the target retains.
-        if (self.rc_local[@backingInt(target)]) try self.noteMention(stmt, source);
+        // A read through a view is a read of the view's root in its own
+        // right instead.
+        if (self.rc_local[target_index]) {
+            if (through_view) {
+                self.read_through_view[target_index] = true;
+            } else {
+                try self.noteMention(stmt, source);
+            }
+        }
         const root = self.resolveRoot(source);
-        const target_index = @backingInt(target);
+        // Only a struct root can dismantle.
+        if (self.layouts.getLayout(self.store.getLocal(source).layout_idx).tag != .struct_) return false;
+        const view_base: u32 = if (through_view) self.view_base[@backingInt(source)] else 0;
+        const first = view_base + self.layouts.ownershipSlotBase(self.store.getLocal(source).layout_idx, field_idx);
+        const count = self.layouts.ownershipSlotCount(self.store.getLocal(target).layout_idx);
+        if (first + count > 64) {
+            // Beyond the residual mask's reach: the root cannot dismantle.
+            self.disqualify(root);
+            return false;
+        }
+        const mask = (if (count == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(count)) - 1) << @intCast(first);
         const representative_index = self.projected_container[target_index];
         if (representative_index != no_index and representative_index != target_index) {
-            try self.noteEquivalencedRead(stmt, root, field_idx, target, @fromBackingInt(@intCast(representative_index)));
-            return;
+            try self.noteEquivalencedRead(stmt, root, mask, target, @fromBackingInt(@intCast(representative_index)));
+            return false;
         }
-        const candidate = (try self.entryOf(root)) orelse return;
+        const candidate = (try self.entryOf(root)) orelse return false;
+        const view = self.state[target_index] == .unknown and
+            self.rc_local[target_index] and
+            self.solution.isBorrowed(target) and
+            !self.is_param[target_index] and
+            self.layouts.getLayout(self.store.getLocal(target).layout_idx).tag == .struct_ and
+            self.projected_root[target_index] == no_index and
+            self.view_root[target_index] == no_index;
+        if (view) {
+            self.state[target_index] = .view;
+            self.alias_root[target_index] = @backingInt(root);
+            self.view_base[target_index] = first;
+        }
         try candidate.reads.append(self.gpa, .{
             .stmt = stmt,
             .target = target,
-            .field_idx = field_idx,
+            .mask = mask,
+            .view = view,
         });
+        return view;
     }
 
     /// A complete read canonicalized to a dominating representative. If the
@@ -794,25 +870,45 @@ const Analysis = struct {
     /// dominates this one, so the root's flow already observes the field
     /// before it, and a mention of the representative here would poison the
     /// root's own take when the read rejoins its field reads.
-    fn noteEquivalencedRead(self: *Analysis, stmt: LIR.CFStmtId, root: LIR.LocalId, field_idx: u32, target: LIR.LocalId, representative: LIR.LocalId) Error!void {
+    fn noteEquivalencedRead(self: *Analysis, stmt: LIR.CFStmtId, root: LIR.LocalId, mask: u64, target: LIR.LocalId, representative: LIR.LocalId) Error!void {
         if (!self.solution.isBorrowed(target)) {
             if (try self.entryOf(representative)) |candidate| try candidate.whole_uses.append(self.gpa, stmt);
         }
         const root_candidate = (try self.entryOf(root)) orelse return;
         try root_candidate.equivalenced_reads.append(self.gpa, .{
-            .read = .{ .stmt = stmt, .target = target, .field_idx = field_idx },
+            .read = .{ .stmt = stmt, .target = target, .mask = mask },
             .representative = representative,
         });
     }
 
     fn noteAliasDef(self: *Analysis, stmt: LIR.CFStmtId, target: LIR.LocalId, source: LIR.LocalId) Error!void {
         const target_index = @backingInt(target);
-        if (self.state[target_index] == .transparent_alias) {
+        if (self.state[target_index] == .transparent_alias or self.state[target_index] == .view) {
             // Redefinition of an existing alias: neither its old nor its new
             // root can attribute reads through it.
             self.disqualify(target);
             self.disqualify(source);
             self.state[target_index] = .ineligible;
+            return;
+        }
+        if (self.isView(source)) {
+            const source_index = @backingInt(source);
+            if (self.solution.isBorrowed(target) and self.state[target_index] == .unknown) {
+                // A borrowed alias of a view is the same view.
+                self.state[target_index] = .view;
+                self.alias_root[target_index] = self.alias_root[source_index];
+                self.view_base[target_index] = self.view_base[source_index];
+                return;
+            }
+            // An owned binding retains the view's slots here, observing
+            // them, and holds that retained unit as its own.
+            try self.noteMention(stmt, source);
+            try self.touchUnion(source);
+            if (self.solution.isBorrowed(target)) {
+                self.disqualify(target);
+            } else {
+                try self.noteDef(target, stmt);
+            }
             return;
         }
         const root = self.resolveRoot(source);
@@ -1907,8 +2003,9 @@ fn classifyStatement(
         .assign_ref => |stmt| {
             switch (stmt.op) {
                 .field => |op| {
-                    try analysis.noteFieldRead(current, op.source, op.field_idx, stmt.target);
-                    try analysis.noteDef(stmt.target, current);
+                    if (!try analysis.noteFieldRead(current, op.source, op.field_idx, stmt.target)) {
+                        try analysis.noteDef(stmt.target, current);
+                    }
                 },
                 .local => |source| {
                     try analysis.noteDemandAlias(source, stmt.target);
@@ -2633,6 +2730,8 @@ pub fn compute(
         .rc_local = rc_local,
         .state = try gpa.alloc(State, store.localCount()),
         .alias_root = try gpa.alloc(u32, store.localCount()),
+        .view_base = try gpa.alloc(u32, store.localCount()),
+        .read_through_view = try gpa.alloc(bool, store.localCount()),
         .view_root = try gpa.alloc(u32, store.localCount()),
         .union_roots = .empty,
         .candidates = .empty,
@@ -2648,6 +2747,8 @@ pub fn compute(
     defer analysis.deinit();
     @memset(analysis.state, .unknown);
     @memset(analysis.alias_root, no_index);
+    @memset(analysis.view_base, 0);
+    @memset(analysis.read_through_view, false);
     @memset(analysis.view_root, no_index);
     @memset(analysis.owned_demand, false);
     @memset(analysis.mention_heads, no_index);
@@ -2694,6 +2795,7 @@ pub fn compute(
         .projection_units = .init(gpa),
         .complete_takes = .init(gpa),
         .projection_aliases = .init(gpa),
+        .views = .init(gpa),
     };
     errdefer result.deinit();
     result.owned_only_param_benefits = try result.arena.allocator().alloc(arc_sig.ParamMask, store.procSpecCount());
@@ -2768,6 +2870,8 @@ pub fn compute(
     }
     var borrow_stack = std.ArrayList(u32).empty;
     defer borrow_stack.deinit(gpa);
+    var rc_slots = std.ArrayList(layout_mod.Store.RcSlot).empty;
+    defer rc_slots.deinit(gpa);
 
     // A root's deferred reads are settled by their representatives' plans,
     // and a representative's layout is a proper part of its root's layout,
@@ -3106,12 +3210,6 @@ pub fn compute(
                 else
                     continue :candidates;
 
-                // Reads keep their field indexes within a mask's reach or the
-                // container cannot dismantle at all.
-                for (candidate.reads.items) |read| {
-                    if (read.field_idx >= 64) continue :candidates;
-                }
-
                 // A container released through its Boxy descriptor has fields whose
                 // release needs that descriptor too, so they cannot be released one
                 // at a time from their layouts.
@@ -3120,15 +3218,11 @@ pub fn compute(
                 // Only refcounted fields carry stored units worth taking; a
                 // container with no refcounted take keeps its ordinary whole
                 // release.
-                const local_layout = layouts.getLayout(store.getLocal(local).layout_idx);
-                const info = layouts.getStructInfo(local_layout);
+                const local_layout_idx = store.getLocal(local).layout_idx;
+                rc_slots.clearRetainingCapacity();
+                try layouts.appendRcSlots(gpa, local_layout_idx, 0, &rc_slots);
                 var rc_mask: u64 = 0;
-                for (0..info.fields.len) |i| {
-                    const field = info.fields.get(@intCast(i));
-                    if (layouts.layoutContainsRefcounted(layouts.getLayout(field.layout))) {
-                        rc_mask |= @as(u64, 1) << @intCast(field.index);
-                    }
-                }
+                for (rc_slots.items) |slot| rc_mask |= @as(u64, 1) << @intCast(slot.slot);
 
                 // Verify each field by a forward dataflow from the container's
                 // definition over the control-flow graph: a consuming read is a take
@@ -3140,9 +3234,13 @@ pub fn compute(
                 read_kinds.clearRetainingCapacity();
                 field_restitutions.clearRetainingCapacity();
                 for (candidate.reads.items) |read| {
-                    const bit = @as(u64, 1) << @intCast(read.field_idx);
-                    if (rc_mask & bit == 0) continue;
+                    const bit = read.mask & rc_mask;
+                    if (bit == 0) continue;
                     const consuming = !solution.isBorrowed(read.target) or analysis.owned_demand[@backingInt(read.target)];
+                    // A borrowed view's definition copies only the
+                    // representation; its reads and other uses observe the
+                    // slots themselves.
+                    if (read.view and !consuming) continue;
                     try read_kinds.put(read.stmt, .{
                         .bit = bit,
                         .consuming = consuming,
@@ -3200,8 +3298,8 @@ pub fn compute(
                 // may not run before any of them on any path.
                 var forced_poison: u64 = 0;
                 for (candidate.reads.items) |read| {
-                    const bit = @as(u64, 1) << @intCast(read.field_idx);
-                    if (rc_mask & bit == 0) continue;
+                    const bit = read.mask & rc_mask;
+                    if (bit == 0) continue;
                     if (!solution.isBorrowed(read.target) or analysis.owned_demand[@backingInt(read.target)]) continue;
                     borrow_stack.clearRetainingCapacity();
                     try borrow_stack.append(gpa, @backingInt(read.target));
@@ -3225,7 +3323,11 @@ pub fn compute(
                         var child = borrow_child_heads[borrower];
                         while (child != no_index) {
                             const child_edge = borrow_child_edges.items[child];
-                            try borrow_stack.append(gpa, child_edge.local);
+                            // A read through a view is a read of this
+                            // container with its own slots and observations.
+                            if (!analysis.read_through_view[child_edge.local]) {
+                                try borrow_stack.append(gpa, child_edge.local);
+                            }
                             child = child_edge.next;
                         }
                     }
@@ -3234,7 +3336,7 @@ pub fn compute(
                 var candidate_mask: u64 = 0;
                 for (candidate.reads.items) |read| {
                     if (!solution.isBorrowed(read.target) or analysis.owned_demand[@backingInt(read.target)]) {
-                        candidate_mask |= @as(u64, 1) << @intCast(read.field_idx);
+                        candidate_mask |= read.mask;
                     }
                 }
                 candidate_mask &= rc_mask;
@@ -3401,15 +3503,9 @@ pub fn compute(
                 const taken_mask: u64 = candidate_mask & ~poison;
                 if (taken_mask == 0) continue;
 
-                // Accepted. Record the exact committed field-place domain. ARC owns
-                // the path-sensitive residual mask and release normalization.
-                var fields = std.ArrayList(FieldPlace).empty;
-                defer fields.deinit(gpa);
-                for (0..info.fields.len) |i| {
-                    const field = info.fields.get(@intCast(i));
-                    if (!layouts.layoutContainsRefcounted(layouts.getLayout(field.layout))) continue;
-                    try fields.append(gpa, .{ .field_idx = field.index, .layout_idx = field.layout });
-                }
+                // Accepted. The committed field-place domain is the layout's
+                // refcounted slots. ARC owns the path-sensitive residual mask
+                // and release normalization.
 
                 // A parameter solved borrowed dismantles only in emissions whose
                 // demand vector overrides it to owned; everything else applies to
@@ -3418,7 +3514,6 @@ pub fn compute(
                 const projected = projection_root_index != no_index and union_root == null;
                 const activation_root: LIR.LocalId = if (projected) @fromBackingInt(@intCast(projection_root_index)) else local;
                 const owned_only = solution.isBorrowed(activation_root) and union_root == null;
-                const stored_fields = try result.arena.allocator().dupe(FieldPlace, fields.items);
                 if (projected) {
                     // The projection read itself moves the outer unit into this
                     // container in precisely those emissions where the root is owned.
@@ -3436,8 +3531,8 @@ pub fn compute(
                     }
                 }
                 for (candidate.reads.items) |read| {
-                    const bit = @as(u64, 1) << @intCast(read.field_idx);
-                    if (taken_mask & bit == 0) continue;
+                    const bit = read.mask & rc_mask;
+                    if (bit == 0 or (taken_mask & bit) != bit) continue;
                     if (!(read_kinds.get(read.stmt) orelse continue).consuming) continue;
                     if (solution.isBorrowed(read.target) and !analysis.owned_demand[@backingInt(read.target)]) continue;
                     const take = Take{ .root = local, .field_mask = bit };
@@ -3488,7 +3583,7 @@ pub fn compute(
                 if (union_root) |view_root_entry| {
                     const root_local: LIR.LocalId = @fromBackingInt(@intCast(analysis.view_root[@backingInt(local)]));
                     try result.containers.put(root_local, .{
-                        .fields = stored_fields,
+                        .layout_idx = local_layout_idx,
                         .full_mask = rc_mask,
                         .payload_view = .{
                             .view = local,
@@ -3497,10 +3592,10 @@ pub fn compute(
                     });
                     try undo.append(gpa, .{ .container = root_local });
                 } else if (owned_only) {
-                    try result.owned_only_containers.put(local, .{ .fields = stored_fields, .full_mask = rc_mask });
+                    try result.owned_only_containers.put(local, .{ .layout_idx = local_layout_idx, .full_mask = rc_mask });
                     try undo.append(gpa, .{ .owned_only_container = local });
                 } else {
-                    try result.containers.put(local, .{ .fields = stored_fields, .full_mask = rc_mask });
+                    try result.containers.put(local, .{ .layout_idx = local_layout_idx, .full_mask = rc_mask });
                     try undo.append(gpa, .{ .container = local });
                 }
             }
@@ -3749,6 +3844,19 @@ pub fn compute(
         if (stmt.* != .assign_ref) dismantleInvariant("projected alias definition stopped being a reference read");
         stmt.assign_ref.op = .{ .local = representative_local };
         try result.projection_aliases.put(@fromBackingInt(@intCast(@as(u32, @intCast(local_index)))), representative_local);
+    }
+    // Publish the views of committed containers. A tag union's container is
+    // keyed by the union, whose payload view numbers the slots.
+    for (analysis.state, 0..) |state, local_index| {
+        if (state != .view) continue;
+        const root_index = analysis.alias_root[local_index];
+        const union_index = analysis.view_root[root_index];
+        const key: LIR.LocalId = @fromBackingInt(@intCast(if (union_index != no_index) union_index else root_index));
+        if (!result.containers.contains(key) and !result.owned_only_containers.contains(key)) continue;
+        try result.views.put(@fromBackingInt(@intCast(@as(u32, @intCast(local_index)))), .{
+            .root = key,
+            .base = analysis.view_base[local_index],
+        });
     }
     return result;
 }
