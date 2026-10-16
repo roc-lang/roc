@@ -12,7 +12,6 @@ const backend = @import("backend");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 const lir = @import("lir");
-const GuardedList = lir.LirStore.GuardedList;
 const roc_target = @import("roc_target");
 const reporting = @import("reporting");
 

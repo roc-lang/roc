@@ -576,8 +576,10 @@ fn runCheck(
 /// null when every one passes, or an owned message naming each that failed.
 fn runExpects(allocator: Allocator, source: []const u8) BuiltinDocTestError!?[]u8 {
     var run = test_helpers.devEvalTopLevelExpects(allocator, source, &.{}, prePublishedBuiltin()) catch |err| {
-        if (err == error.TypeCheckError) return try dupeErr(allocator, "check produced diagnostics or problems", .{});
-        return try dupeErr(allocator, "devEvalTopLevelExpects: {s}", .{@errorName(err)});
+        return switch (err) {
+            error.TypeCheckError => try dupeErr(allocator, "check produced diagnostics or problems", .{}),
+            else => try dupeErr(allocator, "devEvalTopLevelExpects: {s}", .{@errorName(err)}),
+        };
     };
     defer run.deinit(allocator);
 
