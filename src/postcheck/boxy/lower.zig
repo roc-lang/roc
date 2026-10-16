@@ -28238,8 +28238,11 @@ const ProcBodyBuilder = struct {
         return after_receiver;
     }
 
-    fn prependRecordFieldDescriptorBind(
+    /// Bind the descriptor of field `field_idx` read from `source` into
+    /// `target`, when that field's storage carries one.
+    fn prependAggregateFieldDescriptorBind(
         self: *ProcBodyBuilder,
+        aggregate: AggregateFieldKind,
         target: LIR.LocalId,
         source: LIR.LocalId,
         record_rep: Plan.TypeRepId,
@@ -28247,7 +28250,10 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         if (!self.payloadFieldCarriesRuntimeDesc(record_rep, field_idx)) return next;
-        const nested_desc_index = self.recordFieldNestedDescriptorIndex(record_rep, field_idx);
+        const nested_desc_index = switch (aggregate) {
+            .record => self.recordFieldNestedDescriptorIndex(record_rep, field_idx),
+            .tuple => self.tupleElemNestedDescriptorIndex(record_rep, field_idx),
+        };
         const record_desc = try self.descriptorRefForLocalOrKnownRep(source, record_rep);
         if (self.parent.result.store.getLocal(target).boxy_desc) |desc| {
             if (desc.localOrNull() == null) return next;
@@ -37245,6 +37251,13 @@ const ProcBodyBuilder = struct {
             } }, self.glueOrigin());
         }
 
+        // A nominal boundary only relabels; any storage change is an earlier
+        // structural boundary's conversion.
+        if (comptime zig_builtin.mode == .debug) {
+            if (!try self.boundaryLayoutsInterchangeable(target_layout, source_layout)) {
+                boxyLowerInvariant("nominal boundary relabeled a value between layouts that store it differently");
+            }
+        }
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
             .op = .{ .nominal = .{ .backing_ref = source } },
@@ -38548,8 +38561,13 @@ const ProcBodyBuilder = struct {
         },
     };
 
-    /// A record converted field by field, last field first.
+    /// Whether an aggregate's fields are record fields or tuple elements,
+    /// which selects how a field's nested descriptor is found.
+    const AggregateFieldKind = enum { record, tuple };
+
+    /// A record or tuple converted field by field, last field first.
     const RecordBoundaryState = struct {
+        aggregate: AggregateFieldKind = .record,
         target: LIR.LocalId,
         target_rep: Plan.TypeRepId,
         /// The record the fields are read from: the source itself, or the
@@ -38944,6 +38962,7 @@ const ProcBodyBuilder = struct {
                         return .{ .done = adapted };
                     }
                     if (try self.beginConcreteRecordToConcreteBoundary(frames, identity_request)) |step| return step;
+                    if (try self.beginConcreteTupleToConcreteBoundary(frames, identity_request)) |step| return step;
                     return .{ .done = try self.assignDescriptorAwareNominalBoundary(
                         target,
                         source,
@@ -39043,7 +39062,8 @@ const ProcBodyBuilder = struct {
                         } },
                         .next = converted,
                     } }, self.glueOrigin());
-                    state.current = try self.prependRecordFieldDescriptorBind(
+                    state.current = try self.prependAggregateFieldDescriptorBind(
+                        state.aggregate,
                         state.source_fields[index],
                         state.fields_source,
                         state.source_record_rep,
@@ -39322,6 +39342,31 @@ const ProcBodyBuilder = struct {
         }, "concrete");
     }
 
+    /// Tuples whose element storage differs, such as a nominal's shared
+    /// backing template holding boxed formals read as a tuple of the use's
+    /// actual types, convert element by element.
+    fn beginConcreteTupleToConcreteBoundary(self: *ProcBodyBuilder, frames: *std.ArrayList(BoundaryFrame), request: BoundaryRequest) Allocator.Error!?BoundaryStep {
+        if (request.target_rep == request.source_rep) return null;
+        const source_tuple_rep = self.tupleRepForBoundary(request.source_rep) orelse return null;
+        const target_tuple_rep = self.tupleRepForBoundary(request.target_rep) orelse return null;
+        const target_layout = self.parent.result.store.getLocal(request.target).layout_idx;
+        const source_layout = self.parent.result.store.getLocal(request.source).layout_idx;
+        if (target_layout == source_layout) return null;
+        if (self.parent.layoutIsBoxStorage(self.workerRuntimeLayoutForRep(source_tuple_rep).layoutIdx())) return null;
+
+        const target_tuple = self.parent.plan.representations.items[@backingInt(target_tuple_rep)];
+        const elem_count = self.parent.plan.childSlice(target_tuple.children).len;
+        if (elem_count == 0) return null;
+        return try self.beginRecordFieldsBoundary(frames, request, target_tuple, elem_count, .{
+            .aggregate = .tuple,
+            .target = request.target,
+            .target_rep = request.target_rep,
+            .fields_source = request.source,
+            .source_record_rep = source_tuple_rep,
+            .unbox = null,
+        }, "concrete");
+    }
+
     /// Reserve each target field's conversion and build the record's
     /// construction, then push the frame that converts the fields.
     fn beginRecordFieldsBoundary(
@@ -39345,23 +39390,34 @@ const ProcBodyBuilder = struct {
 
         var field_index: usize = 0;
         for (self.parent.plan.childSlice(target_record.children)) |target_child| {
-            switch (target_child.role) {
-                .record_field => |target_label| {
-                    const source_field = self.findRecordFieldByLabel(state.source_record_rep, Plan.moduleViewForKey(self.parent.modules, target_child.source_type.module), target_label) orelse
-                        boxyLowerInvariant(kind ++ " record boundary source was missing target field");
-                    state.target_fields[field_index] = if (self.representationBoundaryIsDirect(target_child.rep, source_field.rep))
-                        try self.addFrameLocalForRep(target_child.rep)
-                    else
-                        try self.addFrameBoundaryTargetLocalForRep(target_child.rep);
-                    state.source_fields[field_index] = try self.addFrameLocalForRep(source_field.rep);
-                    state.target_field_reps[field_index] = target_child.rep;
-                    state.source_field_reps[field_index] = source_field.rep;
-                    state.source_field_indices[field_index] = source_field.index;
-                    field_index += 1;
+            const source_field: MatchedRecordField = switch (initial.aggregate) {
+                .record => switch (target_child.role) {
+                    .record_field => |target_label| self.findRecordFieldByLabel(state.source_record_rep, Plan.moduleViewForKey(self.parent.modules, target_child.source_type.module), target_label) orelse
+                        boxyLowerInvariant(kind ++ " record boundary source was missing target field"),
+                    .record_ext => {
+                        self.requireEmptyRecordExtension(target_child.rep);
+                        continue;
+                    },
+                    .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant(kind ++ " record boundary target had non-record child role"),
                 },
-                .record_ext => self.requireEmptyRecordExtension(target_child.rep),
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant(kind ++ " record boundary target had non-record child role"),
-            }
+                .tuple => switch (target_child.role) {
+                    .tuple_elem => |elem_index| .{
+                        .index = elem_index,
+                        .rep = self.tupleElemRep(state.source_record_rep, elem_index) orelse
+                            boxyLowerInvariant(kind ++ " tuple boundary source was missing target element"),
+                    },
+                    .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant(kind ++ " tuple boundary target had non-element child role"),
+                },
+            };
+            state.target_fields[field_index] = if (self.representationBoundaryIsDirect(target_child.rep, source_field.rep))
+                try self.addFrameLocalForRep(target_child.rep)
+            else
+                try self.addFrameBoundaryTargetLocalForRep(target_child.rep);
+            state.source_fields[field_index] = try self.addFrameLocalForRep(source_field.rep);
+            state.target_field_reps[field_index] = target_child.rep;
+            state.source_field_reps[field_index] = source_field.rep;
+            state.source_field_indices[field_index] = source_field.index;
+            field_index += 1;
         }
         if (field_index != target_field_count) {
             boxyLowerInvariant(kind ++ " record boundary field count disagreed with target record children");
@@ -42827,6 +42883,18 @@ const ProcBodyBuilder = struct {
                 },
                 .record_ext => self.requireEmptyRecordExtension(child.rep),
                 .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("record boundary source had a non-record child role"),
+            }
+        }
+        return null;
+    }
+
+    /// The representation of element `elem_index` of tuple `tuple_rep_id`.
+    fn tupleElemRep(self: *const ProcBodyBuilder, tuple_rep_id: Plan.TypeRepId, elem_index: u32) ?Plan.TypeRepId {
+        const rep = self.parent.plan.representations.items[@backingInt(tuple_rep_id)];
+        for (self.parent.plan.childSlice(rep.children)) |child| {
+            switch (child.role) {
+                .tuple_elem => |index| if (index == elem_index) return child.rep,
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tuple boundary source had a non-element child role"),
             }
         }
         return null;
