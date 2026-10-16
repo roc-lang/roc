@@ -6375,7 +6375,7 @@ const ProcedureBuilder = struct {
                     boxyLowerInvariant("declared nominal field index exceeded its backing record fields");
                 }
                 const child = backing_fields.items[field.index];
-                const view = Plan.moduleViewForKey(self.modules, child.source_type.module);
+                const view = Plan.moduleViewForKey(self.modules, self.plan.childLabelModule(child));
                 field_name_ids.items[field.index] = try self.result.store.insertBoxyName(
                     view.canonical_names.?.recordFieldLabelText(child.role.record_field),
                 );
@@ -6386,7 +6386,7 @@ const ProcedureBuilder = struct {
         }
         for (self.plan.childSlice(rep.children)) |child| {
             if (child.role == .record_field) {
-                const view = Plan.moduleViewForKey(self.modules, child.source_type.module);
+                const view = Plan.moduleViewForKey(self.modules, self.plan.childLabelModule(child));
                 try field_name_ids.append(
                     self.allocator,
                     try self.result.store.insertBoxyName(view.canonical_names.?.recordFieldLabelText(child.role.record_field)),
@@ -16339,7 +16339,7 @@ const ProcBodyBuilder = struct {
                     .tag_name = no_tag_payload_read,
                     .read = .nested,
                 };
-            } else (try self.immediateTagPayloadDescriptorForRep(parent_rep, target_rep, candidate_index)) orelse continue;
+            } else (try self.immediateTagReadDescriptorForRep(parent_rep, target_rep, candidate_index)) orelse continue;
             if (source != null) {
                 boxyLowerInvariant("boxy erased argument descriptor had multiple direct parent parameters");
             }
@@ -16348,9 +16348,10 @@ const ProcBodyBuilder = struct {
         return source orelse direct;
     }
 
-    /// The tag payload of `parent_rep_id`'s descriptor that describes
-    /// `target_rep` directly, read from parameter `parent_index`.
-    fn immediateTagPayloadDescriptorForRep(
+    /// The tag payload or open-row extension of `parent_rep_id`'s descriptor
+    /// that describes `target_rep` directly, read from parameter
+    /// `parent_index`.
+    fn immediateTagReadDescriptorForRep(
         self: *ProcBodyBuilder,
         parent_rep_id: Plan.TypeRepId,
         target_rep: Plan.TypeRepId,
@@ -16365,7 +16366,13 @@ const ProcBodyBuilder = struct {
         if (read_path.items.len != 1) return null;
         const payload = switch (read_path.items[0]) {
             .tag_payload => |payload| payload,
-            .nested, .tag_ext, .box_payload => return null,
+            .tag_ext => return .{
+                .descriptor_index = @intCast(parent_index),
+                .nested_index = std.math.maxInt(u32),
+                .tag_name = no_tag_payload_read,
+                .read = .tag_ext,
+            },
+            .nested, .box_payload => return null,
         };
         if (payload.payload_index > std.math.maxInt(u32)) {
             boxyLowerInvariant("boxy erased argument tag payload descriptor index exceeded its ABI range");
@@ -26916,7 +26923,7 @@ const ProcBodyBuilder = struct {
                     }
                     const source_field = self.findRecordFieldByLabel(
                         state.source_aggregate_rep,
-                        Plan.moduleViewForKey(self.parent.modules, target_child.source_type.module),
+                        Plan.moduleViewForKey(self.parent.modules, self.parent.plan.childLabelModule(target_child)),
                         target_label,
                     ) orelse {
                         switch (target_child.record_field_kind.tag) {
@@ -39360,7 +39367,7 @@ const ProcBodyBuilder = struct {
         for (self.parent.plan.childSlice(target_record.children)) |target_child| {
             switch (target_child.role) {
                 .record_field => |target_label| {
-                    const source_field = self.findRecordFieldByLabel(state.source_record_rep, Plan.moduleViewForKey(self.parent.modules, target_child.source_type.module), target_label) orelse
+                    const source_field = self.findRecordFieldByLabel(state.source_record_rep, Plan.moduleViewForKey(self.parent.modules, self.parent.plan.childLabelModule(target_child)), target_label) orelse
                         boxyLowerInvariant(kind ++ " record boundary source was missing target field");
                     state.target_fields[field_index] = if (self.representationBoundaryIsDirect(target_child.rep, source_field.rep))
                         try self.addFrameLocalForRep(target_child.rep)
@@ -42830,7 +42837,7 @@ const ProcBodyBuilder = struct {
         for (self.parent.plan.childSlice(rep.children)) |child| {
             switch (child.role) {
                 .record_field => |source_label| {
-                    if (Plan.recordFieldNameMatches(Plan.moduleNamesOf(Plan.moduleViewForKey(self.parent.modules, child.source_type.module)), source_label, Plan.moduleNamesOf(target_view), target_label)) {
+                    if (Plan.recordFieldNameMatches(Plan.moduleNamesOf(Plan.moduleViewForKey(self.parent.modules, self.parent.plan.childLabelModule(child))), source_label, Plan.moduleNamesOf(target_view), target_label)) {
                         return .{
                             .index = index,
                             .rep = child.rep,

@@ -3309,6 +3309,12 @@ pub const MonoLlvmCodeGen = struct {
                             try self.boxyInt(.i32, param.source_nested_index),
                         },
                     ),
+                    .tag_ext => try self.callBoxy(
+                        "roc_boxy_tag_ext_desc",
+                        try self.ptrType(),
+                        &.{try self.ptrType()},
+                        &.{try self.loadPointer(self.slot(parent).ptr)},
+                    ),
                 };
             };
             try self.storePointer(self.slot(param.local).ptr, desc);

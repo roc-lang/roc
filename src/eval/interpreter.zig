@@ -4132,6 +4132,7 @@ pub const Interpreter = struct {
                     .call_key => return self.invariantFailedError("LIR/interpreter invariant violated: erased descriptor parameter read from its call key reached a parent read", .{}),
                     .nested => try self.boxy_runtime.nestedBoxyDesc(self.boxyFrameHooks(null), parent_desc, param.source_nested_index),
                     .tag_payload => try self.boxy_runtime.tagPayloadBoxyDesc(self.boxyFrameHooks(null), parent_desc, param.source_tag_name, param.source_nested_index),
+                    .tag_ext => try self.boxy_runtime.resolveBoxyTagExtDesc(self.boxyFrameHooks(null), parent_desc),
                 };
             };
             bindings[param_index] = .{ .local = param.local, .desc = desc };
@@ -4315,6 +4316,7 @@ pub const Interpreter = struct {
                         .call_key => return self.invariantFailedError("LIR/interpreter invariant violated: erased descriptor parameter read from its call key reached a parent read", .{}),
                         .nested => try self.boxy_runtime.nestedBoxyDesc(self.boxyFrameHooks(frame), parent, param.source_nested_index),
                         .tag_payload => try self.boxy_runtime.tagPayloadBoxyDesc(self.boxyFrameHooks(frame), parent, param.source_tag_name, param.source_nested_index),
+                        .tag_ext => try self.boxy_runtime.resolveBoxyTagExtDesc(self.boxyFrameHooks(frame), parent),
                     };
                 };
                 resolved_descs[desc_param_index] = desc;

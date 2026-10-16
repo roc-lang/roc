@@ -12492,16 +12492,23 @@ Child representations restored from a stored value carry the stored root's
 checked type as their source type, not the checked type at their own
 position. Planning therefore reads a stored child's representation, never its
 source type, as its type: a worker slot that holds such a child in a presence
-slot builds that slot around the child's representation.
+slot builds that slot around the child's representation, a dictionary for a
+stored representation takes its method owner from the stored type, and a
+static dictionary's method is called at the dictionary's own representation.
+A stored record's field labels and a stored tag union's tag labels are the
+ConstStore module's, which need not own the root's checked type, so each such
+child records the module its labels are named in (`RepChild.label_module`).
 
 A stored function value restored inside a stored aggregate (a static function)
-is restored at its stored representation. That concrete representation alone
-supplies its worker's hidden descriptor arguments: the construction site's
-scheme substitution names the constructing frame's variables, which no longer
-exist, and the stored representation fixes them. Its hidden dictionary
-arguments use the checked evidence and scheme substitution of its construction
-site, the nested callable its worker runs, exactly as that site instantiated
-the worker.
+is restored at its stored representation. The construction site's checked
+evidence and scheme substitution name the constructing frame's variables,
+which no longer exist, so the stored value fixes each variable of the worker:
+first its stored signature, then the stored type of each capture for a
+variable the signature does not name, then, for a variable only the body's
+dispatches fix, the construction site's binding with the constructing frame's
+variables replaced by their stored captures. Its hidden descriptor and
+dictionary arguments are those of the types this substitution names; its
+dictionaries are the static dictionaries of those types.
 
 Entry wrapper procedure templates name an `EntryWrapperTable` entry. Boxy
 planning and lowering use the wrapper's checked `body_expr` as the worker body
@@ -17052,10 +17059,11 @@ be more generic than the callee's. A dictionary slot is called through the
 consumer's declared requirement, for example a bare `val`. So every argument
 descriptor that an earlier parameter's descriptor holds is read from that
 parent rather than from its own key: a nested descriptor read for aggregate,
-list and box positions, and a tag payload read
+list and box positions, a tag payload read
 (`ErasedArgDescRead.tag_payload`) for a variant payload such as a presence
-slot's `Present` value. Only a descriptor no earlier parameter holds is read
-from its call-site key.
+slot's `Present` value, and an extension read (`ErasedArgDescRead.tag_ext`)
+for an open tag row's extension. Only a descriptor no earlier parameter holds
+is read from its call-site key.
 
 An evidence-only descriptor collected inside an evidence dispatcher's
 representation, such as a presence slot of a record dispatcher, takes the
@@ -17093,11 +17101,20 @@ hidden descriptor for a presence slot, matched against a call whose field is
 required, takes the presence slot over the call's payload representation, not
 the payload's own descriptor; the worker then reads the payload's descriptor
 through the slot's `Present` payload as usual.
+A worker position that is a nominal with a backing, matched against a call
+that holds the structure the backing names (a method declared to return
+`Try(ok, err)` called where its requirement names the tag union
+`[Ok(ok), Err(err)]`), takes each nominal argument's descriptor from the
+call's representation at that argument's formal's position in the backing.
 
 A generalized callable used at its own definition (an argument lambda, for one)
 is instantiated there: its use carries a checked site substitution, so its
 hidden dictionary arguments are materialized at that instantiation like any
-other use's, rather than treated as the definition's own types.
+other use's, rather than treated as the definition's own types. A site
+substitution that binds a scheme variable to itself (a use written inside the
+scope that quantifies the variable, such as a closure that mentions its
+enclosing function's constrained variable) names that variable exactly, so
+its dictionary is the calling worker's own.
 
 A recursive direct call reaches its callee before the callee's emission settles
 whether it returns a runtime result descriptor. A fully concrete result never

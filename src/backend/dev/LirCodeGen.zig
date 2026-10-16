@@ -19577,6 +19577,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try builder.addImmArg(param.source_nested_index);
                             try self.callBoxyBuiltin(&builder, .tag_payload_desc);
                         },
+                        .tag_ext => try self.callBoxyBuiltin(&builder, .tag_ext_desc),
                     }
                     try self.emitStore(.w64, frame_ptr, desc_slot, ret_reg_0);
                 }

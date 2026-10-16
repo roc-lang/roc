@@ -306,7 +306,16 @@ pub const RepChild = struct {
     source_type: CheckedTypeIdentity,
     rep: TypeRepId,
     record_field_kind: checked.CheckedFieldKind = .required,
+    /// The module whose name store `role`'s labels are in
+    /// (`ProgramPlan.childLabelModule`).
+    label_module: LabelModuleIndex = .source_type,
 };
+
+/// Where a child's role labels are named: its source type's module, or a
+/// module in `ProgramPlan.label_modules`. A stored representation's labels
+/// are its ConstStore module's, while its `source_type` names the stored
+/// root, which another module can own.
+pub const LabelModuleIndex = enum(u16) { source_type = std.math.maxInt(u16), _ };
 
 /// One tag name and its planned payload representation span.
 pub const TagVariant = struct {
@@ -1357,6 +1366,8 @@ pub const ProgramPlan = struct {
     root_reps: std.ArrayList(TypeRepId),
     type_reps: std.ArrayList(TypeRepBinding),
     stored_type_reps: std.ArrayList(StoredTypeRepBinding),
+    /// Modules a child's `label_module` names.
+    label_modules: std.ArrayList(checked.ModuleId),
     representations: std.ArrayList(TypeRepresentation),
     /// Checked-source ABI shapes, requested only at public boundaries.
     host_reps: collections.DenseMap(TypeRepId, TypeRepId),
@@ -1429,6 +1440,7 @@ pub const ProgramPlan = struct {
             .root_reps = .empty,
             .type_reps = .empty,
             .stored_type_reps = .empty,
+            .label_modules = .empty,
             .representations = .empty,
             .host_reps = collections.DenseMap(TypeRepId, TypeRepId).init(allocator),
             .sort_comparator_abis = collections.DenseMap(TypeRepId, TypeRepId).init(allocator),
@@ -1506,6 +1518,7 @@ pub const ProgramPlan = struct {
         self.sort_comparator_abis.deinit();
         self.type_reps.deinit(self.allocator);
         self.stored_type_reps.deinit(self.allocator);
+        self.label_modules.deinit(self.allocator);
         self.root_reps.deinit(self.allocator);
         self.generated_codec_call_types.deinit(self.allocator);
         self.generated_codec_runtime_links.deinit(self.allocator);
@@ -1543,6 +1556,25 @@ pub const ProgramPlan = struct {
         self.worker_bodies.deinit(self.allocator);
         self.roots.deinit(self.allocator);
         self.* = ProgramPlan.init(self.allocator);
+    }
+
+    /// The module whose name store `child`'s role labels are in.
+    pub fn childLabelModule(self: *const ProgramPlan, child: RepChild) checked.ModuleId {
+        return switch (child.label_module) {
+            .source_type => child.source_type.module,
+            _ => self.label_modules.items[@backingInt(child.label_module)],
+        };
+    }
+
+    /// The `label_module` that names `module`.
+    pub fn labelModuleIndex(self: *ProgramPlan, module: checked.ModuleId) Allocator.Error!LabelModuleIndex {
+        for (self.label_modules.items, 0..) |existing, index| {
+            if (moduleKeyEqual(existing, module)) return @fromBackingInt(@intCast(index));
+        }
+        const index = self.label_modules.items.len;
+        if (index >= @backingInt(LabelModuleIndex.source_type)) boxyPlanInvariant("boxy plan named more label modules than its index holds");
+        try self.label_modules.append(self.allocator, module);
+        return @fromBackingInt(@intCast(index));
     }
 
     pub fn childSlice(self: *const ProgramPlan, span: Span) []const RepChild {
@@ -2765,7 +2797,7 @@ const LiteralPlanner = struct {
                     }
                     std.mem.sort(RepChild, children.items, self.builder, struct {
                         fn lessThan(builder: *Builder, a: RepChild, b: RepChild) bool {
-                            return std.mem.lessThan(u8, builder.moduleForId(a.source_type.module).canonical_names.?.recordFieldLabelText(a.role.record_field), builder.moduleForId(b.source_type.module).canonical_names.?.recordFieldLabelText(b.role.record_field));
+                            return std.mem.lessThan(u8, builder.moduleForId(builder.plan.childLabelModule(a)).canonical_names.?.recordFieldLabelText(a.role.record_field), builder.moduleForId(builder.plan.childLabelModule(b)).canonical_names.?.recordFieldLabelText(b.role.record_field));
                         }
                     }.lessThan);
                 },
@@ -4019,6 +4051,9 @@ const Builder = struct {
     /// type (`presenceSlotAroundRep`), by payload representation.
     rep_presence_slots: collections.DenseMap(TypeRepId, TypeRepId),
     by_stored_type: std.AutoHashMap(StoredTypeIdentity, TypeRepId),
+    /// The stored type each stored representation was planned from. Its
+    /// `source_type` is the stored root's checked type, not its own.
+    stored_type_of_rep: collections.DenseMap(TypeRepId, StoredTypeIdentity),
     body_exprs_seen: std.AutoHashMap(BodyExprVisit, void),
     body_patterns_seen: std.AutoHashMap(BodyPatternVisit, void),
     body_statements_seen: std.AutoHashMap(BodyStatementVisit, void),
@@ -4133,6 +4168,7 @@ const Builder = struct {
             .optional_slots = std.AutoHashMap(CheckedTypeIdentity, TypeRepId).init(allocator),
             .rep_presence_slots = collections.DenseMap(TypeRepId, TypeRepId).init(allocator),
             .by_stored_type = std.AutoHashMap(StoredTypeIdentity, TypeRepId).init(allocator),
+            .stored_type_of_rep = collections.DenseMap(TypeRepId, StoredTypeIdentity).init(allocator),
             .body_exprs_seen = std.AutoHashMap(BodyExprVisit, void).init(allocator),
             .body_patterns_seen = std.AutoHashMap(BodyPatternVisit, void).init(allocator),
             .body_statements_seen = std.AutoHashMap(BodyStatementVisit, void).init(allocator),
@@ -4190,6 +4226,7 @@ const Builder = struct {
         self.observed_numeral_evidence.deinit(self.allocator);
         self.generic_numeral_sites.deinit(self.allocator);
         self.by_stored_type.deinit();
+        self.stored_type_of_rep.deinit();
         self.plan.deinit();
     }
 
@@ -10796,8 +10833,8 @@ const Builder = struct {
                 if (self.host_mode and value.view.canonical_names != null) {
                     std.mem.sort(RepChild, children, self, struct {
                         fn lessThan(builder: *Builder, a: RepChild, b: RepChild) bool {
-                            const a_names = builder.moduleForId(a.source_type.module).canonical_names.?;
-                            const b_names = builder.moduleForId(b.source_type.module).canonical_names.?;
+                            const a_names = builder.moduleForId(builder.plan.childLabelModule(a)).canonical_names.?;
+                            const b_names = builder.moduleForId(builder.plan.childLabelModule(b)).canonical_names.?;
                             return std.mem.lessThan(u8, a_names.recordFieldLabelText(a.role.record_field), b_names.recordFieldLabelText(b.role.record_field));
                         }
                     }.lessThan);
@@ -11226,6 +11263,7 @@ const Builder = struct {
             .source_type = source_type,
             .rep = rep_id,
         });
+        try self.stored_type_of_rep.put(rep_id, source_type);
 
         const store = store_view.const_store orelse
             boxyPlanInvariant("stored representation planning had no ConstStore");
@@ -11437,6 +11475,7 @@ const Builder = struct {
             .record => |fields| {
                 for (fields, results) |field, rep| {
                     var child = self.storedChild(.{ .record_field = field.name }, rep);
+                    child.label_module = try self.plan.labelModuleIndex(frame.store_view.key);
                     child.record_field_kind = if (field.value_ty != null)
                         checked.CheckedFieldKind.optional
                     else if (field.default != null)
@@ -11467,7 +11506,9 @@ const Builder = struct {
                 for (ordered) |tag| {
                     const payloads = store.type_store.typeSpan(tag.payloads);
                     for (0..payloads.len) |index| {
-                        try children.append(self.allocator, self.storedChild(.{ .tag_payload = .{ .tag = tag.checked_name, .index = @intCast(index) } }, results[next]));
+                        var child = self.storedChild(.{ .tag_payload = .{ .tag = tag.checked_name, .index = @intCast(index) } }, results[next]);
+                        child.label_module = try self.plan.labelModuleIndex(frame.store_view.key);
+                        try children.append(self.allocator, child);
                         next += 1;
                     }
                 }
@@ -15337,17 +15378,9 @@ const Builder = struct {
         }
     }
 
-    /// The checked construction site of a stored function value: the nested
-    /// callable its worker runs. Its checked evidence and scheme substitution
-    /// instantiate the worker exactly as at that site.
-    fn staticFnSite(self: *Builder, static_fn: StaticFnPlan) CheckedExprIdentity {
-        return self.staticFnNestedSite(static_fn) orelse
-            boxyPlanInvariant("stored function value with hidden inputs had no nested construction site");
-    }
-
-    /// `staticFnSite` for a nested callable, or null for a stored top-level
-    /// or generated procedure, whose stored representation is its whole
-    /// instantiation.
+    /// The checked construction site of a stored function value that is a
+    /// nested callable, or null for a stored top-level or generated
+    /// procedure, whose stored representation is its whole instantiation.
     fn staticFnNestedSite(self: *Builder, static_fn: StaticFnPlan) ?CheckedExprIdentity {
         return switch (self.plan.workers.items[@backingInt(static_fn.worker)].source) {
             .nested_expr => |expr_ref| expr_ref,
@@ -15360,40 +15393,89 @@ const Builder = struct {
         };
     }
 
-    /// A stored function value's worker takes its hidden dictionaries from
-    /// its construction site's checked evidence under that site's scheme
-    /// substitution. The site is the callable's own definition, so its types
-    /// are the worker's and supply no further instantiation.
+    /// A stored function value's worker takes the dictionaries of the types
+    /// the stored value fixes (`staticFnSchemeRepSubstitutions`). Its
+    /// construction site's evidence names types in the variables of the scope
+    /// that constructed it, which is gone.
     fn materializeStaticFnHiddenDictionaryArgs(self: *Builder) Allocator.Error!void {
         var index: usize = 0;
         while (index < self.plan.static_fns.items.len) : (index += 1) {
             const static_fn = self.plan.static_fns.items[index];
             const worker = self.plan.workers.items[@backingInt(static_fn.worker)];
             if (worker.hidden_dicts.len == 0 or static_fn.hidden_dict_args.len != 0) continue;
-            const site = self.staticFnSite(static_fn);
-            const evidence = self.checkedEvidenceForProcedureUse(site);
+            const outer_stored_fn = self.active_stored_fn;
+            const outer_stored_substitution = self.active_stored_substitution;
+            self.active_stored_fn = .{ .module = static_fn.store_module, .fn_id = static_fn.fn_id };
+            self.active_stored_substitution = try self.staticFnSchemeRepSubstitutions(static_fn);
+            defer {
+                self.active_stored_fn = outer_stored_fn;
+                self.active_stored_substitution = outer_stored_substitution;
+            }
             const hidden_dict_args = try self.materializeWorkerHiddenDictionaryArgsAtCallTypes(
                 static_fn.worker,
                 null,
                 null,
-                evidence.view,
-                evidence.entries,
-                self.useSchemeSubstitution(static_fn.worker, site),
+                null,
+                null,
+                null,
                 0,
             );
             self.plan.static_fns.items[index].hidden_dict_args = hidden_dict_args;
         }
     }
 
+    /// Each variable of a stored function value's worker paired with what the
+    /// stored value puts in its position: the use-site relation of the
+    /// worker's type to the stored representation, then the stored type of
+    /// each capture for a variable that relation does not name, then, for a
+    /// variable neither names (one only the body's
+    /// dispatches fix), its construction site's checked binding with the
+    /// constructing scope's variables replaced by their stored captures.
+    fn staticFnSchemeRepSubstitutions(self: *Builder, static_fn: StaticFnPlan) Allocator.Error!Span {
+        const worker = self.plan.workers.items[@backingInt(static_fn.worker)];
+        const stored_fn: StoredFnSource = .{ .module = static_fn.store_module, .fn_id = static_fn.fn_id };
+        const signature = try self.storedUseSchemeRepSubstitutions(worker.rep, static_fn.rep);
+        var captures = std.ArrayList(CallDescriptorRepSubstitution).empty;
+        defer captures.deinit(self.allocator);
+        try self.storedFnCaptureDescriptorSubstitutions(stored_fn, &captures);
+        var capture_bindings = collections.DenseMapUnmanaged(TypeRepId, TypeRepId).empty;
+        defer capture_bindings.deinit(self.allocator);
+        for (captures.items) |capture| try capture_bindings.put(self.allocator, capture.worker_rep, capture.call_rep);
+        const site_substitution = if (self.staticFnNestedSite(static_fn)) |site| self.useSchemeSubstitution(static_fn.worker, site) else null;
+        if (capture_bindings.count() == 0 and site_substitution == null) return signature;
+
+        const start: u32 = @intCast(self.plan.scheme_rep_substitutions.items.len);
+        try self.plan.scheme_rep_substitutions.ensureUnusedCapacity(self.allocator, signature.len);
+        for (0..signature.len) |offset| {
+            self.plan.scheme_rep_substitutions.appendAssumeCapacity(self.plan.scheme_rep_substitutions.items[signature.start + offset]);
+        }
+        for (captures.items) |capture| {
+            if (schemeRepSubstitutionFor(self.plan.scheme_rep_substitutions.items[start..], capture.worker_rep) != null) continue;
+            try self.plan.scheme_rep_substitutions.append(self.allocator, .{ .scheme_rep = capture.worker_rep, .site_rep = capture.call_rep });
+        }
+        if (site_substitution) |substitution| {
+            for (substitution.scheme_vars, substitution.site_types) |scheme_var, site_type| {
+                if (substitution.site_view.checked_types.payload(site_type) == .err) continue;
+                const scheme_rep = self.plan.repForSourceType(typeRef(substitution.callee_view, scheme_var)) orelse continue;
+                if (schemeRepSubstitutionFor(self.plan.scheme_rep_substitutions.items[start..], scheme_rep) != null) continue;
+                const site_rep = substitution.siteRep(self.plan.repForSourceType(typeRef(substitution.site_view, site_type)) orelse
+                    boxyPlanInvariant("checked construction-site substitution type was not analyzed"));
+                const stored_site_rep = try self.substitutedRep(site_rep, &capture_bindings);
+                if (stored_site_rep == scheme_rep) continue;
+                try self.plan.scheme_rep_substitutions.append(self.allocator, .{ .scheme_rep = scheme_rep, .site_rep = stored_site_rep });
+            }
+        }
+        return .{ .start = start, .len = @as(u32, @intCast(self.plan.scheme_rep_substitutions.items.len)) - start };
+    }
+
     /// A stored function value is restored at its stored representation, so
-    /// that concrete representation supplies its worker's hidden descriptors,
-    /// with a nested callable's construction-site evidence and scheme
-    /// substitution.
+    /// that concrete representation and the types its stored value fixes
+    /// (`staticFnSchemeRepSubstitutions`) supply its worker's hidden
+    /// descriptors.
     fn materializeStaticFnHiddenDescriptorArgs(self: *Builder) Allocator.Error!void {
         for (self.plan.static_fns.items) |*static_fn| {
             const worker = self.plan.workers.items[@backingInt(static_fn.worker)];
             if (worker.hidden_descs.len == 0) continue;
-            const evidence: ?CheckedCallEvidence = if (self.staticFnNestedSite(static_fn.*)) |site| self.checkedEvidenceForProcedureUse(site) else null;
             const function = (self.repQuery().functionChildren(static_fn.rep)) orelse
                 boxyPlanInvariant("stored function value had a non-callable stored representation");
             const children = self.plan.childSlice(self.plan.representations.items[@backingInt(function.rep)].children);
@@ -15405,11 +15487,10 @@ const Builder = struct {
                 arg_rep.* = child.rep;
                 arg_type.* = child.source_type;
             }
+            const stored_fn: StoredFnSource = .{ .module = static_fn.store_module, .fn_id = static_fn.fn_id };
             var stored_capture_substitutions = std.ArrayList(CallDescriptorRepSubstitution).empty;
             defer stored_capture_substitutions.deinit(self.allocator);
-            try self.storedFnCaptureDescriptorSubstitutions(.{ .module = static_fn.store_module, .fn_id = static_fn.fn_id }, &stored_capture_substitutions);
-            // The stored callable signature and captures record this value's
-            // instantiation; construction evidence supplies its dictionaries.
+            try self.storedFnCaptureDescriptorSubstitutions(stored_fn, &stored_capture_substitutions);
             static_fn.hidden_desc_args = try self.materializeWorkerHiddenDescriptorArgsWithStoredCaptures(
                 static_fn.worker,
                 arg_reps,
@@ -15417,12 +15498,12 @@ const Builder = struct {
                 function.ret,
                 arg_types,
                 self.plan.representations.items[@backingInt(function.ret)].source_type,
-                if (evidence) |known| known.view else null,
-                if (evidence) |known| known.entries else null,
                 null,
-                try self.storedUseSchemeRepSubstitutions(worker.rep, static_fn.rep),
+                null,
+                null,
+                try self.staticFnSchemeRepSubstitutions(static_fn.*),
                 stored_capture_substitutions.items,
-                .{},
+                static_fn.hidden_dict_args,
             );
         }
     }
@@ -16552,7 +16633,7 @@ const Builder = struct {
                     const path_name: RecordFieldLabelId = @fromBackingInt(@intCast(path_step.data));
                     for (children) |child| {
                         if (child.role != .record_field) continue;
-                        const child_view = self.moduleForId(child.source_type.module);
+                        const child_view = self.moduleForId(self.plan.childLabelModule(child));
                         if (recordFieldNameMatches(moduleNamesOf(path_view), path_name, moduleNamesOf(child_view), child.role.record_field)) {
                             break :blk child.rep;
                         }
@@ -16568,7 +16649,7 @@ const Builder = struct {
                     for (children) |child| {
                         if (child.role != .tag_payload) continue;
                         const payload = child.role.tag_payload;
-                        const child_view = self.moduleForId(child.source_type.module);
+                        const child_view = self.moduleForId(self.plan.childLabelModule(child));
                         if (payload.index == payload_index and
                             tagLabelNameMatches(moduleNamesOf(path_view), path_tag, moduleNamesOf(child_view), payload.tag))
                         {
@@ -17088,6 +17169,19 @@ const Builder = struct {
                 try state.substitutions.put(self.allocator, pair.scheme_rep, pair.site_rep);
             }
         }
+        // A site that binds a scheme variable to itself (a use written in the
+        // scope that quantifies it) names that variable as exactly as any
+        // other binding, though it adds no representation pair.
+        if (relation == null) if (request.scheme_substitution) |substitution| {
+            for (substitution.scheme_vars, substitution.site_types) |scheme_var, site_type| {
+                if (substitution.site_view.checked_types.payload(site_type) == .err) continue;
+                const scheme_rep = self.plan.repForSourceType(typeRef(substitution.callee_view, scheme_var)) orelse continue;
+                if (self.plan.representations.items[@backingInt(scheme_rep)].dictionaries.len == 0) continue;
+                const site_rep = substitution.siteRep(self.plan.repForSourceType(typeRef(substitution.site_view, site_type)) orelse
+                    boxyPlanInvariant("checked call-site substitution type was not analyzed"));
+                if (site_rep == scheme_rep) try state.substitutions.put(self.allocator, scheme_rep, site_rep);
+            }
+        };
 
         const definition_type = self.workerCheckedTypeForSource(worker.source, worker.checked_type);
         if (!typeRefEql(definition_type, worker.checked_type)) {
@@ -17880,11 +17974,11 @@ const Builder = struct {
     ) Allocator.Error!?DictionaryMethodEvidence {
         const source_rep_id = state.source_rep_id;
         const source_rep = self.plan.representations.items[@backingInt(source_rep_id)];
-        const source_view = self.moduleForId(source_rep.source_type.module);
         const requirement_view = self.moduleForId(requirement.source_type.module);
         _ = try self.analyzeType(requirement_view, requirement.fn_ty.ty);
-        const owner = methodOwnerForModuleType(source_view, source_rep.source_type.ty) orelse
-            self.defaultedDictionaryOwner(source_rep_id);
+        const rep_owner = self.dictionaryMethodOwner(source_rep_id);
+        const source_view = rep_owner.view;
+        const owner = rep_owner.owner;
         if (owner) |method_owner| {
             if (lookupMethodTarget(self.methodSearchModules(), source_view, method_owner, requirement_view, requirement.fn_name)) |lookup| {
                 // A compiler-derived equality or hash has no worker: the slot
@@ -17941,6 +18035,30 @@ const Builder = struct {
             }
         }
         return try self.structuralDictionaryMethodEvidence(source_rep, requirement, requirement_view);
+    }
+
+    /// A nominal's argument where the call holds the structure the
+    /// nominal's backing names: the call's representation at that
+    /// argument's formal's position in the backing. Null when the formal has
+    /// no runtime position there or the call is not that structure.
+    fn nominalArgInBackingStructure(
+        self: *Builder,
+        worker_rep_id: TypeRepId,
+        arg_index: u32,
+        call_structure_rep_id: TypeRepId,
+    ) Allocator.Error!?TypeRepId {
+        const worker_rep = self.plan.representations.items[@backingInt(worker_rep_id)];
+        if (worker_rep.kind != .nominal) return null;
+        const call_kind = self.plan.representations.items[@backingInt(call_structure_rep_id)].kind;
+        if (call_kind == .nominal or call_kind == .alias) return null;
+        const backing = for (self.plan.childSlice(worker_rep.children)) |child| {
+            if (child.role == .nominal_backing) break child.rep;
+        } else return null;
+        var bindings = self.plan.nominalBackingSubstitutions(worker_rep.nominal_backing_arg_substitutions);
+        const formal = while (bindings.next()) |binding| {
+            if (binding.arg_index == arg_index) break binding.formal_rep orelse return null;
+        } else return null;
+        return try self.repAtPosition(.runtime, backing, formal, call_structure_rep_id);
     }
 
     /// Collect, in pre-order, the hidden descriptor parameters `root`
@@ -18305,6 +18423,9 @@ const Builder = struct {
                         if (self.workerPresenceSlotPayloadMatchesUnwrappedCallRep(worker_rep_id, aligned_call_rep_id, worker_child)) break :target aligned_call_rep_id;
                         if (try self.repQuery().workerChildCanMatchUnwrappedCallRep(worker_rep_id, worker_child)) break :target aligned_call_rep_id;
                         if (worker_child.role == .tag_ext and call_children.len == 0 and call_rep.descriptor != null) break :target aligned_call_rep_id;
+                        if (worker_child.role == .nominal_arg) {
+                            if (try self.nominalArgInBackingStructure(worker_rep_id, worker_child.role.nominal_arg, structure_call_rep_id)) |call_arg| break :target call_arg;
+                        }
                         boxyPlanInvariant("boxy direct call hidden descriptor mapping saw mismatched child roles");
                     };
                     return try self.enterCallDescriptorRep(walk, frames, worker_child.rep, target);
@@ -19623,8 +19744,18 @@ const Builder = struct {
                 any_at_call = true;
                 try position_reps.append(self.allocator, at_call);
             } else {
-                try position_reps.append(self.allocator, self.plan.repForSourceType(position_type) orelse
-                    boxyPlanInvariant("static dictionary method instantiation type was not analyzed"));
+                const type_rep = self.plan.repForSourceType(position_type) orelse
+                    boxyPlanInvariant("static dictionary method instantiation type was not analyzed");
+                // The dispatcher's position is the dictionary's own
+                // representation, and a position the call binds is the
+                // call's. A stored representation's source type names its
+                // stored root, so the call is made at the representation.
+                const exact_rep = if (child_rep == dispatcher_rep)
+                    source_rep_id
+                else
+                    type_rep;
+                if (exact_rep != type_rep) any_at_call = true;
+                try position_reps.append(self.allocator, exact_rep);
             }
         }
         const start: u32 = @intCast(self.plan.dictionary_method_call_types.items.len);
@@ -19853,6 +19984,41 @@ const Builder = struct {
         // type of its own; the call relates it to the target's declared
         // position through the requirement's descriptor sources.
         return target_type;
+    }
+
+    const DictionaryMethodOwner = struct {
+        /// The module whose names `owner` is written in.
+        view: ModuleView,
+        owner: ?static_dispatch.MethodOwner,
+    };
+
+    /// The method owner a dictionary for `rep_id` dispatches on. A stored
+    /// representation's owner is its stored type's: its `source_type` names
+    /// the stored root rather than its own position.
+    fn dictionaryMethodOwner(self: *Builder, rep_id: TypeRepId) DictionaryMethodOwner {
+        if (self.stored_type_of_rep.get(rep_id)) |stored| {
+            const store_view = self.moduleForId(stored.module);
+            const store = store_view.const_store orelse
+                boxyPlanInvariant("stored representation's module had no ConstStore");
+            return switch (store.type_store.get(stored.ty)) {
+                .named => |named| if (named.builtin_owner) |builtin|
+                    .{ .view = store_view, .owner = .{ .builtin = builtin } }
+                else blk: {
+                    const named_view = self.moduleForId(.{ .bytes = named.named_type.module.bytes });
+                    break :blk .{ .view = named_view, .owner = methodOwnerForModuleType(named_view, named.named_type.ty) };
+                },
+                .primitive => |primitive| .{ .view = store_view, .owner = .{ .builtin = checked.builtinOwnerForPrimitive(primitive) } },
+                .list => .{ .view = store_view, .owner = .{ .builtin = .list } },
+                .box => .{ .view = store_view, .owner = .{ .builtin = .box } },
+                .record, .tuple, .tag_union, .func, .erased, .zst => .{ .view = store_view, .owner = null },
+            };
+        }
+        const rep = self.plan.representations.items[@backingInt(rep_id)];
+        const view = self.moduleForId(rep.source_type.module);
+        return .{
+            .view = view,
+            .owner = methodOwnerForModuleType(view, rep.source_type.ty) orelse self.defaultedDictionaryOwner(rep_id),
+        };
     }
 
     fn defaultedDictionaryOwner(self: *Builder, rep_id: TypeRepId) ?static_dispatch.MethodOwner {
@@ -20139,30 +20305,33 @@ const Builder = struct {
         if (self.plan.repForSourceType(call_rep.source_type) == call_rep_id) {
             return try self.optionalSlotRepresentation(self.moduleForId(call_rep.source_type.module), call_rep.source_type.ty);
         }
-        return try self.presenceSlotAroundRep(worker_rep, call_rep_id);
+        return try self.presenceSlotAroundRep(call_rep_id);
     }
 
-    /// A presence slot whose Present payload is `payload_rep`, labelled as the
-    /// worker slot `template` is.
-    fn presenceSlotAroundRep(self: *Builder, template: TypeRepresentation, payload_rep: TypeRepId) Allocator.Error!TypeRepId {
+    /// A presence slot whose Present payload is `payload_rep`, labelled in the
+    /// name store of the payload's source module, which its child roles are
+    /// read against.
+    fn presenceSlotAroundRep(self: *Builder, payload_rep: TypeRepId) Allocator.Error!TypeRepId {
         const entry = try self.rep_presence_slots.getOrPut(payload_rep);
         if (entry.found_existing) return entry.value_ptr.*;
-        const template_variants = self.plan.tagVariantSlice(template.tag_variants);
-        const present_index: usize = template.presence_slot_present_discriminant.?;
-        if (template_variants.len != 2 or present_index > 1) boxyPlanInvariant("presence slot did not have exactly a Missing and a Present variant");
-        const missing = template_variants[1 - present_index];
-        const present = template_variants[present_index];
         const payload_source = self.plan.representations.items[@backingInt(payload_rep)].source_type;
+        const view = self.moduleForId(payload_source.module);
+        const names = view.canonical_names orelse
+            boxyPlanInvariant("presence slot payload ModuleView had no name store");
+        const missing = names.lookupTagLabel("#Missing") orelse
+            boxyPlanInvariant("presence slot payload module was missing the reserved Missing label");
+        const present = names.lookupTagLabel("#Present") orelse
+            boxyPlanInvariant("presence slot payload module was missing the reserved Present label");
         const child_start: u32 = @intCast(self.plan.children.items.len);
         try self.plan.children.append(self.allocator, .{
-            .role = .{ .tag_payload = .{ .tag = present.name, .index = 0 } },
+            .role = .{ .tag_payload = .{ .tag = present, .index = 0 } },
             .source_type = payload_source,
             .rep = payload_rep,
         });
         const variant_start: u32 = @intCast(self.plan.tag_variants.items.len);
         try self.plan.tag_variants.appendSlice(self.allocator, &.{
-            .{ .name = missing.name, .name_module = missing.name_module },
-            .{ .name = present.name, .name_module = present.name_module, .payloads = .{ .start = child_start, .len = 1 } },
+            .{ .name = missing, .name_module = view.key },
+            .{ .name = present, .name_module = view.key, .payloads = .{ .start = child_start, .len = 1 } },
         });
         const rep_id: TypeRepId = @fromBackingInt(@intCast(@as(u32, @intCast(self.plan.representations.items.len))));
         try self.plan.representations.append(self.allocator, .{
@@ -22036,9 +22205,9 @@ pub fn NamedRepQuery(comptime Modules: type) type {
             return switch (target.role) {
                 .record_field => |target_label| switch (candidate.role) {
                     .record_field => |candidate_label| recordFieldNameMatches(
-                        self.modules.moduleNames(target.source_type.module),
+                        self.modules.moduleNames(self.query.plan.childLabelModule(target)),
                         target_label,
-                        self.modules.moduleNames(candidate.source_type.module),
+                        self.modules.moduleNames(self.query.plan.childLabelModule(candidate)),
                         candidate_label,
                     ),
                     .alias_backing,
@@ -22059,9 +22228,9 @@ pub fn NamedRepQuery(comptime Modules: type) type {
                 .tag_payload => |target_payload| switch (candidate.role) {
                     .tag_payload => |candidate_payload| target_payload.index == candidate_payload.index and
                         tagLabelNameMatches(
-                            self.modules.moduleNames(target.source_type.module),
+                            self.modules.moduleNames(self.query.plan.childLabelModule(target)),
                             target_payload.tag,
-                            self.modules.moduleNames(candidate.source_type.module),
+                            self.modules.moduleNames(self.query.plan.childLabelModule(candidate)),
                             candidate_payload.tag,
                         ),
                     .alias_backing,

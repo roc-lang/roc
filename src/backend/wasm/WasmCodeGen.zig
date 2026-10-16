@@ -7125,6 +7125,7 @@ fn bindErasedCallableAdapterParams(
                     try self.emitI32Const(@intCast(param.source_nested_index));
                     try self.emitBoxyCall("roc_boxy_tag_payload_desc");
                 },
+                .tag_ext => try self.emitBoxyCall("roc_boxy_tag_ext_desc"),
             }
         }
         try self.emitLocalSet(desc_local);
