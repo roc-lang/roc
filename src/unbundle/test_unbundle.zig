@@ -552,6 +552,8 @@ test "download URL validation rejects non-allowlisted URLs via the shared gate" 
         "http://example.com/packages/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
         "http://192.168.1.100/packages/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
         "ftp://example.com/packages/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+        "http://localhost:80@example.com/packages/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
+        "https://[::1]/packages/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst",
         "./relative/path",
     };
     for (rejected) |url| {
@@ -759,4 +761,145 @@ test "download follows a validated loopback redirect" {
     const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/6jk5DfVBwdRs9C5PwuFbvxNvFKAGcu5FHtK2cWsmqfSV.tar.zst", .{context.port});
     defer allocator.free(url);
     try testing.expectError(error.InvalidTarHeader, download.downloadAndExtract(&allocator, io, url, path, .{}));
+}
+
+test "download fetches an http://[::1] URL from an IPv6 loopback server" {
+    // repro for https://github.com/roc-lang/roc/issues/12158
+    // `src/base/url.zig` allows `http://[::1]:<port>/...`, so the request must
+    // reach the server and the downloaded body must be handed to extraction
+    // (which rejects it as not a bundle) instead of failing as an HTTP error.
+    const io = testing.io;
+    var allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(path);
+
+    const loopback = try std.Io.net.IpAddress.parse("::1", 0);
+    var server = try loopback.listen(io, .{ .reuse_address = true });
+    defer server.deinit(io);
+
+    const Server = struct {
+        server: *std.Io.net.Server,
+        fn run(self: *@This()) void {
+            const thread_io = testing.io;
+            const stream = self.server.accept(thread_io) catch return;
+            defer stream.close(thread_io);
+            var read_buffer: [1024]u8 = undefined;
+            var reader = stream.reader(thread_io, &read_buffer);
+            var request_buffer: [1024]u8 = undefined;
+            var slices = [_][]u8{&request_buffer};
+            _ = std.Io.Reader.readVec(&reader.interface, &slices) catch return;
+            var write_buffer: [512]u8 = undefined;
+            var writer = stream.writer(thread_io, &write_buffer);
+            writer.interface.writeAll("HTTP/1.1 200 OK\r\nContent-Length: 16\r\nConnection: close\r\n\r\nnot a roc bundle") catch return;
+            writer.interface.flush() catch return;
+        }
+    };
+    var context = Server{ .server = &server };
+    const thread = try std.Thread.spawn(.{}, Server.run, .{&context});
+    defer {
+        // Unblock `accept` if the client never connected, so the join cannot hang.
+        if (std.Io.net.IpAddress.parse("::1", server.socket.address.getPort())) |address| {
+            if (address.connect(io, .{ .mode = .stream })) |stream| stream.close(io) else |_| {}
+        } else |_| {}
+        thread.join();
+    }
+
+    const url = try std.fmt.allocPrint(allocator, "http://[::1]:{d}/6jk5DfVBwdRs9C5PwuFbvxNvFKAGcu5FHtK2cWsmqfSV.tar.zst", .{server.socket.address.getPort()});
+    defer allocator.free(url);
+    try testing.expectError(error.InvalidTarHeader, download.downloadAndExtract(&allocator, io, url, path, .{}));
+}
+
+test "download fetches an http://localhost URL over the family localhost resolves to, with one Host header" {
+    const io = testing.io;
+    var allocator = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const path = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(path);
+
+    const loopback: std.Io.net.IpAddress = switch (try @import("localhost.zig").resolveLoopback()) {
+        .ip4 => .{ .ip4 = .loopback(0) },
+        .ip6 => .{ .ip6 = .loopback(0) },
+    };
+    var server = try loopback.listen(io, .{ .reuse_address = true });
+    defer server.deinit(io);
+
+    const Server = struct {
+        server: *std.Io.net.Server,
+        request: [1024]u8 = undefined,
+        request_len: usize = 0,
+        fn run(self: *@This()) void {
+            const thread_io = testing.io;
+            const stream = self.server.accept(thread_io) catch return;
+            defer stream.close(thread_io);
+            var read_buffer: [1024]u8 = undefined;
+            var reader = stream.reader(thread_io, &read_buffer);
+            while (std.mem.find(u8, self.request[0..self.request_len], "\r\n\r\n") == null) {
+                var slices = [_][]u8{self.request[self.request_len..]};
+                self.request_len += std.Io.Reader.readVec(&reader.interface, &slices) catch return;
+            }
+            var write_buffer: [512]u8 = undefined;
+            var writer = stream.writer(thread_io, &write_buffer);
+            writer.interface.writeAll("HTTP/1.1 200 OK\r\nContent-Length: 16\r\nConnection: close\r\n\r\nnot a roc bundle") catch return;
+            writer.interface.flush() catch return;
+        }
+    };
+    const port = server.socket.address.getPort();
+    var context = Server{ .server = &server };
+    const thread = try std.Thread.spawn(.{}, Server.run, .{&context});
+    var joined = false;
+    defer if (!joined) {
+        // Unblock `accept` if the client never connected, so the join cannot hang.
+        if (server.socket.address.connect(io, .{ .mode = .stream })) |stream| stream.close(io) else |_| {}
+        thread.join();
+    };
+
+    const url = try std.fmt.allocPrint(allocator, "http://localhost:{d}/6jk5DfVBwdRs9C5PwuFbvxNvFKAGcu5FHtK2cWsmqfSV.tar.zst", .{port});
+    defer allocator.free(url);
+    try testing.expectError(error.InvalidTarHeader, download.downloadAndExtract(&allocator, io, url, path, .{}));
+    thread.join();
+    joined = true;
+
+    const host_header = try std.fmt.allocPrint(allocator, "\r\nhost: localhost:{d}\r\n", .{port});
+    defer allocator.free(host_header);
+    var lowered: [1024]u8 = undefined;
+    const request = std.ascii.lowerString(&lowered, context.request[0..context.request_len]);
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, request, "\r\nhost:"));
+    try testing.expect(std.mem.find(u8, request, host_header) != null);
+}
+
+test "download routes plain HTTP to an exact loopback address and HTTPS by host" {
+    const route = struct {
+        fn of(url: []const u8) (std.Uri.ParseError || download.DownloadError)!download.Route {
+            return download.routeFor(try std.Uri.parse(url));
+        }
+    }.of;
+
+    try testing.expectEqual(download.Route{ .loopback_http = .{ .ip4 = .loopback(8000) } }, try route("http://127.0.0.1:8000/x.tar.zst"));
+    try testing.expectEqual(download.Route{ .loopback_http = .{ .ip6 = .loopback(80) } }, try route("http://[::1]/x.tar.zst"));
+    const localhost_route = try route("http://localhost:8000/x.tar.zst");
+    if (localhost_route != .loopback_http) return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(u16, 8000), localhost_route.loopback_http.getPort());
+
+    // HTTPS to this machine is never proxied; its host is left as written so
+    // TLS checks the certificate against it.
+    try testing.expectEqual(download.Route.loopback_https, try route("https://localhost:8443/x.tar.zst"));
+    try testing.expectEqual(download.Route.loopback_https, try route("https://127.0.0.1/x.tar.zst"));
+    try testing.expectEqual(download.Route.remote_https, try route("https://example.com/x.tar.zst"));
+}
+
+test "download writes a loopback request whose only Host header is the URL authority" {
+    var buffer: [256]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    try download.writeLoopbackRequest(&writer, try std.Uri.parse("http://[::1]:8000/a/b.tar.zst?x=1#frag"));
+    try testing.expectEqualStrings(
+        "GET /a/b.tar.zst?x=1 HTTP/1.1\r\n" ++
+            "host: [::1]:8000\r\n" ++
+            "connection: close\r\n" ++
+            "accept-encoding: zstd, gzip, deflate\r\n" ++
+            "\r\n",
+        writer.buffered(),
+    );
 }
