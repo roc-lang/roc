@@ -98,7 +98,6 @@ pub const LowLevel = enum(u16) {
     list_take_first,
     list_take_last,
     list_reverse,
-    list_sort_with,
     list_reserve,
     list_reserve_for_append,
     list_release_excess_capacity,
@@ -112,6 +111,11 @@ pub const LowLevel = enum(u16) {
     list_map_cast_unsafe,
     list_map_extract_unsafe,
     list_map_write_unsafe,
+    /// Whether the list's item layout occupies at most the given number of
+    /// bytes: 1 or 0. A `match` on it with a literal bound folds at lowering
+    /// (see `layoutResolved`); anywhere else a backend answers it from the
+    /// item layout it builds for.
+    list_item_size_at_most,
 
     // Bool operations
     bool_not,
@@ -862,6 +866,21 @@ pub const LowLevel = enum(u16) {
         }
     };
 
+    /// The operations whose answer LIR lowering decides from committed
+    /// layouts, so a `match` on one can keep only the arm that answer selects
+    /// (design.md "In-Place List Transforms").
+    pub const LayoutResolved = enum {
+        list_map_can_reuse,
+        list_item_size_at_most,
+    };
+
+    /// This operation as a layout-resolved one, or null for every other.
+    pub fn layoutResolved(self: LowLevel) ?LayoutResolved {
+        if (self == .list_map_can_reuse) return .list_map_can_reuse;
+        if (self == .list_item_size_at_most) return .list_item_size_at_most;
+        return null;
+    }
+
     /// Operands read solely from their by-value representation. These reads
     /// need the saved descriptor, but never its backing allocation. Other
     /// operands retain their ordinary allocation-lifetime requirements.
@@ -1018,7 +1037,6 @@ pub const LowLevel = enum(u16) {
         .list_sublist_borrowed = byType(.retainsResultBorrowingArgs(arg_0)),
 
         .list_reverse = byType(.runtimeUniqueness(arg_0)),
-        .list_sort_with = byType(.runtimeUniqueness(arg_0)),
         .list_reserve = byLayout(.runtimeUniqueness(arg_0)),
         .list_reserve_for_append = byLayout(.runtimeUniqueness(arg_0)),
         .list_release_excess_capacity = byLayout(.runtimeUniqueness(arg_0)),
@@ -1075,6 +1093,10 @@ pub const LowLevel = enum(u16) {
         // Stores an owned element into the slot vacated by
         // `list_map_extract_unsafe`, mirroring `list_append_unsafe`.
         .list_map_write_unsafe = byLayout(.consumesArgsReturningConsumedArgsRetainingArgs(arg_0, arg_2)),
+
+        // Reads the bound and the list's layout, never the list itself; the
+        // bound is an operand value, so the operation is not layout-keyed.
+        .list_item_size_at_most = byType(.none()),
 
         .list_swap = byLayout(.runtimeUniqueness(arg_0)),
 
