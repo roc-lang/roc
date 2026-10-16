@@ -13057,8 +13057,10 @@ fn hoistedRootExprStep(
         .e_empty_list,
         .e_empty_record,
         .e_zero_argument_tag,
-        .e_runtime_error,
         => true,
+        // A retired expression still evaluates its recorded operands before
+        // it crashes, so the root depends on everything they read.
+        .e_runtime_error => |runtime_error| try self.pushHoistedKeptExprs(pending, runtime_error.evaluated),
         .e_lookup_required,
         .e_lambda,
         .e_closure,
@@ -17858,6 +17860,7 @@ fn predeclareAnnotationSchemeHelp(
     defer live_holes.deinit(self.gpa);
     if (hole_rank != null) {
         try self.collectUnderscoreAnnoVars(annotation_idx, &live_holes);
+        self.retainUndecidedHoles(&live_holes);
     }
 
     const scheme_var = if (live_holes.items.len > 0)
@@ -17912,6 +17915,28 @@ fn predeclareAnnotationSchemeHelp(
         try self.hole_shared_schemes.put(self.gpa, scheme_var, holes);
     }
     return scheme_var;
+}
+
+/// Keep only the holes the body still has to decide. Generating an annotation
+/// can decide a hole from the annotation's own content: two `where`
+/// requirements of one method relate, so in
+/// `a.info : a -> _, a.info : a -> { count : U64 }` the hole becomes the
+/// record. Such a hole's class is rooted at annotation content that the
+/// reset after predeclaration clears, so the scheme copies it like the rest
+/// of the annotation instead of sharing it. A hole stays shared exactly when
+/// its class is still unbound and rooted at a hole.
+fn retainUndecidedHoles(self: *const Self, holes: *std.ArrayListUnmanaged(Var)) void {
+    var kept: usize = 0;
+    for (holes.items) |hole| {
+        const resolved = self.types.resolveVar(hole);
+        const rooted_at_hole = for (holes.items) |other| {
+            if (other == resolved.var_) break true;
+        } else false;
+        if (resolved.desc.content != .flex or !rooted_at_hole) continue;
+        holes.items[kept] = hole;
+        kept += 1;
+    }
+    holes.shrinkRetainingCapacity(kept);
 }
 
 /// Register a predeclared annotation's standalone scheme. Its identity slots
@@ -18297,10 +18322,12 @@ fn predeclaredSlotImage(
     var current = body_var;
     while (true) {
         const resolved = self.types.resolveVar(current);
+        const quantified = resolved.desc.rank == .generalized or
+            (if (quantified_from) |rank| @backingInt(resolved.desc.rank) >= @backingInt(rank) else false);
+        // A slot the scheme will not quantify is shared by the body and
+        // every use, so an earlier use may already have added tags to it.
+        if (!quantified) return resolved.var_;
         if (canonical_type_keys.isIdentityVariable(resolved.desc)) {
-            const quantified = resolved.desc.rank == .generalized or
-                (if (quantified_from) |rank| @backingInt(resolved.desc.rank) >= @backingInt(rank) else false);
-            if (!quantified) return resolved.var_;
             const entry = try images.getOrPut(resolved.var_);
             if (entry.found_existing) return entry.value_ptr.*;
             entry.value_ptr.* = use_copy;
@@ -20471,16 +20498,51 @@ fn runLateImplicitOpenExtAudit(self: *Self, env: *Env) std.mem.Allocator.Error!v
             if (candidate.tail != demand_tail) continue;
             if (reported.isSet(candidate.entry)) continue;
             const entry = self.late_implicit_open_ext_audits.items[candidate.entry];
-            if (demand.owner.start.offset < entry.owner_rhs.start.offset) continue;
-            if (demand.owner.end.offset > entry.owner_rhs.end.offset) continue;
             for (tags) |tag_name| {
-                if (!self.tagRowHasTag(entry.ext.var_, tag_name)) continue;
+                if (!self.codecDemandRejectsAuditedTag(demand, entry, tag_name)) continue;
                 reported.set(candidate.entry);
                 try self.reportImplicitOpenExtExtension(entry.ext, tag_name, entry.owner_expr, env);
                 break;
             }
         }
     }
+}
+
+/// Whether `demand`, which shares `entry`'s row, makes the late audit reject
+/// `tag_name` in that row: the codec relation belongs to the definition whose
+/// annotation minted the row, and the row now carries the tag.
+fn codecDemandRejectsAuditedTag(
+    self: *const Self,
+    demand: CodecRowDemand,
+    entry: LateImplicitOpenExtAudit,
+    tag_name: Ident.Idx,
+) bool {
+    if (demand.owner.start.offset < entry.owner_rhs.start.offset) return false;
+    if (demand.owner.end.offset > entry.owner_rhs.end.offset) return false;
+    return self.tagRowHasTag(entry.ext.var_, tag_name);
+}
+
+/// Whether the late audit will reject `tag_name` in `row` as a tag a
+/// generated codec produces on behalf of the definition whose annotation
+/// bounds `row` (`runLateImplicitOpenExtAudit`). That definition is then
+/// retired and never produces a value.
+fn rowTagIsRejectedCodecProduction(self: *const Self, row: Var, tag_name: Ident.Idx) bool {
+    if (self.codec_row_demands.items.len == 0) return false;
+    const tail = self.tagRowTail(row);
+    for (self.late_implicit_open_ext_audits.items) |entry| {
+        if (entry.owner_rhs.isEmpty()) continue;
+        if (!self.implicitOpenExtCarriesTags(entry.ext)) continue;
+        if (self.tagRowTail(entry.ext.var_) != tail) continue;
+        for (self.codec_row_demands.items) |demand| {
+            if (self.tagRowTail(demand.row) != tail) continue;
+            const tags = self.codec_row_demand_tags.items[demand.tags_start..][0..demand.tags_len];
+            for (tags) |demanded| {
+                if (!demanded.eql(tag_name)) continue;
+                if (self.codecDemandRejectsAuditedTag(demand, entry, tag_name)) return true;
+            }
+        }
+    }
+    return false;
 }
 
 /// The resolved extension a tag row ends in, through aliases and extension
@@ -20591,10 +20653,10 @@ fn nominalIsBuiltinTry(self: *const Self, nominal: types_mod.NominalType) bool {
 /// row, is shared with the value, so those stay one type for every use. Null
 /// when the coercion reaches no tag union, so the use relates to the value's
 /// type itself.
-fn widenedValueUseVar(self: *Self, value_var: Var, env: *Env, region: Region) std.mem.Allocator.Error!?Var {
+fn widenedValueUseVar(self: *Self, value_var: Var, use_expr: CIR.Expr.Idx, env: *Env, region: Region) std.mem.Allocator.Error!?Var {
     try self.computeCoercionReach(value_var);
     self.widened_use_copies.clearRetainingCapacity();
-    const copy = try self.widenedReachCopy(value_var, env, region);
+    const copy = try self.widenedReachCopy(value_var, use_expr, env, region);
     return if (copy == self.types.resolveVar(value_var).var_) null else copy;
 }
 
@@ -20613,7 +20675,7 @@ fn coercionMayWiden(self: *const Self, var_: Var) bool {
 /// (recursion goes through a nominal, which ends the reach); a variable met
 /// again while its own copy is in progress keeps itself, so the walk is finite
 /// regardless.
-fn widenedReachCopy(self: *Self, root: Var, env: *Env, region: Region) std.mem.Allocator.Error!Var {
+fn widenedReachCopy(self: *Self, root: Var, use_expr: CIR.Expr.Idx, env: *Env, region: Region) std.mem.Allocator.Error!Var {
     const Step = struct { var_: Var, expanded: bool };
     var stack: std.ArrayListUnmanaged(Step) = .empty;
     defer stack.deinit(self.gpa);
@@ -20644,7 +20706,7 @@ fn widenedReachCopy(self: *Self, root: Var, env: *Env, region: Region) std.mem.A
                 break :blk if (backing_copy == self.types.resolveVar(backing).var_) resolved.var_ else backing_copy;
             },
             .structure => |flat| switch (flat) {
-                .tag_union => try self.widenedRowCopy(resolved.var_, env, region),
+                .tag_union => try self.widenedRowCopy(resolved.var_, use_expr, env, region),
                 .nominal_type => |nominal| blk: {
                     // Copying appends to the type store, so read the arguments
                     // out of it first.
@@ -20714,7 +20776,7 @@ fn appendWidenedReachChildren(self: *Self, var_: Var, children: *std.ArrayListUn
 /// A reached tag union's copy: every tag on its extension chain, each payload
 /// copied through the reach, under a fresh open extension. A row whose chain
 /// ends in a rigid is not the value's to widen and is shared.
-fn widenedRowCopy(self: *Self, row: Var, env: *Env, region: Region) std.mem.Allocator.Error!Var {
+fn widenedRowCopy(self: *Self, row: Var, use_expr: CIR.Expr.Idx, env: *Env, region: Region) std.mem.Allocator.Error!Var {
     const tags_start = self.widened_use_tags.items.len;
     defer self.widened_use_tags.shrinkRetainingCapacity(tags_start);
     var current = row;
@@ -20758,7 +20820,7 @@ fn widenedRowCopy(self: *Self, row: Var, env: *Env, region: Region) std.mem.Allo
     }
     const ext = try self.freshFromContent(.{ .flex = Flex.init() }, env, region);
     const copy = try self.freshFromContent(try self.types.mkTagUnion(tags, ext), env, region);
-    try self.widened_use_rows.append(self.gpa, .{ .value_row = self.types.resolveVar(row).var_, .use_row = copy });
+    try self.widened_use_rows.append(self.gpa, .{ .value_row = self.types.resolveVar(row).var_, .use_row = copy, .use_expr = use_expr });
     return copy;
 }
 
@@ -20769,7 +20831,7 @@ fn widenedRowCopy(self: *Self, row: Var, env: *Env, region: Region) std.mem.Allo
 /// A forwarder's argument and result rows can be one class, so only the
 /// result's spine down to a re-opened row is copied, and the argument stays
 /// closed. Null when nothing in the result re-opens.
-fn widenedFunctionResultUseVar(self: *Self, fn_var: Var, env: *Env, region: Region) std.mem.Allocator.Error!?Var {
+fn widenedFunctionResultUseVar(self: *Self, fn_var: Var, use_expr: CIR.Expr.Idx, env: *Env, region: Region) std.mem.Allocator.Error!?Var {
     const resolved = self.types.resolveVar(fn_var);
     const flat = switch (resolved.desc.content) {
         .structure => |flat| flat,
@@ -20784,7 +20846,7 @@ fn widenedFunctionResultUseVar(self: *Self, fn_var: Var, env: *Env, region: Regi
     const saved_closed_rows_only = self.widen_closed_rows_only;
     self.widen_closed_rows_only = true;
     defer self.widen_closed_rows_only = saved_closed_rows_only;
-    const ret_copy = try self.widenedReachCopy(func.ret, env, region);
+    const ret_copy = try self.widenedReachCopy(func.ret, use_expr, env, region);
     if (ret_copy == self.types.resolveVar(func.ret).var_) return null;
     var widened = func;
     widened.ret = ret_copy;
@@ -20823,7 +20885,7 @@ fn widenedCalleeUseVar(
 /// (`ModuleEnv.RowCoercedCallee`).
 fn widenRecordedCalleeResult(self: *Self, expr_idx: CIR.Expr.Idx, fn_var: Var, env: *Env, region: Region) std.mem.Allocator.Error!?Var {
     const rows_start: u32 = @intCast(self.widened_use_rows.items.len);
-    const widened = try self.widenedFunctionResultUseVar(fn_var, env, region) orelse return null;
+    const widened = try self.widenedFunctionResultUseVar(fn_var, expr_idx, env, region) orelse return null;
     try self.widened_callees.append(self.gpa, .{
         .expr_idx = expr_idx,
         .rows_start = rows_start,
@@ -20931,10 +20993,15 @@ const WidenedUseRow = struct {
     value_row: Var,
     /// The use's copy of it.
     use_row: Var,
+    /// The use that relates to the copy, retired when the copy cannot take
+    /// a tag the value's row gained.
+    use_expr: CIR.Expr.Idx,
     /// Set once the copy needs nothing more: the use's type was found not to
-    /// admit a tag of the value's row (that mismatch is reported), or the copy
-    /// is no longer a tag row because the use related it to a nominal type,
-    /// whose declared backing that relation already checked.
+    /// admit a tag of the value's row (that mismatch is reported and the use
+    /// retired), the tag is one the value's definition was rejected for
+    /// producing (the use is retired), or the copy is no longer a tag row
+    /// because the use related it to a nominal type, whose declared backing
+    /// that relation already checked.
     settled: bool = false,
 };
 
@@ -20958,14 +21025,27 @@ fn propagateValueRowsToWidenedUses(self: *Self, env: *Env) std.mem.Allocator.Err
         }
         try self.collectTagsMissingFromUse(pair, &missing);
         if (missing.items.len == 0) continue;
+        // A tag the value's own definition is rejected for producing is not
+        // one the value can have: the definition is retired, so the use is a
+        // use of a rejected declaration, erroneous at the use and reported
+        // once, at the definition.
+        const rejected_production = for (missing.items) |tag| {
+            if (self.rowTagIsRejectedCodecProduction(pair.value_row, tag.name)) break true;
+        } else false;
+        if (rejected_production) {
+            try self.markErroneousValueExpr(pair.use_expr);
+            self.widened_use_rows.items[index].settled = true;
+            continue;
+        }
         const region = self.getRegionAt(pair.use_row);
         const ext = try self.freshFromContent(.{ .flex = Flex.init() }, env, region);
         const extra = try self.freshFromContent(try self.types.mkTagUnion(missing.items, ext), env, region);
-        // A relation that fails reports its mismatch at the use and settles
-        // the pair. One that succeeds gives the copy every missing tag, which
-        // a second look confirms; a copy the relation did not extend settles
-        // too, so this loop always ends.
+        // A relation that fails reports its mismatch at the use, retires the
+        // use, and settles the pair. One that succeeds gives the copy every
+        // missing tag, which a second look confirms; a copy the relation did
+        // not extend settles too, so this loop always ends.
         if ((try self.unify(self.tagRowTail(pair.use_row), extra, env)).isProblem()) {
+            try self.markErroneousValueExpr(pair.use_expr);
             self.widened_use_rows.items[index].settled = true;
             continue;
         }
@@ -22998,7 +23078,12 @@ fn stepRigidAnnoGen(self: *Self, frame: *AnnoGenFrame, rigid: std.meta.fieldInfo
                 .w_method => |method| {
                     // The annotation owns the callable variable. Declare its identity
                     // before generating its type so recursive constraints can refer to it.
+                    // A repeated requirement of the same method relates to this callable
+                    // below, before either type is generated, so it takes the current
+                    // rank now: generation cannot re-rank a node that relation has
+                    // already redirected into another class.
                     const func_var = ModuleEnv.varFrom(method.anno);
+                    try self.setVarRank(func_var, env);
                     try self.recordAnnotationDispatchRelationOwner(func_var);
 
                     try self.scratch_static_dispatch_constraints.append(ScratchStaticDispatchConstraint{
@@ -26563,7 +26648,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
     const expr_region = frame.expr_region;
     const expr_var = frame.expr_var;
 
-    switch (expr) {
+    check: switch (expr) {
         // str //
         .e_str_segment => {
             const str_var = try self.freshStr(env, expr_region);
@@ -27002,7 +27087,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                 const widened_use_var = if (widened_fn_var != null)
                     null
                 else if (processed_def != null and !self.isFunctionTypeVar(use_var))
-                    try self.widenedValueUseVar(use_var, env, expr_region)
+                    try self.widenedValueUseVar(use_var, expr_idx, env, expr_region)
                 else
                     null;
                 if (widened_fn_var) |widened| {
@@ -27069,7 +27154,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                     else
                         null;
                     const widened_use_var = if (widened_callee_var == null and is_value and !self.isFunctionTypeVar(ext_instantiated_var))
-                        try self.widenedValueUseVar(ext_instantiated_var, env, expr_region)
+                        try self.widenedValueUseVar(ext_instantiated_var, expr_idx, env, expr_region)
                     else
                         null;
                     if (widened_callee_var) |widened| {
@@ -27086,7 +27171,11 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
             }
         },
         .e_lookup_associated_local => |lookup| {
-            try self.checkLocalAssociatedLookup(expr_idx, expr_var, lookup, expr_region, env);
+            if (try self.checkLocalAssociatedLookup(expr_idx, expr_var, lookup, expr_region, env)) {
+                // The lookup now names a method's local binding.
+                frame.expr = self.cir.store.getExpr(expr_idx);
+                continue :check frame.expr;
+            }
         },
         .e_lookup_associated => |lookup| {
             try self.checkAssociatedLookup(expr_idx, expr_var, lookup, expr_region, env);
@@ -33988,6 +34077,10 @@ fn checkAssociatedLookup(
     );
 }
 
+/// Returns true when the lookup's target is a method declared in a function
+/// body. That method is a local binding, so the lookup is rewritten to the
+/// same local lookup naming the method through its own type produces, and
+/// the caller checks it as one.
 fn checkLocalAssociatedLookup(
     self: *Self,
     expr_idx: CIR.Expr.Idx,
@@ -33995,17 +34088,27 @@ fn checkLocalAssociatedLookup(
     lookup: @FieldType(CIR.Expr, "e_lookup_associated_local"),
     region: Region,
     env: *Env,
-) Allocator.Error!void {
+) Allocator.Error!bool {
     try self.noteTypeDeclReferenceForLocalProcedures(@fromBackingInt(@intCast(lookup.type_node_idx)));
+    const owner_var: Var = @fromBackingInt(@intCast(lookup.type_node_idx));
+    if (try self.resolveAssociatedLookup(owner_var, lookup.item_ident)) |resolution| {
+        const target_node_idx = resolution.target.binding.type_node_idx;
+        if (resolution.target.is_this_module and self.cir.store.nodes.get(target_node_idx).tag == .statement_decl) {
+            const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(@backingInt(target_node_idx)));
+            self.cir.store.replaceExprWithLocalLookup(expr_idx, self.cir.store.getStatement(statement).s_decl.pattern);
+            return true;
+        }
+    }
     try self.checkAssociatedLookupFromOwnerVar(
         expr_idx,
         expr_var,
-        @fromBackingInt(@intCast(lookup.type_node_idx)),
+        owner_var,
         lookup.type_ident,
         lookup.item_ident,
         region,
         env,
     );
+    return false;
 }
 
 fn checkAssociatedLookupFromOwnerVar(
@@ -34115,11 +34218,6 @@ fn checkResolvedAssociatedTarget(
     region: Region,
     env: *Env,
 ) Allocator.Error!void {
-    // A method declared in a function body is a local binding, and naming it
-    // through its type refers to that binding like any local lookup.
-    if (is_this_module and self.cir.store.nodes.get(target_node_idx).tag == .statement_decl) {
-        try self.noteLocalLookupForLocalProcedures(self.cir.store.getStatement(@fromBackingInt(@intCast(@backingInt(target_node_idx)))).s_decl.pattern);
-    }
     if (derivedMethodDef(target_env, target_def_idx)) |derived| {
         try self.checkDerivedMethodReference(expr_idx, expr_var, target_env, is_this_module, derived, region, env);
         return;
@@ -36284,6 +36382,12 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
             continue;
         }
         _ = try self.unify(ModuleEnv.varFrom(pending.default_expr), expected_field_type, env);
+        // A tuple access whose receiver was still open when the default
+        // checked it (`|pair| pair.0` passed before `pair`'s type was known)
+        // relates its result to the receiver's element only once resolved,
+        // and that relation can pin a parameter copy. Resolve the accesses
+        // whose receivers the default's check has now decided.
+        try self.resolvePendingTupleAccesses(env, false);
         // Judged HERE, before the numeric-defaulting rounds could commit a
         // still-flex parameter copy: a default may constrain NO declaration
         // type parameter (design.md "Defaulted Fields").

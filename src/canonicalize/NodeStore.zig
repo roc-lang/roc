@@ -2137,6 +2137,21 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
     }
 }
 
+/// Replaces an associated lookup whose checked target is a method declared in
+/// a function body with a lookup of that method's local binding.
+pub fn replaceExprWithLocalLookup(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    pattern_idx: CIR.Pattern.Idx,
+) void {
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
+    var node = Node.init(.expr_var);
+    node.setPayload(.{ .expr_var = .{
+        .pattern_idx = @backingInt(pattern_idx),
+    } });
+    store.nodes.set(node_idx, node);
+}
+
 /// Replaces an imported-type associated lookup with its exact checked target.
 pub fn replaceExprWithResolvedAssociatedLookup(
     store: *NodeStore,

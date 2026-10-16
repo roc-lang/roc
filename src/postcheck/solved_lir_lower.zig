@@ -9283,11 +9283,27 @@ const Lowerer = struct {
     fn reserveRecursiveLetSlot(self: *Lowerer, local: Lifted.LocalId, ty: Type.TypeId) Common.LowerError!RecursiveLetSlot {
         const binding = try self.bindRecursiveLocalForTyped(local, ty);
         const target_content = self.result.layouts.getLayout(self.result.store.getLocal(binding.slot).layout_idx);
-        if (target_content.tag != .box) Common.invariant("recursive Monotype let statement must bind a boxed runtime layout");
+        // A zero-sized value boxes to `box_of_zst`, which records no payload
+        // layout; the value's own layout is the payload its slot stores.
+        const payload_layout = switch (target_content.tag) {
+            .box => target_content.getIdx(),
+            .box_of_zst => try self.layoutOfType(ty),
+            .scalar,
+            .list,
+            .list_of_zst,
+            .struct_,
+            .closure,
+            .erased_callable,
+            .zst,
+            .tag_union,
+            .ptr,
+            .erased_box,
+            => Common.invariant("recursive Monotype let statement must bind a boxed runtime layout"),
+        };
         return .{
             .ty = ty,
             .binding = binding,
-            .payload_layout = target_content.getIdx(),
+            .payload_layout = payload_layout,
         };
     }
 
