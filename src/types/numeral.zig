@@ -497,14 +497,51 @@ fn limbsExtractTop(limbs: []const std.math.big.Limb, bit_length: usize, count: u
 
 // fit set //
 
+/// Whether the literal's correctly-rounded value at F is finite. Rounding to
+/// the nearest representable value stays within half a ULP everywhere in F's
+/// finite range (gradual underflow included, so a tiny literal rounding to a
+/// subnormal or to zero is ordinary rounding); a magnitude that rounds past
+/// F's largest finite value has no such bound, so it does not fit.
+///
+/// The smallest magnitude that rounds to infinity is the midpoint between
+/// F's largest finite value and 2^(exponent_max+1): that tie rounds to even,
+/// which is infinity, because the largest finite mantissa is odd. In binary
+/// the midpoint is `precision + 1` ones followed by zeros, an integer, so a
+/// fraction below one never moves the integer part across it, and an integer
+/// part in the top binade reaches it exactly when its top `precision + 1`
+/// bits are all ones.
+fn floatTargetAccepts(comptime F: type, exact: Exact) bool {
+    const spec = FloatSpec(F);
+    const bit_length = bytesBitLength(exact.before);
+    if (bit_length != spec.exponent_max + 1) return bit_length <= spec.exponent_max;
+    var bit: usize = spec.exponent_max - spec.precision;
+    while (bit <= spec.exponent_max) : (bit += 1) {
+        if (!bytesTestBit(exact.before, bit)) return true;
+    }
+    return false;
+}
+
+/// Bit length of a big-endian base-256 magnitude with no leading zero bytes.
+fn bytesBitLength(bytes_be: []const u8) usize {
+    if (bytes_be.len == 0) return 0;
+    return (bytes_be.len - 1) * 8 + (8 - @as(usize, @clz(bytes_be[0])));
+}
+
+/// Bit `bit` (0 = least significant) of a big-endian base-256 magnitude.
+fn bytesTestBit(bytes_be: []const u8, bit: usize) bool {
+    const byte_offset = bit / 8;
+    if (byte_offset >= bytes_be.len) return false;
+    const byte = bytes_be[bytes_be.len - 1 - byte_offset];
+    return (byte >> @intCast(bit % 8)) & 1 != 0;
+}
+
 /// Compute the set of builtin numeric types that can represent the literal's
-/// exact value. Floats are total (out-of-range values become ±inf), so their
-/// bits are always set. Allocates only when the fractional digit magnitude
-/// exceeds u128 (adversarial literals).
+/// exact value. Allocates only when the fractional digit magnitude exceeds
+/// u128 (adversarial literals).
 pub fn computeFitSet(allocator: Allocator, exact: Exact) Allocator.Error!FitSet {
     var set = FitSet.empty;
-    set.insert(.f32);
-    set.insert(.f64);
+    if (floatTargetAccepts(f32, exact)) set.insert(.f32);
+    if (floatTargetAccepts(f64, exact)) set.insert(.f64);
 
     if (!exact.is_fractional) {
         if (magnitudeU128(exact.before)) |magnitude| {
@@ -521,7 +558,8 @@ pub fn computeFitSet(allocator: Allocator, exact: Exact) Allocator.Error!FitSet 
 /// Whether one builtin numeric type can represent the literal's exact value.
 pub fn fits(allocator: Allocator, exact: Exact, target: Target) Allocator.Error!bool {
     switch (target) {
-        .f32, .f64 => return true,
+        .f32 => return floatTargetAccepts(f32, exact),
+        .f64 => return floatTargetAccepts(f64, exact),
         .dec => return (try decBits(allocator, exact)) != null,
         .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => {
             const magnitude = intMagnitude(exact) orelse return false;
@@ -807,6 +845,42 @@ test "fit set summarizes representability across targets" {
     try testing.expect(negative_set.contains(.i16));
 }
 
+test "float targets reject literals whose rounded value overflows" {
+    const gpa = testing.allocator;
+    // Each literal is `prefix ++ "0" ** zeros ++ suffix`.
+    const cases = [_]struct { prefix: []const u8, zeros: usize = 0, suffix: []const u8 = "", f32_fits: bool, f64_fits: bool }{
+        .{ .prefix = "340282356779733661637539395458142568447", .f32_fits = true, .f64_fits = true },
+        .{ .prefix = "340282356779733661637539395458142568447.999", .f32_fits = true, .f64_fits = true },
+        .{ .prefix = "340282356779733661637539395458142568448", .f32_fits = false, .f64_fits = true },
+        .{ .prefix = "-340282356779733661637539395458142568448", .f32_fits = false, .f64_fits = true },
+        .{ .prefix = "1", .zeros = 39, .f32_fits = false, .f64_fits = true },
+        .{ .prefix = "179769313486231580793728971405303415079934132710037826936173778980444968292764750946649017977587207096330286416692887910946555547851940402630657488671505820681908902000708383676273854845817711531764475730270069855571366959622842914819860834936475292719074168444365510704342711559699508093042880177904174497791", .f32_fits = false, .f64_fits = true },
+        .{ .prefix = "179769313486231580793728971405303415079934132710037826936173778980444968292764750946649017977587207096330286416692887910946555547851940402630657488671505820681908902000708383676273854845817711531764475730270069855571366959622842914819860834936475292719074168444365510704342711559699508093042880177904174497791.999", .f32_fits = false, .f64_fits = true },
+        .{ .prefix = "179769313486231580793728971405303415079934132710037826936173778980444968292764750946649017977587207096330286416692887910946555547851940402630657488671505820681908902000708383676273854845817711531764475730270069855571366959622842914819860834936475292719074168444365510704342711559699508093042880177904174497792", .f32_fits = false, .f64_fits = false },
+        .{ .prefix = "17976931348623158", .zeros = 292, .f32_fits = false, .f64_fits = true },
+        .{ .prefix = "1", .zeros = 309, .f32_fits = false, .f64_fits = false },
+        .{ .prefix = "-1", .zeros = 400, .f32_fits = false, .f64_fits = false },
+        .{ .prefix = "1", .zeros = 400, .suffix = ".5", .f32_fits = false, .f64_fits = false },
+        .{ .prefix = "0.", .zeros = 399, .suffix = "1", .f32_fits = true, .f64_fits = true },
+    };
+    for (cases) |case| {
+        var text: std.ArrayList(u8) = .empty;
+        defer text.deinit(gpa);
+        try text.appendSlice(gpa, case.prefix);
+        try text.appendNTimes(gpa, '0', case.zeros);
+        try text.appendSlice(gpa, case.suffix);
+        const parsed = try testParse(gpa, text.items);
+        defer parsed.deinit(gpa);
+        const set = try computeFitSet(gpa, parsed.exact);
+        try testing.expectEqual(case.f32_fits, set.contains(.f32));
+        try testing.expectEqual(case.f64_fits, set.contains(.f64));
+        try testing.expectEqual(case.f32_fits, try fits(gpa, parsed.exact, .f32));
+        try testing.expectEqual(case.f64_fits, try fits(gpa, parsed.exact, .f64));
+        try testing.expectEqual(case.f32_fits, !std.math.isInf(try floatBits(f32, gpa, parsed.exact)));
+        try testing.expectEqual(case.f64_fits, !std.math.isInf(try floatBits(f64, gpa, parsed.exact)));
+    }
+}
+
 test "huge digit counts stay fast and unrepresentable in fixed-width targets" {
     const gpa = testing.allocator;
     // 1E80000: 80001 decimal digits, integer-valued.
@@ -827,7 +901,8 @@ test "huge digit counts stay fast and unrepresentable in fixed-width targets" {
     try testing.expect(!set.contains(.u128));
     try testing.expect(!set.contains(.i128));
     try testing.expect(!set.contains(.dec));
-    try testing.expect(set.contains(.f64));
+    try testing.expect(!set.contains(.f32));
+    try testing.expect(!set.contains(.f64));
     const f64_bits = try floatBits(f64, gpa, exact);
     try testing.expect(std.math.isPositiveInf(f64_bits));
     const f32_bits = try floatBits(f32, gpa, exact);
