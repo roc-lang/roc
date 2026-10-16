@@ -1097,67 +1097,83 @@ pub fn publishProgramForComptimeProblems(
     return .no_problems;
 }
 
-/// Result of running the top-level `expect` statements of a program.
-pub const TopLevelExpectOutcome = union(enum) {
-    passed: usize,
-    failed: struct { failed: usize, total: usize },
-    no_expects,
-    checked_errors,
+/// The top-level expects of one program: each expect's source region, in
+/// source order, and the dev backend's result for it at the same index.
+pub const TopLevelExpectRun = struct {
+    regions: []base.Region,
+    batch: BoolRootEvalBatch,
+
+    pub fn deinit(self: *TopLevelExpectRun, allocator: Allocator) void {
+        allocator.free(self.regions);
+        self.batch.deinit(allocator);
+        self.* = undefined;
+    }
 };
 
-/// Lower the top-level `expect` statements of a module as test roots and run
-/// each root with the dev backend. Returns `error.DevBackendUnavailable` when
-/// the host has no dev backend.
-pub fn runTopLevelExpects(
+/// Lower a program's top-level expects as test roots and evaluate them with
+/// `devEvalBoolRootModule`, the evaluator `roc test` uses by default. Like
+/// `roc test`, the roots carry test-plan metadata, so inline expects they
+/// reach are observed and counted in `batch.expect_counts`.
+pub fn devEvalTopLevelExpects(
     allocator: Allocator,
-    io: std.Io,
-    source: []const u8,
-    imports: []const ModuleSource,
-) Error!TopLevelExpectOutcome {
-    return runTopLevelExpectsImpl(allocator, io, source, imports, null);
-}
-
-/// Same as `runTopLevelExpects` but reuses a Builtin artifact the caller has
-/// already published.
-pub fn runTopLevelExpectsWithBuiltin(
-    allocator: Allocator,
-    io: std.Io,
-    source: []const u8,
-    imports: []const ModuleSource,
-    pre_published_builtin: PrePublishedBuiltin,
-) Error!TopLevelExpectOutcome {
-    return runTopLevelExpectsImpl(allocator, io, source, imports, pre_published_builtin);
-}
-
-fn runTopLevelExpectsImpl(
-    allocator: Allocator,
-    io: std.Io,
     source: []const u8,
     imports: []const ModuleSource,
     pre_published_builtin: ?PrePublishedBuiltin,
-) Error!TopLevelExpectOutcome {
-    var resources = try parseProgram(allocator, .module, source, imports, .{
+) Error!TopLevelExpectRun {
+    const resources = try parseProgram(allocator, .module, source, imports, .{
         .roots = .published_only,
         .pre_published_builtin = pre_published_builtin,
     });
     defer cleanupParseAndCanonical(allocator, resources);
 
-    if (try parsedResourcesHaveErrorDiagnostics(allocator, &resources)) return .checked_errors;
+    if (try parsedResourcesHaveErrorDiagnostics(allocator, &resources)) return error.TypeCheckError;
 
-    var selected = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
-    defer selected.deinit(allocator);
-    for (resources.checked_artifact.root_requests.requests) |root| {
-        if (root.kind != .test_expect) continue;
-        try selected.append(allocator, root);
+    var requests = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
+    defer requests.deinit(allocator);
+    var test_plan = std.ArrayList(lir.CheckedPipeline.RootTestPlanMetadata).empty;
+    defer test_plan.deinit(allocator);
+    for (resources.checked_artifact.root_requests.requests) |request| {
+        if (request.kind != .test_expect) continue;
+        const index: u32 = @intCast(requests.items.len);
+        try requests.append(allocator, request);
+        try test_plan.append(allocator, .{
+            .request_index = index,
+            .root_order = request.order,
+            .result_index = index,
+            .module_index = 0,
+            .root_index = index,
+        });
     }
-    if (selected.items.len == 0) return .no_expects;
 
-    var lowered = try lowerParsedProgramToLirWithOptions(allocator, io, &resources, .native, .{ .root_requests = selected.items });
-    defer lowered.deinit(allocator);
+    if (requests.items.len == 0) return .{
+        .regions = &.{},
+        .batch = .{ .results = &.{}, .expect_counts = &.{} },
+    };
 
-    // Every root proc is a `test_expect` root: lowering received only the
-    // selected requests.
-    const root_procs = lowered.view.root_procs;
+    const import_views = try parsedImportViews(allocator, &resources);
+    defer allocator.free(import_views);
+    const modules: lir.CheckedPipeline.CheckedModuleSet = .{
+        .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+        .imports = import_views,
+    };
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        allocator,
+        modules,
+        .{ .requests = requests.items, .test_plan_metadata = test_plan.items },
+        lowerToLirTarget(base.target.TargetUsize.native, .{}),
+    );
+    defer lowered.deinit();
+    const static_data = try @import("static_data").buildStaticDataForWidth(allocator, .{
+        .root = modules.root,
+        .imports = modules.imports,
+    }, &lowered, lowered.target_usize, .{});
+    if (lowered.frozen_static_data) |*previous| previous.deinit();
+    lowered.frozen_static_data = .{ .allocator = allocator, .exports = static_data };
+
+    const root_procs = lowered.lir_result.root_procs.items;
+    const root_metadata = lowered.lir_result.root_metadata.items;
+    std.debug.assert(root_procs.len == requests.items.len and root_metadata.len == requests.items.len);
+
     const roots = try allocator.alloc(BoolRoot, root_procs.len);
     var roots_len: usize = 0;
     defer {
@@ -1167,55 +1183,43 @@ fn runTopLevelExpectsImpl(
         }
         allocator.free(roots);
     }
-    for (root_procs, 0..) |root_proc, i| {
-        const proc = lowered.view.store.getProcSpec(root_proc);
-        const arg_locals = lowered.view.store.getLocalSpan(proc.args);
-        const arg_layouts = try allocator.alloc(LayoutIdx, arg_locals.len);
+    const regions = try allocator.alloc(base.Region, root_procs.len);
+    errdefer allocator.free(regions);
+    for (root_procs, root_metadata, requests.items, 0..) |root_proc, metadata, request, index| {
+        std.debug.assert(metadata.kind == .test_expect and metadata.order == request.order);
+        regions[index] = switch (request.source) {
+            .statement => |statement| resources.module_env.store.getStatementRegion(statement),
+            .def, .expr, .required_binding, .hoisted => {
+                if (builtin.mode == .debug) {
+                    base.invariant("eval helper invariant violated: test root was not published from an expect statement", .{});
+                }
+                unreachable;
+            },
+        };
+        const arg_layouts = try InspectedRun.mainProcArgLayouts(allocator, &lowered.lir_result.store, root_proc);
         errdefer allocator.free(arg_layouts);
-        for (0..arg_locals.len) |arg_index| {
-            arg_layouts[arg_index] = lowered.view.store.getLocal(GuardedList.at(arg_locals, arg_index)).layout_idx;
-        }
-        const symbol_name = try std.fmt.allocPrintSentinel(allocator, "roc__test_expect_{d}", .{i}, 0);
-        roots[i] = .{
+        const symbol_name = try std.fmt.allocPrintSentinel(allocator, "roc_test_expect_{d}", .{index}, 0);
+        roots[index] = .{
             .symbol_name = symbol_name,
             .proc = root_proc,
             .arg_layouts = arg_layouts,
-            .ret_layout = proc.ret_layout,
+            .ret_layout = lowered.lir_result.store.getProcSpec(root_proc).ret_layout,
         };
         roots_len += 1;
     }
 
-    var batch = try devEvalBoolRootModule(allocator, .{
-        .store = &lowered.view.store,
-        .layouts = &lowered.view.layouts,
-        .tables = boxy_runtime.BoxyTables.fromImageView(&lowered.view),
+    const batch = try devEvalBoolRootModule(allocator, .{
+        .store = &lowered.lir_result.store,
+        .layouts = &lowered.lir_result.layouts,
+        .tables = boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
         .roots = roots,
+        .expect_site_count = lowered.lir_result.expect_sites.items.len,
         .static_data = .{
-            .exports = lowered.view.static_data,
-            .value_count = lowered.view.static_data_value_count,
+            .exports = lowered.frozen_static_data.?.exports,
+            .value_count = lowered.lir_result.static_data_values.items.len,
         },
     }, null, 1);
-    defer batch.deinit(allocator);
-
-    var failed: usize = 0;
-    for (batch.results) |result| {
-        const returned_true = switch (result.outcome) {
-            .passed => |passed| passed,
-            .crashed, .expect_err, .checked_error => false,
-        };
-        if (!returned_true or boolRootEventsHaveExpectFailure(result.events)) failed += 1;
-    }
-
-    if (failed == 0) return .{ .passed = batch.results.len };
-    return .{ .failed = .{ .failed = failed, .total = batch.results.len } };
-}
-
-fn boolRootEventsHaveExpectFailure(events: []const BoolRootEvent) bool {
-    for (events) |event| switch (event) {
-        .expect_failed => return true,
-        .dbg, .crashed => {},
-    };
-    return false;
+    return .{ .regions = regions, .batch = batch };
 }
 
 /// Publish a program for an interactive compile-time evaluation while retaining
@@ -1623,19 +1627,37 @@ fn lowerParsedProgramToLirWithOptions(
     target_usize: base.target.TargetUsize,
     options: LowerToLirOptions,
 ) Error!LoweredProgram {
-    if (resources.borrowed_builtin_artifact == null) {
-        return lowerCheckedModuleSetToLir(allocator, io, &resources.checked_artifact, resources.import_artifacts, target_usize, options);
-    }
-
-    const borrowed = resources.borrowed_builtin_artifact.?;
-    const total = resources.import_artifacts.len + 1;
-    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, total);
+    const import_views = try parsedImportViews(allocator, resources);
     defer allocator.free(import_views);
-    import_views[0] = check.CheckedArtifact.importedView(borrowed);
-    for (resources.import_artifacts, 0..) |*module, i| {
-        import_views[i + 1] = check.CheckedArtifact.importedView(module);
-    }
     return lowerCheckedRootWithViews(allocator, io, &resources.checked_artifact, import_views, target_usize, options);
+}
+
+/// Views of every module a parsed program imports, the borrowed Builtin first.
+fn parsedImportViews(
+    allocator: Allocator,
+    resources: *const ParsedResources,
+) Allocator.Error![]check.CheckedArtifact.ImportedModuleView {
+    const borrowed_count: usize = if (resources.borrowed_builtin_artifact == null) 0 else 1;
+    const import_views = try allocator.alloc(check.CheckedArtifact.ImportedModuleView, resources.import_artifacts.len + borrowed_count);
+    if (resources.borrowed_builtin_artifact) |borrowed| {
+        import_views[0] = check.CheckedArtifact.importedView(borrowed);
+    }
+    for (resources.import_artifacts, 0..) |*module, i| {
+        import_views[i + borrowed_count] = check.CheckedArtifact.importedView(module);
+    }
+    return import_views;
+}
+
+fn lowerToLirTarget(target_usize: base.target.TargetUsize, options: LowerToLirOptions) lir.CheckedPipeline.TargetConfig {
+    return .{
+        .target_usize = target_usize,
+        .specialization_strategy = options.specialization_strategy,
+        .inline_mode = options.inline_mode,
+        .list_in_place_map = options.list_in_place_map,
+        .inline_expects = options.inline_expects,
+        .tag_reachability = options.tag_reachability,
+        .prove_ranges = options.prove_ranges,
+    };
 }
 
 /// Lower already-published checked modules to a LIR image.
@@ -1677,15 +1699,7 @@ fn lowerCheckedRootWithViews(
             .imports = import_views,
         },
         .{ .requests = options.root_requests orelse root_module.root_requests.runtime_requests },
-        .{
-            .target_usize = target_usize,
-            .specialization_strategy = options.specialization_strategy,
-            .inline_mode = options.inline_mode,
-            .list_in_place_map = options.list_in_place_map,
-            .inline_expects = options.inline_expects,
-            .tag_reachability = options.tag_reachability,
-            .prove_ranges = options.prove_ranges,
-        },
+        lowerToLirTarget(target_usize, options),
     );
     defer lowered.deinit();
 

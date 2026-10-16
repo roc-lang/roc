@@ -3590,6 +3590,19 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .unreachable_code => |data| blk: {
+            var report = try Report.init(allocator, "Unreachable Code", "", .warning);
+            try report.headline.addReflowingText("This code will never run, because the code before it always ends with a ");
+            try report.headline.addAnnotated("return", .inline_code);
+            try report.headline.addReflowingText(", ");
+            try report.headline.addAnnotated("crash", .inline_code);
+            try report.headline.addReflowingText(", or ");
+            try report.headline.addAnnotated("break", .inline_code);
+            try report.headline.addReflowingText(", or loops forever.");
+            try self.addSourceRegionTo(&report.document, self.calcRegionInfo(data.region), .error_highlight, filename);
+            try report.document.addReflowingText("Remove this code, or change the code before it so that it can finish.");
+            break :blk report;
+        },
         .redundant_return => |data| blk: {
             var report = try Report.init(allocator, "Redundant Return", "", .warning);
             try report.headline.addReflowingText("This return is unnecessary because its value is already the function's final expression.");

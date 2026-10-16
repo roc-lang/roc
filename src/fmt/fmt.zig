@@ -1686,23 +1686,25 @@ const Formatter = struct {
             return .{ .done = .{ .region = field.region, .ends_with_multiline_string_line = result.ends_with_multiline_string_line } };
         }
         try fmt.pushTokenText(field.name);
-        if (fmt.roc_version_upgrade) |upgrade| {
-            if (f.idx == upgrade.field) {
-                // Write the running compiler's version rather than the stale
-                // one in the source. Planning the upgrade already parsed that
-                // version as a nightly tag, so it is alphanumerics and `-`
-                // only and needs no escaping inside the quotes.
-                try fmt.pushAll(": \"");
-                try fmt.pushAll(upgrade.version);
-                try fmt.push('"');
-                return .{ .done = .{ .region = field.region } };
-            }
-        }
         switch (field.value) {
             .supplied => |v| {
                 try fmt.commentBoundary(field.name + 1, false);
                 try fmt.push(':');
                 try fmt.commentBoundary(fmt.nodeRegion(@backingInt(v)).start, true);
+                if (fmt.roc_version_upgrade) |upgrade| {
+                    if (f.idx == upgrade.field) {
+                        // Write the running compiler's version in place of the
+                        // stale string literal. Planning the upgrade already
+                        // parsed that version as a nightly tag, so it is
+                        // alphanumerics and `-` only and needs no escaping
+                        // inside the quotes; and the literal it replaces is a
+                        // single string part, so no comment sits inside it.
+                        try fmt.push('"');
+                        try fmt.pushAll(upgrade.version);
+                        try fmt.push('"');
+                        return .{ .done = .{ .region = field.region } };
+                    }
+                }
                 f.phase = 1;
                 return call(exprFrame(v, .{}));
             },
@@ -1731,6 +1733,9 @@ const Formatter = struct {
         // Follow only the leading callee/receiver until emitted parentheses
         // establish an ordinary expression context. Arguments start fresh.
         starts_pipe_target: bool = false,
+        // The right operand of a same-operator binary operation continues its
+        // parent's chain, so its operator lines share the chain's indentation.
+        operator_chain_indent: ?u32 = null,
     };
 
     const InterpolationFrame = struct {
@@ -2686,14 +2691,21 @@ const Formatter = struct {
                     },
                     1 => {
                         const left = result;
+                        // A chain link that breaks before its operator lines up with
+                        // the chain; one that stays on its line keeps that line's
+                        // indentation for the operand that follows.
+                        const operand_indent = fmt.curr_indent;
+                        const line_indent = format_context.operator_chain_indent orelse operand_indent;
+                        fmt.curr_indent = line_indent;
                         var pushed = false;
                         if (try fmt.continueAfterMultilineStringLine(left)) {
                             pushed = true;
                         } else if (multiline and try fmt.flushContinuationComments(op.operator)) {
                             try fmt.pushIndent();
                             pushed = true;
-                        } else if (!is_range_op) {
-                            try fmt.push(' ');
+                        } else {
+                            fmt.curr_indent = operand_indent;
+                            if (!is_range_op) try fmt.push(' ');
                         }
                         try fmt.pushTokenText(op.operator);
                         const right_region = fmt.nodeRegion(@backingInt(op.right));
@@ -2704,6 +2716,12 @@ const Formatter = struct {
                             try fmt.push(' ');
                         }
                         f.phase = 2;
+                        if (format_context.operator_chain_indent != null or fmt.curr_indent != line_indent) {
+                            const right_expr = fmt.ast.store.getExpr(op.right);
+                            if (right_expr == .bin_op and fmt.ast.tokens.tokens.items(.tag)[right_expr.bin_op.operator] == op_tag) {
+                                return call(exprFrame(op.right, .{ .operator_chain_indent = line_indent }));
+                            }
+                        }
                         return call(exprFrame(op.right, .{}));
                     },
                     else => return fmt.finishExpr(f),
@@ -5426,7 +5444,7 @@ pub fn moduleFmtsStableWithDiags(gpa: std.mem.Allocator, input: []const u8, debu
     const formatted = parseAndFmtCountingDiags(gpa, input, expected_diags) catch |err| return err;
     defer gpa.free(formatted);
 
-    const formatted_twice = parseAndFmt(gpa, formatted, debug) catch {
+    const formatted_twice = parseAndFmt(gpa, formatted, debug, .{}) catch {
         return error.SecondParseFailed;
     };
     errdefer gpa.free(formatted_twice);
@@ -5441,14 +5459,19 @@ pub fn moduleFmtsStableWithDiags(gpa: std.mem.Allocator, input: []const u8, debu
 /// Assert that formatting `input` as a module is stable (formatting the
 /// formatted output changes nothing) and return the formatted source.
 pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) FormatTestError![]const u8 {
+    return moduleFmtsStableWithOptions(gpa, input, debug, .{});
+}
+
+/// `moduleFmtsStable`, formatting both passes with `options`.
+pub fn moduleFmtsStableWithOptions(gpa: std.mem.Allocator, input: []const u8, debug: bool, options: Options) FormatTestError![]const u8 {
     if (debug) {
         std.debug.print("Original:\n==========\n{s}\n==========\n\n", .{input});
     }
 
-    const formatted = try parseAndFmt(gpa, input, debug);
+    const formatted = try parseAndFmt(gpa, input, debug, options);
     defer gpa.free(formatted);
 
-    const formatted_twice = parseAndFmt(gpa, formatted, debug) catch {
+    const formatted_twice = parseAndFmt(gpa, formatted, debug, options) catch {
         return error.SecondParseFailed;
     };
     errdefer gpa.free(formatted_twice);
@@ -5532,7 +5555,7 @@ fn parseAndFmtCountingDiags(gpa: std.mem.Allocator, input: []const u8, expected_
     return result.toOwnedSlice();
 }
 
-fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) FormatParseError![]const u8 {
+fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool, options: Options) FormatParseError![]const u8 {
     var module_env = try ModuleEnv.init(gpa, input);
     defer module_env.deinit();
 
@@ -5558,7 +5581,7 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) FormatPar
 
     var result: std.Io.Writer.Allocating = .init(gpa);
     defer result.deinit();
-    try formatAst(parse_ast.*, &result.writer);
+    try formatAstWithOptions(parse_ast.*, &result.writer, options);
 
     if (debug) {
         std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{result.written()});
@@ -5649,6 +5672,97 @@ test "issue 11713: match closing brace aligns after a multiline final arm" {
             "\t\t\tA => 1\n" ++
             "\t\t\tB => 2\n" ++
             "\t\t}\n" ++
+            "}\n",
+    };
+    for (inputs) |input| {
+        const result = try moduleFmtsStable(std.testing.allocator, input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(input, result);
+    }
+}
+
+test "issue 12156: multi-line and chain operands share one indentation level" {
+    // Repro for https://github.com/roc-lang/roc/issues/12156
+    const input =
+        "Stair :: [].{}\n" ++
+        "\n" ++
+        "expect {\n" ++
+        "\ta = 1\n" ++
+        "\ta == 1\n" ++
+        "\t\tand a > 0\n" ++
+        "\t\tand a < 2\n" ++
+        "\t\tand a != 3\n" ++
+        "}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(input, result);
+}
+
+test "operator chains keep each link at the chain's indentation" {
+    const inputs = [_][]const u8{
+        // `or` chains nest to the right like `and` chains.
+        "Stair :: [].{}\n" ++
+            "\n" ++
+            "expect {\n" ++
+            "\ta = 1\n" ++
+            "\ta == 1\n" ++
+            "\t\tor a > 0\n" ++
+            "\t\tor a < 2\n" ++
+            "\t\tor a != 3\n" ++
+            "}\n",
+        // A link that stays on one line passes the chain's indentation on.
+        "Stair :: [].{}\n" ++
+            "\n" ++
+            "expect {\n" ++
+            "\ta = 1\n" ++
+            "\ta == 1\n" ++
+            "\t\tand a > 0 and a < 2\n" ++
+            "\t\tand a != 3\n" ++
+            "}\n",
+        // A multiline operand on a link's line indents from that line.
+        "Stair :: [].{}\n" ++
+            "\n" ++
+            "expect {\n" ++
+            "\ta = 1\n" ++
+            "\ta == 1\n" ++
+            "\t\tand a > 0 and [\n" ++
+            "\t\t\ta,\n" ++
+            "\t\t] != []\n" ++
+            "\t\tand a != 3\n" ++
+            "}\n",
+        // Comments before a link sit at the chain's indentation.
+        "Stair :: [].{}\n" ++
+            "\n" ++
+            "expect {\n" ++
+            "\ta = 1\n" ++
+            "\ta == 1\n" ++
+            "\t\tand a > 0\n" ++
+            "\t\t# upper bound\n" ++
+            "\t\tand a < 2\n" ++
+            "\t\tand a != 3\n" ++
+            "}\n",
+        // A multiline operand indents from its own link's line.
+        "Stair :: [].{}\n" ++
+            "\n" ++
+            "expect {\n" ++
+            "\ta = 1\n" ++
+            "\ta == 1\n" ++
+            "\t\tand [\n" ++
+            "\t\t\ta,\n" ++
+            "\t\t\t2,\n" ++
+            "\t\t] != []\n" ++
+            "\t\tand a < 2\n" ++
+            "\t\tand a != 3\n" ++
+            "}\n",
+        // A tighter operator inside a link is a nested group, not a link.
+        "Stair :: [].{}\n" ++
+            "\n" ++
+            "expect {\n" ++
+            "\ta = 1\n" ++
+            "\ta == 1\n" ++
+            "\t\tor a > 0\n" ++
+            "\t\t\tand a < 2\n" ++
+            "\t\tor a != 3\n" ++
             "}\n",
     };
     for (inputs) |input| {
@@ -7485,35 +7599,11 @@ test "blank line inserted before doc comments following code" {
 
 /// Format `input` as a compiler reporting itself as `compiler_version` would,
 /// so that tests of the `roc` version pin do not depend on how this binary was
-/// built. Asserts that formatting the result again is a no-op, since a pin
-/// that has just been brought up to date must have nothing left to upgrade.
+/// built. Asserts that every comment survives and that formatting the result
+/// again is a no-op, since a pin that has just been brought up to date must
+/// have nothing left to upgrade.
 fn fmtAsCompiler(gpa: std.mem.Allocator, input: []const u8, compiler_version: []const u8) FormatTestError![]const u8 {
-    const options: Options = .{ .compiler_version = compiler_version };
-
-    var module_env = try ModuleEnv.init(gpa, input);
-    defer module_env.deinit();
-    const parse_ast = try parse.file(gpa, &module_env.common);
-    defer parse_ast.deinit();
-    std.testing.expectEqualSlices(AST.Diagnostic, &[_]AST.Diagnostic{}, parse_ast.parse_diagnostics.items) catch {
-        return error.ParseFailed;
-    };
-
-    var result: std.Io.Writer.Allocating = .init(gpa);
-    defer result.deinit();
-    try formatAstWithOptions(parse_ast.*, &result.writer, options);
-
-    var stable_env = try ModuleEnv.init(gpa, result.written());
-    defer stable_env.deinit();
-    const stable_ast = try parse.file(gpa, &stable_env.common);
-    defer stable_ast.deinit();
-    var stable: std.Io.Writer.Allocating = .init(gpa);
-    defer stable.deinit();
-    try formatAstWithOptions(stable_ast.*, &stable.writer, options);
-    std.testing.expectEqualStrings(result.written(), stable.written()) catch {
-        return error.FormattingNotStable;
-    };
-
-    return try result.toOwnedSlice();
+    return moduleFmtsStableWithOptions(gpa, input, false, .{ .compiler_version = compiler_version });
 }
 
 test "fmt upgrades an app's roc version pin to a newer nightly" {
@@ -7568,6 +7658,24 @@ test "fmt upgrades a roc version pin written across several lines" {
             "}\n\nmain! = |_| {}\n",
         result,
     );
+}
+
+test "issue 12283: upgrading a roc version pin keeps the comments around its colon" {
+    // Repro for https://github.com/roc-lang/roc/issues/12283
+    const result = try fmtAsCompiler(
+        std.testing.allocator,
+        "app [main!] {\n" ++
+            "    pf: platform \"../basic-cli/main.roc\",\n" ++
+            "    roc # before the colon\n" ++
+            "        : # the compiler this app pins\n" ++
+            "        \"nightly-2026-July-31-aaaaaaa\",\n" ++
+            "}\n\nmain! = |_| {}",
+        "nightly-2026-August-1-bbbbbbb",
+    );
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expect(std.mem.find(u8, result, "\"nightly-2026-August-1-bbbbbbb\"") != null);
+    try std.testing.expect(std.mem.find(u8, result, "nightly-2026-July-31-aaaaaaa") == null);
 }
 
 test "fmt leaves a roc version pin alone when it must not be upgraded" {
@@ -9397,7 +9505,7 @@ test "issue 12145: fuzzed layouts are stable" {
             "\n" ++
             "v1, f2! #\n" ++
             "] { p3: \"\", p4: \"\" }\n",
-        "package [] { p4 # c4\n" ++
+        "package [] { p4: \"\" # c4\n" ++
             "\n" ++
             ", }\n",
         "import T4 exposing [ # c8\n" ++

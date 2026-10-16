@@ -56,9 +56,18 @@ pub fn resolveLoopback() Error!ResolvedFamily {
                 ppResult: *?*ADDRINFOA,
             ) callconv(.winapi) i32;
             extern "ws2_32" fn freeaddrinfo(pAddrInfo: ?*ADDRINFOA) callconv(.winapi) void;
+            extern "ws2_32" fn WSAStartup(wVersionRequested: u16, lpWSAData: *anyopaque) callconv(.winapi) i32;
+            extern "ws2_32" fn WSACleanup() callconv(.winapi) i32;
         };
         const AF_INET: i32 = 2;
         const AF_INET6: i32 = 23; // Windows
+
+        // Winsock calls fail until the process has started Winsock, and each
+        // start is paired with a cleanup. The startup data is never read; the
+        // buffer is larger than any version of `WSADATA`.
+        var wsa_data: [512]u8 align(8) = undefined;
+        if (ws2.WSAStartup(0x0202, &wsa_data) != 0) return error.NetworkError;
+        defer _ = ws2.WSACleanup();
 
         var result: ?*ws2.ADDRINFOA = null;
         if (ws2.getaddrinfo("localhost", null, null, &result) != 0) return error.NetworkError;

@@ -2,9 +2,9 @@
 //!
 //! For each block:
 //!   * It must pass `roc check` (driven by `parseAndCheckProgramForProblems`).
-//!   * If the block contains only top-level `expect` statements, the block's
-//!     `test_expect` roots run with the dev backend. Hosts without the dev
-//!     backend skip these blocks.
+//!   * If the block contains top-level `expect` statements, those expects are
+//!     lowered as test roots and run by the dev backend, as `roc test` runs them.
+//!     Hosts without the dev backend skip these blocks.
 //!   * Otherwise, the block is evaluated through `compileInspectedProgram`.
 //!
 //! When a block fails, the source is written to a debug file under
@@ -572,22 +572,79 @@ fn runCheck(
     return null;
 }
 
-/// Run the `test_expect` roots of an expect-only block with the dev backend.
-/// This matches the path used by `roc test` for top-level expects.
+/// Run a block's top-level expects the way `roc test` runs them, and return
+/// null when every one passes, or an owned message naming each that failed.
 fn runExpects(allocator: Allocator, source: []const u8) BuiltinDocTestError!?[]u8 {
-    const outcome = (if (prePublishedBuiltin()) |ppb|
-        test_helpers.runTopLevelExpectsWithBuiltin(allocator, std.testing.io, source, &.{}, ppb)
-    else
-        test_helpers.runTopLevelExpects(allocator, std.testing.io, source, &.{})) catch |err| {
-        return try dupeErr(allocator, "runTopLevelExpects: {s}", .{@errorName(err)});
+    var run = test_helpers.devEvalTopLevelExpects(allocator, source, &.{}, prePublishedBuiltin()) catch |err| {
+        if (err == error.TypeCheckError) return try dupeErr(allocator, "check produced diagnostics or problems", .{});
+        return try dupeErr(allocator, "devEvalTopLevelExpects: {s}", .{@errorName(err)});
     };
+    defer run.deinit(allocator);
 
-    return switch (outcome) {
-        .passed => null,
-        .failed => |counts| try dupeErr(allocator, "{d} of {d} expects failed", .{ counts.failed, counts.total }),
-        .no_expects => try dupeErr(allocator, "expect block lowered no test roots", .{}),
-        .checked_errors => try dupeErr(allocator, "check produced diagnostics or problems", .{}),
-    };
+    if (run.batch.results.len == 0) return try dupeErr(allocator, "expect block lowered no test roots", .{});
+
+    var message = std.ArrayList(u8).empty;
+    defer message.deinit(allocator);
+    for (run.batch.results, run.regions) |result, region| {
+        const failure: []const u8 = switch (result.outcome) {
+            .passed => |passed| if (passed) continue else "evaluated to False",
+            .crashed => |crash| crash,
+            .expect_err => |failure| failure.message,
+            .checked_error => "reached code that failed type checking",
+        };
+        if (message.items.len != 0) try message.appendSlice(allocator, "; ");
+        try message.print(allocator, "`{s}`: {s}", .{ source[region.start.offset..region.end.offset], failure });
+    }
+    var inline_failures: u64 = 0;
+    for (run.batch.expect_counts) |counts| inline_failures += counts.failed;
+    if (inline_failures != 0) {
+        if (message.items.len != 0) try message.appendSlice(allocator, "; ");
+        try message.print(allocator, "inline expects failed {d} time(s)", .{inline_failures});
+    }
+
+    if (message.items.len == 0) return null;
+    return try message.toOwnedSlice(allocator);
+}
+
+test "runExpects passes a true top-level expect" {
+    const allocator = std.testing.allocator;
+    const result = try runExpects(allocator, "expect \"ab\".concat(\"cd\") == \"abcd\"\n");
+    defer if (result) |msg| allocator.free(msg);
+    try testing.expectEqual(@as(?[]u8, null), result);
+}
+
+test "runExpects reports a false top-level expect" {
+    const allocator = std.testing.allocator;
+    const result = try runExpects(allocator, "expect \"ab\".concat(\"cd\") == \"abXd\"\n");
+    defer if (result) |msg| allocator.free(msg);
+    try testing.expect(result != null);
+}
+
+test "runExpects reports only the false expect of a block" {
+    const allocator = std.testing.allocator;
+    const result = try runExpects(allocator,
+        \\expect 1 + 1 == 2
+        \\
+        \\expect 2 + 2 == 5
+        \\
+    );
+    defer if (result) |msg| allocator.free(msg);
+    try testing.expectEqualStrings("`expect 2 + 2 == 5`: evaluated to False", result orelse return error.TestUnexpectedResult);
+}
+
+test "runExpects reports a false inline expect a top-level expect reaches" {
+    const allocator = std.testing.allocator;
+    const result = try runExpects(allocator,
+        \\checked = |n| {
+        \\    expect n > 10
+        \\    n
+        \\}
+        \\
+        \\expect checked(3) == 3
+        \\
+    );
+    defer if (result) |msg| allocator.free(msg);
+    try testing.expect(result != null);
 }
 
 fn expectRunExpectsMessage(source: []const u8, expected: ?[]const u8) BuiltinDocTestError!void {
@@ -607,11 +664,11 @@ test "runExpects passes a true expect" {
 }
 
 test "runExpects fails a false expect" {
-    try expectRunExpectsMessage("expect 1.I64 == 2\n", "1 of 1 expects failed");
+    try expectRunExpectsMessage("expect 1.I64 == 2\n", "`expect 1.I64 == 2`: evaluated to False");
 }
 
 test "runExpects counts each failed expect" {
-    try expectRunExpectsMessage("expect 1.I64 == 1\nexpect 1.I64 == 2\n", "1 of 2 expects failed");
+    try expectRunExpectsMessage("expect 1.I64 == 1\nexpect 1.I64 == 2\n", "`expect 1.I64 == 2`: evaluated to False");
 }
 
 test "runExpects passes a true expect that calls a Builtin function" {
@@ -619,7 +676,7 @@ test "runExpects passes a true expect that calls a Builtin function" {
 }
 
 test "runExpects fails a false expect that calls a Builtin function" {
-    try expectRunExpectsMessage("expect List.first([3.I64]) == Ok(4)\n", "1 of 1 expects failed");
+    try expectRunExpectsMessage("expect List.first([3.I64]) == Ok(4)\n", "`expect List.first([3.I64]) == Ok(4)`: evaluated to False");
 }
 
 test "runExpects fails a true expect whose callee fails an inline expect" {
@@ -631,7 +688,7 @@ test "runExpects fails a true expect whose callee fails an inline expect" {
         \\
         \\expect check(1.I64) == 1
         \\
-    , "1 of 1 expects failed");
+    , "inline expects failed 1 time(s)");
 }
 
 test "runExpects fails an expect that crashes" {
@@ -641,11 +698,11 @@ test "runExpects fails an expect that crashes" {
         \\
         \\expect boom(1)
         \\
-    , "1 of 1 expects failed");
+    , "`expect boom(1)`: boom");
 }
 
 test "runExpects runs only expects in a block with a definition" {
-    try expectRunExpectsMessage("x = 1.I64\n\nexpect x == 2\n", "1 of 1 expects failed");
+    try expectRunExpectsMessage("x = 1.I64\n\nexpect x == 2\n", "`expect x == 2`: evaluated to False");
 }
 
 test "runExpects reports a block without expects" {

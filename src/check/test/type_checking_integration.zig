@@ -5484,10 +5484,9 @@ test "check type - if with all crash branches makes following code unreachable" 
         \\}
     ;
 
-    try checkTypesModule(source, .{ .pass_with_warnings = .{
-        .def = .last_def,
-        .warnings = &.{"Unreachable Code"},
-    } }, "Bool -> Str");
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertLastDefTypeWithCanDiagnostics("Bool -> Str", &.{.unreachable_code});
 }
 
 test "check type - constant if condition warns" {
@@ -8009,7 +8008,9 @@ test "check type - unreachable final expression does not constrain early return"
         \\}
         \\result = f(1.I64)
     ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "result" } }, "I64");
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertLastDefTypeWithCanDiagnostics("I64", &.{.unreachable_code});
 }
 
 test "check type - unreachable statements do not constrain early return" {
@@ -8021,7 +8022,9 @@ test "check type - unreachable statements do not constrain early return" {
         \\}
         \\result = f(1.I64)
     ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "result" } }, "I64");
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertLastDefTypeWithCanDiagnostics("I64", &.{.unreachable_code});
 }
 
 test "check type - final infinite loop can satisfy annotated return type" {

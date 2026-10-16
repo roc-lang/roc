@@ -10729,6 +10729,55 @@ test "RC single-incoming join parameter dismantles its fields" {
     try testing.expectEqual(@as(usize, 0), f.countRc(state, .decref));
 }
 
+test "RC owned same-value binding dismantles its fields beside a whole move on another branch" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const cond = try f.local(.i64);
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const state = try f.local(f.pair_list);
+    const data = try f.local(f.pair_list);
+    const kept = try f.local(f.list_i64);
+    const field = try f.local(f.list_i64);
+    const updated = try f.local(f.list_i64);
+    const rebuilt = try f.local(f.pair_list);
+    const moved = try f.local(f.pair_list);
+    const join_id = f.freshJoinPointId();
+
+    // `data` is bound once from the join cell `state`. One arm moves it
+    // whole into a call, so it is solved owned; the other arm reads both
+    // fields and updates one in place. The owned binding holds its own unit, so the
+    // read fields are takes: no retain leaves the update a second reference.
+    const ret_rebuilt = try f.ret(rebuilt);
+    const rebuild = try f.assignStruct(rebuilt, &.{ kept, updated }, ret_rebuilt);
+    const update = try f.assignLowLevel(updated, &.{field}, LIR.LowLevel.RcEffect.runtimeUniqueness(1), rebuild);
+    const take = try f.assignRefField(field, data, 1, update);
+    const keep = try f.assignRefField(kept, data, 0, take);
+    const ret_moved = try f.ret(moved);
+    const move_whole = try f.assignCall(moved, &.{data}, ret_moved);
+    const choose = try f.switchStmt(cond, keep, move_whole, null);
+    const alias = try f.assignRefLocal(data, state, choose);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const initialize = try f.setLocal(state, pair, .initialize_join_param, jump);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.span(&.{state}),
+        .body = alias,
+        .remainder = initialize,
+    } }, .test_fixture);
+    const make_pair = try f.assignStruct(pair, &.{ first, second }, join);
+    const make_second = try f.assignList(second, &.{}, make_pair);
+    const make_first = try f.assignList(first, &.{}, make_second);
+    const body = try f.assignI64(cond, 1, make_first);
+    _ = try f.addProc(&.{}, body, f.pair_list);
+
+    try f.run();
+    try testing.expectEqual(@as(usize, 0), f.countRc(field, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(kept, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(data, .decref));
+}
+
 test "RC loop join reinitialization supplies fresh field units" {
     try testLoopJoinFieldUnits(true);
 }
