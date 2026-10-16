@@ -643,6 +643,9 @@ pub const ModuleState = struct {
     validation: can.Can.Validation = .checking,
     /// Declared source pin from the parse/canonicalization producer.
     has_source_version_pin: bool = false,
+    /// Whether this module's source has syntax errors, so later stages work
+    /// from a parse that recovered past them.
+    has_syntax_errors: bool = false,
     /// Owned semantic module payload. Earlier phases populate only `module_env`;
     /// type checking later fills in the checked artifact.
     semantic: ?OwnedSemanticModuleData = null,
@@ -3975,6 +3978,7 @@ pub const Coordinator = struct {
         mod.source_file_state = result.source_file_state;
         mod.replaceModuleEnv(result.module_env);
         mod.cached_ast = result.cached_ast;
+        mod.has_syntax_errors = result.cached_ast.hasErrors();
 
         // Append reports - we take ownership, so clear result.reports after copying
         for (result.reports.items) |rep| {

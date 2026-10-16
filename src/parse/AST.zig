@@ -317,9 +317,10 @@ pub fn tokenizedRegionToRegion(self: *AST, tokenized_region: TokenizedRegion) ba
         safe_end_idx;
 
     const start_region = self.tokens.resolve(safe_start_idx);
-    // Protect against underflow when final_end_idx is 0
-    const end_idx = if (final_end_idx > 0) final_end_idx - 1 else 0;
-    const end_region = self.tokens.resolve(end_idx);
+    // A span of no tokens, such as a missing expression at the end of the
+    // file, is the empty region where its first token would start.
+    if (final_end_idx <= safe_start_idx) return .{ .start = start_region.start, .end = start_region.start };
+    const end_region = self.tokens.resolve(final_end_idx - 1);
     return .{
         .start = start_region.start,
         .end = end_region.end,

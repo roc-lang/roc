@@ -65,10 +65,10 @@ test "issue 12179: checking an app with a syntax error reports its own errors, n
             try reporting.renderReportToPlain(report, &rendered.writer, reporting.ReportingConfig.initForTesting());
             const text = rendered.written();
 
-            if (std.mem.indexOf(u8, text, "unclosed in main") != null) {
+            if (std.mem.find(u8, text, "unclosed in main") != null) {
                 main_errors += 1;
                 std.debug.print("unexpected error from the sibling main.roc: {s}\n", .{report.title});
-            } else if (std.mem.indexOf(u8, text, "hello world") != null) {
+            } else if (std.mem.find(u8, text, "hello world") != null) {
                 other_errors += 1;
             }
         }
@@ -109,7 +109,7 @@ const ReportCounts = struct {
 
 /// Count error reports titled `title`, and error reports whose rendered text
 /// contains `text`.
-fn countErrorReports(build_env: *BuildEnv, title: []const u8, text: []const u8) !ReportCounts {
+fn countErrorReports(build_env: *BuildEnv, title: []const u8, text: []const u8) (std.mem.Allocator.Error || error{WriteFailed})!ReportCounts {
     const gpa = std.testing.allocator;
     const drained = try build_env.drainReports();
     defer build_env.freeDrainedReports(drained);
@@ -123,7 +123,7 @@ fn countErrorReports(build_env: *BuildEnv, title: []const u8, text: []const u8) 
             var rendered: std.Io.Writer.Allocating = .init(gpa);
             defer rendered.deinit();
             try reporting.renderReportToPlain(report, &rendered.writer, reporting.ReportingConfig.initForTesting());
-            if (std.mem.indexOf(u8, rendered.written(), text) != null) counts.containing += 1;
+            if (std.mem.find(u8, rendered.written(), text) != null) counts.containing += 1;
         }
     }
     return counts;

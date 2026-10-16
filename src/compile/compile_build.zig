@@ -339,6 +339,9 @@ pub const BuildEnv = struct {
     /// each to its module's parse task, so these files are read and parsed
     /// once per build.
     discovered_root_parse: ?DiscoveredParse = null,
+    /// Whether the held root parse's syntax errors were reported because the
+    /// build stopped before the root's parse task, which reports them.
+    discovered_root_syntax_reported: bool = false,
     discovered_entry_parse: ?DiscoveredParse = null,
     discovered_platform_parse: ?DiscoveredParse = null,
 
@@ -1803,10 +1806,8 @@ pub const BuildEnv = struct {
                 try self.emitWorkspaceReport(diagnostic.title, diagnostic.message);
             }
         }
-        // Build the sink order so the reports above are drainable:
-        // the build aborts here, so nothing else will order them.
-        try self.sink.buildOrder(&[_][]const u8{"workspace"}, &[_][]const u8{"root"}, &[_]u32{0});
-        self.sink.tryEmit();
+        // The build aborts here, so nothing else will order the reports above.
+        try self.makeWorkspaceReportsDrainable();
     }
 
     fn resolveAndMaterialize(
@@ -2002,9 +2003,37 @@ pub const BuildEnv = struct {
         try self.sink.emitReport("workspace", "root", rep);
     }
 
+    /// Order the reports of a build that stops before compiling, so they can
+    /// be drained. The root's syntax errors, which its parse task would have
+    /// reported, come first, ahead of what stopped the build.
     fn makeWorkspaceReportsDrainable(self: *BuildEnv) Allocator.Error!void {
+        if (self.discovered_root_parse) |*parsed| {
+            if (parsed.ast.hasErrors()) {
+                if (!self.discovered_root_syntax_reported) {
+                    try self.emitSyntaxReports("main", parsed);
+                    self.discovered_root_syntax_reported = true;
+                }
+                try self.sink.buildOrder(&[_][]const u8{ "main", "workspace" }, &[_][]const u8{ parsed.path, "root" }, &[_]u32{ 0, 0 });
+                self.sink.tryEmit();
+                return;
+            }
+        }
         try self.sink.buildOrder(&[_][]const u8{"workspace"}, &[_][]const u8{"root"}, &[_]u32{0});
         self.sink.tryEmit();
+    }
+
+    /// Report the syntax errors of a file dependency discovery parsed, filed
+    /// under `pkg_name` and the file's own path.
+    fn emitSyntaxReports(self: *BuildEnv, pkg_name: []const u8, parsed: *const DiscoveredParse) Allocator.Error!void {
+        const ast = parsed.ast;
+        for (ast.tokenize_diagnostics.items) |diagnostic| {
+            const report = try ast.tokenizeDiagnosticToReport(diagnostic, self.gpa, parsed.path);
+            try self.sink.emitReport(pkg_name, parsed.path, report);
+        }
+        for (ast.parse_diagnostics.items) |diagnostic| {
+            const report = try ast.parseDiagnosticToReport(&parsed.module_env.common, diagnostic, self.gpa, parsed.path);
+            try self.sink.emitReport(pkg_name, parsed.path, report);
+        }
     }
 
     /// Emit the same "Absolute Platform Path" report the CLI run path produces
