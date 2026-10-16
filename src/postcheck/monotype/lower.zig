@@ -2200,6 +2200,19 @@ fn relateFunctionRequestInterface(graph: *InstGraph, public_fn: NodeId, private_
     try relateRequestComponentAtWidth(graph, public_fn, private_fn, .exact);
 }
 
+/// Relate a fresh checked root to a request carrying generated-private
+/// evidence: first to the request's checked-source interface, then to the
+/// request itself. A root whose checked signature leaves a slot polymorphic
+/// takes that slot's public interface from the source, so the opaque
+/// relation to the request's private representation always meets the
+/// matching public nominal (design.md, generated-private requests).
+fn relateGeneratedPrivateRequestInterface(graph: *InstGraph, root_fn: NodeId, request_fn: NodeId) Allocator.Error!void {
+    if (graph.requestSourceInterface(request_fn)) |source_fn| {
+        try relateFunctionRequestInterface(graph, root_fn, source_fn);
+    }
+    try relateFunctionRequestInterface(graph, root_fn, request_fn);
+}
+
 /// Relate a fresh checked procedure-template instance to a caller request that the
 /// checker formed through a construction-width relation. Ordinary structure
 /// still unifies exactly; only explicit optional/defaulted record fields may
@@ -10116,10 +10129,7 @@ const Builder = struct {
             if (template.target == .hosted) {
                 try relateFunctionRequestInterface(source_ctx.graph, root_node, request_fn_node);
             } else if (try source_ctx.graph.containsGeneratedPrivate(request_fn_node)) {
-                if (source_ctx.graph.requestSourceInterface(request_fn_node)) |source_fn_node| {
-                    try relateFunctionRequestInterface(source_ctx.graph, root_node, source_fn_node);
-                }
-                try relateFunctionRequestInterface(source_ctx.graph, root_node, request_fn_node);
+                try relateGeneratedPrivateRequestInterface(source_ctx.graph, root_node, request_fn_node);
             } else {
                 try source_ctx.graph.unify(root_node, request_fn_node);
             }
@@ -12713,13 +12723,11 @@ const Builder = struct {
                 .default_root => {},
             }
         }
-        const request_contains_generated_private = try nested_ctx.graph.containsGeneratedPrivate(request_fn_node);
-        if (request_contains_generated_private) {
-            if (nested_ctx.graph.requestSourceInterface(request_fn_node)) |source_fn_node| {
-                try relateFunctionRequestInterface(nested_ctx.graph, root_node, source_fn_node);
-            }
+        if (try nested_ctx.graph.containsGeneratedPrivate(request_fn_node)) {
+            try relateGeneratedPrivateRequestInterface(nested_ctx.graph, root_node, request_fn_node);
+        } else {
+            try relateFunctionRequestInterface(nested_ctx.graph, root_node, request_fn_node);
         }
-        try relateFunctionRequestInterface(nested_ctx.graph, root_node, request_fn_node);
         return .{ .lowering = .{
             .request_fn_node = request_fn_node,
             .capture_entry_guards = capture_entry_guards,
@@ -53561,7 +53569,7 @@ const BodyContext = struct {
             reachability,
         )) return;
         if (try self.graph.containsGeneratedPrivate(request_fn_node)) {
-            try relateFunctionRequestInterface(self.graph, root_node, request_fn_node);
+            try relateGeneratedPrivateRequestInterface(self.graph, root_node, request_fn_node);
         } else {
             try self.graph.unify(root_node, request_fn_node);
         }
