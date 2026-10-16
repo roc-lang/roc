@@ -8,6 +8,7 @@
 //! show their own declaration's documentation too.
 
 const std = @import("std");
+const compiled_builtins = @import("compiled_builtins");
 const lsp = @import("lsp");
 const SyntaxChecker = lsp.syntax.SyntaxChecker;
 const uri_util = lsp.uri;
@@ -22,6 +23,7 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "issue 12292: hover on a value of an aliased import shows its documentation", .run = hoverOnAliasedImportValueShowsItsDocs },
     .{ .name = "issue 12292: hover on an associated item through a type alias shows its documentation", .run = hoverOnAliasAssociatedItemShowsItsDocs },
     .{ .name = "issue 12292: hover on a literal shows no documentation of the enclosing definition", .run = hoverOnLiteralShowsNoEnclosingDocs },
+    .{ .name = "issue 12292: goto definition follows resolved imports and type annotations", .run = gotoDefinitionFollowsResolvedImportsAndTypes },
 };
 
 const Sibling = struct {
@@ -65,7 +67,10 @@ const Fixture = struct {
             allocator.free(publish_sets);
         }
         var problem_count: usize = 0;
-        for (publish_sets) |set| problem_count += set.diagnostics.len;
+        for (publish_sets) |set| {
+            problem_count += set.diagnostics.len;
+            for (set.diagnostics) |diagnostic| std.debug.print("\n{s}\n", .{diagnostic.message});
+        }
         try std.testing.expectEqual(@as(usize, 0), problem_count);
     }
 
@@ -225,4 +230,57 @@ fn hoverOnLiteralShowsNoEnclosingDocs() integration_spec.SpecError!void {
     defer fixture.deinit();
 
     try fixture.expectHover(4, 42, "Str", "Processes");
+}
+
+const helper_source =
+    \\Helper :: [].{
+    \\    Tone := [Loud, Quiet]
+    \\
+    \\    ## Shouts the text.
+    \\    shout : Str -> Str
+    \\    shout = |text| Str.with_ascii_uppercased(text)
+    \\}
+    \\
+;
+
+/// Goto definition on an import's module and exposed items, on imported and
+/// builtin types in annotations, and on the qualifier of a builtin call.
+fn gotoDefinitionFollowsResolvedImportsAndTypes() integration_spec.SpecError!void {
+    var fixture: Fixture = undefined;
+    try fixture.init(
+        \\app [process_string] {{ pf: platform "{s}" }}
+        \\
+        \\import Helper exposing [shout, Tone]
+        \\
+        \\describe : Tone -> Str
+        \\describe = |_| "tone"
+        \\
+        \\count : List(Str) -> U64
+        \\count = |xs| List.len(xs)
+        \\
+        \\process_string : Str -> Str
+        \\process_string = |text| Str.concat(shout(text), describe(Tone.Loud)).concat(count([text]).to_str())
+        \\
+    , "main.roc", &.{.{ .name = "Helper.roc", .source = helper_source }});
+    defer fixture.deinit();
+
+    // `Helper` in the import goes to the module, `shout` and `Tone` in its
+    // exposing list to their declarations.
+    try fixture.expectDefinition(2, 9, "/Helper.roc", 0);
+    try fixture.expectDefinition(2, 25, "/Helper.roc", 5);
+    try fixture.expectDefinition(2, 32, "/Helper.roc", 1);
+    // `Tone` in an annotation goes to its declaration.
+    try fixture.expectDefinition(4, 12, "/Helper.roc", 1);
+
+    // `List` in an annotation, and the qualifier of `List.len`, go to the
+    // builtin `List` declaration.
+    const list_line = builtinLineOf("List(_item) :: [ProvidedByCompiler]");
+    try fixture.expectDefinition(7, 9, "/Builtin.roc", list_line);
+    try fixture.expectDefinition(8, 14, "/Builtin.roc", list_line);
+}
+
+/// The zero-based line of the Builtin source that contains `text`.
+fn builtinLineOf(text: []const u8) u32 {
+    const offset = std.mem.find(u8, compiled_builtins.builtin_source, text).?;
+    return @intCast(std.mem.countScalar(u8, compiled_builtins.builtin_source[0..offset], '\n'));
 }
