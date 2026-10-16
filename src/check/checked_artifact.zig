@@ -5822,6 +5822,15 @@ fn appendCheckedNominalDeclarationFromStatement(
         store,
         nominal_payload,
     );
+    if (builtin.mode == .debug) {
+        // The declaration's formals are exactly the roots its backing was
+        // built over, so instantiating them substitutes into that backing.
+        const declared_args = store.payload(declaration_root).nominal.args;
+        std.debug.assert(declared_args.len == declaration_formals.len);
+        for (declared_args, declaration_formals) |declared_arg, formal| {
+            std.debug.assert(declared_arg == formal.root);
+        }
+    }
     try appendCheckedNominalDeclarationFromPayload(allocator, store, declaration_root, backing, declared_record_fields);
 }
 
@@ -6672,7 +6681,14 @@ fn appendNominalDeclarationRootPayload(
     const nominal = owned_payload.nominal;
 
     const key_info = try checkedTypePayloadKeyBuild(allocator, names, store, owned_payload);
-    if (store.rootForKey(key_info.key)) |existing| {
+    // A key names a type only up to a consistent renaming of its variables,
+    // so a generic declaration's key also names applications of the nominal
+    // to other variables of the same names (`A(s)` written inside another
+    // declaration's body, over that declaration's `s`). Only a key without
+    // variables identifies one type, so only such a key selects an existing
+    // root.
+    const existing_root = if (key_info.contains_identity_variables) null else store.rootForKey(key_info.key);
+    if (existing_root) |existing| {
         const index: usize = @backingInt(existing);
         if (index >= store.payloads.items.len) {
             checkedArtifactInvariant("nominal declaration root key referenced a missing payload", .{});
@@ -6681,9 +6697,9 @@ fn appendNominalDeclarationRootPayload(
             checkedArtifactInvariant("nominal declaration key collided with a non-nominal payload", .{});
         }
         const existing_nominal = store.payloads.items[index].nominal;
-        // The canonical key already includes the semantic formal-arg shapes.
-        // The checked root ids can differ when the same nominal declaration is
-        // reached through a declaration root and a use-site root.
+        // The checked root ids can differ when the same closed nominal
+        // declaration is reached through a declaration root and a use-site
+        // root.
         if (existing_nominal.name != nominal.name or
             existing_nominal.origin_module != nominal.origin_module or
             !CheckedModuleArtifactKey.eql(existing_nominal.owner_module, nominal.owner_module) or
