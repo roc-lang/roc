@@ -9757,7 +9757,7 @@ test "certify flags a dismantle that leaves a stored unit unspent" {
 /// slot 1 through one view and the other slots through a second view
 /// (marked with `second_view_shell`) and directly. `release_a` decides
 /// whether slot 0 is spent.
-fn buildNestedViewTakes(f: *CertifyTest, second_view_shell: []const u32, release_a: bool) !void {
+fn buildNestedViewTakes(f: *CertifyTest, second_view_shell: []const u32, release_a: bool) Allocator.Error!void {
     const outer_layout = try f.layouts.putStructFields(&.{
         .{ .index = 0, .layout = f.pair_str },
         .{ .index = 1, .layout = .str },
