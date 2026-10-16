@@ -118,7 +118,6 @@ pub const LowerToLirHarnessError = std.mem.Allocator.Error ||
         BuiltinLowLevelAnnotationMustBeFunction,
         DownloadFailed,
         ExpectedPlatformString,
-        ExpectedString,
         FileError,
         FileNotFound,
         Internal,
