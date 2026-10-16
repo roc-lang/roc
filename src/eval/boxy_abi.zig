@@ -376,9 +376,17 @@ pub fn roc_boxy_drive_pending(
     // The conversion skipped on the way out to this caller. It belongs to
     // the first pending call; later ones are left inside that call's extent.
     var outermost: ?PendingConversion = null;
+    // The first pending call's own site: a later call's value, once
+    // converted out of its own extent, is stored as the first call's
+    // statement stores it before the outermost conversion applies.
+    var first_site: ?PendingConversion = null;
     var first = true;
     while (tail.pending) |call| {
         tail.pending = null;
+        const back_to_first: ?PendingConversion = if (first_site) |site|
+            (if (site.layout == call.site_layout and site.desc == call.result_desc and call.conversion == null and call.callee_boundary == null) null else site)
+        else
+            null;
         var args = tail.args;
         var arg_descs = tail.arg_descs;
         tail.args = .empty;
@@ -388,7 +396,7 @@ pub fn roc_boxy_drive_pending(
         if (runtime) |g| enter(g);
         const args_ptr: ?[*]const u8 = if (call.args_len == 0) null else args.items.ptr;
         const arg_descs_ptr: ?[*]const ?*const BoxyTypeDesc = if (arg_descs.items.len == 0) null else arg_descs.items.ptr;
-        if (call.conversion == null and call.callee_boundary == null and outermost == null and call.site_layout == expected_layout) {
+        if (call.conversion == null and call.callee_boundary == null and back_to_first == null and outermost == null and call.site_layout == expected_layout) {
             callErasedOnce(call.fn_ptr, ret, args_ptr, call.capture, null, out_desc, call.result_desc, expected_layout, arg_descs_ptr, call.arg_desc_keys_start, call.arg_desc_keys_len, call.arg_layouts_start, call.arg_layouts_len);
             if (tail.pending == null) {
                 if (result_desc) |own| {
@@ -405,7 +413,7 @@ pub fn roc_boxy_drive_pending(
                 var value = site_value;
                 var value_layout = site_layout;
                 var value_desc = site_desc;
-                for ([_]?PendingConversion{ call.conversion, call.callee_boundary, outermost }) |skipped| {
+                for ([_]?PendingConversion{ call.conversion, call.callee_boundary, back_to_first, outermost }) |skipped| {
                     const conversion = skipped orelse continue;
                     const stored_as = if (conversion.keeps_own_desc) value_desc else conversion.desc;
                     const converted = g.runtime.materializeCallResult(hooks(g), value, value_layout, value_desc, stored_as, layoutIdx(conversion.layout)) catch
@@ -428,6 +436,7 @@ pub fn roc_boxy_drive_pending(
         if (runtime) |g| leave(g);
         if (first) {
             outermost = call.conversion;
+            first_site = .{ .layout = call.site_layout, .desc = call.result_desc, .keeps_own_desc = false };
             first = false;
         }
         builtins.erased_callable.decref(call.closure, tailOps());
@@ -1850,6 +1859,43 @@ pub fn roc_boxy_list_concat(
         &boxyListElementDecref,
         update_mode_a,
         update_mode_b,
+        ctx.g.runtime.roc_ops,
+    );
+}
+
+/// Append a range of another list using the element descriptor for copy and
+/// drop logic.
+pub fn roc_boxy_list_append_sublist(
+    out: *RocList,
+    list_bytes: ?[*]u8,
+    list_len: usize,
+    list_cap: usize,
+    src_bytes: ?[*]u8,
+    src_len: usize,
+    src_cap: usize,
+    start: u64,
+    len: u64,
+    alignment: u32,
+    element_width: usize,
+    elem_layout: u32,
+    list_desc: *const BoxyTypeDesc,
+    update_mode: builtins.utils.UpdateMode,
+) callconv(.c) void {
+    var ctx = enterBoxyList(list_desc, elem_layout);
+    defer leave(ctx.g);
+    out.* = builtins.list.listAppendSublist(
+        .{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap },
+        .{ .bytes = src_bytes, .length = src_len, .capacity_or_alloc_ptr = src_cap },
+        start,
+        len,
+        alignment,
+        element_width,
+        ctx.elements_refcounted,
+        @ptrCast(&ctx),
+        &boxyListElementIncref,
+        @ptrCast(&ctx),
+        &boxyListElementDecref,
+        update_mode,
         ctx.g.runtime.roc_ops,
     );
 }

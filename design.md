@@ -5112,7 +5112,10 @@ knowledge.
 Checking errors are dependency-local for hoistability. A malformed expression,
 unresolved static-dispatch call, type error, or other checker-owned diagnostic
 poisons the expression that owns the error and any expression that explicitly
-depends on it. It does not poison sibling definitions, unrelated top-level
+depends on it. A selected root whose expression reaches code checking replaced
+with its error (a dispatch rejected after selection, whose argument may read
+runtime locals) is therefore pruned and evaluates at runtime, in source
+order, where it reaches the error. It does not poison sibling definitions, unrelated top-level
 values, unrelated imported modules, or the checked program as a whole. A checked
 CheckedModule data that carries diagnostics is still a valid input to every independent
 compile-time-evaluation decision whose expression/dependency region is
@@ -17078,7 +17081,10 @@ slot's `Present` value, and an extension read (`ErasedArgDescRead.tag_ext`)
 for an open tag row's extension. Only a descriptor no earlier parameter holds
 is read from its call-site key. When two earlier parameters hold it, the nearer one is
 read: the one the other holds, or the other's backing (a nominal's record,
-whose fields the nominal's descriptor also lists).
+whose fields the nominal's descriptor also lists). Otherwise the
+representation occurs at two places in the argument (a field type inside a
+nested record and in its parent), and within one value a representation has
+one descriptor, so the first parameter holding it is read.
 
 An evidence-only descriptor collected inside an evidence dispatcher's
 representation, such as a presence slot of a record dispatcher, takes the
@@ -17099,6 +17105,14 @@ recursion. A local whose representation has dynamic contents but no planned
 descriptor of its own (an alias of a `Dict`) is described by its storage's
 planned descriptor when the frame holds it or it is static; only otherwise
 does the value that fills the local bring its descriptor.
+
+A local that several producers fill (the result of each branch of an `if` or
+`match`) is described the same way on every path. A concrete record, tuple, or
+tag union constructed into a target that has no descriptor of its own is
+therefore described by its static descriptor, never by a descriptor local
+only that branch writes. Likewise a descriptor slot that the body fills later
+is not read by the templates initialized at procedure entry. A pattern that
+checking rejected binds nothing, so planning gives it no representation.
 
 A runtime adapter rewrites bytes through descriptors, and descriptors do not
 describe a callable's erased-call convention. A value holding a callable in its
@@ -19334,7 +19348,10 @@ is represented. The erased-call runtime converts what a callee it
 invoked returns to the layout and result descriptor of the site that called
 it; when that callee leaves a call pending instead, the runtime records this
 boundary conversion on the pending call too, and applies it after the call's
-own conversion and before the chain's first. The caller's own result descriptor applies last, as it would
+own conversion and before the chain's first. A value that comes back from a
+later call in the chain is stored as the first call's statement stores it
+(its site layout and result descriptor) before the chain's first conversion
+applies, since the in-between conversions it skipped end at that site. The caller's own result descriptor applies last, as it would
 have to the value its callee returned.
 
 Backends follow these marks and nothing else: a deferred call becomes a call

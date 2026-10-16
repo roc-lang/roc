@@ -10968,7 +10968,7 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitListAppendSublist(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        const abi = self.layouts().builtinListAbi(self.localLayout(target));
+        const abi = self.boxyAwareBuiltinListAbi(self.localLayout(target));
         if (abi.elem_size == 0) {
             // Zero-width elements: only the length grows.
             const count = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 3)).ptr, self.localLayout(GuardedList.at(args, 3))), self.ptrSizedIntType(), false);
@@ -10989,9 +10989,10 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 3)).ptr, self.localLayout(GuardedList.at(args, 3))), .i64, false));
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
-        try self.appendListElementRcArgs(&call_args, abi, true, true);
+        const boxy_elem = self.boxyListElementDescForLocals(abi, &.{ GuardedList.at(args, 0), GuardedList.at(args, 1) }, target);
+        try self.appendListElemDescOrRcArgs(&call_args, abi, boxy_elem, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_append_sublist)), call_args.types.items, call_args.values.items);
+        try self.callListBoxyOrBuiltin(boxy_elem, "roc_boxy_list_append_sublist", builtinSymbol(LowLevelBuiltins.listOp(.list_append_sublist)), &call_args);
     }
 
     /// Store the canonical value for a list of zero-width elements into

@@ -16346,11 +16346,15 @@ const ProcBodyBuilder = struct {
                 // A parent that an earlier parent itself holds, or that is
                 // the earlier one's backing (a nominal's record, whose fields
                 // the nominal's descriptor also lists), is the nearer one.
+                // Otherwise the representation occurs at two places in the
+                // argument (a record's field and the same field type inside
+                // its nested record); within one value a representation has
+                // one descriptor, so the first parent holding it is read.
                 const earlier_rep = self.descriptorStorageRep(params[earlier.descriptor_index].rep);
                 const nearer = self.repBacksRep(earlier_rep, parent_rep) or
                     (try self.immediateNestedDescriptorIndexForRep(earlier_rep, parent_rep)) != null or
                     (try self.immediateTagReadDescriptorForRep(earlier_rep, parent_rep, earlier.descriptor_index)) != null;
-                if (!nearer) boxyLowerInvariant("boxy erased argument descriptor had multiple direct parent parameters");
+                if (!nearer) continue;
             }
             source = projected;
         }
@@ -32618,10 +32622,13 @@ const ProcBodyBuilder = struct {
             // descriptor as a candidate the aggregate construction records; ARC
             // adopts it only when a field actually carries a descriptor, so
             // aggregates whose fields stay concrete keep the concrete plan.
-            if (!self.aggregateFieldsMayCarryDescriptor(fields) and
-                self.parent.result.store.getLocal(target).boxy_desc == null)
-            {
-                return .{};
+            if (self.parent.result.store.getLocal(target).boxy_desc == null) {
+                if (!self.aggregateFieldsMayCarryDescriptor(fields)) return .{};
+                // A target with no descriptor of its own can receive values
+                // from other producers too (each branch of a `match`), so
+                // the construction records the static descriptor rather than
+                // giving the target a descriptor only this path writes.
+                return .{ .contents_desc = try self.parent.staticDescRefForRep(identity_rep) };
             }
             return try self.constructedConcreteAggregateDescriptorForFields(target, identity_rep, fields);
         }
@@ -32680,10 +32687,14 @@ const ProcBodyBuilder = struct {
         const identity_rep = self.descriptorStorageRep(rep_id);
         const rep = self.parent.plan.representations.items[@backingInt(identity_rep)];
         if (rep.descriptor == null and !rep.contains_dynamic and
-            self.parent.result.store.getLocal(target).boxy_desc == null and
-            !self.aggregateFieldsMayCarryDescriptor(fields))
+            self.parent.result.store.getLocal(target).boxy_desc == null)
         {
-            return .{};
+            if (!self.aggregateFieldsMayCarryDescriptor(fields)) return .{};
+            // A concrete union is described by its static descriptor. Its
+            // target can receive values from other producers too (each
+            // branch of an `if`), so it gets no descriptor only this path
+            // writes.
+            return .{ .desc = try self.parent.staticDescRefForRep(identity_rep) };
         }
 
         const snapshot = try self.snapshotDescriptorBindings();
@@ -42020,6 +42031,23 @@ const ProcBodyBuilder = struct {
         var continuation = next;
         if (self.descriptor_slots.len == 0) return continuation;
 
+        // A slot a body statement writes, whose descriptor is not static, is
+        // not initialized here; the templates initialized here run before
+        // that write, so none of them reads it.
+        var late_slots = std.ArrayList(LIR.LocalId).empty;
+        defer late_slots.deinit(self.parent.allocator);
+        for (self.descriptor_slots, self.descriptor_slot_reps, 0..) |maybe_local, maybe_rep, slot_index| {
+            const local = maybe_local orelse continue;
+            const slot_rep = maybe_rep orelse continue;
+            if (outer) |snapshot| {
+                if (snapshot.slots[slot_index] == local and snapshot.slot_reps[slot_index] == slot_rep) continue;
+            }
+            if (std.mem.findScalar(LIR.LocalId, self.runtime_initialized_descriptor_locals.items, local) == null) continue;
+            const materialization = try self.descriptorMaterializationForKnownRepExcludingLocal(slot_rep, local);
+            if (materialization.captures.len == 0 and materialization.desc == .static) continue;
+            try late_slots.append(self.parent.allocator, local);
+        }
+
         // A slot's template may capture another slot, so the static
         // initializers, which capture nothing, run before all the others.
         var static_inits = std.ArrayList(struct { local: LIR.LocalId, desc: LIR.BoxyDescRef }).empty;
@@ -42045,7 +42073,7 @@ const ProcBodyBuilder = struct {
             const materialization = if (runtime_initialized)
                 try self.descriptorMaterializationForKnownRepExcludingLocal(slot_rep, local)
             else
-                try self.descriptorMaterializationForKnownRep(slot_rep);
+                try self.descriptorMaterializationForKnownRepExcludingLocals(slot_rep, late_slots.items);
             if (materialization.captures.len == 0 and materialization.desc == .static) {
                 try static_inits.append(self.parent.allocator, .{ .local = local, .desc = materialization.desc });
                 continue;

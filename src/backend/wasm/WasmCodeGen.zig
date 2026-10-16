@@ -6467,6 +6467,7 @@ pub fn registerBoxySymbolTargets(self: *Self) HostedSymbolError!void {
     try self.registerBoxySymbol("roc_boxy_caller_drives", &.{.i32}, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_return_pending", &.{ .i32, .i32, .i32 }, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_list_concat", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i64 }, &.{});
+    try self.registerBoxySymbol("roc_boxy_list_append_sublist", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i64, .i64, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_prepend", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_sublist", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i64, .i64, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_drop_at", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i64, .i32, .i32, .i32 }, &.{});
@@ -10392,7 +10393,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .list_append_sublist => {
             // list_append_sublist(list, src, start, len) -> extended list
-            try self.generateLLListAppendSublist(args, ll.ret_layout, ll.unique_args);
+            try self.generateLLListAppendSublist(args, ll.ret_layout, ll.target, ll.unique_args);
         },
         .list_slack_unique => {
             // list_slack_unique(list) -> U64
@@ -15410,7 +15411,7 @@ fn generateLLListAppendLeBytes(self: *Self, args: anytype, unique_args: u64) All
 }
 
 /// Generate LowLevel list_append_sublist: append a range of another list.
-fn generateLLListAppendSublist(self: *Self, args: anytype, ret_layout: layout.Idx, unique_args: u64) Allocator.Error!void {
+fn generateLLListAppendSublist(self: *Self, args: anytype, ret_layout: layout.Idx, target: ?ProcLocalId, unique_args: u64) Allocator.Error!void {
     const list_abi = self.builtinInternalListAbi("wasm.generateLLListAppendSublist.builtin_list_abi", ret_layout);
     const elem_size = list_abi.elem_size;
     const elem_align = list_abi.elem_align;
@@ -15429,16 +15430,16 @@ fn generateLLListAppendSublist(self: *Self, args: anytype, ret_layout: layout.Id
     self.requireBuiltinCalls("list_append_sublist");
     const fields = try self.loadRocListFields(list_ptr);
     const src_fields = try self.loadRocListFields(src_ptr);
-    const callbacks = try self.listElementCallbacks(list_abi);
+    const rc = try self.listElemRc(list_abi, &.{ GuardedList.at(args, 0), GuardedList.at(args, 1) }, target);
     try self.emitFpOffset(result_offset);
     try self.emitRocListFields(fields);
     try self.emitRocListFields(src_fields);
     try self.emitLocalGets(.{ start_local, len_local });
     try self.emitI32Const(@intCast(elem_align));
     try self.emitI32Const(@intCast(elem_size));
-    try self.emitListElementCallbackArgs(callbacks);
+    try self.emitListElemRcArgs(rc);
     try self.emitI32Const(@intCast(unique_args & 1));
-    try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_sublist)));
+    try self.emitListElemRcCall(rc, BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_sublist)), .list_append_sublist);
     try self.emitFpOffset(result_offset);
 }
 

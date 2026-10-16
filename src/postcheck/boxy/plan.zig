@@ -7309,6 +7309,9 @@ const Builder = struct {
         if (entry.found_existing) return;
 
         const pattern = view.checked_bodies.pattern(pattern_id);
+        // A pattern checking rejected binds nothing: the code that reaches it
+        // is the reported error.
+        if (view.checked_types.payload(pattern.ty) == .err) return;
         const pattern_rep = try self.analyzeType(view, pattern.ty);
         if (!self.analyzing_nested_callable_args) try self.recordWorkerBodyType(worker, pattern_rep);
         const start = beginPlanSequence(actions);

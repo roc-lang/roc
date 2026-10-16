@@ -12474,7 +12474,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         keep_oracle.current_root_index = i;
         const intrinsic = !self.selectedHoistedRootNamesRetiredBinder(root.*) and
             (root.body == .pattern_error or root.body == .valueless_binding or !self.hoistExprInvalidated(root.expr)) and
-            !try self.hoistedRootReachesRejectedInstantiation(root.*) and
+            !try self.hoistedRootReachesRejectedCode(root.*) and
             try self.hoistedRootIsIntrinsicallyKept(root);
         // Top-level extractions define names; they are not optional hoists.
         // Like ordinary top-level constants, their complete checked bodies
@@ -12566,11 +12566,13 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     try self.debugVerifyKeptHoistedRootDependencies();
 }
 
-/// Whether evaluating a selected root's expression evaluates an expression
-/// that instantiated a requirement another expression rejected
-/// (`rejected_instantiation_exprs`).
-fn hoistedRootReachesRejectedInstantiation(self: *Self, root: hoist_roots.SelectedHoistedRoot) Allocator.Error!bool {
-    if (self.rejected_instantiation_exprs.count() == 0) return false;
+/// Whether a selected root's expression reaches code checking rejected: an
+/// expression that instantiated a requirement another expression rejected
+/// (`rejected_instantiation_exprs`), or an
+/// expression checking replaced with its error after selection. An error
+/// poisons every expression that depends on it, so the root evaluates at
+/// runtime instead, where it reaches the error in source order.
+fn hoistedRootReachesRejectedCode(self: *Self, root: hoist_roots.SelectedHoistedRoot) Allocator.Error!bool {
     switch (root.body) {
         .pattern_error, .valueless_binding => return false,
         .expr, .pattern_extraction, .pattern_validation => {},
@@ -12593,7 +12595,8 @@ fn hoistedRootReachesRejectedInstantiation(self: *Self, root: hoist_roots.Select
         fn returnTarget(_: @This(), _: CIR.Expr.Idx) Allocator.Error!void {}
     };
     while (work.pop()) |expr| {
-        if (self.rejected_instantiation_exprs.contains(expr)) return true;
+        if (self.rejected_instantiation_exprs.contains(expr) or self.hoistExprInvalidated(expr)) return true;
+        if (self.cir.store.getExpr(expr) == .e_runtime_error) return true;
         try self.visitExprChildren(expr, Collector{ .work = &work, .gpa = self.gpa });
     }
     return false;

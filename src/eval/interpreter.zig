@@ -3560,9 +3560,17 @@ pub const Interpreter = struct {
         // The conversion skipped on the way out to this caller. It belongs
         // to the first pending call; later ones are left inside its extent.
         var outermost: ?PendingConversion = null;
+        // The first pending call's own site: a later call's value, once
+        // converted out of its own extent, is stored as the first call's
+        // statement stores it before the outermost conversion applies.
+        var first_site: ?PendingConversion = null;
         var first = true;
         while (self.pending_erased) |call| {
             self.pending_erased = null;
+            const back_to_first: ?PendingConversion = if (first_site) |site|
+                (if (site.layout == call.site_layout and site.desc == call.result_desc and call.conversion == null and call.callee_boundary == null) null else site)
+            else
+                null;
             const raw = try self.evalErasedCallOnce(frame, call.closure, null, call.args, call.arg_layouts, call.arg_descs, call.arg_desc_keys, call.arg_plan, call.site_layout, false);
             if (self.pending_erased) |*next| {
                 next.callee_boundary = .{ .layout = call.site_layout, .desc = call.result_desc, .keeps_own_desc = false };
@@ -3577,7 +3585,7 @@ pub const Interpreter = struct {
                     call.site_layout,
                 );
                 var current_layout = call.site_layout;
-                for ([_]?PendingConversion{ call.conversion, call.callee_boundary, outermost }) |skipped| {
+                for ([_]?PendingConversion{ call.conversion, call.callee_boundary, back_to_first, outermost }) |skipped| {
                     const conversion = skipped orelse continue;
                     current = try self.boxy_runtime.materializeCallResult(
                         self.boxyFrameHooks(frame),
@@ -3593,11 +3601,12 @@ pub const Interpreter = struct {
                     .value = current.value,
                     .layout = current_layout,
                     .desc = current.desc,
-                    .stored_as = if (call.conversion == null and call.callee_boundary == null and outermost == null) call.result_desc else null,
+                    .stored_as = if (call.conversion == null and call.callee_boundary == null and back_to_first == null and outermost == null) call.result_desc else null,
                 };
             }
             if (first) {
                 outermost = call.conversion;
+                first_site = .{ .layout = call.site_layout, .desc = call.result_desc, .keeps_own_desc = false };
                 first = false;
             }
             const closure_ptr = self.readBoxedDataPointer(call.closure) orelse return self.invariantFailedError(
