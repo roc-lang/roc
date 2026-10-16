@@ -2666,6 +2666,20 @@ pub const BuildEnv = struct {
         return self.findModuleByNameInPackage(null, module_name);
     }
 
+    /// The environment that the import named `import_name` of the module at
+    /// `importer_path` was type-checked against.
+    pub fn importedModuleEnv(self: *BuildEnv, importer_path: []const u8, import_name: []const u8) ?*ModuleEnv {
+        const coord = self.coordinator orelse return null;
+        var pkg_it = coord.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            for (pkg.modules.items) |*mod| {
+                if (std.mem.eql(u8, mod.path, importer_path)) return coord.importedModuleEnv(pkg, mod, import_name);
+            }
+        }
+        return null;
+    }
+
     pub fn findModuleByPath(self: *BuildEnv, path: []const u8) ?*coordinator_mod.ModuleState {
         const coord = self.coordinator orelse return null;
         var pkg_it = coord.packages.iterator();

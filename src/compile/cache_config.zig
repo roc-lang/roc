@@ -319,7 +319,9 @@ pub const Constants = struct {
     ///      field of their own.
     /// 150: `str_from_utf8`'s builtin call takes only the `Try` discriminant
     ///      and error-record field offsets.
-    pub const CACHE_VERSION = 150;
+    /// 151: an import's exposed items record the declaration import
+    ///      resolution selected for them.
+    pub const CACHE_VERSION = 151;
 };
 
 /// Configuration for the Roc cache system.

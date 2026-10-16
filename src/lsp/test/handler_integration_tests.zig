@@ -3738,15 +3738,10 @@ pub fn definitionHandlerNavigatesToBuiltinDeclarations() integration_spec.SpecEr
         allocator.free(responses);
     }
 
-    try expectBuiltinDefinitionAtDeclaration(allocator, responses, 2, "is_empty : Str -> Bool");
-    try expectBuiltinDefinitionAtDeclaration(allocator, responses, 3, "is_empty : List(_item) -> Bool");
-    try expectBuiltinDefinitionAtDeclaration(allocator, responses, 4, "append : List(a), a -> List(a)");
-    try expectBuiltinDefinitionAtDeclaration(
-        allocator,
-        responses,
-        5,
-        "update : Dict(k, v), k, (Try(v, [Missing]) -> Try(v, [Missing])) -> Dict(k, v)",
-    );
+    try expectBuiltinDefinitionAtDeclaration(allocator, responses, 2, "is_empty = |str| Str.count_utf8_bytes");
+    try expectBuiltinDefinitionAtDeclaration(allocator, responses, 3, "is_empty = |list| List.len(list) == 0");
+    try expectBuiltinDefinitionAtDeclaration(allocator, responses, 4, "append = |list, item| {");
+    try expectBuiltinDefinitionAtDeclaration(allocator, responses, 5, "update = |dict, key, alter| match dict {");
     try expectBuiltinDefinitionAtDeclaration(allocator, responses, 6, "Dict(k, v) :: [");
 }
 

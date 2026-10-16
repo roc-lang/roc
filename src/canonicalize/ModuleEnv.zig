@@ -1338,6 +1338,9 @@ pub const DeferredImportRef = extern struct {
     /// For an entry with `Flags.allows_tag_member`, where the qualified tag
     /// `Alias.Path.U` ends in the source. It starts where the node does.
     tag_receiver_end: u32 = 0,
+    /// For `exposed_item`, the exposed item this entry checks; the drain
+    /// records the declaration it resolves to on that item.
+    exposed_item: u32 = 0,
 
     /// Bit flags recording source-local facts the drain needs.
     pub const Flags = struct {
