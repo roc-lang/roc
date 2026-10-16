@@ -15051,9 +15051,13 @@ identity hit needs is declared from this program: Monotype lowered the body, so
 every checked root the served closure materializes is read by some body of the
 program, either through a storage request Monotype declared (a retired body's
 reads) or through a read expression, whose solved type is the root's
-representation (`declareIdentityHitReads`); a root with neither is a compiler
-invariant, since identity equality means the served closure reads what the
-replaced body reads. Identity hits cannot replace Monotype, closure lifting,
+representation (`declareIdentityHitReads`). A program that restores a
+completed root's value in place reads it through no expression and requested
+no storage for it, so served code compiled while that root was pending, which
+reaches the root's storage, is not linked into such a program: the offer serves
+only when every root it materializes has storage the program can declare
+(`identityHitStorageDeclarable`), and the body lowers otherwise. Identity hits
+cannot replace Monotype, closure lifting,
 SpecConstr or lambda solving for the procedures they serve, because the identity
 is computed from their output; they remove Direct LIR body lowering, the LIR
 passes, ARC emission, static data and codegen for the served closures.

@@ -3103,12 +3103,16 @@ const Lowerer = struct {
         var identity_hit = false;
         if (cached == null and identity_contract and source_fn.body == .roc and (!self.comptime_phase or self.comptime_closure_hits)) {
             if (self.spec_cache) |cache| {
+                var storage_declarable = true;
                 if (cache.lookupIdentity(identity.bytes, relation)) |hit| {
                     if (!std.mem.eql(u8, &hit.identity, &identity.bytes)) Common.invariant("identity offer named a different procedure identity");
-                    cached = hit;
-                    identity_hit = true;
+                    storage_declarable = try self.identityHitStorageDeclarable(hit);
+                    if (storage_declarable) {
+                        cached = hit;
+                        identity_hit = true;
+                    }
                 }
-                if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup identity {s} {s}\n", .{ &identity.symbolHex(), if (identity_hit) "hit" else "miss" });
+                if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup identity {s} {s}\n", .{ &identity.symbolHex(), if (identity_hit) "hit" else if (!storage_declarable) "storage-miss" else "miss" });
             }
         }
         if (plain_spec) if (literal_producer) |root| if (root.recipe) |recipe| if (recipe.required_native_identity) |required| {
@@ -6239,6 +6243,27 @@ const Lowerer = struct {
         if (self.retired_read_requests.count() == 0) try self.indexRetiredReadRequests();
         for (demand.eager_reads) |read| try self.declareIdentityRead(.{ .module = read.module, .root = read.root });
         for (hit.checked_root_uses) |use| try self.declareIdentityRead(use);
+    }
+
+    /// Whether this program can declare storage for every checked root an
+    /// identity offer's served code materializes (`declareIdentityHitReads`).
+    /// A program that restores a completed root's value in place reads it
+    /// through no expression and requested no storage for it, so served code
+    /// compiled while the root was pending, which reaches the root's storage,
+    /// is not linked into it; the body lowers instead.
+    fn identityHitStorageDeclarable(self: *Lowerer, hit: Common.SpecCacheHit) Allocator.Error!bool {
+        const demand = hit.demand orelse return false;
+        if (demand.eager_reads.len == 0 and hit.checked_root_uses.len == 0) return true;
+        if (self.retired_read_requests.count() == 0) try self.indexRetiredReadRequests();
+        const types = try self.rootReadTypes();
+        for (demand.eager_reads) |read| {
+            const use = Common.CheckedRootUse{ .module = read.module, .root = read.root };
+            if (!self.retired_read_requests.contains(use) and !types.contains(use)) return false;
+        }
+        for (hit.checked_root_uses) |use| {
+            if (!self.retired_read_requests.contains(use) and !types.contains(use)) return false;
+        }
+        return true;
     }
 
     fn declareIdentityRead(self: *Lowerer, use: Common.CheckedRootUse) Common.LowerError!void {
