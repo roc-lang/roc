@@ -435,6 +435,14 @@ test "fx platform cold-path list literal and List.with_capacity (speed backend)"
     try runIoSpecTest("--opt=speed", fx_test_specs.issue_12196_cold_list_builds_test);
 }
 
+test "fx platform inline list fast paths and their slow arms (dev backend)" {
+    try runIoSpecTest("--opt=dev", fx_test_specs.inline_list_slow_arms_test);
+}
+
+test "fx platform inline list fast paths and their slow arms (speed backend)" {
+    try runIoSpecTest("--opt=speed", fx_test_specs.inline_list_slow_arms_test);
+}
+
 /// Repro for https://github.com/roc-lang/roc/issues/10770: one boxed callable
 /// stored in two fields of a provided root's result is one heap allocation, so
 /// the host must receive the same erased-callable pointer for both fields.
