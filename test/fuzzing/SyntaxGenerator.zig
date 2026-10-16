@@ -16,11 +16,17 @@ const SymbolKind = TypedCodeGenerator.SymbolKind;
 
 const max_depth = 4;
 
+/// The version a generated header's `roc` entry pins. It is an old nightly, so
+/// formatting as any newer nightly compiler upgrades it.
+pub const roc_pin = "nightly-2026-July-30-aaaaaaa";
+
 allocator: std.mem.Allocator,
 reader: *FuzzReader,
 output: std.ArrayList(u8),
 next_id: u32,
 indent: usize,
+/// Whether the header already has its `roc` entry; a second is an error.
+roc_pinned: bool,
 
 pub fn init(allocator: std.mem.Allocator, reader: *FuzzReader) Self {
     return .{
@@ -29,6 +35,7 @@ pub fn init(allocator: std.mem.Allocator, reader: *FuzzReader) Self {
         .output = .empty,
         .next_id = 0,
         .indent = 0,
+        .roc_pinned = false,
     };
 }
 
@@ -44,6 +51,7 @@ pub fn generateModule(self: *Self) std.mem.Allocator.Error!void {
     self.output.clearRetainingCapacity();
     self.next_id = 0;
     self.indent = 0;
+    self.roc_pinned = false;
 
     try self.writeHeader();
     const statement_count = self.reader.intRangeAtMost(u8, 1, 6);
@@ -137,6 +145,11 @@ fn writePackageEntries(self: *Self) std.mem.Allocator.Error!void {
 }
 
 fn writePackageEntry(self: *Self) std.mem.Allocator.Error!void {
+    if (!self.roc_pinned and self.choose(3) == 0) {
+        self.roc_pinned = true;
+        try self.write("roc: \"" ++ roc_pin ++ "\"");
+        return;
+    }
     try self.writeSymbol(self.fresh(.package));
     try self.write(": ");
     try self.writePlainString();
