@@ -1138,7 +1138,7 @@ pub const SyntaxChecker = struct {
         const documentation = if (lookup_result_opt) |lookup_result|
             try self.resolveDocForLookup(env, module_env, build.absolute_path, lookup_result)
         else
-            try self.findDocumentationForRegion(env, module_env, build.absolute_path, result.region, target_offset);
+            try self.findDocumentationForDeclarationName(module_env, target_offset);
 
         defer if (documentation) |doc| self.allocator.free(doc);
 
@@ -1157,64 +1157,47 @@ pub const SyntaxChecker = struct {
         };
     }
 
-    /// Find documentation comments for the symbol at the given region/offset.
-    /// First checks if the cursor is on a lookup expression and resolves it to
-    /// the actual definition. Otherwise searches defs and statements by region.
-    fn findDocumentationForRegion(
-        self: *SyntaxChecker,
-        env: *BuildEnv,
-        module_env: *ModuleEnv,
-        doc_path: []const u8,
-        region: Region,
-        target_offset: u32,
-    ) Allocator.Error!?[]const u8 {
+    /// Documentation of the declaration whose name is at `offset`: a def's
+    /// pattern, a declaration statement's pattern, or a type declaration's
+    /// header.
+    fn findDocumentationForDeclarationName(self: *SyntaxChecker, module_env: *ModuleEnv, offset: u32) Allocator.Error!?[]const u8 {
         const source = module_env.common.source;
         const store = &module_env.store;
 
-        // First, check if this is a lookup expression (e.g., a function call)
-        // If so, resolve it to the definition and extract docs from there
-        if (cir_queries.findLookupAtOffset(module_env, target_offset)) |lookup_result| {
-            if (try self.resolveDocForLookup(env, module_env, doc_path, lookup_result)) |doc| return doc;
-        }
-
-        // Hover positions can land on delimiters around the symbol (e.g. `(` in
-        // `foo(...)`) depending on UTF-16 cursor conversion. As a fallback, try
-        // the start of the selected type region as an anchor for lookup-based
-        // documentation resolution.
-        if (region.start.offset != target_offset) {
-            if (cir_queries.findLookupAtOffset(module_env, region.start.offset)) |lookup_result| {
-                if (try self.resolveDocForLookup(env, module_env, doc_path, lookup_result)) |doc| return doc;
-            }
-        }
-
-        // Not a lookup, or lookup resolution failed - fall back to region-based search
-
-        // Check top-level definitions
-        const defs_slice = store.sliceDefs(module_env.all_defs);
-        for (defs_slice) |def_idx| {
+        for (store.sliceDefs(module_env.all_defs)) |def_idx| {
             const def = store.getDef(def_idx);
-            const pattern_region = store.getPatternRegion(def.pattern);
-
-            if (cir_queries.regionContainsOffset(pattern_region, region.start.offset) or
-                pattern_region.start.offset == region.start.offset)
-            {
-                return try doc_comments.extractDocForDef(self.allocator, source, store, def);
-            }
-
-            // Also check if the expression region matches (for hovering over expressions)
-            const expr_region = store.getExprRegion(def.expr);
-            if (cir_queries.regionContainsOffset(expr_region, region.start.offset)) {
+            if (cir_queries.regionContainsOffset(store.getPatternRegion(def.pattern), offset)) {
                 return try doc_comments.extractDocForDef(self.allocator, source, store, def);
             }
         }
 
-        // Check statements
-        const statements_slice = store.sliceStatements(module_env.all_statements);
-        for (statements_slice) |stmt_idx| {
+        for (store.sliceStatements(module_env.all_statements)) |stmt_idx| {
             const stmt = store.getSourceStatement(stmt_idx);
-            const stmt_region = store.getStatementRegion(stmt_idx);
-
-            if (cir_queries.regionContainsOffset(stmt_region, region.start.offset)) {
+            const name_region = switch (stmt) {
+                .s_decl => |decl| store.getPatternRegion(decl.pattern),
+                .s_var => |var_stmt| store.getPatternRegion(var_stmt.pattern_idx),
+                .s_var_uninitialized => |var_stmt| store.getPatternRegion(var_stmt.pattern_idx),
+                .s_alias_decl => |alias| store.getRegionAt(@fromBackingInt(@backingInt(alias.header))),
+                .s_nominal_decl => |nominal| store.getRegionAt(@fromBackingInt(@backingInt(nominal.header))),
+                .s_reassign,
+                .s_crash,
+                .s_dbg,
+                .s_expr,
+                .s_expect,
+                .s_for,
+                .s_while,
+                .s_infinite_loop,
+                .s_breakable_loop,
+                .s_break,
+                .s_return,
+                .s_import,
+                .s_where_alias_decl,
+                .s_type_anno,
+                .s_type_var_alias,
+                .s_runtime_error,
+                => continue,
+            };
+            if (cir_queries.regionContainsOffset(name_region, offset)) {
                 return try doc_comments.extractDocForStatement(self.allocator, source, store, stmt, stmt_idx);
             }
         }
@@ -1237,7 +1220,6 @@ pub const SyntaxChecker = struct {
             .field_access => return null,
         };
         const expr = store.getSourceExpr(expr_idx);
-        const importing_pkg = env.findPackageForModulePath(doc_path);
 
         const expr_tag = std.meta.activeTag(expr);
         if (expr_tag == .e_lookup_local) {
@@ -1261,37 +1243,22 @@ pub const SyntaxChecker = struct {
         }
         if (expr_tag == .e_lookup_external) {
             const lookup = expr.e_lookup_external;
-            // External lookup - parse "Module.function" and find docs in that module
-            const region_text = module_env.getSource(lookup.region);
-            if (std.mem.find(u8, region_text, ".")) |dot_pos| {
-                const module_name = region_text[0..dot_pos];
-                const function_name = region_text[dot_pos + 1 ..];
-
-                if (findExternalModuleEnv(env, importing_pkg, module_name)) |external_env| {
-                    return try findDocInModule(self.allocator, external_env, function_name);
-                }
-            }
+            const import_name = module_env.common.getString(module_env.imports.imports.items.items[@backingInt(lookup.module_idx)]);
+            const target_env = env.importedModuleEnv(doc_path, import_name) orelse return null;
+            return try findDocForValueNode(self.allocator, target_env, lookup.target_node_idx);
+        }
+        if (expr_tag == .e_lookup_associated_resolved) {
+            const resolved = expr.e_lookup_associated_resolved;
+            const target_env = moduleEnvForIdentity(env, module_env, resolved.module_identity) orelse return null;
+            return try doc_comments.extractDocForDef(self.allocator, target_env.common.source, &target_env.store, target_env.store.getDef(resolved.target_def_idx));
         }
         if (expr_tag == .e_dispatch_call) {
             const method_call = expr.e_dispatch_call;
-            const method_name = module_env.getIdentText(method_call.method_name);
-            const receiver_type_var = ModuleEnv.varFrom(method_call.receiver);
-            if (resolveMethodOwnerForLookup(module_env, receiver_type_var)) |method_owner| {
-                if (try findMethodDocForOwnerAndName(self.allocator, module_env, method_owner.owner, method_name)) |local_doc| {
-                    return local_doc;
-                }
-
-                const type_name = module_env.getIdentText(method_owner.type_ident);
-                if (findExternalModuleEnvForMethodOwner(env, importing_pkg, method_owner, type_name)) |external_env| {
-                    const qualified_name = try std.fmt.allocPrint(
-                        self.allocator,
-                        "{s}.{s}",
-                        .{ type_name, method_name },
-                    );
-                    defer self.allocator.free(qualified_name);
-                    return try findDocInModule(self.allocator, external_env, qualified_name);
-                }
-            }
+            return try self.findMethodDoc(env, module_env, method_call.receiver, method_call.method_name);
+        }
+        if (expr_tag == .e_method_call) {
+            const method_call = expr.e_method_call;
+            return try self.findMethodDoc(env, module_env, method_call.receiver, method_call.method_name);
         }
         return null;
     }
@@ -1363,91 +1330,64 @@ pub const SyntaxChecker = struct {
         return null;
     }
 
-    /// Find local method documentation by `(owner statement, method_name)`.
-    fn findMethodDocForOwnerAndName(
-        allocator: Allocator,
+    /// Documentation of the method `method_name` (an ident in `module_env`)
+    /// that a call on `receiver` dispatches to, read from the declaration of
+    /// the receiver's checked nominal type.
+    fn findMethodDoc(
+        self: *SyntaxChecker,
+        env: *BuildEnv,
         module_env: *ModuleEnv,
-        owner: CIR.Statement.Idx,
-        method_name: []const u8,
+        receiver: CIR.Expr.Idx,
+        method_name: base.Ident.Idx,
     ) Allocator.Error!?[]const u8 {
-        const entries = module_env.method_idents.entries.items;
-        for (entries) |entry| {
-            if (entry.key.owner != owner) continue;
-
-            const entry_method_name = module_env.getIdentText(entry.key.methodIdent());
-            if (!std.mem.eql(u8, entry_method_name, method_name)) continue;
-
-            return try findDocForQualifiedIdent(allocator, module_env, entry.value);
-        }
-
-        return null;
+        const method_owner = resolveMethodOwnerForLookup(module_env, ModuleEnv.varFrom(receiver)) orelse return null;
+        const owner_env = methodOwnerModuleEnv(env, module_env, method_owner) orelse return null;
+        const owner_method_name = owner_env.common.findIdentFrom(&module_env.common, method_name) orelse return null;
+        const qualified_ident = owner_env.lookupMethodIdentForOwnerConst(method_owner.owner, owner_method_name) orelse return null;
+        return try findDocForQualifiedIdent(self.allocator, owner_env, qualified_ident);
     }
 
-    fn findExternalModuleEnvForMethodOwner(
-        env: *BuildEnv,
-        importing_pkg: ?*compile.coordinator.PackageState,
-        method_owner: MethodOwnerLookup,
-        module_name: []const u8,
-    ) ?*ModuleEnv {
-        if (method_owner.builtin_origin) {
-            const base_name = if (std.mem.findLast(u8, module_name, ".")) |dot_pos|
-                module_name[dot_pos + 1 ..]
-            else
-                module_name;
-            if (completion_builtins.isBuiltinType(base_name)) {
-                return env.builtin_modules.builtin_module.env;
-            }
-        }
-        if (env.findModuleByQualifiedNameInPackage(importing_pkg, module_name)) |mod_state| {
-            return mod_state.moduleEnv();
-        }
-        return null;
+    /// The checked environment of the module declaring a method owner.
+    fn methodOwnerModuleEnv(env: *BuildEnv, module_env: *ModuleEnv, method_owner: MethodOwnerLookup) ?*ModuleEnv {
+        if (method_owner.builtin_origin) return env.builtin_modules.builtin_module.env;
+        return moduleEnvForIdentity(env, module_env, method_owner.origin_module);
     }
 
-    /// Find a module environment by name (handles builtins and regular modules).
-    fn findExternalModuleEnv(
-        env: *BuildEnv,
-        importing_pkg: ?*compile.coordinator.PackageState,
-        module_name: []const u8,
-    ) ?*ModuleEnv {
-        const base_name = if (std.mem.findLast(u8, module_name, ".")) |dot_pos|
-            module_name[dot_pos + 1 ..]
-        else
-            module_name;
-
-        // Check builtins first
-        if (completion_builtins.isBuiltinType(base_name)) {
-            return env.builtin_modules.builtin_module.env;
+    /// The checked environment of the module `module_env` names by `identity`.
+    fn moduleEnvForIdentity(env: *BuildEnv, module_env: *ModuleEnv, identity: base.ModuleIdentity.Idx) ?*ModuleEnv {
+        if (identity == module_env.selfModuleIdentity()) return module_env;
+        const target_hash = module_env.moduleIdentityHash(identity);
+        const builtin_env = env.builtin_modules.builtin_module.env;
+        if (builtin_env.contentIdentityHash()) |builtin_hash| {
+            if (std.mem.eql(u8, builtin_hash, target_hash)) return builtin_env;
         }
-
-        if (env.findModuleByQualifiedNameInPackage(importing_pkg, module_name)) |mod_state| {
-            return mod_state.moduleEnv();
-        }
-        return null;
+        const mod_state = findModuleByContentIdentity(env, target_hash) orelse return null;
+        return mod_state.moduleEnv();
     }
 
-    /// Find documentation for a definition by name in a module.
-    /// Uses module_lookup infrastructure for the search, with qualified-name fallback.
-    fn findDocInModule(allocator: Allocator, module_env: *ModuleEnv, name: []const u8) Allocator.Error!?[]const u8 {
+    /// Documentation of the value an exposed-value node names: a def, or a
+    /// name bound by destructuring in a def's pattern.
+    fn findDocForValueNode(allocator: Allocator, module_env: *ModuleEnv, value_node: u32) Allocator.Error!?[]const u8 {
         const source = module_env.common.source;
         const store = &module_env.store;
+        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(value_node));
+        if (store.nodes.get(node_idx).tag == .def) {
+            const def_idx: CIR.Def.Idx = @fromBackingInt(value_node);
+            return try doc_comments.extractDocForDef(allocator, source, store, store.getDef(def_idx));
+        }
 
-        // Use module_lookup to find by exact or unqualified name
-        if (module_lookup.findDefinitionByUnqualifiedName(module_env, name)) |def_info| {
-            // Try to find the full Def for annotation-aware offset
-            if (module_lookup.findDefOwningPattern(module_env, def_info.pattern_idx)) |def| {
+        const binder: CIR.Pattern.Idx = @fromBackingInt(value_node);
+        var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
+        defer binders.deinit(allocator);
+        var binder_scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
+        defer binder_scratch.deinit(allocator);
+        for (store.sliceDefs(module_env.all_defs)) |def_idx| {
+            const def = store.getDef(def_idx);
+            binders.clearRetainingCapacity();
+            try can.DependencyGraph.appendPatternBinders(module_env, def.pattern, &binders, &binder_scratch, allocator);
+            if (std.mem.findScalar(CIR.Pattern.Idx, binders.items, binder) != null) {
                 return try doc_comments.extractDocForDef(allocator, source, store, def);
             }
-            // Fall back to statement-based extraction
-            if (module_lookup.findStatementOwningPattern(module_env, def_info.pattern_idx)) |result| {
-                return try doc_comments.extractDocForStatement(allocator, source, store, result.stmt, result.idx);
-            }
-            // Last resort: use pattern region directly
-            return try doc_comments.extractDocCommentBefore(
-                allocator,
-                source,
-                store.getPatternRegion(def_info.pattern_idx).start.offset,
-            );
         }
         return null;
     }
@@ -1705,59 +1645,31 @@ pub const SyntaxChecker = struct {
             }
             if (expr_tag == .e_lookup_external) {
                 const lookup = expr.e_lookup_external;
-                const import_idx_int = @backingInt(lookup.module_idx);
-                if (import_idx_int >= module_env.imports.imports.len()) return null;
+                const import_name = module_env.common.getString(module_env.imports.imports.items.items[@backingInt(lookup.module_idx)]);
 
-                const string_idx = module_env.imports.imports.items.items[import_idx_int];
-                const module_name = module_env.common.getString(string_idx);
-                const member_name = module_env.getIdentText(lookup.ident_idx);
-
+                // On the qualifier (`List` in `List.len`), go to the module or
+                // type it names.
                 const region_text = module_env.getSource(lookup.region);
                 if (std.mem.find(u8, region_text, ".")) |dot_pos| {
-                    const prefix = region_text[0..dot_pos];
-                    const suffix = region_text[dot_pos + 1 ..];
                     const dot_offset = lookup.region.start.offset + @as(u32, @intCast(dot_pos));
                     if (target_offset < dot_offset) {
+                        const prefix = region_text[0..dot_pos];
                         if (completion_builtins.isBuiltinType(prefix)) {
                             return self.findBuiltinDefinition(prefix, null, oom);
                         }
-                        return self.findDefinitionInModule(build_env, doc_path, module_name, null, oom);
-                    } else {
-                        if (completion_builtins.isBuiltinType(prefix)) {
-                            return self.findBuiltinDefinition(prefix, suffix, oom);
-                        }
+                        return self.findDefinitionInModule(build_env, doc_path, import_name, null, oom);
                     }
                 }
-                return self.findDefinitionInModule(build_env, doc_path, module_name, member_name, oom);
+
+                const target_env = build_env.importedModuleEnv(doc_path, import_name) orelse return null;
+                const region = valueNodeRegion(target_env, lookup.target_node_idx);
+                return self.declarationLocation(build_env, module_env, current_uri, target_env, region, oom);
             }
-            if (expr_tag == .e_lookup_associated) {
-                const lookup = expr.e_lookup_associated;
-                const member_name = module_env.getIdentText(lookup.item_ident);
-                const import_idx_int = @backingInt(lookup.module_idx);
-                if (import_idx_int < module_env.imports.imports.len()) {
-                    const string_idx = module_env.imports.imports.items.items[import_idx_int];
-                    const module_name = module_env.common.getString(string_idx);
-                    const expr_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
-                    const expr_region = module_env.store.getRegionAt(expr_node_idx);
-                    const region_text = module_env.getSource(expr_region);
-                    if (std.mem.find(u8, region_text, ".")) |dot_pos| {
-                        const prefix = region_text[0..dot_pos];
-                        const suffix = region_text[dot_pos + 1 ..];
-                        const dot_offset = expr_region.start.offset + @as(u32, @intCast(dot_pos));
-                        if (target_offset < dot_offset) {
-                            if (completion_builtins.isBuiltinType(prefix)) {
-                                return self.findBuiltinDefinition(prefix, null, oom);
-                            }
-                            return self.findDefinitionInModule(build_env, doc_path, module_name, null, oom);
-                        } else {
-                            if (completion_builtins.isBuiltinType(prefix)) {
-                                return self.findBuiltinDefinition(prefix, suffix, oom);
-                            }
-                        }
-                    }
-                    return self.findDefinitionInModule(build_env, doc_path, module_name, member_name, oom);
-                }
-                return null;
+            if (expr_tag == .e_lookup_associated_resolved) {
+                const resolved = expr.e_lookup_associated_resolved;
+                const target_env = moduleEnvForIdentity(build_env, module_env, resolved.module_identity) orelse return null;
+                const def = target_env.store.getDef(resolved.target_def_idx);
+                return self.declarationLocation(build_env, module_env, current_uri, target_env, target_env.store.getPatternRegion(def.pattern), oom);
             }
             if (expr_tag == .e_method_call) {
                 const method_call = expr.e_method_call;
@@ -1793,42 +1705,46 @@ pub const SyntaxChecker = struct {
         oom: *?Allocator.Error,
     ) ?DefinitionResult {
         const method_owner = resolveMethodOwnerForLookup(module_env, ModuleEnv.varFrom(receiver)) orelse return null;
-
-        if (method_owner.builtin_origin) {
-            const type_name = module_env.getIdentText(method_owner.type_ident);
-            const base_name = if (std.mem.findLast(u8, type_name, ".")) |dot_pos|
-                type_name[dot_pos + 1 ..]
-            else
-                type_name;
-            return self.findBuiltinDefinition(base_name, module_env.getIdentText(method_name), oom);
-        }
-
-        if (method_owner.origin_module == module_env.selfModuleIdentity()) {
-            const range = methodDefinitionRange(module_env, module_env, method_owner.owner, method_name) orelse return null;
-            const uri_copy = noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null;
-            return DefinitionResult{ .uri = uri_copy, .range = range };
-        }
-
-        const origin_hash = module_env.moduleIdentityHash(method_owner.origin_module);
-        const target_mod_state = findModuleByContentIdentity(build_env, origin_hash) orelse return null;
-        const target_mod_env = target_mod_state.moduleEnv() orelse return null;
-        const range = methodDefinitionRange(target_mod_env, module_env, method_owner.owner, method_name) orelse return null;
-        const module_uri = noteOom(oom, uri_util.pathToUri(self.allocator, target_mod_state.path)) orelse return null;
-        return DefinitionResult{ .uri = module_uri, .range = range };
+        const owner_env = methodOwnerModuleEnv(build_env, module_env, method_owner) orelse return null;
+        const owner_method_name = owner_env.common.findIdentFrom(&module_env.common, method_name) orelse return null;
+        const qualified_ident = owner_env.lookupMethodIdentForOwnerConst(method_owner.owner, owner_method_name) orelse return null;
+        const pattern_idx = findPatternForQualifiedIdent(owner_env, qualified_ident) orelse return null;
+        return self.declarationLocation(build_env, module_env, current_uri, owner_env, owner_env.store.getPatternRegion(pattern_idx), oom);
     }
 
-    /// The range of the definition of `method_name` (an ident in `source_env`)
-    /// on the type declared by `owner` in `owner_env`.
-    fn methodDefinitionRange(
-        owner_env: *ModuleEnv,
-        source_env: *const ModuleEnv,
-        owner: CIR.Statement.Idx,
-        method_name: base.Ident.Idx,
-    ) ?LspRange {
-        const owner_method_name = owner_env.common.findIdentFrom(&source_env.common, method_name) orelse return null;
-        const qualified_ident = owner_env.lookupMethodIdentForOwnerConst(owner, owner_method_name) orelse return null;
-        const pattern_idx = findPatternForQualifiedIdent(owner_env, qualified_ident) orelse return null;
-        return cir_queries.regionToRange(owner_env, owner_env.store.getPatternRegion(pattern_idx));
+    /// The location of `region` in `target_env`'s source file.
+    fn declarationLocation(
+        self: *SyntaxChecker,
+        build_env: *BuildEnv,
+        module_env: *ModuleEnv,
+        current_uri: []const u8,
+        target_env: *ModuleEnv,
+        region: Region,
+        oom: *?Allocator.Error,
+    ) ?DefinitionResult {
+        const range = cir_queries.regionToRange(target_env, region) orelse return null;
+        const uri = if (target_env == module_env)
+            noteOom(oom, self.allocator.dupe(u8, current_uri)) orelse return null
+        else if (target_env == build_env.builtin_modules.builtin_module.env)
+            self.builtinSourceUri(oom) orelse return null
+        else blk: {
+            const target_hash = target_env.contentIdentityHash() orelse return null;
+            const target_mod_state = findModuleByContentIdentity(build_env, target_hash) orelse return null;
+            break :blk noteOom(oom, uri_util.pathToUri(self.allocator, target_mod_state.path)) orelse return null;
+        };
+        return DefinitionResult{ .uri = uri, .range = range };
+    }
+
+    /// The region of the name an exposed-value node binds: a def's pattern, or
+    /// a name bound by destructuring in a def's pattern.
+    fn valueNodeRegion(module_env: *ModuleEnv, value_node: u32) Region {
+        const store = &module_env.store;
+        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(value_node));
+        if (store.nodes.get(node_idx).tag == .def) {
+            const def_idx: CIR.Def.Idx = @fromBackingInt(value_node);
+            return store.getPatternRegion(store.getDef(def_idx).pattern);
+        }
+        return store.getPatternRegion(@fromBackingInt(value_node));
     }
 
     const TagOriginInfo = struct {
@@ -2090,14 +2006,9 @@ pub const SyntaxChecker = struct {
         return null;
     }
 
-    /// Helper function to find a builtin definition/type in Builtin.roc
-    fn findBuiltinDefinition(
-        self: *SyntaxChecker,
-        base_name: []const u8,
-        member_name: ?[]const u8,
-        oom: *?Allocator.Error,
-    ) ?DefinitionResult {
-        // Write embedded builtin source to roc cache
+    /// The URI of the cached copy of the embedded Builtin source, written on
+    /// first use so editors can open it.
+    fn builtinSourceUri(self: *SyntaxChecker, oom: *?Allocator.Error) ?[]u8 {
         const cache_dir = self.cache_config.getModuleCacheDir(self.allocator) catch |err| switch (err) {
             error.OutOfMemory => {
                 oom.* = error.OutOfMemory;
@@ -2137,6 +2048,18 @@ pub const SyntaxChecker = struct {
             return null;
         };
         self.allocator.free(builtin_cache_path);
+
+        return module_uri;
+    }
+
+    /// Helper function to find a builtin definition/type in Builtin.roc
+    fn findBuiltinDefinition(
+        self: *SyntaxChecker,
+        base_name: []const u8,
+        member_name: ?[]const u8,
+        oom: *?Allocator.Error,
+    ) ?DefinitionResult {
+        const module_uri = self.builtinSourceUri(oom) orelse return null;
 
         var builtin_module = can.BuiltinStatic.moduleView(
             self.allocator,
