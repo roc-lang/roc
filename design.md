@@ -20036,6 +20036,14 @@ A container qualifies for dismantling when all of the following hold:
   operand-position whole use: moved into an aggregate or a call, returned,
   or join-carried by `set_local`
 
+An owned same-value binding (`ref.local` solved owned) is bound exactly once
+and holds the unit its definition gave it, whether that definition moved the
+source's unit or retained a new one, so it qualifies as a container in its own
+right; for its source, the binding is an operand-position whole use. Pattern
+bindings take this form: the payload of `match dict { HashMap(data) => ... }`
+is owned when some branch moves `data` whole, and the branch that reads its
+fields still updates them in place.
+
 A tag union qualifies through a payload view. The union must be owned, bound
 exactly once by a value-producing statement, and not a join parameter, and
 every occurrence of it must be a discriminant read, a borrowed pure alias, or
@@ -20364,7 +20372,12 @@ leak check or a jump's quotient. A claimed container keeps its conceptual
 balance at one—borrowed reads of its unclaimed bytes remain legitimate—and a
 complete claim set marks that unit spent: a terminal treats it as balanced and
 a jump's carry check exempts it, while anything less fails as an unspent stored
-unit. A claimed container can be neither consumed, moved into an aggregate, nor
+unit. A claim set that becomes complete while the value still holds further
+explicit units settles at once: the spent unit leaves the balance and the claim
+set empties, because the remaining units are intact and a dismantle of another
+of them, such as through a second owned alias of a retained record, starts a
+claim set of its own. Only the last unit keeps its complete claims outstanding.
+A claimed container can be neither consumed, moved into an aggregate, nor
 released whole. Claims and complete read chains cross join quotients on the
 summary: owned entries carry their container's claim set, and every live entry
 carries sparse lender, aggregate-holder, and immediate payload-source
@@ -20386,7 +20399,13 @@ directly for the consumer. The dismantled unit's field claims remain outstanding
 This transfer follows only recorded field-read provenance, on demand, and its
 claim and balance mutations participate in outcome restitution. It neither
 adds runtime retains nor changes join summaries on paths that already have an
-explicit intact unit.
+explicit intact unit. A value relevant after a join whose only explicit unit a
+complete claim set has spent holds no unit, exactly like an unclaimed read
+value: when its nearest unit-holding container is not independently relevant,
+quotienting claims that stored unit for it and settles the spent unit's claims,
+so the join value carries one intact unit and a later dismantle in the join
+body starts a claim set of its own. Without a claimable stored unit the spent
+value stays dead past the join.
 
 #### Per-edge aggregate residuals
 
