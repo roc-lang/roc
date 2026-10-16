@@ -627,6 +627,20 @@ const CompileTimeObjectCache = struct {
     fn finish(context: *anyopaque, accepted: bool) void {
         const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
         if (accepted) std.debug.assert(!self.packs.revoked) else self.packs.revoked = true;
+        const stats = std.c.getenv("ROC_PACK_STATS") != null;
+        const store_started = if (stats) std.Io.Timestamp.now(self.io, .awake).nanoseconds else 0;
+        defer if (stats) {
+            // Diagnostic output, like the build's: an ordinary check leaves
+            // stderr empty.
+            std.debug.print("compile-time object cache: hits {d} artifacts {d} packs {d} keys {d}; store {d} ms\n", .{
+                self.packs.hits,
+                self.packs.artifacts_served,
+                self.packs.packs.items.len,
+                self.packs.specs.count(),
+                @divTrunc(std.Io.Timestamp.now(self.io, .awake).nanoseconds - store_started, std.time.ns_per_ms),
+            });
+            printPackTimings(&self.packs);
+        };
         for (self.publications.items) |publication| {
             if (accepted) {
                 const written = if (publication.discovery)
@@ -654,6 +668,21 @@ const CompileTimeObjectCache = struct {
         self.allocator.destroy(self);
     }
 };
+
+/// The time a pack collection spent admitting offers and capturing this
+/// program's artifacts, for `ROC_PACK_STATS`.
+fn printPackTimings(packs: *const pack_store.LoadedPacks) void {
+    std.debug.print("pack admission: {d} ms (decode {d} ms, index {d} ms); capture: {d} ms (combine {d} ms, plan {d} ms, encode {d} ms, stage {d} ms)\n", .{
+        @divTrunc(packs.admit_ns, std.time.ns_per_ms),
+        @divTrunc(packs.decode_ns, std.time.ns_per_ms),
+        @divTrunc(packs.index_ns, std.time.ns_per_ms),
+        @divTrunc(packs.capture_ns, std.time.ns_per_ms),
+        @divTrunc(packs.capture_combine_ns, std.time.ns_per_ms),
+        @divTrunc(packs.capture_plan_ns, std.time.ns_per_ms),
+        @divTrunc(packs.capture_encode_ns, std.time.ns_per_ms),
+        @divTrunc(packs.capture_stage_ns, std.time.ns_per_ms),
+    });
+}
 
 /// Persistent body policy excludes session capabilities and root materialization.
 /// Each value is encoded explicitly: padding and pointer identity are not policy.
@@ -11604,16 +11633,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         // The compile-time evaluator has already spliced its entries; the
         // object compiler asks for the runtime program's afterwards.
         std.debug.print("pack hits: {d} external procs: {d} evaluator artifacts: {d} packs loaded: {d} keys: {d}\n", .{ packs.hits, external_procs, packs.artifacts_served, packs.packs.items.len, packs.specs.count() });
-        std.debug.print("pack admission: {d} ms (decode {d} ms, index {d} ms); capture: {d} ms (combine {d} ms, plan {d} ms, encode {d} ms, stage {d} ms)\n", .{
-            @divTrunc(packs.admit_ns, std.time.ns_per_ms),
-            @divTrunc(packs.decode_ns, std.time.ns_per_ms),
-            @divTrunc(packs.index_ns, std.time.ns_per_ms),
-            @divTrunc(packs.capture_ns, std.time.ns_per_ms),
-            @divTrunc(packs.capture_combine_ns, std.time.ns_per_ms),
-            @divTrunc(packs.capture_plan_ns, std.time.ns_per_ms),
-            @divTrunc(packs.capture_encode_ns, std.time.ns_per_ms),
-            @divTrunc(packs.capture_stage_ns, std.time.ns_per_ms),
-        });
+        printPackTimings(&packs);
     }
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
