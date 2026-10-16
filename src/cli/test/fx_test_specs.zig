@@ -56,6 +56,14 @@ pub const branch_entry_release_test = TestSpec{
     .description = "Regression test: a value a branch never reads is released at the branch entry",
 };
 
+/// Repro for https://github.com/roc-lang/roc/issues/12196: a list literal and
+/// `List.with_capacity` built on cold paths in different functions.
+pub const issue_12196_cold_list_builds_test = TestSpec{
+    .roc_file = "test/fx/issue_12196_cold_list_builds.roc",
+    .io_spec = "0<abcde|1>2 0",
+    .description = "Regression test: cold-path list literal and List.with_capacity share a builtin",
+};
+
 /// All fx platform tests that can be run with --test mode IO specs.
 /// These tests work with cross-compilation because they only test
 /// the compiled binary's IO behavior, not build-time features.

@@ -16,6 +16,8 @@
 const std = @import("std");
 const dev_wrappers = @import("dev_wrappers.zig");
 const num = @import("num.zig");
+const RocList = @import("list.zig").RocList;
+const RocStr = @import("str.zig").RocStr;
 
 /// Prefix shared by every builtin wrapper linker symbol.
 pub const symbol_prefix = "roc_builtins_";
@@ -399,6 +401,89 @@ pub const BuiltinFn = enum {
     /// the right default for a newly added builtin.
     pub fn payload(self: BuiltinFn) Payload {
         return payload_by_builtin[@backingInt(self)];
+    }
+
+    const writes_result_word_triple = blk: {
+        @setEvalBranchQuota(20_000);
+        var result = @as([@typeInfo(BuiltinFn).@"enum".field_names.len]bool, @splat(false));
+        for ([_]BuiltinFn{
+            .simd_store_16,
+            .simd_append_16,
+            .crypto_sha256_hash_bytes,
+            .crypto_sha256_hasher_empty,
+            .crypto_sha256_hasher_write,
+            .crypto_sha256_hasher_finish,
+            .crypto_blake3_hash_bytes,
+            .crypto_blake3_hasher_empty,
+            .crypto_blake3_hasher_write,
+            .crypto_blake3_hasher_finish,
+            .str_to_utf8,
+            .str_concat,
+            .str_substring_unsafe,
+            .str_repeat,
+            .str_trim,
+            .str_trim_start,
+            .str_trim_end,
+            .str_split,
+            .str_join_with,
+            .str_reserve,
+            .str_release_excess_capacity,
+            .str_with_capacity,
+            .str_drop_prefix,
+            .str_drop_suffix,
+            .str_with_ascii_lowercased,
+            .str_with_ascii_uppercased,
+            .str_from_utf8_validated,
+            .str_from_utf16_le_short,
+            .str_from_utf16_be_short,
+            .str_from_utf32_le_short,
+            .str_from_utf32_be_short,
+            .str_from_utf8_lossy,
+            .str_escape_and_quote,
+            .str_from_literal,
+            .list_with_capacity,
+            .list_append_unsafe,
+            .list_concat,
+            .list_append_range_within,
+            .list_copy_range_within,
+            .list_append_range_within_unsafe,
+            .list_append_sublist,
+            .list_append_le_bytes,
+            .list_prepend,
+            .list_sublist,
+            .list_sublist_borrowed,
+            .list_drop_at,
+            .list_replace,
+            .list_set,
+            .list_swap,
+            .list_reserve,
+            .list_reserve_for_append,
+            .list_release_excess_capacity,
+            .list_reverse,
+            .list_sort_with,
+            .dec_to_str,
+            .int_to_str,
+            .float_to_str,
+        }) |builtin| {
+            const Wrapper = @typeInfo(@TypeOf(@field(dev_wrappers, symbol_prefix ++ @tagName(builtin)))).@"fn";
+            if (Wrapper.return_type != void or Wrapper.param_types.len == 0 or
+                (Wrapper.param_types[0] != *RocList and Wrapper.param_types[0] != *RocStr))
+            {
+                @compileError("BuiltinFn." ++ @tagName(builtin) ++ " is declared to write a list or string result through its first parameter, but its wrapper does not take a *RocList or *RocStr first and return void");
+            }
+            result[@backingInt(builtin)] = true;
+        }
+        break :blk result;
+    };
+
+    /// Whether this builtin's wrapper returns void and writes a list or string
+    /// (three machine words) through its first parameter without ever reading
+    /// what that parameter points to. Code generation relies on the write-only
+    /// guarantee to hand such a builtin a fresh slot and move the result out
+    /// of it, so a wrapper that reads or updates its first parameter in place
+    /// must not be listed.
+    pub fn writesResultWordTriple(self: BuiltinFn) bool {
+        return writes_result_word_triple[@backingInt(self)];
     }
 };
 
