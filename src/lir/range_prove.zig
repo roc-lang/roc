@@ -411,26 +411,26 @@ test "range prove folds a threaded Bool join site that wrote the parameter as a 
     defer scratch.deinit();
     try runProc(&store, &layouts, proc, scratch.allocator());
 
-    // No switch survives, and the only return reachable is the true arm's.
+    // No switch survives, and the one jump left is the threaded site's,
+    // targeting the join whose body is the true arm.
     var switches: usize = 0;
-    var returns_one: usize = 0;
-    var returns_zero: usize = 0;
+    var jump_targets = std.ArrayList(LIR.JoinPointId).empty;
+    defer jump_targets.deinit(testing.allocator);
+    var join_bodies = collections.DenseMap(LIR.JoinPointId, CFStmtId).init(testing.allocator);
+    defer join_bodies.deinit();
     var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpecImmediate(proc).body.?, testing.allocator);
     defer walk.deinit();
     while (try walk.next()) |stmt| {
-        switch (store.getCFStmt(stmt)) {
-            .switch_stmt => switches += 1,
-            .ret => |r| if (r.value == one) {
-                returns_one += 1;
-            } else {
-                returns_zero += 1;
-            },
-            else => {},
-        }
+        const cf = store.getCFStmt(stmt);
+        if (cf == .switch_stmt) switches += 1;
+        if (cf == .jump) try jump_targets.append(testing.allocator, cf.jump.target);
+        if (cf == .join) try join_bodies.put(cf.join.id, cf.join.body);
     }
     try testing.expectEqual(@as(usize, 0), switches);
-    try testing.expectEqual(@as(usize, 1), returns_one);
-    try testing.expectEqual(@as(usize, 0), returns_zero);
+    try testing.expectEqual(@as(usize, 1), jump_targets.items.len);
+    const chosen = store.getCFStmt(join_bodies.get(jump_targets.items[0]).?);
+    try testing.expect(chosen == .ret);
+    try testing.expectEqual(one, chosen.ret.value);
 }
 
 /// One symbolic value. A node is either a root (its own `root`, carrying
