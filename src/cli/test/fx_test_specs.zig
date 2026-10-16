@@ -64,6 +64,15 @@ pub const issue_12196_cold_list_builds_test = TestSpec{
     .description = "Regression test: cold-path list literal and List.with_capacity share a builtin",
 };
 
+/// Repro for https://github.com/roc-lang/roc/issues/12328: a field taken out of
+/// a dying record and passed to a function's owned variant, which takes a
+/// field out of its argument in turn, is released exactly once.
+pub const take_binding_alias_owned_variant_test = TestSpec{
+    .roc_file = "test/fx/take_binding_alias_owned_variant.roc",
+    .io_spec = "0<abcdef|1>once: 197|1>looped: 603",
+    .description = "Regression test: a taken field passed to an owned variant is released exactly once",
+};
+
 /// All fx platform tests that can be run with --test mode IO specs.
 /// These tests work with cross-compilation because they only test
 /// the compiled binary's IO behavior, not build-time features.
