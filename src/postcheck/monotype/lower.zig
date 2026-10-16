@@ -5395,6 +5395,26 @@ const Builder = struct {
             const module_id = try self.program.addLoweringModule(seed.key);
             self.lowering_module_ids.putAssumeCapacity(seed.key.bytes, module_id);
         }
+        try self.seedDeclarationNames(self.rootModuleView());
+        for (0..self.modules.imports.len) |index| try self.seedDeclarationNames(self.importModuleView(index));
+        for (0..self.modules.root.relation_modules.len) |index| try self.seedDeclarationNames(self.relationModuleView(index));
+    }
+
+    /// Copy one module's template and nominal declaration identities into
+    /// the program (`Program.declarations`), templates as `templateDeclaration`
+    /// names them for specialization keys.
+    fn seedDeclarationNames(self: *Builder, view: ModuleView) Allocator.Error!void {
+        const identities = view.declaration_identities;
+        const table = &self.program.declarations;
+        try table.templates.ensureUnusedCapacity(self.allocator, @intCast(identities.templates.len));
+        for (0..identities.templates.len) |index| {
+            const template: names.CheckedProcedureTemplateId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+            table.templates.putAssumeCapacity(.{ .artifact = view.key.bytes, .template = @intCast(index) }, view.templateDeclaration(template));
+        }
+        try table.nominals.ensureUnusedCapacity(self.allocator, @intCast(identities.nominals.len));
+        for (identities.nominals) |entry| {
+            table.nominals.putAssumeCapacity(.{ .module_identity = view.key.module_identity_hash, .source_decl = entry.source_decl }, entry.identity);
+        }
     }
 
     fn sourceFileIds(self: *const Builder) *const SourceFileIds {
@@ -8294,6 +8314,7 @@ const Builder = struct {
 
         var fn_template = self.fnDefForTemplate(view, template_ref, source_fn_ty, source_fn_key, lower_fn_ty);
         fn_template.evidence_digest = evidence_digest;
+        fn_template.evidence_declaration = Ast.fnEvidenceDeclarationDigest(identity_evidence.nodes, identity_evidence.frames, identity_evidence.head, TemplateDeclarations{ .builder = self });
         // Only a closed request names a specialization the object cache can
         // hold: a function type in its arguments or result makes the body
         // depend on the program's lambda sets. The request's outer arrow does
@@ -8303,7 +8324,7 @@ const Builder = struct {
         // reach the host directly through its declared ABI.
         if (template.target != .hosted and !try self.monoFnTypeMentionsFunction(lower_fn_ty)) {
             const key = Ast.specIdentityKey(spec_identity, .{
-                .evidence = Ast.fnEvidenceDeclarationDigest(identity_evidence.nodes, identity_evidence.frames, identity_evidence.head, TemplateDeclarations{ .builder = self }),
+                .evidence = fn_template.evidence_declaration.?,
                 .codec_contract = self.codecContractDeclarationDigest(spec_identity.codec_contract),
                 .request_fn_ty = self.program.types.declarationDigestCached(&self.program.names, spec_identity.request_fn_ty, self.nominalDeclarations(), null),
             });

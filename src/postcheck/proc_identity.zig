@@ -99,6 +99,9 @@ pub const Renderer = struct {
     /// checked source, indexed by `Lifted.FnId`.
     source_digests: []const ?Identity,
     fn_by_symbol: *const std.AutoHashMap(Common.Symbol, Lifted.FnId),
+    /// The program's declaration names: a nominal type is rendered by its
+    /// declaration identity when the program names it.
+    declarations: *const Common.DeclarationNames,
     memo: *Memo,
 
     /// Identity of the specialization of `source` at `solved_fn_ty` with the
@@ -353,13 +356,25 @@ const Engine = struct {
             },
             .named => |named| {
                 try self.putBytes("named");
-                try self.putBytes(&named.named_type.module.bytes);
-                try self.putBytes(renderer.names.moduleIdentityBytes(named.def.module));
-                if (named.def.source_decl) |decl| {
-                    try self.putBytes("source-decl");
-                    try self.putU32(decl);
+                const module_identity = renderer.names.moduleIdentityBytes(named.def.module);
+                const declaration = if (named.def.source_decl) |decl|
+                    (if (module_identity.len == 32) renderer.declarations.nominal(module_identity[0..32].*, decl) else null)
+                else
+                    null;
+                if (declaration) |identity| {
+                    // Named by declaration, like a specialization key names
+                    // it, so an edit elsewhere in its module leaves it alone.
+                    try self.putBytes("declaration");
+                    try self.putBytes(&identity);
                 } else {
-                    try self.putBytes("no-source-decl");
+                    try self.putBytes(&named.named_type.module.bytes);
+                    try self.putBytes(module_identity);
+                    if (named.def.source_decl) |decl| {
+                        try self.putBytes("source-decl");
+                        try self.putU32(decl);
+                    } else {
+                        try self.putBytes("no-source-decl");
+                    }
                 }
                 try self.putBytes(renderer.names.typeNameText(named.def.type_name));
                 try self.putBytes(@tagName(named.kind));

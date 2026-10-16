@@ -215,6 +215,11 @@ pub const FnTemplate = struct {
     source_fn_key: names.TypeDigest,
     mono_fn_ty: Type.TypeId,
     evidence_digest: EvidenceDigest = .{},
+    /// The dispatch evidence digested by declaration
+    /// (`fnEvidenceDeclarationDigest`), stamped at reservation for every
+    /// template specialization; a procedure's identity names its evidence by
+    /// it. Null for a template that is not a template specialization.
+    evidence_declaration: ?EvidenceDigest = null,
     /// `specIdentityKey` of the specialization this template was reserved
     /// for: the key an object-cache lookup can compute at reservation time,
     /// before the body exists. Null for functions that are not template
@@ -1976,6 +1981,10 @@ pub const ProgramBuilder = struct {
     /// See `Common.PlatformRequirementFilling`; null when no module of the
     /// input has platform requirements filled by an app.
     platform_requirement_filling: ?Common.PlatformRequirementFilling = null,
+    /// The declaration identities of the input modules' templates and
+    /// nominal types (`Common.DeclarationNames`), seeded with the module
+    /// tables.
+    declarations: Common.DeclarationNames = .empty,
     /// Source file table for `SourceLoc.file` indices (module display and
     /// package-qualified names, owned by this program).
     source_files: ProgramList(base.SourceFileEntry, "source_files"),
@@ -2128,6 +2137,7 @@ pub const ProgramBuilder = struct {
         }
         self.comptime_sites.deinit(self.allocator);
         self.lowering_modules.deinit(self.allocator);
+        self.declarations.deinit(self.allocator);
         self.comptime_value_roots.deinit(self.allocator);
         self.static_data_values.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);

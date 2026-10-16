@@ -777,7 +777,6 @@ test "normal native namespace separates every body policy and ignores root sessi
     session.comptime_value_reads = !original.comptime_value_reads;
     session.literal_roots = !original.literal_roots;
     session.layout_request_const_plans = !original.layout_request_const_plans;
-    session.comptime_closure_hits = !original.comptime_closure_hits;
     const session_key = try nativeObjectNamespace(allocator, physical, session);
     defer allocator.free(session_key);
     try std.testing.expectEqualStrings(key, session_key);
@@ -9453,6 +9452,11 @@ fn packFileBytesFiltered(
         const entry_reads = if (offer.frozen_fn) |frozen_fn| comptime_reads.getFn(frozen_fn) else lir.CheckedPipeline.SpecComptimeReads.Lookup{ .offerable = true, .reads = &.{} };
         if (!entry_reads.offerable or proc.rc_variant_demandable or proc.inlined_at_calls or proc.tail_group != null or !plan.eligible[artifact]) {
             withheld += 1;
+            if (trace) std.debug.print("withhold-identity {s} reason={s} name={s}\n", .{
+                &proc.identity.symbolHex(),
+                if (!entry_reads.offerable) "evaluates-root" else if (proc.rc_variant_demandable) "ownership-variants" else if (proc.inlined_at_calls) "inlined" else if (proc.tail_group != null) "tail-group" else "serving-closure",
+                lowered.lir_result.store.procDebugName(offer.proc) orelse "",
+            });
             continue;
         }
         // An identity offer names the procedure's own artifact; a producer

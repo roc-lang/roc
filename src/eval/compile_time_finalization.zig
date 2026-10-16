@@ -1412,7 +1412,7 @@ pub fn finalizeProgram(
             useOrdinaryProvider(&host_target, cache.spec_cache);
         }
         host_target.demand_driven_comptime_roots = demand_driven;
-        var host_lir_policy = lir.CheckedPipeline.LirPolicy.fromTarget(host_target);
+        const host_lir_policy = lir.CheckedPipeline.LirPolicy.fromTarget(host_target);
         // All readers of this producer are declared before any cache hit can
         // erase a source body. CTFE still owns its native late-splice policy.
         host_target.code_provision = sharedProducerProvision(host_target, session_runtime_target);
@@ -1445,7 +1445,6 @@ pub fn finalizeProgram(
         var prepared = try lir.CheckedPipeline.prepareMonotypeToSolved(monotype);
         var prepared_owned = true;
         errdefer if (prepared_owned) prepared.deinit();
-        host_lir_policy.comptime_closure_hits = prepared.target.comptime_closure_hits;
 
         // Completed checked values are storage producers even when this
         // compilation has no evaluation roots. Their declared initializer

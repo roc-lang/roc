@@ -1935,10 +1935,13 @@ SpecConstr preserve meaning, so the policy changes how evaluation's code is
 built, never what it computes. Every command also gives evaluation the same
 object cache (`CompileTimeObjectCache`): the host's dev-policy packs, whose
 procedures run expects. The evaluator's program takes a hit for a procedure
-it runs (under `comptime_closure_hits`) only when the entry names that
-procedure's own identity, and splices its cached code in place of compiling
-it; a cache entry is the procedure its key names, so the cache too changes
-only what evaluation compiles. `roc check` and `roc build` therefore
+it runs only when the entry names that procedure's own identity, and splices
+its cached code in place of compiling it; a cache entry is the procedure its
+key names, so the cache too changes only what evaluation compiles. Spliced
+code reports the branches it takes and the failures it meets through the same
+source events compiled code reports, bound from its certificates, so a match
+whose exhaustiveness only the evaluation can decide is resolved the same way
+whichever of the two runs it. `roc check` and `roc build` therefore
 compute the same value for every root both evaluate: a build cannot report an
 error in the program that checking did not, checking reports the errors of
 roots no build demands, and `--opt` never moves a computation between compile

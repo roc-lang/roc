@@ -445,6 +445,10 @@ pub const Program = struct {
     lowering_modules: ProgramList(check.CheckedModule.ModuleId, "lowering_modules") = .empty,
     /// See `Common.PlatformRequirementFilling` (moved from Monotype).
     platform_requirement_filling: ?Common.PlatformRequirementFilling = null,
+    /// The declaration identities of the input modules' templates and
+    /// nominal types (`Common.DeclarationNames`), moved from the Monotype
+    /// program; `fnSourceDigest` names sources by them.
+    declarations: Common.DeclarationNames = .empty,
     /// Functions whose code reaches a platform requirement, computed on first
     /// use by `fnReachesPlatformRequirement`.
     requirement_reaching_fns: ?std.DynamicBitSetUnmanaged = null,
@@ -494,6 +498,8 @@ pub const Program = struct {
         result.current_region = self.current_region;
         result.current_inline_scope = self.current_inline_scope;
         result.platform_requirement_filling = self.platform_requirement_filling;
+        // A shard computes no procedure identities; the owner keeps the table.
+        result.declarations = .empty;
         result.requirement_reaching_fns = null;
         return result;
     }
@@ -677,6 +683,7 @@ pub const Program = struct {
         for (self.local_names.unsafeRawItemsForView()) |name| {
             if (name.len > 0) self.allocator.free(name);
         }
+        self.declarations.deinit(self.allocator);
         self.local_names.deinit(self.allocator);
         self.stmt_inline_scopes.deinit(self.allocator);
         self.expr_inline_scopes.deinit(self.allocator);
@@ -1188,19 +1195,25 @@ pub const Program = struct {
         writeIdentityBytes(&hasher, "roc.lifted.fn-source.v2");
         if (fn_.source) |template| {
             writeIdentityBytes(&hasher, "template");
-            writeFnDefDigest(&hasher, &self.names, template.fn_def);
+            writeFnDefDigest(&hasher, &self.names, &self.declarations, template.fn_def);
             if (Mono.generatedBodyKey(template)) |body_key| {
                 writeIdentityBytes(&hasher, "generated_body");
                 hasher.update(&body_key.bytes);
             } else {
                 writeIdentityBytes(&hasher, "no_generated_body");
             }
-            hasher.update(&template.evidence_digest.bytes);
-            // The equality digest, not the stored-identity digest: the latter
-            // names a nominal type by the checked type id of whichever
-            // module's store lowered it, and the same specialization lowered
-            // by two programs must have one identity.
-            const mono_digest = self.types.equalityDigest(&self.names, template.mono_fn_ty);
+            // Evidence and the request type are named by declaration, as a
+            // specialization key names them, so that an edit elsewhere in a
+            // module leaves the identities of the specializations that do not
+            // reach it unchanged (design.md "Identity Offers").
+            if (template.evidence_declaration) |evidence| {
+                writeIdentityBytes(&hasher, "evidence-declaration");
+                hasher.update(&evidence.bytes);
+            } else {
+                writeIdentityBytes(&hasher, "evidence");
+                hasher.update(&template.evidence_digest.bytes);
+            }
+            const mono_digest = self.types.declarationDigestCached(&self.names, template.mono_fn_ty, self.declarations.nominalDeclarations(), null);
             hasher.update(&mono_digest.bytes);
             if (template.discovery) writeIdentityBytes(&hasher, "discovery");
         } else {
@@ -1358,8 +1371,14 @@ pub const Program = struct {
         if (!template.procedure_keyed_by_layout or fn_.spec_constr_pattern != null) return null;
         var hasher = TypeDigestHasher.init();
         writeIdentityBytes(&hasher, "roc.lifted.fn-layout-keyed-source.v1");
-        writeFnDefDigest(&hasher, &self.names, template.fn_def);
-        hasher.update(&template.evidence_digest.bytes);
+        writeFnDefDigest(&hasher, &self.names, &self.declarations, template.fn_def);
+        if (template.evidence_declaration) |evidence| {
+            writeIdentityBytes(&hasher, "evidence-declaration");
+            hasher.update(&evidence.bytes);
+        } else {
+            writeIdentityBytes(&hasher, "evidence");
+            hasher.update(&template.evidence_digest.bytes);
+        }
         writeIdentityBytes(&hasher, if (fn_.iterator_fusion_scope) "iterator-fusion" else "plain");
         return hasher.finalResult();
     }
@@ -2424,7 +2443,7 @@ test "monotype lifted declarations are referenced" {
     _ = @import("body_shard_test.zig");
 }
 
-fn writeFnDefDigest(hasher: *TypeDigestHasher, name_store: *const names.NameStore, fn_def: Mono.FnDef) void {
+fn writeFnDefDigest(hasher: *TypeDigestHasher, name_store: *const names.NameStore, declarations: *const Common.DeclarationNames, fn_def: Mono.FnDef) void {
     // Whether a template was requested from its own module or from an
     // importer changes nothing about the code it lowers to, so both spellings
     // digest alike; otherwise a package's pack and the apps that import it
@@ -2438,9 +2457,9 @@ fn writeFnDefDigest(hasher: *TypeDigestHasher, name_store: *const names.NameStor
         .encoder_for_runtime => "encoder_for_runtime",
     });
     switch (fn_def) {
-        .local_template, .imported_template, .checked_generated => |template| writeProcTemplateDigest(hasher, template),
+        .local_template, .imported_template, .checked_generated => |template| writeProcTemplateDigest(hasher, declarations, template),
         .nested => |nested| {
-            writeProcTemplateDigest(hasher, nested.owner);
+            writeProcTemplateDigest(hasher, declarations, nested.owner);
             writeIdentityU32(hasher, @backingInt(nested.site));
             if (nested.default_root) |root| {
                 writeIdentityBytes(hasher, "default-root");
@@ -2459,21 +2478,29 @@ fn writeFnDefDigest(hasher: *TypeDigestHasher, name_store: *const names.NameStor
         // A hosted function is named by its external symbol; its dispatch
         // slot is assigned per program and is not part of the code it names.
         .local_hosted, .imported_hosted => |hosted_fn| {
-            writeProcTemplateDigest(hasher, hosted_fn.template);
+            writeProcTemplateDigest(hasher, declarations, hosted_fn.template);
             writeIdentityBytes(hasher, name_store.externalSymbolNameText(hosted_fn.external_symbol_name));
         },
         .parser_runtime => |runtime| {
-            writeProcTemplateDigest(hasher, runtime.owner);
+            writeProcTemplateDigest(hasher, declarations, runtime.owner);
             writeIdentityU32(hasher, @backingInt(runtime.expr));
         },
         .encoder_for_runtime => |runtime| {
-            writeProcTemplateDigest(hasher, runtime.owner);
+            writeProcTemplateDigest(hasher, declarations, runtime.owner);
             writeIdentityU32(hasher, @backingInt(runtime.expr));
         },
     }
 }
 
-fn writeProcTemplateDigest(hasher: *TypeDigestHasher, template: names.ProcTemplate) void {
+/// A template by its declaration identity when the program names it, else by
+/// its module's key and ids (design.md "Identity Offers").
+fn writeProcTemplateDigest(hasher: *TypeDigestHasher, declarations: *const Common.DeclarationNames, template: names.ProcTemplate) void {
+    if (declarations.template(template)) |declaration| {
+        writeIdentityBytes(hasher, "declaration");
+        hasher.update(&declaration);
+        return;
+    }
+    writeIdentityBytes(hasher, "artifact");
     hasher.update(&template.artifact.bytes);
     writeIdentityU32(hasher, @backingInt(template.proc_base));
     writeIdentityU32(hasher, @backingInt(template.template));

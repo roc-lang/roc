@@ -222,11 +222,6 @@ pub const RootManifest = struct {
 pub const Options = struct {
     /// The object cache asked for closed specializations.
     spec_cache: ?Common.SpecCacheLookup = null,
-    /// Whether the cache may also serve specializations the compile-time
-    /// roots reach. The evaluator splices those entries into its own image,
-    /// which is only faithful when no compile-time-only exhaustiveness site
-    /// waits for the evaluation to reach it (`CheckedPipeline` decides).
-    comptime_closure_hits: bool = false,
     inline_plan: SolvedInline.Plan = .{},
     /// Lower every keyed specialization's procedure body, even one whose every
     /// call was inlined, so a pack program can offer it.
@@ -836,13 +831,11 @@ const Lowerer = struct {
     completed_scalar_values: ?*const ComptimeScalarValues.CompletedScalarValues,
     proc_debug_names: bool,
     spec_cache: ?Common.SpecCacheLookup,
-    comptime_closure_hits: bool,
     /// This consumer's explicit share of the producer's roots and requests.
     root_manifest: ?RootManifest,
-    /// True while the closure of the compile-time roots is being lowered.
-    /// Those procedures run in the compile-time evaluator, which takes
-    /// object-cache entries only under `comptime_closure_hits`; procedures
-    /// first reached afterwards may always be served.
+    /// True while the closure of the compile-time roots is being lowered:
+    /// those procedures run in the compile-time evaluator, which splices the
+    /// object-cache entries it takes into its own image.
     comptime_phase: bool,
     /// Drain positions, kept across calls so a second drain resumes.
     fn_queue_index: usize,
@@ -1149,7 +1142,6 @@ const Lowerer = struct {
             .completed_scalar_values = options.completed_scalar_values,
             .proc_debug_names = options.proc_debug_names,
             .spec_cache = options.spec_cache,
-            .comptime_closure_hits = options.comptime_closure_hits,
             .root_manifest = options.root_manifest,
             .comptime_phase = true,
             .fn_queue_index = 0,
@@ -1513,8 +1505,7 @@ const Lowerer = struct {
         }
         // The compile-time roots' closure lowers first, so that a procedure
         // the evaluator runs is known as such when the object cache is
-        // asked for it: the evaluator takes hits only under its own rules
-        // (`comptime_closure_hits`), a runtime-only procedure takes any.
+        // asked for it.
         for (self.roots.items) |root| {
             if (!rootRunsAtCompileTime(root.request)) continue;
             _ = try self.markReachableFn(root.fn_id);
@@ -3052,9 +3043,6 @@ const Lowerer = struct {
         // a SpecConstr clone or a second lowering of the same template has a
         // body and lowers normally.
         if (source_fn.body == .hosted) if (source_fn.source) |template| if (template.cached) |hit| {
-            if (self.comptime_phase and !self.comptime_closure_hits) {
-                Common.invariant("early object cache hit reached CTFE without the checked-program eligibility proof");
-            }
             if (plain_spec) {
                 if (!std.mem.eql(u8, &hit.identity, &identity.bytes)) {
                     Common.invariant("object cache entry identity disagrees with the identity lowered for its specialization key");
@@ -3071,7 +3059,7 @@ const Lowerer = struct {
                 entry.forwards_to = try self.ensureOwnFnSpec(spec.source, .finite);
             }
         };
-        if (cached == null and plain_spec and (!self.comptime_phase or self.comptime_closure_hits)) {
+        if (cached == null and plain_spec) {
             if (self.spec_cache) |cache| {
                 if (source_fn.source) |template| {
                     // Substituting compiled code for a lowered body needs the
@@ -3101,7 +3089,7 @@ const Lowerer = struct {
         const identity_contract = source_fn.source != null and spec.abi == .finite and !spec.return_reuse.enabled() and
             literal_producer == null and (try self.hostedProcForSource(source_fn.source)) == null;
         var identity_hit = false;
-        if (cached == null and identity_contract and source_fn.body == .roc and (!self.comptime_phase or self.comptime_closure_hits)) {
+        if (cached == null and identity_contract and source_fn.body == .roc) {
             if (self.spec_cache) |cache| {
                 var storage_declarable = true;
                 if (cache.lookupIdentity(identity.bytes, relation)) |hit| {
@@ -3222,6 +3210,10 @@ const Lowerer = struct {
             }
         }
         try self.procs_by_identity.putNoClobber(identity, fn_id);
+        if (pack_trace_available and packTraceEnabled()) {
+            const name = if (self.solved.lifted.procDebugName(source_fn.symbol)) |debug_name| self.solved.lifted.names.exportNameText(debug_name) else "";
+            std.debug.print("finalize-identity {s} body={s} cached={} keyed={} name={s}\n", .{ &identity.symbolHex(), @tagName(source_fn.body), cached != null, source_fn.source != null and source_fn.source.?.spec_key != null, name });
+        }
         if (cached) |hit| {
             if (identity_hit) try self.declareIdentityHitReads(hit) else try self.declareRetiredBodyReads(hit);
         }
@@ -5656,6 +5648,7 @@ const Lowerer = struct {
             .fn_tys = self.solved.fn_tys.items,
             .source_digests = self.source_digests,
             .fn_by_symbol = &self.source_symbols,
+            .declarations = &self.solved.lifted.declarations,
             .memo = &self.identity_memo,
         };
         const return_reuse: []const u8 = switch (spec.return_reuse) {

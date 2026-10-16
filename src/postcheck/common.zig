@@ -7,6 +7,8 @@ const layout = @import("layout");
 const lir_core = @import("lir_core");
 
 const checked = check.CheckedModule;
+const names = check.CheckedNames;
+const MonoType = @import("monotype/type.zig");
 const LIR = lir_core.LIR;
 const LiteralDemand = @import("literal_demand.zig");
 
@@ -72,6 +74,50 @@ pub const CheckedModules = struct {
 /// `LIR.LoweringModuleId`, whose domain this is. Every post-check IR carries
 /// the same `lowering_modules` table and the same ids into it.
 pub const LoweringModuleId = LIR.LoweringModuleId;
+
+/// The declaration identities (`check.DeclarationIdentities`) of the
+/// templates and nominal types of a lowering's modules, copied into the
+/// program so that a procedure's identity can name its source by declaration
+/// once the module views are gone (design.md "Identity Offers"). A template
+/// or nominal the table lacks is named by its module's key instead, which
+/// only costs reuse.
+pub const DeclarationNames = struct {
+    pub const TemplateKey = struct { artifact: [32]u8, template: u32 };
+    pub const NominalKey = struct { module_identity: [32]u8, source_decl: u32 };
+
+    templates: std.AutoHashMapUnmanaged(TemplateKey, [32]u8) = .empty,
+    nominals: std.AutoHashMapUnmanaged(NominalKey, [32]u8) = .empty,
+
+    pub const empty: DeclarationNames = .{};
+
+    pub fn deinit(self: *DeclarationNames, allocator: std.mem.Allocator) void {
+        self.templates.deinit(allocator);
+        self.nominals.deinit(allocator);
+        self.* = .empty;
+    }
+
+    /// The declaration identity of a checked procedure template.
+    pub fn template(self: *const DeclarationNames, ref: names.ProcTemplate) ?[32]u8 {
+        return self.templates.get(.{ .artifact = ref.artifact.bytes, .template = @backingInt(ref.template) });
+    }
+
+    /// The declaration identity of the nominal `source_decl` declares in the
+    /// module with identity hash `module_identity`.
+    pub fn nominal(self: *const DeclarationNames, module_identity: [32]u8, source_decl: u32) ?[32]u8 {
+        return self.nominals.get(.{ .module_identity = module_identity, .source_decl = source_decl });
+    }
+
+    /// The table as the resolver Monotype's type digests take.
+    pub fn nominalDeclarations(self: *const DeclarationNames) MonoType.NominalDeclarations {
+        return .{ .context = self, .nominal_fn = resolveNominal };
+    }
+
+    fn resolveNominal(context: *const anyopaque, module_identity: []const u8, source_decl: u32) ?[32]u8 {
+        const self: *const DeclarationNames = @ptrCast(@alignCast(context));
+        if (module_identity.len != 32) return null;
+        return self.nominal(module_identity[0..32].*, source_decl);
+    }
+};
 
 /// How the program's app fills its platform's requirements: the app module
 /// whose values fill them, and the relation key naming that filling. Which
