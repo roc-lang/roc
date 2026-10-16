@@ -4860,6 +4860,19 @@ pub const Coordinator = struct {
         return self.buildTypecheckImportedEnvsForEnv(pkg, mod, mod.moduleEnv().?, allocator);
     }
 
+    /// The environment `mod`'s import named `import_name` was type-checked
+    /// against: the compiler's Builtin module, the local module its import
+    /// edge names, or the module it names in a dependency package. Null when
+    /// that import did not resolve to a checked module.
+    pub fn importedModuleEnv(self: *Coordinator, pkg: *PackageState, mod: *const ModuleState, import_name: []const u8) ?*ModuleEnv {
+        if (can.CIR.Import.isCompilerBuiltinImportName(import_name)) return self.builtin_modules.builtin_module.env;
+        if (localImportModuleId(mod, import_name)) |imp_id| {
+            const imp = pkg.getModule(imp_id) orelse return null;
+            return imp.moduleEnv();
+        }
+        return self.getExternalEnv(pkg.name, import_name);
+    }
+
     fn localImportModuleId(mod: *const ModuleState, import_name: []const u8) ?ModuleId {
         for (mod.imports.items) |edge| {
             if (std.mem.eql(u8, edge.import_name, import_name)) return edge.module_id;

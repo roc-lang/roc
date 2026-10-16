@@ -1100,7 +1100,10 @@ const Resolver = struct {
         }
         if (target) |resolved| {
             const node = if (selects_type) resolved.typeDeclNode() else resolved.valueDefNode();
-            if (node != null) return;
+            if (node) |target_node| {
+                self.env.store.setExposedItemTarget(@fromBackingInt(entry.exposed_item), target_node);
+                return;
+            }
         }
         const region = self.regionOf(entry);
         try self.env.pushDiagnostic(if (selects_type)
