@@ -16595,11 +16595,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         pub fn importSourceEventData(self: *Self, certificates: []const SourceEventCertificate, data: anytype) Allocator.Error!void {
+            if (certificates.len == 0) return;
+            // An artifact carries every constant its code reads beside its
+            // descriptors, so its items are indexed once rather than scanned
+            // per certificate.
+            var items = std.StringHashMap([]const u8).init(self.allocator);
+            defer items.deinit();
+            try items.ensureTotalCapacity(@intCast(data.len));
+            for (data) |item| items.putAssumeCapacity(item.name, item.bytes);
             for (certificates) |certificate| {
                 const symbol = try self.internSymbolName(certificate.data_name, .shared);
-                const bytes = for (data) |item| {
-                    if (std.mem.eql(u8, certificate.data_name, item.name)) break item.bytes;
-                } else unreachable;
+                const bytes = items.get(certificate.data_name) orelse unreachable;
                 const owned_bytes = try self.allocator.dupe(u8, bytes);
                 errdefer self.allocator.free(owned_bytes);
                 const branches = try self.allocator.dupe(base.Region, certificate.branch_regions);

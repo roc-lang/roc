@@ -18,6 +18,7 @@
 //! as compiling it directly.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const collections = @import("collections");
 const Sha256 = @import("base").Sha256;
 const lir = @import("lir");
@@ -714,13 +715,33 @@ pub const ContentNames = struct {
             }
         };
         if (has_code) {
+            // The graph a local code ordinal indexes into: each definition's
+            // kind and machine code, in order. Two sets whose definitions
+            // agree here give an ordinal the same code.
             var hasher = Sha256.init(.{});
-            hasher.update("roc.physical.artifact.graph.v1");
-            for (set.artifacts) |original| {
-                var artifact = original;
-                artifact.producer_proc = null;
-                artifact.producer_helper = null;
-                std.hash.autoHashStrat(&hasher, artifact, .Deep);
+            hasher.update("roc.physical.artifact.graph.v2");
+            for (set.artifacts) |artifact| {
+                switch (artifact.kind) {
+                    .proc => |identity| {
+                        hasher.update("proc");
+                        hasher.update(&identity.bytes);
+                    },
+                    .boxy_thunk => |identity| {
+                        hasher.update("thunk");
+                        hasher.update(&identity.bytes);
+                    },
+                    .rc_helper => |name| {
+                        hasher.update("helper");
+                        writeWord(&hasher, @intCast(name.len));
+                        hasher.update(name);
+                    },
+                    .entrypoint => hasher.update("entrypoint"),
+                    .message_pool_run => hasher.update("message-pool-run"),
+                    .branch_island => hasher.update("branch-island"),
+                }
+                writeWord(&hasher, @intCast(artifact.code.len));
+                hasher.update(artifact.code);
+                writeWord(&hasher, artifact.entry);
             }
             self.code_namespace = hasher.finalResult();
         }
@@ -856,6 +877,10 @@ pub const PreparedData = struct {
     /// storage (`StaticDataExport.root_slot`), which the linking program
     /// declares itself.
     cell_targets: std.StringHashMapUnmanaged(void),
+    /// The procedure declared under each identity a data item's code pointer
+    /// may name: every ordinary procedure of the program, indexed once for
+    /// all the fragments the program compiles.
+    producer_procs: std.AutoHashMapUnmanaged(lir.ProcIdentity, lir.LIR.LirProcSpecId),
 
     pub fn init(
         allocator: Allocator,
@@ -867,6 +892,10 @@ pub const PreparedData = struct {
         var arena = collections.SingleThreadArena.init(allocator);
         errdefer arena.deinit();
         const a = arena.allocator();
+        var producer_procs = std.AutoHashMapUnmanaged(lir.ProcIdentity, lir.LIR.LirProcSpecId){};
+        for (proc_specs, 0..) |proc, index| {
+            if (!proc.is_static_initializer and proc.root_materialization == null) try producer_procs.put(a, proc.identity, @fromBackingInt(@intCast(@as(u32, @intCast(index)))));
+        }
         var items = std.StringHashMapUnmanaged(DataItem){};
         for (string_exports) |string_export| {
             const item = try cloneData(a, .{
@@ -919,7 +948,7 @@ pub const PreparedData = struct {
             if (constant.value_id == null or constant.root_slot) continue;
             try cell_targets.put(a, items.get(constant.symbol_name).?.name, {});
         }
-        return .{ .arena = arena, .items = items, .cell_targets = cell_targets };
+        return .{ .arena = arena, .items = items, .cell_targets = cell_targets, .producer_procs = producer_procs };
     }
 
     pub fn deinit(self: *PreparedData) void {
@@ -1033,11 +1062,7 @@ pub fn extractPrepared(
     const relocations = try codegen.artifactRelocations(allocator);
     defer allocator.free(relocations);
     const refs = codegen.codeRefs();
-    var producer_procs = std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId).init(allocator);
-    defer producer_procs.deinit();
-    for (proc_specs, 0..) |proc, index| {
-        if (!proc.is_static_initializer and proc.root_materialization == null) try producer_procs.put(proc.identity, @fromBackingInt(@intCast(@as(u32, @intCast(index)))));
-    }
+    const producer_procs = &prepared.producer_procs;
 
     // Standalone branch islands belong to this placement, not the artifact
     // set. Embedded reservations stay inside their owning bytes but every
@@ -1427,7 +1452,10 @@ pub fn appendPreparedWithPlacement(
 }
 
 fn appendMetadata(comptime CG: type, codegen: *CG, artifact: Artifact, start: usize, include_lines: bool, bind_symbols: bool) Allocator.Error!void {
-    validateSourceEventCertificates(codegen.allocator, artifact, codegen.getFragmentContract().target.toCpuArch().endian()) catch |err| switch (err) {
+    // The producer of every artifact assembled here is this compiler, so a
+    // malformed certificate is a compiler bug: a fresh artifact's producer
+    // stamped it, and a pack's was asserted when the pack was written.
+    if (builtin.mode == .debug) validateSourceEventCertificates(codegen.allocator, artifact, codegen.getFragmentContract().target.toCpuArch().endian()) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.InvalidSourceEventCertificate => std.debug.panic("invalid source event producer certificate", .{}),
     };
@@ -1655,7 +1683,7 @@ pub fn spliceIndexed(
     for (roots) |root| try stack.append(allocator, root);
     while (stack.pop()) |index| {
         if (placed.contains(index)) continue;
-        const provision: LirCodeGenMod.PhysicalProvision = .{ .graph = graph.physical_namespace, .definition = set.physicalDefinition(index) };
+        const provision: LirCodeGenMod.PhysicalProvision = .{ .graph = graph.physicalNamespace(), .definition = set.physicalDefinition(index) };
         if (codegen.physical_provisions.get(provision)) |start| {
             try placed.putNoClobber(index, start);
             continue;
@@ -1697,7 +1725,7 @@ pub fn spliceIndexed(
         // as belonging to this program. Session append does preserve lines.
         try appendMetadata(CG, codegen, artifact, start, false, false);
         try placed.putNoClobber(index, start);
-        try codegen.physical_provisions.putNoClobber(codegen.allocator, .{ .graph = graph.physical_namespace, .definition = set.physicalDefinition(index) }, start);
+        try codegen.physical_provisions.putNoClobber(codegen.allocator, .{ .graph = graph.physicalNamespace(), .definition = set.physicalDefinition(index) }, start);
         for (artifact.relocations) |relocation| {
             const symbol = try codegen.internSymbolName(relocation.name, relocation.scope);
             const offset: u64 = start + relocation.offset;

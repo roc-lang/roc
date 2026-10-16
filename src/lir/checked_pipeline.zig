@@ -2283,7 +2283,8 @@ const LirDump = if (builtin.os.tag == .freestanding) struct {
             DebugPrint.writeProc(store.allocator, store, layouts, proc_id, &buffer.writer) catch |err| switch (err) {
                 error.OutOfMemory, error.WriteFailed => return error.OutOfMemory,
             };
-            std.debug.print("=== LIR {s} (p{d}) ===\n{s}\n", .{ name orelse "<unnamed>", index, buffer.written() });
+            const spec = store.getProcSpec(proc_id);
+            std.debug.print("=== LIR {s} (p{d}) id={s} args={d} static_init={} root_mat={} external={} body={} ===\n{s}\n", .{ name orelse "<unnamed>", index, &spec.identity.symbolHex(), store.getLocalSpan(spec.args).len, spec.is_static_initializer, spec.root_materialization != null, spec.external, spec.body != null, buffer.written() });
         }
     }
 };

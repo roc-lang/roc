@@ -14,6 +14,9 @@ const Guard = struct { locals: [3]LIR.LocalId, success: LIR.CFStmtId, crash: LIR
 /// Insert explicit failure checks before each compile-time value slot read.
 /// Completion changes the failure records, never ordinary procedure bodies.
 /// The same guards therefore serve pending evaluation and completed images.
+/// A slot whose root the checker had already completed with a value when the
+/// program was lowered has a success record by construction and no outcome
+/// left to observe, so its reads stay unguarded.
 pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, _: ?*const Program.FrozenStaticData) std.mem.Allocator.Error!void {
     std.debug.assert(program.comptime_value_guards.items.len == 0);
     const has_value_slots = for (program.static_data_values.items) |slot| {
@@ -54,7 +57,7 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, _: ?*const
                 .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal, .proc_ref => continue,
             };
             const root = program.static_data_values.items[@backingInt(slot)].compile_time_root orelse continue;
-            if (root.role != .value) continue;
+            if (root.role != .value or root.completion == .value) continue;
             try uses.append(allocator, .{ .proc = proc_id, .stmt = stmt_id, .slot = slot });
         }
     }
@@ -320,4 +323,73 @@ fn testCompletedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error ||
     try std.testing.expectEqual(value_slots[0], kept.value.static_data);
     try std.testing.expectEqual(@as(usize, 4), program.store.getLocalSpan(program.store.getProcSpec(owners[0]).frame_locals).len);
     try std.testing.expectEqual(@as(u64, 0), program.store.getProcSpec(owners[0]).native_code_revision);
+}
+
+test "a value the checker completed before lowering is read without a guard" {
+    try testCheckerCompletedValue(std.testing.allocator);
+}
+
+test "checker-completed value guard allocation failure cleanup" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testCheckerCompletedValue, .{});
+}
+
+fn testCheckerCompletedValue(allocator: std.mem.Allocator) (std.mem.Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+    var program = try Program.Result.init(allocator, .u64);
+    defer program.deinit();
+    const record_layout = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
+    const struct_idx = program.layouts.getLayout(record_layout).getStruct().idx;
+    const plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(allocator, .scalar);
+    // The first slot pair is pending; the checker completed the second.
+    const completions = [_]Program.ComptimeRootCompletion{ .pending, .value };
+    var value_slots: [2]LIR.StaticDataId = undefined; // Both entries are assigned below before use.
+    for (&value_slots, completions) |*value_slot, completion| {
+        const failure_slot: LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
+        try program.static_data_values.append(allocator, .{
+            .initializer = null,
+            .layout_idx = record_layout,
+            .compile_time_root = .{
+                .module = .{},
+                .root = undefined, // Guard insertion reads slot roles, never checked-root identities.
+                .const_locator = null,
+                .completion = completion,
+                .role = .{ .failure_message = .{
+                    .failed_field = 0,
+                    .message_field = 1,
+                    .failed_offset = program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0),
+                    .message_offset = program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1),
+                } },
+            },
+        });
+        value_slot.* = @fromBackingInt(@intCast(program.static_data_values.items.len));
+        try program.static_data_values.append(allocator, .{
+            .initializer = null,
+            .layout_idx = .u8,
+            .compile_time_root = .{
+                .module = .{},
+                .root = undefined, // Guard insertion reads slot roles, never checked-root identities.
+                .const_locator = null,
+                .completion = completion,
+                .role = .{ .value = .{ .failure_slot = failure_slot, .plan = plan } },
+            },
+        });
+    }
+    var loads: [2]LIR.CFStmtId = undefined; // Both entries are assigned below before use.
+    var owners: [2]LIR.LirProcSpecId = undefined; // Both entries are assigned below before use.
+    for (value_slots, &loads, &owners, 0..) |slot, *load, *owner, i| {
+        const target = try program.store.addLocal(.{ .layout_idx = .u8 });
+        const ret = try program.store.addCFStmt(.{ .ret = .{ .value = target } }, .test_fixture);
+        load.* = try program.store.addCFStmt(.{ .assign_literal = .{ .target = target, .value = .{ .static_data = slot }, .next = ret } }, .test_fixture);
+        owner.* = try program.store.addProcSpec(.{ .name = .fromRaw(i), .identity = LIR.ProcIdentity.forTest(@intCast(i + 1)), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{target}), .body = load.*, .ret_layout = .u8 }, .none);
+    }
+    try insert(allocator, &program, null);
+    // Only the pending slot's read is guarded.
+    try std.testing.expectEqual(@as(usize, 1), program.comptime_value_guards.items.len);
+    try std.testing.expectEqual(owners[0], program.comptime_value_guards.items[0].owner);
+    try std.testing.expectEqual(value_slots[0], program.comptime_value_guards.items[0].value_slot);
+    try std.testing.expect(program.static_data_values.items[@backingInt(value_slots[1])].first_comptime_guard == null);
+    // The completed slot's read and frame are exactly as lowered.
+    const kept = program.store.getCFStmtImmediate(loads[1]).assign_literal;
+    try std.testing.expectEqual(value_slots[1], kept.value.static_data);
+    try std.testing.expectEqual(@as(usize, 1), program.store.getLocalSpan(program.store.getProcSpecImmediate(owners[1]).frame_locals).len);
 }

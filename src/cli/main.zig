@@ -432,13 +432,20 @@ const CompileTimeObjectCache = struct {
         @memset(generated, false);
         var generated_offer = false;
         const trace = std.c.getenv("ROC_PACK_TRACE") != null;
+        var initializer_slots = collections.DenseMap(lir.LIR.LirProcSpecId, u32).init(self.allocator);
+        defer initializer_slots.deinit();
+        if (trace) for (lowered.lir_result.static_data_values.items, 0..) |value, slot| {
+            if (value.initializer) |initializer| try initializer_slots.put(initializer, @intCast(slot));
+        };
         for (retained.procedures.items) |*proc| {
             generated_offer = generated_offer or keyed[@backingInt(proc.id)];
             generated[@backingInt(proc.id)] = true;
             try sets.append(self.allocator, &proc.fragment.set);
             if (trace and !keyed[@backingInt(proc.id)]) {
                 const spec = lowered.lir_result.store.getProcSpec(proc.id);
-                std.debug.print("unoffered-emitted {s} static_init={} root_mat={} external={} abi={s} hosted={} tail_group={} name={s}\n", .{ &spec.identity.symbolHex(), spec.is_static_initializer, spec.root_materialization != null, spec.external, @tagName(spec.abi), spec.hosted != null, spec.tail_group != null, lowered.lir_result.store.procDebugName(proc.id) orelse "" });
+                var code_bytes: usize = 0;
+                for (proc.fragment.set.artifacts) |member| code_bytes += member.code.len;
+                std.debug.print("unoffered-emitted {s} p{d} static_init={} root_mat={} external={} abi={s} hosted={} tail_group={} code={d} artifacts={d} init_slot={?d} args={d} name={s}\n", .{ &spec.identity.symbolHex(), @backingInt(proc.id), spec.is_static_initializer, spec.root_materialization != null, spec.external, @tagName(spec.abi), spec.hosted != null, spec.tail_group != null, code_bytes, proc.fragment.set.artifacts.len, initializer_slots.get(proc.id), lowered.lir_result.store.getLocalSpan(spec.args).len, lowered.lir_result.store.procDebugName(proc.id) orelse "" });
             }
         }
         if (trace) std.debug.print("capture: retained procedures={d} helpers={d}\n", .{ retained.procedures.items.len, retained.helpers.items.len });
@@ -684,10 +691,15 @@ const CompileTimeObjectCache = struct {
 /// The time a pack collection spent admitting offers and capturing this
 /// program's artifacts, for `ROC_PACK_STATS`.
 fn printPackTimings(packs: *const pack_store.LoadedPacks) void {
-    std.debug.print("pack admission: {d} ms (decode {d} ms, index {d} ms); capture: {d} ms (combine {d} ms, plan {d} ms, encode {d} ms, stage {d} ms)\n", .{
+    std.debug.print("pack admission: {d} ms (decode {d} ms, index {d} ms: authority {d}, summaries {d}, project {d}, admit {d}, specs {d}); capture: {d} ms (combine {d} ms, plan {d} ms, encode {d} ms, stage {d} ms)\n", .{
         @divTrunc(packs.admit_ns, std.time.ns_per_ms),
         @divTrunc(packs.decode_ns, std.time.ns_per_ms),
         @divTrunc(packs.index_ns, std.time.ns_per_ms),
+        @divTrunc(packs.index_authority_ns, std.time.ns_per_ms),
+        @divTrunc(packs.index_summaries_ns, std.time.ns_per_ms),
+        @divTrunc(packs.index_project_ns, std.time.ns_per_ms),
+        @divTrunc(packs.index_admit_ns, std.time.ns_per_ms),
+        @divTrunc(packs.index_specs_ns, std.time.ns_per_ms),
         @divTrunc(packs.capture_ns, std.time.ns_per_ms),
         @divTrunc(packs.capture_combine_ns, std.time.ns_per_ms),
         @divTrunc(packs.capture_plan_ns, std.time.ns_per_ms),

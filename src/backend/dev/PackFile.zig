@@ -660,7 +660,7 @@ pub fn encodeBody(allocator: Allocator, set: *const ProcArtifact.Set) WriteError
         for (artifact.data) |item| {
             var data_row = std.mem.zeroes(DataItemRow);
             data_row.name = try builder.name(names.of(item.name));
-            data_row.bytes = try builder.bytes(&builder.data_bytes, item.bytes);
+            data_row.bytes = try builder.dataBytes(data_row.name, item.bytes);
             data_row.alignment = item.alignment;
             data_row.symbol_offset = item.symbol_offset;
             data_row.program_local_name = @intFromBool(item.program_local_name);
@@ -878,6 +878,11 @@ pub fn writeWithBody(
         try offers.materializer_reads.append(offers.lists, .{ .wrapper_identity = entry.wrapper_identity, .read = try offers.blob(entry.read) });
     }
     var columns = body.columns;
+    if (builtin.os.tag != .freestanding and std.c.getenv("ROC_PACK_TRACE") != null) {
+        std.debug.print("pack-columns artifacts={d} code={d} names={d} data_bytes={d} data_items={d} data_relocations={d} blobs={d} lines={d} relocations={d} refs={d} symbolic_refs={d} certificates={d} regions={d} materializations={d} edges={d}\n", .{
+            columns.artifacts.len, columns.code.len, columns.names.len, columns.data_bytes.len, columns.data_items.len, columns.data_relocations.len, columns.blobs.len, columns.lines.len, columns.relocations.len, columns.refs.len, columns.symbolic_refs.len, columns.certificates.len, columns.regions.len, columns.materializations.len, columns.edges.len,
+        });
+    }
     const offer_columns = try offers.columns();
     columns.blobs = offer_columns.blobs;
     columns.specs = offer_columns.specs;
@@ -925,6 +930,8 @@ const Builder = struct {
     /// Owns the finished columns.
     arena: Allocator,
     name_table: std.StringHashMap(NameRef),
+    /// The data column range first appended for each data item name.
+    data_ranges: std.AutoHashMapUnmanaged(NameRef, Range) = .empty,
     code: std.ArrayList(u8) = .empty,
     names: std.ArrayList(u8) = .empty,
     data_bytes: std.ArrayList(u8) = .empty,
@@ -952,6 +959,7 @@ const Builder = struct {
 
     fn deinit(self: *Builder) void {
         self.name_table.deinit();
+        self.data_ranges.deinit(self.lists);
         inline for (@typeInfo(Columns).@"struct".field_names) |field_name| {
             @field(self, field_name).deinit(self.lists);
         }
@@ -972,6 +980,21 @@ const Builder = struct {
         const start: u32 = @intCast(column.items.len);
         try column.appendSlice(self.lists, data);
         return .{ .start = start, .len = @intCast(data.len) };
+    }
+
+    /// The data column range holding `data` for the item named `name`. Every
+    /// artifact lists the items it carries, and many carry the same frozen
+    /// constant, so the bytes of one name are appended once and shared by
+    /// every row that names it with those bytes.
+    fn dataBytes(self: *Builder, item_name: NameRef, data: []const u8) Allocator.Error!Range {
+        const entry = try self.data_ranges.getOrPut(self.lists, item_name);
+        if (entry.found_existing) {
+            const existing = entry.value_ptr.*;
+            if (std.mem.eql(u8, self.data_bytes.items[existing.start .. existing.start + existing.len], data)) return existing;
+            return try self.bytes(&self.data_bytes, data);
+        }
+        entry.value_ptr.* = try self.bytes(&self.data_bytes, data);
+        return entry.value_ptr.*;
     }
 
     /// Encode a value field-wise into the blob column, returning its range.
@@ -1118,6 +1141,23 @@ pub const View = struct {
     /// Content identity of the artifact graph.
     pub fn physicalNamespace(self: *const View) [32]u8 {
         return self.header.physical_namespace;
+    }
+
+    /// Content identity of the whole pack: its graph's identity, which the
+    /// writer computed over the artifact columns, and the offer columns. Two
+    /// packs with this digest are one pack, so a store names a pack by it
+    /// without hashing the body again.
+    pub fn contentDigest(self: *const View) [32]u8 {
+        var hasher = std.crypto.hash.Blake3.init(.{});
+        hasher.update("roc.native.pack.content.v1");
+        hasher.update(&self.header.physical_namespace);
+        const c = &self.columns;
+        inline for (.{ "specs", "blobs", "root_reads", "conditions", "discovery", "materializer_reads" }) |field| {
+            hasher.update(std.mem.sliceAsBytes(@field(c, field)));
+        }
+        var digest: [32]u8 = undefined;
+        hasher.final(&digest);
+        return digest;
     }
 
     /// How many artifacts the pack holds.

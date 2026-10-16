@@ -2,6 +2,7 @@
 //! Monotype reservation and the artifacts the object writer splices in.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const collections = @import("collections");
 const backend = @import("backend");
 const check = @import("check");
@@ -103,11 +104,15 @@ pub const Store = struct {
     /// module pack. Content identity deduplicates identical publications without
     /// claiming the immutable complete-pack key or rewriting earlier subsets.
     /// The store's target and code-policy namespace applies to both forms.
-    pub fn writePartial(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
+    pub fn writePartial(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8, bytes: PackFile.Bytes) (Allocator.Error || error{PackWriteFailed})!void {
         const dir = try self.identityDir(origin, identity);
         defer self.allocator.free(dir);
-        var digest: [32]u8 = undefined;
-        std.crypto.hash.Blake3.hash(bytes, &digest, .{});
+        // The bytes are this compiler's own encoding, so they view.
+        const view = PackFile.View.init(bytes, self.version_hash) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.MalformedPack, error.UnsupportedPackVersion => unreachable,
+        };
+        const digest = view.contentDigest();
         const name = try std.fmt.allocPrint(self.allocator, "partial-{s}-{s}.rpk", .{ &std.fmt.bytesToHex(key, .lower), &std.fmt.bytesToHex(digest, .lower) });
         defer self.allocator.free(name);
         const path = try std.fs.path.join(self.allocator, &.{ dir, name });
@@ -234,7 +239,9 @@ test "object cache interleaved writers expose only complete final bytes" {
     try std.testing.expect(hook.observed_complete);
     hook.distinct = false;
     hook.observed_complete = false;
-    try store.writePartial(.local, identity, key, "whole completed subset");
+    const subset = try testPackBytes(allocator, store.version_hash, 1);
+    defer allocator.free(subset);
+    try store.writePartial(.local, identity, key, subset);
     try std.testing.expect(hook.distinct);
     try std.testing.expect(hook.observed_complete);
     const dir_path = try store.identityDir(.local, identity);
@@ -248,6 +255,14 @@ test "object cache interleaved writers expose only complete final bytes" {
         count += 1;
     }
     try std.testing.expectEqual(@as(usize, 2), count);
+}
+
+/// A pack with no artifacts and one settled discovery entry keyed by `tag`,
+/// so two tags give two distinct packs.
+fn testPackBytes(allocator: Allocator, version_hash: [32]u8, tag: u8) PackFile.WriteError!PackFile.Bytes {
+    var empty = backend.dev.ProcArtifact.Set{ .arena = collections.SingleThreadArena.init(allocator), .artifacts = &.{} };
+    defer empty.deinit();
+    return PackFile.writeOffers(allocator, &empty, &.{}, &.{.{ .key = @splat(tag), .platform_requirement_relation = null }}, &.{}, version_hash);
 }
 
 test "partial object publications are additive and do not occupy the complete key" {
@@ -267,8 +282,10 @@ test "partial object publications are additive and do not occupy the complete ke
     defer store.deinit();
     const identity = @as([32]u8, @splat(1));
     const key = @as([32]u8, @splat(2));
-    try store.writePartial(.local, identity, key, "first subset");
-    try store.writePartial(.local, identity, key, "first subset");
+    const first = try testPackBytes(allocator, store.version_hash, 1);
+    defer allocator.free(first);
+    try store.writePartial(.local, identity, key, first);
+    try store.writePartial(.local, identity, key, first);
     try std.testing.expect(!try store.has(.local, identity, key));
     const dir_path = try store.identityDir(.local, identity);
     defer allocator.free(dir_path);
@@ -279,7 +296,9 @@ test "partial object publications are additive and do not occupy the complete ke
     while (try iterator.next(io)) |_| count += 1;
     try std.testing.expectEqual(@as(usize, 1), count);
 
-    try store.writePartial(.local, identity, key, "expanded subset");
+    const expanded = try testPackBytes(allocator, store.version_hash, 2);
+    defer allocator.free(expanded);
+    try store.writePartial(.local, identity, key, expanded);
     try store.write(.local, identity, key, "complete module");
     try std.testing.expect(try store.has(.local, identity, key));
     const path = try store.packPath(.local, identity, key);
@@ -948,9 +967,11 @@ test "object cache write failures preserve quiet behavior and report verbose cau
                 .verbose = verbose,
             }, .arm64mac, "dev");
             defer store.deinit();
+            const pack = try testPackBytes(allocator, store.version_hash, 1);
+            defer allocator.free(pack);
             for (0..2) |_| {
                 try std.testing.expectError(error.PackWriteFailed, store.write(.local, @as([32]u8, @splat(1)), @as([32]u8, @splat(2)), "pack"));
-                try std.testing.expectError(error.PackWriteFailed, store.writePartial(.local, @as([32]u8, @splat(1)), @as([32]u8, @splat(2)), "pack"));
+                try std.testing.expectError(error.PackWriteFailed, store.writePartial(.local, @as([32]u8, @splat(1)), @as([32]u8, @splat(2)), pack));
             }
             try std.testing.expectEqual(@as(usize, if (stage == .rename) 4 else 0), capture.deleted);
             if (verbose) {
@@ -960,7 +981,10 @@ test "object cache write failures preserve quiet behavior and report verbose cau
                     .rename => "error.DiskQuota",
                 };
                 try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, capture.stderr.items, cause));
-                try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, capture.stderr.items, "(4 bytes)"));
+                try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, capture.stderr.items, "(4 bytes)"));
+                const pack_size = try std.fmt.allocPrint(allocator, "({d} bytes)", .{pack.len});
+                defer allocator.free(pack_size);
+                try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, capture.stderr.items, pack_size));
                 try std.testing.expect(std.mem.containsAtLeast(u8, capture.stderr.items, 1, store.root));
             } else {
                 try std.testing.expectEqualStrings("", capture.stderr.items);
@@ -1302,6 +1326,14 @@ pub const LoadedPacks = struct {
     admit_ns: i128 = 0,
     decode_ns: i128 = 0,
     index_ns: i128 = 0,
+    /// Within `index_ns`: pinning certificate authority, serving-demand
+    /// summaries, materializer projection, closure admission, and the
+    /// offer rows.
+    index_authority_ns: i128 = 0,
+    index_summaries_ns: i128 = 0,
+    index_project_ns: i128 = 0,
+    index_admit_ns: i128 = 0,
+    index_specs_ns: i128 = 0,
     /// Nanoseconds the compile-time cache spent capturing and encoding this
     /// program's offers, and within that combining the retained artifacts,
     /// planning the encoding, encoding each owner's pack, and staging it.
@@ -1928,20 +1960,33 @@ pub const LoadedPacks = struct {
                     if (!read.found_existing) read.value_ptr.* = entry.read;
                 }
             }
+            const authority_started = self.now();
             for (pack.set.artifacts[from..]) |artifact| {
-                backend.dev.ProcArtifact.validateSourceEventCertificates(self.allocator, artifact, @import("builtin").cpu.arch.endian()) catch |err| switch (err) {
+                // A pack's certificates were asserted well-formed when it was
+                // written (design.md "Early Compile-Time Object Reuse"), so a
+                // malformed one here is a compiler bug, not a cache condition.
+                if (builtin.mode == .debug) backend.dev.ProcArtifact.validateSourceEventCertificates(self.allocator, artifact, builtin.cpu.arch.endian()) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
-                    error.InvalidSourceEventCertificate => return error.MalformedPack,
+                    error.InvalidSourceEventCertificate => std.debug.panic("pack carries a malformed source event certificate", .{}),
                 };
                 for (artifact.source_events) |certificate| try self.pinAuthority(certificate);
             }
+            const summaries_started = self.now();
+            self.index_authority_ns += summaries_started - authority_started;
             const summaries = try self.servingDemandSummaries(pack.set.artifacts, pack.edges, pack.specs, pack.materializer_reads, state.summaries.items);
             defer self.allocator.free(summaries);
+            const project_started = self.now();
+            self.index_summaries_ns += project_started - summaries_started;
             try self.projectPendingMaterializers(pack, summaries);
+            const admit_started = self.now();
+            self.index_project_ns += admit_started - project_started;
             const closed = try self.allocator.alloc(bool, pack.set.artifacts.len);
             defer self.allocator.free(closed);
             @memcpy(closed[0..from], state.valid.items);
             try self.admitNewArtifacts(pack, from, summaries, closed);
+            const specs_started = self.now();
+            self.index_admit_ns += specs_started - admit_started;
+            defer self.index_specs_ns += self.now() - specs_started;
             try state.summaries.appendSlice(self.allocator, summaries[from..]);
             try state.valid.appendSlice(self.allocator, closed[from..]);
             state.artifacts = pack.set.artifacts.len;
@@ -2304,6 +2349,9 @@ pub const LoadedPacks = struct {
         producer: LiteralProducer,
         /// Keep distinct diagnostic causes without relying on pack-local order.
         cause: [32]u8,
+        /// Digest of the read's recipe: one producer with two recipes cannot
+        /// be served, which a component's reads are checked for.
+        recipe_digest: [32]u8,
     };
 
     const LiteralRead = struct {
@@ -2340,7 +2388,9 @@ pub const LoadedPacks = struct {
     /// offers are complete. `settled` holds the demand of the set's first
     /// artifacts, which an earlier indexing found; nothing they reach was
     /// added since, so they take part only as settled callees and only the
-    /// later artifacts' components are summed.
+    /// later artifacts' components are summed. A component's demand is a bit
+    /// set over the distinct roots and reads in view, so taking in a
+    /// callee's demand costs one word per sixty-four of them.
     fn servingDemandSummaries(
         self: *LoadedPacks,
         artifacts: []const backend.dev.ProcArtifact.Artifact,
@@ -2352,38 +2402,42 @@ pub const LoadedPacks = struct {
         const from = settled.len;
         var scratch = collections.SingleThreadArena.init(self.allocator);
         defer scratch.deinit();
-        const components = try newComponents(scratch.allocator(), edges, from);
+        const a = scratch.allocator();
+        const components = try newComponents(a, edges, from);
         const count = components.count();
-        const sets = try self.allocator.alloc(std.AutoHashMap(Common.CheckedRootUse, void), count);
-        defer self.allocator.free(sets);
-        for (sets) |*set| set.* = std.AutoHashMap(Common.CheckedRootUse, void).init(self.allocator);
-        defer for (sets) |*set| set.deinit();
-        const literals = try self.allocator.alloc(std.AutoHashMap(LiteralReadKey, lir.Program.CachedLiteralRead), count);
-        defer self.allocator.free(literals);
-        for (literals) |*set| set.* = std.AutoHashMap(LiteralReadKey, lir.Program.CachedLiteralRead).init(self.allocator);
-        defer for (literals) |*set| set.deinit();
-        const recipes = try self.allocator.alloc(std.AutoHashMap(LiteralProducer, [32]u8), count);
-        defer self.allocator.free(recipes);
-        for (recipes) |*set| set.* = std.AutoHashMap(LiteralProducer, [32]u8).init(self.allocator);
-        defer for (recipes) |*set| set.deinit();
-        const complete = try self.allocator.alloc(bool, count);
-        defer self.allocator.free(complete);
-        @memset(complete, true);
+        const new_count = artifacts.len - from;
+
+        // Every distinct root and read in view, each with its first id, and
+        // what each new node contributes by itself.
+        var roots = DemandIndex(Common.CheckedRootUse, Common.CheckedRootUse){ .allocator = a };
+        var reads = DemandIndex(LiteralReadKey, LiteralRead){ .allocator = a };
+        const node_roots = try a.alloc(std.ArrayList(u32), new_count);
+        @memset(node_roots, .empty);
+        const node_reads = try a.alloc(std.ArrayList(u32), new_count);
+        @memset(node_reads, .empty);
+        const node_complete = try a.alloc(bool, new_count);
+        @memset(node_complete, true);
         for (specs) |spec| {
             if (spec.artifact < from) continue;
-            const component = components.component_of[spec.artifact - from];
+            const node = spec.artifact - from;
             const demand = spec.demand orelse {
-                complete[component] = false;
+                node_complete[node] = false;
                 continue;
             };
-            complete[component] = complete[component] and demand.permitsRetirement();
-            for (demand.literal_reads) |read| try addLiteralRead(&literals[component], &recipes[component], &complete[component], read);
+            node_complete[node] = node_complete[node] and demand.permitsRetirement();
+            for (demand.literal_reads) |read| {
+                const key = try literalReadKey(a, read);
+                try node_reads[node].append(a, try reads.id(key, .{ .key = key, .read = read }));
+            }
         }
-        for (artifacts[from..], components.component_of) |artifact, component| {
+        for (artifacts[from..], 0..) |artifact, node| {
             for (artifact.materializations) |dependency| {
                 const declaration = dependency.materialization;
                 switch (declaration.producer) {
-                    .checked => |root| try sets[component].put(.{ .module = declaration.module, .root = root }, {}),
+                    .checked => |root| {
+                        const use = Common.CheckedRootUse{ .module = declaration.module, .root = root };
+                        try node_roots[node].append(a, try roots.id(use, use));
+                    },
                     // Code that reads a literal carries that literal's read in
                     // its own pack, so serving it declares the literal even
                     // where no offer's demand reached the read (the body of a
@@ -2391,66 +2445,79 @@ pub const LoadedPacks = struct {
                     .literal => for (materializer_reads) |entry| {
                         if (!std.mem.eql(u8, &entry.wrapper_identity, &declaration.wrapper_identity)) continue;
                         if (!literalRecipeMatchesMaterializer(declaration, entry.read.recipe)) {
-                            complete[component] = false;
+                            node_complete[node] = false;
                             continue;
                         }
-                        try addLiteralRead(&literals[component], &recipes[component], &complete[component], entry.read);
+                        const key = try literalReadKey(a, entry.read);
+                        try node_reads[node].append(a, try reads.id(key, .{ .key = key, .read = entry.read }));
                     },
                 }
             }
+            for (edges[from + node]) |callee| {
+                if (callee >= from) continue;
+                const summary = settled[callee];
+                node_complete[node] = node_complete[node] and summary.complete;
+                for (summary.checked_roots) |use| try node_roots[node].append(a, try roots.id(use, use));
+                for (summary.literal_reads) |read| {
+                    const key = try literalReadKey(a, read);
+                    try node_reads[node].append(a, try reads.id(key, .{ .key = key, .read = read }));
+                }
+            }
+        }
+
+        // Ranks list the distinct items in output order, so a component's
+        // lists come out sorted by walking its bits.
+        const root_rank = try roots.ranks(a, rootUseLessThan);
+        const read_rank = try reads.ranks(a, literalReadLessThan);
+        var root_bits = try DemandBits.init(a, count, roots.items.items.len);
+        var read_bits = try DemandBits.init(a, count, reads.items.items.len);
+        const complete = try a.alloc(bool, count);
+        @memset(complete, true);
+        for (0..new_count) |node| {
+            const component = components.component_of[node];
+            complete[component] = complete[component] and node_complete[node];
+            for (node_roots[node].items) |id| root_bits.set(component, root_rank[id]);
+            for (node_reads[node].items) |id| read_bits.set(component, read_rank[id]);
         }
         var component: usize = count;
         while (component != 0) {
             component -= 1;
             for (components.membersOf(component)) |member| for (edges[from + member]) |callee| {
-                if (callee < from) {
-                    const summary = settled[callee];
-                    for (summary.checked_roots) |use| try sets[component].put(use, {});
-                    complete[component] = complete[component] and summary.complete;
-                    for (summary.literal_reads) |read| try addLiteralRead(&literals[component], &recipes[component], &complete[component], read);
-                    continue;
-                }
+                if (callee < from) continue;
                 const callee_component = components.component_of[callee - from];
                 if (callee_component == component) continue;
-                var keys = sets[callee_component].keyIterator();
-                while (keys.next()) |use| try sets[component].put(use.*, {});
+                root_bits.unionInto(component, callee_component);
+                read_bits.unionInto(component, callee_component);
                 complete[component] = complete[component] and complete[callee_component];
-                var reads = literals[callee_component].valueIterator();
-                while (reads.next()) |read| try addLiteralRead(&literals[component], &recipes[component], &complete[component], read.*);
             };
         }
-        const summaries = try self.allocator.alloc(ServingDemand, count);
-        defer self.allocator.free(summaries);
-        const a = self.authority_arena.allocator();
-        for (sets, literals, complete, summaries) |*set, *literal_set, is_complete, *summary| {
-            const uses = try a.alloc(Common.CheckedRootUse, set.count());
-            var keys = set.keyIterator();
-            for (uses) |*use| use.* = keys.next().?.*;
-            std.mem.sort(Common.CheckedRootUse, uses, {}, struct {
-                fn lessThan(_: void, left: Common.CheckedRootUse, right: Common.CheckedRootUse) bool {
-                    const order = std.mem.order(u8, &left.module, &right.module);
-                    return if (order == .eq) left.root < right.root else order == .lt;
-                }
-            }.lessThan);
-            const ordered = try self.allocator.alloc(LiteralRead, literal_set.count());
-            defer self.allocator.free(ordered);
-            var reads = literal_set.iterator();
-            for (ordered) |*read| {
-                const entry = reads.next().?;
-                read.* = .{ .key = entry.key_ptr.*, .read = entry.value_ptr.* };
+
+        const summaries = try a.alloc(ServingDemand, count);
+        const authority = self.authority_arena.allocator();
+        const by_rank_roots = try a.alloc(Common.CheckedRootUse, roots.items.items.len);
+        for (roots.items.items, 0..) |use, id| by_rank_roots[root_rank[id]] = use;
+        const by_rank_reads = try a.alloc(LiteralRead, reads.items.items.len);
+        for (reads.items.items, 0..) |read, id| by_rank_reads[read_rank[id]] = read;
+        var producers = std.AutoHashMap(LiteralProducer, [32]u8).init(a);
+        for (summaries, 0..) |*summary, id| {
+            const uses = try authority.alloc(Common.CheckedRootUse, root_bits.popCount(id));
+            var next: usize = 0;
+            var root_iterator = root_bits.iterator(id);
+            while (root_iterator.next()) |rank| : (next += 1) uses[next] = by_rank_roots[rank];
+            const literal_reads = try authority.alloc(lir.Program.CachedLiteralRead, read_bits.popCount(id));
+            next = 0;
+            producers.clearRetainingCapacity();
+            var read_iterator = read_bits.iterator(id);
+            while (read_iterator.next()) |rank| : (next += 1) {
+                const read = by_rank_reads[rank];
+                literal_reads[next] = read.read;
+                // One producer with two recipes cannot be served.
+                const recipe = try producers.getOrPut(read.key.producer);
+                if (recipe.found_existing) {
+                    if (!std.mem.eql(u8, &recipe.value_ptr.*, &read.key.recipe_digest)) complete[id] = false;
+                } else recipe.value_ptr.* = read.key.recipe_digest;
             }
-            std.mem.sort(LiteralRead, ordered, {}, struct {
-                fn lessThan(_: void, left: LiteralRead, right: LiteralRead) bool {
-                    const key_order = std.mem.order(u8, &left.key.producer.key, &right.key.producer.key);
-                    if (key_order != .eq) return key_order == .lt;
-                    const identity_order = std.mem.order(u8, &left.key.producer.identity, &right.key.producer.identity);
-                    if (identity_order != .eq) return identity_order == .lt;
-                    return std.mem.order(u8, &left.key.cause, &right.key.cause) == .lt;
-                }
-            }.lessThan);
-            const literal_reads = try a.alloc(lir.Program.CachedLiteralRead, ordered.len);
-            for (ordered, literal_reads) |read, *out| out.* = read.read;
-            summary.* = .{ .checked_roots = uses, .literal_reads = literal_reads, .complete = is_complete };
+            summary.* = .{ .checked_roots = uses, .literal_reads = literal_reads, .complete = complete[id] };
         }
         const nodes = try self.allocator.alloc(ServingDemand, artifacts.len);
         @memcpy(nodes[0..from], settled);
@@ -2458,22 +2525,120 @@ pub const LoadedPacks = struct {
         return nodes;
     }
 
-    fn addLiteralRead(
-        reads: *std.AutoHashMap(LiteralReadKey, lir.Program.CachedLiteralRead),
-        recipes: *std.AutoHashMap(LiteralProducer, [32]u8),
-        complete: *bool,
-        read: lir.Program.CachedLiteralRead,
-    ) Allocator.Error!void {
-        const producer = LiteralProducer{ .key = read.recipe.producer_key, .identity = read.recipe.object_identity };
-        var digest = try PackFile.recipeDigest(reads.allocator, read.recipe);
-        const recipe = try recipes.getOrPut(producer);
-        if (recipe.found_existing) {
-            if (!std.mem.eql(u8, &recipe.value_ptr.*, &digest)) complete.* = false;
-        } else recipe.value_ptr.* = digest;
-        var cause_hash = std.crypto.hash.Blake3.init(.{});
-        std.hash.autoHashStrat(&cause_hash, read.cause, .Deep);
-        cause_hash.final(&digest);
-        try reads.put(.{ .producer = producer, .cause = digest }, read);
+    /// Distinct demand items, each with the id of its first occurrence.
+    fn DemandIndex(comptime Key: type, comptime Item: type) type {
+        return struct {
+            allocator: Allocator,
+            ids: std.AutoHashMapUnmanaged(Key, u32) = .empty,
+            keys: std.ArrayList(Key) = .empty,
+            items: std.ArrayList(Item) = .empty,
+
+            fn id(self: *@This(), key: Key, item: Item) Allocator.Error!u32 {
+                const entry = try self.ids.getOrPut(self.allocator, key);
+                if (!entry.found_existing) {
+                    entry.value_ptr.* = @intCast(self.items.items.len);
+                    try self.keys.append(self.allocator, key);
+                    try self.items.append(self.allocator, item);
+                }
+                return entry.value_ptr.*;
+            }
+
+            /// Each id's position in the order `lessThan` gives the keys.
+            fn ranks(self: *const @This(), allocator: Allocator, comptime lessThan: fn (void, Key, Key) bool) Allocator.Error![]u32 {
+                const order = try allocator.alloc(u32, self.keys.items.len);
+                for (order, 0..) |*slot, index| slot.* = @intCast(index);
+                const Sort = struct {
+                    keys: []const Key,
+                    fn before(context: @This(), lhs: u32, rhs: u32) bool {
+                        return lessThan({}, context.keys[lhs], context.keys[rhs]);
+                    }
+                };
+                std.mem.sort(u32, order, Sort{ .keys = self.keys.items }, Sort.before);
+                const rank = try allocator.alloc(u32, order.len);
+                for (order, 0..) |item_id, position| rank[item_id] = @intCast(position);
+                return rank;
+            }
+        };
+    }
+
+    /// One bit set per component over `width` demand items.
+    const DemandBits = struct {
+        words: []u64,
+        stride: usize,
+
+        fn init(allocator: Allocator, components: usize, width: usize) Allocator.Error!DemandBits {
+            const stride = (width + 63) / 64;
+            const words = try allocator.alloc(u64, components * stride);
+            @memset(words, 0);
+            return .{ .words = words, .stride = stride };
+        }
+
+        fn row(self: *const DemandBits, component: usize) []u64 {
+            return self.words[component * self.stride ..][0..self.stride];
+        }
+
+        fn set(self: *DemandBits, component: usize, rank: u32) void {
+            self.row(component)[rank / 64] |= @as(u64, 1) << @intCast(rank % 64);
+        }
+
+        fn unionInto(self: *DemandBits, component: usize, callee: usize) void {
+            const target = self.row(component);
+            for (target, self.row(callee)) |*word, source| word.* |= source;
+        }
+
+        fn popCount(self: *const DemandBits, component: usize) usize {
+            var total: usize = 0;
+            for (self.row(component)) |word| total += @popCount(word);
+            return total;
+        }
+
+        const Iterator = struct {
+            words: []const u64,
+            index: usize = 0,
+            remaining: u64,
+
+            fn next(self: *Iterator) ?u32 {
+                while (self.remaining == 0) {
+                    self.index += 1;
+                    if (self.index >= self.words.len) return null;
+                    self.remaining = self.words[self.index];
+                }
+                const bit: u32 = @intCast(@ctz(self.remaining));
+                self.remaining &= self.remaining - 1;
+                return @intCast(self.index * 64 + bit);
+            }
+        };
+
+        fn iterator(self: *const DemandBits, component: usize) Iterator {
+            const words = self.row(component);
+            return .{ .words = words, .remaining = if (words.len == 0) 0 else words[0] };
+        }
+    };
+
+    fn rootUseLessThan(_: void, left: Common.CheckedRootUse, right: Common.CheckedRootUse) bool {
+        const order = std.mem.order(u8, &left.module, &right.module);
+        return if (order == .eq) left.root < right.root else order == .lt;
+    }
+
+    fn literalReadLessThan(_: void, left: LiteralReadKey, right: LiteralReadKey) bool {
+        const key_order = std.mem.order(u8, &left.producer.key, &right.producer.key);
+        if (key_order != .eq) return key_order == .lt;
+        const identity_order = std.mem.order(u8, &left.producer.identity, &right.producer.identity);
+        if (identity_order != .eq) return identity_order == .lt;
+        return std.mem.order(u8, &left.cause, &right.cause) == .lt;
+    }
+
+    /// The key a literal read is distinct under, with its recipe's digest.
+    fn literalReadKey(allocator: Allocator, read: lir.Program.CachedLiteralRead) Allocator.Error!LiteralReadKey {
+        var cause = std.crypto.hash.Blake3.init(.{});
+        std.hash.autoHashStrat(&cause, read.cause, .Deep);
+        var cause_digest: [32]u8 = undefined;
+        cause.final(&cause_digest);
+        return .{
+            .producer = .{ .key = read.recipe.producer_key, .identity = read.recipe.object_identity },
+            .cause = cause_digest,
+            .recipe_digest = try PackFile.recipeDigest(allocator, read.recipe),
+        };
     }
 
     /// Whether every module an offer's demand facts name is in the program

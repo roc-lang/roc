@@ -27,8 +27,11 @@ seen: std.AutoHashMap(u32, void),
 order: std.ArrayList(u32) = .empty,
 complete: bool = true,
 /// Content identity of this exact producer graph, excluding execution-phase
-/// labels, session LIR ordinals, and source-file debug numbering.
-physical_namespace: [32]u8 = undefined,
+/// labels, session LIR ordinals, and source-file debug numbering, when the
+/// set's producer recorded one. A set without one (a program's own
+/// artifacts) derives it only where a provision names it
+/// (`physicalNamespace`), not for every walk over the set.
+physical_namespace: ?[32]u8 = null,
 
 pub fn init(allocator: Allocator, set: *const ProcArtifact.Set) Allocator.Error!Self {
     var self = Self{
@@ -41,7 +44,7 @@ pub fn init(allocator: Allocator, set: *const ProcArtifact.Set) Allocator.Error!
         .seen = std.AutoHashMap(u32, void).init(allocator),
     };
     errdefer self.deinit();
-    self.physical_namespace = set.physical_namespace orelse derivedPhysicalNamespace(set);
+    self.physical_namespace = set.physical_namespace;
     for (set.artifacts, 0..) |artifact, index| {
         switch (artifact.kind) {
             .proc => |identity| try self.indexDefinition(&self.procs, identity, @intCast(index)),
@@ -85,6 +88,12 @@ pub fn init(allocator: Allocator, set: *const ProcArtifact.Set) Allocator.Error!
         };
     }
     return self;
+}
+
+/// The physical identity of the set: the producer's, or derived from the
+/// artifacts when no producer recorded one.
+pub fn physicalNamespace(self: *const Self) [32]u8 {
+    return self.physical_namespace orelse derivedPhysicalNamespace(self.set);
 }
 
 /// The physical identity of a set no producer recorded one for.

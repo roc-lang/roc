@@ -745,6 +745,7 @@ test "procedure identity excludes outer callable sets but retains nested callabl
         .fn_tys = &.{ alone, beside_lambda },
         .source_digests = &.{ @splat(1), @splat(2) },
         .fn_by_symbol = &fn_by_symbol,
+        .declarations = &Common.DeclarationNames.empty,
         .memo = &memo,
     };
     const identity = try renderer.specIdentity(first_fn, alone, &.{}, "finite", "none");

@@ -788,7 +788,9 @@ serving facts depend on its closure, and nothing an admitted artifact reaches
 arrives later. A closure containing an artifact whose reference resolves to
 nothing in the pack is not admitted, as whole-pack admission would also decline
 it. Packs with different offers of one program's closure share one encoded
-body (`PackFile.Body`). The
+body (`PackFile.Body`), and within a body the bytes of a data item are stored
+once per name: every artifact lists the items it carries, and many carry the
+same frozen constant, so their rows share one range of the data column. The
 producer supplies its checked module capability directly; an unpublished app
 artifact is not a reason to delay loading until after specialization. Exact
 checked-root layout/role certificates come from a type-only projection through
@@ -853,7 +855,8 @@ namespace proves one exact definition. Machine references and frozen callable
 relocations then name physical artifact indices through selection, binding,
 placement, and recapture. Native-image offsets are session handles, never pack
 data. Frozen data containing a callable includes its physical source graph
-identity in its content name, so equal logical names and local ordinals in two
+identity in its content name (the sequence of the graph's definitions, each by
+kind and machine code), so equal logical names and local ordinals in two
 packs cannot merge different callable values.
 
 Every declared consumer selects an eligible physical serving closure before
@@ -1830,7 +1833,10 @@ separate internal `failed: U8` (zero means success, one means failure) and
 `message: Str` fields. Empty crash messages remain
 failures. After CFG transformations, ARC, and immortal-local certification, a
 final LIR pass guards each value read with ordinary record loads, a branch, and
-a crash. The pass records guard identities for failure provenance binding;
+a crash. A slot whose root the checker had already completed with a value when
+the program was lowered has a success record by construction and no outcome
+left to observe, so its reads stay unguarded; every other value read is
+guarded. The pass records guard identities for failure provenance binding;
 publication never rewrites these ordinary procedure bodies. No subsequent CFG
 pass may invalidate these identities. Guard locals borrow the
 immutable evaluation image, including its immortal string backing, and introduce
@@ -2007,8 +2013,9 @@ resulting frozen graph participates in the consumer's one reachability pass:
 its explicit function relocations retain exactly the callable procedures that
 the completed values contain, and those procedures join the ordinary runtime
 roots supplied to ARC. Guard insertion runs after that pass and is independent
-of each value's outcome: the ordinary guard reads the completed failure record
-to select the successful read or its failure path. Worker preparation may create slots that
+of the outcome of a value that was pending when the program was lowered: the
+ordinary guard reads the completed failure record to select the successful
+read or its failure path. Worker preparation may create slots that
 lowering never reads, so no step may assume a slot present at transcoding
 survives reachability. A root that stops at a checked root's value guard is a propagated
 failure: it records the failure it read and is not reported again, because the
