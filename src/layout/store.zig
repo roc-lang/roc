@@ -3442,6 +3442,58 @@ test "ZST containers and erased boxes have distinct RC semantics" {
     );
 }
 
+test "ownership slots follow semantic indices and expand nested refcounted structs" {
+    const testing = std.testing;
+
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    // A flat struct's slots are its semantic indices, sparse ones included.
+    const sparse_idx = try store.putStructFields(&.{
+        .{ .index = 0, .layout = .i64 },
+        .{ .index = 128, .layout = .str },
+    });
+    try testing.expectEqual(@as(u32, 128), store.ownershipSlotBase(sparse_idx, 128));
+    try testing.expectEqual(@as(u32, 129), store.ownershipSlotCount(sparse_idx));
+
+    // A struct without refcounted data stays one slot.
+    const scalars_idx = try store.putStructFields(&.{
+        .{ .index = 0, .layout = .i64 },
+        .{ .index = 1, .layout = .i64 },
+    });
+    const with_scalars_idx = try store.putStructFields(&.{
+        .{ .index = 0, .layout = scalars_idx },
+        .{ .index = 1, .layout = .str },
+    });
+    try testing.expectEqual(@as(u32, 1), store.ownershipSlotBase(with_scalars_idx, 1));
+    try testing.expectEqual(@as(u32, 2), store.ownershipSlotCount(with_scalars_idx));
+
+    // inner = { 0: Str, 1: I64, 2: Str } expands in place inside
+    // outer = { 0: I64, 1: inner, 2: Str }.
+    const inner_idx = try store.putStructFields(&.{
+        .{ .index = 0, .layout = .str },
+        .{ .index = 1, .layout = .i64 },
+        .{ .index = 2, .layout = .str },
+    });
+    const outer_idx = try store.putStructFields(&.{
+        .{ .index = 0, .layout = .i64 },
+        .{ .index = 1, .layout = inner_idx },
+        .{ .index = 2, .layout = .str },
+    });
+    try testing.expectEqual(@as(u32, 0), store.ownershipSlotBase(outer_idx, 0));
+    try testing.expectEqual(@as(u32, 1), store.ownershipSlotBase(outer_idx, 1));
+    try testing.expectEqual(@as(u32, 4), store.ownershipSlotBase(outer_idx, 2));
+    try testing.expectEqual(@as(u32, 5), store.ownershipSlotCount(outer_idx));
+
+    var slots = std.ArrayList(Store.RcSlot).empty;
+    defer slots.deinit(testing.allocator);
+    try store.appendRcSlots(testing.allocator, outer_idx, 0, &slots);
+    try testing.expectEqual(@as(usize, 3), slots.items.len);
+    try testing.expectEqual(Store.RcSlot{ .slot = 1, .layout = .str }, slots.items[0]);
+    try testing.expectEqual(Store.RcSlot{ .slot = 3, .layout = .str }, slots.items[1]);
+    try testing.expectEqual(Store.RcSlot{ .slot = 4, .layout = .str }, slots.items[2]);
+}
+
 test "RC helper plans recurse through only refcounted struct fields" {
     const testing = std.testing;
 

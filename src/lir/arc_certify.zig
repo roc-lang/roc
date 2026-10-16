@@ -1056,6 +1056,9 @@ const ValueInfo = struct {
     /// Aggregate projection read from `payload_source`, encoded by
     /// `arc_dismantle.encodeProjection`.
     payload_projection: arc_dismantle.Projection = .none,
+    /// The read was stamped a take: the value claims its stored unit from
+    /// `payload_source` and is never a view of the container's slots.
+    payload_taken: bool = false,
     /// Complete outcome rows and exact argument-transfer receipts for a
     /// direct call result. Empty for every other value.
     call_outcomes: arc_sig.OutcomeSpan = .empty,
@@ -1435,6 +1438,7 @@ const SummaryProvenance = struct {
     /// Immediate container and projection retained for a deferred field take.
     payload_source: u32 = no_dense,
     payload_projection: arc_dismantle.Projection = .none,
+    payload_taken: bool = false,
 };
 
 fn summaryProvenanceEql(a: ?*const SummaryProvenance, b: ?*const SummaryProvenance) bool {
@@ -1443,7 +1447,8 @@ fn summaryProvenanceEql(a: ?*const SummaryProvenance, b: ?*const SummaryProvenan
     return std.mem.eql(u32, a.?.lender_reprs, b.?.lender_reprs) and
         std.mem.eql(u32, a.?.holder_reprs, b.?.holder_reprs) and
         a.?.payload_source == b.?.payload_source and
-        a.?.payload_projection.eql(b.?.payload_projection);
+        a.?.payload_projection.eql(b.?.payload_projection) and
+        a.?.payload_taken == b.?.payload_taken;
 }
 
 const SummaryProvenanceContext = struct {
@@ -1457,6 +1462,7 @@ const SummaryProvenanceContext = struct {
         hasher.update(std.mem.sliceAsBytes(provenance.holder_reprs));
         hasher.update(std.mem.asBytes(&provenance.payload_source));
         hasher.update(std.mem.asBytes(&provenance.payload_projection));
+        hasher.update(std.mem.asBytes(&provenance.payload_taken));
         return hasher.final();
     }
 
@@ -1464,7 +1470,8 @@ const SummaryProvenanceContext = struct {
         return std.mem.eql(u32, a.lender_reprs, b.lender_reprs) and
             std.mem.eql(u32, a.holder_reprs, b.holder_reprs) and
             a.payload_source == b.payload_source and
-            a.payload_projection.eql(b.payload_projection);
+            a.payload_projection.eql(b.payload_projection) and
+            a.payload_taken == b.payload_taken;
     }
 };
 
@@ -2423,14 +2430,15 @@ const Certifier = struct {
     };
 
     /// The parent a unit-less struct view reads its slots from in place, and
-    /// the view's first slot there. A struct field read that holds no unit
-    /// and has claimed nothing of its own is a view of its parent's slots;
-    /// claims through it are claims of the parent's slots.
+    /// the view's first slot there. An unstamped struct field read that holds
+    /// no unit and has claimed nothing of its own is a view of its parent's
+    /// slots; claims through it are claims of the parent's slots. A stamped
+    /// take instead claims its whole field as a unit of its own.
     fn viewParent(self: *Certifier, state: *const State, value: ValueId) ?struct { parent: ValueId, first: u32 } {
         if (state.balanceOf(value) != 0 or state.conditionalConditionOf(value) != null) return null;
         if (!state.claimsOf(value).isEmpty()) return null;
         const info = self.values.items[value];
-        if (info.payload_source == no_value or info.payload_projection.kind != .field) return null;
+        if (info.payload_source == no_value or info.payload_projection.kind != .field or info.payload_taken) return null;
         if (self.layouts.getLayout(self.store.getLocal(info.origin).layout_idx).tag != .struct_) return null;
         const parent_layout = self.store.getLocal(self.values.items[info.payload_source].origin).layout_idx;
         if (self.layouts.getLayout(parent_layout).tag != .struct_) return null;
@@ -3278,6 +3286,7 @@ const Certifier = struct {
                 arc_dismantle.Projection.none
             else
                 info.payload_projection,
+            .payload_taken = payload_source != no_dense and info.payload_taken,
         };
         const interned = try self.provenance_interner.getOrPutContext(
             self.allocator,
@@ -3302,6 +3311,7 @@ const Certifier = struct {
                 try arena.dupe(u32, self.provenance_holder_scratch.items),
             .payload_source = candidate.payload_source,
             .payload_projection = candidate.payload_projection,
+            .payload_taken = candidate.payload_taken,
         };
         interned.key_ptr.* = provenance.*;
         interned.value_ptr.* = provenance;
@@ -3336,6 +3346,7 @@ const Certifier = struct {
                 }
                 hasher.update(std.mem.asBytes(&provenance.payload_source));
                 hasher.update(std.mem.asBytes(&provenance.payload_projection));
+                hasher.update(std.mem.asBytes(&provenance.payload_taken));
             }
             hasher.update(std.mem.asBytes(&entry.abi_live));
             hasher.update(std.mem.asBytes(&entry.condition));
@@ -3441,6 +3452,7 @@ const Certifier = struct {
                 }
                 self.values.items[value].payload_source = container;
                 self.values.items[value].payload_projection = provenance.payload_projection;
+                self.values.items[value].payload_taken = provenance.payload_taken;
             }
         }
 
@@ -6054,6 +6066,7 @@ const Certifier = struct {
         const info = &self.values.items[value];
         info.payload_source = source_value;
         info.payload_projection = projection;
+        info.payload_taken = take_kind == .take;
     }
 
     /// An RC-bearing projection read observes the stored unit behind the
@@ -9736,6 +9749,63 @@ test "certify flags a dismantle that leaves a stored unit unspent" {
     const release_first = try f.decrefStmt(first, .str, result_assign);
     const body = try fieldReadStmt(&f, first, pair, 0, release_first);
     _ = try f.addProc(&.{pair}, body, .i64);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "unspent") != null);
+}
+
+/// `outer = { 0: { 0: Str, 1: Str }, 1: Str }` as a parameter, taking
+/// slot 1 through one view and the other slots through a second view
+/// (marked with `second_view_shell`) and directly. `release_a` decides
+/// whether slot 0 is spent.
+fn buildNestedViewTakes(f: *CertifyTest, second_view_shell: []const u32, release_a: bool) !void {
+    const outer_layout = try f.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = f.pair_str },
+        .{ .index = 1, .layout = .str },
+    });
+    const outer = try f.local(outer_layout);
+    const first_view = try f.local(f.pair_str);
+    const b = try f.local(.str);
+    const second_view = try f.local(f.pair_str);
+    const a = try f.local(.str);
+    const c = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, ret);
+    const release_c = try f.decrefStmt(c, .str, result_assign);
+    const take_c = try takeFieldStmt(f, c, outer, 1, release_c);
+    const after_a = if (release_a) try f.decrefStmt(a, .str, take_c) else take_c;
+    const take_a = if (release_a) try takeFieldStmt(f, a, second_view, 0, after_a) else after_a;
+    const read_second_view = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = second_view,
+        .op = .{ .field = .{ .source = outer, .field_idx = 0 } },
+        .residual_shell_absent_fields = try f.store.addU32Span(second_view_shell),
+        .next = take_a,
+    } }, .test_fixture);
+    const release_b = try f.decrefStmt(b, .str, read_second_view);
+    const take_b = try takeFieldStmt(f, b, first_view, 1, release_b);
+    const body = try fieldReadStmt(f, first_view, outer, 0, take_b);
+    _ = try f.addProc(&.{outer}, body, .i64);
+}
+
+test "certify accepts takes of nested record fields through views" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildNestedViewTakes(&f, &.{1}, true);
+    try f.certify();
+}
+
+test "certify flags a view that copies a taken nested field without naming it absent" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildNestedViewTakes(&f, &.{}, true);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "after the field's stored unit was taken") != null);
+}
+
+test "certify flags a nested field a view dismantle leaves unspent" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildNestedViewTakes(&f, &.{1}, false);
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "unspent") != null);
 }

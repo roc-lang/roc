@@ -20056,6 +20056,34 @@ A container qualifies for dismantling when all of the following hold:
   operand-position whole use: moved into an aggregate or a call, returned,
   or join-carried by `set_local`
 
+A container's take domain is its ownership slots, not its top-level fields.
+A struct holding refcounted data numbers its fields by semantic index, and a
+field that is itself a struct holding refcounted data expands in place into
+that struct's own slots: a field's first slot is its semantic index plus the
+extra slots of the expanded fields before it
+(`layout.Store.ownershipSlotCount`). A flat record's slots are therefore its
+semantic field indices, and a record nested in a field covers a contiguous
+slot range. A take names the slots its result carries away, residual masks
+and residual shells name slots, and a container dismantles only when every
+slot fits one mask word.
+
+A borrowed struct read out of a container, or a borrowed pure alias of one,
+is a view of the slots it covers. It holds no unit: its field reads are
+reads of the container's slots offset by the view's first slot, so a
+consumed read through it takes those slots from the container, and its
+other uses observe its whole range. Its definition copies only the
+container's representation, which may name slots the container has already
+given away on that path; ARC writes those slots on the definition as the
+view's residual shell, numbered in the view's own layout. A view whose value
+reaches an owned operand reads its whole range there, so any take through it
+is rejected. This is what lets
+`{ cursor, builder: { nodes, children }, node }` returned from one call
+hand `builder.nodes` to the next append without a retain: the builder is
+read as a view each time the source names it, and each list leaves the dying
+result by a take. A residual release reads a struct field whose slots are
+only partly residual as a view marked with its absent slots and releases the
+residual slots through it.
+
 An owned same-value binding (`ref.local` solved owned) is bound exactly once
 and holds the unit its definition gave it, whether that definition moved the
 source's unit or retained a new one, so it qualifies as a container in its own
@@ -20154,10 +20182,14 @@ tag-payload field is that payload struct's sole refcounted field. The tag read's
 variant and discriminant metadata is the explicit proof of the active shape;
 no layout shape is treated as evidence that a variant is active.
 
-Certification tracks field claims over the full committed layout field-index
-domain. Scalar and padding fields require no RC claims, regardless
+Certification tracks field claims over the full committed layout ownership-slot
+domain. Scalar and padding slots require no RC claims, regardless
 of their indices. The required claim set is derived once per queried layout from
-its committed RC fields. Path states keep the first word inline and share sparse
+its committed refcounted slots. A field read that holds no unit and has claimed
+nothing of its own is a view of its parent struct's slots, so a claim through
+it is a claim of the parent's slots offset by its first slot, and a read
+through it of a slot already claimed is a read after a take unless the view's
+residual shell names that slot. Path states keep the first word inline and share sparse
 persistent words for higher indices; forks and outcome-restitution receipts retain
 exact prior sets. Join comparison and memo hashing use field-set contents rather
 than snapshot addresses. A container's unit is spent only when its claims equal

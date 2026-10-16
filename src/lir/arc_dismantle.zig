@@ -198,17 +198,47 @@ pub const PayloadView = struct {
     tag_discriminant: u32,
 };
 
-/// Committed field-place domain for one dismantlable container: the
-/// refcounted ownership slots of its struct layout (see
-/// `layout.Store.ownershipSlotCount`), one mask bit per slot. Residual
-/// ownership is path state in ARC, not a global property of this descriptor.
+/// A contiguous range of a struct's ownership slots (see
+/// `layout.Store.ownershipSlotCount`).
+pub const SlotRange = struct {
+    first: u32,
+    count: u32,
+
+    pub fn end(self: SlotRange) u32 {
+        return self.first + self.count;
+    }
+
+    pub fn contains(self: SlotRange, slot: u32) bool {
+        return slot >= self.first and slot < self.end();
+    }
+};
+
+/// Committed field-place domain for one dismantlable container. Its places
+/// are pieces: the maximal ranges of its ownership slots between the bounds
+/// of the ranges its reads address, each holding refcounted slots. Mask bit
+/// `i` is `pieces[i]`, so every read takes or observes whole pieces, and
+/// slots no read separates share one piece. Residual ownership is path
+/// state in ARC, not a global property of this descriptor.
 pub const Container = struct {
-    /// The struct layout whose ownership slots the masks number: the
+    /// The struct layout whose ownership slots the pieces cover: the
     /// container's own, or its payload view's for a tag union.
     layout_idx: layout_mod.Idx,
+    pieces: []const SlotRange,
     full_mask: u64,
     /// Set for a tag-union container, whose fields belong to this view.
     payload_view: ?PayloadView = null,
+
+    /// The mask bit of the piece holding `slot`, if one does.
+    pub fn pieceOf(self: Container, slot: u32) ?u6 {
+        var low: usize = 0;
+        var high: usize = self.pieces.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            if (self.pieces[mid].end() <= slot) low = mid + 1 else high = mid;
+        }
+        if (low == self.pieces.len or !self.pieces[low].contains(slot)) return null;
+        return @intCast(low);
+    }
 };
 
 /// Exact resource-place transfer performed by one field read: the ownership
@@ -390,7 +420,7 @@ const Read = struct {
     stmt: LIR.CFStmtId,
     target: LIR.LocalId,
     /// The root container's ownership slots the read's result holds.
-    mask: u64,
+    slots: SlotRange,
     /// The read defines a view: its result reads the container's slots in
     /// place instead of holding them.
     view: bool = false,
@@ -617,8 +647,6 @@ const Analysis = struct {
         if (self.solution.isJoinParam(local) and !self.explicit_init_join[local_index]) return false;
         if (self.solution.maybeUninitializedCondition(local) != null) return false;
 
-        // Every ownership slot needs a residual mask bit.
-        if (self.layouts.ownershipSlotCount(self.store.getLocal(local).layout_idx) > 64) return false;
         const info = self.layouts.getStructInfo(local_layout);
         var any_rc = false;
         for (0..info.fields.len) |i| {
@@ -822,17 +850,13 @@ const Analysis = struct {
         // Only a struct root can dismantle.
         if (self.layouts.getLayout(self.store.getLocal(source).layout_idx).tag != .struct_) return false;
         const view_base: u32 = if (through_view) self.view_base[@backingInt(source)] else 0;
-        const first = view_base + self.layouts.ownershipSlotBase(self.store.getLocal(source).layout_idx, field_idx);
-        const count = self.layouts.ownershipSlotCount(self.store.getLocal(target).layout_idx);
-        if (first + count > 64) {
-            // Beyond the residual mask's reach: the root cannot dismantle.
-            self.disqualify(root);
-            return false;
-        }
-        const mask = (if (count == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(count)) - 1) << @intCast(first);
+        const slots: SlotRange = .{
+            .first = view_base + self.layouts.ownershipSlotBase(self.store.getLocal(source).layout_idx, field_idx),
+            .count = self.layouts.ownershipSlotCount(self.store.getLocal(target).layout_idx),
+        };
         const representative_index = self.projected_container[target_index];
         if (representative_index != no_index and representative_index != target_index) {
-            try self.noteEquivalencedRead(stmt, root, mask, target, @fromBackingInt(@intCast(representative_index)));
+            try self.noteEquivalencedRead(stmt, root, slots, target, @fromBackingInt(@intCast(representative_index)));
             return false;
         }
         const candidate = (try self.entryOf(root)) orelse return false;
@@ -846,12 +870,12 @@ const Analysis = struct {
         if (view) {
             self.state[target_index] = .view;
             self.alias_root[target_index] = @backingInt(root);
-            self.view_base[target_index] = first;
+            self.view_base[target_index] = slots.first;
         }
         try candidate.reads.append(self.gpa, .{
             .stmt = stmt,
             .target = target,
-            .mask = mask,
+            .slots = slots,
             .view = view,
         });
         return view;
@@ -870,13 +894,13 @@ const Analysis = struct {
     /// dominates this one, so the root's flow already observes the field
     /// before it, and a mention of the representative here would poison the
     /// root's own take when the read rejoins its field reads.
-    fn noteEquivalencedRead(self: *Analysis, stmt: LIR.CFStmtId, root: LIR.LocalId, mask: u64, target: LIR.LocalId, representative: LIR.LocalId) Error!void {
+    fn noteEquivalencedRead(self: *Analysis, stmt: LIR.CFStmtId, root: LIR.LocalId, slots: SlotRange, target: LIR.LocalId, representative: LIR.LocalId) Error!void {
         if (!self.solution.isBorrowed(target)) {
             if (try self.entryOf(representative)) |candidate| try candidate.whole_uses.append(self.gpa, stmt);
         }
         const root_candidate = (try self.entryOf(root)) orelse return;
         try root_candidate.equivalenced_reads.append(self.gpa, .{
-            .read = .{ .stmt = stmt, .target = target, .mask = mask },
+            .read = .{ .stmt = stmt, .target = target, .slots = slots },
             .representative = representative,
         });
     }
@@ -2872,6 +2896,12 @@ pub fn compute(
     defer borrow_stack.deinit(gpa);
     var rc_slots = std.ArrayList(layout_mod.Store.RcSlot).empty;
     defer rc_slots.deinit(gpa);
+    var bounds = std.ArrayList(u32).empty;
+    defer bounds.deinit(gpa);
+    var pieces = std.ArrayList(SlotRange).empty;
+    defer pieces.deinit(gpa);
+    var read_masks = std.ArrayList(u64).empty;
+    defer read_masks.deinit(gpa);
 
     // A root's deferred reads are settled by their representatives' plans,
     // and a representative's layout is a proper part of its root's layout,
@@ -3221,8 +3251,34 @@ pub fn compute(
                 const local_layout_idx = store.getLocal(local).layout_idx;
                 rc_slots.clearRetainingCapacity();
                 try layouts.appendRcSlots(gpa, local_layout_idx, 0, &rc_slots);
-                var rc_mask: u64 = 0;
-                for (rc_slots.items) |slot| rc_mask |= @as(u64, 1) << @intCast(slot.slot);
+                // Cut the slots at every read's bounds, and keep the pieces
+                // holding stored units: one mask bit each.
+                bounds.clearRetainingCapacity();
+                try bounds.append(gpa, 0);
+                try bounds.append(gpa, layouts.ownershipSlotCount(local_layout_idx));
+                for (candidate.reads.items) |read| {
+                    try bounds.append(gpa, read.slots.first);
+                    try bounds.append(gpa, read.slots.end());
+                }
+                std.sort.pdq(u32, bounds.items, {}, std.sort.asc(u32));
+                pieces.clearRetainingCapacity();
+                var next_rc: usize = 0;
+                for (bounds.items[0 .. bounds.items.len - 1], bounds.items[1..]) |low, high| {
+                    if (low == high) continue;
+                    while (next_rc < rc_slots.items.len and rc_slots.items[next_rc].slot < low) next_rc += 1;
+                    if (next_rc == rc_slots.items.len or rc_slots.items[next_rc].slot >= high) continue;
+                    try pieces.append(gpa, .{ .first = low, .count = high - low });
+                }
+                if (pieces.items.len > 64) continue :candidates;
+                const rc_mask: u64 = if (pieces.items.len == 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(pieces.items.len)) - 1;
+                read_masks.clearRetainingCapacity();
+                for (candidate.reads.items) |read| {
+                    var mask: u64 = 0;
+                    for (pieces.items, 0..) |piece, index| {
+                        if (piece.first >= read.slots.first and piece.end() <= read.slots.end()) mask |= @as(u64, 1) << @intCast(index);
+                    }
+                    try read_masks.append(gpa, mask);
+                }
 
                 // Verify each field by a forward dataflow from the container's
                 // definition over the control-flow graph: a consuming read is a take
@@ -3233,8 +3289,7 @@ pub fn compute(
                 // receipt supplies the field again before the next take.
                 read_kinds.clearRetainingCapacity();
                 field_restitutions.clearRetainingCapacity();
-                for (candidate.reads.items) |read| {
-                    const bit = read.mask & rc_mask;
+                for (candidate.reads.items, read_masks.items) |read, bit| {
                     if (bit == 0) continue;
                     const consuming = !solution.isBorrowed(read.target) or analysis.owned_demand[@backingInt(read.target)];
                     // A borrowed view's definition copies only the
@@ -3297,8 +3352,7 @@ pub fn compute(
                 // mention is a borrow observation of that field: a take of the field
                 // may not run before any of them on any path.
                 var forced_poison: u64 = 0;
-                for (candidate.reads.items) |read| {
-                    const bit = read.mask & rc_mask;
+                for (candidate.reads.items, read_masks.items) |read, bit| {
                     if (bit == 0) continue;
                     if (!solution.isBorrowed(read.target) or analysis.owned_demand[@backingInt(read.target)]) continue;
                     borrow_stack.clearRetainingCapacity();
@@ -3334,9 +3388,9 @@ pub fn compute(
                 }
 
                 var candidate_mask: u64 = 0;
-                for (candidate.reads.items) |read| {
+                for (candidate.reads.items, read_masks.items) |read, bit| {
                     if (!solution.isBorrowed(read.target) or analysis.owned_demand[@backingInt(read.target)]) {
-                        candidate_mask |= read.mask;
+                        candidate_mask |= bit;
                     }
                 }
                 candidate_mask &= rc_mask;
@@ -3530,8 +3584,8 @@ pub fn compute(
                         try undo.append(gpa, .{ .take_binding = local });
                     }
                 }
-                for (candidate.reads.items) |read| {
-                    const bit = read.mask & rc_mask;
+                const stored_pieces = try result.arena.allocator().dupe(SlotRange, pieces.items);
+                for (candidate.reads.items, read_masks.items) |read, bit| {
                     if (bit == 0 or (taken_mask & bit) != bit) continue;
                     if (!(read_kinds.get(read.stmt) orelse continue).consuming) continue;
                     if (solution.isBorrowed(read.target) and !analysis.owned_demand[@backingInt(read.target)]) continue;
@@ -3584,6 +3638,7 @@ pub fn compute(
                     const root_local: LIR.LocalId = @fromBackingInt(@intCast(analysis.view_root[@backingInt(local)]));
                     try result.containers.put(root_local, .{
                         .layout_idx = local_layout_idx,
+                        .pieces = stored_pieces,
                         .full_mask = rc_mask,
                         .payload_view = .{
                             .view = local,
@@ -3592,10 +3647,10 @@ pub fn compute(
                     });
                     try undo.append(gpa, .{ .container = root_local });
                 } else if (owned_only) {
-                    try result.owned_only_containers.put(local, .{ .layout_idx = local_layout_idx, .full_mask = rc_mask });
+                    try result.owned_only_containers.put(local, .{ .layout_idx = local_layout_idx, .pieces = stored_pieces, .full_mask = rc_mask });
                     try undo.append(gpa, .{ .owned_only_container = local });
                 } else {
-                    try result.containers.put(local, .{ .layout_idx = local_layout_idx, .full_mask = rc_mask });
+                    try result.containers.put(local, .{ .layout_idx = local_layout_idx, .pieces = stored_pieces, .full_mask = rc_mask });
                     try undo.append(gpa, .{ .container = local });
                 }
             }
@@ -3849,6 +3904,8 @@ pub fn compute(
     // keyed by the union, whose payload view numbers the slots.
     for (analysis.state, 0..) |state, local_index| {
         if (state != .view) continue;
+        // A view whose definition became a take holds those slots itself.
+        if (result.take_bindings[local_index]) continue;
         const root_index = analysis.alias_root[local_index];
         const union_index = analysis.view_root[root_index];
         const key: LIR.LocalId = @fromBackingInt(@intCast(if (union_index != no_index) union_index else root_index));
