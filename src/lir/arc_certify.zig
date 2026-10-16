@@ -2539,6 +2539,33 @@ const Certifier = struct {
         mutations: ?*std.ArrayList(OwnershipMutation),
     ) Allocator.Error!void {
         const updated = try existing.withField(self.state_arena.allocator(), field);
+        // A complete claim set has spent exactly one unit. When the value
+        // holds further explicit units they are intact, so the spent unit
+        // settles now and a dismantle of another unit starts its own claim
+        // set. The last unit keeps its claims outstanding: they record which
+        // stored units are gone for later reads and the leak check.
+        const balance = state.balanceOf(container);
+        if (balance >= 2) {
+            if (try self.requiredClaims(container)) |required| {
+                if (updated.eql(required)) {
+                    try state.setClaims(container, .{});
+                    try state.addBalance(container, -1);
+                    if (mutations) |list| {
+                        try list.append(self.allocator, .{ .claims = .{
+                            .value = container,
+                            .before = existing,
+                            .after = .{},
+                        } });
+                        try list.append(self.allocator, .{ .balance = .{
+                            .value = container,
+                            .before = balance,
+                            .after = balance - 1,
+                        } });
+                    }
+                    return;
+                }
+            }
+        }
         try state.setClaims(container, updated);
         if (mutations) |list| try list.append(self.allocator, .{ .claims = .{
             .value = container,
@@ -4408,10 +4435,13 @@ const Certifier = struct {
         // that stored unit into the join value before quotienting. When the
         // root is independently relevant this remains an ordinary borrow;
         // `tryClaim` declines a read whose exact claim is unavailable or
-        // conditionally present.
+        // conditionally present. A value whose explicit unit its claims have
+        // fully spent holds no unit either; the stored unit it claims
+        // replaces the spent one, whose claims settle here.
         for (self.relevant_bound_scratch.items) |dense| {
             const value = state.valueAtDense(dense);
-            if (state.balanceOf(value) != 0) continue;
+            const spent = try self.claimsSpendUnit(state, value);
+            if (state.balanceOf(value) != 0 and !spent) continue;
             if (self.values.items[value].payload_source == no_value) continue;
 
             var root = value;
@@ -4420,7 +4450,13 @@ const Certifier = struct {
                 if (state.balanceOf(root) > 0) break;
             }
             if (self.carrier_scratch.contains(root)) continue;
-            if (try self.tryClaim(state, value)) try state.addBalance(value, 1);
+            if (try self.tryClaim(state, value)) {
+                if (spent) {
+                    try state.setClaims(value, .{});
+                } else {
+                    try state.addBalance(value, 1);
+                }
+            }
         }
 
         // Settle deferred takes before quotienting: a field-read value driven
@@ -8142,6 +8178,161 @@ test "certify preserves payload lender when retained holder crosses join" {
     try f.certifyWith(.{ .sigs = &sigs });
 }
 
+/// A record's two units, its own and with `retain` a retained one, are each
+/// dismantled through their own alias: a take and a residual release apiece.
+fn buildRecordDismantledTwice(f: *CertifyTest, retain: bool) Allocator.Error!void {
+    const first = try f.local(.str);
+    const second = try f.local(.str);
+    const record = try f.local(f.pair_str);
+    const left = try f.local(f.pair_str);
+    const left_taken = try f.local(.str);
+    const left_residual = try f.local(.str);
+    const right = try f.local(f.pair_str);
+    const right_taken = try f.local(.str);
+    const right_residual = try f.local(.str);
+    const result = try f.local(.i64);
+
+    const ret = try f.ret(result);
+    const assign_result = try f.assignI64(result, ret);
+    const release_right_taken = try f.decrefStmt(right_taken, .str, assign_result);
+    const release_right_residual = try f.decrefStmt(right_residual, .str, release_right_taken);
+    const take_right_residual = try takeFieldStmt(f, right_residual, right, 1, release_right_residual);
+    const take_right = try takeFieldStmt(f, right_taken, right, 0, take_right_residual);
+    const alias_right = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = right,
+        .op = .{ .local = record },
+        .next = take_right,
+    } }, .test_fixture);
+    const release_left_taken = try f.decrefStmt(left_taken, .str, alias_right);
+    const release_left_residual = try f.decrefStmt(left_residual, .str, release_left_taken);
+    const take_left_residual = try takeFieldStmt(f, left_residual, left, 0, release_left_residual);
+    const take_left = try takeFieldStmt(f, left_taken, left, 1, take_left_residual);
+    const retain_left = if (retain) try f.increfStmt(left, f.pair_str, take_left) else take_left;
+    const alias_left = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = left,
+        .op = .{ .local = record },
+        .next = retain_left,
+    } }, .test_fixture);
+    const make_record = try f.store.addCFStmt(.{ .assign_struct = .{
+        .target = record,
+        .fields = try f.store.addLocalSpan(&.{ first, second }),
+        .next = alias_left,
+    } }, .test_fixture);
+    const assign_second = try f.assignStr(second, make_record);
+    const body = try f.assignStr(first, assign_second);
+    _ = try f.addProc(&.{}, body, .i64);
+}
+
+test "certify accepts dismantling a retained record's two units through separate aliases" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildRecordDismantledTwice(&f, true);
+    try f.certify();
+}
+
+test "certify rejects dismantling a record's only unit twice" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildRecordDismantledTwice(&f, false);
+    try testing.expectError(error.Certification, f.certify());
+}
+
+/// A payload view holds no unit of its own; its record's unit is stored in
+/// the tag. Takes and a residual release dismantle one unit of the view,
+/// then its copy enters a join whose body dismantles the copy. With `retain`
+/// the copy's incref supplies that dismantled unit and the tag's stored unit
+/// crosses the join intact; without it the stored unit is the one already
+/// dismantled.
+fn buildPayloadViewDismantledBeforeJoin(f: *CertifyTest, retain: bool) Allocator.Error!void {
+    const tag_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        f.pair_str,
+    });
+    const first = try f.local(.str);
+    const second = try f.local(.str);
+    const record = try f.local(f.pair_str);
+    const tag_value = try f.local(tag_layout);
+    const view = try f.local(f.pair_str);
+    const copy = try f.local(f.pair_str);
+    const taken = try f.local(.str);
+    const residual = try f.local(.str);
+    const state = try f.local(f.pair_str);
+    const state_first = try f.local(.str);
+    const state_second = try f.local(.str);
+    const result = try f.local(.i64);
+
+    const join_id = f.freshJoinPointId();
+    const ret = try f.ret(result);
+    const assign_result = try f.assignI64(result, ret);
+    const release_state_second = try f.decrefStmt(state_second, .str, assign_result);
+    const take_state_second = try takeFieldStmt(f, state_second, state, 1, release_state_second);
+    const release_state_first = try f.decrefStmt(state_first, .str, take_state_second);
+    const take_state_first = try takeFieldStmt(f, state_first, state, 0, release_state_first);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const initialize = try f.store.addCFStmt(.{ .set_local = .{
+        .target = state,
+        .value = copy,
+        .mode = .initialize_join_param,
+        .next = jump,
+    } }, .test_fixture);
+    const join_stmt = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.store.addLocalSpan(&.{state}),
+        .body = take_state_first,
+        .remainder = initialize,
+    } }, .test_fixture);
+    const release_residual = try f.decrefStmt(residual, .str, join_stmt);
+    const take_residual = try takeFieldStmt(f, residual, view, 0, release_residual);
+    const release_taken = try f.decrefStmt(taken, .str, take_residual);
+    const take = try takeFieldStmt(f, taken, view, 1, release_taken);
+    const retain_copy = if (retain) try f.increfStmt(copy, f.pair_str, take) else take;
+    const alias_copy = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = copy,
+        .op = .{ .local = view },
+        .next = retain_copy,
+    } }, .test_fixture);
+    const project = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = view,
+        .op = .{ .tag_payload_struct = .{
+            .source = tag_value,
+            .variant_index = 1,
+            .tag_discriminant = 1,
+        } },
+        .take_kind = .take,
+        .next = alias_copy,
+    } }, .test_fixture);
+    const make_tag = try f.store.addCFStmt(.{ .assign_tag = .{
+        .target = tag_value,
+        .variant_index = 1,
+        .discriminant = 1,
+        .payload = record,
+        .next = project,
+    } }, .test_fixture);
+    const make_record = try f.store.addCFStmt(.{ .assign_struct = .{
+        .target = record,
+        .fields = try f.store.addLocalSpan(&.{ first, second }),
+        .next = make_tag,
+    } }, .test_fixture);
+    const assign_second = try f.assignStr(second, make_record);
+    const body = try f.assignStr(first, assign_second);
+    _ = try f.addProc(&.{}, body, .i64);
+}
+
+test "certify carries a payload view's stored unit into a join after its retained unit is dismantled" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildPayloadViewDismantledBeforeJoin(&f, true);
+    try f.certify();
+}
+
+test "certify rejects dismantling a payload view in a join after its only unit was dismantled" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildPayloadViewDismantledBeforeJoin(&f, false);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "use of dead refcounted local") != null);
+}
+
 test "certify preserves an owned payload's dormant lender across a join" {
     var f = try CertifyTest.init(testing.allocator);
     defer f.deinit();
@@ -8583,6 +8774,15 @@ fn fieldReadStmt(f: *CertifyTest, target: LIR.LocalId, source: LIR.LocalId, fiel
     return try f.store.addCFStmt(.{ .assign_ref = .{
         .target = target,
         .op = .{ .field = .{ .source = source, .field_idx = field_idx } },
+        .next = next,
+    } }, .test_fixture);
+}
+
+fn takeFieldStmt(f: *CertifyTest, target: LIR.LocalId, source: LIR.LocalId, field_idx: u32, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+    return try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = target,
+        .op = .{ .field = .{ .source = source, .field_idx = field_idx } },
+        .take_kind = .take,
         .next = next,
     } }, .test_fixture);
 }
