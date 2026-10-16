@@ -10691,6 +10691,34 @@ test "bidi rejected dependencies fail identically with cold warm and disabled ca
     try std.testing.expectEqualSlices([32]u8, cold.artifact_keys, uncached.artifact_keys);
 }
 
+test "app discovery rejects a repeated package shorthand before registering packages" {
+    const gpa = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const ctx = CoreCtx.os(gpa, gpa, std.testing.io);
+    const builtin_modules = try sharedBuiltinModules();
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data = "app [main!] { dep: \"./a/main.roc\", dep: \"./b/main.roc\" }\nmain! = |_args| Ok({})\n",
+    });
+    const app_path = try tmp.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+    var cache_manager = CacheManager.init(gpa, .{ .enabled = false }, ctx);
+    var coord = try Coordinator.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), builtin_modules, build_options.compiler_compatibility_id, &cache_manager, ctx);
+    defer coord.deinit();
+    var arena = base.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    try std.testing.expectError(error.HeaderParseFailed, coord.discoverAppFromPath(arena.allocator(), .{ .entry_path = app_path }));
+    try std.testing.expect(coord.hasUserErrors());
+    try std.testing.expectEqual(@as(usize, 0), coord.total_remaining);
+    try std.testing.expectEqual(@as(u32, 1), coord.packages.count());
+    var reports = coord.iterReports();
+    const entry = reports.next().?;
+    try std.testing.expectEqualStrings("main", entry.module_name);
+    try std.testing.expectEqualStrings("Duplicate Package Shorthand", entry.report.title);
+    try std.testing.expect(reports.next() == null);
+}
+
 test "app discovery retains tokenizer rejection reports before platform resolution" {
     const gpa = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});

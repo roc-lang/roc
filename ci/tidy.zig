@@ -772,7 +772,6 @@ fn tidyBannedGitDependency(file: SourceFile, errors: *Errors) void {
 /// user programs through LLVM bitcode merging and inlining.
 fn tidyBannedBuiltinStdFormat(file: SourceFile, errors: *Errors) void {
     if (!std.mem.startsWith(u8, file.path, "src/builtins/")) return;
-    if (std.mem.endsWith(u8, file.path, "fuzz_sort.zig")) return;
 
     const banned_patterns: []const struct { []const u8, []const u8 } = &.{
         .{ "std.fmt.", "builtin-local parsing/formatting helpers" },
@@ -1465,7 +1464,6 @@ const DeadFilesDetector = struct {
             "shim_io.zig", // Minimal std.Io impl for shims; imported as named module via build.zig
             "tracy.zig", // Profiler module (added via b.addModule)
             "tracy_stub.zig", // No-op tracy stub for standalone static library builds (added via b.addModule)
-            "fuzz_sort.zig", // Fuzzing entry point
             "watch.zig", // File watcher entry point
             "fx_platform_test.zig", // FX platform tests
             "glue_test.zig", // Glue generation tests

@@ -772,10 +772,10 @@ hex = |str| {
 			is_valid =
 				a.is_char_in_hex_range()
 					and b.is_char_in_hex_range()
-						and c.is_char_in_hex_range()
-							and d.is_char_in_hex_range()
-								and e.is_char_in_hex_range()
-									and f.is_char_in_hex_range()
+					and c.is_char_in_hex_range()
+					and d.is_char_in_hex_range()
+					and e.is_char_in_hex_range()
+					and f.is_char_in_hex_range()
 
 			if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
 		}

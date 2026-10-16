@@ -49225,9 +49225,7 @@ fn validateBuiltinFromNumeralLiteral(
     const target = numeralTargetFromNumKind(num_kind) orelse return null;
     if (num_literal.fits.contains(target)) return null;
     return switch (target) {
-        // Floats represent every materializable literal (out-of-range becomes
-        // ±inf), so they are in every materialized fit set; only a literal
-        // whose digits were never recorded reaches this branch.
+        // The literal's correctly-rounded value overflows the float type.
         .f32, .f64 => .out_of_range,
         .u8, .u16, .u32, .u64, .u128 => blk: {
             if (num_literal.is_fractional) break :blk .fractional_integer;
