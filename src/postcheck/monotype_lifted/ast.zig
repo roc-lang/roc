@@ -128,6 +128,12 @@ pub const Fn = struct {
     /// has no function template (`Mono.Def.root_identity`). Null when
     /// `source` is present.
     root_identity: ?names.TypeDigest = null,
+    /// The index of the Monotype definition this function was lifted from,
+    /// under which Monotype recorded what the definition's code reads of
+    /// compile-time evaluation (`SpecComptimeReads.def_rows`). Null for a
+    /// function lifted from a nested definition or a lambda, whose template's
+    /// `frozen_fn` names its reads.
+    mono_def: ?u32 = null,
     args: Span(TypedLocal),
     captures: Span(TypedLocal),
     body: FnBody,
@@ -201,6 +207,8 @@ pub const LayoutRequest = struct {
     const_locator: ?check.CheckedModule.ConstLocator = null,
     comptime_root: ?Common.ComptimeValueRoot = null,
     literal_materialization: ?Common.LiteralMaterializationDeclaration = null,
+    /// `Mono.LayoutRequest.unconditional`.
+    unconditional: bool = true,
 };
 
 /// Runtime schema requested for a named runtime value shape.

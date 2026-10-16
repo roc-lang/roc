@@ -870,10 +870,13 @@ pub const SpecComptimeReads = struct {
 
     allocator: Allocator,
     rows: std.AutoHashMapUnmanaged([32]u8, Row) = .empty,
-    /// The same facts for every function with a template, by the function's
-    /// index in the Monotype program, which identity offers are recorded
-    /// under; a function with no row reads nothing.
+    /// The same facts for every function, by the function's index in the
+    /// Monotype program, which identity offers are recorded under; a
+    /// function with no row reads nothing.
     fn_rows: std.AutoHashMapUnmanaged(u32, Row) = .empty,
+    /// The same facts for every top-level definition, by its index, for the
+    /// definitions that have no function (generated helpers).
+    def_rows: std.AutoHashMapUnmanaged(u32, Row) = .empty,
     reads: std.ArrayList(Common.ComptimeRootRead) = .empty,
 
     pub fn get(self: *const SpecComptimeReads, key: [32]u8) Lookup {
@@ -887,11 +890,18 @@ pub const SpecComptimeReads = struct {
         return .{ .offerable = !row.local, .reads = self.reads.items[row.start..][0..row.len] };
     }
 
+    /// What the code of Monotype definition `def_index` reads.
+    pub fn getDef(self: *const SpecComptimeReads, def_index: u32) Lookup {
+        const row = self.def_rows.get(def_index) orelse return .{ .offerable = true, .reads = &.{} };
+        return .{ .offerable = !row.local, .reads = self.reads.items[row.start..][0..row.len] };
+    }
+
     pub fn clone(self: *const SpecComptimeReads, allocator: Allocator) Allocator.Error!SpecComptimeReads {
         var result: SpecComptimeReads = .{ .allocator = allocator };
         errdefer result.deinit();
         result.rows = try self.rows.clone(allocator);
         result.fn_rows = try self.fn_rows.clone(allocator);
+        result.def_rows = try self.def_rows.clone(allocator);
         try result.reads.appendSlice(allocator, self.reads.items);
         return result;
     }
@@ -899,6 +909,7 @@ pub const SpecComptimeReads = struct {
     pub fn deinit(self: *SpecComptimeReads) void {
         self.rows.deinit(self.allocator);
         self.fn_rows.deinit(self.allocator);
+        self.def_rows.deinit(self.allocator);
         self.reads.deinit(self.allocator);
         self.* = .{ .allocator = self.allocator };
     }
@@ -6311,6 +6322,17 @@ const Builder = struct {
 
         var result: SpecComptimeReads = .{ .allocator = self.allocator };
         errdefer result.deinit();
+        for (view.defs, 0..) |def, index| {
+            if (def.fn_id != null) continue;
+            if (!reaches_read[index]) continue;
+            const reads = try state.rootReads(self.allocator, view, Dense.item(index, def_count));
+            const start = result.reads.items.len;
+            for (reads) |read| {
+                const root = state.roots.items[read];
+                try result.reads.append(self.allocator, .{ .module = root.module.bytes, .root = @backingInt(root.root) });
+            }
+            try result.def_rows.putNoClobber(self.allocator, @intCast(index), .{ .start = @intCast(start), .len = @intCast(result.reads.items.len - start), .local = state.closure_local });
+        }
         for (view.fns, 0..) |fn_, raw| {
             const item = state.fn_items.items[raw] orelse continue;
             if (!reaches_read[Dense.of(item, def_count)]) continue;
@@ -7119,11 +7141,14 @@ const Builder = struct {
                     .body = .{ .roc = value },
                     .ret = ty,
                 }) else null;
+                // The read expression reaches this storage; a body nothing
+                // reaches demands none of it.
                 try self.program.addLayoutRequest(.{
                     .checked_type = root.checked_type,
                     .ty = ty,
                     .def = initializer,
                     .comptime_root = read,
+                    .unconditional = false,
                 });
                 try declared.put(key, initializer);
                 if (initializer) |def| self.bindCompletedRootProducer(expr_id, def);
@@ -17353,14 +17378,17 @@ fn sealedDefIdentity(
         const cell = maybe_cell orelse continue;
         hasher.update("cell");
         const ty = try cell.sealCommitted(committed_types);
-        hasher.update(&program.types.specializationDigest(&program.names, ty).bytes);
+        hasher.update(&program.types.declarationDigestCached(&program.names, ty, program.declarations.nominalDeclarations(), null).bytes);
     }
+    // Types are named by declaration, as a specialization key names them,
+    // so an edit elsewhere in a module leaves the helpers over its types
+    // alone (design.md "Identity Offers").
     const locals = program.typedLocalSpan(args);
     hashU32(&hasher, @intCast(GuardedList.borrowLen(locals)));
     for (0..GuardedList.borrowLen(locals)) |index| {
-        hasher.update(&program.types.specializationDigest(&program.names, GuardedList.at(locals, index).ty).bytes);
+        hasher.update(&program.types.declarationDigestCached(&program.names, GuardedList.at(locals, index).ty, program.declarations.nominalDeclarations(), null).bytes);
     }
-    hasher.update(&program.types.specializationDigest(&program.names, ret).bytes);
+    hasher.update(&program.types.declarationDigestCached(&program.names, ret, program.declarations.nominalDeclarations(), null).bytes);
     return .{ .bytes = hasher.finalResult() };
 }
 

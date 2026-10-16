@@ -32,6 +32,8 @@ pub const LayoutRequest = struct {
     const_locator: ?@import("check").CheckedModule.ConstLocator = null,
     comptime_root: ?Common.ComptimeValueRoot = null,
     literal_materialization: ?Common.LiteralMaterializationDeclaration = null,
+    /// `Mono.LayoutRequest.unconditional`.
+    unconditional: bool = true,
 };
 
 /// Runtime schema requested for a named runtime value shape.

@@ -431,11 +431,17 @@ const CompileTimeObjectCache = struct {
         defer self.allocator.free(generated);
         @memset(generated, false);
         var generated_offer = false;
+        const trace = std.c.getenv("ROC_PACK_TRACE") != null;
         for (retained.procedures.items) |*proc| {
             generated_offer = generated_offer or keyed[@backingInt(proc.id)];
             generated[@backingInt(proc.id)] = true;
             try sets.append(self.allocator, &proc.fragment.set);
+            if (trace and !keyed[@backingInt(proc.id)]) {
+                const spec = lowered.lir_result.store.getProcSpec(proc.id);
+                std.debug.print("unoffered-emitted {s} static_init={} root_mat={} external={} abi={s} hosted={} tail_group={} name={s}\n", .{ &spec.identity.symbolHex(), spec.is_static_initializer, spec.root_materialization != null, spec.external, @tagName(spec.abi), spec.hosted != null, spec.tail_group != null, lowered.lir_result.store.procDebugName(proc.id) orelse "" });
+            }
         }
+        if (trace) std.debug.print("capture: retained procedures={d} helpers={d}\n", .{ retained.procedures.items.len, retained.helpers.items.len });
         var fresh_count: u32 = 0;
         for (sets.items) |set| fresh_count += @intCast(set.artifacts.len);
         var helper_roots = std.ArrayList(u32).empty;
@@ -9446,10 +9452,21 @@ fn packFileBytesFiltered(
         }
         if (filter.generated_roots) |generated| requested = requested and generated[@backingInt(offer.proc)];
         const demand = offer.demand orelse unreachable;
-        if (!demand.permitsRetirement() or demand.literal_reads.len != 0) continue;
         const proc = procs[@backingInt(offer.proc)];
-        const artifact = plan.artifact_by_proc.get(offer.proc) orelse continue;
-        const entry_reads = if (offer.frozen_fn) |frozen_fn| comptime_reads.getFn(frozen_fn) else lir.CheckedPipeline.SpecComptimeReads.Lookup{ .offerable = true, .reads = &.{} };
+        if (!demand.permitsRetirement() or demand.literal_reads.len != 0) {
+            if (trace) std.debug.print("withhold-identity {s} reason={s} name={s}\n", .{ &proc.identity.symbolHex(), if (!demand.permitsRetirement()) "incomplete-demand" else "literal-reads", lowered.lir_result.store.procDebugName(offer.proc) orelse "" });
+            continue;
+        }
+        const artifact = plan.artifact_by_proc.get(offer.proc) orelse {
+            if (trace) std.debug.print("withhold-identity {s} reason=no-artifact name={s}\n", .{ &proc.identity.symbolHex(), lowered.lir_result.store.procDebugName(offer.proc) orelse "" });
+            continue;
+        };
+        const entry_reads = if (offer.mono_fn) |mono_fn|
+            comptime_reads.getFn(mono_fn)
+        else if (offer.mono_def) |mono_def|
+            comptime_reads.getDef(mono_def)
+        else
+            lir.CheckedPipeline.SpecComptimeReads.Lookup{ .offerable = true, .reads = &.{} };
         if (!entry_reads.offerable or proc.rc_variant_demandable or proc.inlined_at_calls or proc.tail_group != null or !plan.eligible[artifact]) {
             withheld += 1;
             if (trace) std.debug.print("withhold-identity {s} reason={s} name={s}\n", .{
@@ -9462,7 +9479,10 @@ fn packFileBytesFiltered(
         // An identity offer names the procedure's own artifact; a producer
         // whose artifact is another definition's is not offered by identity.
         const definition = set.artifacts[artifact];
-        if (definition.kind != .proc or !std.mem.eql(u8, &definition.kind.proc.bytes, &proc.identity.bytes) or definition.callable_contract == null) continue;
+        if (definition.kind != .proc or !std.mem.eql(u8, &definition.kind.proc.bytes, &proc.identity.bytes) or definition.callable_contract == null) {
+            if (trace) std.debug.print("withhold-identity {s} reason={s} name={s}\n", .{ &proc.identity.symbolHex(), if (definition.callable_contract == null) "no-contract" else "other-definition", lowered.lir_result.store.procDebugName(offer.proc) orelse "" });
+            continue;
+        }
         if (requested) try roots.append(allocator, @intCast(specs.items.len));
         if (trace) std.debug.print("offer-identity {s} {s}\n", .{ &proc.identity.symbolHex(), lowered.lir_result.store.procDebugName(offer.proc) orelse "" });
         try specs.append(allocator, .{

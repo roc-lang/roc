@@ -463,7 +463,7 @@ const Lifter = struct {
 
         for (self.source.defs, 0..) |def, index| {
             try self.lowerTopLevelDef(self.def_map[index] orelse
-                Common.invariant("Monotype definition was not reserved before lifting"), def);
+                Common.invariant("Monotype definition was not reserved before lifting"), def, @intCast(index));
         }
 
         for (self.source.nested_defs, 0..) |def, index| {
@@ -522,6 +522,7 @@ const Lifter = struct {
                 .const_locator = request.const_locator,
                 .comptime_root = request.comptime_root,
                 .literal_materialization = request.literal_materialization,
+                .unconditional = request.unconditional,
             });
         }
 
@@ -536,7 +537,7 @@ const Lifter = struct {
         try finalizeProgramFunctionReferenceCaptures(self.output, self.fn_captures);
     }
 
-    fn lowerTopLevelDef(self: *Lifter, fn_id: Ast.FnId, def: Mono.Def) Allocator.Error!void {
+    fn lowerTopLevelDef(self: *Lifter, fn_id: Ast.FnId, def: Mono.Def, def_index: u32) Allocator.Error!void {
         if (self.fn_captures[@backingInt(fn_id)].items.len != 0) {
             Common.invariant("top-level Monotype definition has free locals after checked closure collection");
         }
@@ -557,6 +558,7 @@ const Lifter = struct {
             .symbol = def.symbol,
             .source = source,
             .root_identity = def.root_identity,
+            .mono_def = def_index,
             .signature = if (def.fn_id) |source_fn_id| switch (self.source.fnSignatureRelation(source_fn_id)) {
                 .independent_roots => null,
                 .exact_graph => source.?.mono_fn_ty,

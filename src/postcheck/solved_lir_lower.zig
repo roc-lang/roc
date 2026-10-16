@@ -1428,12 +1428,13 @@ const Lowerer = struct {
         try self.indexSourceFns();
         // Typed producer declarations survive body elision independently of
         // expression reachability. The usual slot owner creates both roles.
+        // Storage a read expression declared is demanded by that read alone.
         for (self.solved.layout_requests.items) |request| {
             const root = request.comptime_root orelse continue;
             if (self.root_manifest) |manifest| if (!manifest.cached_root_demands) continue;
             const ty = try self.lowerType(request.ty);
             const slot = try self.comptimeValueSlot(root, ty, try self.layoutOfType(ty));
-            self.result.static_data_values.items[@backingInt(slot)].cached_demand = true;
+            if (request.unconditional) self.result.static_data_values.items[@backingInt(slot)].cached_demand = true;
             // A type-only cached provision can reserve this slot before the
             // completed checked producer declares its storage. Completion is
             // that producer's authority for both the value and its guard.
@@ -3086,8 +3087,10 @@ const Lowerer = struct {
         // offers under the identity just assigned (design.md "Identity
         // Offers"). The offer's facts replace the body's reads and ARC
         // signature the way a keyed hit's do.
-        const identity_contract = source_fn.source != null and spec.abi == .finite and !spec.return_reuse.enabled() and
-            literal_producer == null and (try self.hostedProcForSource(source_fn.source)) == null;
+        // A template specialization or a generated helper with a content
+        // identity; a literal producer is served by its recipe's key.
+        const identity_contract = (source_fn.source != null or source_fn.root_identity != null) and spec.abi == .finite and
+            !spec.return_reuse.enabled() and literal_producer == null and (try self.hostedProcForSource(source_fn.source)) == null;
         var identity_hit = false;
         if (cached == null and identity_contract and source_fn.body == .roc) {
             if (self.spec_cache) |cache| {
@@ -3210,24 +3213,21 @@ const Lowerer = struct {
             }
         }
         try self.procs_by_identity.putNoClobber(identity, fn_id);
-        if (pack_trace_available and packTraceEnabled()) {
-            const name = if (self.solved.lifted.procDebugName(source_fn.symbol)) |debug_name| self.solved.lifted.names.exportNameText(debug_name) else "";
-            std.debug.print("finalize-identity {s} body={s} cached={} keyed={} name={s}\n", .{ &identity.symbolHex(), @tagName(source_fn.body), cached != null, source_fn.source != null and source_fn.source.?.spec_key != null, name });
-        }
         if (cached) |hit| {
             if (identity_hit) try self.declareIdentityHitReads(hit) else try self.declareRetiredBodyReads(hit);
         }
         // A body lowered here and a body served from a pack are both offered
         // by identity, the latter with its producer's code.
-        if (identity_contract and (source_fn.body == .roc or cached != null)) if (source_fn.source) |template| {
+        if (identity_contract and (source_fn.body == .roc or cached != null)) {
             try self.result.identity_offers.append(self.allocator, .{
                 .proc = proc,
-                .owner = checkedSpecOwner(template),
+                .owner = if (source_fn.source) |template| checkedSpecOwner(template) else null,
                 .platform_requirement_relation = dependency_relation,
                 .demand = try self.cachedDemand(spec.source),
-                .frozen_fn = if (template.frozen_fn) |frozen| @backingInt(frozen) else null,
+                .mono_fn = if (source_fn.source) |template| (if (template.frozen_fn) |frozen| @backingInt(frozen) else null) else null,
+                .mono_def = source_fn.mono_def,
             });
-        };
+        }
         if (source_fn.source) |template| {
             if (template.spec_key) |key| {
                 // A program that keeps its keyed specializations lowers each

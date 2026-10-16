@@ -963,8 +963,11 @@ pub const IdentityOffer = struct {
     platform_requirement_relation: ?[32]u8 = null,
     demand: ?CachedCtfeDemand = null,
     /// The Monotype function this procedure was lowered from, under which
-    /// Monotype recorded what its code reads of compile-time evaluation.
-    frozen_fn: ?u32 = null,
+    /// Monotype recorded what its code reads of compile-time evaluation;
+    /// null for a generated helper, whose definition `mono_def` names.
+    mono_fn: ?u32 = null,
+    /// The Monotype definition a generated helper was lowered from.
+    mono_def: ?u32 = null,
 };
 
 /// A specialization lowered only for discovery whose discovery, through every

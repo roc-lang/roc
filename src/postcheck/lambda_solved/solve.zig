@@ -558,6 +558,7 @@ const Solver = struct {
                 .const_locator = request.const_locator,
                 .comptime_root = request.comptime_root,
                 .literal_materialization = request.literal_materialization,
+                .unconditional = request.unconditional,
             });
         }
 

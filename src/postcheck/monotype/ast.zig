@@ -1715,6 +1715,11 @@ pub const LayoutRequest = struct {
     /// A cached procedure's explicit typed storage demand, not an initializer.
     comptime_root: ?Common.ComptimeValueRoot = null,
     literal_materialization: ?Common.LiteralMaterializationDeclaration = null,
+    /// Whether this storage is demanded unconditionally: a cached procedure's
+    /// explicit typed storage demand, or a root's own declaration. Storage
+    /// declared for a completed root a lowered body reads is reached through
+    /// that read, so an unreachable body demands nothing.
+    unconditional: bool = true,
 };
 
 /// Runtime schema requested for a named runtime value shape.

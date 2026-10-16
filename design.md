@@ -798,8 +798,13 @@ unrooted, mismatched, or ambiguous storage declines the complete serving offer.
 
 Cached offers carry explicit checked-root demand before body retirement.
 Typed declarations survive to LIR as retained storage demand, independently of
-erased read statements. A root owns one failure-message slot across its value
-representations. Pending declarations demand their producer; completed values
+erased read statements. That unconditional demand belongs to the declarations
+a cached body or a root makes (`LayoutRequest.unconditional`); the storage
+Monotype declares for a completed root a lowered body reads is reached through
+the read itself, so a body nothing reaches demands no materializer, and a
+build compiles the materializers its reachable code and its served closures
+read rather than one per completed root the program mentions. A root owns one
+failure-message slot across its value representations. Pending declarations demand their producer; completed values
 materialize from the owning ConstStore, and guarded failures retain archived
 message/classification plus semantic source provenance. The checked-cache
 schema fingerprint includes that pointer-free failure record. Bound guards use
