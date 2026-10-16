@@ -11085,13 +11085,8 @@ const rebinding_record_result_source =
 // through to it. With no join for the statements in `step`'s loop, there is
 // no dead write from a branch-local into the record result's cell, so ARC
 // summarizes the record `step` returns field by field: the cache lists come
-// back unique whenever they went in unique, and every list write in `step`
-// and in the caller's loop runs without a runtime uniqueness check.
-// Lowering declares an `if`/`match` value join only when some branch falls
-// through to it. With no join for the statements in `step`'s loop, there is
-// no dead write from a branch-local into the record result's cell, so ARC
-// summarizes the record `step` returns field by field: every list field comes
-// back unique, outright or whenever the parameter it came from went in unique.
+// back unique whenever they went in unique, and the caller's writes into
+// them after each call need no runtime uniqueness check.
 test "a record returned past a rebinding if keeps its fields' unique-return facts" {
     const allocator = std.testing.allocator;
     var lowered = try lowerModuleWithOptions(allocator, rebinding_record_result_source, .wrappers, .{
@@ -11100,24 +11095,9 @@ test "a record returned past a rebinding if keeps its fields' unique-return fact
     defer lowered.deinit(allocator);
 
     const store = &lowered.lowered.lir_result.store;
-    var step_procs: usize = 0;
-    for (0..store.procSpecCount()) |index| {
-        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-        const name = store.procDebugName(proc_id) orelse continue;
-        if (!std.mem.eql(u8, name, "step")) continue;
-        const spec = store.getProcSpec(proc_id);
-        if (spec.body == null) continue;
-        step_procs += 1;
-        // Fields in layout order: cache_len, cache_off, child, ptr, tab.
-        var summarized: u64 = spec.rc_ret_unique_fields;
-        const rows = store.getU32Span(spec.rc_ret_conditions);
-        for (0..GuardedList.borrowLen(rows)) |row_index| {
-            const row: LIR.RcRetCondition = @bitCast(GuardedList.at(rows, row_index));
-            if (row.field < 64) summarized |= @as(u64, 1) << @as(u6, @intCast(row.field));
-        }
-        try std.testing.expectEqual(@as(u64, 0b10111), summarized & 0b10111);
-    }
-    try std.testing.expect(step_procs >= 1);
+    const root_sets = listSetCounts(store, try rootProc(&lowered.lowered));
+    try std.testing.expectEqual(@as(usize, 2), root_sets.check_free);
+    try std.testing.expectEqual(@as(usize, 0), root_sets.checked);
 }
 
 // A record of lists updated through a helper function stays in place: the

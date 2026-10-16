@@ -6151,18 +6151,28 @@ fn computeUniquenessDetailed(
     // A view that some statement consumes is retained there and hands the
     // retained unit on, as a returned borrowed alias does; it follows the
     // alias rule, taking its source's unit at the definition when that is
-    // the source's last use. A view that is only read stays a read.
+    // the source's last use. A view that is only read stays a read. A
+    // promoted view's definition consumes its own source, so a view whose
+    // only consumer is another view is promoted in turn: the chain's unit
+    // moves link by link to the consuming occurrence.
     var consumed_views = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     defer consumed_views.deinit(allocator);
-    for (consumes.items) |consume| {
-        if (view_source[consume.index] != no_local) consumed_views.set(consume.index);
-    }
-    for (view_defs.items) |def| {
-        if (!consumed_views.isSet(def.target)) continue;
-        view_source[def.target] = no_local;
-        foreign_def.unset(def.target);
-        try consumes.append(allocator, .{ .index = def.source, .stmt = def.stmt });
-        try alias_defs.append(allocator, .{ .target = def.target, .source = def.source, .stmt = def.stmt });
+    var promoted_views = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+    defer promoted_views.deinit(allocator);
+    var consumes_scanned: usize = 0;
+    while (consumes_scanned < consumes.items.len) {
+        for (consumes.items[consumes_scanned..]) |consume| {
+            if (view_source[consume.index] != no_local) consumed_views.set(consume.index);
+        }
+        consumes_scanned = consumes.items.len;
+        for (view_defs.items) |def| {
+            if (!consumed_views.isSet(def.target) or promoted_views.isSet(def.target)) continue;
+            promoted_views.set(def.target);
+            view_source[def.target] = no_local;
+            foreign_def.unset(def.target);
+            try consumes.append(allocator, .{ .index = def.source, .stmt = def.stmt });
+            try alias_defs.append(allocator, .{ .target = def.target, .source = def.source, .stmt = def.stmt });
+        }
     }
 
     // An alias assigned into a join result cell is one of the cell's
