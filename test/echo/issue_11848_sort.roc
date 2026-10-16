@@ -1,8 +1,8 @@
 # repro for https://github.com/roc-lang/roc/issues/11848
 #
-# Sorting compares through each numeric type's own `compare` low-level and
-# calls a comparator through the sort low-level's fixed ABI, whose ordering is
-# the closed `[Before, Same, After]`.
+# Sorting compares through each numeric type's own `compare` low-level, whose
+# ordering is the closed `[Before, Same, After]`, and the Roc sort calls the
+# comparator directly even when Boxy keeps items in their erased representation.
 sorted_desc = |items| items.sort_reversed()
 
 main! = |_| {

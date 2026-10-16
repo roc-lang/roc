@@ -31,7 +31,6 @@ const HoistedConstantsTestError = std.mem.Allocator.Error ||
         DownloadFailed,
         ExportedRuntimeEntrypointNotFound,
         ExpectedPlatformString,
-        ExpectedString,
         FileError,
         HoistedConstWasNotI64,
         HoistedConstWasNotScalar,

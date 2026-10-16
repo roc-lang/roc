@@ -1846,7 +1846,7 @@ fn finishLoweredOutput(
     lowered: anytype,
     frozen: *?LirProgram.FrozenStaticData,
 ) LowerResourceError!LoweredProgram {
-    verifyArithmeticBoundary(&lowered.lir_result.store, false);
+    verifyArithmeticBoundary(&lowered.lir_result.store);
     var lir_passes_timing_scope = PipelineStageScope.begin(target.timing, .lir_passes);
     defer lir_passes_timing_scope.end();
     var local_pass_metrics: LirPassParallelMetrics = .{};
@@ -1887,7 +1887,6 @@ fn finishLoweredOutput(
     if (target.promote_loop_appends.enabled()) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .loop_append);
     }
-    verifyArithmeticBoundary(&lowered.lir_result.store, true);
     if (target.prove_ranges) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .range);
     }
@@ -2073,20 +2072,17 @@ pub fn prepareBoxyCheckedModules(
     };
 }
 
-fn verifyArithmeticBoundary(store: *const core.LirStore, before_prover: bool) void {
+/// Source-policy arithmetic is resolved to a concrete family member during
+/// lowering, so none of it may survive into LIR. The proven members cannot be
+/// checked here: lowering mints them for the builtin module's private
+/// `plus_infallible` and `minus_infallible`, and LIR carries no provenance
+/// that would tell those apart from a pass that minted one it should not have.
+fn verifyArithmeticBoundary(store: *const core.LirStore) void {
     if (builtin.mode != .debug) return;
     for (store.getCFStmts()) |stmt| {
         if (stmt != .assign_low_level) continue;
-        const op = stmt.assign_low_level.op;
-        if (CheckedArithmetic.isSourcePolicyOp(op)) {
+        if (CheckedArithmetic.isSourcePolicyOp(stmt.assign_low_level.op)) {
             checkedPipelineInvariant("source-policy arithmetic operation reached LIR");
-        }
-        if (before_prover) {
-            if (CheckedArithmetic.classify(op)) |entry| {
-                if (entry.mode == .proven_cannot_overflow) {
-                    checkedPipelineInvariant("proven integer arithmetic existed before range proving");
-                }
-            }
         }
     }
 }

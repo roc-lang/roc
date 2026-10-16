@@ -317,9 +317,10 @@ pub fn tokenizedRegionToRegion(self: *AST, tokenized_region: TokenizedRegion) ba
         safe_end_idx;
 
     const start_region = self.tokens.resolve(safe_start_idx);
-    // Protect against underflow when final_end_idx is 0
-    const end_idx = if (final_end_idx > 0) final_end_idx - 1 else 0;
-    const end_region = self.tokens.resolve(end_idx);
+    // A span of no tokens, such as a missing expression at the end of the
+    // file, is the empty region where its first token would start.
+    if (final_end_idx <= safe_start_idx) return .{ .start = start_region.start, .end = start_region.start };
+    const end_region = self.tokens.resolve(final_end_idx - 1);
     return .{
         .start = start_region.start,
         .end = end_region.end,
@@ -517,13 +518,15 @@ fn parseReport(ctx: ParseReportContext) Allocator.Error!reporting.Report {
         .invalid_roc_version => reportParseProblem(ctx, "Invalid Roc Version", "I was parsing the `roc` entry of a header, and I did not recognize this version.", "The `roc` entry pins the version of the Roc compiler this file is written for. It must be a string holding either a nightly tag or a release version.", .{ .example = "roc: \"nightly-2026-08-05-24f0b47\"", .show_found = false }),
         .duplicate_roc_version => reportParseProblem(ctx, "Duplicate Roc Version", "I was parsing a header, and it pins the `roc` version more than once.", "A header can pin at most one compiler version. Remove the extra `roc` entries.", .{ .example = "roc: \"nightly-2026-08-05-24f0b47\"", .show_found = false }),
         .roc_version_key_is_reserved => reportParseProblem(ctx, "Reserved Dependency Name", "I was parsing a dependency record, and `roc` is used as the name of a platform or package.", "The `roc` name is reserved for pinning the compiler version, so it cannot name a dependency. Pick a different name for this one.", .{ .example = "pf: platform \"../platform/main.roc\"", .show_found = false }),
+        .dependency_source_not_plain => reportParseProblem(ctx, "Dependency Source Not Plain", "I was parsing a dependency entry, and its path or URL uses string interpolation or an escape sequence.", "Dependency sources are read exactly as they are written, so write the path or URL out in full, without `${...}` or `\\` escapes.", .{ .example = "json: \"../json/main.roc\"", .show_found = false }),
+        .duplicate_package_shorthand => reportParseProblem(ctx, "Duplicate Package Shorthand", "I was parsing a dependency record, and this name was already given to an earlier dependency in the same record.", "Each name in a dependency record refers to exactly one platform or package, so every entry needs its own name. Remove this entry, or rename one of the two.", .{ .example = "{ json: \"../json/main.roc\", json_old: \"../json_old/main.roc\" }", .show_found = false }),
         .missing_arrow => reportParseProblem(ctx, "Missing Arrow", "I was parsing a function type, and I expected an arrow here.", "Function types use `->` between arguments and return values. Add the missing arrow or wrap the surrounding type in parentheses if a different grouping was intended.", .{ .example = "Str -> U64" }),
         .expected_exposes => reportParseProblem(ctx, "Expected Exposes", "I was parsing a platform header, and I expected the `exposes` section.", "A platform header must list the values it exposes before the package and provides sections.", .{ .example = "exposes [main]" }),
         .expected_exposes_close_square => reportParseProblem(ctx, "Expected Closing Bracket", "I was parsing an `exposes` list, and I expected a closing `]`.", "Every exposes list starts with `[` and ends with `]`. Add the closing bracket after the last exposed name.", .{ .example = "exposes [main, helper]" }),
         .expected_exposes_open_square => reportParseProblem(ctx, "Expected Opening Bracket", "I was parsing an `exposes` section, and I expected an opening `[`.", "The exposed names must be written inside square brackets.", .{ .example = "exposes [main]" }),
         .expected_package_or_platform_name => reportParseProblem(ctx, "Expected Dependency Name", "I was parsing an app dependency record, and I expected a lowercase field name.", "Each package or platform entry starts with a lowercase field name, followed by `:` and a string path or `platform` path.", .{ .example = "pf: platform \"../platform/main.roc\"" }),
-        .expected_package_or_platform_colon => reportParseProblem(ctx, "Expected Dependency Colon", "I was parsing an app dependency entry, and I expected `:` after the field name.", "A dependency entry uses a colon between the local package name and the package path.", .{ .example = "json: \"../json/main.roc\"" }),
-        .expected_package_or_platform_string => reportParseProblem(ctx, "Expected Package Path", "I was parsing an app or package dependency entry, and I expected a string path.", "Normal package dependencies use a string path after the colon. Use `platform \"...\"` only for the single platform entry.", .{ .example = "json: \"../json/main.roc\"" }),
+        .expected_package_or_platform_colon => reportParseProblem(ctx, "Expected Dependency Colon", "I was parsing a dependency entry, and I expected `:` after the field name.", "A dependency entry uses a colon between the local package name and the package path.", .{ .example = "json: \"../json/main.roc\"" }),
+        .expected_package_or_platform_string => reportParseProblem(ctx, "Expected Package Path", "I was parsing a dependency entry, and I expected a string path.", "Normal package dependencies use a string path after the colon. Use `platform \"...\"` only for the single platform entry.", .{ .example = "json: \"../json/main.roc\"" }),
         .expected_package_platform_close_curly => reportParseProblem(ctx, "Expected Closing Brace", "I was parsing an app or package dependency record, and I expected a closing `}`.", "Dependency records must be closed with `}` after the final entry.", .{ .example = "{ pf: platform \"../platform/main.roc\" }" }),
         .expected_app_open_curly => reportParseProblem(ctx, "Expected Opening Brace", "I was parsing an app header, and I expected an opening `{` for dependencies.", "App headers write the platform and package dependencies in a record after the provided names list.", .{ .example = "app [main] { pf: platform \"../platform/main.roc\" }" }),
         .expected_packages => reportParseProblem(ctx, "Expected Packages", "I was parsing a platform header, and I expected the `packages` section.", "A platform header must include a packages record that names package dependencies.", .{ .example = "packages { base: \"../base/main.roc\" }" }),
@@ -655,6 +658,8 @@ pub const Diagnostic = struct {
         invalid_roc_version,
         duplicate_roc_version,
         roc_version_key_is_reserved,
+        duplicate_package_shorthand,
+        dependency_source_not_plain,
         missing_arrow,
         expected_exposes,
         expected_exposes_close_square,
@@ -828,6 +833,35 @@ pub fn rootAppKind(self: *const AST) RootAppKind {
         .default_app => .default_platform,
         .module, .package, .platform, .hosted, .malformed => .non_app,
     };
+}
+
+/// The source offset just past `header`'s last token, or zero for a file
+/// without a header.
+pub fn headerEndOffset(self: *const AST, header: Header) u32 {
+    const region = header.to_tokenized_region();
+    if (region.end <= region.start) return 0;
+
+    const token_count: u32 = @intCast(self.tokens.tokens.len);
+    if (token_count == 0) return 0;
+
+    const last_token = @min(region.end - 1, token_count - 1);
+    return self.tokens.resolve(last_token).end.offset;
+}
+
+/// Whether the tokenizer reported a problem inside `header`.
+///
+/// The tokenizer reports problems in source order, except that a byte order
+/// mark and source-policy rejections (see `source_rejected`) come first, and it
+/// drops the latest ones past its limit. Short of a source-policy rejection,
+/// the limit marker therefore never stands for a header problem that is not
+/// also reported individually.
+pub fn headerHasTokenizeErrors(self: *const AST, header: Header) bool {
+    const header_end_offset = self.headerEndOffset(header);
+    for (self.tokenize_diagnostics.items) |diagnostic| {
+        if (diagnostic.tag == .TooManyTokenizationErrors) continue;
+        if (diagnostic.region.start.offset < header_end_offset) return true;
+    }
+    return false;
 }
 
 /// Resolve a token index to a string slice from the source code.

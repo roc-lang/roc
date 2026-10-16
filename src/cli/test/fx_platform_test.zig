@@ -427,6 +427,14 @@ test "fx platform value a branch never reads is released at the branch entry (sp
     try runIoSpecTest("--opt=speed", fx_test_specs.branch_entry_release_test);
 }
 
+test "fx platform cold-path list literal and List.with_capacity (dev backend)" {
+    try runIoSpecTest("--opt=dev", fx_test_specs.issue_12196_cold_list_builds_test);
+}
+
+test "fx platform cold-path list literal and List.with_capacity (speed backend)" {
+    try runIoSpecTest("--opt=speed", fx_test_specs.issue_12196_cold_list_builds_test);
+}
+
 /// Repro for https://github.com/roc-lang/roc/issues/10770: one boxed callable
 /// stored in two fields of a provided root's result is one heap allocation, so
 /// the host must receive the same erased-callable pointer for both fields.

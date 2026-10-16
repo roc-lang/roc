@@ -52,6 +52,7 @@ const can = @import("can");
 const CoreCtx = @import("ctx").CoreCtx;
 const threading = @import("threading.zig");
 const compiler_platforms = @import("compiler_platforms.zig");
+const reporting = @import("reporting");
 
 const Allocator = std.mem.Allocator;
 const Version = base.url.Version;
@@ -200,11 +201,15 @@ pub const Fetcher = struct {
     /// allocating all returned strings with `allocator`. Must be safe to call
     /// from multiple threads at once. `max_expanded_bytes` is the per-bundle
     /// decompression limit to enforce (null for explicitly unlimited bundles).
-    fetchUrlFn: *const fn (ctx: ?*anyopaque, allocator: Allocator, url: []const u8, hash: []const u8, max_expanded_bytes: ?u64) FetchError!FetchedPackage,
+    ///
+    /// Every function that scans a header appends a located report for each
+    /// header problem to its `rejection_reports` before returning
+    /// `error.HeaderParseFailed`; see `scanHeaderSource`.
+    fetchUrlFn: *const fn (ctx: ?*anyopaque, allocator: Allocator, url: []const u8, hash: []const u8, max_expanded_bytes: ?u64, rejection_reports: *HeaderReports) FetchError!FetchedPackage,
     /// Load and scan the local package rooted at `root_file_abs`.
-    loadLocalFn: *const fn (ctx: ?*anyopaque, allocator: Allocator, root_file_abs: []const u8) FetchError!FetchedPackage,
+    loadLocalFn: *const fn (ctx: ?*anyopaque, allocator: Allocator, root_file_abs: []const u8, rejection_reports: *HeaderReports) FetchError!FetchedPackage,
     /// Materialize and scan a compiler-owned platform.
-    loadCompilerOwnedPlatformFn: *const fn (ctx: ?*anyopaque, allocator: Allocator, platform: CompilerOwnedPlatform) FetchError!FetchedPackage,
+    loadCompilerOwnedPlatformFn: *const fn (ctx: ?*anyopaque, allocator: Allocator, platform: CompilerOwnedPlatform, rejection_reports: *HeaderReports) FetchError!FetchedPackage,
     /// Resolve a local root-file path (relative paths are relative to the
     /// invocation's working directory) to its canonical absolute path,
     /// following symlinks. Only consulted when dependency replacements are
@@ -215,11 +220,27 @@ pub const Fetcher = struct {
 /// Errors canonicalizing a local root-file path.
 pub const CanonicalizeError = error{ OutOfMemory, CannotCanonicalize };
 
+/// Located reports for the problems that made a package header unusable,
+/// owned by whoever holds the list. Each report carries its own allocator.
+pub const HeaderReports = std.array_list.Managed(reporting.Report);
+
 /// One rendered resolution problem. Messages are owned by the resolver and
 /// live until the resolver is deinitialized.
 pub const Diagnostic = struct {
     title: []const u8,
     message: []const u8,
+    /// The complete report to show for a problem that has a source
+    /// location, such as a header problem that kept a package from loading.
+    /// When present, `title` and `message` only summarize it. Owned by the
+    /// resolver until a caller takes it with `takeLocated`.
+    located: ?reporting.Report = null,
+
+    /// Take ownership of this diagnostic's located report.
+    pub fn takeLocated(self: *Diagnostic) ?reporting.Report {
+        const located = self.located;
+        self.located = null;
+        return located;
+    }
 };
 
 /// The result of successful resolution: every package in the final graph,
@@ -338,8 +359,9 @@ pub fn versionBumpNotes(
 }
 
 /// Sidecar metadata recorded next to each extracted bundle in the cache.
-/// `format` guards against layout changes; unknown formats are regenerated
-/// from the extracted bundle, never trusted.
+/// `format` guards against changes to the sidecar layout and to the header
+/// rules that decide what a scan records (or rejects); unknown formats are
+/// regenerated from the extracted bundle, never trusted.
 pub const Sidecar = struct {
     format: u32,
     kind: []const u8,
@@ -363,7 +385,7 @@ pub const Sidecar = struct {
         compiler_owned_platform: ?CompilerOwnedPlatform = null,
     };
 
-    pub const current_format: u32 = 3;
+    pub const current_format: u32 = 4;
 };
 
 /// One validated `--replace-dep` request.
@@ -520,6 +542,12 @@ pub const Resolver = struct {
     }
 
     pub fn deinit(self: *Resolver) void {
+        for (self.diagnostics.items) |*diagnostic| {
+            if (diagnostic.takeLocated()) |located| {
+                var report = located;
+                report.deinit();
+            }
+        }
         self.arena_state.deinit();
     }
 
@@ -537,16 +565,44 @@ pub const Resolver = struct {
         try self.diagnostics.append(self.arena(), .{ .title = title, .message = message });
     }
 
+    /// Record each header problem in `rejection_reports` (taking the reports
+    /// out of it) as a diagnostic of its own, noting that the problem keeps
+    /// the package named by `intro` and `source` from loading.
+    fn addHeaderRejection(self: *Resolver, intro: []const u8, source: []const u8, rejection_reports: *HeaderReports) Allocator.Error!void {
+        const message = try std.fmt.allocPrint(self.arena(), "This problem is in the header of {s}\n\n    {s}\n\nso that package can't be loaded.", .{ intro, source });
+        try self.diagnostics.ensureUnusedCapacity(self.arena(), rejection_reports.items.len);
+        for (rejection_reports.items) |*report| {
+            const owned_intro = try report.addOwnedString(intro);
+            const owned_source = try report.addOwnedString(source);
+            try report.document.addReflowingText("This problem is in the header of ");
+            try report.document.addReflowingText(owned_intro);
+            try report.document.addLineBreaks(2);
+            try report.document.addIndent(1);
+            try report.document.addAnnotated(owned_source, .path);
+            try report.document.addLineBreaks(2);
+            try report.document.addReflowingText("so that package can't be loaded.");
+        }
+        for (rejection_reports.items) |report| {
+            self.diagnostics.appendAssumeCapacity(.{ .title = report.title, .message = message, .located = report });
+        }
+        rejection_reports.clearRetainingCapacity();
+    }
+
     /// Resolve the graph rooted at `root_file_abs`. On error.ResolutionFailed,
     /// `diagnostics` holds at least one problem to report.
     pub fn resolve(self: *Resolver, root_file_abs: []const u8) error{ OutOfMemory, ResolutionFailed }!Resolved {
         const root_path = try self.arena().dupe(u8, root_file_abs);
-        const root_node = self.fetcher.loadLocalFn(self.fetcher.ctx, self.arena(), root_path) catch |err| switch (err) {
+        var rejection_reports = HeaderReports.init(self.gpa);
+        defer deinitHeaderReports(&rejection_reports);
+        const root_node = self.fetcher.loadLocalFn(self.fetcher.ctx, self.arena(), root_path, &rejection_reports) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
+            error.HeaderParseFailed => {
+                try self.addHeaderRejection("the package at", root_path, &rejection_reports);
+                return error.ResolutionFailed;
+            },
             error.DownloadFailed,
             error.ExpandedSizeLimitExceeded,
             error.FileNotFound,
-            error.HeaderParseFailed,
             error.Unsupported,
             => {
                 try self.addDiagnostic("Invalid Package Header", "Could not load the header of {s}: {s}.", .{ root_path, @errorName(err) });
@@ -1116,13 +1172,19 @@ pub const Resolver = struct {
         missing_locals: []const []const u8,
         missing_compiler_owned: []const CompilerOwnedPlatform,
     ) Allocator.Error!void {
+        var rejection_reports = HeaderReports.init(self.gpa);
+        defer deinitHeaderReports(&rejection_reports);
+
         for (missing_locals) |abs| {
-            const node = self.fetcher.loadLocalFn(self.fetcher.ctx, self.arena(), abs) catch |err| switch (err) {
+            const node = self.fetcher.loadLocalFn(self.fetcher.ctx, self.arena(), abs, &rejection_reports) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
+                error.HeaderParseFailed => {
+                    try self.addHeaderRejection("the package at", abs, &rejection_reports);
+                    continue;
+                },
                 error.DownloadFailed,
                 error.ExpandedSizeLimitExceeded,
                 error.FileNotFound,
-                error.HeaderParseFailed,
                 error.Unsupported,
                 => {
                     try self.addDiagnostic("Invalid Package Dependency", "Could not load the package at {s}: {s}.", .{ abs, @errorName(err) });
@@ -1133,12 +1195,15 @@ pub const Resolver = struct {
         }
 
         for (missing_compiler_owned) |platform| {
-            const fetched = self.fetcher.loadCompilerOwnedPlatformFn(self.fetcher.ctx, self.arena(), platform) catch |err| switch (err) {
+            const fetched = self.fetcher.loadCompilerOwnedPlatformFn(self.fetcher.ctx, self.arena(), platform, &rejection_reports) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
+                error.HeaderParseFailed => {
+                    try self.addHeaderRejection("the compiler-owned platform", compiler_platforms.identity(platform), &rejection_reports);
+                    continue;
+                },
                 error.DownloadFailed,
                 error.ExpandedSizeLimitExceeded,
                 error.FileNotFound,
-                error.HeaderParseFailed,
                 error.Unsupported,
                 => {
                     try self.addDiagnostic(
@@ -1160,6 +1225,7 @@ pub const Resolver = struct {
             missing: Missing,
             max_expanded_bytes: ?u64,
             task_arena: base.SingleThreadArena,
+            rejection_reports: HeaderReports,
             result: FetchError!FetchedPackage,
 
             fn run(task: *@This()) void {
@@ -1169,6 +1235,7 @@ pub const Resolver = struct {
                     task.missing.url,
                     task.missing.hash,
                     task.max_expanded_bytes,
+                    &task.rejection_reports,
                 );
             }
         };
@@ -1181,10 +1248,14 @@ pub const Resolver = struct {
                 .missing = missing,
                 .max_expanded_bytes = if (missing.is_platform) self.config.max_platform_transitive_expanded_bytes else self.config.max_package_expanded_bytes,
                 .task_arena = base.SingleThreadArena.init(self.gpa),
+                .rejection_reports = HeaderReports.init(self.gpa),
                 .result = error.DownloadFailed,
             };
         }
-        defer for (tasks) |*task| task.task_arena.deinit();
+        defer for (tasks) |*task| {
+            task.task_arena.deinit();
+            deinitHeaderReports(&task.rejection_reports);
+        };
 
         if (comptime is_freestanding) {
             for (tasks) |*task| task.run();
@@ -1226,9 +1297,12 @@ pub const Resolver = struct {
                     );
                     continue;
                 },
+                error.HeaderParseFailed => {
+                    try self.addHeaderRejection("the package downloaded from", task.missing.url, &task.rejection_reports);
+                    continue;
+                },
                 error.DownloadFailed,
                 error.FileNotFound,
-                error.HeaderParseFailed,
                 error.Unsupported,
                 => {
                     try self.addDiagnostic(
@@ -1878,13 +1952,24 @@ fn copyFetchedPackage(allocator: Allocator, fetched: FetchedPackage) Allocator.E
     };
 }
 
+fn deinitHeaderReports(reports: *HeaderReports) void {
+    for (reports.items) |*report| report.deinit();
+    reports.deinit();
+}
+
 /// Scan a Roc source file's header for its kind and declared dependencies.
 /// Allocates returned strings with `allocator`; uses `gpa` for scratch.
+///
+/// A header with tokenize or parse problems is rejected with
+/// `error.HeaderParseFailed`, after a located report for each problem
+/// (allocated with `gpa`) is appended to `rejection_reports`. Reports name
+/// the file as `root_file_abs`.
 pub fn scanHeaderSource(
     allocator: Allocator,
     gpa: Allocator,
     root_file_abs: []const u8,
     src: []const u8,
+    rejection_reports: *HeaderReports,
 ) error{ OutOfMemory, HeaderParseFailed }!FetchedPackage {
     var env = try ModuleEnv.init(gpa, src);
     defer env.deinit();
@@ -1895,19 +1980,24 @@ pub fn scanHeaderSource(
 
     const header = ast.store.getHeader(@fromBackingInt(@intCast(ast.root_node_idx)));
 
-    if (ast.parse_diagnostics.items.len > 0) {
-        return error.HeaderParseFailed;
-    }
-    if (header == .malformed) {
-        return error.HeaderParseFailed;
-    }
-
-    const header_end_offset = headerEndOffset(ast, header);
+    // Only the header is scanned, so tokenizer problems past its end are the
+    // module's own business. A malformed header always carries a parse
+    // problem, so it is rejected through the parse diagnostics.
+    const header_end_offset = ast.headerEndOffset(header);
+    var rejected = ast.parse_diagnostics.items.len > 0;
     for (ast.tokenize_diagnostics.items) |diagnostic| {
-        if (diagnostic.region.start.offset < header_end_offset) {
-            return error.HeaderParseFailed;
-        }
+        if (diagnostic.region.start.offset >= header_end_offset) continue;
+        rejected = true;
+        var report = try ast.tokenizeDiagnosticToReport(diagnostic, gpa, root_file_abs);
+        errdefer report.deinit();
+        try rejection_reports.append(report);
     }
+    for (ast.parse_diagnostics.items) |diagnostic| {
+        var report = try ast.parseDiagnosticToReport(&env.common, diagnostic, gpa, root_file_abs);
+        errdefer report.deinit();
+        try rejection_reports.append(report);
+    }
+    if (rejected) return error.HeaderParseFailed;
 
     return scanParsedHeader(allocator, root_file_abs, src, ast, header);
 }
@@ -1915,13 +2005,17 @@ pub fn scanHeaderSource(
 /// Extract dependency-resolution input from an already parsed Roc header.
 /// This lets callers that need other header metadata hand the exact same parse
 /// to the resolver instead of reading and parsing the root file a second time.
+///
+/// The header must have parsed without tokenize or parse problems: the parser
+/// guarantees such a header's dependency record holds only plain string
+/// sources and compiler-owned platform references.
 pub fn scanParsedHeader(
     allocator: Allocator,
     root_file_abs: []const u8,
     src: []const u8,
     ast: *parse.AST,
     header: parse.AST.Header,
-) error{ OutOfMemory, HeaderParseFailed }!FetchedPackage {
+) Allocator.Error!FetchedPackage {
     var deps = std.ArrayListUnmanaged(ScannedDep).empty;
     errdefer {
         for (deps.items) |dep| {
@@ -1958,7 +2052,7 @@ pub fn scanParsedHeader(
             break :blk .platform;
         },
         .module, .hosted, .type_module, .default_app => .module,
-        .malformed => return error.HeaderParseFailed,
+        .malformed => base.invariant("scanned a malformed header, which always carries a parse problem", .{}),
     };
 
     return .{
@@ -1978,17 +2072,6 @@ fn sha256Bytes(bytes: []const u8) [32]u8 {
     return hasher.finalResult();
 }
 
-fn headerEndOffset(ast: *const parse.AST, header: parse.AST.Header) u32 {
-    const region = header.to_tokenized_region();
-    if (region.end <= region.start) return 0;
-
-    const token_count: u32 = @intCast(ast.tokens.tokens.len);
-    if (token_count == 0) return 0;
-
-    const last_token = @min(region.end - 1, token_count - 1);
-    return ast.tokens.resolve(last_token).end.offset;
-}
-
 /// Record a header's platform field as its platform edge: a path or URL
 /// string, or a compiler-owned platform ident.
 fn appendPlatformDep(
@@ -1996,20 +2079,58 @@ fn appendPlatformDep(
     ast: *parse.AST,
     platform_idx: parse.AST.RecordField.Idx,
     deps: *std.ArrayListUnmanaged(ScannedDep),
-) error{ OutOfMemory, HeaderParseFailed }!void {
+) Allocator.Error!void {
     const platform_field = ast.store.getRecordField(platform_idx);
-    const value_expr = platform_field.value.asSupplied() orelse return error.HeaderParseFailed;
-    const platform_expr = ast.store.getExpr(value_expr);
-    if (platform_expr == .string) {
-        const spec = (try stringFromExpr(allocator, ast, value_expr)) orelse return error.HeaderParseFailed;
-        try appendScannedDep(allocator, deps, ast.resolve(platform_field.name), spec, true);
-    } else if (platform_expr == .ident) {
-        const ident = platform_expr.ident;
-        if (ident.qualifiers.span.len != 0) return error.HeaderParseFailed;
-        const platform = compiler_platforms.fromHeaderIdent(ast.resolve(ident.token)) orelse return error.HeaderParseFailed;
-        try appendCompilerOwnedScannedDep(allocator, deps, ast.resolve(platform_field.name), platform);
-    } else {
-        return error.HeaderParseFailed;
+    const value_expr = platform_field.value.asSupplied() orelse
+        base.invariant("a parsed platform entry always has a value", .{});
+    switch (ast.store.getExpr(value_expr)) {
+        .string => {
+            const spec = try stringFromExpr(allocator, ast, value_expr);
+            try appendScannedDep(allocator, deps, ast.resolve(platform_field.name), spec, true);
+        },
+        .ident => |ident| {
+            const platform = compiler_platforms.fromHeaderIdent(ast.resolve(ident.token)) orelse
+                base.invariant("the parser only accepts compiler-owned platform idents", .{});
+            try appendCompilerOwnedScannedDep(allocator, deps, ast.resolve(platform_field.name), platform);
+        },
+        .int,
+        .frac,
+        .typed_int,
+        .typed_frac,
+        .single_quote,
+        .string_part,
+        .multiline_string,
+        .typed_string,
+        .typed_multiline_string,
+        .list,
+        .tuple,
+        .record,
+        .tag,
+        .lambda,
+        .apply,
+        .record_updater,
+        .field_access,
+        .method_call,
+        .tuple_access,
+        .arrow_call,
+        .bin_op,
+        .suffix_single_question,
+        .unary_op,
+        .if_then_else,
+        .if_without_else,
+        .match,
+        .dbg,
+        .crash,
+        .record_builder,
+        .nominal_record,
+        .nominal_apply,
+        .ellipsis,
+        .@"break",
+        .@"return",
+        .block,
+        .for_expr,
+        .malformed,
+        => base.invariant("the parser only accepts a string or compiler-owned ident after `platform`", .{}),
     }
 }
 
@@ -2020,7 +2141,7 @@ fn appendPackagesCollection(
     skip_platform: ?parse.AST.RecordField.Idx,
     skip_roc_version: ?parse.AST.RecordField.Idx,
     deps: *std.ArrayListUnmanaged(ScannedDep),
-) error{ OutOfMemory, HeaderParseFailed }!void {
+) Allocator.Error!void {
     const coll = ast.store.getCollection(packages);
     const fields = ast.store.recordFieldSlice(.{ .span = coll.span });
     for (fields) |idx| {
@@ -2031,8 +2152,9 @@ fn appendPackagesCollection(
             if (idx == skip) continue;
         }
         const field = ast.store.getRecordField(idx);
-        const value_expr = field.value.asSupplied() orelse continue;
-        const spec = (try stringFromExpr(allocator, ast, value_expr)) orelse return error.HeaderParseFailed;
+        const value_expr = field.value.asSupplied() orelse
+            base.invariant("the parser rejects punned dependency entries", .{});
+        const spec = try stringFromExpr(allocator, ast, value_expr);
         try appendScannedDep(allocator, deps, ast.resolve(field.name), spec, false);
     }
 }
@@ -2072,22 +2194,19 @@ fn appendCompilerOwnedScannedDep(
     });
 }
 
-fn stringFromExpr(allocator: Allocator, ast: *parse.AST, expr_idx: parse.AST.Expr.Idx) Allocator.Error!?[]const u8 {
+/// The text of a dependency source. The parser guarantees it is a string
+/// literal made only of plain parts (no interpolation or escapes), and the
+/// tokenizer rejects control characters such as NUL inside it.
+fn stringFromExpr(allocator: Allocator, ast: *parse.AST, expr_idx: parse.AST.Expr.Idx) Allocator.Error![]const u8 {
     const expr = ast.store.getExpr(expr_idx);
-    if (expr != .string) return null;
+    if (expr != .string) base.invariant("the parser only accepts string dependency sources", .{});
 
     var buf = std.ArrayListUnmanaged(u8).empty;
     errdefer buf.deinit(allocator);
     for (ast.store.exprSlice(expr.string.parts)) |part_idx| {
         const part = ast.store.getExpr(part_idx);
-        if (part == .string_part) {
-            try buf.appendSlice(allocator, ast.resolve(part.string_part.token));
-        }
-    }
-    // Null bytes are invalid in both file paths and URLs.
-    if (std.mem.findScalar(u8, buf.items, 0) != null) {
-        buf.deinit(allocator);
-        return null;
+        if (part != .string_part) base.invariant("the parser rejects interpolated dependency sources", .{});
+        try buf.appendSlice(allocator, ast.resolve(part.string_part.token));
     }
     return try buf.toOwnedSlice(allocator);
 }
@@ -2206,7 +2325,7 @@ pub const CtxFetcher = struct {
         };
     }
 
-    fn fetchUrlImpl(ctx: ?*anyopaque, allocator: Allocator, url: []const u8, hash: []const u8, max_expanded_bytes: ?u64) FetchError!FetchedPackage {
+    fn fetchUrlImpl(ctx: ?*anyopaque, allocator: Allocator, url: []const u8, hash: []const u8, max_expanded_bytes: ?u64, rejection_reports: *HeaderReports) FetchError!FetchedPackage {
         const self: *CtxFetcher = @ptrCast(@alignCast(ctx.?));
         const cache_dir = self.cache_packages_dir orelse return error.Unsupported;
 
@@ -2239,7 +2358,7 @@ pub const CtxFetcher = struct {
         }
 
         const src = try self.readNormalizedSource(allocator, root_file);
-        var scanned = try scanHeaderSource(allocator, self.gpa, root_file, src);
+        var scanned = try scanHeaderSource(allocator, self.gpa, root_file, src, rejection_reports);
         scanned.content_bytes = try self.measureContentBytes(allocator, package_dir, hash);
 
         // When the bundle was already extracted but had no sidecar, the tar
@@ -2306,20 +2425,20 @@ pub const CtxFetcher = struct {
         return if (published) expanded_bytes else null;
     }
 
-    fn loadLocalImpl(ctx: ?*anyopaque, allocator: Allocator, root_file_abs: []const u8) FetchError!FetchedPackage {
+    fn loadLocalImpl(ctx: ?*anyopaque, allocator: Allocator, root_file_abs: []const u8, rejection_reports: *HeaderReports) FetchError!FetchedPackage {
         const self: *CtxFetcher = @ptrCast(@alignCast(ctx.?));
         const src = try self.readNormalizedSource(allocator, root_file_abs);
-        return try scanHeaderSource(allocator, self.gpa, root_file_abs, src);
+        return try scanHeaderSource(allocator, self.gpa, root_file_abs, src, rejection_reports);
     }
 
-    fn loadCompilerOwnedPlatformImpl(ctx: ?*anyopaque, allocator: Allocator, platform: CompilerOwnedPlatform) FetchError!FetchedPackage {
+    fn loadCompilerOwnedPlatformImpl(ctx: ?*anyopaque, allocator: Allocator, platform: CompilerOwnedPlatform, rejection_reports: *HeaderReports) FetchError!FetchedPackage {
         const self: *CtxFetcher = @ptrCast(@alignCast(ctx.?));
         const materialized = compiler_platforms.materialize(allocator, self.fs, self.compiler_owned_source_dir, platform) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return error.Unsupported,
         };
         const src = try self.readNormalizedSource(allocator, materialized.root_file);
-        var scanned = try scanHeaderSource(allocator, self.gpa, materialized.root_file, src);
+        var scanned = try scanHeaderSource(allocator, self.gpa, materialized.root_file, src, rejection_reports);
         scanned.content_bytes = materialized.content_bytes;
         scanned.compiler_owned_platform = platform;
         return scanned;
@@ -2438,6 +2557,7 @@ test "scanHeaderSource ignores tokenizer diagnostics after the header" {
     var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
+    var reports = HeaderReports.init(gpa);
 
     const src =
         "app [main!] { pf: platform \"../platform/main.roc\" }\r\n" ++
@@ -2446,7 +2566,7 @@ test "scanHeaderSource ignores tokenizer diagnostics after the header" {
         "    \\\\Line 1\r\n" ++
         "    \\\\Line ${number.to_str()}\r\n";
 
-    const fetched = try scanHeaderSource(gpa, gpa, "/tmp/root.roc", src);
+    const fetched = try scanHeaderSource(gpa, gpa, "/tmp/root.roc", src, &reports);
 
     try std.testing.expectEqual(HeaderKind.app, fetched.kind);
     try std.testing.expectEqual(@as(usize, 1), fetched.deps.len);
@@ -2459,12 +2579,13 @@ test "scanHeaderSource accepts compiler-owned glue platform" {
     var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
+    var reports = HeaderReports.init(gpa);
 
     const src =
         "app [make_glue] { pf: platform glue }\n" ++
         "make_glue = |_| Ok([])\n";
 
-    const fetched = try scanHeaderSource(gpa, gpa, "/tmp/root.roc", src);
+    const fetched = try scanHeaderSource(gpa, gpa, "/tmp/root.roc", src, &reports);
 
     try std.testing.expectEqual(HeaderKind.app, fetched.kind);
     try std.testing.expectEqual(@as(usize, 1), fetched.deps.len);
@@ -2478,12 +2599,14 @@ test "scanHeaderSource accepts a package platform dependency" {
     var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
+    var reports = HeaderReports.init(gpa);
 
     const fetched = try scanHeaderSource(
         gpa,
         gpa,
         "/tmp/main.roc",
         "package [Wrapper] { pf: platform \"../platform/main.roc\", util: \"../util/main.roc\" }\n",
+        &reports,
     );
 
     try std.testing.expectEqual(HeaderKind.package, fetched.kind);
@@ -2498,6 +2621,7 @@ test "scanHeaderSource rejects multiple package platform dependencies" {
     var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
+    var reports = HeaderReports.init(gpa);
 
     try std.testing.expectError(
         error.HeaderParseFailed,
@@ -2506,32 +2630,75 @@ test "scanHeaderSource rejects multiple package platform dependencies" {
             gpa,
             "/tmp/main.roc",
             "package [Wrapper] { one: platform \"../one/main.roc\", two: platform \"../two/main.roc\" }\n",
+            &reports,
         ),
     );
+}
+
+test "scanHeaderSource rejects a repeated dependency shorthand" {
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var reports = HeaderReports.init(gpa);
+
+    for ([_][]const u8{
+        "package [Wrapper] { dep: \"../a/main.roc\", dep: \"../b/main.roc\" }\n",
+        "app [main!] { pf: platform \"../platform/main.roc\", pf: \"../other/main.roc\" }\n",
+        "platform \"p\"\n    requires {}\n    exposes []\n    packages { dep: \"../a/main.roc\", dep: \"../b/main.roc\" }\n    provides {}\n",
+    }) |src| {
+        reports.clearRetainingCapacity();
+        try std.testing.expectError(error.HeaderParseFailed, scanHeaderSource(gpa, gpa, "/tmp/main.roc", src, &reports));
+        try std.testing.expectEqual(@as(usize, 1), reports.items.len);
+        try std.testing.expectEqualStrings("Duplicate Package Shorthand", reports.items[0].title);
+    }
+}
+
+test "scanHeaderSource rejects dependency sources it cannot read as written" {
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var reports = HeaderReports.init(gpa);
+
+    const cases = [_]struct { src: []const u8, title: []const u8 }{
+        .{ .src = "package [Wrapper] { dep: 42 }\n", .title = "Expected Package Path" },
+        .{ .src = "package [Wrapper] { dep, }\n", .title = "Expected Dependency Colon" },
+        .{ .src = "package [Wrapper] { dep: \"../${x}/main.roc\" }\n", .title = "Dependency Source Not Plain" },
+        .{ .src = "app [main!] { pf: platform \"..\\u(2F)p/main.roc\" }\n", .title = "Dependency Source Not Plain" },
+        .{ .src = "platform \"p\"\n    requires {}\n    exposes []\n    packages { dep: [] }\n    provides {}\n", .title = "Expected Package Path" },
+    };
+    for (cases) |case| {
+        reports.clearRetainingCapacity();
+        try std.testing.expectError(error.HeaderParseFailed, scanHeaderSource(gpa, gpa, "/tmp/main.roc", case.src, &reports));
+        try std.testing.expectEqual(@as(usize, 1), reports.items.len);
+        try std.testing.expectEqualStrings(case.title, reports.items[0].title);
+    }
 }
 
 test "scanHeaderSource rejects malformed package headers" {
     var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
+    var reports = HeaderReports.init(gpa);
 
     const src =
         "app [main!] { pf: platform }\n" ++
         "main! = |_| Ok({})\n";
 
-    try std.testing.expectError(error.HeaderParseFailed, scanHeaderSource(gpa, gpa, "/tmp/root.roc", src));
+    try std.testing.expectError(error.HeaderParseFailed, scanHeaderSource(gpa, gpa, "/tmp/root.roc", src, &reports));
 }
 
 test "scanHeaderSource rejects tokenizer diagnostics inside the header" {
     var arena = base.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
+    var reports = HeaderReports.init(gpa);
 
     const src =
         "app [main!] { pf: platform \"../bad\rpath\" }\n" ++
         "main! = |_| Ok({})\n";
 
-    try std.testing.expectError(error.HeaderParseFailed, scanHeaderSource(gpa, gpa, "/tmp/root.roc", src));
+    try std.testing.expectError(error.HeaderParseFailed, scanHeaderSource(gpa, gpa, "/tmp/root.roc", src, &reports));
+    try std.testing.expect(reports.items.len > 0);
 }
 
 const TestRegistry = struct {
@@ -2606,7 +2773,7 @@ const TestRegistry = struct {
         };
     }
 
-    fn fetchUrlImpl(ctx: ?*anyopaque, allocator: Allocator, url: []const u8, hash: []const u8, max_expanded_bytes: ?u64) FetchError!FetchedPackage {
+    fn fetchUrlImpl(ctx: ?*anyopaque, allocator: Allocator, url: []const u8, hash: []const u8, max_expanded_bytes: ?u64, _: *HeaderReports) FetchError!FetchedPackage {
         const self: *TestRegistry = @ptrCast(@alignCast(ctx.?));
         const package = self.urls.get(url) orelse return error.DownloadFailed;
         var root_file_buf: [256]u8 = undefined;
@@ -2629,7 +2796,7 @@ const TestRegistry = struct {
         return buf[0..len];
     }
 
-    fn loadLocalImpl(ctx: ?*anyopaque, allocator: Allocator, root_file_abs: []const u8) FetchError!FetchedPackage {
+    fn loadLocalImpl(ctx: ?*anyopaque, allocator: Allocator, root_file_abs: []const u8, _: *HeaderReports) FetchError!FetchedPackage {
         const self: *TestRegistry = @ptrCast(@alignCast(ctx.?));
         var key_buf: [512]u8 = undefined;
         const key = normalizedLookupKey(&key_buf, root_file_abs);
@@ -2637,7 +2804,7 @@ const TestRegistry = struct {
         return toFetched(allocator, package, root_file_abs, null);
     }
 
-    fn loadCompilerOwnedPlatformImpl(_: ?*anyopaque, allocator: Allocator, platform: CompilerOwnedPlatform) FetchError!FetchedPackage {
+    fn loadCompilerOwnedPlatformImpl(_: ?*anyopaque, allocator: Allocator, platform: CompilerOwnedPlatform, _: *HeaderReports) FetchError!FetchedPackage {
         const deps = try allocator.alloc(ScannedDep, 0);
         const root_file = switch (platform) {
             .glue => "/compiler/glue/main.roc",
@@ -4534,6 +4701,31 @@ const StubDownload = struct {
     }
 };
 
+test "a downloaded bundle with header problems is rejected with located reports and no sidecar" {
+    var arena = base.SingleThreadArena.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var harness = try CacheTestHarness.init(gpa);
+    defer harness.deinit();
+    const io = std.testing.io;
+
+    const hash = CacheTestHarness.hash;
+    try harness.tmp.dir.createDir(io, hash, .default_dir);
+    try harness.tmp.dir.writeFile(io, .{
+        .sub_path = hash ++ "/main.roc",
+        .data = "package [Thing] { dep: \"../a/main.roc\", dep: \"../b/main.roc\" }\n",
+    });
+
+    var rejection_reports = HeaderReports.init(gpa);
+    try std.testing.expectError(
+        error.HeaderParseFailed,
+        CtxFetcher.fetchUrlImpl(&harness.fetcher, gpa, CacheTestHarness.url, hash, null, &rejection_reports),
+    );
+    try std.testing.expectEqual(@as(usize, 1), rejection_reports.items.len);
+    try std.testing.expectEqualStrings("Duplicate Package Shorthand", rejection_reports.items[0].title);
+    try std.testing.expect(!harness.fetcher.fs.fileExists(try std.fmt.allocPrint(gpa, "{s}.deps.json", .{try harness.packageDir(gpa)})));
+}
+
 test "bundle links - rejected archives leave warm cache slots unchanged and no staging directories" {
     const unbundle = @import("unbundle");
     const test_support = unbundle.test_support;
@@ -4550,7 +4742,9 @@ test "bundle links - rejected archives leave warm cache slots unchanged and no s
     try harness.tmp.dir.writeFile(io, .{ .sub_path = victim_hash ++ "/main.roc", .data = StubDownload.main_roc });
     try harness.tmp.dir.writeFile(io, .{ .sub_path = victim_hash ++ "/Thing.roc", .data = "module [value]\nvalue = 42\n" });
     // Generate the real sidecar and confirm this slot is a warm-cache hit.
-    _ = try CtxFetcher.fetchUrlImpl(&harness.fetcher, gpa, victim_url, victim_hash, null);
+    var rejection_reports = HeaderReports.init(gpa);
+    defer deinitHeaderReports(&rejection_reports);
+    _ = try CtxFetcher.fetchUrlImpl(&harness.fetcher, gpa, victim_url, victim_hash, null, &rejection_reports);
     try std.testing.expectEqual(@as(usize, 0), StubDownload.attempts);
 
     const victim_files = [_][]const u8{
@@ -4591,7 +4785,7 @@ test "bundle links - rejected archives leave warm cache slots unchanged and no s
         const hash = test_support.hashName(bytes, &hash_buffer);
         const url = try std.fmt.allocPrint(gpa, "https://example.com/attack/{s}.tar.zst", .{hash});
 
-        try std.testing.expectError(error.DownloadFailed, CtxFetcher.fetchUrlImpl(&harness.fetcher, gpa, url, hash, null));
+        try std.testing.expectError(error.DownloadFailed, CtxFetcher.fetchUrlImpl(&harness.fetcher, gpa, url, hash, null, &rejection_reports));
         try std.testing.expectEqual(case.expected_error, StubDownload.extraction_error.?);
         try std.testing.expectEqual(index + 1, StubDownload.attempts);
         for (victim_files, original) |path, expected| {
@@ -4613,7 +4807,7 @@ test "bundle links - rejected archives leave warm cache slots unchanged and no s
         try std.testing.expectEqual(@as(usize, 2), (try harness.entryNames(gpa)).len);
         try std.testing.expect(try harness.hasEntry(gpa, victim_hash));
         try std.testing.expect(try harness.hasEntry(gpa, victim_hash ++ ".deps.json"));
-        _ = try CtxFetcher.fetchUrlImpl(&harness.fetcher, gpa, victim_url, victim_hash, null);
+        _ = try CtxFetcher.fetchUrlImpl(&harness.fetcher, gpa, victim_url, victim_hash, null, &rejection_reports);
         try std.testing.expectEqual(index + 1, StubDownload.attempts);
     }
 }
@@ -4666,7 +4860,9 @@ const CacheTestHarness = struct {
     }
 
     fn fetch(self: *CacheTestHarness, allocator: Allocator) FetchError!FetchedPackage {
-        return CtxFetcher.fetchUrlImpl(&self.fetcher, allocator, url, hash, null);
+        var rejection_reports = HeaderReports.init(self.gpa);
+        defer deinitHeaderReports(&rejection_reports);
+        return CtxFetcher.fetchUrlImpl(&self.fetcher, allocator, url, hash, null, &rejection_reports);
     }
 
     fn packageDir(self: *CacheTestHarness, allocator: Allocator) Allocator.Error![]u8 {

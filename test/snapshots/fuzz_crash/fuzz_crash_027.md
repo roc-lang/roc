@@ -245,6 +245,7 @@ UNDECLARED TYPE - fuzz_crash_027.md:99:14:99:20
 VAR NAME MISSING `$` - fuzz_crash_027.md:102:6:102:12
 NAME NOT IN SCOPE - fuzz_crash_027.md:103:9:103:13
 NAME NOT IN SCOPE - fuzz_crash_027.md:114:2:114:11
+UNREACHABLE CODE - fuzz_crash_027.md:110:2:159:2
 UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
 UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
 UNUSED VARIABLE - fuzz_crash_027.md:121:2:121:6
@@ -1920,6 +1921,21 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 			(line-break)
 			(line-break)
 			(source-region (file "fuzz_crash_027.md") (start 114 2) (end 114 11) (annotation error) (line-text "\tsome_func("))))
+	(report
+		(severity warning)
+		(title "Unreachable Code")
+		(region (start 110 2) (end 159 2))
+		(headline
+			(reflow "This code will never run, because the code before it always ends with a ")
+			(annotated code "return")
+			(reflow ", ")
+			(annotated code "crash")
+			(reflow ", or ")
+			(annotated code "break")
+			(reflow ", or loops forever."))
+		(document
+			(source-region (file "fuzz_crash_027.md") (start 110 2) (end 159 2) (annotation error) (line-text "\t...\n\tmatch_time(\n\t\t..., #\n\t)\n\tsome_func(\n\t\tdbg # bug\n\t\t\t42, # Aft expr\n\t)\n\tcrash \"Unreachtement\n\ttag_with = Ok(number)\n\tited = \"Hello, ${world}\"\n\tlist = [\n\t\tadd_one(\n\t\t\tdbg # Afin list\ne[, # afarg\n\t\t),\t456, # ee\n\t]\n\tfor n in list {\n\tline!(\"Adding ${n} to ${number}\")\n\t\tnumber = number + n\n\t}\n\trecord = { foo: 123, bar: \"Hello\", baz: tag, qux: Ok(world), punned }\n\ttuple = (123, \"World\", tag, Ok(world), (nested, tuple), [1, 2, 3])\n\tm_tuple = (\n\t\t123,\n\t\t\"World\",\n\t\ttag1,\n\t\tOk(world), # Thisnt\n\t\t(nested, tuple),\n\t\t[1, 2, 3],\n\t)\n\tbsult = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5\n\tstale = some_fn(arg1)?.statod()?.ned()?.recd?\n\tStdoline!(\n\t\t\"How about ${ #\n\t\t\tNum.toStr(number) # on expr\n\t\t} as a\",\n\t)\n} # Commenl decl\n\nempty : {}\nempty = {}\n\ntuple : Value((a, b, c))\n\nexpect {\n\tfoo = 1 # Thio\n\tblah = 1\n\tblah == foo\n}"))
+			(reflow "Remove this code, or change the code before it so that it can finish.")))
 	(report
 		(severity warning)
 		(title "Unused Variable")

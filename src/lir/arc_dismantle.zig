@@ -842,7 +842,14 @@ const Analysis = struct {
                 self.unionRootOf(source) == self.unionRootOf(target);
             if (!union_alias) try self.touchUnion(source);
             if (try self.entryOf(root)) |candidate| try candidate.whole_uses.append(self.gpa, stmt);
-            self.disqualify(target);
+            if (self.solution.isBorrowed(target)) {
+                self.disqualify(target);
+            } else {
+                // The owned binding holds its own unit, received by this
+                // statement whether it moved the source's unit or retained
+                // a new one, so it is a container defined here.
+                try self.noteDef(target, stmt);
+            }
         }
     }
 };
@@ -3046,14 +3053,17 @@ pub fn compute(
                 } else null;
 
                 // An ownership-complete projected struct can receive its root's exact
-                // unit in an owned emission. Other reference-defined containers remain
-                // excluded: they have no independent certifier unit to dismantle.
+                // unit in an owned emission, and an owned same-value binding holds the
+                // unit its definition gave it. A borrowed reference-defined container
+                // holds no unit of its own to dismantle.
                 const spine_start: LIR.CFStmtId = if (candidate.join_starts.items.len != 0)
                     candidate.join_starts.items[0]
                 else if (candidate.def_count == 1)
                     switch (store.getCFStmtImmediate(candidate.def_stmt).*) {
                         inline .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag => |stmt| stmt.next,
-                        .assign_ref => |stmt| if (union_root != null or analysis.projected_root[@backingInt(local)] != no_index) stmt.next else continue :candidates,
+                        .assign_ref => |stmt| if (union_root != null or
+                            analysis.projected_root[@backingInt(local)] != no_index or
+                            (stmt.op == .local and !solution.isBorrowed(local))) stmt.next else continue :candidates,
                         .set_local => continue :candidates,
                         .init_uninitialized,
                         .assign_boxy_desc_ref,
