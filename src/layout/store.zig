@@ -571,6 +571,7 @@ pub const Store = struct {
         try self.appendStructFieldPlacement(fields);
 
         const contains_refcounted = self.computeStructContainsRefcounted(fields);
+        const slots = self.computeStructOwnershipSlots(fields, contains_refcounted);
         const struct_idx = StructIdx{ .int_idx = try nextRowPosition(@FieldType(StructIdx, "int_idx"), self.struct_data.len()) };
         const expected_idx = self.struct_data.items.items.len;
         const struct_data_idx = try self.struct_data.append(self.allocator, .{
@@ -580,6 +581,8 @@ pub const Store = struct {
                 .count = @intCast(fields.len),
             },
             .contains_refcounted = contains_refcounted,
+            .expands_fields = slots.expands_fields,
+            .ownership_slots = slots.count,
         });
         std.debug.assert(@backingInt(struct_data_idx) == expected_idx);
 
@@ -862,6 +865,7 @@ pub const Store = struct {
         try self.appendStructFieldPlacement(temp_fields.items);
 
         const contains_refcounted = self.computeStructContainsRefcounted(temp_fields.items);
+        const slots = self.computeStructOwnershipSlots(temp_fields.items, contains_refcounted);
         const struct_idx = StructIdx{ .int_idx = try nextRowPosition(@FieldType(StructIdx, "int_idx"), self.struct_data.len()) };
         const expected_idx = self.struct_data.items.items.len;
         const struct_data_idx = try self.struct_data.append(self.allocator, .{
@@ -871,6 +875,8 @@ pub const Store = struct {
                 .count = @intCast(temp_fields.items.len),
             },
             .contains_refcounted = contains_refcounted,
+            .expands_fields = slots.expands_fields,
+            .ownership_slots = slots.count,
         });
         std.debug.assert(@backingInt(struct_data_idx) == expected_idx);
 
@@ -3001,24 +3007,19 @@ pub const Store = struct {
     /// struct's slots are therefore exactly its semantic field indices, and
     /// a refcounted struct nested in a field covers a contiguous slot range.
     /// ARC field takes, residual releases, and residual shells name stored
-    /// units by slot.
+    /// units by slot. Struct counts are precomputed when the struct commits.
     pub fn ownershipSlotCount(self: *const Self, layout_idx: Idx) u32 {
         const l = self.getLayout(layout_idx);
-        if (l.tag != .struct_ or !self.layoutContainsRefcounted(l)) return 1;
-        const info = self.getStructInfo(l);
-        var end: u32 = 0;
-        var extra: u32 = 0;
-        for (0..info.fields.len) |i| {
-            const field = info.fields.get(@intCast(i));
-            end = @max(end, field.index + 1);
-            if (!field.is_padding) extra += self.ownershipSlotCount(field.layout) - 1;
-        }
-        return end + extra;
+        if (l.tag != .struct_) return 1;
+        const data = self.getStructData(l.getStruct().idx);
+        return if (data.contains_refcounted) data.ownership_slots else 1;
     }
 
     /// The first ownership slot of a struct's field, by semantic index.
     pub fn ownershipSlotBase(self: *const Self, struct_layout_idx: Idx, field_index: u32) u32 {
-        const info = self.getStructInfo(self.getLayout(struct_layout_idx));
+        const l = self.getLayout(struct_layout_idx);
+        if (!self.getStructData(l.getStruct().idx).expands_fields) return field_index;
+        const info = self.getStructInfo(l);
         var slot_base = field_index;
         for (0..info.fields.len) |i| {
             const field = info.fields.get(@intCast(i));
@@ -3026,6 +3027,20 @@ pub const Store = struct {
             slot_base += self.ownershipSlotCount(field.layout) - 1;
         }
         return slot_base;
+    }
+
+    /// Ownership slot facts of a struct about to commit, from its already
+    /// committed field layouts.
+    fn computeStructOwnershipSlots(self: *const Self, fields: []const StructField, contains_refcounted: bool) struct { count: u32, expands_fields: bool } {
+        if (!contains_refcounted) return .{ .count = 1, .expands_fields = false };
+        var end: u32 = 0;
+        var extra: u32 = 0;
+        for (fields) |field| {
+            end = @max(end, field.index + 1);
+            if (field.is_padding) continue;
+            extra += self.ownershipSlotCount(field.layout) - 1;
+        }
+        return .{ .count = end + extra, .expands_fields = extra != 0 };
     }
 
     /// One ownership slot that holds refcounted data: a slot whose layout is

@@ -830,6 +830,15 @@ const Analysis = struct {
         }
     }
 
+    /// The root container's slots a field read of `source` addresses.
+    fn readSlots(self: *const Analysis, source: LIR.LocalId, field_idx: u32, target: LIR.LocalId) SlotRange {
+        const view_base: u32 = if (self.isView(source)) self.view_base[@backingInt(source)] else 0;
+        return .{
+            .first = view_base + self.layouts.ownershipSlotBase(self.store.getLocal(source).layout_idx, field_idx),
+            .count = self.layouts.ownershipSlotCount(self.store.getLocal(target).layout_idx),
+        };
+    }
+
     /// Records a field read of `source`, and returns whether it defined a
     /// view, whose definition is then already recorded.
     fn noteFieldRead(self: *Analysis, stmt: LIR.CFStmtId, source: LIR.LocalId, field_idx: u32, target: LIR.LocalId) Error!bool {
@@ -847,19 +856,13 @@ const Analysis = struct {
             }
         }
         const root = self.resolveRoot(source);
-        // Only a struct root can dismantle.
-        if (self.layouts.getLayout(self.store.getLocal(source).layout_idx).tag != .struct_) return false;
-        const view_base: u32 = if (through_view) self.view_base[@backingInt(source)] else 0;
-        const slots: SlotRange = .{
-            .first = view_base + self.layouts.ownershipSlotBase(self.store.getLocal(source).layout_idx, field_idx),
-            .count = self.layouts.ownershipSlotCount(self.store.getLocal(target).layout_idx),
-        };
         const representative_index = self.projected_container[target_index];
         if (representative_index != no_index and representative_index != target_index) {
-            try self.noteEquivalencedRead(stmt, root, slots, target, @fromBackingInt(@intCast(representative_index)));
+            try self.noteEquivalencedRead(stmt, root, self.readSlots(source, field_idx, target), target, @fromBackingInt(@intCast(representative_index)));
             return false;
         }
         const candidate = (try self.entryOf(root)) orelse return false;
+        const slots = self.readSlots(source, field_idx, target);
         const view = self.state[target_index] == .unknown and
             self.rc_local[target_index] and
             self.solution.isBorrowed(target) and

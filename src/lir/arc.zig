@@ -2180,16 +2180,7 @@ const Inserter = struct {
         if ((absent_mask & ~container.full_mask) != 0) {
             arcInvariant("ARC representation-shell alias exceeded its committed field domain");
         }
-        const range: arc_dismantle.SlotRange = .{ .first = first, .count = self.layouts.ownershipSlotCount(target_layout) };
-        var slots = std.ArrayList(layout_mod.Store.RcSlot).empty;
-        defer slots.deinit(self.emission_allocator);
-        try self.layouts.appendRcSlots(self.emission_allocator, container.layout_idx, 0, &slots);
-        for (slots.items) |slot| {
-            if (!range.contains(slot.slot)) continue;
-            const piece = container.pieceOf(slot.slot) orelse arcInvariant("ARC container pieces missed a refcounted slot");
-            if ((absent_mask & (@as(u64, 1) << @intCast(piece))) == 0) continue;
-            try absent.append(self.emission_allocator, slot.slot - first);
-        }
+        try self.appendAbsentSlots(container, ~absent_mask, target_layout, first, first, &absent);
         return try self.store.addU32Span(absent.items);
     }
 
@@ -2543,12 +2534,13 @@ const Inserter = struct {
             switch (stmt) {
                 .assign_ref => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    if (assign.op == .field and self.dismantles.viewOf(assign.target) != null and self.isBindingBorrowed(assign.target)) {
+                    const any_views = self.dismantles.views.count() != 0;
+                    if (any_views and assign.op == .field and self.dismantles.viewOf(assign.target) != null and self.isBindingBorrowed(assign.target)) {
                         // A view copies its container's representation,
                         // including slots already given away on this path.
                         step.residual_shell_absent_mask = self.viewShellAbsentMask(&segment.owned, assign.target);
                         step.residual_shell_view = assign.target;
-                    } else if (assign.op == .local and self.dismantles.viewOf(assign.op.local) != null and self.isBindingBorrowed(assign.op.local) and
+                    } else if (any_views and assign.op == .local and self.dismantles.viewOf(assign.op.local) != null and self.isBindingBorrowed(assign.op.local) and
                         self.store.getLocal(assign.op.local).layout_idx == self.store.getLocal(assign.target).layout_idx)
                     {
                         step.residual_shell_absent_mask = self.viewShellAbsentMask(&segment.owned, assign.op.local);
@@ -5233,19 +5225,30 @@ const Inserter = struct {
     /// argument's ownership place in the current emission, so the place is
     /// still live at the statement even though no later statement uses it.
     /// Field takes give their targets places of their own, so two takes of
-    /// different fields of one container never share.
+    /// different fields of one container never share. A place lies on its
+    /// local's solved borrow chain, which ends at the solved leader, so only
+    /// operands with the same leader can share one.
     fn groupSharesOtherOperand(
         self: *const Inserter,
         locals: anytype,
         position: usize,
         local: LIR.LocalId,
     ) bool {
-        const place = self.ownershipPlaceLeader(local);
+        const leader = self.solution.leaderOf(local);
+        var place: ?LIR.LocalId = null;
         for (0..GuardedList.borrowLen(locals)) |j| {
             if (j == position) continue;
             const other = GuardedList.at(locals, j);
             if (other == local) return true;
-            if (self.ownershipPlaceLeader(other) == place) return true;
+            if (self.solution.leaderOf(other) != leader) {
+                if (builtin.mode == .debug and self.ownershipPlaceLeader(other) == self.ownershipPlaceLeader(local)) {
+                    arcInvariant("ARC ownership place left its solved borrow leader");
+                }
+                continue;
+            }
+            const local_place = place orelse self.ownershipPlaceLeader(local);
+            place = local_place;
+            if (self.ownershipPlaceLeader(other) == local_place) return true;
         }
         return false;
     }
@@ -7199,10 +7202,65 @@ const Inserter = struct {
         cause: RcCause,
         next: LIR.CFStmtId,
     ) ResourceError!LIR.CFStmtId {
-        var rc_slots = std.ArrayList(layout_mod.Store.RcSlot).empty;
-        defer rc_slots.deinit(self.emission_allocator);
-        try self.layouts.appendRcSlots(self.emission_allocator, container.layout_idx, 0, &rc_slots);
-        return try self.releaseResidualSlots(local, fields_source, container.layout_idx, 0, container, rc_slots.items, residual_mask, cause, next);
+        return try self.releaseResidualSlots(local, fields_source, container.layout_idx, 0, container, residual_mask, cause, next);
+    }
+
+    /// Which of a field's refcounted slots its container still holds.
+    const SlotCoverage = struct {
+        residual: bool = false,
+        absent: bool = false,
+    };
+
+    /// The residual coverage of the refcounted slots of a value of
+    /// `layout_idx` whose slots start at `slot_base` in `container`.
+    fn residualCoverage(
+        self: *const Inserter,
+        container: arc_dismantle.Container,
+        residual_mask: u64,
+        layout_idx: layout_mod.Idx,
+        slot_base: u32,
+        coverage: *SlotCoverage,
+    ) void {
+        const layout_val = self.layouts.getLayout(layout_idx);
+        if (!self.layouts.layoutContainsRefcounted(layout_val)) return;
+        if (layout_val.tag != .struct_) {
+            const piece = container.pieceOf(slot_base) orelse arcInvariant("ARC container pieces missed a refcounted slot");
+            if ((residual_mask & (@as(u64, 1) << piece)) != 0) coverage.residual = true else coverage.absent = true;
+            return;
+        }
+        const info = self.layouts.getStructInfo(layout_val);
+        for (0..info.fields.len) |index| {
+            const field = info.fields.get(@intCast(index));
+            if (field.is_padding) continue;
+            self.residualCoverage(container, residual_mask, field.layout, slot_base + self.layouts.ownershipSlotBase(layout_idx, field.index), coverage);
+        }
+    }
+
+    /// Append the refcounted slots of a value of `layout_idx` (slots from
+    /// `slot_base` in `container`) the container no longer holds, numbered
+    /// from `shell_base`.
+    fn appendAbsentSlots(
+        self: *Inserter,
+        container: arc_dismantle.Container,
+        residual_mask: u64,
+        layout_idx: layout_mod.Idx,
+        slot_base: u32,
+        shell_base: u32,
+        absent: *std.ArrayList(u32),
+    ) ResourceError!void {
+        const layout_val = self.layouts.getLayout(layout_idx);
+        if (!self.layouts.layoutContainsRefcounted(layout_val)) return;
+        if (layout_val.tag != .struct_) {
+            const piece = container.pieceOf(slot_base) orelse arcInvariant("ARC container pieces missed a refcounted slot");
+            if ((residual_mask & (@as(u64, 1) << piece)) == 0) try absent.append(self.emission_allocator, slot_base - shell_base);
+            return;
+        }
+        const info = self.layouts.getStructInfo(layout_val);
+        for (0..info.fields.len) |index| {
+            const field = info.fields.get(@intCast(index));
+            if (field.is_padding) continue;
+            try self.appendAbsentSlots(container, residual_mask, field.layout, slot_base + self.layouts.ownershipSlotBase(layout_idx, field.index), shell_base, absent);
+        }
     }
 
     /// Release the residual stored units of the struct `source`, whose slots
@@ -7218,7 +7276,6 @@ const Inserter = struct {
         layout_idx: layout_mod.Idx,
         slot_base: u32,
         container: arc_dismantle.Container,
-        rc_slots: []const layout_mod.Store.RcSlot,
         residual_mask: u64,
         cause: RcCause,
         next: LIR.CFStmtId,
@@ -7232,34 +7289,21 @@ const Inserter = struct {
             const field = info.fields.get(@intCast(index));
             if (field.is_padding) continue;
             if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(field.layout))) continue;
-            const range: arc_dismantle.SlotRange = .{
-                .first = slot_base + self.layouts.ownershipSlotBase(layout_idx, field.index),
-                .count = self.layouts.ownershipSlotCount(field.layout),
-            };
-            var any_residual = false;
-            var any_absent = false;
-            for (rc_slots) |slot| {
-                if (!range.contains(slot.slot)) continue;
-                const piece = container.pieceOf(slot.slot) orelse arcInvariant("ARC container pieces missed a refcounted slot");
-                if ((residual_mask & (@as(u64, 1) << piece)) != 0) any_residual = true else any_absent = true;
-            }
-            if (!any_residual) continue;
+            const first = slot_base + self.layouts.ownershipSlotBase(layout_idx, field.index);
+            var coverage: SlotCoverage = .{};
+            self.residualCoverage(container, residual_mask, field.layout, first, &coverage);
+            if (!coverage.residual) continue;
             const temp = try self.store.addLocal(.{ .layout_idx = field.layout });
             try self.dismantle_temps.append(self.emission_allocator, temp);
             const read_op: LIR.RefOp = .{ .field = .{
                 .source = source,
                 .field_idx = @intCast(field.index),
             } };
-            if (any_absent) {
-                tail = try self.releaseResidualSlots(local, temp, field.layout, range.first, container, rc_slots, residual_mask, cause, tail);
+            if (coverage.absent) {
+                tail = try self.releaseResidualSlots(local, temp, field.layout, first, container, residual_mask, cause, tail);
                 var absent = std.ArrayList(u32).empty;
                 defer absent.deinit(self.emission_allocator);
-                for (rc_slots) |slot| {
-                    if (!range.contains(slot.slot)) continue;
-                    const piece = container.pieceOf(slot.slot).?;
-                    if ((residual_mask & (@as(u64, 1) << piece)) != 0) continue;
-                    try absent.append(self.emission_allocator, slot.slot - range.first);
-                }
+                try self.appendAbsentSlots(container, residual_mask, field.layout, first, first, &absent);
                 tail = try self.store.addCFStmt(.{ .assign_ref = .{
                     .target = temp,
                     .op = read_op,
