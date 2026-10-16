@@ -17057,7 +17057,14 @@ two distinct representations is direct only when neither side takes hidden
 descriptor parameters. Otherwise an adapter makes both sides agree on the
 erased-call descriptor keys, for arguments and function-typed results alike.
 A generated codec callable whose enclosing frame does not receive one of its
-descriptor captures materializes that capture from its representation.
+descriptor captures materializes that capture from its representation. A
+callee whose type variables appear only inside function types (a parser
+combinator's `input`) takes no descriptor for them, so the call boundary
+substitutes nothing for them; an adapter capture naming such a variable, which
+neither the source value's descriptor environment nor the building frame
+describes, is materialized from the other side's representation at the same
+position in the two function types. A row's extension has no such position:
+it stands for the other row's variants it does not list.
 
 An erased procedure's argument descriptor parameters are keyed by their
 pre-order position under the argument, but a caller's view of the argument can

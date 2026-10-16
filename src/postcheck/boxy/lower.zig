@@ -37481,18 +37481,29 @@ const ProcBodyBuilder = struct {
             // A template dictionary's adapter binds the building frame's type
             // variables; a representation naming them is described through
             // those bindings.
+            // A callee takes no descriptor for a variable that appears only
+            // inside function types (a parser combinator's `input`), so the
+            // boundary substitutes nothing for it; when nothing here
+            // describes it, the other side's representation at the same
+            // position in the two function types does.
+            const materialize_rep = if (try self.repNamesUnboundVariable(capture.materialize_rep))
+                (try self.counterpartRepAtPosition(target_function.rep, source_function.rep, capture.materialize_rep)) orelse
+                    (try self.counterpartRepAtPosition(source_function.rep, target_function.rep, capture.materialize_rep)) orelse
+                    capture.materialize_rep
+            else
+                capture.materialize_rep;
             const materialization: DescriptorMaterialization = if (self.template_frame_descriptors and
-                try self.descriptorTemplateNeedsCapturesForKnownRep(capture.materialize_rep))
-                try self.descriptorMaterializationForSourceRep(capture.materialize_rep)
+                try self.descriptorTemplateNeedsCapturesForKnownRep(materialize_rep))
+                try self.descriptorMaterializationForSourceRep(materialize_rep)
             else if (self.static_descriptor_materialization_scope) |scope|
                 .{ .desc = try self.parent.staticDescRefForWorkerRepWithSourceMap(
-                    capture.materialize_rep,
+                    materialize_rep,
                     scope.sources.get(capture.desc),
                     scope.sources,
                     scope.context,
                 ) }
             else
-                try self.descriptorMaterializationForSourceRep(capture.materialize_rep);
+                try self.descriptorMaterializationForSourceRep(materialize_rep);
             try descriptor_materializations.append(self.parent.allocator, materialization.initializer(local));
         }
         for (descriptor_captures, capture_fields[1..], capture_needs_materialization) |capture, local, needs_materialization| {
@@ -37855,6 +37866,75 @@ const ProcBodyBuilder = struct {
             };
         }
         return captures;
+    }
+
+    /// Whether `root` names a bare type variable that neither this frame
+    /// binds nor a sealed default fixes; an open tag row's extension is
+    /// described statically by its row.
+    fn repNamesUnboundVariable(self: *ProcBodyBuilder, root: Plan.TypeRepId) Allocator.Error!bool {
+        const allocator = self.parent.allocator;
+        var pending = std.ArrayList(Plan.TypeRepId).empty;
+        defer pending.deinit(allocator);
+        var visited = collections.DenseMap(Plan.TypeRepId, void).init(allocator);
+        defer visited.deinit();
+        try pending.append(allocator, root);
+        while (pending.pop()) |rep_id| {
+            if ((try visited.getOrPut(rep_id)).found_existing) continue;
+            if (self.descriptorBindingIsBoundForRep(rep_id)) continue;
+            const rep = self.parent.plan.representations.items[@backingInt(rep_id)];
+            if (self.repIsBareDynamic(rep_id)) {
+                if (rep.sealed_default == null and !rep.is_open_tag_row and rep.tag_variants.len == 0) return true;
+                continue;
+            }
+            for (self.parent.plan.childSlice(rep.children)) |child| {
+                if (self.parent.plan.childIsSharedBackingTemplate(rep_id, child)) continue;
+                try pending.append(allocator, child.rep);
+            }
+        }
+        return false;
+    }
+
+    /// The representation inside `other_root` at the position `target`
+    /// occupies inside `root`, following children by role.
+    fn counterpartRepAtPosition(
+        self: *ProcBodyBuilder,
+        root: Plan.TypeRepId,
+        other_root: Plan.TypeRepId,
+        target: Plan.TypeRepId,
+    ) Allocator.Error!?Plan.TypeRepId {
+        const allocator = self.parent.allocator;
+        const Pair = struct { rep: Plan.TypeRepId, other: Plan.TypeRepId };
+        var pending = std.ArrayList(Pair).empty;
+        defer pending.deinit(allocator);
+        var visited = collections.DenseMap(Plan.TypeRepId, void).init(allocator);
+        defer visited.deinit();
+        try pending.append(allocator, .{ .rep = root, .other = other_root });
+        while (pending.pop()) |pair| {
+            if (pair.rep == target) return pair.other;
+            if ((try visited.getOrPut(pair.rep)).found_existing) continue;
+            const rep = self.parent.plan.representations.items[@backingInt(pair.rep)];
+            const other = self.parent.plan.representations.items[@backingInt(pair.other)];
+            // An alias names its backing's structure, which the other side
+            // may hold without the alias layer.
+            if (rep.kind == .alias and other.kind != .alias) {
+                try pending.append(allocator, .{ .rep = self.repQuery().requiredSingleChild(pair.rep, .alias_backing).rep, .other = pair.other });
+                continue;
+            }
+            if (other.kind == .alias and rep.kind != .alias) {
+                try pending.append(allocator, .{ .rep = pair.rep, .other = self.repQuery().requiredSingleChild(pair.other, .alias_backing).rep });
+                continue;
+            }
+            const other_children = self.parent.plan.childSlice(other.children);
+            for (self.parent.plan.childSlice(rep.children)) |child| {
+                if (self.parent.plan.childIsSharedBackingTemplate(pair.rep, child)) continue;
+                // A row's extension stands for the other row's variants it
+                // does not list, not for the other row's extension.
+                if (child.role == .tag_ext) continue;
+                const other_child = self.namedQuery().findMatchingChildByRole(other_children, child) orelse continue;
+                try pending.append(allocator, .{ .rep = child.rep, .other = other_child.rep });
+            }
+        }
+        return null;
     }
 
     /// The caller representation the active call boundary substitutes for
