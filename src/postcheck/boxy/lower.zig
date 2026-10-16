@@ -15200,7 +15200,9 @@ const ProcBodyBuilder = struct {
         exact_reps: collections.DenseMapUnmanaged(Plan.TypeRepId, Plan.TypeRepId) = .empty,
         exact_storage: bool,
         env: DescriptorTemplateEnvId = .empty,
-        excluded_local: ?LIR.LocalId = null,
+        /// Descriptor locals the template must not read: the one it fills,
+        /// and any other still waiting to be filled.
+        excluded_locals: []const LIR.LocalId = &.{},
         /// Whether the build asked which descriptor locals this procedure
         /// has bound, making its descriptor specific to the procedure.
         read_bound_locals: bool = false,
@@ -16340,12 +16342,30 @@ const ProcBodyBuilder = struct {
                     .read = .nested,
                 };
             } else (try self.immediateTagReadDescriptorForRep(parent_rep, target_rep, candidate_index)) orelse continue;
-            if (source != null) {
-                boxyLowerInvariant("boxy erased argument descriptor had multiple direct parent parameters");
+            if (source) |earlier| {
+                // A parent that an earlier parent itself holds, or that is
+                // the earlier one's backing (a nominal's record, whose fields
+                // the nominal's descriptor also lists), is the nearer one.
+                const earlier_rep = self.descriptorStorageRep(params[earlier.descriptor_index].rep);
+                const nearer = self.repBacksRep(earlier_rep, parent_rep) or
+                    (try self.immediateNestedDescriptorIndexForRep(earlier_rep, parent_rep)) != null or
+                    (try self.immediateTagReadDescriptorForRep(earlier_rep, parent_rep, earlier.descriptor_index)) != null;
+                if (!nearer) boxyLowerInvariant("boxy erased argument descriptor had multiple direct parent parameters");
             }
             source = projected;
         }
         return source orelse direct;
+    }
+
+    /// Whether `backing_rep` is the alias or nominal backing of `rep_id`.
+    fn repBacksRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId, backing_rep: Plan.TypeRepId) bool {
+        for (self.parent.plan.childSlice(self.parent.plan.representations.items[@backingInt(rep_id)].children)) |child| {
+            switch (child.role) {
+                .alias_backing, .nominal_backing => if (self.descriptorStorageRep(child.rep) == backing_rep) return true,
+                .alias_arg, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => {},
+            }
+        }
+        return false;
     }
 
     /// The tag payload or open-row extension of `parent_rep_id`'s descriptor
@@ -26326,6 +26346,15 @@ const ProcBodyBuilder = struct {
             return result;
         }
 
+        // A concrete source fills no variable of the target. A target that
+        // names no type variable is then described by its static descriptor
+        // alone, however deep a recursive type runs.
+        if (!self.parent.plan.representations.items[@backingInt(source_rep)].contains_dynamic and
+            !try self.parent.plan.namesTypeVariable(self.parent.allocator, target_rep))
+        {
+            return .{ .desc = try self.parent.staticDescRefForRep(target_rep) };
+        }
+
         // Both sides share one nominal backing template, so its positions do
         // not name either side's storage. When the uses bind a formal to
         // actuals that store differently, the target's storage is its own
@@ -31485,6 +31514,9 @@ const ProcBodyBuilder = struct {
         }
         const lowered = try self.parent.allocator.alloc(DescriptorArgLocal, hidden_args.len);
         errdefer self.parent.allocator.free(lowered);
+        // Arguments whose local this call allocates; materialization fills them.
+        var fresh = std.ArrayList(usize).empty;
+        defer fresh.deinit(self.parent.allocator);
 
         for (hidden_args, lowered, 0..) |arg, *local, index| {
             if (arg.source_descriptor_index) |source_index| {
@@ -31514,6 +31546,7 @@ const ProcBodyBuilder = struct {
                 const rep = self.parent.plan.representations.items[@backingInt(identity_rep)];
                 const desc = rep.descriptor orelse {
                     local.* = .{ .local = try self.addFrameLocal(.opaque_ptr) };
+                    try fresh.append(self.parent.allocator, index);
                     continue;
                 };
                 if (self.descriptorLocalForRequirementAndRepOrNull(desc, identity_rep)) |desc_local| {
@@ -31536,6 +31569,7 @@ const ProcBodyBuilder = struct {
                 }
             }
             local.* = .{ .local = try self.addFrameLocal(.opaque_ptr) };
+            try fresh.append(self.parent.allocator, index);
         }
 
         const snapshot = try self.snapshotDescriptorBindings();
@@ -31543,7 +31577,12 @@ const ProcBodyBuilder = struct {
         defer self.restoreDescriptorBindings(snapshot);
         try self.bindDirectCallHiddenDescriptorLocals(hidden_args, lowered, false);
 
-        for (hidden_args, lowered) |arg, *local| {
+        // The representation each argument's template describes, for the
+        // cycle pass below.
+        const template_reps = try self.parent.allocator.alloc(?Plan.TypeRepId, hidden_args.len);
+        defer self.parent.allocator.free(template_reps);
+        @memset(template_reps, null);
+        for (hidden_args, lowered, template_reps) |arg, *local, *template_rep| {
             if (local.from_source_value) continue;
             if (self.localIsReadOnlyDescriptorInput(local.local)) continue;
 
@@ -31564,6 +31603,7 @@ const ProcBodyBuilder = struct {
                 );
                 local.materialize = materialization.desc;
                 local.captures = materialization.captures;
+                template_rep.* = identity_call_rep;
                 continue;
             }
 
@@ -31575,6 +31615,7 @@ const ProcBodyBuilder = struct {
                 );
                 local.materialize = materialization.desc;
                 local.captures = materialization.captures;
+                template_rep.* = identity_worker_rep;
                 continue;
             }
 
@@ -31584,7 +31625,60 @@ const ProcBodyBuilder = struct {
             }
         }
 
+        // Two compound arguments this call allocates can each read the
+        // other: the levels of a recursive type. An argument that reaches
+        // itself through the locals it reads is materialized again from the
+        // ones before it alone, which breaks the cycle there.
+        var excluded = std.ArrayList(LIR.LocalId).empty;
+        defer excluded.deinit(self.parent.allocator);
+        for (fresh.items) |index| {
+            const template_rep = template_reps[index] orelse continue;
+            if (!try self.descriptorArgReachesItself(lowered, fresh.items, index)) continue;
+            excluded.clearRetainingCapacity();
+            for (fresh.items) |other| {
+                if (other < index or template_reps[other] == null or self.repIsBareDynamic(hidden_args[other].rep)) continue;
+                try excluded.append(self.parent.allocator, lowered[other].local);
+            }
+            const materialization = try self.descriptorMaterializationForKnownRepExcludingLocals(template_rep, excluded.items);
+            lowered[index].materialize = materialization.desc;
+            lowered[index].captures = materialization.captures;
+        }
+
         return lowered;
+    }
+
+    /// Whether hidden argument `root` reads, through the captures of the
+    /// arguments `fresh` names, its own local.
+    fn descriptorArgReachesItself(
+        self: *ProcBodyBuilder,
+        lowered: []const DescriptorArgLocal,
+        fresh: []const usize,
+        root: usize,
+    ) Allocator.Error!bool {
+        const allocator = self.parent.allocator;
+        var visited = try std.DynamicBitSetUnmanaged.initEmpty(allocator, lowered.len);
+        defer visited.deinit(allocator);
+        var pending = std.ArrayList(usize).empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, root);
+        while (pending.pop()) |index| {
+            const captures = self.parent.result.store.getLocalSpan(lowered[index].captures);
+            for (0..GuardedList.borrowLen(captures)) |capture_index| {
+                const captured = GuardedList.at(captures, capture_index);
+                for (fresh) |other| {
+                    if (lowered[other].local != captured) continue;
+                    if (other == root) return true;
+                    if (visited.isSet(other)) continue;
+                    visited.set(other);
+                    try pending.append(allocator, other);
+                }
+            }
+        }
+        return false;
+    }
+
+    fn localIsAmong(locals: []const LIR.LocalId, local: LIR.LocalId) bool {
+        return std.mem.findScalar(LIR.LocalId, locals, local) != null;
     }
 
     /// A planned argument source reads the original operand's own
@@ -32755,6 +32849,17 @@ const ProcBodyBuilder = struct {
         root: Plan.TypeRepId,
         excluded_local: ?LIR.LocalId,
     ) Allocator.Error!DescriptorMaterialization {
+        const excluded: []const LIR.LocalId = if (excluded_local) |*local| local[0..1] else &.{};
+        return try self.descriptorMaterializationForKnownRepExcludingLocals(root, excluded);
+    }
+
+    /// `descriptorMaterializationForKnownRepExcludingLocal` reading none of
+    /// `excluded_locals`.
+    fn descriptorMaterializationForKnownRepExcludingLocals(
+        self: *ProcBodyBuilder,
+        root: Plan.TypeRepId,
+        excluded_locals: []const LIR.LocalId,
+    ) Allocator.Error!DescriptorMaterialization {
         // A bound formal is described by its actual.
         var identity_rep = self.parent.descriptorIdentityRep(root);
         while (self.nominalFormalActualBelow(self.nominal_formal_bindings.items.len, identity_rep)) |actual| {
@@ -32767,7 +32872,7 @@ const ProcBodyBuilder = struct {
             const desc = rep.descriptor.?;
             if (self.descriptorBindingIsBoundForRep(identity_rep)) {
                 if (self.descriptorLocalForRequirementAndRepOrNull(desc, identity_rep)) |local| {
-                    if (local != excluded_local) {
+                    if (!localIsAmong(excluded_locals, local)) {
                         return .{ .desc = .{ .local = local } };
                     }
                 }
@@ -32787,7 +32892,7 @@ const ProcBodyBuilder = struct {
 
         var context = try self.initDescriptorTemplateContext(false);
         defer context.deinit(self.parent.allocator);
-        context.excluded_local = excluded_local;
+        context.excluded_locals = excluded_locals;
 
         const desc: LIR.BoxyDescRef = .{ .static = try self.descriptorTemplateTypeDescForRep(identity_rep, &captures, &context) };
         const span = if (captures.items.len == 0)
@@ -33292,7 +33397,7 @@ const ProcBodyBuilder = struct {
             // own descriptor describes its storage there, whatever descriptor
             // the formal's actual type carries.
             if (context.forced_refs.get(self.parent.descriptorIdentityRep(rep_id))) |local| {
-                if (context.excluded_local != local) {
+                if (!localIsAmong(context.excluded_locals, local)) {
                     try appendUniqueLocal(self.parent.allocator, captures, local);
                     return .{ .local = local };
                 }
@@ -33312,7 +33417,7 @@ const ProcBodyBuilder = struct {
             !try self.descriptorTemplateRebindsRep(identity_rep, context);
         if (may_reuse_rep_local) {
             if (context.forced_refs.get(identity_rep)) |local| {
-                if (context.excluded_local == local) return try self.templateStaticRef(rep_id, frames, context);
+                if (localIsAmong(context.excluded_locals, local)) return try self.templateStaticRef(rep_id, frames, context);
                 try appendUniqueLocal(self.parent.allocator, captures, local);
                 return .{ .local = local };
             }
@@ -33322,7 +33427,7 @@ const ProcBodyBuilder = struct {
             if (parent_desc == null or desc != parent_desc.?) {
                 context.read_bound_locals = true;
                 if (self.descriptorLocalForRequirementAndRepOrNull(desc, identity_rep)) |local| {
-                    if (self.descriptorBindingIsBoundForRep(identity_rep) and context.excluded_local != local) {
+                    if (self.descriptorBindingIsBoundForRep(identity_rep) and !localIsAmong(context.excluded_locals, local)) {
                         try appendUniqueLocal(self.parent.allocator, captures, local);
                         return .{ .local = local };
                     }
@@ -41075,14 +41180,8 @@ const ProcBodyBuilder = struct {
     fn addFrameLocalForRep(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.LocalId {
         const layout_idx = self.workerRuntimeLayoutForRep(rep_id).layoutIdx();
         const identity_rep = self.descriptorStorageRep(rep_id);
-        const exact = self.parent.plan.representations.items[@backingInt(rep_id)];
-        const identity = self.parent.plan.representations.items[@backingInt(identity_rep)];
         var desc: ?LIR.BoxyDescRef = null;
-        if (exact.descriptor == null and
-            (exact.contains_dynamic or identity.contains_dynamic) and
-            !self.parent.layoutIsBoxStorage(layout_idx) and
-            self.parent.layoutNeedsNestedBoxyDesc(layout_idx))
-        {
+        if (try self.repTakesValueDescriptor(rep_id)) {
             desc = .{ .local = try self.addFrameLocal(.opaque_ptr) };
         } else {
             desc = try self.frameDescriptorRefForRep(rep_id);
@@ -41093,6 +41192,29 @@ const ProcBodyBuilder = struct {
         const local = try self.addFrameLocal(layout_idx);
         if (desc) |desc_ref| self.parent.result.store.setLocalBoxyDesc(local, desc_ref);
         return local;
+    }
+
+    /// Whether a local of `rep_id` is described by a descriptor its value
+    /// brings rather than by one the representation plans: dynamic contents
+    /// with no planned descriptor of their own, unless the storage's planned
+    /// descriptor describes them here (an alias is described by its
+    /// backing's): this frame holds it, or it names no type variable and so
+    /// is static. Whatever produces the value fills it.
+    fn repTakesValueDescriptor(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!bool {
+        const layout_idx = self.workerRuntimeLayoutForRep(rep_id).layoutIdx();
+        const identity_rep = self.descriptorStorageRep(rep_id);
+        const exact = self.parent.plan.representations.items[@backingInt(rep_id)];
+        const identity = self.parent.plan.representations.items[@backingInt(identity_rep)];
+        if (identity.descriptor) |desc| {
+            if (self.descriptorBindingIsBoundForRep(identity_rep) and
+                self.descriptorLocalForRequirementAndRepOrNull(desc, identity_rep) != null) return false;
+            if (!self.repIsBareDynamic(identity_rep) and
+                !try self.parent.plan.namesTypeVariable(self.parent.allocator, identity_rep)) return false;
+        }
+        return exact.descriptor == null and
+            (exact.contains_dynamic or identity.contains_dynamic) and
+            !self.parent.layoutIsBoxStorage(layout_idx) and
+            self.parent.layoutNeedsNestedBoxyDesc(layout_idx);
     }
 
     fn addGeneratedParserOutputLocalForRep(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.LocalId {

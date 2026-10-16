@@ -17037,7 +17037,13 @@ representation. A compound parameter's descriptor is its worker representation
 described under the call's bindings. Evidence-only descriptors (worker scheme
 variables absent from the signature) take the checked call-site substitution
 wherever it names their variable. Hidden descriptors are materialized before
-argument adaptation, and the adaptation is lowered with those bindings active.
+argument adaptation, and the adaptation is lowered with those bindings active. Two
+of a call's compound hidden descriptors can each read the other (a list of a
+recursive nominal, and the nominal itself); one that reaches itself through
+the locals it reads is materialized from the descriptors before it alone,
+which breaks the cycle there. Every other descriptor keeps reading whatever
+local describes it, since a box's descriptor is the one its allocation was
+made with.
 
 An erased callable's hidden-descriptor captures come only from the use's
 planned hidden descriptor arguments. Each capture initializer is materialized
@@ -17063,7 +17069,9 @@ list and box positions, a tag payload read
 (`ErasedArgDescRead.tag_payload`) for a variant payload such as a presence
 slot's `Present` value, and an extension read (`ErasedArgDescRead.tag_ext`)
 for an open tag row's extension. Only a descriptor no earlier parameter holds
-is read from its call-site key.
+is read from its call-site key. When two earlier parameters hold it, the nearer one is
+read: the one the other holds, or the other's backing (a nominal's record,
+whose fields the nominal's descriptor also lists).
 
 An evidence-only descriptor collected inside an evidence dispatcher's
 representation, such as a presence slot of a record dispatcher, takes the
@@ -17075,6 +17083,15 @@ descriptors and argument descriptors from the inspected descriptor's own
 representation itself maps to the descriptor being built. Descriptor template
 capture sets include both spans, so every local an inspect span names is
 supplied to the materialization.
+
+A runtime adapter's target descriptor is computed from the source's only
+where the source fills a variable of the target. A source with no dynamic
+part fills none, so a target that names no type variable is described by its
+static descriptor, which keeps a recursive type's adapter from unrolling its
+recursion. A local whose representation has dynamic contents but no planned
+descriptor of its own (an alias of a `Dict`) is described by its storage's
+planned descriptor when the frame holds it or it is static; only otherwise
+does the value that fills the local bring its descriptor.
 
 A runtime adapter rewrites bytes through descriptors, and descriptors do not
 describe a callable's erased-call convention. A value holding a callable in its
