@@ -838,7 +838,7 @@ test "normal native capture serves both consumers the same exact objects before 
         .allocator = allocator,
         .io = std.testing.io,
         .store = undefined,
-        .packs = pack_store.LoadedPacks.init(allocator),
+        .packs = pack_store.LoadedPacks.init(allocator, backend.dev.PackFile.test_version_hash),
         .policy = different_policy,
         .policy_registry = &cache,
     };
@@ -883,7 +883,9 @@ test "rejected checking discards staged CTFE publication ownership without IO" {
         .packs = pack_store.LoadedPacks.init(allocator, backend.dev.PackFile.test_version_hash),
     };
     defer CompileTimeObjectCache.deinit(cache);
-    const bytes = try allocator.dupe(u8, "staged bytes");
+    const staged = "staged bytes";
+    const bytes = try allocator.alignedAlloc(u8, .@"16", staged.len);
+    @memcpy(bytes, staged);
     cache.publications.append(allocator, .{
         .placement = .{ .origin = .local, .identity = @as([32]u8, @splat(1)) },
         .key = @as([32]u8, @splat(2)),
