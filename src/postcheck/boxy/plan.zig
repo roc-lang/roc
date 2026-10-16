@@ -1360,9 +1360,6 @@ pub const ProgramPlan = struct {
     representations: std.ArrayList(TypeRepresentation),
     /// Checked-source ABI shapes, requested only at public boundaries.
     host_reps: collections.DenseMap(TypeRepId, TypeRepId),
-    /// The ABI representation the sort low-level calls each comparator
-    /// representation through, keyed by the comparator's representation.
-    sort_comparator_abis: collections.DenseMap(TypeRepId, TypeRepId),
     children: std.ArrayList(RepChild),
     tag_variants: std.ArrayList(TagVariant),
     declared_fields: std.ArrayList(DeclaredField),
@@ -1431,7 +1428,6 @@ pub const ProgramPlan = struct {
             .stored_type_reps = .empty,
             .representations = .empty,
             .host_reps = collections.DenseMap(TypeRepId, TypeRepId).init(allocator),
-            .sort_comparator_abis = collections.DenseMap(TypeRepId, TypeRepId).init(allocator),
             .children = .empty,
             .tag_variants = .empty,
             .declared_fields = .empty,
@@ -1471,10 +1467,6 @@ pub const ProgramPlan = struct {
         return null;
     }
 
-    pub fn sortComparatorAbiRep(self: *const ProgramPlan, comparator_rep: TypeRepId) TypeRepId {
-        return self.sort_comparator_abis.get(comparator_rep) orelse boxyPlanInvariant("missing planned sort comparator ABI");
-    }
-
     pub fn deinit(self: *ProgramPlan) void {
         self.literal_sites.deinit(self.allocator);
         if (self.literal_evidence) |*evidence| evidence.deinit(self.allocator);
@@ -1503,7 +1495,6 @@ pub const ProgramPlan = struct {
         self.children.deinit(self.allocator);
         self.representations.deinit(self.allocator);
         self.host_reps.deinit();
-        self.sort_comparator_abis.deinit();
         self.type_reps.deinit(self.allocator);
         self.stored_type_reps.deinit(self.allocator);
         self.root_reps.deinit(self.allocator);
@@ -4821,11 +4812,6 @@ const Builder = struct {
                 const expr = site.view.checked_bodies.expr(site.expr);
                 if (builtinTryArgs(site.view.checked_types, expr.ty) != null or expr.data.run_low_level.op == .compare) {
                     _ = try self.requestHostRep(try self.analyzeType(site.view, expr.ty));
-                }
-                const run = expr.data.run_low_level;
-                if (run.op == .list_sort_with) {
-                    if (run.args.len != 2) boxyPlanInvariant("list_sort_with did not take a list and a comparator");
-                    try self.planSortComparatorAbi(try self.analyzeType(site.view, site.view.checked_bodies.expr(run.args[1]).ty));
                 }
             },
             .inspect_expr => |site| try self.pushPlanActions(actions, &.{
@@ -9001,39 +8987,6 @@ const Builder = struct {
             const worker_child = self.namedQuery().findMatchingChildByRole(worker_children, declared_children[index]) orelse continue;
             try pending.append(self.allocator, .{ declared_children[index].rep, worker_child.rep });
         }
-    }
-
-    /// The sort low-level calls its boxed comparator through a fixed ABI: the
-    /// comparator's arguments keep their worker representation, and its
-    /// ordering result is the closed `[Before, Same, After]` in its host
-    /// representation.
-    fn planSortComparatorAbi(self: *Builder, boxed_comparator_rep: TypeRepId) Allocator.Error!void {
-        const comparator_rep = self.repQuery().requiredSingleChild(boxed_comparator_rep, .box_payload).rep;
-        if (self.plan.sort_comparator_abis.get(comparator_rep) != null) return;
-        const function = self.repQuery().functionChildren(comparator_rep) orelse
-            boxyPlanInvariant("sort comparator was not a function");
-        const abi_ret = try self.requestHostRep(function.ret);
-        var children = std.ArrayList(RepChild).empty;
-        defer children.deinit(self.allocator);
-        for (self.plan.childSlice(self.plan.representations.items[@backingInt(comparator_rep)].children)) |child| {
-            var abi_child = child;
-            switch (child.role) {
-                .function_ret => {
-                    abi_child.rep = abi_ret;
-                    abi_child.source_type = self.plan.representations.items[@backingInt(abi_ret)].source_type;
-                },
-                .function_arg => {},
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyPlanInvariant("sort comparator representation had a non-function child"),
-            }
-            try children.append(self.allocator, abi_child);
-        }
-        const abi_rep: TypeRepId = @fromBackingInt(@intCast(@as(u32, @intCast(self.plan.representations.items.len))));
-        try self.plan.representations.append(self.allocator, .{
-            .source_type = self.plan.representations.items[@backingInt(comparator_rep)].source_type,
-            .kind = .erased_callable,
-            .children = try self.commitPendingChildren(children.items),
-        });
-        try self.plan.sort_comparator_abis.put(comparator_rep, abi_rep);
     }
 
     fn requestHostRep(self: *Builder, worker_rep: TypeRepId) Allocator.Error!TypeRepId {

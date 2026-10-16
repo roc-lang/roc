@@ -5848,7 +5848,6 @@ pub const Interpreter = struct {
             .num_plus, .num_minus, .num_times => unreachable,
             // LIR lowering splits this into an alias and `list_prefetch`.
             .list_prefetched => unreachable,
-            .list_sort_with => self.evalListSortWith(args[0], args[1], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
             // ── String ops ──
             .str_is_eq => blk: {
                 const result = builtins.str.strEqual(valueToRocStr(args[0]), valueToRocStr(args[1]));
@@ -6457,6 +6456,12 @@ pub const Interpreter = struct {
                 }
                 const rl = self.valueToRocListForLayout(args[0], arg_layout);
                 val.write(u8, if (builtins.list.listMapCanReuse(rl, &self.roc_ops)) 1 else 0);
+                break :blk val;
+            },
+            .list_item_size_at_most => blk: {
+                const fits = self.listElemInfo(arg_layout).width <= args[1].read(u64);
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u8, @as(u8, @intFromBool(fits)));
                 break :blk val;
             },
             .list_map_cast_unsafe => blk: {
@@ -8347,37 +8352,6 @@ pub const Interpreter = struct {
             if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
             update_mode,
             &builtins.list.copy_fallback,
-            &self.roc_ops,
-        );
-        return self.rocListToValue(result, ret_layout);
-    }
-
-    fn evalListSortWith(self: *LirInterpreter, list_arg: Value, callable_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
-        const rl = self.valueToRocListForLayout(list_arg, list_layout);
-        const info = self.listElemInfo(list_layout);
-        if (info.width == 0) return self.rocListToValue(canonicalZstList(rl.len()), ret_layout);
-        const callable = self.readBoxedDataPointer(callable_arg) orelse return self.invariantFailedError(
-            "LIR/interpreter invariant violated: list_sort_with received a null erased callable",
-            .{},
-        );
-        const elems_rc = self.builtinListElemRc(list_layout);
-        var crash_boundary = self.enterCrashBoundary();
-        defer crash_boundary.deinit();
-        if (crash_boundary.set() != 0) return self.crashError();
-        var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
-        const result = builtins.list.listSortWith(
-            rl,
-            callable,
-            info.alignment,
-            info.width,
-            elems_rc,
-            if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
-            if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
-            if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
-            if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
-            update_mode,
-            false,
-            null,
             &self.roc_ops,
         );
         return self.rocListToValue(result, ret_layout);

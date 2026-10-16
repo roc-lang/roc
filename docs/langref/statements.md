@@ -319,6 +319,18 @@ my_func = |arg| {
 }
 ```
 
+Code written after a `return` in the same block can never run, so the compiler gives
+a warning for it. The same goes for code after an `if` or `match` where every branch
+returns, and code after a [`crash`](#crash) or [`break`](#break).
+
+```roc
+my_func = |arg| {
+    return 0
+
+    arg - 1 # This gives a warning.
+}
+```
+
 ## [`break`](#break) {#break}
 
 The `break` statement immediately exits the innermost `for` or `while` loop. See [loops](loops#break-statement) for details.
@@ -330,7 +342,8 @@ The `break` statement immediately exits the innermost `for` or `while` loop. See
 ## [`crash`](#crash) {#crash}
 
 A `crash` statement crashes the running application. All code following the `crash`
-becomes unreachable and will not be executed.
+becomes unreachable and will not be executed. Code written after a `crash` in the same
+block gives a warning, just like code after a [`return`](#return).
 
 ```roc
 if some_condition {

@@ -8778,27 +8778,39 @@ const Lowerer = struct {
         comptime_site: ?Lifted.ComptimeSiteId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LowerStep {
-        // When the in-place `List.map` branch is statically impossible—the
-        // optimization is disabled or the element layouts are not
-        // interchangeable—lower only the branch a constant-0
-        // `list_map_can_reuse` selects, so the in-place machinery never reaches
-        // LIR. Each fold is recorded as explicit data; the debug Lambda Mono
-        // materializer replays the recorded resolutions instead of recomputing
-        // them (it runs before layout selection and has no layout store), so
-        // the two derivations demand the same set of functions.
-        if (self.solved.lifted.listMapCanReuseMatch(scrutinee, branches_span)) |folded| {
-            const args = self.solved.lifted.exprSpan(folded.call_args);
-            const interchangeable = try self.listMapLayoutsInterchangeable(args, null);
-            // Reuse possible on at least one width keeps the match, so each
-            // backend can decide per the width it is building.
-            if (!interchangeable.get(.u32) and !interchangeable.get(.u64)) {
-                if (builtin.mode == .debug) {
-                    try self.folded_map_matches.append(self.allocator, .{
-                        .scrutinee = scrutinee,
-                        .body = folded.zero_branch_body,
-                    });
+        // A match on a layout-resolved low-level (`list_map_can_reuse`,
+        // `list_item_size_at_most`) whose answer is known here keeps only the
+        // branch that answer selects, so the other branch never reaches LIR
+        // and its functions are never demanded. Each fold is recorded as
+        // explicit data; the debug Lambda Mono materializer replays the
+        // recorded resolutions instead of recomputing them (it runs before
+        // layout selection and has no layout store), so the two derivations
+        // demand the same set of functions.
+        if (self.solved.lifted.layoutResolvedMatch(scrutinee, branches_span)) |site| {
+            const args = self.solved.lifted.exprSpan(site.call_args);
+            const answer: ?u8 = switch (site.op) {
+                .list_map_can_reuse => blk: {
+                    // Reuse possible on at least one width keeps the match, so
+                    // each backend can decide per the width it is building.
+                    const interchangeable = try self.listMapLayoutsInterchangeable(args, null);
+                    break :blk if (!interchangeable.get(.u32) and !interchangeable.get(.u64)) 0 else null;
+                },
+                .list_item_size_at_most => blk: {
+                    const answers = (try self.listItemSizeAtMost(args)) orelse break :blk null;
+                    break :blk if (answers.get(.u32) == answers.get(.u64)) @intFromBool(answers.get(.u64)) else null;
+                },
+            };
+            if (answer) |value| {
+                if (self.solved.lifted.branchForAnswer(branches_span, value)) |body| {
+                    if (builtin.mode == .debug) {
+                        try self.folded_map_matches.append(self.allocator, .{
+                            .scrutinee = scrutinee,
+                            .body = body,
+                            .answer = value,
+                        });
+                    }
+                    return .{ .tail = exprTask(where, target, body, result_ty, next) };
                 }
-                return .{ .tail = exprTask(where, target, folded.zero_branch_body, result_ty, next) };
             }
         }
         self.noteErasedOwnerAmbiguous(target);
@@ -9803,11 +9815,27 @@ const Lowerer = struct {
     fn reserveRecursiveLetSlot(self: *Lowerer, local: Lifted.LocalId, ty: Type.TypeId) Common.LowerError!RecursiveLetSlot {
         const binding = try self.bindRecursiveLocalForTyped(local, ty);
         const target_content = self.result.layouts.getLayout(self.result.store.getLocal(binding.slot).layout_idx);
-        if (target_content.tag != .box) Common.invariant("recursive Monotype let statement must bind a boxed runtime layout");
+        // A zero-sized value boxes to `box_of_zst`, which records no payload
+        // layout; the value's own layout is the payload its slot stores.
+        const payload_layout = switch (target_content.tag) {
+            .box => target_content.getIdx(),
+            .box_of_zst => try self.layoutOfType(ty),
+            .scalar,
+            .list,
+            .list_of_zst,
+            .struct_,
+            .closure,
+            .erased_callable,
+            .zst,
+            .tag_union,
+            .ptr,
+            .erased_box,
+            => Common.invariant("recursive Monotype let statement must bind a boxed runtime layout"),
+        };
         return .{
             .ty = ty,
             .binding = binding,
-            .payload_layout = target_content.getIdx(),
+            .payload_layout = payload_layout,
         };
     }
 
@@ -10218,6 +10246,18 @@ const Lowerer = struct {
             .op = op,
             .next = next,
         } }, origin);
+    }
+
+    /// Whether the list's item layout fits `list_item_size_at_most`'s bound,
+    /// per pointer width, when the bound is a literal at this site; null when
+    /// it is not, which leaves the operation to run at runtime.
+    fn listItemSizeAtMost(self: *Lowerer, args: anytype) Common.LowerError!?layout.WidthValues(bool) {
+        if (args.len != 2) Common.invariant("list_item_size_at_most reached LIR lowering with the wrong arity");
+        const bound_data = self.solved.lifted.getExpr(GuardedList.at(args, 1)).data;
+        if (bound_data != .int_lit) return null;
+        const bound: u128 = @intCast(bound_data.int_lit.toI128());
+        const list_layout_idx = try self.layoutOfType(try self.lowerExprTy(GuardedList.at(args, 0)));
+        return self.result.layouts.listItemSizeAtMost(list_layout_idx, bound);
     }
 
     /// Compile-time half of the `list_map_can_reuse` decision, computed for

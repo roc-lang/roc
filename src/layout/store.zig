@@ -3109,6 +3109,16 @@ pub const Store = struct {
         };
     }
 
+    /// Whether a list's item layout occupies at most `bound` bytes, decided
+    /// per pointer width. A list of zero-sized items always fits.
+    pub fn listItemSizeAtMost(self: *const Self, list_layout_idx: Idx, bound: u128) layout_mod.WidthValues(bool) {
+        const list_layout = self.getLayout(list_layout_idx);
+        if (list_layout.tag == .list_of_zst) return layout_mod.WidthValues(bool).both(true, true);
+        if (list_layout.tag != .list) unreachable;
+        const elem = self.getLayout(self.runtimeRepresentationLayoutIdx(list_layout.getIdx()));
+        return layout_mod.WidthValues(bool).both(self.sizeAt(elem, .u32) <= bound, self.sizeAt(elem, .u64) <= bound);
+    }
+
     /// Size in bytes of a layout for a specific target. Aggregates read their
     /// precomputed per-target size; pointers/strings/lists scale with the target's
     /// pointer width. Recursion terminates at boxes.

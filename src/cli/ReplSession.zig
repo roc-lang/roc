@@ -2762,12 +2762,12 @@ test "Repl - range_to" {
     try expectInterpreter("Iter.fold((1..=3).iter(), [], |acc, item| acc.append(item))", "[1.0, 2.0, 3.0]");
 }
 
-test "Repl - list_sort_with lengths" {
+test "Repl - List.sort_with lengths" {
     try expectAllNative("List.len(List.sort_with([3, 1, 2], |a, b| if a < b Before else if a > b After else Same))", "3");
     try expectAllNative("List.len(List.sort_with([5, 2, 8, 1, 9], |a, b| if a < b Before else if a > b After else Same))", "5");
 }
 
-test "Repl - list_sort_with empty" {
+test "Repl - List.sort_with empty" {
     try expectAllNative(
         \\{
         \\    xs : List(I64)
@@ -2777,7 +2777,7 @@ test "Repl - list_sort_with empty" {
     , "0");
 }
 
-test "Repl - list_sort_with single" {
+test "Repl - List.sort_with single" {
     try expectAllNative("List.len(List.sort_with([42], |a, b| if a < b Before else if a > b After else Same))", "1");
 }
 

@@ -64,10 +64,9 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
     // The uniform erased-callable ABI hands the callee a pointer to
     // caller-owned result storage of exactly the return layout's size (see
     // builtins/erased_callable.zig). A callee that stores past that size
-    // corrupts whatever the caller keeps next to the result slot:
-    // `listSortWith` comparators return a 1-byte ordering into a
-    // `var ordering: u8` stack slot, so any wider store smashes the caller's
-    // frame and segfaults `List.sort` under the machine-code shim.
+    // corrupts whatever the caller keeps next to the result slot: a callee
+    // returning a 1-byte value into a `var result: u8` stack slot smashes the
+    // caller's frame with any wider store.
     //
     // The four return layouts cover every copy shape: a register-sized
     // scalar (1 byte), sub-word aggregates with and without an overlapping

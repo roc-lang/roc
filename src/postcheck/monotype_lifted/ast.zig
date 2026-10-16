@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const can = @import("can");
 const check = @import("check");
 const collections = @import("collections");
 
@@ -1695,13 +1696,18 @@ pub const Program = struct {
         return self.bodySpan(Branch, "branches", span_);
     }
 
-    /// See `listMapCanReuseMatchIn`.
-    pub fn listMapCanReuseMatch(
+    /// See `layoutResolvedMatchIn`.
+    pub fn layoutResolvedMatch(
         self: *const Program,
         scrutinee: ExprId,
         branches_span: Span(Branch),
-    ) ?ListMapCanReuseMatch {
-        return listMapCanReuseMatchIn(self, scrutinee, branches_span);
+    ) ?LayoutResolvedMatch {
+        return layoutResolvedMatchIn(self, scrutinee, branches_span);
+    }
+
+    /// See `branchForAnswerIn`.
+    pub fn branchForAnswer(self: *const Program, branches_span: Span(Branch), answer: u8) ?ExprId {
+        return branchForAnswerIn(self, branches_span, answer);
     }
 
     pub fn ifBranchSpan(self: *const Program, span_: Span(IfBranch)) ProgramSpanBorrow(IfBranch, "if_branches") {
@@ -1725,12 +1731,14 @@ pub const Program = struct {
     }
 };
 
-/// The two pieces direct LIR lowering needs to consider folding away the
-/// in-place `List.map` branch: the `list_map_can_reuse` call's arguments (to
-/// compute layout eligibility) and the body a constant-0 scrutinee selects.
-pub const ListMapCanReuseMatch = struct {
+/// A match direct LIR lowering may fold to one branch: its scrutinee calls
+/// the Builtin wrapper of a low-level whose answer the lowerer decides from
+/// committed layouts, and its branches are guard-free, binding-free integer
+/// literals and wildcards. The lowerer computes the answer (it needs the
+/// layouts) and `branchForAnswer` names the branch that answer selects.
+pub const LayoutResolvedMatch = struct {
+    op: can.CIR.Expr.LowLevel.LayoutResolved,
     call_args: Span(ExprId),
-    zero_branch_body: ExprId,
 };
 
 /// One match statically resolved by direct LIR lowering, recorded so the
@@ -1739,36 +1747,41 @@ pub const ListMapCanReuseMatch = struct {
 /// scrutinee expression, which belongs to exactly one match.
 ///
 /// The fold choice is the only part the materializer copies: it re-derives
-/// the site with `listMapCanReuseMatch` and asserts the recorded body is the
-/// branch a constant 0 selects. Skipping the scrutinee is sound only because
-/// that recognizer admits nothing but a call to the compiler-synthesized
-/// `list_map_can_reuse` wrapper over guard-free, binding-free literal and
+/// the site with `layoutResolvedMatch` and asserts the recorded body is the
+/// branch the recorded answer selects. Skipping the scrutinee is sound only
+/// because that recognizer admits nothing but a call to a compiler-synthesized
+/// layout-resolved low-level wrapper over guard-free, binding-free literal and
 /// wildcard branches; a new kind of fold must extend the recognizer and this
 /// contract together.
 pub const FoldedMatch = struct {
     scrutinee: ExprId,
     body: ExprId,
+    /// The low-level's answer the fold assumed. `list_map_can_reuse` only
+    /// ever folds to 0: a possible reuse keeps the match for the backends.
+    answer: u8,
 
     /// Whether this record resolves the match `self.scrutinee` heads, whose
-    /// branches are `branches_span`: the match is a `List.map` reuse site and
-    /// `self.body` is the branch a constant 0 selects. `program` is a
+    /// branches are `branches_span`: the match is a layout-resolved site and
+    /// `self.body` is the branch `self.answer` selects. `program` is a
     /// `Program` or a `ProgramView`.
     pub fn isResolutionOf(self: FoldedMatch, program: anytype, branches_span: Span(Branch)) bool {
-        const site = listMapCanReuseMatchIn(program, self.scrutinee, branches_span) orelse return false;
-        return site.zero_branch_body == self.body;
+        const site = layoutResolvedMatchIn(program, self.scrutinee, branches_span) orelse return false;
+        if (site.op == .list_map_can_reuse and self.answer != 0) return false;
+        return branchForAnswerIn(program, branches_span, self.answer) == self.body;
     }
 };
 
-/// Recognizes the `List.map` reuse match: a match whose scrutinee calls the
-/// Builtin `list_map_can_reuse` wrapper, with guard-free integer-literal and
-/// wildcard branches. Returns null for any other shape. Whether to fold is the
-/// caller's layout-aware decision; this only identifies the site and the
-/// branch a constant 0 reaches. `program` is a `Program` or a `ProgramView`.
-fn listMapCanReuseMatchIn(
+/// Recognizes a layout-resolved match: one whose scrutinee calls the Builtin
+/// wrapper of `list_map_can_reuse` or `list_item_size_at_most`, with
+/// guard-free, binding-free integer-literal and wildcard branches. Returns
+/// null for any other shape. Whether to fold is the caller's layout-aware
+/// decision; this only identifies the site. `program` is a `Program` or a
+/// `ProgramView`.
+fn layoutResolvedMatchIn(
     program: anytype,
     scrutinee: ExprId,
     branches_span: Span(Branch),
-) ?ListMapCanReuseMatch {
+) ?LayoutResolvedMatch {
     const scrutinee_data = program.getExpr(scrutinee).data;
     if (std.meta.activeTag(scrutinee_data) != .call_proc) return null;
     const call = scrutinee_data.call_proc;
@@ -1780,29 +1793,42 @@ fn listMapCanReuseMatchIn(
         .roc => |body| body,
         .hosted => return null,
     };
-    if (!exprIsListMapCanReuseOp(program, callee_body)) return null;
+    const op = layoutResolvedOpOf(program, callee_body) orelse return null;
 
     const branches = program.branchSpan(branches_span);
     for (0..GuardedList.borrowLen(branches)) |index| {
         const branch = GuardedList.at(branches, index);
         if (branch.guard != null or branch.bindings.len != 0) return null;
+        const tag = std.meta.activeTag(program.getPat(branch.pat).data);
+        if (tag != .wildcard and tag != .int_lit) return null;
+    }
+    return .{ .op = op, .call_args = call.args };
+}
+
+/// The branch of a layout-resolved match that the answer selects: the first
+/// whose pattern is that integer literal or a wildcard. Null when no branch
+/// matches, which an exhaustive match never has.
+fn branchForAnswerIn(program: anytype, branches_span: Span(Branch), answer: u8) ?ExprId {
+    const branches = program.branchSpan(branches_span);
+    for (0..GuardedList.borrowLen(branches)) |index| {
+        const branch = GuardedList.at(branches, index);
         const pat_data = program.getPat(branch.pat).data;
         const tag = std.meta.activeTag(pat_data);
-        if (tag == .wildcard or (tag == .int_lit and pat_data.int_lit.toI128() == 0)) {
-            return .{ .call_args = call.args, .zero_branch_body = branch.body };
+        if (tag == .wildcard or (tag == .int_lit and pat_data.int_lit.toI128() == answer)) {
+            return branch.body;
         }
-        return null;
     }
     return null;
 }
 
-fn exprIsListMapCanReuseOp(program: anytype, root: ExprId) bool {
+/// The layout-resolved low-level a Builtin wrapper body runs, if it is one.
+fn layoutResolvedOpOf(program: anytype, root: ExprId) ?can.CIR.Expr.LowLevel.LayoutResolved {
     var expr_id = root;
     while (true) {
         const data = program.getExpr(expr_id).data;
         const tag = std.meta.activeTag(data);
-        if (tag == .low_level) return data.low_level.op == .list_map_can_reuse;
-        if (tag != .block or data.block.statements.len != 0) return false;
+        if (tag == .low_level) return data.low_level.op.layoutResolved();
+        if (tag != .block or data.block.statements.len != 0) return null;
         expr_id = data.block.final_expr;
     }
 }
@@ -2377,8 +2403,7 @@ test "cached requirement summaries preserve source identity and transitive calle
     try std.testing.expect(!std.mem.eql(u8, &cold_digest, &independent_digest));
 }
 
-test "a folded match resolves only a List.map reuse site to its constant-0 branch" {
-    const can = @import("can");
+test "a folded match resolves only a layout-resolved site to the branch its answer selects" {
     var program = testLiftedProgram(std.testing.allocator);
     defer program.deinit();
     const ty = try program.types.add(.zst);
@@ -2387,32 +2412,45 @@ test "a folded match resolves only a List.map reuse site to its constant-0 branc
 
     const reuse_op = try program.addExpr(.{ .ty = ty, .data = .{ .low_level = .{ .op = .list_map_can_reuse, .args = .empty() } } });
     const reuse_wrapper = try program.addFn(.{ .symbol = @fromBackingInt(@intCast(1)), .args = .empty(), .captures = .empty(), .body = .{ .roc = reuse_op }, .ret = ty });
+    const size_op = try program.addExpr(.{ .ty = ty, .data = .{ .low_level = .{ .op = .list_item_size_at_most, .args = .empty() } } });
+    const size_wrapper = try program.addFn(.{ .symbol = @fromBackingInt(@intCast(3)), .args = .empty(), .captures = .empty(), .body = .{ .roc = size_op }, .ret = ty });
     const other_body = try program.addExpr(.{ .ty = ty, .data = .{ .int_lit = zero } });
     const other_fn = try program.addFn(.{ .symbol = @fromBackingInt(@intCast(2)), .args = .empty(), .captures = .empty(), .body = .{ .roc = other_body }, .ret = ty });
 
     const reuse_scrutinee = try program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{ .callee = .{ .lifted = reuse_wrapper }, .args = .empty() } } });
+    const size_scrutinee = try program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{ .callee = .{ .lifted = size_wrapper }, .args = .empty() } } });
     const other_scrutinee = try program.addExpr(.{ .ty = ty, .data = .{ .call_proc = .{ .callee = .{ .lifted = other_fn }, .args = .empty() } } });
     const literal_scrutinee = try program.addExpr(.{ .ty = ty, .data = .{ .int_lit = zero } });
 
     const zero_body = try program.addExpr(.{ .ty = ty, .data = .{ .int_lit = one } });
-    const in_place_body = try program.addExpr(.{ .ty = ty, .data = .{ .int_lit = zero } });
+    const other_branch_body = try program.addExpr(.{ .ty = ty, .data = .{ .int_lit = zero } });
     const branches = try program.addBranchSpan(&.{
         .{ .pat = try program.addPat(.{ .ty = ty, .data = .{ .int_lit = zero } }), .body = zero_body },
-        .{ .pat = try program.addPat(.{ .ty = ty, .data = .wildcard }), .body = in_place_body },
+        .{ .pat = try program.addPat(.{ .ty = ty, .data = .wildcard }), .body = other_branch_body },
     });
 
-    const resolved: FoldedMatch = .{ .scrutinee = reuse_scrutinee, .body = zero_body };
+    const resolved: FoldedMatch = .{ .scrutinee = reuse_scrutinee, .body = zero_body, .answer = 0 };
     try std.testing.expect(resolved.isResolutionOf(&program, branches));
     try std.testing.expect(resolved.isResolutionOf(program.view(), branches));
 
-    const wrong_branch: FoldedMatch = .{ .scrutinee = reuse_scrutinee, .body = in_place_body };
+    const wrong_branch: FoldedMatch = .{ .scrutinee = reuse_scrutinee, .body = other_branch_body, .answer = 0 };
     try std.testing.expect(!wrong_branch.isResolutionOf(program.view(), branches));
-    const user_call: FoldedMatch = .{ .scrutinee = other_scrutinee, .body = zero_body };
+    // A possible reuse never folds.
+    const reuse_possible: FoldedMatch = .{ .scrutinee = reuse_scrutinee, .body = other_branch_body, .answer = 1 };
+    try std.testing.expect(!reuse_possible.isResolutionOf(program.view(), branches));
+    // The item-size check folds to either answer.
+    const narrow_items: FoldedMatch = .{ .scrutinee = size_scrutinee, .body = other_branch_body, .answer = 1 };
+    try std.testing.expect(narrow_items.isResolutionOf(program.view(), branches));
+    const wide_items: FoldedMatch = .{ .scrutinee = size_scrutinee, .body = zero_body, .answer = 0 };
+    try std.testing.expect(wide_items.isResolutionOf(program.view(), branches));
+    const wide_wrong_branch: FoldedMatch = .{ .scrutinee = size_scrutinee, .body = other_branch_body, .answer = 0 };
+    try std.testing.expect(!wide_wrong_branch.isResolutionOf(program.view(), branches));
+    const user_call: FoldedMatch = .{ .scrutinee = other_scrutinee, .body = zero_body, .answer = 0 };
     try std.testing.expect(!user_call.isResolutionOf(program.view(), branches));
-    const not_a_call: FoldedMatch = .{ .scrutinee = literal_scrutinee, .body = zero_body };
+    const not_a_call: FoldedMatch = .{ .scrutinee = literal_scrutinee, .body = zero_body, .answer = 0 };
     try std.testing.expect(!not_a_call.isResolutionOf(program.view(), branches));
 
-    const binding = try program.addStmtSpan(&.{try program.addStmt(.{ .expr = in_place_body })});
+    const binding = try program.addStmtSpan(&.{try program.addStmt(.{ .expr = other_branch_body })});
     const binding_branches = try program.addBranchSpan(&.{
         .{ .pat = try program.addPat(.{ .ty = ty, .data = .{ .int_lit = zero } }), .bindings = binding, .body = zero_body },
     });

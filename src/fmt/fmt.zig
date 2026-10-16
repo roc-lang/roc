@@ -1731,6 +1731,9 @@ const Formatter = struct {
         // Follow only the leading callee/receiver until emitted parentheses
         // establish an ordinary expression context. Arguments start fresh.
         starts_pipe_target: bool = false,
+        // The right operand of a same-operator binary operation continues its
+        // parent's chain, so its operator lines share the chain's indentation.
+        operator_chain_indent: ?u32 = null,
     };
 
     const InterpolationFrame = struct {
@@ -2686,14 +2689,21 @@ const Formatter = struct {
                     },
                     1 => {
                         const left = result;
+                        // A chain link that breaks before its operator lines up with
+                        // the chain; one that stays on its line keeps that line's
+                        // indentation for the operand that follows.
+                        const operand_indent = fmt.curr_indent;
+                        const line_indent = format_context.operator_chain_indent orelse operand_indent;
+                        fmt.curr_indent = line_indent;
                         var pushed = false;
                         if (try fmt.continueAfterMultilineStringLine(left)) {
                             pushed = true;
                         } else if (multiline and try fmt.flushContinuationComments(op.operator)) {
                             try fmt.pushIndent();
                             pushed = true;
-                        } else if (!is_range_op) {
-                            try fmt.push(' ');
+                        } else {
+                            fmt.curr_indent = operand_indent;
+                            if (!is_range_op) try fmt.push(' ');
                         }
                         try fmt.pushTokenText(op.operator);
                         const right_region = fmt.nodeRegion(@backingInt(op.right));
@@ -2704,6 +2714,12 @@ const Formatter = struct {
                             try fmt.push(' ');
                         }
                         f.phase = 2;
+                        if (format_context.operator_chain_indent != null or fmt.curr_indent != line_indent) {
+                            const right_expr = fmt.ast.store.getExpr(op.right);
+                            if (right_expr == .bin_op and fmt.ast.tokens.tokens.items(.tag)[right_expr.bin_op.operator] == op_tag) {
+                                return call(exprFrame(op.right, .{ .operator_chain_indent = line_indent }));
+                            }
+                        }
                         return call(exprFrame(op.right, .{}));
                     },
                     else => return fmt.finishExpr(f),
@@ -5649,6 +5665,97 @@ test "issue 11713: match closing brace aligns after a multiline final arm" {
             "\t\t\tA => 1\n" ++
             "\t\t\tB => 2\n" ++
             "\t\t}\n" ++
+            "}\n",
+    };
+    for (inputs) |input| {
+        const result = try moduleFmtsStable(std.testing.allocator, input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(input, result);
+    }
+}
+
+test "issue 12156: multi-line and chain operands share one indentation level" {
+    // Repro for https://github.com/roc-lang/roc/issues/12156
+    const input =
+        "Stair :: [].{}\n" ++
+        "\n" ++
+        "expect {\n" ++
+        "\ta = 1\n" ++
+        "\ta == 1\n" ++
+        "\t\tand a > 0\n" ++
+        "\t\tand a < 2\n" ++
+        "\t\tand a != 3\n" ++
+        "}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(input, result);
+}
+
+test "operator chains keep each link at the chain's indentation" {
+    const inputs = [_][]const u8{
+        // `or` chains nest to the right like `and` chains.
+        "Stair :: [].{}\n" ++
+            "\n" ++
+            "expect {\n" ++
+            "\ta = 1\n" ++
+            "\ta == 1\n" ++
+            "\t\tor a > 0\n" ++
+            "\t\tor a < 2\n" ++
+            "\t\tor a != 3\n" ++
+            "}\n",
+        // A link that stays on one line passes the chain's indentation on.
+        "Stair :: [].{}\n" ++
+            "\n" ++
+            "expect {\n" ++
+            "\ta = 1\n" ++
+            "\ta == 1\n" ++
+            "\t\tand a > 0 and a < 2\n" ++
+            "\t\tand a != 3\n" ++
+            "}\n",
+        // A multiline operand on a link's line indents from that line.
+        "Stair :: [].{}\n" ++
+            "\n" ++
+            "expect {\n" ++
+            "\ta = 1\n" ++
+            "\ta == 1\n" ++
+            "\t\tand a > 0 and [\n" ++
+            "\t\t\ta,\n" ++
+            "\t\t] != []\n" ++
+            "\t\tand a != 3\n" ++
+            "}\n",
+        // Comments before a link sit at the chain's indentation.
+        "Stair :: [].{}\n" ++
+            "\n" ++
+            "expect {\n" ++
+            "\ta = 1\n" ++
+            "\ta == 1\n" ++
+            "\t\tand a > 0\n" ++
+            "\t\t# upper bound\n" ++
+            "\t\tand a < 2\n" ++
+            "\t\tand a != 3\n" ++
+            "}\n",
+        // A multiline operand indents from its own link's line.
+        "Stair :: [].{}\n" ++
+            "\n" ++
+            "expect {\n" ++
+            "\ta = 1\n" ++
+            "\ta == 1\n" ++
+            "\t\tand [\n" ++
+            "\t\t\ta,\n" ++
+            "\t\t\t2,\n" ++
+            "\t\t] != []\n" ++
+            "\t\tand a < 2\n" ++
+            "\t\tand a != 3\n" ++
+            "}\n",
+        // A tighter operator inside a link is a nested group, not a link.
+        "Stair :: [].{}\n" ++
+            "\n" ++
+            "expect {\n" ++
+            "\ta = 1\n" ++
+            "\ta == 1\n" ++
+            "\t\tor a > 0\n" ++
+            "\t\t\tand a < 2\n" ++
+            "\t\tor a != 3\n" ++
             "}\n",
     };
     for (inputs) |input| {
@@ -9397,7 +9504,7 @@ test "issue 12145: fuzzed layouts are stable" {
             "\n" ++
             "v1, f2! #\n" ++
             "] { p3: \"\", p4: \"\" }\n",
-        "package [] { p4 # c4\n" ++
+        "package [] { p4: \"\" # c4\n" ++
             "\n" ++
             ", }\n",
         "import T4 exposing [ # c8\n" ++

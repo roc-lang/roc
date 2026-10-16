@@ -177,6 +177,7 @@ NAME NOT IN SCOPE - fuzz_crash_020.md:105:55:105:59
 NAME NOT IN SCOPE - fuzz_crash_020.md:105:60:105:64
 NAME NOT IN SCOPE - fuzz_crash_020.md:108:4:108:5
 NAME NOT IN SCOPE - fuzz_crash_020.md:108:6:108:8
+UNREACHABLE CODE - fuzz_crash_020.md:83:2:110:3
 UNUSED VARIABLE - fuzz_crash_020.md:76:2:76:3
 UNUSED VARIABLE - fuzz_crash_020.md:87:2:87:3
 UNUSED VARIABLE - fuzz_crash_020.md:96:2:96:4
@@ -929,6 +930,21 @@ TYPE NOT DETERMINED - fuzz_crash_020.md:105:55:105:72
 			(line-break)
 			(line-break)
 			(source-region (file "fuzz_crash_020.md") (start 108 6) (end 108 8) (annotation error) (line-text "\t\t\tr(nu) # xpr"))))
+	(report
+		(severity warning)
+		(title "Unreachable Code")
+		(region (start 83 2) (end 110 3))
+		(headline
+			(reflow "This code will never run, because the code before it always ends with a ")
+			(annotated code "return")
+			(reflow ", ")
+			(annotated code "crash")
+			(reflow ", or ")
+			(annotated code "break")
+			(reflow ", or loops forever."))
+		(document
+			(source-region (file "fuzz_crash_020.md") (start 83 2) (end 110 3) (annotation error) (line-text "\t...\n\tme(\n\t\t..., # r\n\t)crash ke\"Unr!\" #)\n\ti= \"H, ${d}\"\nt = [\n\t\tone(er, \t\t),\t456, # two\n9, #ee\n\t]\n\tfor n in list {\n\tline!(\"Ag ${n} to ${er}\")\n\t\tber + n\n\t}\n\trd = { foo: 123, bar: \"H\", baz: tag, qux: Ok(world),ned }\n\tt = (123, \"World\", tag, O, (nd, t), [1, 2, 3])\n\tm (\n\t\t123,\n\t\t\"World\",ag1,\n\t\tO, # nt\n\t\t(ne, tuple),\n\t\t[1, 2, 3],\n\t)\n\tb?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?\n\tStdo!(\n\t\t\"Ho${ #\n\t\t\tr(nu) # xpr\n\t\t} \",\n\t)"))
+			(reflow "Remove this code, or change the code before it so that it can finish.")))
 	(report
 		(severity warning)
 		(title "Unused Variable")
