@@ -14308,37 +14308,43 @@ fn literalDispatchPlanMatchesConstraint(
     constraint: StaticDispatchConstraint,
     dispatcher_root: Var,
 ) bool {
-    const literal_kind = constraint.origin.literalKind() orelse return false;
+    const plan_kind = literalPlanKind(constraint.origin.literalKind() orelse return false) orelse return false;
     // The raw callable is the literal occurrence's stable identity. Distinct
     // occurrences may share both a receiver root and a callable equivalence
     // class after unification, so either resolved root would conflate owners.
     return plan.fnVar() == constraint.fn_var and
-        self.literalDispatchPlanMatches(plan, literal_kind, dispatcher_root);
+        self.literalDispatchPlanMatches(plan, plan_kind, dispatcher_root);
+}
+
+/// The dispatch plan kind that records literals of `kind`. An interpolation
+/// records no dispatch plan: its regions ride its own `from_interpolation`
+/// constraint (`StaticDispatchConstraint.InterpolationMetadata`).
+fn literalPlanKind(kind: StaticDispatchConstraint.LiteralKind) ?LiteralDispatchPlan.Kind {
+    return switch (kind) {
+        .numeral => .numeral,
+        .quote => .quote,
+        .interpolation => null,
+    };
 }
 
 fn literalDispatchPlanMatches(
     self: *Self,
     plan: LiteralDispatchPlan,
-    literal_kind: StaticDispatchConstraint.LiteralKind,
+    plan_kind: LiteralDispatchPlan.Kind,
     dispatcher_root: Var,
 ) bool {
-    const kind_matches = switch (literal_kind) {
-        .numeral => plan.dispatchKind() == .numeral,
-        .quote => plan.dispatchKind() == .quote,
-        .interpolation => unreachable,
-    };
-    return kind_matches and
+    return plan.dispatchKind() == plan_kind and
         self.types.resolveVar(@fromBackingInt(@intCast(plan.target_var))).var_ == dispatcher_root;
 }
 
 fn matchingLiteralDispatchPlan(
     self: *Self,
     plans: []const LiteralDispatchPlan,
-    literal_kind: StaticDispatchConstraint.LiteralKind,
+    plan_kind: LiteralDispatchPlan.Kind,
     dispatcher_root: Var,
 ) ?LiteralDispatchPlan {
     for (plans) |plan| {
-        if (self.literalDispatchPlanMatches(plan, literal_kind, dispatcher_root)) return plan;
+        if (self.literalDispatchPlanMatches(plan, plan_kind, dispatcher_root)) return plan;
     }
     return null;
 }
@@ -14379,12 +14385,11 @@ fn poisonLiteralFailureOwners(
     defer pattern_owners.deinit(self.gpa);
 
     for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |literal_constraint| {
-        const literal_kind = literal_constraint.origin.literalKind() orelse continue;
-        if (literal_kind == .interpolation) continue;
+        const plan_kind = literalPlanKind(literal_constraint.origin.literalKind() orelse continue) orelse continue;
         const literal_fn_root = self.types.resolveVar(literal_constraint.fn_var).var_;
 
         for (self.cir.store.literalDispatchPlans()) |plan| {
-            if (!self.literalDispatchPlanMatches(plan, literal_kind, dispatcher_root)) continue;
+            if (!self.literalDispatchPlanMatches(plan, plan_kind, dispatcher_root)) continue;
             const plan_fn_var = plan.fnVar() orelse continue;
             if (self.types.resolveVar(plan_fn_var).var_ != literal_fn_root) continue;
             const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(plan.node_idx));
@@ -40653,7 +40658,7 @@ fn reportUndeterminedType(
             .numeral => .number_literal,
             .quote, .interpolation => .string_literal,
         };
-        if (self.firstLiteralRegionInClass(kind, root)) |literal_region| region = literal_region;
+        if (self.firstLiteralRegionInClass(kind, root, recorded_constraints)) |literal_region| region = literal_region;
         builtin_candidates_lack_method = try self.builtinLiteralCandidatesLackMethod(kind, constraint.fn_name);
         break :literal;
     }
@@ -40711,14 +40716,40 @@ fn builtinNominalHasMethod(self: *Self, nominal_type: types_mod.NominalType, met
     return self.lookupStaticDispatchMethodBinding(owner_env, nominal_type.sourceDeclOptional(), self.cir, method_name) != null;
 }
 
-/// The source region of the first literal of `kind` whose dispatch plan
-/// resolves into the class rooted at `root`. Literal dispatch plans are
-/// recorded at the literal sites in source order.
-fn firstLiteralRegionInClass(self: *Self, kind: StaticDispatchConstraint.LiteralKind, root: Var) ?Region {
-    const plan = self.matchingLiteralDispatchPlan(self.cir.store.literalDispatchPlans(), kind, root) orelse
-        self.matchingLiteralDispatchPlan(self.retired_literal_dispatch_plans.items, kind, root) orelse
+/// The source region of the first literal of `kind` in the class rooted at
+/// `root`, whose constraints are `constraints`. Numerals and quotes are found
+/// through their dispatch plans, which are recorded at the literal sites in
+/// source order. Interpolations record no dispatch plan; each carries its own
+/// region on its `from_interpolation` constraint, and unification never folds
+/// two of those together, so the class's constraints hold every one.
+fn firstLiteralRegionInClass(
+    self: *Self,
+    kind: StaticDispatchConstraint.LiteralKind,
+    root: Var,
+    constraints: []const StaticDispatchConstraint,
+) ?Region {
+    const plan_kind = literalPlanKind(kind) orelse return self.firstInterpolationRegion(constraints);
+    const plan = self.matchingLiteralDispatchPlan(self.cir.store.literalDispatchPlans(), plan_kind, root) orelse
+        self.matchingLiteralDispatchPlan(self.retired_literal_dispatch_plans.items, plan_kind, root) orelse
         return null;
     return self.cir.store.getNodeRegion(@fromBackingInt(@intCast(plan.node_idx)));
+}
+
+/// The earliest source region among the interpolations in `constraints`. An
+/// imported copy is located at the use that instantiated it (design.md
+/// "Builtin Str Interpolation Part Compatibility").
+fn firstInterpolationRegion(self: *Self, constraints: []const StaticDispatchConstraint) ?Region {
+    var first: ?Region = null;
+    for (constraints) |constraint| {
+        if (constraint.origin.literalKind() != .interpolation) continue;
+        const region = switch (constraint.interpolation.regions) {
+            .this_module => constraint.interpolation.expr_region.get() orelse
+                base.invariant("an interpolation's literal conversion carries no interpolation metadata", .{}),
+            .imported => self.cir.store.getExprRegion(self.instantiatedInterpolationOwner(constraint) orelse continue),
+        };
+        if (first == null or region.start.offset < first.?.start.offset) first = region;
+    }
+    return first;
 }
 
 fn undeterminedTypeUseRegion(
@@ -55758,11 +55789,11 @@ fn quoteLiteralRegionForDispatcher(self: *Self, constraint: StaticDispatchConstr
     const dispatcher_root = self.types.resolveVar(dispatcher_var).var_;
     const plan = self.matchingLiteralDispatchPlan(
         self.cir.store.literalDispatchPlans(),
-        kind,
+        .quote,
         dispatcher_root,
     ) orelse self.matchingLiteralDispatchPlan(
         self.retired_literal_dispatch_plans.items,
-        kind,
+        .quote,
         dispatcher_root,
     ) orelse return null;
     return self.cir.store.getNodeRegion(@fromBackingInt(@intCast(plan.node_idx)));
