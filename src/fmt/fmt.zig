@@ -7674,8 +7674,8 @@ test "issue 12283: upgrading a roc version pin keeps the comments around its col
     );
     defer std.testing.allocator.free(result);
 
-    try std.testing.expect(std.mem.indexOf(u8, result, "\"nightly-2026-August-1-bbbbbbb\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "nightly-2026-July-31-aaaaaaa") == null);
+    try std.testing.expect(std.mem.find(u8, result, "\"nightly-2026-August-1-bbbbbbb\"") != null);
+    try std.testing.expect(std.mem.find(u8, result, "nightly-2026-July-31-aaaaaaa") == null);
 }
 
 test "fmt leaves a roc version pin alone when it must not be upgraded" {
