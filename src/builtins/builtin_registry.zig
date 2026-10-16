@@ -458,7 +458,6 @@ pub const BuiltinFn = enum {
             .list_reserve_for_append,
             .list_release_excess_capacity,
             .list_reverse,
-            .list_sort_with,
             .dec_to_str,
             .int_to_str,
             .float_to_str,
