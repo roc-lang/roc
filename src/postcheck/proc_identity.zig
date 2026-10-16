@@ -746,6 +746,7 @@ test "procedure identity excludes outer callable sets but retains nested callabl
         .source_digests = &.{ @splat(1), @splat(2) },
         .fn_by_symbol = &fn_by_symbol,
         .memo = &memo,
+        .declarations = &Common.DeclarationNames.empty,
     };
     const identity = try renderer.specIdentity(first_fn, alone, &.{}, "finite", "none");
     try std.testing.expectEqual(identity, try renderer.specIdentity(first_fn, beside_lambda, &.{}, "finite", "none"));
