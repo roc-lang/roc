@@ -133,7 +133,6 @@ pub const Problem = union(enum) {
     redundant_pattern: RedundantPattern,
     unmatchable_pattern: UnmatchablePattern,
     match_alt_binder_missing: MatchAltBinderMissing,
-    unreachable_code: UnreachableCode,
     discarded_var_update: DiscardedVarUpdate,
     comptime_unused_branch: ComptimeUnusedBranch,
     comptime_condition: ComptimeCondition,
@@ -752,11 +751,6 @@ pub const MatchAltBinderMissing = struct {
     bound_pattern_index: u32,
     /// Zero-based index of the alternative that does not bind the name.
     missing_pattern_index: u32,
-};
-
-/// Code that appears after an expression or statement that never returns.
-pub const UnreachableCode = struct {
-    region: base.Region,
 };
 
 /// A statement that calls a method on a `var` and discards the result, which

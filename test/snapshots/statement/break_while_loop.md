@@ -18,9 +18,26 @@ result = {
 expect result == True
 ~~~
 # EXPECTED
-NIL
+UNREACHABLE CODE - break_while_loop.md:6:3:6:15
 # PROBLEMS
-NIL
+~~~clojure
+(reports
+	(report
+		(severity warning)
+		(title "Unreachable Code")
+		(region (start 6 3) (end 6 15))
+		(headline
+			(reflow "This code will never run, because the code before it always ends with a ")
+			(annotated code "return")
+			(reflow ", ")
+			(annotated code "crash")
+			(reflow ", or ")
+			(annotated code "break")
+			(reflow ", or loops forever."))
+		(document
+			(source-region (file "break_while_loop.md") (start 6 3) (end 6 15) (annotation error) (line-text "\t\t$foo = False"))
+			(reflow "Remove this code, or change the code before it so that it can finish."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpColon,UpperIdent,

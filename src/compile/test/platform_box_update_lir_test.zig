@@ -128,8 +128,11 @@ fn expectNoInlineOwnership(store: *const lir.LirStore, layouts: *const layout.St
         unbox_proc,
         "update_pattern_for_host!",
     );
+    // Every checked list mutation these wrappers reach, `List.update` included
+    // (its failure path hands the caller's list back), consumes its list and
+    // needs no retain around the call.
     try std.testing.expectEqual(@as(usize, 0), active.box_retain);
-    try std.testing.expect(active.list_retain > 0);
+    try std.testing.expectEqual(@as(usize, 0), active.list_retain);
     try std.testing.expectEqual(@as(usize, 0), pattern_active.box_retain);
     try std.testing.expectEqual(@as(usize, 0), pattern_active.list_retain);
 

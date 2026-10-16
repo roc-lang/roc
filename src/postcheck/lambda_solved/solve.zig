@@ -626,8 +626,7 @@ const Solver = struct {
             try functions.put(fn_.symbol, @fromBackingInt(@intCast(@as(u32, @intCast(index)))));
         }
         for (self.program.ctfe_demand.late_applications.items) |application| {
-            const operand_ty = self.program.expr_tys.items[application.callee_expr];
-            const ty = if (application.boxed) try self.boxElem(operand_ty) else operand_ty;
+            const ty = self.program.expr_tys.items[application.callee_expr];
             const shape = try self.functionShape(ty);
             const callable = self.program.types.rootContentCompressed(shape.callable);
             const members = switch (callable) {
@@ -1163,17 +1162,7 @@ const Solver = struct {
                 .callee_expr = @backingInt(call.callee),
             }),
             .fn_ref => |ref| try self.program.ctfe_demand.addEdge(node, self.demandFn(ref.fn_id), .address_capture),
-            .low_level => |call| {
-                if (call.op == .list_sort_with) {
-                    const args = self.lifted.exprSpan(call.args);
-                    if (args.len != 2) Common.invariant("sort demand requires list and boxed comparator");
-                    try self.program.ctfe_demand.addLateApplication(.{
-                        .node = node,
-                        .callee_expr = @backingInt(args[1]),
-                        .boxed = true,
-                    });
-                }
-            },
+            .low_level,
             .local,
             .unit,
             .@"unreachable",
@@ -5647,80 +5636,6 @@ test "CTFE demand publishes per-owner reads and separates initializer proof from
     defer cloned.deinit();
     try std.testing.expectEqualDeep(graph, cloned.view());
     try std.testing.expect(graph.edges.ptr != cloned.edges.items.ptr);
-}
-
-test "CTFE demand sort invokes boxed comparator without eagerly invoking box construction" {
-    const allocator = std.testing.allocator;
-    var lifted = emptyLiftedProgramForTest(allocator);
-    var lifted_owned = true;
-    errdefer if (lifted_owned) lifted.deinit();
-    const byte_ty = try lifted.types.add(.{ .primitive = .u8 });
-    const byte = try lifted.addExpr(.{ .ty = byte_ty, .data = .{ .int_lit = .{
-        .bytes = @bitCast(@as(i128, 7)),
-        .kind = .i128,
-    } } });
-    const root = try lifted.addComptimeValueRoot(.{
-        .module = .{ .bytes = @as([32]u8, @splat(9)) },
-        .root = .{ .checked = @fromBackingInt(@intCast(4)) },
-        .const_locator = null,
-    });
-    const read = try lifted.addExpr(.{ .ty = byte_ty, .data = .{ .comptime_value = .{
-        .root = root,
-        .initializer = byte,
-    } } });
-    const left = try lifted.addLocal(@fromBackingInt(@intCast(3)), byte_ty);
-    const right = try lifted.addLocal(@fromBackingInt(@intCast(1)), byte_ty);
-    const comparator = try lifted.addFn(.{
-        .symbol = @fromBackingInt(@intCast(3)),
-        .args = try lifted.addTypedLocalSpan(&.{
-            .{ .local = left, .ty = byte_ty },
-            .{ .local = right, .ty = byte_ty },
-        }),
-        .captures = .empty(),
-        .body = .{ .roc = read },
-        .ret = byte_ty,
-    });
-    const args_ty = try lifted.types.addSpan(&.{ byte_ty, byte_ty });
-    const callable_ty = try lifted.types.add(.{ .func = .{ .args = args_ty, .ret = byte_ty } });
-    const address = try lifted.addExpr(.{ .ty = callable_ty, .data = .{ .fn_ref = .{ .fn_id = comparator } } });
-    const box_ty = try lifted.types.add(.{ .box = callable_ty });
-    const box = try lifted.addExpr(.{ .ty = box_ty, .data = .{ .low_level = .{
-        .op = .box_box,
-        .args = try lifted.addExprSpan(&.{address}),
-    } } });
-    const box_owner = try lifted.addFn(.{
-        .symbol = @fromBackingInt(@intCast(1)),
-        .args = .empty(),
-        .captures = .empty(),
-        .body = .{ .roc = box },
-        .ret = box_ty,
-    });
-    const list_ty = try lifted.types.add(.{ .list = byte_ty });
-    const list = try lifted.addExpr(.{ .ty = list_ty, .data = .{ .list = try lifted.addExprSpan(&.{ byte, byte }) } });
-    const sort = try lifted.addExpr(.{ .ty = list_ty, .data = .{ .low_level = .{
-        .op = .list_sort_with,
-        .args = try lifted.addExprSpan(&.{ list, box }),
-    } } });
-    const sort_owner = try lifted.addFn(.{
-        .symbol = @fromBackingInt(@intCast(2)),
-        .args = .empty(),
-        .captures = .empty(),
-        .body = .{ .roc = sort },
-        .ret = list_ty,
-    });
-    lifted_owned = false;
-    var program = try run(allocator, lifted);
-    defer program.deinit();
-    var solver = try Solver.init(allocator, &program);
-    defer solver.deinit();
-    var sort_summary = try program.ctfe_demand.summarize(allocator, solver.demandFn(sort_owner));
-    defer sort_summary.deinit(allocator);
-    try std.testing.expect(sort_summary.complete);
-    try std.testing.expectEqualSlices(u32, &.{0}, sort_summary.reads);
-    var box_summary = try program.ctfe_demand.summarize(allocator, solver.demandFn(box_owner));
-    defer box_summary.deinit(allocator);
-    try std.testing.expect(box_summary.complete);
-    try std.testing.expectEqual(@as(usize, 0), box_summary.reads.len);
 }
 
 test "lambda solved traverses deep sequential and nested expressions without native recursion" {

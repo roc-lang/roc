@@ -806,6 +806,13 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 try args.append(maximum_memory_str);
             }
 
+            // Place the stack at the lowest addresses, growing down toward 0,
+            // with static data and the heap above it. A stack overflow then
+            // wraps below 0 and traps out of bounds instead of silently
+            // overwriting static data, which hosts running many tasks in one
+            // instance rely on.
+            try args.append("--stack-first");
+
             if (config.wasm_global_base) |global_base| {
                 const global_base_str = std.fmt.allocPrint(ctx.arena, "--global-base={d}", .{global_base}) catch return LinkError.OutOfMemory;
                 try args.append(global_base_str);

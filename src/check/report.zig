@@ -60,7 +60,6 @@ const NonExhaustiveDestructure = problem_mod.NonExhaustiveDestructure;
 const RedundantPattern = problem_mod.RedundantPattern;
 const UnmatchablePattern = problem_mod.UnmatchablePattern;
 const MatchAltBinderMissing = problem_mod.MatchAltBinderMissing;
-const UnreachableCode = problem_mod.UnreachableCode;
 const DiscardedVarUpdate = problem_mod.DiscardedVarUpdate;
 const ComptimeUnusedBranch = problem_mod.ComptimeUnusedBranch;
 const ComptimeCondition = problem_mod.ComptimeCondition;
@@ -1173,7 +1172,6 @@ pub const ReportBuilder = struct {
             .redundant_open_tag_union => |data| return self.buildRedundantOpenTagUnionReport(data),
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
             .match_alt_binder_missing => |data| return self.buildMatchAltBinderMissingReport(data),
-            .unreachable_code => |data| return self.buildUnreachableCodeReport(data),
             .discarded_var_update => |data| return self.buildDiscardedVarUpdateReport(data),
             .comptime_unused_branch => |data| return self.buildComptimeUnusedBranchReport(data),
             .comptime_condition => |data| return self.buildComptimeConditionReport(data),
@@ -5737,15 +5735,6 @@ pub const ReportBuilder = struct {
             D.bytes("|").withAnnotation(.inline_code),
             D.bytes("in a branch must give values the same names, so the branch can use those names no matter which pattern matched."),
         }, self, &report);
-
-        return report;
-    }
-
-    fn buildUnreachableCodeReport(self: *Self, data: UnreachableCode) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Unreachable Code", "This code is unreachable because an earlier expression always exits.", .warning);
-        errdefer report.deinit();
-
-        try self.addSourceRegionOf(&report.document, data.region, .warning_highlight);
 
         return report;
     }

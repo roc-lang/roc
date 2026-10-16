@@ -119,15 +119,13 @@ ordered! = |x| {
 }
 
 early! : U64 => U64
-early! = |x| {
-	values = (
+early! = |x|
+	(
 		{
 			return x
 		},
 		say!("unreachable", x),
-	)
-	values.0 + values.1
-}
+	).0
 
 answer = in_call_arg(7)
 

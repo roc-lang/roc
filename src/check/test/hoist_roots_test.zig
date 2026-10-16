@@ -579,6 +579,9 @@ test "hoist context matrix marks guarded positions and suppresses default-suppre
         source: []const u8,
         expected_comptime_condition_warnings: usize = 0,
         expected_guarded_roots: usize = 0,
+        /// The case writes code after a `return`, which canonicalization
+        /// reports as unreachable.
+        expects_unreachable_code_warning: bool = false,
     }{
         .{
             .name = "if_branch_body",
@@ -702,6 +705,7 @@ test "hoist context matrix marks guarded positions and suppresses default-suppre
             \\    add_one(41.I64)
             \\}
             ,
+            .expects_unreachable_code_warning = true,
         },
         .{
             .name = "lambda_inside_expect_body",
@@ -720,7 +724,9 @@ test "hoist context matrix marks guarded positions and suppresses default-suppre
         var test_env = try TestEnv.init(matrix_case.name, matrix_case.source);
         defer test_env.deinit();
 
-        if (matrix_case.expected_comptime_condition_warnings == 0) {
+        if (matrix_case.expects_unreachable_code_warning) {
+            try expectOnlyUnreachableCodeWarning(&test_env);
+        } else if (matrix_case.expected_comptime_condition_warnings == 0) {
             try test_env.assertNoErrors();
         } else {
             try expectOnlyComptimeConditionWarnings(&test_env, matrix_case.expected_comptime_condition_warnings);
@@ -1198,6 +1204,17 @@ fn expectOnlyComptimeConditionWarnings(test_env: *TestEnv, expected_count: usize
     for (test_env.checker.problems.problems.items) |problem| {
         if (problem != .comptime_condition) return error.TestUnexpectedResult;
     }
+}
+
+fn expectOnlyUnreachableCodeWarning(test_env: *TestEnv) error{ OutOfMemory, TestExpectedEqual, TestUnexpectedResult }!void {
+    try std.testing.expect(!test_env.parse_ast.hasErrors());
+
+    const diagnostics = try test_env.module_env.getDiagnostics();
+    defer test_env.gpa.free(diagnostics);
+    try std.testing.expectEqual(@as(usize, 1), diagnostics.len);
+    try std.testing.expect(diagnostics[0] == .unreachable_code);
+
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.problems.problems.items.len);
 }
 
 fn countPatternExtractionRoots(roots: []const hoist_roots.SelectedHoistedRoot) usize {

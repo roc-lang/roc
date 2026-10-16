@@ -510,18 +510,6 @@ const CheckPanicStep = struct {
         "src/builtins",
     };
 
-    // Files to exclude from scanning (test-only files)
-    const excluded_files = [_][]const u8{
-        "fuzz_sort.zig",
-    };
-
-    fn isExcludedFile(file_name: []const u8) bool {
-        for (excluded_files) |excluded| {
-            if (std.mem.eql(u8, file_name, excluded)) return true;
-        }
-        return false;
-    }
-
     fn scanFile(allocator: std.mem.Allocator, io: std.Io, file_path: []const u8, violations: *std.ArrayList(Violation)) !void {
         const content = std.Io.Dir.cwd().readFileAlloc(io, file_path, allocator, .limited(50 * 1024 * 1024)) catch |err| {
             std.debug.print("Warning: Failed to read {s}: {}\n", .{ file_path, err });
@@ -583,11 +571,9 @@ const CheckPanicStep = struct {
             var iter = dir.iterate();
             while (try iter.next(io)) |entry| {
                 if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".zig")) {
-                    if (!isExcludedFile(entry.name)) {
-                        const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_path, entry.name });
-                        defer allocator.free(full_path);
-                        try scanFile(allocator, io, full_path, &violations);
-                    }
+                    const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ dir_path, entry.name });
+                    defer allocator.free(full_path);
+                    try scanFile(allocator, io, full_path, &violations);
                 }
             }
         }

@@ -39,9 +39,6 @@ pub const Read = struct {
 pub const LateApplication = struct {
     node: NodeId,
     callee_expr: u32,
-    /// Builtins can invoke a callable stored inside a box without unboxing
-    /// it in the source expression graph.
-    boxed: bool = false,
 };
 
 /// Only touched keys are enumerated. An empty component never scans the
