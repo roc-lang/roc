@@ -1686,23 +1686,25 @@ const Formatter = struct {
             return .{ .done = .{ .region = field.region, .ends_with_multiline_string_line = result.ends_with_multiline_string_line } };
         }
         try fmt.pushTokenText(field.name);
-        if (fmt.roc_version_upgrade) |upgrade| {
-            if (f.idx == upgrade.field) {
-                // Write the running compiler's version rather than the stale
-                // one in the source. Planning the upgrade already parsed that
-                // version as a nightly tag, so it is alphanumerics and `-`
-                // only and needs no escaping inside the quotes.
-                try fmt.pushAll(": \"");
-                try fmt.pushAll(upgrade.version);
-                try fmt.push('"');
-                return .{ .done = .{ .region = field.region } };
-            }
-        }
         switch (field.value) {
             .supplied => |v| {
                 try fmt.commentBoundary(field.name + 1, false);
                 try fmt.push(':');
                 try fmt.commentBoundary(fmt.nodeRegion(@backingInt(v)).start, true);
+                if (fmt.roc_version_upgrade) |upgrade| {
+                    if (f.idx == upgrade.field) {
+                        // Write the running compiler's version in place of the
+                        // stale string literal. Planning the upgrade already
+                        // parsed that version as a nightly tag, so it is
+                        // alphanumerics and `-` only and needs no escaping
+                        // inside the quotes; and the literal it replaces is a
+                        // single string part, so no comment sits inside it.
+                        try fmt.push('"');
+                        try fmt.pushAll(upgrade.version);
+                        try fmt.push('"');
+                        return .{ .done = .{ .region = field.region } };
+                    }
+                }
                 f.phase = 1;
                 return call(exprFrame(v, .{}));
             },
@@ -5442,7 +5444,7 @@ pub fn moduleFmtsStableWithDiags(gpa: std.mem.Allocator, input: []const u8, debu
     const formatted = parseAndFmtCountingDiags(gpa, input, expected_diags) catch |err| return err;
     defer gpa.free(formatted);
 
-    const formatted_twice = parseAndFmt(gpa, formatted, debug) catch {
+    const formatted_twice = parseAndFmt(gpa, formatted, debug, .{}) catch {
         return error.SecondParseFailed;
     };
     errdefer gpa.free(formatted_twice);
@@ -5457,14 +5459,19 @@ pub fn moduleFmtsStableWithDiags(gpa: std.mem.Allocator, input: []const u8, debu
 /// Assert that formatting `input` as a module is stable (formatting the
 /// formatted output changes nothing) and return the formatted source.
 pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) FormatTestError![]const u8 {
+    return moduleFmtsStableWithOptions(gpa, input, debug, .{});
+}
+
+/// `moduleFmtsStable`, formatting both passes with `options`.
+pub fn moduleFmtsStableWithOptions(gpa: std.mem.Allocator, input: []const u8, debug: bool, options: Options) FormatTestError![]const u8 {
     if (debug) {
         std.debug.print("Original:\n==========\n{s}\n==========\n\n", .{input});
     }
 
-    const formatted = try parseAndFmt(gpa, input, debug);
+    const formatted = try parseAndFmt(gpa, input, debug, options);
     defer gpa.free(formatted);
 
-    const formatted_twice = parseAndFmt(gpa, formatted, debug) catch {
+    const formatted_twice = parseAndFmt(gpa, formatted, debug, options) catch {
         return error.SecondParseFailed;
     };
     errdefer gpa.free(formatted_twice);
@@ -5548,7 +5555,7 @@ fn parseAndFmtCountingDiags(gpa: std.mem.Allocator, input: []const u8, expected_
     return result.toOwnedSlice();
 }
 
-fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) FormatParseError![]const u8 {
+fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool, options: Options) FormatParseError![]const u8 {
     var module_env = try ModuleEnv.init(gpa, input);
     defer module_env.deinit();
 
@@ -5574,7 +5581,7 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) FormatPar
 
     var result: std.Io.Writer.Allocating = .init(gpa);
     defer result.deinit();
-    try formatAst(parse_ast.*, &result.writer);
+    try formatAstWithOptions(parse_ast.*, &result.writer, options);
 
     if (debug) {
         std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{result.written()});
@@ -7592,35 +7599,11 @@ test "blank line inserted before doc comments following code" {
 
 /// Format `input` as a compiler reporting itself as `compiler_version` would,
 /// so that tests of the `roc` version pin do not depend on how this binary was
-/// built. Asserts that formatting the result again is a no-op, since a pin
-/// that has just been brought up to date must have nothing left to upgrade.
+/// built. Asserts that every comment survives and that formatting the result
+/// again is a no-op, since a pin that has just been brought up to date must
+/// have nothing left to upgrade.
 fn fmtAsCompiler(gpa: std.mem.Allocator, input: []const u8, compiler_version: []const u8) FormatTestError![]const u8 {
-    const options: Options = .{ .compiler_version = compiler_version };
-
-    var module_env = try ModuleEnv.init(gpa, input);
-    defer module_env.deinit();
-    const parse_ast = try parse.file(gpa, &module_env.common);
-    defer parse_ast.deinit();
-    std.testing.expectEqualSlices(AST.Diagnostic, &[_]AST.Diagnostic{}, parse_ast.parse_diagnostics.items) catch {
-        return error.ParseFailed;
-    };
-
-    var result: std.Io.Writer.Allocating = .init(gpa);
-    defer result.deinit();
-    try formatAstWithOptions(parse_ast.*, &result.writer, options);
-
-    var stable_env = try ModuleEnv.init(gpa, result.written());
-    defer stable_env.deinit();
-    const stable_ast = try parse.file(gpa, &stable_env.common);
-    defer stable_ast.deinit();
-    var stable: std.Io.Writer.Allocating = .init(gpa);
-    defer stable.deinit();
-    try formatAstWithOptions(stable_ast.*, &stable.writer, options);
-    std.testing.expectEqualStrings(result.written(), stable.written()) catch {
-        return error.FormattingNotStable;
-    };
-
-    return try result.toOwnedSlice();
+    return moduleFmtsStableWithOptions(gpa, input, false, .{ .compiler_version = compiler_version });
 }
 
 test "fmt upgrades an app's roc version pin to a newer nightly" {
@@ -7675,6 +7658,24 @@ test "fmt upgrades a roc version pin written across several lines" {
             "}\n\nmain! = |_| {}\n",
         result,
     );
+}
+
+test "issue 12283: upgrading a roc version pin keeps the comments around its colon" {
+    // Repro for https://github.com/roc-lang/roc/issues/12283
+    const result = try fmtAsCompiler(
+        std.testing.allocator,
+        "app [main!] {\n" ++
+            "    pf: platform \"../basic-cli/main.roc\",\n" ++
+            "    roc # before the colon\n" ++
+            "        : # the compiler this app pins\n" ++
+            "        \"nightly-2026-July-31-aaaaaaa\",\n" ++
+            "}\n\nmain! = |_| {}",
+        "nightly-2026-August-1-bbbbbbb",
+    );
+    defer std.testing.allocator.free(result);
+
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"nightly-2026-August-1-bbbbbbb\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "nightly-2026-July-31-aaaaaaa") == null);
 }
 
 test "fmt leaves a roc version pin alone when it must not be upgraded" {
