@@ -20909,6 +20909,12 @@ A loop-parameter write that brings an outside list into the chain also prevents
 slack-based loop versioning: its new allocation may have less spare capacity
 than the loop head measured, even when that write measures fresh metadata.
 
+A byte append (`list_append_le_bytes`) is a promotion site like a checked
+append. Under a limit with at least a word of slack it runs unchecked, storing
+the whole word at the length and bumping the length by its count; otherwise
+the checked append grows the list and the slack is measured fresh. The limit
+names the capacity, so the hot path forwards it unchanged.
+
 Metadata forwarding also requires linear value use. Pure single-definition
 aliases belong to the same logical value; join writes, merged definitions,
 and operation results establish new values. If a consuming use can execute

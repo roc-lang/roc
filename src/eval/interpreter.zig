@@ -6347,17 +6347,19 @@ pub const Interpreter = struct {
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
-            .list_append_le_bytes => blk: {
+            .list_append_le_bytes, .list_append_le_bytes_unsafe => blk: {
                 const list_val = self.valueToRocListForLayout(args[0], arg_layout);
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 if (crash_boundary.set() != 0) return self.crashError();
+                // The unchecked variant's list is already proven unique with
+                // the spare word, so the builtin runs in place.
                 const result = builtins.list.listAppendLeBytes(
                     list_val,
                     args[1].read(u64),
                     args[2].read(u64),
                     1,
-                    updateModeForArg0(ll.unique_args),
+                    if (ll.op == .list_append_le_bytes_unsafe) .InPlace else updateModeForArg0(ll.unique_args),
                     &self.roc_ops,
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);

@@ -10377,7 +10377,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .list_append_le_bytes => {
             // list_append_le_bytes(list, value, count) -> extended list
-            try self.generateLLListAppendLeBytes(args, ll.unique_args);
+            try self.generateLLListAppendLeBytes(args, ll.unique_args & 1 != 0);
+        },
+        .list_append_le_bytes_unsafe => {
+            // list_append_le_bytes_unsafe(list, value, count) -> extended list;
+            // the list is already proven unique with the spare word, so the
+            // builtin runs in place.
+            try self.generateLLListAppendLeBytes(args, true);
         },
         .list_reverse => {
             // list_reverse(list) -> reversed list
@@ -15289,7 +15295,7 @@ fn generateLLListOwnedUnique(self: *Self, args: anytype, unique_args: u64) Alloc
 }
 
 /// Generate LowLevel list_append_le_bytes: append a value's low bytes.
-fn generateLLListAppendLeBytes(self: *Self, args: anytype, unique_args: u64) Allocator.Error!void {
+fn generateLLListAppendLeBytes(self: *Self, args: anytype, in_place: bool) Allocator.Error!void {
     const list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
 
     const value_local = try self.materializeListIndex(GuardedList.at(args, 1));
@@ -15303,7 +15309,7 @@ fn generateLLListAppendLeBytes(self: *Self, args: anytype, unique_args: u64) All
     try self.emitRocListFields(fields);
     try self.emitLocalGets(.{ value_local, count_local });
     try self.emitI32Const(1);
-    try self.emitI32Const(@intCast(unique_args & 1));
+    try self.emitI32Const(@intFromBool(in_place));
     try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_le_bytes)));
     try self.emitFpOffset(result_offset);
 }

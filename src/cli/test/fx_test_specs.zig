@@ -56,6 +56,15 @@ pub const branch_entry_release_test = TestSpec{
     .description = "Regression test: a value a branch never reads is released at the branch entry",
 };
 
+/// A loop whose only operation on its list is `append_le_bytes_to`: the
+/// promoter guards each append with a word of slack and runs it unchecked,
+/// so the bytes must match a byte-at-a-time construction across growth.
+pub const le_bytes_append_loop_test = TestSpec{
+    .roc_file = "test/fx/le_bytes_append_loop.roc",
+    .io_spec = "1>count 1: len 300 same|1>count 2: len 600 same|1>count 3: len 900 same|1>count 4: len 1200 same|1>count 5: len 1500 same|1>count 6: len 1800 same|1>count 7: len 2100 same|1>count 8: len 2400 same",
+    .description = "A promoted byte-append loop matches a byte-at-a-time construction",
+};
+
 /// Repro for https://github.com/roc-lang/roc/issues/12196: a list literal and
 /// `List.with_capacity` built on cold paths in different functions.
 pub const issue_12196_cold_list_builds_test = TestSpec{
