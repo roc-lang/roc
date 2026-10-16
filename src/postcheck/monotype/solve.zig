@@ -5319,7 +5319,12 @@ pub const InstGraph = struct {
             self.countDiagnostic("finished_mono_nodes_visited");
             if (self.classFinishedMono(node) != null) return true;
             switch (self.nodes.items[@backingInt(node)]) {
-                .redirect, .leaf => unreachable,
+                .redirect => unreachable,
+                // An imported leaf is a finished Monotype witness, answered
+                // above. A checked leaf is a closed checked type whose
+                // components expand into the same leaf scope, so it reaches
+                // no finished Monotype.
+                .leaf => |leaf| if (leaf.origin != .checked) Common.invariant("finished Monotype leaf was not registered as its class witness"),
                 .unresolved, .primitive, .empty_tag_union, .empty_record, .erased, .zst => {},
                 .list, .box => |child| try pending.append(self.allocator, child),
                 .tuple => |items| try pending.appendSlice(self.allocator, items),
@@ -12013,6 +12018,30 @@ test "finished Monotype detection includes imported structural descendants" {
     const fresh_item = try graph.newNode(.{ .primitive = .u64 });
     const entirely_fresh = try graph.newNode(.{ .list = fresh_item });
     try std.testing.expect(!try graph.containsFinishedMono(entirely_fresh));
+}
+
+test "finished Monotype detection reads an unread checked leaf as containing none" {
+    const gpa = std.testing.allocator;
+
+    var type_store = Type.Store.init(gpa);
+    defer type_store.deinit();
+
+    var name_store = names.NameStore.init(gpa);
+    defer name_store.deinit();
+
+    const item_ty = try type_store.add(.{ .primitive = .u64 });
+    const list_ty = try type_store.add(.{ .list = item_ty });
+    const graph = try InstGraph.create(gpa, &type_store, &name_store);
+    defer graph.destroy();
+
+    const scope = try graph.newLeafScope();
+    const checked_leaf = try graph.checkedLeaf(scope, list_ty);
+    const fresh_list = try graph.newNode(.{ .list = checked_leaf });
+    try std.testing.expect(!try graph.containsFinishedMono(fresh_list));
+
+    const imported = try graph.importMono(list_ty);
+    const mixed = try graph.newNode(.{ .tuple = try graph.arena().dupe(NodeId, &.{ checked_leaf, imported }) });
+    try std.testing.expect(try graph.containsFinishedMono(mixed));
 }
 
 test "opaque interface relation preserves distinct public and generated-private backing authority" {
