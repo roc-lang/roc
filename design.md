@@ -19995,7 +19995,15 @@ A container qualifies for dismantling when all of the following hold:
   every `if`/`match` value join whose result is a struct holding refcounted
   fields this form: each branch computes its value into a branch-local and
   writes the join parameter with `initialize_join_param`, so a record chosen
-  by an `if`, a `match`, or `?` hands its fields on without retains
+  by an `if`, a `match`, or `?` hands its fields on without retains. A branch
+  that transfers control away (a jump to a join point, `return`, `break`,
+  `continue`, a crash, or a block the statement-termination relation
+  stopped) never reaches the join: it gets no branch-local and no write, and
+  an `if`/`match` none of whose branches fall through declares no value join
+  at all. A write into the parameter from a branch that never produces a
+  value would be a definition the uniqueness analysis cannot treat as a
+  birth, and it would veto the summary of every result the parameter flows
+  into
 - every occurrence of it is a field read (directly or through a borrowed
   pure same-value alias whose own occurrences are all field reads) or an
   operand-position whole use: moved into an aggregate or a call, returned,
