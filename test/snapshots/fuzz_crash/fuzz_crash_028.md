@@ -238,6 +238,7 @@ NAME NOT IN SCOPE - fuzz_crash_028.md:127:11:127:14
 NAME NOT IN SCOPE - fuzz_crash_028.md:132:10:132:13
 NAME NOT IN SCOPE - fuzz_crash_028.md:133:6:133:10
 NAME NOT IN SCOPE - fuzz_crash_028.md:136:4:136:5
+UNREACHABLE CODE - fuzz_crash_028.md:102:8:138:3
 UNUSED VARIABLE - fuzz_crash_028.md:112:2:112:6
 UNUSED VARIABLE - fuzz_crash_028.md:113:2:113:3
 UNUSED VARIABLE - fuzz_crash_028.md:114:1:114:2
@@ -1855,6 +1856,21 @@ TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 			(source-region (file "fuzz_crash_028.md") (start 136 4) (end 136 5) (annotation error) (line-text "\t\t\tr(number) # xpr"))))
 	(report
 		(severity warning)
+		(title "Unreachable Code")
+		(region (start 102 8) (end 138 3))
+		(headline
+			(reflow "This code will never run, because the code before it always ends with a ")
+			(annotated code "return")
+			(reflow ", ")
+			(annotated code "crash")
+			(reflow ", or ")
+			(annotated code "break")
+			(reflow ", or loops forever."))
+		(document
+			(source-region (file "fuzz_crash_028.md") (start 102 8) (end 138 3) (annotation error) (line-text "\t\ttag  Jus\n\t...\n\tmatch_time(\n\t\t...\n\t)\nnc(\n\t\tdbg # bug\n2,\n\t)\n\tcrash \"Unrnt\n\ttag_ = Ok(number)\n\ti= \"H, ${world}\"\nt = [\n\t\tadd_one(dbg # Afist\ner, # afarg\n\t\t),\t456, # ee\n\t]\n\tfor n in list {\n\tline!(\"Ag ${n} to ${er}\")\n\t\t+ n\n\t}\n\trd = { foo: 123, bar: \"H\", baz: tag, qux: Ok(world),ned }\n\ttuple = (123, \"World\", tag, Ok(world), (nd, tuple), [1, 2, 3])\n\tmle = (\n\t\t123,\n\t\t\"World\",ag1,\n\t\tOk(world), # nt\n\t\t(ne, tuple),\n\t\t[1, 2, 3],\n\t)\n\tb = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5\nle =(arg1)?.od()?.ned()?.recd?\n\tline!(\n\t\t\"Ho${ #\n\t\t\tr(number) # xpr\n\t\t} \",\n\t)"))
+			(reflow "Remove this code, or change the code before it so that it can finish.")))
+	(report
+		(severity warning)
 		(title "Unused Variable")
 		(region (start 112 2) (end 112 6))
 		(headline
@@ -3195,7 +3211,7 @@ EndOfFile,
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1357) (dispatcher-var 281)
+						(e-interpolation (constraint-fn-var 1360) (dispatcher-var 281)
 							(first
 								(e-literal (string "H, ")))
 							(parts
@@ -3252,11 +3268,11 @@ EndOfFile,
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 1540)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 1543)
 									(receiver
 										(e-runtime-error (tag "erroneous_value_expr")))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 1537)
+										(e-dispatch-call (method "times") (constraint-fn-var 1540)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -3271,18 +3287,18 @@ EndOfFile,
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 1573)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 1576)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 1563)
+															(e-dispatch-call (method "plus") (constraint-fn-var 1566)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 1600)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 1603)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 1590)
+															(e-dispatch-call (method "minus") (constraint-fn-var 1593)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -3297,11 +3313,11 @@ EndOfFile,
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 1639)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 1642)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 1636)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 1639)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -3316,12 +3332,12 @@ EndOfFile,
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 1705)
+													(e-dispatch-call (method "ned") (constraint-fn-var 1708)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 1675)
+																		(e-dispatch-call (method "od") (constraint-fn-var 1678)
 																			(receiver
 																				(e-runtime-error (tag "erroneous_value_expr")))
 																			(args)))

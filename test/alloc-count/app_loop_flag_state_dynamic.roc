@@ -55,7 +55,6 @@ flag_return = |step, n| {
             }
         }
     }
-    $steps
 }
 
 run! : Str => Str

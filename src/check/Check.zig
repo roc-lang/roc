@@ -13087,8 +13087,10 @@ fn hoistedRootExprStep(
         .e_empty_list,
         .e_empty_record,
         .e_zero_argument_tag,
-        .e_runtime_error,
         => true,
+        // A retired expression still evaluates its recorded operands before
+        // it crashes, so the root depends on everything they read.
+        .e_runtime_error => |runtime_error| try self.pushHoistedKeptExprs(pending, runtime_error.evaluated),
         .e_lookup_required,
         .e_lambda,
         .e_closure,
@@ -14336,37 +14338,43 @@ fn literalDispatchPlanMatchesConstraint(
     constraint: StaticDispatchConstraint,
     dispatcher_root: Var,
 ) bool {
-    const literal_kind = constraint.origin.literalKind() orelse return false;
+    const plan_kind = literalPlanKind(constraint.origin.literalKind() orelse return false) orelse return false;
     // The raw callable is the literal occurrence's stable identity. Distinct
     // occurrences may share both a receiver root and a callable equivalence
     // class after unification, so either resolved root would conflate owners.
     return plan.fnVar() == constraint.fn_var and
-        self.literalDispatchPlanMatches(plan, literal_kind, dispatcher_root);
+        self.literalDispatchPlanMatches(plan, plan_kind, dispatcher_root);
+}
+
+/// The dispatch plan kind that records literals of `kind`. An interpolation
+/// records no dispatch plan: its regions ride its own `from_interpolation`
+/// constraint (`StaticDispatchConstraint.InterpolationMetadata`).
+fn literalPlanKind(kind: StaticDispatchConstraint.LiteralKind) ?LiteralDispatchPlan.Kind {
+    return switch (kind) {
+        .numeral => .numeral,
+        .quote => .quote,
+        .interpolation => null,
+    };
 }
 
 fn literalDispatchPlanMatches(
     self: *Self,
     plan: LiteralDispatchPlan,
-    literal_kind: StaticDispatchConstraint.LiteralKind,
+    plan_kind: LiteralDispatchPlan.Kind,
     dispatcher_root: Var,
 ) bool {
-    const kind_matches = switch (literal_kind) {
-        .numeral => plan.dispatchKind() == .numeral,
-        .quote => plan.dispatchKind() == .quote,
-        .interpolation => unreachable,
-    };
-    return kind_matches and
+    return plan.dispatchKind() == plan_kind and
         self.types.resolveVar(@fromBackingInt(@intCast(plan.target_var))).var_ == dispatcher_root;
 }
 
 fn matchingLiteralDispatchPlan(
     self: *Self,
     plans: []const LiteralDispatchPlan,
-    literal_kind: StaticDispatchConstraint.LiteralKind,
+    plan_kind: LiteralDispatchPlan.Kind,
     dispatcher_root: Var,
 ) ?LiteralDispatchPlan {
     for (plans) |plan| {
-        if (self.literalDispatchPlanMatches(plan, literal_kind, dispatcher_root)) return plan;
+        if (self.literalDispatchPlanMatches(plan, plan_kind, dispatcher_root)) return plan;
     }
     return null;
 }
@@ -14407,12 +14415,11 @@ fn poisonLiteralFailureOwners(
     defer pattern_owners.deinit(self.gpa);
 
     for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |literal_constraint| {
-        const literal_kind = literal_constraint.origin.literalKind() orelse continue;
-        if (literal_kind == .interpolation) continue;
+        const plan_kind = literalPlanKind(literal_constraint.origin.literalKind() orelse continue) orelse continue;
         const literal_fn_root = self.types.resolveVar(literal_constraint.fn_var).var_;
 
         for (self.cir.store.literalDispatchPlans()) |plan| {
-            if (!self.literalDispatchPlanMatches(plan, literal_kind, dispatcher_root)) continue;
+            if (!self.literalDispatchPlanMatches(plan, plan_kind, dispatcher_root)) continue;
             const plan_fn_var = plan.fnVar() orelse continue;
             if (self.types.resolveVar(plan_fn_var).var_ != literal_fn_root) continue;
             const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(plan.node_idx));
@@ -17888,6 +17895,7 @@ fn predeclareAnnotationSchemeHelp(
     defer live_holes.deinit(self.gpa);
     if (hole_rank != null) {
         try self.collectUnderscoreAnnoVars(annotation_idx, &live_holes);
+        self.retainUndecidedHoles(&live_holes);
     }
 
     const scheme_var = if (live_holes.items.len > 0)
@@ -17942,6 +17950,28 @@ fn predeclareAnnotationSchemeHelp(
         try self.hole_shared_schemes.put(self.gpa, scheme_var, holes);
     }
     return scheme_var;
+}
+
+/// Keep only the holes the body still has to decide. Generating an annotation
+/// can decide a hole from the annotation's own content: two `where`
+/// requirements of one method relate, so in
+/// `a.info : a -> _, a.info : a -> { count : U64 }` the hole becomes the
+/// record. Such a hole's class is rooted at annotation content that the
+/// reset after predeclaration clears, so the scheme copies it like the rest
+/// of the annotation instead of sharing it. A hole stays shared exactly when
+/// its class is still unbound and rooted at a hole.
+fn retainUndecidedHoles(self: *const Self, holes: *std.ArrayListUnmanaged(Var)) void {
+    var kept: usize = 0;
+    for (holes.items) |hole| {
+        const resolved = self.types.resolveVar(hole);
+        const rooted_at_hole = for (holes.items) |other| {
+            if (other == resolved.var_) break true;
+        } else false;
+        if (resolved.desc.content != .flex or !rooted_at_hole) continue;
+        holes.items[kept] = hole;
+        kept += 1;
+    }
+    holes.shrinkRetainingCapacity(kept);
 }
 
 /// Register a predeclared annotation's standalone scheme. Its identity slots
@@ -18327,10 +18357,12 @@ fn predeclaredSlotImage(
     var current = body_var;
     while (true) {
         const resolved = self.types.resolveVar(current);
+        const quantified = resolved.desc.rank == .generalized or
+            (if (quantified_from) |rank| @backingInt(resolved.desc.rank) >= @backingInt(rank) else false);
+        // A slot the scheme will not quantify is shared by the body and
+        // every use, so an earlier use may already have added tags to it.
+        if (!quantified) return resolved.var_;
         if (canonical_type_keys.isIdentityVariable(resolved.desc)) {
-            const quantified = resolved.desc.rank == .generalized or
-                (if (quantified_from) |rank| @backingInt(resolved.desc.rank) >= @backingInt(rank) else false);
-            if (!quantified) return resolved.var_;
             const entry = try images.getOrPut(resolved.var_);
             if (entry.found_existing) return entry.value_ptr.*;
             entry.value_ptr.* = use_copy;
@@ -20541,16 +20573,51 @@ fn runLateImplicitOpenExtAudit(self: *Self, env: *Env) std.mem.Allocator.Error!v
             if (candidate.tail != demand_tail) continue;
             if (reported.isSet(candidate.entry)) continue;
             const entry = self.late_implicit_open_ext_audits.items[candidate.entry];
-            if (demand.owner.start.offset < entry.owner_rhs.start.offset) continue;
-            if (demand.owner.end.offset > entry.owner_rhs.end.offset) continue;
             for (tags) |tag_name| {
-                if (!self.tagRowHasTag(entry.ext.var_, tag_name)) continue;
+                if (!self.codecDemandRejectsAuditedTag(demand, entry, tag_name)) continue;
                 reported.set(candidate.entry);
                 try self.reportImplicitOpenExtExtension(entry.ext, tag_name, entry.owner_expr, env);
                 break;
             }
         }
     }
+}
+
+/// Whether `demand`, which shares `entry`'s row, makes the late audit reject
+/// `tag_name` in that row: the codec relation belongs to the definition whose
+/// annotation minted the row, and the row now carries the tag.
+fn codecDemandRejectsAuditedTag(
+    self: *const Self,
+    demand: CodecRowDemand,
+    entry: LateImplicitOpenExtAudit,
+    tag_name: Ident.Idx,
+) bool {
+    if (demand.owner.start.offset < entry.owner_rhs.start.offset) return false;
+    if (demand.owner.end.offset > entry.owner_rhs.end.offset) return false;
+    return self.tagRowHasTag(entry.ext.var_, tag_name);
+}
+
+/// Whether the late audit will reject `tag_name` in `row` as a tag a
+/// generated codec produces on behalf of the definition whose annotation
+/// bounds `row` (`runLateImplicitOpenExtAudit`). That definition is then
+/// retired and never produces a value.
+fn rowTagIsRejectedCodecProduction(self: *const Self, row: Var, tag_name: Ident.Idx) bool {
+    if (self.codec_row_demands.items.len == 0) return false;
+    const tail = self.tagRowTail(row);
+    for (self.late_implicit_open_ext_audits.items) |entry| {
+        if (entry.owner_rhs.isEmpty()) continue;
+        if (!self.implicitOpenExtCarriesTags(entry.ext)) continue;
+        if (self.tagRowTail(entry.ext.var_) != tail) continue;
+        for (self.codec_row_demands.items) |demand| {
+            if (self.tagRowTail(demand.row) != tail) continue;
+            const tags = self.codec_row_demand_tags.items[demand.tags_start..][0..demand.tags_len];
+            for (tags) |demanded| {
+                if (!demanded.eql(tag_name)) continue;
+                if (self.codecDemandRejectsAuditedTag(demand, entry, tag_name)) return true;
+            }
+        }
+    }
+    return false;
 }
 
 /// The resolved extension a tag row ends in, through aliases and extension
@@ -20667,7 +20734,7 @@ fn coercionMayWiden(self: *const Self, var_: Var) bool {
 /// (recursion goes through a nominal, which ends the reach); a variable met
 /// again while its own copy is in progress keeps itself, so the walk is finite
 /// regardless.
-fn widenedReachCopy(self: *Self, root: Var, env: *Env, region: Region) std.mem.Allocator.Error!Var {
+fn widenedReachCopy(self: *Self, root: Var, use_expr: CIR.Expr.Idx, env: *Env, region: Region) std.mem.Allocator.Error!Var {
     const Step = struct { var_: Var, expanded: bool };
     var stack: std.ArrayListUnmanaged(Step) = .empty;
     defer stack.deinit(self.gpa);
@@ -20698,7 +20765,7 @@ fn widenedReachCopy(self: *Self, root: Var, env: *Env, region: Region) std.mem.A
                 break :blk if (backing_copy == self.types.resolveVar(backing).var_) resolved.var_ else backing_copy;
             },
             .structure => |flat| switch (flat) {
-                .tag_union => try self.widenedRowCopy(resolved.var_, env, region),
+                .tag_union => try self.widenedRowCopy(resolved.var_, use_expr, env, region),
                 .nominal_type => |nominal| blk: {
                     // Copying appends to the type store, so read the arguments
                     // out of it first.
@@ -20768,7 +20835,7 @@ fn appendWidenedReachChildren(self: *Self, var_: Var, children: *std.ArrayListUn
 /// A reached tag union's copy: every tag on its extension chain, each payload
 /// copied through the reach, under a fresh open extension. A row whose chain
 /// ends in a rigid is not the value's to widen and is shared.
-fn widenedRowCopy(self: *Self, row: Var, env: *Env, region: Region) std.mem.Allocator.Error!Var {
+fn widenedRowCopy(self: *Self, row: Var, use_expr: CIR.Expr.Idx, env: *Env, region: Region) std.mem.Allocator.Error!Var {
     // A host-boundary row never widens (design.md "Row Joins").
     if (self.rowIsHostFixed(row)) return self.types.resolveVar(row).var_;
     const tags_start = self.widened_use_tags.items.len;
@@ -20816,7 +20883,7 @@ fn widenedRowCopy(self: *Self, row: Var, env: *Env, region: Region) std.mem.Allo
     }
     const ext = try self.freshFromContent(.{ .flex = Flex.init() }, env, region);
     const copy = try self.freshFromContent(try self.types.mkTagUnion(tags, ext), env, region);
-    try self.widened_use_rows.append(self.gpa, .{ .value_row = self.types.resolveVar(row).var_, .use_row = copy });
+    try self.widened_use_rows.append(self.gpa, .{ .value_row = self.types.resolveVar(row).var_, .use_row = copy, .use_expr = use_expr });
     return copy;
 }
 
@@ -20824,12 +20891,12 @@ fn widenedRowCopy(self: *Self, row: Var, env: *Env, region: Region) std.mem.Allo
 /// reaches has a fresh open extension, every open row and every position
 /// outside the reach shared with the value. Null when the reach holds no
 /// closed row, so the value's own type is what relates.
-fn widenedClosedRowsCopy(self: *Self, value_var: Var, env: *Env, region: Region) std.mem.Allocator.Error!?Var {
+fn widenedClosedRowsCopy(self: *Self, value_var: Var, use_expr: CIR.Expr.Idx, env: *Env, region: Region) std.mem.Allocator.Error!?Var {
     try self.computeCoercionReach(value_var);
     self.widened_use_copies.clearRetainingCapacity();
     self.widen_closed_rows_only = true;
     defer self.widen_closed_rows_only = false;
-    const copy = try self.widenedReachCopy(value_var, env, region);
+    const copy = try self.widenedReachCopy(value_var, use_expr, env, region);
     return if (copy == self.types.resolveVar(value_var).var_) null else copy;
 }
 
@@ -20855,6 +20922,7 @@ fn widenResultValue(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env) std.mem.Allo
     const rows_start: u32 = @intCast(self.widened_use_rows.items.len);
     const wide_var = try self.widenedClosedRowsCopy(
         ModuleEnv.varFrom(expr_idx),
+        expr_idx,
         env,
         self.cir.store.getExprRegion(expr_idx),
     ) orelse return null;
@@ -21019,10 +21087,15 @@ const WidenedUseRow = struct {
     value_row: Var,
     /// The use's copy of it.
     use_row: Var,
+    /// The use that relates to the copy, retired when the copy cannot take
+    /// a tag the value's row gained.
+    use_expr: CIR.Expr.Idx,
     /// Set once the copy needs nothing more: the use's type was found not to
-    /// admit a tag of the value's row (that mismatch is reported), or the copy
-    /// is no longer a tag row because the use related it to a nominal type,
-    /// whose declared backing that relation already checked.
+    /// admit a tag of the value's row (that mismatch is reported and the use
+    /// retired), the tag is one the value's definition was rejected for
+    /// producing (the use is retired), or the copy is no longer a tag row
+    /// because the use related it to a nominal type, whose declared backing
+    /// that relation already checked.
     settled: bool = false,
 };
 
@@ -21046,14 +21119,27 @@ fn propagateValueRowsToWidenedUses(self: *Self, env: *Env) std.mem.Allocator.Err
         }
         try self.collectTagsMissingFromUse(pair, &missing);
         if (missing.items.len == 0) continue;
+        // A tag the value's own definition is rejected for producing is not
+        // one the value can have: the definition is retired, so the use is a
+        // use of a rejected declaration, erroneous at the use and reported
+        // once, at the definition.
+        const rejected_production = for (missing.items) |tag| {
+            if (self.rowTagIsRejectedCodecProduction(pair.value_row, tag.name)) break true;
+        } else false;
+        if (rejected_production) {
+            try self.markErroneousValueExpr(pair.use_expr);
+            self.widened_use_rows.items[index].settled = true;
+            continue;
+        }
         const region = self.getRegionAt(pair.use_row);
         const ext = try self.freshFromContent(.{ .flex = Flex.init() }, env, region);
         const extra = try self.freshFromContent(try self.types.mkTagUnion(missing.items, ext), env, region);
-        // A relation that fails reports its mismatch at the use and settles
-        // the pair. One that succeeds gives the copy every missing tag, which
-        // a second look confirms; a copy the relation did not extend settles
-        // too, so this loop always ends.
+        // A relation that fails reports its mismatch at the use, retires the
+        // use, and settles the pair. One that succeeds gives the copy every
+        // missing tag, which a second look confirms; a copy the relation did
+        // not extend settles too, so this loop always ends.
         if ((try self.unify(self.tagRowTail(pair.use_row), extra, env)).isProblem()) {
+            try self.markErroneousValueExpr(pair.use_expr);
             self.widened_use_rows.items[index].settled = true;
             continue;
         }
@@ -21475,9 +21561,7 @@ fn annoIsAnonymousOpenExt(self: *const Self, ext_anno_idx: CIR.TypeAnno.Idx) boo
 /// owns it. Null when this compilation has no builtin module to resolve
 /// against, in which case nothing can be the builtin `Try`.
 fn builtinTrySourceDecl(self: *const Self) ?u32 {
-    if (self.isCheckingBuiltinModuleDirectly()) {
-        return @backingInt(self.findLocalTypeDeclByName(self.cir.idents.@"try") orelse return null);
-    }
+    if (self.isCheckingBuiltinModuleDirectly()) return self.sourceDeclForBuiltinNominal(.try_type);
     const indices = self.builtin_ctx.builtin_indices orelse return null;
     return @backingInt(indices.try_type);
 }
@@ -23102,7 +23186,12 @@ fn stepRigidAnnoGen(self: *Self, frame: *AnnoGenFrame, rigid: std.meta.fieldInfo
                 .w_method => |method| {
                     // The annotation owns the callable variable. Declare its identity
                     // before generating its type so recursive constraints can refer to it.
+                    // A repeated requirement of the same method relates to this callable
+                    // below, before either type is generated, so it takes the current
+                    // rank now: generation cannot re-rank a node that relation has
+                    // already redirected into another class.
                     const func_var = ModuleEnv.varFrom(method.anno);
+                    try self.setVarRank(func_var, env);
                     try self.recordAnnotationDispatchRelationOwner(func_var);
 
                     try self.scratch_static_dispatch_constraints.append(ScratchStaticDispatchConstraint{
@@ -26667,7 +26756,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
     const expr_region = frame.expr_region;
     const expr_var = frame.expr_var;
 
-    switch (expr) {
+    check: switch (expr) {
         // str //
         .e_str_segment => {
             const str_var = try self.freshStr(env, expr_region);
@@ -27137,7 +27226,11 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
             }
         },
         .e_lookup_associated_local => |lookup| {
-            try self.checkLocalAssociatedLookup(expr_idx, expr_var, lookup, expr_region, env);
+            if (try self.checkLocalAssociatedLookup(expr_idx, expr_var, lookup, expr_region, env)) {
+                // The lookup now names a method's local binding.
+                frame.expr = self.cir.store.getExpr(expr_idx);
+                continue :check frame.expr;
+            }
         },
         .e_lookup_associated => |lookup| {
             try self.checkAssociatedLookup(expr_idx, expr_var, lookup, expr_region, env);
@@ -28143,7 +28236,6 @@ const BlockStatementsCheck = struct {
     expected: Expected,
     does_fx: bool = false,
     diverges: bool = false,
-    warn_unreachable: bool = false,
     offset: u32 = 0,
     current: ?StatementCheck = null,
 
@@ -28195,14 +28287,6 @@ fn stepBlockStatements(self: *Self, state: *BlockStatementsCheck, statements: CI
     while (state.offset < statements.span.len) {
         const stmt_idx = self.cir.store.statementAt(statements, state.offset);
         const stmt_var = ModuleEnv.varFrom(stmt_idx);
-        const stmt_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(stmt_idx));
-
-        if (state.warn_unreachable) {
-            _ = try self.problems.appendProblem(.{ .unreachable_code = .{
-                .region = stmt_region,
-            } });
-        }
-
         const stmt = self.cir.store.getStatement(stmt_idx);
         switch (stmt) {
             // A local type declaration's or standalone annotation's var is the
@@ -28831,7 +28915,6 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             }
             if (try self.exprIsAllCrashConditional(expr.expr)) {
                 block_state.diverges = true;
-                block_state.warn_unreachable = true;
             }
             return null;
         },
@@ -34056,6 +34139,10 @@ fn checkAssociatedLookup(
     );
 }
 
+/// Returns true when the lookup's target is a method declared in a function
+/// body. That method is a local binding, so the lookup is rewritten to the
+/// same local lookup naming the method through its own type produces, and
+/// the caller checks it as one.
 fn checkLocalAssociatedLookup(
     self: *Self,
     expr_idx: CIR.Expr.Idx,
@@ -34063,17 +34150,27 @@ fn checkLocalAssociatedLookup(
     lookup: @FieldType(CIR.Expr, "e_lookup_associated_local"),
     region: Region,
     env: *Env,
-) Allocator.Error!void {
+) Allocator.Error!bool {
     try self.noteTypeDeclReferenceForLocalProcedures(@fromBackingInt(@intCast(lookup.type_node_idx)));
+    const owner_var: Var = @fromBackingInt(@intCast(lookup.type_node_idx));
+    if (try self.resolveAssociatedLookup(owner_var, lookup.item_ident)) |resolution| {
+        const target_node_idx = resolution.target.binding.type_node_idx;
+        if (resolution.target.is_this_module and self.cir.store.nodes.get(target_node_idx).tag == .statement_decl) {
+            const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(@backingInt(target_node_idx)));
+            self.cir.store.replaceExprWithLocalLookup(expr_idx, self.cir.store.getStatement(statement).s_decl.pattern);
+            return true;
+        }
+    }
     try self.checkAssociatedLookupFromOwnerVar(
         expr_idx,
         expr_var,
-        @fromBackingInt(@intCast(lookup.type_node_idx)),
+        owner_var,
         lookup.type_ident,
         lookup.item_ident,
         region,
         env,
     );
+    return false;
 }
 
 fn checkAssociatedLookupFromOwnerVar(
@@ -34183,11 +34280,6 @@ fn checkResolvedAssociatedTarget(
     region: Region,
     env: *Env,
 ) Allocator.Error!void {
-    // A method declared in a function body is a local binding, and naming it
-    // through its type refers to that binding like any local lookup.
-    if (is_this_module and self.cir.store.nodes.get(target_node_idx).tag == .statement_decl) {
-        try self.noteLocalLookupForLocalProcedures(self.cir.store.getStatement(@fromBackingInt(@intCast(@backingInt(target_node_idx)))).s_decl.pattern);
-    }
     if (derivedMethodDef(target_env, target_def_idx)) |derived| {
         try self.checkDerivedMethodReference(expr_idx, expr_var, target_env, is_this_module, derived, region, env);
         return;
@@ -36352,6 +36444,12 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
             continue;
         }
         _ = try self.unify(ModuleEnv.varFrom(pending.default_expr), expected_field_type, env);
+        // A tuple access whose receiver was still open when the default
+        // checked it (`|pair| pair.0` passed before `pair`'s type was known)
+        // relates its result to the receiver's element only once resolved,
+        // and that relation can pin a parameter copy. Resolve the accesses
+        // whose receivers the default's check has now decided.
+        try self.resolvePendingTupleAccesses(env, false);
         // Judged HERE, before the numeric-defaulting rounds could commit a
         // still-flex parameter copy: a default may constrain NO declaration
         // type parameter (design.md "Defaulted Fields").
@@ -40617,7 +40715,7 @@ fn reportUndeterminedType(
             .numeral => .number_literal,
             .quote, .interpolation => .string_literal,
         };
-        if (self.firstLiteralRegionInClass(kind, root)) |literal_region| region = literal_region;
+        if (self.firstLiteralRegionInClass(kind, root, recorded_constraints)) |literal_region| region = literal_region;
         builtin_candidates_lack_method = try self.builtinLiteralCandidatesLackMethod(kind, constraint.fn_name);
         break :literal;
     }
@@ -40675,14 +40773,40 @@ fn builtinNominalHasMethod(self: *Self, nominal_type: types_mod.NominalType, met
     return self.lookupStaticDispatchMethodBinding(owner_env, nominal_type.sourceDeclOptional(), self.cir, method_name) != null;
 }
 
-/// The source region of the first literal of `kind` whose dispatch plan
-/// resolves into the class rooted at `root`. Literal dispatch plans are
-/// recorded at the literal sites in source order.
-fn firstLiteralRegionInClass(self: *Self, kind: StaticDispatchConstraint.LiteralKind, root: Var) ?Region {
-    const plan = self.matchingLiteralDispatchPlan(self.cir.store.literalDispatchPlans(), kind, root) orelse
-        self.matchingLiteralDispatchPlan(self.retired_literal_dispatch_plans.items, kind, root) orelse
+/// The source region of the first literal of `kind` in the class rooted at
+/// `root`, whose constraints are `constraints`. Numerals and quotes are found
+/// through their dispatch plans, which are recorded at the literal sites in
+/// source order. Interpolations record no dispatch plan; each carries its own
+/// region on its `from_interpolation` constraint, and unification never folds
+/// two of those together, so the class's constraints hold every one.
+fn firstLiteralRegionInClass(
+    self: *Self,
+    kind: StaticDispatchConstraint.LiteralKind,
+    root: Var,
+    constraints: []const StaticDispatchConstraint,
+) ?Region {
+    const plan_kind = literalPlanKind(kind) orelse return self.firstInterpolationRegion(constraints);
+    const plan = self.matchingLiteralDispatchPlan(self.cir.store.literalDispatchPlans(), plan_kind, root) orelse
+        self.matchingLiteralDispatchPlan(self.retired_literal_dispatch_plans.items, plan_kind, root) orelse
         return null;
     return self.cir.store.getNodeRegion(@fromBackingInt(@intCast(plan.node_idx)));
+}
+
+/// The earliest source region among the interpolations in `constraints`. An
+/// imported copy is located at the use that instantiated it (design.md
+/// "Builtin Str Interpolation Part Compatibility").
+fn firstInterpolationRegion(self: *Self, constraints: []const StaticDispatchConstraint) ?Region {
+    var first: ?Region = null;
+    for (constraints) |constraint| {
+        if (constraint.origin.literalKind() != .interpolation) continue;
+        const region = switch (constraint.interpolation.regions) {
+            .this_module => constraint.interpolation.expr_region.get() orelse
+                base.invariant("an interpolation's literal conversion carries no interpolation metadata", .{}),
+            .imported => self.cir.store.getExprRegion(self.instantiatedInterpolationOwner(constraint) orelse continue),
+        };
+        if (first == null or region.start.offset < first.?.start.offset) first = region;
+    }
+    return first;
 }
 
 fn undeterminedTypeUseRegion(
@@ -49357,9 +49481,7 @@ fn validateBuiltinFromNumeralLiteral(
     const target = numeralTargetFromNumKind(num_kind) orelse return null;
     if (num_literal.fits.contains(target)) return null;
     return switch (target) {
-        // Floats represent every materializable literal (out-of-range becomes
-        // ±inf), so they are in every materialized fit set; only a literal
-        // whose digits were never recorded reaches this branch.
+        // The literal's correctly-rounded value overflows the float type.
         .f32, .f64 => .out_of_range,
         .u8, .u16, .u32, .u64, .u128 => blk: {
             if (num_literal.is_fractional) break :blk .fractional_integer;
@@ -55795,11 +55917,11 @@ fn quoteLiteralRegionForDispatcher(self: *Self, constraint: StaticDispatchConstr
     const dispatcher_root = self.types.resolveVar(dispatcher_var).var_;
     const plan = self.matchingLiteralDispatchPlan(
         self.cir.store.literalDispatchPlans(),
-        kind,
+        .quote,
         dispatcher_root,
     ) orelse self.matchingLiteralDispatchPlan(
         self.retired_literal_dispatch_plans.items,
-        kind,
+        .quote,
         dispatcher_root,
     ) orelse return null;
     return self.cir.store.getNodeRegion(@fromBackingInt(@intCast(plan.node_idx)));

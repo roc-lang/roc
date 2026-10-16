@@ -166,7 +166,7 @@ main! = |_| {}
 					(e-block
 						(s-reassign
 							(p-var-assign (ident "$s"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 349)
+							(e-dispatch-call (method "plus") (constraint-fn-var 351)
 								(receiver
 									(e-lookup-local
 										(p-var-assign (ident "$s"))))
@@ -201,10 +201,10 @@ main! = |_| {}
 						(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))))
 	(d-let
 		(p-assign (ident "total"))
-		(e-call (constraint-fn-var 390)
+		(e-call (constraint-fn-var 392)
 			(e-lookup-local
 				(p-assign (ident "sum")))
-			(e-dispatch-call (method "range_inclusive_to") (constraint-fn-var 388)
+			(e-dispatch-call (method "range_inclusive_to") (constraint-fn-var 390)
 				(receiver
 					(e-num (value "1")))
 				(args

@@ -583,17 +583,15 @@ fn writeDiscriminant(out: [*]u8, offset: u32, size: u32, value: u64) void {
     }
 }
 
-/// Public value `StrFromUtf8Layout`.
+/// Where `roc_builtins_str_from_utf8_result` writes its result: a
+/// `Try(Str, { index : U64, problem : Utf8Problem })`, whose `Err` is
+/// discriminant 0 and `Ok` is 1 (design.md "Builtins Build Their Own Tag
+/// Unions").
 pub const StrFromUtf8Layout = extern struct {
-    ok_tag: u64,
-    err_tag: u64,
-    outer_disc_offset: u32,
-    outer_disc_size: u32,
+    disc_offset: u32,
+    disc_size: u32,
     err_index_offset: u32,
     err_problem_offset: u32,
-    inner_disc_offset: u32,
-    inner_disc_size: u32,
-    inner_bad_utf8_tag: u32,
 };
 
 /// Converts a UTF-8 byte list to a RocStr, writing the full result union (string or error details) to an output buffer.
@@ -604,14 +602,13 @@ pub fn roc_builtins_str_from_utf8_result(out: [*]u8, list_bytes: ?[*]u8, list_le
 
     if (result.is_ok) {
         utils.writeAs(RocStr, out, result.string, @src());
-        writeDiscriminant(out, layout.outer_disc_offset, layout.outer_disc_size, layout.ok_tag);
+        writeDiscriminant(out, layout.disc_offset, layout.disc_size, 1);
         return;
     }
 
     utils.writeAs(u64, out + layout.err_index_offset, result.byte_index, @src());
     utils.writeAs(u8, out + layout.err_problem_offset, @backingInt(result.problem_code), @src());
-    writeDiscriminant(out, layout.inner_disc_offset, layout.inner_disc_size, layout.inner_bad_utf8_tag);
-    writeDiscriminant(out, layout.outer_disc_offset, layout.outer_disc_size, layout.err_tag);
+    writeDiscriminant(out, layout.disc_offset, layout.disc_size, 0);
 }
 
 /// Wrapper: strEscapeAndQuote(RocStr, *RocOps) -> RocStr
@@ -2503,26 +2500,6 @@ pub fn roc_builtins_list_reverse(out: *RocList, list_bytes: ?[*]u8, list_len: us
         out.* = list.listReverse(l, alignment, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, &copy_fallback, roc_ops);
     } else {
         out.* = list.listReverse(l, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, &copy_fallback, roc_ops);
-    }
-}
-
-/// Stable Fluxsort using the uniform boxed-erased-callable ABI. The list's
-/// ownership unit is consumed; the callable is borrowed for the whole sort.
-pub fn roc_builtins_list_sort_with(out: *RocList, list_bytes: ?[*]u8, list_len: usize, list_cap: usize, callable: ?[*]u8, alignment: u32, element_width: usize, elements_refcounted: bool, element_incref: ?RcIncFn, element_decref: ?RcDropFn, update_mode: utils.UpdateMode, in_process: bool, test_context: ?*anyopaque) callconv(.c) void {
-    const roc_ops = in_process_host.ops();
-    const input = RocList{ .bytes = list_bytes, .length = list_len, .capacity_or_alloc_ptr = list_cap };
-    if (list_len < 2 or element_width == 0) {
-        out.* = input;
-        return;
-    }
-
-    const callable_ptr = callable orelse unreachable;
-    if (elements_refcounted) {
-        var inc_ctx = CallbackElementIncrefContext{ .callback = element_incref orelse unreachable };
-        var dec_ctx = CallbackElementDecrefContext{ .callback = element_decref orelse unreachable };
-        out.* = list.listSortWith(input, callable_ptr, alignment, element_width, true, @ptrCast(&inc_ctx), &callbackListElementIncref, @ptrCast(&dec_ctx), &callbackListElementDecref, update_mode, in_process, test_context, roc_ops);
-    } else {
-        out.* = list.listSortWith(input, callable_ptr, alignment, element_width, false, null, @ptrCast(&rcNone), null, @ptrCast(&rcNone), update_mode, in_process, test_context, roc_ops);
     }
 }
 

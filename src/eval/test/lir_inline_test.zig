@@ -10966,6 +10966,129 @@ test "a field take assigned into a join result cell keeps a loop list unique" {
     try std.testing.expectEqual(@as(usize, 0), main_sets.?.checked);
 }
 
+// A record result built past a loop whose body rebinds list state in an `if`
+// statement and a `match` statement. Every arm of those statements ends in a
+// jump to the rebinding join, so neither statement has a value to join.
+const rebinding_record_result_source =
+    \\step : List(U16), List(U16), List(U32), List(U32), U64, U64 -> { tab : List(U16), child : List(U16), cache_len : List(U32), cache_off : List(U32), ptr : U64 }
+    \\step = |tab0, child0, cache_len0, cache_off0, ptr0, pos| {
+    \\    var $tab = tab0
+    \\    var $child = child0
+    \\    var $cache_len = cache_len0
+    \\    var $cache_off = cache_off0
+    \\    var $ptr = ptr0
+    \\    slot = pos.times_wrap(2654435761).bitwise_and(4095)
+    \\    node = List.get($tab, slot) ?? 0
+    \\    $tab = match List.set($tab, slot, pos.to_u16_wrap()) {
+    \\        Ok(next) => next
+    \\        Err(_) => crash "tab"
+    \\    }
+    \\    pending_lt = pos.bitwise_and(32767).times_wrap(2)
+    \\    if node.to_u64() <= pos.bitwise_and(0xFF) {
+    \\        $child = match List.set($child, pending_lt, 0) {
+    \\            Ok(next) => next
+    \\            Err(_) => crash "child"
+    \\        }
+    \\        return { tab: $tab, child: $child, cache_len: $cache_len, cache_off: $cache_off, ptr: $ptr }
+    \\    } else {
+    \\    }
+    \\    var $node = node.to_u64()
+    \\    var $depth = 8.U64
+    \\    var $walking = 1.U64
+    \\    while $walking != 0 {
+    \\        cslot = $node.bitwise_and(32767).times_wrap(2)
+    \\        next = (List.get($child, cslot) ?? 0).to_u64()
+    \\        if next > 7 {
+    \\            $cache_len = match List.set($cache_len, $ptr, next.to_u32_wrap()) {
+    \\                Ok(next2) => next2
+    \\                Err(_) => crash "cache_len"
+    \\            }
+    \\            $cache_off = match List.set($cache_off, $ptr, pos.minus_wrap(next).to_u32_wrap()) {
+    \\                Ok(next2) => next2
+    \\                Err(_) => crash "cache_off"
+    \\            }
+    \\            $ptr = $ptr.plus_wrap(1)
+    \\        } else {
+    \\        }
+    \\        match List.set($child, cslot, $node.to_u16_wrap()) {
+    \\            Ok(next2) => {
+    \\                $child = next2
+    \\            }
+    \\            Err(_) => {
+    \\                $walking = 0
+    \\            }
+    \\        }
+    \\        $node = next
+    \\        $depth = $depth.minus_wrap(1)
+    \\        if $depth == 0 or $node == 0 {
+    \\            $walking = 0
+    \\        } else {
+    \\        }
+    \\    }
+    \\    { tab: $tab, child: $child, cache_len: $cache_len, cache_off: $cache_off, ptr: $ptr }
+    \\}
+    \\
+    \\main : U64
+    \\main = {
+    \\    var $tab = List.repeat(0.U16, 4096)
+    \\    var $child = List.repeat(0.U16, 65536)
+    \\    var $cache_len = List.repeat(0.U32, 1024)
+    \\    var $cache_off = List.repeat(0.U32, 1024)
+    \\    var $ptr = 0.U64
+    \\    var $pos = 0.U64
+    \\    var $sum = 0.U64
+    \\    while $pos < 100000 {
+    \\        matches_at = $ptr
+    \\        adv = step($tab, $child, $cache_len, $cache_off, $ptr, $pos)
+    \\        $tab = adv.tab
+    \\        $child = adv.child
+    \\        $cache_len = adv.cache_len
+    \\        $cache_off = adv.cache_off
+    \\        $ptr = adv.ptr
+    \\        var $best = 0.U64
+    \\        if $ptr > matches_at {
+    \\            $best = (List.get($cache_len, $ptr.minus_wrap(1)) ?? 0).to_u64()
+    \\        } else {
+    \\        }
+    \\        $cache_len = match List.set($cache_len, $ptr, $ptr.minus_wrap(matches_at).to_u32_wrap()) {
+    \\            Ok(next) => next
+    \\            Err(_) => crash "cache_len"
+    \\        }
+    \\        $cache_off = match List.set($cache_off, $ptr, $best.to_u32_wrap()) {
+    \\            Ok(next) => next
+    \\            Err(_) => crash "cache_off"
+    \\        }
+    \\        $ptr = $ptr.plus_wrap(1)
+    \\        if $ptr >= 1000 {
+    \\            $sum = $sum + (List.get($cache_off, 500) ?? 0).to_u64()
+    \\            $ptr = 0
+    \\        } else {
+    \\        }
+    \\        $pos = $pos + 1
+    \\    }
+    \\    $sum + $ptr
+    \\}
+;
+
+// Lowering declares an `if`/`match` value join only when some branch falls
+// through to it. With no join for the statements in `step`'s loop, there is
+// no dead write from a branch-local into the record result's cell, so ARC
+// summarizes the record `step` returns field by field: the cache lists come
+// back unique whenever they went in unique, and the caller's writes into
+// them after each call need no runtime uniqueness check.
+test "a record returned past a rebinding if keeps its fields' unique-return facts" {
+    const allocator = std.testing.allocator;
+    var lowered = try lowerModuleWithOptions(allocator, rebinding_record_result_source, .wrappers, .{
+        .proc_debug_names = true,
+    });
+    defer lowered.deinit(allocator);
+
+    const store = &lowered.lowered.lir_result.store;
+    const root_sets = listSetCounts(store, try rootProc(&lowered.lowered));
+    try std.testing.expectEqual(@as(usize, 2), root_sets.check_free);
+    try std.testing.expectEqual(@as(usize, 0), root_sets.checked);
+}
+
 // A record of lists updated through a helper function stays in place: the
 // call site demands a mode-specialized variant whose owned parameter lets the
 // field reads take, so no emitted variant both mutates a list and retains a
@@ -13148,4 +13271,64 @@ test "provenance: an overflow inside a TCE loop reports the overflowing line" {
         return;
     };
     return error.TestUnexpectedResult;
+}
+
+fn dictInsertLoopInterpreterPeakBytes(lowered: *const lir.CheckedPipeline.LoweredProgram, iterations: u64) (TestError || error{MemoryLeak})!usize {
+    var runtime_env = eval.RuntimeHostEnv.init(std.testing.allocator);
+    defer runtime_env.deinit();
+    var peak_allocator = PeakAllocator{ .child = std.testing.allocator };
+    const allocator = peak_allocator.allocator();
+    {
+        const result = &lowered.lir_result;
+        var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
+        defer static_strings.deinit();
+        var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, static_strings.view(), runtime_env.get_ops());
+        defer interpreter.deinit();
+        var n = iterations;
+        const evaluated = try interpreter.eval(.{
+            .proc_id = try rootProc(lowered),
+            .arg_layouts = &.{.u64},
+            .arg_ptr = @ptrCast(&n),
+        });
+        try std.testing.expectEqual(@as(u64, 4), evaluated.value.read(u64));
+    }
+    try runtime_env.checkForLeaks();
+    try std.testing.expectEqual(@as(usize, 0), peak_allocator.current_bytes);
+    return peak_allocator.peak_bytes;
+}
+
+test "issue 12290: interpreter memory does not grow with the number of loop iterations" {
+    // The dict never holds more than four keys, so everything the loop keeps
+    // alive is the same size after 50 iterations as after 5000. The
+    // interpreter's own storage must be too: what one iteration's statements
+    // compute is dead once the next iteration begins.
+    const allocator = std.testing.allocator;
+    const while_source =
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    var $dict = Dict.empty()
+        \\    var $i = 0
+        \\    while $i < n {
+        \\        $dict = $dict.insert($i % 4, $i)
+        \\        $i = $i + 1
+        \\    }
+        \\    $dict.len()
+        \\}
+    ;
+    const fold_source =
+        \\main : U64 -> U64
+        \\main = |n| {
+        \\    keys = List.repeat(0, n).map_with_index(|_, i| i)
+        \\    keys.fold(Dict.empty(), |dict, k| dict.insert(k % 4, k)).len()
+        \\}
+    ;
+    for ([_][]const u8{ while_source, fold_source }) |source| {
+        for ([_]lir.CheckedPipeline.InlineMode{ .none, .wrappers }) |inline_mode| {
+            var lowered = try lowerModule(allocator, source, inline_mode);
+            defer lowered.deinit(allocator);
+            const few = try dictInsertLoopInterpreterPeakBytes(&lowered.lowered, 50);
+            const many = try dictInsertLoopInterpreterPeakBytes(&lowered.lowered, 5000);
+            try std.testing.expectEqual(few, many);
+        }
+    }
 }

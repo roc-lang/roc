@@ -317,9 +317,13 @@ pub const Constants = struct {
     /// 148: Low-level op numbering covers only ops that lowering produces.
     /// 149: A stored checked runtime error keeps its evaluated operands in a
     ///      field of their own.
-    /// 150: Module environments record row-coerced results in place of
+    /// 150: `str_from_utf8`'s builtin call takes only the `Try` discriminant
+    ///      and error-record field offsets.
+    /// 151: an import's exposed items record the declaration import
+    ///      resolution selected for them.
+    /// 152: Module environments record row-coerced results in place of
     ///      row-coerced callees and closed-result definitions.
-    pub const CACHE_VERSION = 151;
+    pub const CACHE_VERSION = 152;
 };
 
 /// Configuration for the Roc cache system.

@@ -450,6 +450,7 @@ const copied_diagnostic_shapes = [_]DiagnosticShape{
     .{ .cir = "infinite_loop_never_exits", .tag = .diag_infinite_loop_never_exits, .payload = null, .names = &.{} },
     .{ .cir = "trailing_try_suffix", .tag = .diag_trailing_try_suffix, .payload = null, .names = &.{} },
     .{ .cir = "redundant_return", .tag = .diag_redundant_return, .payload = null, .names = &.{} },
+    .{ .cir = "unreachable_code", .tag = .diag_unreachable_code, .payload = null, .names = &.{} },
     .{ .cir = "range_op_chained", .tag = .diag_range_op_chained, .payload = null, .names = &.{} },
     .{ .cir = "ident_already_in_scope", .tag = .diag_ident_already_in_scope, .payload = "diag_single_ident", .names = &.{"ident"} },
     .{ .cir = "provided_value_is_required", .tag = .diag_provided_value_is_required, .payload = "diag_single_ident", .names = &.{"ident"} },
@@ -749,6 +750,7 @@ const DiagnosticNodeTag = enum {
     diag_trailing_try_suffix,
     diag_return_outside_fn,
     diag_redundant_return,
+    diag_unreachable_code,
     diag_control_flow_in_expect,
     diag_var_reassigned_in_expect,
     diag_mutually_recursive_type_aliases,
@@ -1228,7 +1230,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 93;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 94;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
@@ -2133,6 +2135,21 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
         .malformed,
         => |node_tag| return copiedValue(CIR.Expr, &copied_expr_shapes, node_tag, payload),
     }
+}
+
+/// Replaces an associated lookup whose checked target is a method declared in
+/// a function body with a lookup of that method's local binding.
+pub fn replaceExprWithLocalLookup(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    pattern_idx: CIR.Pattern.Idx,
+) void {
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
+    var node = Node.init(.expr_var);
+    node.setPayload(.{ .expr_var = .{
+        .pattern_idx = @backingInt(pattern_idx),
+    } });
+    store.nodes.set(node_idx, node);
 }
 
 /// Replaces an imported-type associated lookup with its exact checked target.
@@ -3132,6 +3149,7 @@ pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx)
                 .alias = if (p.alias == 0) null else @bitCast(p.alias),
                 .is_wildcard = p.flags & 1 != 0,
                 .kind = @fromBackingInt(@intCast((p.flags >> 1) & 1)),
+                .target = if (p.flags & exposed_item_has_target != 0) p.target else null,
             };
         },
     }
@@ -4261,12 +4279,31 @@ pub fn addExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem, region: b
     node.setPayload(.{ .exposed_item = .{
         .name = @bitCast(exposedItem.name),
         .alias = if (exposedItem.alias) |alias| @bitCast(alias) else 0,
-        .flags = @as(u32, @intFromBool(exposedItem.is_wildcard)) | (@as(u32, @backingInt(exposedItem.kind)) << 1),
+        .flags = @as(u32, @intFromBool(exposedItem.is_wildcard)) |
+            (@as(u32, @backingInt(exposedItem.kind)) << 1) |
+            (if (exposedItem.target != null) exposed_item_has_target else 0),
+        .target = exposedItem.target orelse 0,
     } });
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
     return @fromBackingInt(@intCast(@backingInt(nid)));
+}
+
+/// `ExposedItem` payload flag: `target` holds the declaration the item
+/// resolved to.
+const exposed_item_has_target: u32 = 1 << 2;
+
+/// Record the declaration node in the imported module that an exposed item
+/// of an import resolved to.
+pub fn setExposedItemTarget(store: *NodeStore, exposed_item: CIR.ExposedItem.Idx, target: u32) void {
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(exposed_item)));
+    var node = store.nodes.get(node_idx);
+    var payload = node.getPayload().exposed_item;
+    payload.flags |= exposed_item_has_target;
+    payload.target = target;
+    node.setPayload(.{ .exposed_item = payload });
+    store.nodes.set(node_idx, node);
 }
 
 /// Adds a definition to the store.
@@ -5273,6 +5310,7 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         .infinite_loop_never_exits,
         .trailing_try_suffix,
         .redundant_return,
+        .unreachable_code,
         .return_outside_fn,
         .control_flow_in_expect,
         .var_reassigned_in_expect,
@@ -5445,6 +5483,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_trailing_try_suffix,
         .diag_return_outside_fn,
         .diag_redundant_return,
+        .diag_unreachable_code,
         .diag_control_flow_in_expect,
         .diag_var_reassigned_in_expect,
         .diag_deprecated_number_suffix,

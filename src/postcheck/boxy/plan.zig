@@ -1371,9 +1371,6 @@ pub const ProgramPlan = struct {
     representations: std.ArrayList(TypeRepresentation),
     /// Checked-source ABI shapes, requested only at public boundaries.
     host_reps: collections.DenseMap(TypeRepId, TypeRepId),
-    /// The ABI representation the sort low-level calls each comparator
-    /// representation through, keyed by the comparator's representation.
-    sort_comparator_abis: collections.DenseMap(TypeRepId, TypeRepId),
     children: std.ArrayList(RepChild),
     tag_variants: std.ArrayList(TagVariant),
     declared_fields: std.ArrayList(DeclaredField),
@@ -1443,7 +1440,6 @@ pub const ProgramPlan = struct {
             .label_modules = .empty,
             .representations = .empty,
             .host_reps = collections.DenseMap(TypeRepId, TypeRepId).init(allocator),
-            .sort_comparator_abis = collections.DenseMap(TypeRepId, TypeRepId).init(allocator),
             .children = .empty,
             .tag_variants = .empty,
             .declared_fields = .empty,
@@ -1483,10 +1479,6 @@ pub const ProgramPlan = struct {
         return null;
     }
 
-    pub fn sortComparatorAbiRep(self: *const ProgramPlan, comparator_rep: TypeRepId) TypeRepId {
-        return self.sort_comparator_abis.get(comparator_rep) orelse boxyPlanInvariant("missing planned sort comparator ABI");
-    }
-
     pub fn deinit(self: *ProgramPlan) void {
         self.literal_sites.deinit(self.allocator);
         if (self.literal_evidence) |*evidence| evidence.deinit(self.allocator);
@@ -1515,7 +1507,6 @@ pub const ProgramPlan = struct {
         self.children.deinit(self.allocator);
         self.representations.deinit(self.allocator);
         self.host_reps.deinit();
-        self.sort_comparator_abis.deinit();
         self.type_reps.deinit(self.allocator);
         self.stored_type_reps.deinit(self.allocator);
         self.label_modules.deinit(self.allocator);
@@ -4961,11 +4952,6 @@ const Builder = struct {
                 if (builtinTryArgs(site.view.checked_types, expr.ty) != null or expr.data.run_low_level.op == .compare) {
                     _ = try self.requestHostRep(try self.analyzeType(site.view, expr.ty));
                 }
-                const run = expr.data.run_low_level;
-                if (run.op == .list_sort_with) {
-                    if (run.args.len != 2) boxyPlanInvariant("list_sort_with did not take a list and a comparator");
-                    try self.planSortComparatorAbi(try self.analyzeType(site.view, site.view.checked_bodies.expr(run.args[1]).ty));
-                }
             },
             .inspect_expr => |site| try self.pushPlanActions(actions, &.{
                 exprAction(site.view, site.expr),
@@ -6600,7 +6586,11 @@ const Builder = struct {
             .expect,
             => |child| try actions.append(self.allocator, exprAction(view, child)),
             .dbg => |child| try actions.append(self.allocator, .{ .inspect_expr = .{ .view = view, .expr = child } }),
-            .field_access => |access| try actions.append(self.allocator, exprAction(view, access.receiver)),
+            .field_access => |access| {
+                // Lowering holds each path prefix at its own checked type.
+                for (access.segments) |segment| _ = try self.analyzeType(view, segment.success_ty);
+                try actions.append(self.allocator, exprAction(view, access.receiver));
+            },
             .interpolation => |interpolation| {
                 for (interpolation.values) |value| try actions.append(self.allocator, exprAction(view, value));
                 try actions.append(self.allocator, .{ .interpolation_after_parts = site });
@@ -9143,39 +9133,6 @@ const Builder = struct {
             const worker_child = self.namedQuery().findMatchingChildByRole(worker_children, declared_children[index]) orelse continue;
             try pending.append(self.allocator, .{ declared_children[index].rep, worker_child.rep });
         }
-    }
-
-    /// The sort low-level calls its boxed comparator through a fixed ABI: the
-    /// comparator's arguments keep their worker representation, and its
-    /// ordering result is the closed `[Before, Same, After]` in its host
-    /// representation.
-    fn planSortComparatorAbi(self: *Builder, boxed_comparator_rep: TypeRepId) Allocator.Error!void {
-        const comparator_rep = self.repQuery().requiredSingleChild(boxed_comparator_rep, .box_payload).rep;
-        if (self.plan.sort_comparator_abis.get(comparator_rep) != null) return;
-        const function = self.repQuery().functionChildren(comparator_rep) orelse
-            boxyPlanInvariant("sort comparator was not a function");
-        const abi_ret = try self.requestHostRep(function.ret);
-        var children = std.ArrayList(RepChild).empty;
-        defer children.deinit(self.allocator);
-        for (self.plan.childSlice(self.plan.representations.items[@backingInt(comparator_rep)].children)) |child| {
-            var abi_child = child;
-            switch (child.role) {
-                .function_ret => {
-                    abi_child.rep = abi_ret;
-                    abi_child.source_type = self.plan.representations.items[@backingInt(abi_ret)].source_type;
-                },
-                .function_arg => {},
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyPlanInvariant("sort comparator representation had a non-function child"),
-            }
-            try children.append(self.allocator, abi_child);
-        }
-        const abi_rep: TypeRepId = @fromBackingInt(@intCast(@as(u32, @intCast(self.plan.representations.items.len))));
-        try self.plan.representations.append(self.allocator, .{
-            .source_type = self.plan.representations.items[@backingInt(comparator_rep)].source_type,
-            .kind = .erased_callable,
-            .children = try self.commitPendingChildren(children.items),
-        });
-        try self.plan.sort_comparator_abis.put(comparator_rep, abi_rep);
     }
 
     fn requestHostRep(self: *Builder, worker_rep: TypeRepId) Allocator.Error!TypeRepId {
@@ -13341,7 +13298,7 @@ const Builder = struct {
         const dispatch_plan = directCallDispatchPlan(call_expr);
         if (dispatchResolutionIsStructural(site_view, dispatch_plan)) return null;
         const node = site_view.static_dispatch_plans.evidenceNode(directDispatchEvidenceNode(site_view, dispatch_plan));
-        if (node.nested != .from_callable or node.subst.len != 0) return null;
+        if (node.nested != .from_callable or carriesTargetSubstitution(node)) return null;
         const call_rep = self.plan.repForSourceType(direct.source_fn_type) orelse
             boxyPlanInvariant("boxy direct call function type was not analyzed");
         return try self.storedUseSchemeRepSubstitutions(self.plan.workers.items[@backingInt(direct.worker)].rep, call_rep);
@@ -15903,7 +15860,7 @@ const Builder = struct {
             const node = view.static_dispatch_plans.evidenceNode(node_id);
             // A target reached through a procedure alias derives its evidence
             // from its callable, related to the call's function type.
-            const relation: ?Span = if (node.nested == .from_callable and node.subst.len == 0) blk: {
+            const relation: ?Span = if (node.nested == .from_callable and !carriesTargetSubstitution(node)) blk: {
                 const call_rep = self.plan.repForSourceType(call.source_fn_type) orelse
                     boxyPlanInvariant("boxy iterator call function type was not analyzed");
                 break :blk try self.storedUseSchemeRepSubstitutions(self.plan.workers.items[@backingInt(call.worker)].rep, call_rep);
@@ -19307,7 +19264,7 @@ const Builder = struct {
         edge: DictionaryMethodEvidence.EvidenceEdge,
     ) Allocator.Error!?Span {
         const node = self.moduleForId(edge.module).static_dispatch_plans.evidenceNode(edge.node);
-        if (node.nested != .from_callable or node.subst.len != 0) return null;
+        if (node.nested != .from_callable or carriesTargetSubstitution(node)) return null;
         const callable_rep = self.plan.repForSourceType(callable_type) orelse
             boxyPlanInvariant("dictionary method callable type was not analyzed");
         return try self.storedUseSchemeRepSubstitutions(self.plan.workers.items[@backingInt(worker_id)].rep, callable_rep);
@@ -19492,9 +19449,20 @@ const Builder = struct {
         }
     }
 
+    /// Whether an evidence node's substitution is its target's. An edge that
+    /// instantiated an exact procedure alias's scheme substitutes that
+    /// alias's variables instead, so its target relates to the callable.
+    fn carriesTargetSubstitution(node: static_dispatch.EvidenceNode) bool {
+        return switch (node.instantiation) {
+            .alias => false,
+            .monomorphic, .callable, .derived_from_callable => node.subst.len != 0,
+        };
+    }
+
     fn evidenceEdgeSiteTypes(view: ModuleView, node_id: static_dispatch.EvidenceNodeId) []const checked.CheckedTypeId {
         const table = view.static_dispatch_plans;
         const node = table.evidenceNode(node_id);
+        if (!carriesTargetSubstitution(node)) return &.{};
         const start: usize = node.subst.start;
         const len: usize = node.subst.len;
         if (start > table.site_substitutions.len or len > table.site_substitutions.len - start) {
@@ -23287,7 +23255,7 @@ fn selectedDispatchCallableType(
     node: static_dispatch.EvidenceNode,
 ) CheckedTypeIdentity {
     return switch (node.instantiation) {
-        .callable, .derived_from_callable => |callable_ty| typeRef(site_view, callable_ty),
+        .callable, .alias, .derived_from_callable => |callable_ty| typeRef(site_view, callable_ty),
         .monomorphic => typeRef(target_view, node.target.callable_ty),
     };
 }

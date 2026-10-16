@@ -409,7 +409,6 @@ pub const BoxyBuiltinFn = enum {
     list_set,
     list_swap,
     list_reverse,
-    list_sort_with,
     list_reserve,
     list_reserve_for_append,
     list_release_excess_capacity,
@@ -460,7 +459,6 @@ pub const BoxyBuiltinFn = enum {
             .list_sublist, .list_set, .list_swap => &.{ p, p, p, p, 4, p, p, p, 4, p, 1 },
             .list_replace => &.{ p, p, p, p, 4, p, p, p, p, 4, p, 1 },
             .list_reverse, .list_release_excess_capacity => &.{ p, p, p, p, 4, p, 4, p, 1 },
-            .list_sort_with => &.{ p, p, p, p, p, 4, p, 1, p, p, 4, p, 1 },
             .static_desc,
             .static_dict,
             .dict_method_hidden_desc,
@@ -1844,13 +1842,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_plus, .num_minus, .num_times => unreachable,
                 // LIR lowering splits this into an alias and `list_prefetch`.
                 .list_prefetched => unreachable,
-                .list_sort_with => {
-                    if (args.len != 2) unreachable;
-                    const list_local = GuardedList.at(args, 0);
-                    const list_loc = try self.emitValueLocal(list_local);
-                    const callable_loc = try self.emitValueLocal(GuardedList.at(args, 1));
-                    return try self.generateListSortWith(list_local, list_loc, callable_loc, ll);
-                },
                 // A hint only; this backend emits no code for it.
                 .list_prefetch => return .{ .immediate_i64 = 0 },
                 .list_len => {
@@ -2281,6 +2272,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_map_can_reuse));
 
                     return try self.boolRetReg();
+                },
+                .list_item_size_at_most => {
+                    // list_item_size_at_most(list, bound) -> U8: whether this
+                    // target's item layout fits the bound.
+                    std.debug.assert(args.len == 2);
+                    const ls = self.layout_store;
+                    const list_layout_val = ls.getLayout(self.valueLayout(GuardedList.at(args, 0)));
+                    const elem_size: u32 = if (list_layout_val.tag == .list_of_zst)
+                        0
+                    else
+                        ls.layoutSizeAlign(ls.getLayout(list_layout_val.getIdx())).size;
+                    const bound_loc = try self.emitValueLocal(GuardedList.at(args, 1));
+                    const bound_reg = try self.ensureInGeneralReg(bound_loc);
+                    const size_reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(size_reg, elem_size);
+                    const result_reg = try self.allocTempGeneral();
+                    try self.codegen.emitCmp(.w64, result_reg, size_reg, bound_reg, condCode(.below_or_equal));
+                    self.freeGenerals(.{ size_reg, bound_reg });
+                    return .{ .general_reg = result_reg };
                 },
                 .list_map_cast_unsafe => {
                     // Same bits, new element type: copy the list struct through.
@@ -3546,174 +3556,53 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return try self.callList1RocOpsToStr(list_off, LowLevelBuiltins.strOp(.str_from_utf8_lossy));
                 },
                 .str_from_utf8 => {
-                    // str_from_utf8(list) -> Try(Str, [BadUtf8 {problem: Utf8Problem, index: U64}])
+                    // str_from_utf8(list) -> Try(Str, { index : U64, problem : Utf8Problem })
                     if (args.len != 1) unreachable;
                     const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const list_off = try self.ensureOnStack(list_loc, roc_list_size);
 
                     const ls = self.layout_store;
+                    const target_usize = ls.targetUsize();
                     const ret_layout_val = ls.getLayout(ll.ret_layout);
-                    if (ret_layout_val.tag == .tag_union) {
-                        const tu_data = ls.getTagUnionData(ret_layout_val.getTagUnion().idx);
-                        const variants = ls.getTagUnionVariants(tu_data);
-                        var ok_disc: ?u32 = null;
-                        var err_disc: ?u32 = null;
-                        var err_record_idx: ?layout.StructIdx = null;
-                        var inner_disc_offset: u32 = 0;
-                        var inner_disc_size: u32 = 0;
-                        var inner_bad_utf8_disc: u32 = 0;
-                        for (0..variants.len) |i| {
-                            const v_payload = variants.get(@intCast(i)).payload_layout;
-                            const candidate = self.unwrapSingleFieldPayloadLayout(v_payload) orelse v_payload;
-                            if (candidate == .str) {
-                                ok_disc = @intCast(i);
-                            } else {
-                                err_disc = @intCast(i);
-                                const err_layout = ls.getLayout(candidate);
-                                switch (err_layout.tag) {
-                                    .struct_ => err_record_idx = err_layout.getStruct().idx,
-                                    .tag_union => {
-                                        const inner_tu = ls.getTagUnionData(err_layout.getTagUnion().idx);
-                                        if (self.findBadUtf8Variant(inner_tu)) |info| {
-                                            err_record_idx = info.struct_idx;
-                                            inner_disc_offset = inner_tu.discriminant_offset.get(self.layout_store.targetUsize());
-                                            inner_disc_size = inner_tu.discriminant_size;
-                                            inner_bad_utf8_disc = info.disc;
-                                        }
-                                    },
-                                    .scalar,
-                                    .box,
-                                    .box_of_zst,
-                                    .erased_box,
-                                    .list,
-                                    .list_of_zst,
-                                    .closure,
-                                    .erased_callable,
-                                    .zst,
-                                    .ptr,
-                                    => {},
-                                }
-                            }
-                        }
-
-                        const resolved_ok = ok_disc orelse base.invariant(
-                            "LIR/codegen invariant violated: str_from_utf8 had no Ok(Str) variant",
-                            .{},
-                        );
-                        const resolved_err = err_disc orelse base.invariant(
-                            "LIR/codegen invariant violated: str_from_utf8 had no Err variant",
-                            .{},
-                        );
-                        const rec_idx = err_record_idx orelse {
-                            // In a generic (erased) worker the BadUtf8 error record is
-                            // represented as a boxed payload rather than an inline struct,
-                            // so its concrete field offsets are unavailable here. The
-                            // interpreter reports a runtime error for this shape, and such
-                            // a worker is compiled eagerly but never reached with this
-                            // representation. Emit a matching runtime crash and hand back a
-                            // zeroed result of the expected size.
-                            const crash_tag_size = tu_data.size.get(self.layout_store.targetUsize());
-                            const crash_slot = self.codegen.allocStackSlot(crash_tag_size);
-                            try self.zeroStackArea(crash_slot, crash_tag_size);
-                            try self.emitRocCrash("str_from_utf8: could not resolve error record layout");
-                            try self.emitTrap();
-                            return self.stackLocationForLayout(ll.ret_layout, crash_slot);
-                        };
-                        const struct_data = ls.getStructData(rec_idx);
-                        const fields = ls.struct_fields.sliceRange(struct_data.getFields());
-                        var index_off: ?u32 = null;
-                        var index_size: ?u32 = null;
-                        var problem_off: ?u32 = null;
-                        var problem_size: ?u32 = null;
-                        for (0..fields.len) |i| {
-                            const field = fields.get(i);
-                            const field_layout = ls.getLayout(field.layout);
-                            const field_size = ls.layoutSizeAlign(field_layout).size;
-                            const field_off = ls.getStructFieldOffsetByOriginalIndex(rec_idx, field.index);
-                            switch (field_size) {
-                                8 => {
-                                    index_off = field_off;
-                                    index_size = field_size;
-                                },
-                                1 => {
-                                    problem_off = field_off;
-                                    problem_size = field_size;
-                                },
-                                else => {},
-                            }
-                        }
-                        const resolved_index_off = index_off orelse base.invariant(
-                            "LIR/codegen invariant violated: str_from_utf8 could not resolve index offset",
-                            .{},
-                        );
-                        const resolved_index_size = index_size orelse base.invariant(
-                            "LIR/codegen invariant violated: str_from_utf8 could not resolve index size",
-                            .{},
-                        );
-                        const resolved_problem_off = problem_off orelse base.invariant(
-                            "LIR/codegen invariant violated: str_from_utf8 could not resolve problem offset",
-                            .{},
-                        );
-                        const resolved_problem_size = problem_size orelse base.invariant(
-                            "LIR/codegen invariant violated: str_from_utf8 could not resolve problem size",
-                            .{},
-                        );
-                        const tag_size = tu_data.size.get(self.layout_store.targetUsize());
-                        const disc_offset = tu_data.discriminant_offset.get(self.layout_store.targetUsize());
-                        const disc_size = tu_data.discriminant_size;
-                        if (builtin.mode == .debug and resolved_index_size != 8) {
-                            base.invariant(
-                                "LIR/codegen invariant violated: str_from_utf8 index size {d} != 8",
-                                .{resolved_index_size},
-                            );
-                        }
-                        if (builtin.mode == .debug and resolved_problem_size != 1) {
-                            base.invariant(
-                                "LIR/codegen invariant violated: str_from_utf8 problem size {d} != 1",
-                                .{resolved_problem_size},
-                            );
-                        }
-
-                        const result_slot = self.codegen.allocStackSlot(tag_size);
-                        try self.zeroStackArea(result_slot, tag_size);
-
-                        const layout_slot = self.codegen.allocStackSlot(@sizeOf(dev_wrappers.StrFromUtf8Layout));
-                        const layout_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(resolved_ok))));
-                        try self.emitStore(.w64, frame_ptr, layout_slot, layout_reg);
-                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(resolved_err))));
-                        try self.emitStore(.w64, frame_ptr, layout_slot + 8, layout_reg);
-                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(disc_offset))));
-                        try self.emitStore(.w32, frame_ptr, layout_slot + 16, layout_reg);
-                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(disc_size))));
-                        try self.emitStore(.w32, frame_ptr, layout_slot + 20, layout_reg);
-                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(resolved_index_off))));
-                        try self.emitStore(.w32, frame_ptr, layout_slot + 24, layout_reg);
-                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(resolved_problem_off))));
-                        try self.emitStore(.w32, frame_ptr, layout_slot + 28, layout_reg);
-                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(inner_disc_offset))));
-                        try self.emitStore(.w32, frame_ptr, layout_slot + 32, layout_reg);
-                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(inner_disc_size))));
-                        try self.emitStore(.w32, frame_ptr, layout_slot + 36, layout_reg);
-                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(inner_bad_utf8_disc))));
-                        try self.emitStore(.w32, frame_ptr, layout_slot + 40, layout_reg);
-                        self.codegen.freeGeneral(layout_reg);
-
-                        // Call C builtin that writes the Roc tag union directly.
-                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                        defer builder.deinit();
-                        try builder.addLeaArg(frame_ptr, result_slot);
-                        try builder.addThreeWordMemArg(frame_ptr, list_off);
-                        try builder.addLeaArg(frame_ptr, layout_slot);
-                        try self.callBuiltin(&builder, LowLevelBuiltins.strOp(.str_from_utf8));
-
-                        return self.stackLocationForLayout(ll.ret_layout, result_slot);
+                    if (ret_layout_val.tag != .tag_union) {
+                        base.invariant("LIR/codegen invariant violated: str_from_utf8 expected a Try layout", .{});
                     }
+                    const tu_data = ls.getTagUnionData(ret_layout_val.getTagUnion().idx);
+                    // `Try`'s `Err` is discriminant 0; its payload is the error record.
+                    const err_payload = ls.getTagUnionVariants(tu_data).get(0).payload_layout;
+                    const err_layout = ls.getLayout(self.unwrapSingleFieldPayloadLayout(err_payload) orelse err_payload);
+                    if (err_layout.tag != .struct_) {
+                        base.invariant("LIR/codegen invariant violated: str_from_utf8's error was not a record", .{});
+                    }
+                    const rec_idx = err_layout.getStruct().idx;
+                    const tag_size = tu_data.size.get(target_usize);
 
-                    base.invariant(
-                        "LIR/codegen invariant violated: str_from_utf8 expected tag union layout",
-                        .{},
-                    );
+                    const result_slot = self.codegen.allocStackSlot(tag_size);
+                    try self.zeroStackArea(result_slot, tag_size);
+
+                    const ResultLayout = dev_wrappers.StrFromUtf8Layout;
+                    const layout_slot = self.codegen.allocStackSlot(@sizeOf(ResultLayout));
+                    const layout_reg = try self.allocTempGeneral();
+                    inline for (.{
+                        .{ "disc_offset", tu_data.discriminant_offset.get(target_usize) },
+                        .{ "disc_size", @as(u32, tu_data.discriminant_size) },
+                        .{ "err_index_offset", ls.getStructFieldOffsetByOriginalIndex(rec_idx, 0) },
+                        .{ "err_problem_offset", ls.getStructFieldOffsetByOriginalIndex(rec_idx, 1) },
+                    }) |field| {
+                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(field[1]))));
+                        try self.emitStore(.w32, frame_ptr, layout_slot + @offsetOf(ResultLayout, field[0]), layout_reg);
+                    }
+                    self.codegen.freeGeneral(layout_reg);
+
+                    // Call C builtin that writes the Roc tag union directly.
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
+                    try builder.addLeaArg(frame_ptr, result_slot);
+                    try builder.addThreeWordMemArg(frame_ptr, list_off);
+                    try builder.addLeaArg(frame_ptr, layout_slot);
+                    try self.callBuiltin(&builder, LowLevelBuiltins.strOp(.str_from_utf8));
+
+                    return self.stackLocationForLayout(ll.ret_layout, result_slot);
                 },
 
                 // ── Remaining list low-level operations ──
@@ -6383,13 +6272,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_take_first,
                 .list_take_last,
                 .list_reverse,
-                .list_sort_with,
                 .list_reserve,
                 .list_reserve_for_append,
                 .list_release_excess_capacity,
                 .list_clear,
                 .list_map_prepare_reuse,
                 .list_map_can_reuse,
+                .list_item_size_at_most,
                 .list_map_cast_unsafe,
                 .list_map_extract_unsafe,
                 .list_map_write_unsafe,
@@ -7994,39 +7883,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return listStackAt(result_offset);
         }
 
-        fn generateListSortWith(self: *Self, list_local: LocalId, list_loc: ValueLocation, callable_loc: ValueLocation, ll: anytype) Allocator.Error!ValueLocation {
-            const ls = self.layout_store;
-            const list_abi = builtinInternalListAbi(ls, "dev.generateListSortWith.builtin_list_abi", ll.ret_layout);
-            const list_off = try self.ensureOnStack(list_loc, roc_list_size);
-            const result_offset = self.codegen.allocStackSlot(roc_list_size);
-            if (list_abi.elem_size_align.size == 0) {
-                const tr = try self.allocTempGeneral();
-                inline for (.{ 0, 8, 16 }) |offset| {
-                    try self.emitLoad(.w64, tr, frame_ptr, list_off + offset);
-                    try self.emitStore(.w64, frame_ptr, result_offset + offset, tr);
-                }
-                self.codegen.freeGeneral(tr);
-                return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
-            }
-            const callable_off = try self.ensureOnStack(callable_loc, 8);
-            const rc = try self.listElemRc(list_abi, .incref_and_decref, &.{list_local}, ll.target);
-            const update: ListCallArg = .{ .imm = updateModeImmForArg0(ll.unique_args) };
-            // The sort wrapper takes both the element callbacks and the element
-            // layout and descriptor; the set the elements do not use is zero.
-            switch (rc) {
-                .boxy => try self.callListBuiltin(list_abi, rc, &.{
-                    .{ .lea = result_offset }, .{ .list = list_off }, .{ .mem = callable_off }, .elem_abi,
-                    .{ .imm = 1 },             .{ .imm = 0 },         .{ .imm = 0 },            .elem_rc,
-                    update,
-                }, null, .list_sort_with),
-                .callbacks => try self.callListBuiltin(list_abi, rc, &.{
-                    .{ .lea = result_offset }, .{ .list = list_off },                                                .{ .mem = callable_off }, .elem_abi,
-                    .elem_rc,                  .{ .imm = @backingInt(list_abi.elem_layout_idx orelse unreachable) }, .{ .imm = 0 },            update,
-                }, null, .list_sort_with),
-            }
-            return listStackAt(result_offset);
-        }
-
         /// Call a list reserve wrapper: `boxy_fn` for descriptor-governed
         /// elements, `builtin_fn` otherwise.
         fn callListReserveOp(self: *Self, list_local: LocalId, list_loc: ValueLocation, spare_loc: ValueLocation, ll: anytype, boxy_fn: BoxyBuiltinFn, builtin_fn: BuiltinFn) Allocator.Error!ValueLocation {
@@ -8637,7 +8493,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (op != .list_concat and op != .list_append_sublist and op != .list_prepend and op != .list_set and op != .list_set_in_place_unsafe and
                 op != .list_swap and
                 op != .list_take_first and op != .list_take_last and op != .list_sublist and
-                op != .list_drop_at and op != .list_reverse and op != .list_sort_with and
+                op != .list_drop_at and op != .list_reverse and
                 op != .list_reserve and op != .list_reserve_for_append and op != .list_release_excess_capacity and op != .list_clear) return null;
             const abi = builtinInternalListAbi(self.layout_store, "dev.stack_plan.list_abi", self.localLayout(s.target));
             if (abi.elem_size_align.size == 0) return null;
@@ -16875,39 +16731,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const field = fields.get(0);
             if (field.index != 0) return null;
             return field.layout;
-        }
-
-        fn findBadUtf8Variant(self: *Self, inner_tu: *const layout.TagUnionData) ?struct { disc: u32, struct_idx: layout.StructIdx } {
-            const variants = self.layout_store.getTagUnionVariants(inner_tu);
-            for (0..variants.len) |i| {
-                const payload = variants.get(@intCast(i)).payload_layout;
-                const candidate = self.unwrapSingleFieldPayloadLayout(payload) orelse payload;
-                const payload_layout = self.layout_store.getLayout(candidate);
-                if (payload_layout.tag != .struct_) continue;
-
-                const struct_idx = payload_layout.getStruct().idx;
-                const struct_data = self.layout_store.getStructData(struct_idx);
-                const fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
-                if (fields.len != 2) continue;
-
-                var has_index_field = false;
-                var has_problem_field = false;
-                for (0..fields.len) |field_i| {
-                    const field = fields.get(field_i);
-                    const field_layout = self.layout_store.getLayout(field.layout);
-                    const field_size = self.layout_store.layoutSizeAlign(field_layout).size;
-                    switch (field.index) {
-                        0 => has_index_field = field_size == 8,
-                        1 => has_problem_field = field_size == 1,
-                        else => {},
-                    }
-                }
-                if (has_index_field and has_problem_field) {
-                    return .{ .disc = @intCast(i), .struct_idx = struct_idx };
-                }
-            }
-
-            return null;
         }
 
         fn coerceImmediateForStackCopy(self: *Self, loc: ValueLocation, size: u32) Allocator.Error!ValueLocation {

@@ -1487,6 +1487,29 @@ const CallableInstantiation = struct {
 const CheckedTargetSubstitution = struct {
     view: ModuleView,
     tys: []const checked.CheckedTypeId,
+    /// The exact procedure alias the target was reached through. `tys` then
+    /// substitutes that alias scope's quantified variables, and the target's
+    /// substitution composes through the alias's forwarded lookup.
+    alias: ?TargetAlias = null,
+};
+
+/// An exact procedure alias a method target was reached through, in the
+/// module that declares it.
+const TargetAlias = struct {
+    view: ModuleView,
+    alias: static_dispatch.MethodAlias,
+};
+
+/// A lookup's checked target substitution, by where it was recorded, which
+/// decides the context its checked types instantiate in.
+const LookupSubstitution = union(enum) {
+    /// Recorded by the body being lowered: its checked types instantiate in
+    /// that body's context, sharing the cells that body's scope binds.
+    own_body: CheckedTargetSubstitution,
+    /// Carried as evidence from the edge that selected the target in another
+    /// body: its checked types instantiate together in a fresh context of the
+    /// recording module, so no cell of the body being lowered is shared.
+    carried: CheckedTargetSubstitution,
 };
 
 const DraftLocalProcContextId = enum(u32) { _ };
@@ -1497,7 +1520,7 @@ const MethodLookup = struct {
     instantiation: ?CallableInstantiation = null,
     /// The checked edge's substitution for the target's scheme, when checking
     /// selected this target for this relation.
-    substitution: ?CheckedTargetSubstitution = null,
+    substitution: ?LookupSubstitution = null,
     /// Exact lexical declaration instance for a local method target. Checked
     /// binder ids identify source syntax, not the specialization-local capture
     /// environment in which that declaration was lowered.
@@ -1910,17 +1933,51 @@ const TargetEvidenceSource = union(enum) {
     materialized_contract: []const SpecEvidence,
 };
 
+/// The carried substitution an evidence-dependent dispatch instantiates its
+/// target under. Shared evidence carries the substitution of whichever
+/// same-name relation the caller materialized. An independent relation with
+/// no contract of its own instantiates the target at its own types, unless a
+/// recorded where-method use proves its signature copy shares every
+/// non-marker leaf with the slot's, so the slot's substitution is its own.
+fn dependentCallableSubstitution(
+    dependent: anytype,
+    entry: SpecEvidence,
+    substitution: ?CheckedTargetSubstitution,
+) ?LookupSubstitution {
+    if (dependent.independent_callable and
+        !dependent.reuse_slot_nested_evidence and
+        selectCallableContract(entry, dependent.callable_contract) == null) return null;
+    return if (substitution) |carried| .{ .carried = carried } else null;
+}
+
+fn substitutionNodeCount(subst: SpecSubstitution) usize {
+    var count: usize = 0;
+    for (subst) |slot| switch (slot) {
+        .node => count += 1,
+        .checked_error => {},
+    };
+    return count;
+}
+
 /// The substitution an evidence node recorded for its target's scheme, or
 /// null for a monomorphic target.
-fn checkedTargetSubstitution(site_view: ModuleView, node: static_dispatch.EvidenceNode) ?CheckedTargetSubstitution {
-    if (node.subst.len == 0) return null;
+fn checkedTargetSubstitution(site_view: ModuleView, target_view: ModuleView, node: static_dispatch.EvidenceNode) ?CheckedTargetSubstitution {
+    const alias: ?TargetAlias = switch (node.instantiation) {
+        .alias => .{
+            .view = target_view,
+            .alias = node.target.alias orelse
+                Common.invariant("alias-instantiated evidence named a target with no alias binding"),
+        },
+        .monomorphic, .callable, .derived_from_callable => null,
+    };
+    if (node.subst.len == 0 and alias == null) return null;
     const table = site_view.static_dispatch_plans;
     const start: usize = node.subst.start;
     const len: usize = node.subst.len;
     if (start > table.site_substitutions.len or len > table.site_substitutions.len - start) {
         Common.invariant("checked target substitution range was outside its checked module");
     }
-    return .{ .view = site_view, .tys = table.site_substitutions[start .. start + len] };
+    return .{ .view = site_view, .tys = table.site_substitutions[start .. start + len], .alias = alias };
 }
 
 /// A materialized contract already names the checked targets and their nested
@@ -7024,6 +7081,15 @@ const Builder = struct {
         view: ModuleView,
         template: checked.CallableEvalTemplateId,
     };
+
+    /// The callable-eval binding of a top-level exact procedure alias, by its
+    /// checked binding pattern.
+    fn callableEvalForAliasBinding(_: *Builder, view: ModuleView, binding: checked.CheckedPatternId) CallableEvalUse {
+        for (view.callable_eval_templates.templates) |template| {
+            if (template.pattern == binding) return .{ .view = view, .template = template.id };
+        }
+        Common.invariant("method target alias binding had no callable-eval template");
+    }
 
     /// The callable-eval binding behind a procedure use when that binding is
     /// an exact procedure alias, which calls forward through.
@@ -13069,7 +13135,7 @@ const Builder = struct {
             const value_ty = try sealer.sealNode(prepared.value_node);
             const entry = try prepared_methods.getOrPut(value_ty);
             if (entry.found_existing) {
-                if (!std.meta.eql(entry.value_ptr.*, prepared.callee)) {
+                if (!try self.preparedCalleesSpecializeTogether(body_draft, sealer, entry.value_ptr.*, prepared.callee)) {
                     Common.invariant("one sealed inspect type had multiple prepared method callees");
                 }
             } else {
@@ -13110,6 +13176,40 @@ const Builder = struct {
         }
     }
 
+    /// Whether two callees prepared for components that seal to one type are
+    /// one specialization. A callee is prepared while its component's type
+    /// may still be open, so components that only settle to the same type
+    /// later request separate drafts. Specializations are keyed by their
+    /// sealed request interface, so drafts of one template with equal
+    /// evidence and codec contract whose requests seal to one type are one
+    /// specialization, and emission may call either.
+    fn preparedCalleesSpecializeTogether(
+        self: *Builder,
+        body_draft: *BodyDraftStore,
+        sealer: *GraphTypeFinals,
+        left: DraftFnSlot,
+        right: DraftFnSlot,
+    ) Allocator.Error!bool {
+        if (std.meta.eql(left, right)) return true;
+        const left_fn = switch (left.local) {
+            .draft => |fn_id| fn_id,
+            .final => return false,
+        };
+        const right_fn = switch (right.local) {
+            .draft => |fn_id| fn_id,
+            .final => return false,
+        };
+        const left_index = body_draft.template_spec_by_fn.get(left_fn) orelse return false;
+        const right_index = body_draft.template_spec_by_fn.get(right_fn) orelse return false;
+        const left_spec = &body_draft.template_specs.items[left_index];
+        const right_spec = &body_draft.template_specs.items[right_index];
+        if (!std.meta.eql(left_spec.template_ref, right_spec.template_ref)) return false;
+        if (!optionalTypeDigestEql(left_spec.lexical_context_key, right_spec.lexical_context_key)) return false;
+        if (!draftCodecContractSpecializationEql(left_spec.codec_contract, right_spec.codec_contract)) return false;
+        if (!try specEvidenceVectorEql(self.allocator, left_spec.evidence, right_spec.evidence)) return false;
+        return try sealer.sealNode(left_spec.request_fn_node) == try sealer.sealNode(right_spec.request_fn_node);
+    }
+
     fn emitDraftStructuralEq(
         self: *Builder,
         body_draft: *BodyDraftStore,
@@ -13135,7 +13235,7 @@ const Builder = struct {
             const component_ty = try sealer.sealNode(planned.node);
             const entry = try method_calls.getOrPut(component_ty);
             if (entry.found_existing) {
-                if (!std.meta.eql(entry.value_ptr.*, planned.callee)) {
+                if (!try self.preparedCalleesSpecializeTogether(body_draft, sealer, entry.value_ptr.*, planned.callee)) {
                     Common.invariant("deferred structural equality plan assigned two callees to one component type");
                 }
             } else {
@@ -43142,7 +43242,14 @@ const BodyContext = struct {
         defer body_ctx.deinit();
         const entry_template = view.templates.get(wrapper.template.template);
         const schema = templateSchemaIn(view, &entry_template);
-        const subst = try body_ctx.substitutionFromCheckedTypes(view, schema.scheme_vars);
+        // The alias's scope runs under the substitution checking applied at
+        // this use, so its lookup's own recorded substitution composes with
+        // it exactly instead of solving the alias's variables again from the
+        // request.
+        const subst = edge.subst;
+        if (subst.len != schema.scheme_vars.len) {
+            Common.invariant("procedure alias use substitution length differed from its scope's quantified variables");
+        }
         body_ctx.evidence = rootEvidenceWithSubstitution(wrapper.template, schema, .{
             .subst = subst,
             .vector = edge.vector,
@@ -50290,6 +50397,31 @@ const BodyContext = struct {
         };
     }
 
+    /// The substitution checking recorded for `schema`'s scheme at the
+    /// instantiation site `expr` in `site_view`, as live cells of this context.
+    /// Null when checking recorded no instantiation for a constrained scheme
+    /// there (the edge is compiler-generated).
+    fn recordedSiteSubstitution(
+        self: *BodyContext,
+        site_view: ModuleView,
+        expr: checked.CheckedExprId,
+        schema: SchemeRequirements,
+    ) Allocator.Error!?SpecSubstitution {
+        const recorded = site_view.static_dispatch_plans.siteSubstitution(expr);
+        if (recorded == null and schema.params.len != 0) return null;
+        const tys = recorded orelse &.{};
+        return if (tys.len == schema.scheme_vars.len)
+            try self.substitutionFromCheckedTypes(site_view, tys)
+        else if (tys.len == 0)
+            // Checking recorded no instantiation at this use, so nothing was
+            // copied: the scheme's variables are all shared with the use
+            // (a monomorphic value's still-open variables), and every slot is
+            // the scheme variable's own cell.
+            try self.substitutionFromCheckedTypes(schema.view, schema.scheme_vars)
+        else
+            Common.invariant("checked site substitution length differed from its scheme's quantified variables");
+    }
+
     /// Evidence for `schema`'s scheme at a checked instantiation site in
     /// `site_view`: the site's recorded substitution as live cells of this
     /// context, with the site's own entries as contract provenance.
@@ -50301,25 +50433,14 @@ const BodyContext = struct {
         purpose: EvidenceMaterializationPurpose,
         request_node: ?NodeId,
     ) Allocator.Error!EdgeEvidence {
-        const recorded = site_view.static_dispatch_plans.siteSubstitution(expr);
-        if (recorded == null and schema.params.len != 0) {
+        const subst = try self.recordedSiteSubstitution(site_view, expr, schema) orelse {
             // Checking recorded no instantiation at this use (the edge is
             // compiler-generated): the request interface alone determines
             // the substitution.
             const node = request_node orelse Common.invariant("constrained scheme use had no checked substitution");
             return try self.deriveEdgeAtRequest(schema, node, purpose);
-        }
-        const tys = recorded orelse &.{};
-        const subst = if (tys.len == schema.scheme_vars.len)
-            try self.substitutionFromCheckedTypes(site_view, tys)
-        else if (tys.len == 0)
-            // Checking recorded no instantiation at this use, so nothing was
-            // copied: the scheme's variables are all shared with the use
-            // (a monomorphic value's still-open variables), and every slot is
-            // the scheme variable's own cell.
-            try self.substitutionFromCheckedTypes(schema.view, schema.scheme_vars)
-        else
-            Common.invariant("checked site substitution length differed from its scheme's quantified variables");
+        };
+        const tys = site_view.static_dispatch_plans.siteSubstitution(expr) orelse &.{};
         const refs = site_view.static_dispatch_plans.siteEvidence(expr);
         return .{
             .subst = subst,
@@ -50839,10 +50960,10 @@ const BodyContext = struct {
             .target = frame.node.target,
             .instantiation = if (frame.retain_instantiation) switch (frame.node.instantiation) {
                 .monomorphic => null,
-                .callable, .derived_from_callable => |callable_ty| .{ .view = site_view, .callable_ty = callable_ty },
+                .callable, .alias, .derived_from_callable => |callable_ty| .{ .view = site_view, .callable_ty = callable_ty },
             } else null,
             .local_proc_context = frame.lookup.local_proc_context,
-            .substitution = checkedTargetSubstitution(site_view, frame.node),
+            .substitution = checkedTargetSubstitution(site_view, frame.lookup.view, frame.node),
             .nested = if (frame.nested.len != 0 and evidenceVectorCarriesCheckedContract(frame.nested))
                 .{ .resolved = frame.nested }
             else
@@ -51230,11 +51351,31 @@ const BodyContext = struct {
         };
         var scratch = self.graph.acquireArena();
         defer self.graph.releaseArena(scratch);
-        const input = try InterfaceConstraints.capture(self.graph, scratch.allocator(), &.{constraint_node});
+        // Without an exact checked callable, the target's signature
+        // instantiates under the substitution checking applied where it
+        // selected the target. That substitution is an input of the relation
+        // alongside the constraint, after it in the captured roots.
+        const subst: SpecSubstitution = blk: {
+            if (target.instantiation != null) break :blk &.{};
+            const substitution = target.substitution orelse break :blk &.{};
+            break :blk try self.carriedSubstitutionNodes(substitution);
+        };
+        const input_roots = try scratch.allocator().alloc(NodeId, 1 + substitutionNodeCount(subst));
+        input_roots[0] = constraint_node;
+        var next_root: usize = 1;
+        for (subst) |slot| switch (slot) {
+            .node => |node| {
+                input_roots[next_root] = node;
+                next_root += 1;
+            },
+            .checked_error => {},
+        };
+        const input = try InterfaceConstraints.capture(self.graph, scratch.allocator(), input_roots);
         const request = try input.identityInto(self.graph, scratch.allocator());
         // This relation consumes only the selected checked signature, not its
-        // nested dispatch evidence. Its source identity and adapter rule fully
-        // determine the operation over the complete input constraint.
+        // nested dispatch evidence. Its source identity, substitution, and
+        // adapter rule fully determine the operation over the complete input
+        // constraint.
         const evidence = StoredConstFnEvidence.empty();
         const address: InterfaceReplayAddress = .{
             .kind = switch (target.target.kind) {
@@ -51258,8 +51399,18 @@ const BodyContext = struct {
         }
         // Relate an independent copy, so unrelated caller state cannot enter
         // the retained result. Open variables remain fresh on each replay.
-        const detached = (try input.instantiate(self.graph))[0];
-        const target_node = try self.instantiateEvidenceTargetSignature(target, address.family);
+        const detached_roots = try input.instantiate(self.graph);
+        const detached = detached_roots[0];
+        const detached_subst = try scratch.allocator().alloc(SubstSlot, subst.len);
+        next_root = 1;
+        for (subst, detached_subst) |slot, *detached_slot| detached_slot.* = switch (slot) {
+            .node => blk: {
+                defer next_root += 1;
+                break :blk .{ .node = detached_roots[next_root] };
+            },
+            .checked_error => .checked_error,
+        };
+        const target_node = try self.instantiateEvidenceTargetSignature(target, address.family, detached_subst);
         try self.relateEvidenceTargetRootToRequest(root_view, root_fn_ty, target_node, detached);
         if (use_summaries) {
             const constraints = try InterfaceConstraints.capture(self.graph, scratch.allocator(), &.{detached});
@@ -51279,13 +51430,16 @@ const BodyContext = struct {
 
     /// A checked procedure signature is independent of the request it will
     /// constrain. Snapshot its construction once, then instantiate fresh open
-    /// cells for each relation, preserving independent callable evidence.
+    /// cells for each relation, preserving independent callable evidence. A
+    /// signature instantiated under `subst` depends on it, so it is built
+    /// directly instead.
     fn instantiateEvidenceTargetSignature(
         self: *BodyContext,
         target: *const SpecEvidenceTarget,
         family: DraftTemplateFamilyAddress,
+        subst: SpecSubstitution,
     ) Allocator.Error!NodeId {
-        const cacheable = target.target.kind == .procedure and self.draft.interface_replay.use_finished_summaries;
+        const cacheable = subst.len == 0 and target.target.kind == .procedure and self.draft.interface_replay.use_finished_summaries;
         const address: InterfaceReplayAddress = .{
             .kind = .method_signature,
             .family = family,
@@ -51322,6 +51476,7 @@ const BodyContext = struct {
             };
             var target_ctx = try self.methodTargetContext(lookup);
             defer target_ctx.deinit();
+            if (subst.len != 0) try target_ctx.seedSubstitution(self.methodTargetSchema(lookup), subst);
             break :blk try target_ctx.instNode(lookup.target.callable_ty);
         };
         if (cacheable) {
@@ -51358,10 +51513,12 @@ const BodyContext = struct {
             self.draft,
         );
         defer evidence_ctx.deinit();
-        evidence_ctx.instantiation.closed_types = .{ .leaves = try self.graph.newLeafScope() };
+        const scope = try self.graph.newLeafScope();
+        evidence_ctx.instantiation.closed_types = .{ .leaves = scope };
         const evidence_node = try evidence_ctx.instNode(structural.evidence.callable_ty);
         const constraint_node = try scheme_ctx.instNode(param.callable_ty);
         try relateRequestComponent(self.graph, evidence_node, constraint_node);
+        if (@import("builtin").mode == .debug) try self.graph.debugAssertLeafScopeJoined(scope);
     }
 
     /// Parameters that retain the checked target's exact callable instantiation
@@ -51575,8 +51732,10 @@ const BodyContext = struct {
             .direct_closed, .direct_parametric => |direct| direct,
             .evidence_dependent, .structural, .checked_error, .@"unreachable", .direct_pending => return try self.dispatchTargetSubstitution(plan),
         };
-        switch (self.view.static_dispatch_plans.evidenceNode(direct.evidence).instantiation) {
+        const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
+        switch (node.instantiation) {
             .monomorphic, .callable => return try self.dispatchTargetSubstitution(plan),
+            .alias => return try self.targetSubstitutionNodes(checkedTargetSubstitution(self.view, lookup.view, node).?),
             .derived_from_callable => {},
         }
         const procedure = switch (lookup.target.kind) {
@@ -51618,18 +51777,36 @@ const BodyContext = struct {
         return try self.substitutionFromCheckedTypes(self.view, table.site_substitutions[start .. start + len]);
     }
 
-    /// Seed a selected target's scheme context with the substitution checking
-    /// applied where it selected the target, as a direct target specializes
-    /// under its recorded substitution. The checked types are instantiated
-    /// together in one context of the selecting module, so variables they
-    /// share stay shared, and relating the target's root to the request then
-    /// refines the slots that root reaches.
-    fn seedCheckedTargetSubstitution(
-        self: *BodyContext,
-        target_ctx: *BodyContext,
-        schema: SchemeRequirements,
-        substitution: CheckedTargetSubstitution,
-    ) Allocator.Error!void {
+    /// A context instantiating `lookup`'s target, with the target's quantified
+    /// variables bound to the substitution checking applied where it selected
+    /// the target. The substitution's checked types belong to the selecting
+    /// module and instantiate together in this context, which is the one
+    /// whose scope already binds that module's variables, so variables they
+    /// share stay shared and relating the target's root to a request refines
+    /// the slots that root reaches instead of solving them again.
+    fn substitutedMethodTargetContext(self: *BodyContext, lookup: MethodLookup) Allocator.Error!BodyContext {
+        var target_ctx = try self.methodTargetContext(lookup);
+        errdefer target_ctx.deinit();
+        if (lookup.substitution) |substitution| {
+            try target_ctx.seedSubstitution(self.methodTargetSchema(lookup), switch (substitution) {
+                .own_body => |own| try self.targetSubstitutionNodes(own),
+                .carried => |carried| try self.carriedSubstitutionNodes(carried),
+            });
+        }
+        return target_ctx;
+    }
+
+    /// A target substitution recorded by this body, as live cells of this
+    /// context.
+    fn targetSubstitutionNodes(self: *BodyContext, substitution: CheckedTargetSubstitution) Allocator.Error!SpecSubstitution {
+        const recorded = try self.substitutionFromCheckedTypes(substitution.view, substitution.tys);
+        const alias = substitution.alias orelse return recorded;
+        return try self.substitutionThroughAlias(alias, recorded);
+    }
+
+    /// Instantiate a substitution recorded in another body together in a
+    /// fresh context of its module.
+    fn carriedSubstitutionNodes(self: *BodyContext, substitution: CheckedTargetSubstitution) Allocator.Error!SpecSubstitution {
         var site_ctx = try BodyContext.initWithMethodScope(
             self.allocator,
             self.builder,
@@ -51640,7 +51817,78 @@ const BodyContext = struct {
             self.draft,
         );
         defer site_ctx.deinit();
-        try target_ctx.seedSubstitution(schema, try site_ctx.substitutionFromCheckedTypes(substitution.view, substitution.tys));
+        return try site_ctx.targetSubstitutionNodes(substitution);
+    }
+
+    /// The substitution of a target reached through an exact procedure alias.
+    /// `alias_subst` substitutes the alias scope's quantified variables. Each
+    /// alias's forwarded lookup recorded its own substitution over that scope,
+    /// so instantiating it in the scope seeded with `alias_subst` composes the
+    /// two exactly, alias by alias, up to the procedure the chain reaches.
+    fn substitutionThroughAlias(self: *BodyContext, target_alias: TargetAlias, alias_subst: SpecSubstitution) Allocator.Error!SpecSubstitution {
+        const Step = union(enum) {
+            callable_eval: Builder.CallableEvalUse,
+            local: struct { view: ModuleView, lookup: checked.CheckedExprId, dispatch_scope: ?checked.DispatchScopeId },
+        };
+        var step: Step = switch (target_alias.alias) {
+            .top_level => |binding| .{ .callable_eval = self.builder.callableEvalForAliasBinding(target_alias.view, binding) },
+            .local => |local| .{ .local = .{ .view = target_alias.view, .lookup = local.lookup, .dispatch_scope = local.dispatch_scope } },
+        };
+        var subst = alias_subst;
+        while (true) {
+            const view, const lookup, const owner_template, const schema = switch (step) {
+                .callable_eval => |use| blk: {
+                    const template = use.view.callable_eval_templates.templates[@backingInt(use.template)];
+                    const wrapper = use.view.entry_wrappers.lookupByRoot(template.root) orelse
+                        Common.invariant("callable eval template root had no checked entry wrapper");
+                    break :blk .{
+                        use.view,
+                        template.forwarded_lookup orelse
+                            Common.invariant("method target alias binding was not an exact procedure alias"),
+                        wrapper.template,
+                        templateSchemaIn(use.view, &use.view.templates.get(wrapper.template.template)),
+                    };
+                },
+                .local => |local| .{
+                    local.view,
+                    local.lookup,
+                    self.owner_template,
+                    self.scopeSchema(local.view, local.dispatch_scope),
+                },
+            };
+            var alias_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, view, self.method_scope, owner_template, self.graph, self.draft);
+            defer alias_ctx.deinit();
+            if (subst.len != schema.scheme_vars.len) {
+                Common.invariant("procedure alias substitution length differed from its scope's quantified variables");
+            }
+            try alias_ctx.seedSubstitution(schema, subst);
+            const next = try alias_ctx.recordedSiteSubstitution(view, lookup, try alias_ctx.useSiteSchema(lookup)) orelse
+                Common.invariant("procedure alias lookup had no checked substitution");
+            const ref_id = view.resolved_refs.lookupIdByCheckedExpr(lookup) orelse
+                Common.invariant("forwarded procedure alias lookup had no resolved value");
+            step = switch (view.resolved_refs.records[@backingInt(ref_id)].ref) {
+                .local_proc => |local| if (local.is_alias)
+                    .{ .local = .{ .view = view, .lookup = local.expr, .dispatch_scope = local.dispatch_scope } }
+                else
+                    return next,
+                .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |proc| .{
+                    .callable_eval = self.builder.forwardingCallableEvalForProcedureUse(proc) orelse return next,
+                },
+                .platform_required_proc => |required| .{
+                    .callable_eval = self.builder.forwardingCallableEvalForProcedureUse(required.procedure) orelse return next,
+                },
+                .local_param, .local_value, .local_mutable_version, .pattern_binder, .top_level_const, .imported_const, .selected_hoisted_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => Common.invariant("forwarded procedure alias lookup did not name a procedure"),
+            };
+            subst = next;
+        }
+    }
+
+    fn methodTargetSchema(self: *BodyContext, lookup: MethodLookup) SchemeRequirements {
+        return switch (lookup.target.kind) {
+            .procedure => |procedure| templateSchemaIn(lookup.view, &lookup.view.templates.get(procedure.template.template)),
+            .local_proc => |local| self.scopeSchema(lookup.view, local.dispatch_scope),
+            .structural => Common.invariant("structural method registry result has no quantified scheme"),
+        };
     }
 
     /// The requirement contract a checked iterator dispatch call recorded for
@@ -51697,13 +51945,7 @@ const BodyContext = struct {
     fn evidenceResolution(self: *BodyContext, plan: static_dispatch.StaticDispatchCallPlan) ?EvidenceResolved {
         switch (plan.resolution) {
             .direct_closed, .direct_parametric => |direct| {
-                const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
-                var lookup = self.methodLookupForResolvedTarget(node.target);
-                lookup.instantiation = switch (node.instantiation) {
-                    .monomorphic => null,
-                    .callable, .derived_from_callable => |callable_ty| .{ .view = self.view, .callable_ty = callable_ty },
-                };
-                return .{ .target = lookup };
+                return .{ .target = self.methodLookupForEvidenceNode(self.view.static_dispatch_plans.evidenceNode(direct.evidence)) };
             },
             .evidence_dependent => |dependent| {
                 const entry = self.evidence.at(dependent.index) orelse
@@ -51717,10 +51959,7 @@ const BodyContext = struct {
                                 null
                             else
                                 target.instantiation,
-                            .substitution = if (dependent.independent_callable and selectCallableContract(entry, dependent.callable_contract) == null)
-                                null
-                            else
-                                target.substitution,
+                            .substitution = dependentCallableSubstitution(dependent, entry, target.substitution),
                             .local_proc_context = target.local_proc_context,
                         },
                     },
@@ -51874,6 +52113,19 @@ const BodyContext = struct {
         };
     }
 
+    /// The target a checked evidence node of this module selected, with the
+    /// callable instantiation and substitution checking recorded at the edge
+    /// that selected it.
+    fn methodLookupForEvidenceNode(self: *BodyContext, node: static_dispatch.EvidenceNode) MethodLookup {
+        var lookup = self.methodLookupForResolvedTarget(node.target);
+        lookup.instantiation = switch (node.instantiation) {
+            .monomorphic => null,
+            .callable, .alias, .derived_from_callable => |callable_ty| .{ .view = self.view, .callable_ty = callable_ty },
+        };
+        if (checkedTargetSubstitution(self.view, lookup.view, node)) |substitution| lookup.substitution = .{ .own_body = substitution };
+        return lookup;
+    }
+
     fn methodLookupForResolvedTarget(
         self: *BodyContext,
         target: static_dispatch.MethodTarget,
@@ -51956,7 +52208,7 @@ const BodyContext = struct {
         plan_ctx: *BodyContext,
         plan_callable_ty: checked.CheckedTypeId,
     ) Allocator.Error!NodeId {
-        var target_ctx = try self.methodTargetContext(lookup);
+        var target_ctx = try self.substitutedMethodTargetContext(lookup);
         defer target_ctx.deinit();
         const target_node = try target_ctx.instantiateTargetFromPlanNode(
             lookup.target.callable_ty,
@@ -52455,9 +52707,8 @@ const BodyContext = struct {
             .procedure => |procedure| blk: {
                 const template = lookup.view.templates.get(procedure.template.template);
                 const schema = templateSchemaIn(lookup.view, &template);
-                var target_ctx = try self.methodTargetContext(lookup);
+                var target_ctx = try self.substitutedMethodTargetContext(lookup);
                 defer target_ctx.deinit();
-                if (lookup.substitution) |substitution| try self.seedCheckedTargetSubstitution(&target_ctx, schema, substitution);
                 const target_root_node = try target_ctx.instNode(template.checked_fn_root);
                 try self.relateEvidenceTargetRootToRequest(lookup.view, template.checked_fn_root, target_root_node, request_fn_node);
                 const edge = try self.deriveTargetEdge(&target_ctx, schema, evidence_source);
@@ -52475,9 +52726,8 @@ const BodyContext = struct {
             },
             .local_proc => |local| blk: {
                 const schema = self.scopeSchema(lookup.view, local.dispatch_scope);
-                var target_ctx = try self.methodTargetContext(lookup);
+                var target_ctx = try self.substitutedMethodTargetContext(lookup);
                 defer target_ctx.deinit();
-                if (lookup.substitution) |substitution| try self.seedCheckedTargetSubstitution(&target_ctx, schema, substitution);
                 const target_root_node = try target_ctx.instNode(source_fn_ty);
                 try self.relateEvidenceTargetRootToRequest(lookup.view, source_fn_ty, target_root_node, request_fn_node);
                 const edge = try self.deriveTargetEdge(&target_ctx, schema, evidence_source);
@@ -56057,7 +56307,8 @@ const BodyContext = struct {
         );
         defer contract_ctx.deinit();
         contract_ctx.evidence = self.evidence;
-        contract_ctx.instantiation.closed_types = .{ .leaves = try self.graph.newLeafScope() };
+        const scope = try self.graph.newLeafScope();
+        contract_ctx.instantiation.closed_types = .{ .leaves = scope };
         const body_shape_node = try self.bindCodecContractBoundary(
             &contract_ctx,
             derivation,
@@ -56087,6 +56338,7 @@ const BodyContext = struct {
         }
         const instantiated_calls = self.instantiated_codec_calls.items[calls_start..];
         try self.readCodecContractRegion(checked_view, boundary.shape_node, body_shape_node, instantiated_calls);
+        if (@import("builtin").mode == .debug) try self.graph.debugAssertLeafScopeJoined(scope);
         const method_call_slots = try self.codecMethodCallSlots(instantiated_calls);
         // An instantiation that consulted no enclosing evidence is determined
         // by its boundary classes alone, so later uses of this contract at
@@ -62117,13 +62369,7 @@ const BodyContext = struct {
     fn iteratorMethodLookup(self: *BodyContext, plan: static_dispatch.IteratorDispatchCall) MethodLookup {
         return switch (plan.resolution) {
             .direct_closed, .direct_parametric => |direct| blk: {
-                const node = self.view.static_dispatch_plans.evidenceNode(direct.evidence);
-                var lookup = self.methodLookupForResolvedTarget(node.target);
-                lookup.instantiation = switch (node.instantiation) {
-                    .monomorphic => null,
-                    .callable, .derived_from_callable => |callable_ty| .{ .view = self.view, .callable_ty = callable_ty },
-                };
-                break :blk lookup;
+                break :blk self.methodLookupForEvidenceNode(self.view.static_dispatch_plans.evidenceNode(direct.evidence));
             },
             .evidence_dependent => |dependent| if (self.evidence.at(dependent.index)) |entry| switch (selectCallableContract(entry, dependent.callable_contract) orelse entry) {
                 .target => |target| .{
@@ -62137,10 +62383,7 @@ const BodyContext = struct {
                         null
                     else
                         target.instantiation,
-                    .substitution = if (dependent.independent_callable and selectCallableContract(entry, dependent.callable_contract) == null)
-                        null
-                    else
-                        target.substitution,
+                    .substitution = dependentCallableSubstitution(dependent, entry, target.substitution),
                     .local_proc_context = target.local_proc_context,
                 },
                 .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => Common.invariant("iterator dispatch evidence was not a resolved callable target"),
@@ -65029,7 +65272,7 @@ test "draft specialization lookup preserves family evidence and request identity
 
 test "draft specialization candidates retain insertion order across overflow growth and allocation failure" {
     const Scenario = struct {
-        fn run(allocator: Allocator) (Allocator.Error || error{TestUnexpectedResult})!void {
+        fn run(allocator: Allocator) (Allocator.Error || error{TestExpectedEqual})!void {
             var type_store = Type.Store.init(allocator);
             defer type_store.deinit();
             var name_store = names.NameStore.init(allocator);
@@ -65067,26 +65310,32 @@ test "draft specialization candidates retain insertion order across overflow gro
                         try lookup.add(other, raw_spec);
                         try lookup.add(other, std.math.maxInt(u32));
                     }
-                    try std.testing.expect(lookup.openPairs(prefix).len == 61);
+                    try std.testing.expectEqual(@as(usize, 61), lookup.openPairs(prefix).len);
                     var candidates = lookup.get(address).?;
-                    try std.testing.expect(candidates.next().? == std.math.maxInt(u32));
-                    for (0..20) |i| try std.testing.expect(candidates.next().? == i);
-                    try std.testing.expect(candidates.next() == null);
+                    try std.testing.expectEqual(@as(?u32, std.math.maxInt(u32)), candidates.next());
+                    for (0..20) |i| try std.testing.expectEqual(@as(?u32, @intCast(i)), candidates.next());
+                    try std.testing.expectEqual(@as(?u32, null), candidates.next());
                     for (0..20) |i| {
                         var other = lookup.get(.{ .open = .{
                             .prefix = prefix,
                             .node = other_nodes[i],
                         } }).?;
-                        try std.testing.expect(other.next().? == i);
-                        try std.testing.expect(other.next().? == std.math.maxInt(u32));
-                        try std.testing.expect(other.next() == null);
+                        try std.testing.expectEqual(@as(?u32, @intCast(i)), other.next());
+                        try std.testing.expectEqual(@as(?u32, std.math.maxInt(u32)), other.next());
+                        try std.testing.expectEqual(@as(?u32, null), other.next());
                     }
                 }
             }
         }
     };
     try Scenario.run(std.testing.allocator);
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, Scenario.run, .{});
+    // In-place growth depends on the testing allocator's heap state, which
+    // carries over between runs, so growth goes through fresh allocations.
+    var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
+    std.testing.checkAllAllocationFailures(deterministic.allocator(), Scenario.run, .{}) catch |err| {
+        std.debug.print("allocation-failure check failed: {t}\n", .{err});
+        return err;
+    };
 }
 
 test "draft specialization open lookup follows unions within its prefix" {

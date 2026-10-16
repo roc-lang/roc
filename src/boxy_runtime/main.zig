@@ -241,7 +241,6 @@ comptime {
         "roc_boxy_list_set",
         "roc_boxy_list_swap",
         "roc_boxy_list_reverse",
-        "roc_boxy_list_sort_with",
         "roc_boxy_list_reserve",
         "roc_boxy_list_reserve_for_append",
         "roc_boxy_list_release_excess_capacity",

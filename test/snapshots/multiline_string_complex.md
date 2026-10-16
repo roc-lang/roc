@@ -54,11 +54,38 @@ x = {
 }
 ~~~
 # EXPECTED
+EXPECTED PACKAGE PATH - multiline_string_complex.md:4:6:4:17
 TYPE MISMATCH - multiline_string_complex.md:40:6:40:8
 TYPE NOT DETERMINED - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
 ~~~clojure
 (reports
+	(report
+		(severity runtime_error)
+		(title "Expected Package Path")
+		(region (start 4 6) (end 4 17))
+		(headline
+			(reflow "I was parsing a dependency entry, and I expected a string path."))
+		(document
+			(reflow "Normal package dependencies use a string path after the colon. Use ")
+			(annotated code "platform \"...\"")
+			(reflow " only for the single platform entry.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "json: \"../json/main.roc\"")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "\\\\Multiline")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "multiline_string_complex.md") (start 4 6) (end 4 17) (annotation error) (line-text "\t\tx: \\\\Multiline"))))
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
@@ -238,7 +265,7 @@ NO CHANGE
 				(p-assign (ident "#interp_0"))
 				(e-lookup-local
 					(p-assign (ident "value1"))))
-			(e-interpolation (constraint-fn-var 290) (dispatcher-var 15)
+			(e-interpolation (constraint-fn-var 292) (dispatcher-var 15)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
@@ -254,7 +281,7 @@ With multiple lines
 				(p-assign (ident "#interp_1"))
 				(e-lookup-local
 					(p-assign (ident "value2"))))
-			(e-interpolation (constraint-fn-var 304) (dispatcher-var 25)
+			(e-interpolation (constraint-fn-var 306) (dispatcher-var 25)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
@@ -287,8 +314,8 @@ With multiple lines
 						(e-num (value "0"))
 						(e-string)))
 				(field (name "e")
-					(e-call (constraint-fn-var 370)
-						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18231") (target-def "18231"))
+					(e-call (constraint-fn-var 372)
+						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18250") (target-def "18250"))
 						(e-runtime-error (tag "erroneous_value_expr")))))))
 	(d-let
 		(p-assign (ident "x"))

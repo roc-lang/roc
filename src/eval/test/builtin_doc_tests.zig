@@ -2,8 +2,8 @@
 //!
 //! For each block:
 //!   * It must pass `roc check` (driven by `parseAndCheckProgramForProblems`).
-//!   * If the block contains only top-level `expect` statements, those expects
-//!     are executed through checked-artifact compile-time evaluation.
+//!   * If the block contains top-level `expect` statements, those expects are
+//!     lowered as test roots and run by the dev backend, as `roc test` runs them.
 //!   * Otherwise, the block is evaluated through `compileInspectedProgram`.
 //!
 //! When a block fails, the source is written to a debug file under
@@ -570,17 +570,76 @@ fn runCheck(
     return null;
 }
 
-/// Run an expect-only block through checked-artifact compile-time evaluation.
-/// This matches the path used by `roc test` for top-level expects.
+/// Run a block's top-level expects the way `roc test` runs them, and return
+/// null when every one passes, or an owned message naming each that failed.
 fn runExpects(allocator: Allocator, source: []const u8) BuiltinDocTestError!?[]u8 {
-    const outcome = test_helpers.publishProgramForComptimeProblems(allocator, .module, source, &.{}, prePublishedBuiltin()) catch |err| {
-        return try dupeErr(allocator, "publishProgramForComptimeProblems: {s}", .{@errorName(err)});
+    var run = test_helpers.devEvalTopLevelExpects(allocator, source, &.{}, prePublishedBuiltin()) catch |err| {
+        return try dupeErr(allocator, "devEvalTopLevelExpects: {s}", .{@errorName(err)});
     };
+    defer run.deinit(allocator);
 
-    return switch (outcome) {
-        .no_problems => null,
-        .comptime_problems => try dupeErr(allocator, "at least one expect failed", .{}),
-    };
+    var message = std.ArrayList(u8).empty;
+    defer message.deinit(allocator);
+    for (run.batch.results, run.regions) |result, region| {
+        const failure: []const u8 = switch (result.outcome) {
+            .passed => |passed| if (passed) continue else "evaluated to False",
+            .crashed => |crash| crash,
+            .expect_err => |failure| failure.message,
+            .checked_error => "reached code that failed type checking",
+        };
+        if (message.items.len != 0) try message.appendSlice(allocator, "; ");
+        try message.print(allocator, "`{s}`: {s}", .{ source[region.start.offset..region.end.offset], failure });
+    }
+    var inline_failures: u64 = 0;
+    for (run.batch.expect_counts) |counts| inline_failures += counts.failed;
+    if (inline_failures != 0) {
+        if (message.items.len != 0) try message.appendSlice(allocator, "; ");
+        try message.print(allocator, "inline expects failed {d} time(s)", .{inline_failures});
+    }
+
+    if (message.items.len == 0) return null;
+    return try message.toOwnedSlice(allocator);
+}
+
+test "runExpects passes a true top-level expect" {
+    const allocator = std.testing.allocator;
+    const result = try runExpects(allocator, "expect \"ab\".concat(\"cd\") == \"abcd\"\n");
+    defer if (result) |msg| allocator.free(msg);
+    try testing.expectEqual(@as(?[]u8, null), result);
+}
+
+test "runExpects reports a false top-level expect" {
+    const allocator = std.testing.allocator;
+    const result = try runExpects(allocator, "expect \"ab\".concat(\"cd\") == \"abXd\"\n");
+    defer if (result) |msg| allocator.free(msg);
+    try testing.expect(result != null);
+}
+
+test "runExpects reports only the false expect of a block" {
+    const allocator = std.testing.allocator;
+    const result = try runExpects(allocator,
+        \\expect 1 + 1 == 2
+        \\
+        \\expect 2 + 2 == 5
+        \\
+    );
+    defer if (result) |msg| allocator.free(msg);
+    try testing.expectEqualStrings("`expect 2 + 2 == 5`: evaluated to False", result orelse return error.TestUnexpectedResult);
+}
+
+test "runExpects reports a false inline expect a top-level expect reaches" {
+    const allocator = std.testing.allocator;
+    const result = try runExpects(allocator,
+        \\checked = |n| {
+        \\    expect n > 10
+        \\    n
+        \\}
+        \\
+        \\expect checked(3) == 3
+        \\
+    );
+    defer if (result) |msg| allocator.free(msg);
+    try testing.expect(result != null);
 }
 
 fn runEval(

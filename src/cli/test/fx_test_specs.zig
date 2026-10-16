@@ -37,6 +37,33 @@ pub const host_boxed_fn_boundary_test = TestSpec{
     .description = "Regression test: Boxed erased callables across the host boundary in both directions",
 };
 
+/// Repro for https://github.com/roc-lang/roc/issues/12266: a stream whose
+/// state owns a host box is released at the loop exit whether the `for!` loop
+/// runs to the end or is left with `break`, for both a named and an inline
+/// stream, on every backend.
+pub const loop_break_release_test = TestSpec{
+    .roc_file = "test/fx/loop_break_release.roc",
+    .io_spec = "1>named, runs to the end: released|1>named, break at 3: released|1>inline, runs to the end: released|1>inline, break at 3: released",
+    .description = "Regression test: a stream left with break is released at the loop exit (issue #12266)",
+};
+
+/// A value one successor of a branch never reads is released where that
+/// successor begins: an `if` arm, the exit of a `for` over a list, and the
+/// exit of a `while` whose body held the last use.
+pub const branch_entry_release_test = TestSpec{
+    .roc_file = "test/fx/branch_entry_release.roc",
+    .io_spec = "1>if arm: released|1>list loop: released|1>while body: released",
+    .description = "Regression test: a value a branch never reads is released at the branch entry",
+};
+
+/// Repro for https://github.com/roc-lang/roc/issues/12196: a list literal and
+/// `List.with_capacity` built on cold paths in different functions.
+pub const issue_12196_cold_list_builds_test = TestSpec{
+    .roc_file = "test/fx/issue_12196_cold_list_builds.roc",
+    .io_spec = "0<abcde|1>2 0",
+    .description = "Regression test: cold-path list literal and List.with_capacity share a builtin",
+};
+
 /// All fx platform tests that can be run with --test mode IO specs.
 /// These tests work with cross-compilation because they only test
 /// the compiled binary's IO behavior, not build-time features.

@@ -6019,6 +6019,8 @@ const Lowerer = struct {
         result_ty: Type.TypeId,
         scrutinee: Lifted.ExprId,
         next: LIR.CFStmtId,
+        /// Some branch falls through to the value join, so the join exists.
+        joined: bool = false,
         scrutinee_ty: Type.TypeId = undefined,
         scrutinee_local: LIR.LocalId = undefined,
         done: LIR.JoinPointId = undefined,
@@ -6034,6 +6036,8 @@ const Lowerer = struct {
         branches: Lifted.Span(Lifted.IfBranch),
         final_else: Lifted.ExprId,
         next: LIR.CFStmtId,
+        /// Some branch falls through to the value join, so the join exists.
+        joined: bool = false,
         done: LIR.JoinPointId = undefined,
         current: LIR.CFStmtId = undefined,
         body: LIR.CFStmtId = undefined,
@@ -6198,6 +6202,127 @@ const Lowerer = struct {
             .next = jump,
         } }, where.glue());
         return exprTask(where, branch_value, body, result_ty, initialize);
+    }
+
+    /// Lowers one branch of an `if`/`match` whose result goes to `target`.
+    /// A branch that falls through jumps to the value join `done`, which
+    /// exists exactly when `joined`. A branch that transfers control away
+    /// never reaches a continuation, so it is lowered straight into `target`
+    /// with the consumer `next` as its unreachable continuation: it gets no
+    /// edge into the join and no branch-local write.
+    fn valueBranchTask(
+        self: *Lowerer,
+        where: LowerSite,
+        target: LIR.LocalId,
+        body: Lifted.ExprId,
+        result_ty: Type.TypeId,
+        joined: bool,
+        done: LIR.JoinPointId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LowerTask {
+        if (try self.exprDiverges(body)) return exprTask(where, target, body, result_ty, next);
+        if (!joined) Common.invariant("a value join branch fell through to a join its lowering did not declare");
+        return try self.valueJoinBranchTask(where, target, body, result_ty, try self.joinJump(where, done));
+    }
+
+    /// True when `root` never hands a value to its consumer: every path
+    /// through it ends in a control transfer (a jump to a join point, a loop
+    /// `break` or `continue`, an early return, a crash) or in a block whose
+    /// statement chain Monotype's termination relation stopped. Only
+    /// Monotype's explicit control forms decide this; every other form
+    /// produces a value. The walk follows the control skeleton (block tails,
+    /// `let` rests, branch bodies, join point bodies and remainders) and
+    /// nothing else, on an explicit stack.
+    fn exprDiverges(self: *Lowerer, root: Lifted.ExprId) Common.LowerError!bool {
+        const allocator = self.allocator;
+        var pending: std.ArrayList(Lifted.ExprId) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, root);
+        while (pending.pop()) |expr_id| {
+            switch (self.solved.lifted.getExpr(expr_id).data) {
+                .jump,
+                .return_,
+                .break_,
+                .continue_,
+                .crash,
+                .checked_error,
+                .expect_err,
+                .literal_rejected,
+                .comptime_exhaustiveness_failed,
+                .@"unreachable",
+                => {},
+                .block => |block| try pending.append(allocator, block.final_expr),
+                .let_ => |let_| try pending.append(allocator, let_.rest),
+                .if_ => |if_| {
+                    try pending.append(allocator, if_.final_else);
+                    const branches = self.solved.lifted.ifBranchSpan(if_.branches);
+                    for (0..GuardedList.borrowLen(branches)) |index| {
+                        try pending.append(allocator, GuardedList.at(branches, index).body);
+                    }
+                },
+                .match_ => |match_| {
+                    const branches = self.solved.lifted.branchSpan(match_.branches);
+                    for (0..GuardedList.borrowLen(branches)) |index| {
+                        try pending.append(allocator, GuardedList.at(branches, index).body);
+                    }
+                },
+                .join_point => |join_point| {
+                    try pending.append(allocator, join_point.body);
+                    try pending.append(allocator, join_point.remainder);
+                },
+                .comptime_branch_taken => |taken| try pending.append(allocator, taken.body),
+                .if_initialized_payload => |payload_switch| {
+                    try pending.append(allocator, payload_switch.initialized);
+                    try pending.append(allocator, payload_switch.uninitialized);
+                },
+                // An inline `Err` construction is the sequence's value on
+                // the error path; only a shared error continuation jumps.
+                .try_sequence => |sequence| {
+                    if (sequence.err_target == null) return false;
+                    try pending.append(allocator, sequence.ok_body);
+                },
+                .try_record_sequence => |sequence| {
+                    if (sequence.err_target == null) return false;
+                    try pending.append(allocator, sequence.ok_body);
+                },
+                .local,
+                .unit,
+                .int_lit,
+                .frac_f32_lit,
+                .frac_f64_lit,
+                .dec_lit,
+                .str_lit,
+                .bytes_lit,
+                .static_data_candidate,
+                .comptime_value,
+                .typed_boundary,
+                .row_widen,
+                .list,
+                .tuple,
+                .record,
+                .record_update,
+                .tag,
+                .nominal,
+                .lambda,
+                .def_ref,
+                .fn_def,
+                .fn_ref,
+                .call_value,
+                .call_proc,
+                .low_level,
+                .field_access,
+                .tuple_access,
+                .structural_eq,
+                .structural_hash,
+                .uninitialized,
+                .uninitialized_payload,
+                .loop_,
+                .dbg,
+                .expect,
+                => return false,
+            }
+        }
+        return true;
     }
 
     fn lowerExprIntoAtType(
@@ -8232,27 +8357,39 @@ const Lowerer = struct {
         comptime_site: ?Lifted.ComptimeSiteId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LowerStep {
-        // When the in-place `List.map` branch is statically impossible—the
-        // optimization is disabled or the element layouts are not
-        // interchangeable—lower only the branch a constant-0
-        // `list_map_can_reuse` selects, so the in-place machinery never reaches
-        // LIR. Each fold is recorded as explicit data; the debug Lambda Mono
-        // materializer replays the recorded resolutions instead of recomputing
-        // them (it runs before layout selection and has no layout store), so
-        // the two derivations demand the same set of functions.
-        if (self.solved.lifted.listMapCanReuseMatch(scrutinee, branches_span)) |folded| {
-            const args = self.solved.lifted.exprSpan(folded.call_args);
-            const interchangeable = try self.listMapLayoutsInterchangeable(args, null);
-            // Reuse possible on at least one width keeps the match, so each
-            // backend can decide per the width it is building.
-            if (!interchangeable.get(.u32) and !interchangeable.get(.u64)) {
-                if (builtin.mode == .debug) {
-                    try self.folded_map_matches.append(self.allocator, .{
-                        .scrutinee = scrutinee,
-                        .body = folded.zero_branch_body,
-                    });
+        // A match on a layout-resolved low-level (`list_map_can_reuse`,
+        // `list_item_size_at_most`) whose answer is known here keeps only the
+        // branch that answer selects, so the other branch never reaches LIR
+        // and its functions are never demanded. Each fold is recorded as
+        // explicit data; the debug Lambda Mono materializer replays the
+        // recorded resolutions instead of recomputing them (it runs before
+        // layout selection and has no layout store), so the two derivations
+        // demand the same set of functions.
+        if (self.solved.lifted.layoutResolvedMatch(scrutinee, branches_span)) |site| {
+            const args = self.solved.lifted.exprSpan(site.call_args);
+            const answer: ?u8 = switch (site.op) {
+                .list_map_can_reuse => blk: {
+                    // Reuse possible on at least one width keeps the match, so
+                    // each backend can decide per the width it is building.
+                    const interchangeable = try self.listMapLayoutsInterchangeable(args, null);
+                    break :blk if (!interchangeable.get(.u32) and !interchangeable.get(.u64)) 0 else null;
+                },
+                .list_item_size_at_most => blk: {
+                    const answers = (try self.listItemSizeAtMost(args)) orelse break :blk null;
+                    break :blk if (answers.get(.u32) == answers.get(.u64)) @intFromBool(answers.get(.u64)) else null;
+                },
+            };
+            if (answer) |value| {
+                if (self.solved.lifted.branchForAnswer(branches_span, value)) |body| {
+                    if (builtin.mode == .debug) {
+                        try self.folded_map_matches.append(self.allocator, .{
+                            .scrutinee = scrutinee,
+                            .body = body,
+                            .answer = value,
+                        });
+                    }
+                    return .{ .tail = exprTask(where, target, body, result_ty, next) };
                 }
-                return .{ .tail = exprTask(where, target, folded.zero_branch_body, result_ty, next) };
             }
         }
         self.noteErasedOwnerAmbiguous(target);
@@ -8261,6 +8398,12 @@ const Lowerer = struct {
         const branches = try GuardedList.dupe(self.allocator, Lifted.Branch, self.solved.lifted.branchSpan(branches_span));
         defer self.allocator.free(branches);
         const done = self.freshJoinPointId();
+        var joined = false;
+        for (branches) |branch| {
+            if (try self.exprDiverges(branch.body)) continue;
+            joined = true;
+            break;
+        }
 
         // Lower the match through the shared decision-tree compiler
         // (src/postcheck/match_tree.zig): one multiway test per tested
@@ -8305,6 +8448,7 @@ const Lowerer = struct {
             .result_ty = result_ty,
             .scrutinee = scrutinee,
             .next = next,
+            .joined = joined,
             .scrutinee_ty = scrutinee_ty,
             .scrutinee_local = scrutinee_local,
             .done = done,
@@ -8318,7 +8462,7 @@ const Lowerer = struct {
             // Emitting the decision tree; `input` answers its request.
             0 => switch (try task.emitter.advance(input)) {
                 .request => |request| switch (request) {
-                    .body => |body| return .{ .call = try self.valueJoinBranchTask(task.where, task.target, body.body, task.result_ty, body.next) },
+                    .body => |body| return .{ .call = try self.valueBranchTask(task.where, task.target, body.body, task.result_ty, task.joined, body.done, task.next) },
                     .bindings => |bindings| {
                         const stmts = self.solved.lifted.stmtSpan(bindings.bindings);
                         const items = try self.allocator.alloc(ChainItem, stmts.len);
@@ -8337,12 +8481,15 @@ const Lowerer = struct {
                     return .{ .call = exprTask(task.where, task.scrutinee_local, task.scrutinee, task.scrutinee_ty, branch_chain) };
                 },
             },
-            else => return .{ .ret = try self.result.store.addCFStmt(.{ .join = .{
-                .id = task.done,
-                .params = try self.result.store.addLocalSpan(&[_]LIR.LocalId{task.target}),
-                .body = task.next,
-                .remainder = input.?,
-            } }, task.where.glue()) },
+            else => {
+                if (!task.joined) return .{ .ret = input.? };
+                return .{ .ret = try self.result.store.addCFStmt(.{ .join = .{
+                    .id = task.done,
+                    .params = try self.result.store.addLocalSpan(&[_]LIR.LocalId{task.target}),
+                    .body = task.next,
+                    .remainder = input.?,
+                } }, task.where.glue()) };
+            },
         }
     }
 
@@ -8351,9 +8498,15 @@ const Lowerer = struct {
             0 => {
                 self.noteErasedOwnerAmbiguous(task.target);
                 task.done = self.freshJoinPointId();
-                frame.index = self.solved.lifted.ifBranchSpan(task.branches).len;
+                const branches = self.solved.lifted.ifBranchSpan(task.branches);
+                task.joined = !(try self.exprDiverges(task.final_else));
+                var index: usize = 0;
+                while (!task.joined and index < GuardedList.borrowLen(branches)) : (index += 1) {
+                    task.joined = !(try self.exprDiverges(GuardedList.at(branches, index).body));
+                }
+                frame.index = GuardedList.borrowLen(branches);
                 frame.cursor = 1;
-                return .{ .call = try self.valueJoinBranchTask(task.where, task.target, task.final_else, task.result_ty, try self.joinJump(task.where, task.done)) };
+                return .{ .call = try self.valueBranchTask(task.where, task.target, task.final_else, task.result_ty, task.joined, task.done, task.next) };
             },
             // A lowered branch body; lower its condition before the switch.
             2 => {
@@ -8370,8 +8523,9 @@ const Lowerer = struct {
             frame.index -= 1;
             const branch = GuardedList.at(self.solved.lifted.ifBranchSpan(task.branches), frame.index);
             frame.cursor = 2;
-            return .{ .call = try self.valueJoinBranchTask(task.where, task.target, branch.body, task.result_ty, try self.joinJump(task.where, task.done)) };
+            return .{ .call = try self.valueBranchTask(task.where, task.target, branch.body, task.result_ty, task.joined, task.done, task.next) };
         }
+        if (!task.joined) return .{ .ret = task.current };
         return .{ .ret = try self.result.store.addCFStmt(.{ .join = .{
             .id = task.done,
             .params = try self.result.store.addLocalSpan(&[_]LIR.LocalId{task.target}),
@@ -9257,11 +9411,27 @@ const Lowerer = struct {
     fn reserveRecursiveLetSlot(self: *Lowerer, local: Lifted.LocalId, ty: Type.TypeId) Common.LowerError!RecursiveLetSlot {
         const binding = try self.bindRecursiveLocalForTyped(local, ty);
         const target_content = self.result.layouts.getLayout(self.result.store.getLocal(binding.slot).layout_idx);
-        if (target_content.tag != .box) Common.invariant("recursive Monotype let statement must bind a boxed runtime layout");
+        // A zero-sized value boxes to `box_of_zst`, which records no payload
+        // layout; the value's own layout is the payload its slot stores.
+        const payload_layout = switch (target_content.tag) {
+            .box => target_content.getIdx(),
+            .box_of_zst => try self.layoutOfType(ty),
+            .scalar,
+            .list,
+            .list_of_zst,
+            .struct_,
+            .closure,
+            .erased_callable,
+            .zst,
+            .tag_union,
+            .ptr,
+            .erased_box,
+            => Common.invariant("recursive Monotype let statement must bind a boxed runtime layout"),
+        };
         return .{
             .ty = ty,
             .binding = binding,
-            .payload_layout = target_content.getIdx(),
+            .payload_layout = payload_layout,
         };
     }
 
@@ -9672,6 +9842,18 @@ const Lowerer = struct {
             .op = op,
             .next = next,
         } }, origin);
+    }
+
+    /// Whether the list's item layout fits `list_item_size_at_most`'s bound,
+    /// per pointer width, when the bound is a literal at this site; null when
+    /// it is not, which leaves the operation to run at runtime.
+    fn listItemSizeAtMost(self: *Lowerer, args: anytype) Common.LowerError!?layout.WidthValues(bool) {
+        if (args.len != 2) Common.invariant("list_item_size_at_most reached LIR lowering with the wrong arity");
+        const bound_data = self.solved.lifted.getExpr(GuardedList.at(args, 1)).data;
+        if (bound_data != .int_lit) return null;
+        const bound: u128 = @intCast(bound_data.int_lit.toI128());
+        const list_layout_idx = try self.layoutOfType(try self.lowerExprTy(GuardedList.at(args, 0)));
+        return self.result.layouts.listItemSizeAtMost(list_layout_idx, bound);
     }
 
     /// Compile-time half of the `list_map_can_reuse` decision, computed for

@@ -5816,6 +5816,15 @@ fn appendCheckedNominalDeclarationFromStatement(
         store,
         nominal_payload,
     );
+    if (builtin.mode == .debug) {
+        // The declaration's formals are exactly the roots its backing was
+        // built over, so instantiating them substitutes into that backing.
+        const declared_args = store.payload(declaration_root).nominal.args;
+        std.debug.assert(declared_args.len == declaration_formals.len);
+        for (declared_args, declaration_formals) |declared_arg, formal| {
+            std.debug.assert(declared_arg == formal.root);
+        }
+    }
     try appendCheckedNominalDeclarationFromPayload(allocator, store, declaration_root, backing, declared_record_fields);
 }
 
@@ -6666,7 +6675,14 @@ fn appendNominalDeclarationRootPayload(
     const nominal = owned_payload.nominal;
 
     const key_info = try checkedTypePayloadKeyBuild(allocator, names, store, owned_payload);
-    if (store.rootForKey(key_info.key)) |existing| {
+    // A key names a type only up to a consistent renaming of its variables,
+    // so a generic declaration's key also names applications of the nominal
+    // to other variables of the same names (`A(s)` written inside another
+    // declaration's body, over that declaration's `s`). Only a key without
+    // variables identifies one type, so only such a key selects an existing
+    // root.
+    const existing_root = if (key_info.contains_identity_variables) null else store.rootForKey(key_info.key);
+    if (existing_root) |existing| {
         const index: usize = @backingInt(existing);
         if (index >= store.payloads.items.len) {
             checkedArtifactInvariant("nominal declaration root key referenced a missing payload", .{});
@@ -6675,9 +6691,9 @@ fn appendNominalDeclarationRootPayload(
             checkedArtifactInvariant("nominal declaration key collided with a non-nominal payload", .{});
         }
         const existing_nominal = store.payloads.items[index].nominal;
-        // The canonical key already includes the semantic formal-arg shapes.
-        // The checked root ids can differ when the same nominal declaration is
-        // reached through a declaration root and a use-site root.
+        // The checked root ids can differ when the same closed nominal
+        // declaration is reached through a declaration root and a use-site
+        // root.
         if (existing_nominal.name != nominal.name or
             existing_nominal.origin_module != nominal.origin_module or
             !CheckedModuleArtifactKey.eql(existing_nominal.owner_module, nominal.owner_module) or
@@ -18156,6 +18172,10 @@ fn publishLocalMethodDispatchScopes(
 ) void {
     for (method_registry.entries) |*entry| {
         const target = if (entry.target) |*target| target else continue;
+        if (target.alias) |*alias| switch (alias.*) {
+            .local => |*local| local.dispatch_scope = scope_by_checked_expr.get(local.lookup),
+            .top_level => {},
+        };
         if (target.kind != .local_proc) continue;
         const local = &target.kind.local_proc;
 
@@ -18477,9 +18497,12 @@ const EvidencePass = struct {
                 else
                     schema.params;
                 const template_params = self.evidence_params_pool.items[template.evidence_params.start..][0..template.evidence_params.len];
-                if (static_dispatch.procedureEvidenceSchema(template_params) == .from_callable) {
-                    // Only a callable-derived schema consults this; every other
-                    // schema already requires checked per-use evidence.
+                if (try self.schemeExtendsLabeledTagRow(scheme_var)) {
+                    template.callable_determines_scheme = false;
+                } else if (static_dispatch.procedureEvidenceSchema(template_params) == .from_callable) {
+                    // Only a callable-derived schema consults whether its
+                    // signature reaches every variable; every other schema
+                    // already requires checked per-use evidence.
                     const signature_vars = try self.identity_writer.identityVarsFromVarIgnoringConstraints(scheme_var);
                     defer self.allocator.free(signature_vars);
                     template.callable_determines_scheme = signature_vars.len == schema.vars.len;
@@ -18821,6 +18844,73 @@ const EvidencePass = struct {
         return .{ .start = start, .len = @intCast(identity_vars.len) };
     }
 
+    /// Whether a variable of the scheme at `scheme_var` extends a tag row that
+    /// has labels of its own (`[Closed, ..errs]`). Such a row normalizes to
+    /// the same row whether the variable holds those labels or not, so a
+    /// dispatch's normalized callable does not determine the variable's
+    /// instantiation.
+    fn schemeExtendsLabeledTagRow(self: *EvidencePass, scheme_var: Var) Allocator.Error!bool {
+        var visited = std.AutoHashMap(Var, void).init(self.allocator);
+        defer visited.deinit();
+        var pending: std.ArrayList(Var) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, scheme_var);
+        while (pending.pop()) |raw| {
+            const resolved = self.types.resolveVar(raw);
+            if ((try visited.getOrPut(resolved.var_)).found_existing) continue;
+            switch (resolved.desc.content) {
+                .flex, .rigid, .field_presence, .err => {},
+                .alias => |alias| {
+                    try pending.append(self.allocator, self.types.getAliasBackingVar(alias));
+                    var args = self.types.iterAliasArgs(alias);
+                    while (args.next()) |arg| try pending.append(self.allocator, arg);
+                },
+                .structure => |flat| switch (flat) {
+                    .tag_union => |row| {
+                        const tags = self.types.getTagsSlice(row.tags);
+                        if (tags.len != 0 and self.tagRowTailIsVariable(row.ext)) return true;
+                        for (tags.items(.args)) |args| try pending.appendSlice(self.allocator, self.types.sliceVars(args));
+                        try pending.append(self.allocator, row.ext);
+                    },
+                    .record => |record| {
+                        try pending.append(self.allocator, record.ext);
+                        const fields = self.types.getRecordFieldsSlice(record.fields);
+                        for (fields.items(.presence)) |presence| try pending.append(self.allocator, presence.typeVar());
+                    },
+                    .tuple => |tuple| try pending.appendSlice(self.allocator, self.types.sliceVars(tuple.elems)),
+                    .nominal_type => |nominal| {
+                        var args = self.types.iterNominalArgs(nominal);
+                        while (args.next()) |arg| try pending.append(self.allocator, arg);
+                    },
+                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                        try pending.appendSlice(self.allocator, self.types.sliceVars(func.args));
+                        try pending.append(self.allocator, func.ret);
+                    },
+                    .empty_record, .empty_tag_union => {},
+                },
+            }
+        }
+        return false;
+    }
+
+    /// Whether a tag row's extension chain ends in a variable.
+    fn tagRowTailIsVariable(self: *EvidencePass, ext: Var) bool {
+        var tail = ext;
+        while (true) {
+            const content = self.types.resolveVar(tail).desc.content;
+            switch (content) {
+                .flex, .rigid => return true,
+                .alias => |alias| tail = self.types.getAliasBackingVar(alias),
+                .structure => |flat| switch (flat) {
+                    .tag_union => |row| tail = row.ext,
+                    .empty_tag_union => return false,
+                    .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => checkedArtifactInvariant("tag row extension was not a row", .{}),
+                },
+                .field_presence, .err => return false,
+            }
+        }
+    }
+
     fn isCallableBindingWrapper(self: *EvidencePass, template: CheckedProcedureTemplate) bool {
         return switch (template.body) {
             .entry_wrapper => |wrapper_id| blk: {
@@ -19150,7 +19240,7 @@ const EvidencePass = struct {
                             );
                         }
                         const instantiated_callable = switch (node.instantiation) {
-                            .callable, .derived_from_callable => |callable| callable,
+                            .callable, .alias, .derived_from_callable => |callable| callable,
                             .monomorphic => checkedArtifactInvariant(
                                 "checked generated codec callable evidence had no exact instantiation",
                                 .{},
@@ -19680,6 +19770,9 @@ const EvidencePass = struct {
         if (node.target.kind != .procedure) return;
         const expected_len = switch (node.instantiation) {
             .derived_from_callable => 0,
+            // The substitution covers the alias scope's variables, whose
+            // count Monotype checks against that scope when it composes.
+            .alias => return,
             .monomorphic, .callable => self.procedureEvidenceView(node.target).template.scheme_vars.len,
         };
         if (node.subst.len != expected_len) {
@@ -20360,19 +20453,30 @@ const EvidencePass = struct {
             .procedure => self.procedureEvidenceSchema(target),
             .local_proc, .structural => null,
         };
-        if (target.reached_through_alias) {
+        if (target.alias != null) {
             // The dispatch edge instantiated the alias's scheme, whose
-            // requirements are not the target's. The alias's instantiation
+            // requirements are not the target's. Its record substitutes the
+            // alias scope's variables, and the target's substitution composes
+            // through the alias's forwarded lookup. The alias's instantiation
             // fixes the target's callable, and the target's evidence follows
             // from that callable.
             const callable = callable_ty orelse
                 checkedArtifactInvariant("method target reached through an alias had no checked callable", .{});
+            const subst: artifact_serialize.Span = if (record_idx) |idx| blk: {
+                const module_env = self.module.moduleEnvConst();
+                const record = module_env.scheme_uses.items.items[idx];
+                break :blk try self.appendSiteSubstitution(
+                    @fromBackingInt(@intCast(record.scheme_root)),
+                    module_env.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len],
+                );
+            } else .{};
             return .{ .done = try self.internEvidenceNode(.{
                 .target = target,
                 .dispatcher_ty = dispatcher_ty,
                 .generated_codec_derivation = generated_codec_derivation,
-                .instantiation = .{ .derived_from_callable = callable },
+                .instantiation = .{ .alias = callable },
                 .nested = if (procedure_schema == .none) .{ .resolved = .{} } else .from_callable,
+                .subst = subst,
             }) };
         }
         if (record_idx) |idx| {
@@ -20397,7 +20501,7 @@ const EvidencePass = struct {
             if (self.node_by_record.get(idx)) |memoized| {
                 const existing = self.evidence_nodes.items[@backingInt(memoized)];
                 const callable_matches = switch (existing.instantiation) {
-                    .monomorphic, .derived_from_callable => false,
+                    .monomorphic, .alias, .derived_from_callable => false,
                     .callable => |existing_callable| existing_callable == callable_ty.?,
                 };
                 if (existing.dispatcher_ty != dispatcher_ty or
@@ -20706,7 +20810,7 @@ const EvidencePass = struct {
         return switch (evidence.resolution) {
             .direct => |id| switch (self.evidence_nodes.items[@backingInt(id)].target.kind) {
                 .procedure => switch (self.procedureEvidenceSchema(self.evidence_nodes.items[@backingInt(id)].target)) {
-                    .none => false,
+                    .none => !self.procedureEvidenceView(self.evidence_nodes.items[@backingInt(id)].target).template.callable_determines_scheme,
                     .from_callable => self.procedureHasCodecEvidenceParam(self.evidence_nodes.items[@backingInt(id)].target) or
                         !self.procedureEvidenceView(self.evidence_nodes.items[@backingInt(id)].target).template.callable_determines_scheme,
                     .from_target, .requires_record => true,
@@ -22168,12 +22272,14 @@ pub const CheckedProcedureTemplate = struct {
     /// specialization of this template is the template plus one monomorphic
     /// type per entry; every obligation's receiver is one of these entries.
     scheme_vars: artifact_serialize.Span = .{},
-    /// Whether the procedure's own signature reaches every quantified
-    /// variable of its scheme. A variable reached only through a dispatch
+    /// Whether a dispatch's callable fixes every quantified variable of the
+    /// procedure's scheme. A variable reached only through a dispatch
     /// constraint's callable (such as the error row of a forwarded method's
-    /// result) is fixed only by the selected targets' full evidence chain, so
-    /// an independent callable of such a target needs its own checked
-    /// instantiation instead of deriving one from its callable.
+    /// result) is fixed only by the selected targets' full evidence chain, and
+    /// a variable extending a tag row with labels of its own
+    /// (`[Closed, ..errs]`) is not fixed by the normalized row. An independent
+    /// callable of such a target needs its own checked instantiation instead
+    /// of deriving one from its callable.
     callable_determines_scheme: bool = true,
 };
 
@@ -32531,6 +32637,23 @@ pub const CheckedModuleArtifact = struct {
         );
     }
 
+    /// The identity of the program this artifact roots when it is an
+    /// executable root. A paired platform keeps its own module `key`, so the
+    /// app it was paired with is named only by `platform_app_relation`; this
+    /// identity covers both, and an unpaired root is named by its key alone.
+    pub fn executableIdentity(self: *const CheckedModuleArtifact) [32]u8 {
+        var hasher = base.Sha256.init(.{});
+        hasher.update("roc-executable-identity");
+        hasher.update(&self.key.bytes);
+        if (self.checking_context_identity.platform_app_relation) |relation| {
+            hasher.update(&[_]u8{1});
+            hasher.update(&relation.bytes);
+        } else {
+            hasher.update(&[_]u8{0});
+        }
+        return hasher.finalResult();
+    }
+
     /// A platform with declared app requirements is runtime-lowerable only
     /// after checking has published its exact app relation.
     pub fn hasUnboundPlatformRequirements(self: *const CheckedModuleArtifact) bool {
@@ -33527,7 +33650,7 @@ pub const CheckedModuleArtifact = struct {
                         }
                         const node_callable = switch (node.instantiation) {
                             .monomorphic => return .{ .kind = .generated_codec_call_evidence_invalid, .index = @intCast(i), .method = call.method },
-                            .callable, .derived_from_callable => |callable| callable,
+                            .callable, .alias, .derived_from_callable => |callable| callable,
                         };
                         if (@backingInt(node_callable) >= self.checked_types.payloadCount() or
                             !std.meta.eql(type_view.rootKey(node_dispatcher), type_view.rootKey(call.dispatcher_ty)) or
@@ -35823,6 +35946,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .diag_trailing_try_suffix,
             .diag_return_outside_fn,
             .diag_redundant_return,
+            .diag_unreachable_code,
             .diag_control_flow_in_expect,
             .diag_var_reassigned_in_expect,
             .diag_mutually_recursive_type_aliases,
@@ -38870,8 +38994,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x9E, 0x55, 0x2E, 0x47, 0x57, 0xE1, 0xD2, 0xCB, 0xBF, 0xEA, 0x61, 0x9B, 0xDA, 0x2A, 0x61, 0x89,
-        0x00, 0x8D, 0x67, 0x5C, 0x97, 0x0F, 0x44, 0x44, 0xE0, 0x26, 0x55, 0x4A, 0xBF, 0x8F, 0x18, 0x52,
+        0x29, 0xD3, 0xC9, 0x7C, 0x01, 0x03, 0x25, 0xB4, 0x28, 0xFA, 0xDB, 0xED, 0xB4, 0xEC, 0xF1, 0x01,
+        0x20, 0xEE, 0xE2, 0x3C, 0x00, 0x71, 0x64, 0xFC, 0x03, 0xC8, 0xEF, 0xC7, 0xB8, 0xED, 0x81, 0xA2,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

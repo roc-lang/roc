@@ -13,10 +13,26 @@ poly = || {
 rDsult = poly() == poly()
 ~~~
 # EXPECTED
+UNREACHABLE CODE - issue_11312_crash_non_str_message.md:3:2:3:5
 TYPE MISMATCH - issue_11312_crash_non_str_message.md:2:8:2:13
 # PROBLEMS
 ~~~clojure
 (reports
+	(report
+		(severity warning)
+		(title "Unreachable Code")
+		(region (start 3 2) (end 3 5))
+		(headline
+			(reflow "This code will never run, because the code before it always ends with a ")
+			(annotated code "return")
+			(reflow ", ")
+			(annotated code "crash")
+			(reflow ", or ")
+			(annotated code "break")
+			(reflow ", or loops forever."))
+		(document
+			(source-region (file "issue_11312_crash_non_str_message.md") (start 3 2) (end 3 5) (annotation error) (line-text "\t\"x\""))
+			(reflow "Remove this code, or change the code before it so that it can finish.")))
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
@@ -94,11 +110,11 @@ NO CHANGE
 		(p-assign (ident "rDsult"))
 		(e-method-eq (negated "false")
 			(lhs
-				(e-call (constraint-fn-var 235)
+				(e-call (constraint-fn-var 238)
 					(e-lookup-local
 						(p-assign (ident "poly")))))
 			(rhs
-				(e-call (constraint-fn-var 239)
+				(e-call (constraint-fn-var 242)
 					(e-lookup-local
 						(p-assign (ident "poly"))))))))
 ~~~

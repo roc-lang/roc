@@ -446,6 +446,11 @@ pub const Diagnostic = union(enum) {
     redundant_return: struct {
         region: Region,
     },
+    /// Code in a block that follows a statement which never finishes, so it
+    /// can never run.
+    unreachable_code: struct {
+        region: Region,
+    },
     return_outside_fn: struct {
         region: Region,
         context: ReturnContext,
@@ -587,6 +592,7 @@ pub const Diagnostic = union(enum) {
             .trailing_try_suffix => |d| d.region,
             .return_outside_fn => |d| d.region,
             .redundant_return => |d| d.region,
+            .unreachable_code => |d| d.region,
             .control_flow_in_expect => |d| d.region,
             .var_reassigned_in_expect => |d| d.region,
             .mutually_recursive_type_aliases => |d| d.region,

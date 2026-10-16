@@ -65,6 +65,40 @@ pub const DiscoveredExternalImport = struct {
 /// input type: the coordinator builds these once and the drain consumes them.
 pub const CanonicalizeImport = can.ImportResolution.ResolvedImport;
 
+/// A module source file that dependency discovery already read and parsed in
+/// full, handed to that module's parse task so each such file is read and
+/// parsed once per build.
+///
+/// Everything here is allocated with the allocator the coordinator's workers
+/// use for module environments, so the parse task takes ownership exactly as if
+/// it had produced these itself. The environment borrows its source, and its
+/// display module name borrows `path`, until the parse task takes them over.
+pub const DiscoveredParse = struct {
+    /// Absolute path the source was read from; the module's coordinator path.
+    path: []u8,
+    module_env: *ModuleEnv,
+    ast: *AST,
+    source_file_state: ?watch_inputs.State,
+
+    /// Free the parse, including the source it was read from.
+    pub fn deinit(self: DiscoveredParse) void {
+        const source = self.module_env.common.source;
+        const allocator = self.releaseKeepingSource();
+        if (source.len > 0) allocator.free(@constCast(source));
+    }
+
+    /// Free everything but the source, which the caller has taken over, and
+    /// return the allocator that owns it.
+    pub fn releaseKeepingSource(self: DiscoveredParse) Allocator {
+        const allocator = self.module_env.gpa;
+        self.ast.deinit();
+        self.module_env.deinit();
+        allocator.destroy(self.module_env);
+        allocator.free(self.path);
+        return allocator;
+    }
+};
+
 /// Task to parse a module source file
 pub const ParseTask = struct {
     /// Package this module belongs to
@@ -92,6 +126,9 @@ pub const ParseTask = struct {
     /// canonicalization input, so the parse task's cache probe keys on it.
     /// See `Can.ModuleInitContext.is_entry_module`.
     is_entry_module: bool,
+    /// This module's source as dependency discovery already parsed it, which
+    /// the task owns and uses in place of reading and parsing `path`.
+    discovered: ?DiscoveredParse = null,
 };
 
 /// Task to canonicalize a parsed module

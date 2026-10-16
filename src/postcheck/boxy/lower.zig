@@ -168,7 +168,9 @@ const ResolvedWorkerBody = union(enum) {
     generated_field_iterator: Plan.GeneratedFieldIteratorSource,
 };
 
-fn resolvedWorkerIsListMapCanReuseWrapper(resolved: ResolvedWorker) bool {
+/// The layout-resolved low-level a worker's body runs, when the worker is
+/// the Builtin wrapper of one.
+fn resolvedWorkerLayoutResolvedOp(resolved: ResolvedWorker) ?can.CIR.Expr.LowLevel.LayoutResolved {
     const body = switch (resolved.body) {
         .checked_expr => |root_expr| root_expr,
         .intrinsic,
@@ -177,24 +179,24 @@ fn resolvedWorkerIsListMapCanReuseWrapper(resolved: ResolvedWorker) bool {
         .const_crash,
         .generated_codec,
         .generated_field_iterator,
-        => return false,
+        => return null,
     };
-    return checkedExprIsListMapCanReuseWrapper(resolved.module, body);
+    return checkedExprLayoutResolvedOp(resolved.module, body);
 }
 
-fn checkedExprIsListMapCanReuseWrapper(
+fn checkedExprLayoutResolvedOp(
     module: Plan.ModuleView,
     root: checked.CheckedExprId,
-) bool {
+) ?can.CIR.Expr.LowLevel.LayoutResolved {
     var expr_id = root;
     while (true) return switch (module.checked_bodies.expr(expr_id).data) {
-        .run_low_level => |low_level| low_level.op == .list_map_can_reuse,
+        .run_low_level => |low_level| low_level.op.layoutResolved(),
         .lambda => |lambda| {
             expr_id = lambda.body;
             continue;
         },
         .block => |block| {
-            if (block.statements.len != 0) return false;
+            if (block.statements.len != 0) return null;
             expr_id = block.final_expr;
             continue;
         },
@@ -242,7 +244,7 @@ fn checkedExprIsListMapCanReuseWrapper(
         .row_coerce,
         .for_,
         .hosted_lambda,
-        => false,
+        => null,
     };
 }
 
@@ -20445,32 +20447,6 @@ const ProcBodyBuilder = struct {
             return try self.loweredExprsChain(args, lowered, continuation);
         }
 
-        // list_sort_with calls its comparator through a fixed ABI whose
-        // ordering result is the closed `[Before, Same, After]` in its host
-        // representation. A comparator whose representation differs crosses
-        // into that exact ABI representation before the call.
-        if (op == .list_sort_with) {
-            if (lowered.len != 2) boxyLowerInvariant("list_sort_with did not take a list and a comparator");
-            const boxed_comparator_rep = self.repForType(self.module.checked_bodies.expr(args[1]).ty);
-            const comparator_rep = self.repQuery().requiredSingleChild(boxed_comparator_rep, .box_payload).rep;
-            const abi_rep = self.parent.plan.sortComparatorAbiRep(comparator_rep);
-            if (!try self.parent.plan.repsStructurallyIdentical(self.parent.allocator, abi_rep, comparator_rep)) {
-                const abi_comparator = try self.addFrameBoundaryTargetLocalForRep(abi_rep);
-                const arg_locals = [_]LIR.LocalId{ lowered[0], abi_comparator };
-                var continuation = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
-                    .target = target,
-                    .op = op,
-                    .rc_effect = op.rcEffect(),
-                    .args = try self.parent.result.store.addLocalSpan(&arg_locals),
-                    .next = result_next,
-                } }, self.origin);
-                // A boxed callable is stored as the callable itself, so the
-                // boundary wraps the callable in an adapter for its ABI result.
-                continuation = try self.assignRepresentationBoundaryWithSourceMode(abi_comparator, lowered[1], abi_rep, comparator_rep, .move, continuation);
-                return try self.loweredExprsChain(args, lowered, continuation);
-            }
-        }
-
         // list_sublist's { start, len } argument has a fixed concrete ABI; a
         // generic caller supplies it erased, so adapt it out of its dynamic
         // box before the call.
@@ -27302,7 +27278,7 @@ const ProcBodyBuilder = struct {
     /// force before the match.
     fn stepMatch(self: *ProcBodyBuilder, task: anytype, stage: u32, input: ?LIR.CFStmtId) Allocator.Error!ExprStep {
         if (stage == 0) {
-            if (self.listMapCanReuseMatchBody(task.cond, task.branches)) |body| {
+            if (self.layoutResolvedMatchBody(task.cond, task.branches)) |body| {
                 return .{ .tail = .{ .expected = .{ .target = task.target, .expected_ty = task.match_ty, .expr_id = body, .next = task.next } } };
             }
             const cond_expr = self.module.checked_bodies.expr(task.cond);
@@ -27356,34 +27332,47 @@ const ProcBodyBuilder = struct {
         return exprDone(match_stmt);
     }
 
-    const ListMapCanReuseMatch = struct {
+    /// A match whose scrutinee is a layout-resolved low-level (see
+    /// `LowLevel.layoutResolved`) over guard-free, binding-free numeral and
+    /// wildcard branches.
+    const LayoutResolvedMatch = struct {
+        op: can.CIR.Expr.LowLevel.LayoutResolved,
         args: []const checked.CheckedExprId,
-        zero_branch_body: checked.CheckedExprId,
     };
 
-    /// When the explicit target configuration or committed representations
-    /// make list-buffer reuse impossible, lower only the arm selected by the
-    /// primitive's constant-zero result. This is the Boxy counterpart of
-    /// direct lowering's `listMapCanReuseMatch`: both consume the checked
-    /// low-level operation and the same exact layout-eligibility decision.
-    /// The result is the zero branch's body, or null when reuse stays possible.
-    fn listMapCanReuseMatchBody(
+    /// When committed representations decide a layout-resolved low-level's
+    /// answer, lower only the arm that answer selects. This is the Boxy
+    /// counterpart of direct lowering's `layoutResolvedMatch`: both consume
+    /// the checked low-level operation and the same exact layout decision.
+    /// The result is the selected branch's body, or null when the answer is
+    /// not decided here (reuse stays possible, or the pointer widths disagree).
+    fn layoutResolvedMatchBody(
         self: *ProcBodyBuilder,
         cond: checked.CheckedExprId,
         branches: []const checked.CheckedMatchBranch,
     ) ?checked.CheckedExprId {
-        const match = self.listMapCanReuseMatch(cond, branches) orelse return null;
-        const interchangeable = self.listMapLayoutsInterchangeable(match.args, null);
-        if (interchangeable.get(.u32) or interchangeable.get(.u64)) return null;
-        return match.zero_branch_body;
+        const match = self.layoutResolvedMatch(cond, branches) orelse return null;
+        const answer: u8 = switch (match.op) {
+            .list_map_can_reuse => blk: {
+                const interchangeable = self.listMapLayoutsInterchangeable(match.args, null);
+                if (interchangeable.get(.u32) or interchangeable.get(.u64)) return null;
+                break :blk 0;
+            },
+            .list_item_size_at_most => blk: {
+                const answers = self.listItemSizeAtMost(match.args) orelse return null;
+                if (answers.get(.u32) != answers.get(.u64)) return null;
+                break :blk @intFromBool(answers.get(.u64));
+            },
+        };
+        return self.layoutResolvedBranch(branches, answer);
     }
 
-    fn listMapCanReuseMatch(
+    fn layoutResolvedMatch(
         self: *ProcBodyBuilder,
         cond: checked.CheckedExprId,
         branches: []const checked.CheckedMatchBranch,
-    ) ?ListMapCanReuseMatch {
-        const args = self.listMapCanReuseArgs(cond) orelse return null;
+    ) ?LayoutResolvedMatch {
+        const match = self.layoutResolvedLowLevel(cond) orelse return null;
 
         for (branches) |branch| {
             if (branch.guard != null) return null;
@@ -27395,14 +27384,9 @@ const ProcBodyBuilder = struct {
             switch (pattern.data) {
                 .numeral_literal => |literal| {
                     if (literal.guard != null) return null;
-                    const magnitude = exact_numeral.intMagnitude(
-                        self.module.module_env.?.exactNumeral(literal.literal),
-                    ) orelse return null;
-                    if (magnitude == 0) {
-                        return .{ .args = args, .zero_branch_body = branch.value };
-                    }
+                    if (exact_numeral.intMagnitude(self.module.module_env.?.exactNumeral(literal.literal)) == null) return null;
                 },
-                .underscore => return .{ .args = args, .zero_branch_body = branch.value },
+                .underscore => {},
                 .pending,
                 .assign,
                 .as,
@@ -27417,16 +27401,50 @@ const ProcBodyBuilder = struct {
                 => return null,
             }
         }
+        return match;
+    }
+
+    /// The branch of a layout-resolved match that `answer` selects: the first
+    /// whose pattern is that numeral or a wildcard. Null when no branch
+    /// matches, which an exhaustive match never has.
+    fn layoutResolvedBranch(
+        self: *ProcBodyBuilder,
+        branches: []const checked.CheckedMatchBranch,
+        answer: u8,
+    ) ?checked.CheckedExprId {
+        for (branches) |branch| {
+            const patterns = branch.patternsSlice(self.module.checked_bodies);
+            const pattern = self.module.checked_bodies.pattern(patterns[0].pattern);
+            switch (pattern.data) {
+                .numeral_literal => |literal| {
+                    const magnitude = exact_numeral.intMagnitude(self.module.module_env.?.exactNumeral(literal.literal)) orelse unreachable;
+                    if (magnitude == answer) return branch.value;
+                },
+                .underscore => return branch.value,
+                .pending,
+                .assign,
+                .as,
+                .applied_tag,
+                .nominal,
+                .record_destructure,
+                .list,
+                .tuple,
+                .str_literal,
+                .str_interpolation,
+                .runtime_error,
+                => unreachable,
+            }
+        }
         return null;
     }
 
-    fn listMapCanReuseArgs(
+    fn layoutResolvedLowLevel(
         self: *ProcBodyBuilder,
         root: checked.CheckedExprId,
-    ) ?[]const checked.CheckedExprId {
+    ) ?LayoutResolvedMatch {
         var cond = root;
         while (true) return switch (self.module.checked_bodies.expr(cond).data) {
-            .run_low_level => |low_level| if (low_level.op == .list_map_can_reuse) low_level.args else null,
+            .run_low_level => |low_level| if (low_level.op.layoutResolved()) |op| .{ .op = op, .args = low_level.args } else null,
             .block => |block| {
                 if (block.statements.len != 0) return null;
                 cond = block.final_expr;
@@ -27439,8 +27457,8 @@ const ProcBodyBuilder = struct {
                     self.worker_layout.worker,
                 ) orelse break :blk null;
                 const resolved = resolveWorker(self.parent.modules, self.parent.plan, @backingInt(direct.worker));
-                if (!resolvedWorkerIsListMapCanReuseWrapper(resolved)) break :blk null;
-                break :blk call.args;
+                const op = resolvedWorkerLayoutResolvedOp(resolved) orelse break :blk null;
+                break :blk .{ .op = op, .args = call.args };
             },
             .pending,
             .numeral,
@@ -28294,8 +28312,11 @@ const ProcBodyBuilder = struct {
         return after_receiver;
     }
 
-    fn prependRecordFieldDescriptorBind(
+    /// Bind the descriptor of field `field_idx` read from `source` into
+    /// `target`, when that field's storage carries one.
+    fn prependAggregateFieldDescriptorBind(
         self: *ProcBodyBuilder,
+        aggregate: AggregateFieldKind,
         target: LIR.LocalId,
         source: LIR.LocalId,
         record_rep: Plan.TypeRepId,
@@ -28303,7 +28324,10 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         if (!self.payloadFieldCarriesRuntimeDesc(record_rep, field_idx)) return next;
-        const nested_desc_index = self.recordFieldNestedDescriptorIndex(record_rep, field_idx);
+        const nested_desc_index = switch (aggregate) {
+            .record => self.recordFieldNestedDescriptorIndex(record_rep, field_idx),
+            .tuple => self.tupleElemNestedDescriptorIndex(record_rep, field_idx),
+        };
         const record_desc = try self.descriptorRefForLocalOrKnownRep(source, record_rep);
         if (self.parent.result.store.getLocal(target).boxy_desc) |desc| {
             if (desc.localOrNull() == null) return next;
@@ -31043,6 +31067,20 @@ const ProcBodyBuilder = struct {
             .next = next,
         } }, self.origin);
         return try self.loweredExprsChain(args, lowered, continuation);
+    }
+
+    /// Whether the list's item layout fits `list_item_size_at_most`'s bound,
+    /// per pointer width, in this worker's representation, when the bound is
+    /// a literal at this site; null when it is not, which leaves the operation
+    /// to run at runtime.
+    fn listItemSizeAtMost(self: *ProcBodyBuilder, args: []const checked.CheckedExprId) ?layout.WidthValues(bool) {
+        if (args.len != 2) boxyLowerInvariant("list_item_size_at_most reached boxy lowering with the wrong arity");
+        const bound_data = self.module.checked_bodies.expr(args[1]).data;
+        if (bound_data != .numeral) return null;
+        const bound = exact_numeral.intMagnitude(self.module.module_env.?.exactNumeral(bound_data.numeral.literal)) orelse return null;
+        const list_expr = self.module.checked_bodies.expr(args[0]);
+        const list_layout_idx = self.workerRuntimeLayoutForType(list_expr.ty).layoutIdx();
+        return self.parent.result.layouts.listItemSizeAtMost(list_layout_idx, bound);
     }
 
     fn listMapLayoutsInterchangeable(
@@ -37381,6 +37419,13 @@ const ProcBodyBuilder = struct {
             } }, self.glueOrigin());
         }
 
+        // A nominal boundary only relabels; any storage change is an earlier
+        // structural boundary's conversion.
+        if (comptime zig_builtin.mode == .debug) {
+            if (!try self.boundaryLayoutsInterchangeable(target_layout, source_layout)) {
+                boxyLowerInvariant("nominal boundary relabeled a value between layouts that store it differently");
+            }
+        }
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
             .op = .{ .nominal = .{ .backing_ref = source } },
@@ -38764,8 +38809,13 @@ const ProcBodyBuilder = struct {
         },
     };
 
-    /// A record converted field by field, last field first.
+    /// Whether an aggregate's fields are record fields or tuple elements,
+    /// which selects how a field's nested descriptor is found.
+    const AggregateFieldKind = enum { record, tuple };
+
+    /// A record or tuple converted field by field, last field first.
     const RecordBoundaryState = struct {
+        aggregate: AggregateFieldKind = .record,
         target: LIR.LocalId,
         target_rep: Plan.TypeRepId,
         /// The record the fields are read from: the source itself, or the
@@ -39160,6 +39210,7 @@ const ProcBodyBuilder = struct {
                         return .{ .done = adapted };
                     }
                     if (try self.beginConcreteRecordToConcreteBoundary(frames, identity_request)) |step| return step;
+                    if (try self.beginConcreteTupleToConcreteBoundary(frames, identity_request)) |step| return step;
                     return .{ .done = try self.assignDescriptorAwareNominalBoundary(
                         target,
                         source,
@@ -39259,7 +39310,8 @@ const ProcBodyBuilder = struct {
                         } },
                         .next = converted,
                     } }, self.glueOrigin());
-                    state.current = try self.prependRecordFieldDescriptorBind(
+                    state.current = try self.prependAggregateFieldDescriptorBind(
+                        state.aggregate,
                         state.source_fields[index],
                         state.fields_source,
                         state.source_record_rep,
@@ -39538,6 +39590,31 @@ const ProcBodyBuilder = struct {
         }, "concrete");
     }
 
+    /// Tuples whose element storage differs, such as a nominal's shared
+    /// backing template holding boxed formals read as a tuple of the use's
+    /// actual types, convert element by element.
+    fn beginConcreteTupleToConcreteBoundary(self: *ProcBodyBuilder, frames: *std.ArrayList(BoundaryFrame), request: BoundaryRequest) Allocator.Error!?BoundaryStep {
+        if (request.target_rep == request.source_rep) return null;
+        const source_tuple_rep = self.tupleRepForBoundary(request.source_rep) orelse return null;
+        const target_tuple_rep = self.tupleRepForBoundary(request.target_rep) orelse return null;
+        const target_layout = self.parent.result.store.getLocal(request.target).layout_idx;
+        const source_layout = self.parent.result.store.getLocal(request.source).layout_idx;
+        if (target_layout == source_layout) return null;
+        if (self.parent.layoutIsBoxStorage(self.workerRuntimeLayoutForRep(source_tuple_rep).layoutIdx())) return null;
+
+        const target_tuple = self.parent.plan.representations.items[@backingInt(target_tuple_rep)];
+        const elem_count = self.parent.plan.childSlice(target_tuple.children).len;
+        if (elem_count == 0) return null;
+        return try self.beginRecordFieldsBoundary(frames, request, target_tuple, elem_count, .{
+            .aggregate = .tuple,
+            .target = request.target,
+            .target_rep = request.target_rep,
+            .fields_source = request.source,
+            .source_record_rep = source_tuple_rep,
+            .unbox = null,
+        }, "concrete");
+    }
+
     /// Reserve each target field's conversion and build the record's
     /// construction, then push the frame that converts the fields.
     fn beginRecordFieldsBoundary(
@@ -39561,23 +39638,34 @@ const ProcBodyBuilder = struct {
 
         var field_index: usize = 0;
         for (self.parent.plan.childSlice(target_record.children)) |target_child| {
-            switch (target_child.role) {
-                .record_field => |target_label| {
-                    const source_field = self.findRecordFieldByLabel(state.source_record_rep, Plan.moduleViewForKey(self.parent.modules, self.parent.plan.childLabelModule(target_child)), target_label) orelse
-                        boxyLowerInvariant(kind ++ " record boundary source was missing target field");
-                    state.target_fields[field_index] = if (self.representationBoundaryIsDirect(target_child.rep, source_field.rep))
-                        try self.addFrameLocalForRep(target_child.rep)
-                    else
-                        try self.addFrameBoundaryTargetLocalForRep(target_child.rep);
-                    state.source_fields[field_index] = try self.addFrameLocalForRep(source_field.rep);
-                    state.target_field_reps[field_index] = target_child.rep;
-                    state.source_field_reps[field_index] = source_field.rep;
-                    state.source_field_indices[field_index] = source_field.index;
-                    field_index += 1;
+            const source_field: MatchedRecordField = switch (initial.aggregate) {
+                .record => switch (target_child.role) {
+                    .record_field => |target_label| self.findRecordFieldByLabel(state.source_record_rep, Plan.moduleViewForKey(self.parent.modules, self.parent.plan.childLabelModule(target_child)), target_label) orelse
+                        boxyLowerInvariant(kind ++ " record boundary source was missing target field"),
+                    .record_ext => {
+                        self.requireEmptyRecordExtension(target_child.rep);
+                        continue;
+                    },
+                    .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant(kind ++ " record boundary target had non-record child role"),
                 },
-                .record_ext => self.requireEmptyRecordExtension(target_child.rep),
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant(kind ++ " record boundary target had non-record child role"),
-            }
+                .tuple => switch (target_child.role) {
+                    .tuple_elem => |elem_index| .{
+                        .index = elem_index,
+                        .rep = self.tupleElemRep(state.source_record_rep, elem_index) orelse
+                            boxyLowerInvariant(kind ++ " tuple boundary source was missing target element"),
+                    },
+                    .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant(kind ++ " tuple boundary target had non-element child role"),
+                },
+            };
+            state.target_fields[field_index] = if (self.representationBoundaryIsDirect(target_child.rep, source_field.rep))
+                try self.addFrameLocalForRep(target_child.rep)
+            else
+                try self.addFrameBoundaryTargetLocalForRep(target_child.rep);
+            state.source_fields[field_index] = try self.addFrameLocalForRep(source_field.rep);
+            state.target_field_reps[field_index] = target_child.rep;
+            state.source_field_reps[field_index] = source_field.rep;
+            state.source_field_indices[field_index] = source_field.index;
+            field_index += 1;
         }
         if (field_index != target_field_count) {
             boxyLowerInvariant(kind ++ " record boundary field count disagreed with target record children");
@@ -43082,6 +43170,18 @@ const ProcBodyBuilder = struct {
         return null;
     }
 
+    /// The representation of element `elem_index` of tuple `tuple_rep_id`.
+    fn tupleElemRep(self: *const ProcBodyBuilder, tuple_rep_id: Plan.TypeRepId, elem_index: u32) ?Plan.TypeRepId {
+        const rep = self.parent.plan.representations.items[@backingInt(tuple_rep_id)];
+        for (self.parent.plan.childSlice(rep.children)) |child| {
+            switch (child.role) {
+                .tuple_elem => |index| if (index == elem_index) return child.rep,
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tuple boundary source had a non-element child role"),
+            }
+        }
+        return null;
+    }
+
     fn repHasRecordFieldChildrenForBoundary(
         self: *const ProcBodyBuilder,
         rep: Plan.TypeRepresentation,
@@ -44592,7 +44692,7 @@ fn boxyLowLevelKind(op: can.CIR.Expr.LowLevel) BoxyLowLevelKind {
         .box_unbox => .box_unbox,
         .box_unbox_borrowed => .box_unbox_borrowed,
         .list_map_can_reuse => .list_map_can_reuse,
-        .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetch, .list_prefetched, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_prepare_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => .other,
+        .list_item_size_at_most, .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetch, .list_prefetched, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_prepare_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => .other,
     };
 }
 
