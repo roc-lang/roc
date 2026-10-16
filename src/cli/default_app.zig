@@ -221,7 +221,7 @@ fn stagePlatformlessApp(
         defer gpa.free(absolute);
 
         try synthetic.appendSlice(gpa, original_source[copied_through..spec_region.start.offset]);
-        try appendRocStringBody(gpa, &synthetic, absolute);
+        try appendDependencySource(gpa, &synthetic, absolute);
         copied_through = spec_region.end.offset;
     }
     try synthetic.appendSlice(gpa, original_source[copied_through..splice_at]);
@@ -281,16 +281,12 @@ fn platformAlias(
     }
 }
 
-/// Append `text` as the body of a Roc string literal, escaping the bytes that
-/// a string literal cannot carry literally.
-fn appendRocStringBody(gpa: Allocator, out: *std.ArrayList(u8), text: []const u8) Allocator.Error!void {
-    for (text) |byte| {
-        switch (byte) {
-            '\\', '"', '$' => try out.append(gpa, '\\'),
-            else => {},
-        }
-        try out.append(gpa, byte);
-    }
+/// Append an absolute path as the body of a dependency source. Dependency
+/// sources are read exactly as written, without escape sequences, so the
+/// path's separators are written as `/`, which every host accepts.
+fn appendDependencySource(gpa: Allocator, out: *std.ArrayList(u8), path: []const u8) Allocator.Error!void {
+    try out.ensureUnusedCapacity(gpa, path.len);
+    for (path) |byte| out.appendAssumeCapacity(if (byte == '\\') '/' else byte);
 }
 
 /// Whether a package spec names a URL rather than a path. Mirrors the rule the
@@ -381,10 +377,13 @@ test "stage: a relative package path is rewritten for the staging directory" {
     var expected_literal = std.ArrayList(u8).empty;
     defer expected_literal.deinit(testing.allocator);
     try expected_literal.appendSlice(testing.allocator, "helper: \"");
-    try appendRocStringBody(testing.allocator, &expected_literal, expected_path);
+    try appendDependencySource(testing.allocator, &expected_literal, expected_path);
     try expected_literal.append(testing.allocator, '"');
 
     try testing.expect(std.mem.find(u8, staged.synthetic_source, expected_literal.items) != null);
+    // Dependency sources carry no escape sequences, whatever the host's
+    // path separator.
+    try testing.expect(std.mem.findScalar(u8, expected_literal.items, '\\') == null);
 }
 
 test "stage: the platform alias avoids a package that already uses it" {

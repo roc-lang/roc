@@ -1433,7 +1433,10 @@ carrying the alias declaration and requested item. Checking follows the solved
 alias backing to its terminal nominal, resolves that nominal's owner by module
 content identity, and performs the exact owner-and-item method lookup. It then
 replaces the source node with the exact target module identity, type node, and
-definition. Alias traversal has no source-text reconstruction or fixed hop
+definition. A method of a type declared in a function body is a local binding,
+so a lookup selecting one is replaced with the local lookup of that binding,
+exactly what naming the method through its own type canonicalizes to, and is
+checked as one. Alias traversal has no source-text reconstruction or fixed hop
 limit; invalid and cyclic aliases must already resolve to the checker error
 type.
 
@@ -2333,8 +2336,10 @@ structural tag unions out of every compiler-implemented type removes that
 mismatch at the source: a backend only ever writes or reads a representation
 whose tags the helper's own nominal declaration fixes, so no backend, layout
 search, or checker coercion has to recover which tag it meant. The same holds
-for tag unions a helper reads, such as a sort comparator's result: the public
-builtin converts the caller's union into the helper's nominal one.
+for tag unions a helper would read: a builtin that calls back into Roc code
+whose result is a structural tag union is written in Roc itself, as the list
+sort is (see "List Sorting"), so its comparator's `[Before, Same, After]` never
+crosses into compiler-implemented code.
 
 `src/check/test/builtin_low_level_types_test.zig` walks the type of every
 Builtin definition the compiler implements and fails on any structural tag
@@ -4518,15 +4523,18 @@ annotation enumerate the same identity slots (`PredeclaredSlots`), so the
 relation is slot-wise and needs no structural matching: each body slot the
 scheme will quantify stands for the use's copy of the first slot that
 reaches it, a slot the scheme will not quantify is shared, and a slot the
-body closed must be closed in the use's copy too. Each copy is unified
+body closed must be closed in the use's copy too. A shared slot's image is the
+slot itself, whatever earlier uses sharing it made it: a tag row in a record
+field of a value binding is shared by every use (Widenable positions), so an
+earlier use may already have added tags to it. Each copy is unified
 with that image. A relation can pin a receiver, so the boundary runs
 another round after relating any use.
 
 A rejected relation is a Type Mismatch at the use, naming the use's type
 and the definition's final one; the use becomes a runtime error and the
 definition keeps its scheme, as for any other rejected use. A body slot
-solved to anything other than a variable, a closed row, or a row's
-extension is an invariant violation, since the annotation's rigids and
+the scheme quantifies, solved to anything other than a variable, a closed
+row, or a row's extension, is an invariant violation, since the annotation's rigids and
 bounded rows admit nothing else, and a use still unrelated when the module
 finishes checking is one too.
 
@@ -5435,7 +5443,8 @@ value is lowered, the ordinary statement lowering runs inside the tuple's
 initializer, and the initializer ends with the locals that lowering bound. A
 recursive `let` therefore binds one local or a tuple of locals; LIR lowering
 gives each such local a zeroed boxed slot before the initializer runs and
-stores its part of the value once the initializer completes. The store
+stores its part of the value once the initializer completes. A zero-sized
+value's slot is a `box_of_zst`, whose payload is the value's own layout. The store
 addresses the slot's Box itself (`ptr_store` accepts a Box address and borrows
 it), so the slot stays alive through the store even when no callable captured
 it.
@@ -6152,7 +6161,11 @@ locals before the same crash (`beginRuntimeError`). Nested retirements compose:
 the erroneous operand may itself be a runtime error with `evaluated`
 operands, which run before it crashes. The result is that earlier operands
 run, with their `dbg`, effects, and crashes, and the program crashes where
-the erroneous operand is evaluated, in every lowering mode.
+the erroneous operand is evaluated, in every lowering mode. A hoisted root
+containing such a runtime error therefore depends on everything its
+`evaluated` operands read: post-solve pruning walks them like any other
+children, so a root whose operand calls a local procedure that needs its
+declaration context is not kept.
 
 A rejected static dispatch retires its owner by the same rule
 (`replaceRejectedOperationWithRuntimeError`). An owner that dispatches on its
@@ -9490,7 +9503,14 @@ compile-time root. A value's row can still gain tags after a use copied it (a
 generated codec's validation adds its error tags during finalize), so each
 re-opened row is recorded with the row it copies, and once constraints settle
 `Check.propagateValueRowsToWidenedUses` adds every such tag to the copy; a use
-whose type does not admit it is a type mismatch at the use. A row with no
+whose type does not admit it is a type mismatch at the use, and the use is
+retired as a runtime error like any other rejected use, so no erroneous type
+crosses the checked boundary. A tag that a generated codec produces on behalf
+of the value's own annotated definition, which the annotation does not list,
+is not one the value can have: the late audit reports and retires the
+definition (Derived Parser Required-Field Error Composition), so every use
+whose copy lacks the tag is a use of a rejected declaration, retired without
+a report of its own. A row with no
 tags, which asserts that no value has it, is never re-opened.
 
 ### Hosted Try Question Widening Removed
@@ -11528,7 +11548,10 @@ Restrictions:
   both parameters). Judged in `checkPendingDefaults`
   (`checkDefaultParameterConstraints`) immediately after the default
   unifies with an instantiated copy of its field type, BEFORE the
-  defaulting rounds could commit a still-flex parameter copy. Detection
+  defaulting rounds could commit a still-flex parameter copy, and after
+  resolving every pending tuple access whose receiver that check decided
+  (`|pair| pair.0` passed before `pair`'s type is known relates its result
+  to the item only once resolved, which can pin a parameter copy). Detection
   reads the parameter copies the instantiation minted for the
   declaration's rigids (snapshotted from the instantiation's var map,
   which also names the parameter for the report): a copy the default
@@ -12917,12 +12940,6 @@ then an explicit descriptor-guided adapter converts it into the worker
 representation. Worker error-row boxes are not builtin result slots, and
 changing only the outer `Try` layout does not describe its nested payload
 storage.
-
-The sort low-level calls its boxed comparator through a planned ABI
-representation: the comparator's arguments keep their worker representation and
-its ordering result is that closed union in its host representation. Lowering
-wraps a comparator whose representation differs from that ABI in an adapter
-before the call.
 
 The host ABI is independent of lowering strategy. `.boxy` changes only private
 Roc implementation procedures. Any LIR root whose checked root metadata has
@@ -16845,7 +16862,9 @@ constant false value or an `assign_low_level` with explicit
 item layout that the lowerer used for that decision. ARC emission and body
 cloning preserve it, so downstream LIR consumers with their own storage
 representations read it there and never reconstruct the transform's return
-type to recover it.
+type to recover it. `list_item_size_at_most` needs no such metadata: outside
+a folded match (see "In-Place List Transforms") each backend answers it from
+the item layout it builds for and the bound operand.
 
 A low-level operation whose checked result type is the builtin `Try` (the
 typed numeric `*_from_str` parsers, the checked numeric `*_try` conversions,
@@ -18607,9 +18626,10 @@ addition that follows; for multiplication it costs a hardware division.
 `num_int_add_proven_cannot_overflow` and its siblings are the one place in the
 family where an incorrect claim produces undefined behavior rather than a wrong
 answer, because they assert no-wraparound to the backend optimizer. They are
-minted exclusively by the range prover, which proves the result stays in range
-before rewriting. Source lowering never produces them, and neither does any
-other pass.
+minted by the range prover, which proves the result stays in range before
+rewriting, and by nothing else except the builtin-private declarations
+described below. Lowering of user source never produces them, and neither does
+any other pass.
 
 This rule binds compiler-synthesized arithmetic too. A LIR pass that constructs
 an add directly emits the wrapping member and leaves the proof to the prover,
@@ -18618,9 +18638,24 @@ synthesis site is a claim that decays as the surrounding pass changes, and its
 failure mode is undefined behavior rather than a detectably wrong result. The
 range prover proves the result stays in range or the operation remains checked.
 
+The one other source of the proven form is the builtin module's own Roc code.
+`Builtin.roc` declares `plus_infallible` and `minus_infallible`, which
+canonicalize straight to the proven add and subtract, and they are private to
+that file: no user-facing operation, method, or exposed function is one of
+them, and user code cannot name them. Their only callers are the per-item loops
+of the list sort, where the result is an index of a slot that exists or a count
+of items that exist, and where the operands are bounded by the loop's own guard
+rather than by anything the range prover would have to rediscover on every
+compile. Each use site states the invariant that bounds it, in a comment where
+the enclosing condition does not already make it plain, so a reviewer can check
+the claim locally; a claim that needs the whole algorithm to verify belongs on
+checked arithmetic instead. The debug-build interpreter check below applies to
+these calls as it does to the prover's, so the builtin tests audit every one of
+them.
+
 Under a debug build the interpreter evaluates the proven forms in a wider type
 and panics if one actually overflows, so every evaluation test doubles as an
-audit of the prover's claims.
+audit of the prover's claims and of the builtin sort's.
 
 ### What the prover does with the family
 
@@ -20013,6 +20048,14 @@ A container qualifies for dismantling when all of the following hold:
   operand-position whole use: moved into an aggregate or a call, returned,
   or join-carried by `set_local`
 
+An owned same-value binding (`ref.local` solved owned) is bound exactly once
+and holds the unit its definition gave it, whether that definition moved the
+source's unit or retained a new one, so it qualifies as a container in its own
+right; for its source, the binding is an operand-position whole use. Pattern
+bindings take this form: the payload of `match dict { HashMap(data) => ... }`
+is owned when some branch moves `data` whole, and the branch that reads its
+fields still updates them in place.
+
 A tag union qualifies through a payload view. The union must be owned, bound
 exactly once by a value-producing statement, and not a join parameter, and
 every occurrence of it must be a discriminant read, a borrowed pure alias, or
@@ -20341,7 +20384,12 @@ leak check or a jump's quotient. A claimed container keeps its conceptual
 balance at one—borrowed reads of its unclaimed bytes remain legitimate—and a
 complete claim set marks that unit spent: a terminal treats it as balanced and
 a jump's carry check exempts it, while anything less fails as an unspent stored
-unit. A claimed container can be neither consumed, moved into an aggregate, nor
+unit. A claim set that becomes complete while the value still holds further
+explicit units settles at once: the spent unit leaves the balance and the claim
+set empties, because the remaining units are intact and a dismantle of another
+of them, such as through a second owned alias of a retained record, starts a
+claim set of its own. Only the last unit keeps its complete claims outstanding.
+A claimed container can be neither consumed, moved into an aggregate, nor
 released whole. Claims and complete read chains cross join quotients on the
 summary: owned entries carry their container's claim set, and every live entry
 carries sparse lender, aggregate-holder, and immediate payload-source
@@ -20363,7 +20411,13 @@ directly for the consumer. The dismantled unit's field claims remain outstanding
 This transfer follows only recorded field-read provenance, on demand, and its
 claim and balance mutations participate in outcome restitution. It neither
 adds runtime retains nor changes join summaries on paths that already have an
-explicit intact unit.
+explicit intact unit. A value relevant after a join whose only explicit unit a
+complete claim set has spent holds no unit, exactly like an unclaimed read
+value: when its nearest unit-holding container is not independently relevant,
+quotienting claims that stored unit for it and settles the spent unit's claims,
+so the join value carries one intact unit and a later dismantle in the join
+body starts a claim set of its own. Without a claimable stored unit the spent
+value stays dead past the join.
 
 #### Per-edge aggregate residuals
 
@@ -20954,27 +21008,35 @@ representations are not interchangeable or the optimization is disabled
 (`TargetConfig.list_in_place_map`, on for `--opt=size`/`--opt=speed`, off for
 dev, interpreter, and compile-time evaluation), so ineligible map
 and update specializations never carry dead in-place machinery and dev builds
-lower exactly the copy path. Both direct lowerers identify the compiler
-operation from producer IR and consume its typed numeral/wildcard arms; neither
-infers the site from source names or resulting LIR shape. The fold
-uses the same representation-eligibility decision as the primitive. Different
+lower exactly the copy path. The fold is one instance of a layout-resolved
+match: a `match` whose scrutinee calls a Builtin wrapper of a low-level whose
+answer committed layouts decide (`list_map_can_reuse`, whose decided answer is
+only ever 0, and `list_item_size_at_most`, which the list sort matches on to
+pick between sorting items and sorting their indices), over guard-free,
+binding-free numeral and wildcard arms. Both direct lowerers identify the
+compiler operation from producer IR and keep only the arm the decided answer
+selects; neither infers the site from source names or resulting LIR shape. The
+fold uses the same layout decision as the primitive. Different
 fully concrete types may keep the branch when their layouts are
 interchangeable; descriptor-bearing types may keep it only when their
 descriptor representation identity is the same. The debug Lambda Mono
 materializer runs before layout selection and cannot recompute that decision;
-instead, direct lowering records each statically resolved match site as
-explicit data and the verifier replays the record, so the two derivations
-demand the same set of functions without the materializer ever consulting
-layouts. A wrong record can only misplace dead code, never a runtime check—the
-primitive's own lowering independently gates the runtime path—and a fold
-regression surfaces as a Debug stride assertion in the backends rather than as
-silent dead code.
+instead, direct lowering records each statically resolved match site, with
+the answer it assumed, as explicit data and the verifier replays the record, so
+the two derivations demand the same set of functions without the materializer
+ever consulting layouts. A wrong record can only misplace dead code, never a
+runtime check—the primitive's own lowering independently gates the runtime
+path—and a fold regression surfaces as a Debug stride assertion in the
+backends rather than as silent dead code.
 
 Inside an eligible in-place loop, `list_map_extract_unsafe` moves one item's
 ownership out of the buffer and `list_map_write_unsafe` moves the transform's
 result into the vacated slot. Neither performs RC work: the extracted item is an
 ordinary owned local, so ARC places its release according to the transform's
 solved convention, and the certifier checks the loop like any other code.
+`list_move_out_unsafe` and `list_move_in_unsafe` are the same two operations
+declared for a list whose item type does not change; the list sort below is
+built from them.
 Between the two ops the slot holds stale bytes and the buffer is typed by the
 output item while later slots still hold input items. For
 descriptor-governed items, the descriptor representation condition
@@ -20983,6 +21045,41 @@ unobservable because no cleanup path walks live values—`crash` is fatal and
 leaks by design—and the loop itself is the only holder of the buffer (the
 runtime count of 1 proved there were no other counted handles, and a live borrow
 of the list would have forced the copy path through an owned capture's incref).
+
+### List Sorting
+
+`List.sort_with` and the other sorts are Roc code in `Builtin.roc`: a port of
+Fluxsort (stable partitioning around a pivot, finished with quadsort's
+branchless parity merges) whose comparator is an ordinary function argument.
+Every call site's comparator is therefore a direct, inlinable call, and no
+comparator result ever crosses into compiler-implemented code.
+
+The sort consumes its list. It transfers the list's ownership unit with
+`list_map_prepare_reuse` and asks `list_owned_unique` whether the buffer is
+uniquely owned and not a slice; a shared or sliced list is copied once, and
+from then on the sort rearranges a unique buffer in place. Lists shorter than
+32 items are insertion sorted with no scratch at all. Longer lists allocate one
+scratch list with capacity for every item, which stays at length zero for the
+whole sort, so releasing it never releases an item. Items wider than 96 bytes
+are sorted through a list of their indices and permuted once at the end; the
+`match` on `list_item_size_at_most` that picks this path is a layout-resolved
+match, so only the chosen path's functions are demanded for each item type.
+
+Items travel between slots of the two lists through `list_move_out_unsafe` and
+`list_move_in_unsafe`, which copy an item's bytes and do no refcount work. A
+slot an item was moved out of keeps its bytes, and the algorithm, not ARC,
+decides which slot holds the live copy: pivots and median samples are extra
+bytewise copies that are never released, and the moves of a block are the
+same bytes landing in a new slot. The invariant the Roc code maintains is that
+every path through the sort ends with the list holding exactly one copy of
+each item it started with, whatever the comparator answers. Merges count how
+many items each run still holds instead of trusting the comparator to stop at
+a run's end, and partitions move every item back into the list before they
+return, so a comparator that contradicts itself yields some permutation of the
+input rather than a duplicated or dropped refcounted item. ARC sees only
+borrowed reads for comparisons (`list_get_unsafe`) and the two lists flowing
+through the helpers as owned values; it inserts no refcount operations in the
+sort's loops.
 
 ### Destination-Passing Results and Allocation Reuse
 

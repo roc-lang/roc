@@ -5253,7 +5253,6 @@ pub const MonoLlvmCodeGen = struct {
             .num_plus, .num_minus, .num_times => unreachable,
             // LIR lowering splits this into an alias and `list_prefetch`.
             .list_prefetched => unreachable,
-            .list_sort_with => try self.emitListSortWith(target, arg_locals, unique_args),
             .bool_not => {
                 const value = try self.loadBool(self.slot(GuardedList.at(arg_locals, 0)).ptr);
                 const not_value = (self.wip orelse return error.CompilationFailed).not(value, "") catch return error.OutOfMemory;
@@ -5400,6 +5399,7 @@ pub const MonoLlvmCodeGen = struct {
             .list_replace_unsafe => try self.emitListReplaceUnsafe(target, arg_locals, unique_args),
             .list_map_prepare_reuse => try self.copyBytes(self.slot(target).ptr, self.slot(GuardedList.at(arg_locals, 0)).ptr, self.slot(target).size, self.slot(target).alignment),
             .list_map_can_reuse => try self.emitListMapCanReuse(target, arg_locals, interchangeable),
+            .list_item_size_at_most => try self.emitListItemSizeAtMost(target, arg_locals),
             .list_map_cast_unsafe => try self.copyBytes(self.slot(target).ptr, self.slot(GuardedList.at(arg_locals, 0)).ptr, self.slot(target).size, self.slot(target).alignment),
             .list_map_extract_unsafe => try self.emitListMapExtractUnsafe(target, arg_locals),
             .list_map_write_unsafe => try self.emitListMapWriteUnsafe(target, arg_locals),
@@ -10659,6 +10659,17 @@ pub const MonoLlvmCodeGen = struct {
         try self.copyBytes(self.slot(target).ptr, src, self.slot(target).size, self.slot(target).alignment);
     }
 
+    /// `list_item_size_at_most(list, bound) -> U8`: whether this target's item
+    /// layout fits the bound.
+    fn emitListItemSizeAtMost(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        const builder, const wip = try self.builderAndWip();
+        const abi = self.boxyAwareBuiltinListAbi(self.localLayout(GuardedList.at(args, 0)));
+        const bound = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), .i64, false);
+        const elem_size = builder.intValue(.i64, abi.elem_size) catch return error.OutOfMemory;
+        const fits = wip.icmp(.ule, elem_size, bound, "") catch return error.OutOfMemory;
+        try self.storeBool(self.slot(target).ptr, fits);
+    }
+
     fn emitListMapCanReuse(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, interchangeable: layout.WidthValues(bool)) Error!void {
         if (!interchangeable.get(self.layouts().targetUsize())) {
             // On this width the element layouts are not interchangeable, so the
@@ -11385,37 +11396,6 @@ pub const MonoLlvmCodeGen = struct {
         try self.appendListElemDescOrRcArgs(&call_args, abi, boxy_elem, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
         try self.callListBoxyOrBuiltin(boxy_elem, "roc_boxy_list_reverse", LowLevelBuiltins.listOp(.list_reverse), &call_args);
-    }
-
-    fn emitListSortWith(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
-        const builder, const wip = try self.builderAndWip();
-        const list_local = GuardedList.at(args, 0);
-        const callable_local = GuardedList.at(args, 1);
-        const abi = self.boxyAwareBuiltinListAbi(self.localLayout(list_local));
-        if (abi.elem_size == 0) {
-            try self.copyBytes(self.slot(target).ptr, self.slot(list_local).ptr, self.slot(target).size, self.slot(target).alignment);
-            return;
-        }
-        var call_args = try self.rocListArgs1(list_local);
-        defer call_args.deinit(self.allocator);
-        try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
-        const callable = wip.load(.normal, try self.ptrType(), self.slot(callable_local).ptr, self.targetPointerAlignment(), "") catch return error.OutOfMemory;
-        try call_args.append(self.allocator, try self.ptrType(), callable);
-        try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
-        try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
-        const boxy_elem = self.boxyListElementDescForLocals(abi, &.{list_local}, target);
-        if (boxy_elem) |elem| {
-            try call_args.append(self.allocator, .i1, builder.intValue(.i1, 1) catch return error.OutOfMemory);
-            try call_args.append(self.allocator, try self.ptrType(), try self.boxyNullPtr());
-            try call_args.append(self.allocator, try self.ptrType(), try self.boxyNullPtr());
-            try self.appendBoxyListElementDescArgs(&call_args, elem);
-        } else {
-            try self.appendListElementRcArgs(&call_args, abi, true, true);
-            try call_args.append(self.allocator, .i32, try self.boxyInt(.i32, @backingInt(abi.elem_layout_idx orelse return error.CompilationFailed)));
-            try call_args.append(self.allocator, try self.ptrType(), try self.boxyNullPtr());
-        }
-        try self.appendUpdateModeArg(&call_args, unique_args);
-        try self.callBoxyVoid("roc_boxy_list_sort_with", call_args.types.items, call_args.values.items);
     }
 
     fn emitBoxBox(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {

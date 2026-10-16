@@ -257,7 +257,6 @@ pub fn listOp(op: LowLevel) BuiltinFn {
         .{ LowLevel.list_release_excess_capacity, BuiltinFn.list_release_excess_capacity },
         .{ LowLevel.list_clear, BuiltinFn.list_sublist },
         .{ LowLevel.list_reverse, BuiltinFn.list_reverse },
-        .{ LowLevel.list_sort_with, BuiltinFn.list_sort_with },
         .{ LowLevel.list_map_can_reuse, BuiltinFn.list_map_can_reuse },
     });
 }

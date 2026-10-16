@@ -6441,7 +6441,6 @@ pub fn registerBoxySymbolTargets(self: *Self) HostedSymbolError!void {
     try self.registerBoxySymbol("roc_boxy_list_set", &.{ .i32, .i32, .i32, .i32, .i32, .i64, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_swap", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i64, .i64, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_reverse", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
-    try self.registerBoxySymbol("roc_boxy_list_sort_with", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_reserve", &.{ .i32, .i32, .i32, .i32, .i32, .i64, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_reserve_for_append", &.{ .i32, .i32, .i32, .i32, .i32, .i64, .i32, .i32, .i32, .i32 }, &.{});
     try self.registerBoxySymbol("roc_boxy_list_release_excess_capacity", &.{ .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 }, &.{});
@@ -10121,6 +10120,14 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitLocalGet(dst_local);
         },
 
+        .list_item_size_at_most => {
+            // list_item_size_at_most(list, bound) -> U8: whether this target's
+            // item layout fits the bound.
+            const elem_size: u32 = try self.layoutStorageByteSize(self.listElemLayout(self.procLocalLayoutIdx(GuardedList.at(args, 0))));
+            try self.emitI64Const(@intCast(elem_size));
+            try self.emitProcLocal(GuardedList.at(args, 1));
+            try self.emitOps(.{Op.i64_le_u});
+        },
         .list_map_extract_unsafe => {
             // Like list_get_unsafe, but the element layout comes from the
             // result (input element type) while the buffer is typed with the
@@ -10376,7 +10383,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // list_reverse(list) -> reversed list
             try self.generateLLListReverse(args, ll.ret_layout, ll.target, ll.unique_args);
         },
-        .list_sort_with => try self.generateLLListSortWith(args, ll.ret_layout, ll.target, ll.unique_args),
         // list_with_capacity(capacity) -> empty list with given capacity
         .list_with_capacity => {
             try self.generateLLListWithCapacity(args, ll.ret_layout);
@@ -15447,36 +15453,6 @@ fn generateLLListReverse(self: *Self, args: anytype, ret_layout: layout.Idx, tar
     try self.emitListElemRcArgs(rc);
     try self.emitI32Const(updateModeImmForArg(unique_args, 0));
     try self.emitListElemRcCall(rc, .list_reverse, .list_reverse);
-    try self.emitFpOffset(result_offset);
-}
-
-fn generateLLListSortWith(self: *Self, args: anytype, ret_layout: layout.Idx, target: ?ProcLocalId, unique_args: u64) Allocator.Error!void {
-    const list_abi = self.builtinInternalListAbi("wasm.generateLLListSortWith.builtin_list_abi", ret_layout);
-    if (list_abi.elem_size == 0) {
-        try self.emitProcLocal(GuardedList.at(args, 0));
-        return;
-    }
-    const list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-    const callable_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32);
-    const result_offset = try self.allocStackMemory(12, 4);
-    const fields = try self.loadRocListFields(list_ptr);
-    self.requireBuiltinCalls("list_sort_with");
-    const rc = try self.listElemRc(list_abi, &.{GuardedList.at(args, 0)}, target);
-    try self.emitFpOffset(result_offset);
-    try self.emitRocListFields(fields);
-    try self.emitLocalGet(callable_ptr);
-    try self.emitI32Const(@intCast(list_abi.elem_align));
-    try self.emitI32Const(@intCast(list_abi.elem_size));
-    // The Boxy sort wrapper also takes the callback arguments, all zero.
-    switch (rc) {
-        .boxy => inline for (.{ 1, 0, 0 }) |value| try self.emitI32Const(value),
-        .callbacks => {},
-    }
-    try self.emitListElemRcArgs(rc);
-    try self.emitI32Const(updateModeImmForArg(unique_args, 0));
-    try self.emitI32Const(0);
-    try self.emitI32Const(0);
-    try self.emitListElemRcCall(rc, .list_sort_with, .list_sort_with);
     try self.emitFpOffset(result_offset);
 }
 
