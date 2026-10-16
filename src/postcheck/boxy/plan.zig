@@ -6447,7 +6447,11 @@ const Builder = struct {
             .expect,
             => |child| try actions.append(self.allocator, exprAction(view, child)),
             .dbg => |child| try actions.append(self.allocator, .{ .inspect_expr = .{ .view = view, .expr = child } }),
-            .field_access => |access| try actions.append(self.allocator, exprAction(view, access.receiver)),
+            .field_access => |access| {
+                // Lowering holds each path prefix at its own checked type.
+                for (access.segments) |segment| _ = try self.analyzeType(view, segment.success_ty);
+                try actions.append(self.allocator, exprAction(view, access.receiver));
+            },
             .interpolation => |interpolation| {
                 for (interpolation.values) |value| try actions.append(self.allocator, exprAction(view, value));
                 try actions.append(self.allocator, .{ .interpolation_after_parts = site });
