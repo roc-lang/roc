@@ -47,6 +47,7 @@ const RcAtomicity = lir.LIR.RcAtomicity;
 const StrLiteral = lir.LIR.StrLiteral;
 
 const BuiltinSymbol = builtins.builtin_registry.BuiltinFn;
+const builtin_symbol_count = @typeInfo(BuiltinSymbol).@"enum".field_names.len;
 
 const SimdLowLevel = enum(u16) {
     simd_splat = @backingInt(lir.LowLevel.simd_splat),
@@ -102,12 +103,6 @@ const SimdLowLevel = enum(u16) {
     simd_clmul_lo = @backingInt(lir.LowLevel.simd_clmul_lo),
     simd_clmul_hi = @backingInt(lir.LowLevel.simd_clmul_hi),
 };
-
-/// Linker name of a registered builtin; the registry is the only place
-/// builtin symbol names are spelled.
-fn builtinSymbol(comptime f: BuiltinSymbol) [:0]const u8 {
-    return f.symbolName();
-}
 
 /// Bridges the LIR refcount atomicity to the shared table's atomicity so that
 /// refcount-helper symbols are selected through `LowLevelBuiltins.rcHelper`.
@@ -324,14 +319,17 @@ pub const MonoLlvmCodeGen = struct {
     tail_drivers: std.ArrayList(TailDriver) = .empty,
     tail_pending_ptr: ?LlvmBuilder.Value = null,
     tail_args_ptr: ?LlvmBuilder.Value = null,
-    builtin_functions: std.StringHashMap(LlvmBuilder.Function.Index),
+    /// Declared builtins, indexed by `BuiltinSymbol`.
+    builtin_functions: [builtin_symbol_count]?LlvmBuilder.Function.Index = @splat(null),
+    /// Declared host, extern, and intrinsic functions, keyed by symbol name.
+    symbol_functions: std.StringHashMap(LlvmBuilder.Function.Index),
     /// Per-function scratch slot RC-helper calls copy their argument into,
     /// so the argument local's own slot address never escapes into the call.
     /// Follows `wip`: saved and restored wherever the active function swaps.
     rc_arg_scratch: ?LlvmBuilder.Value = null,
     /// Shims that give cold-path builtin calls the preserve_most convention,
-    /// keyed by builtin symbol name. See `callBuiltin`.
-    cold_shims: std.StringHashMap(ColdShim),
+    /// indexed by `BuiltinSymbol`. See `emitBuiltinCall`.
+    cold_shims: [builtin_symbol_count]?ColdShim = @splat(null),
     /// How many enclosing cold switch arms the statement being emitted sits
     /// under. Non-zero routes builtin calls through preserve_most shims.
     cold_depth: u32 = 0,
@@ -573,8 +571,7 @@ pub const MonoLlvmCodeGen = struct {
             .boxy_worker_procs = boxy_worker_procs,
             .proc_registry = collections.DenseMap(u32, LlvmBuilder.Function.Index).init(allocator),
             .fast_registry = collections.DenseMap(u32, LlvmBuilder.Function.Index).init(allocator),
-            .builtin_functions = std.StringHashMap(LlvmBuilder.Function.Index).init(allocator),
-            .cold_shims = std.StringHashMap(ColdShim).init(allocator),
+            .symbol_functions = std.StringHashMap(LlvmBuilder.Function.Index).init(allocator),
             .static_bytes = std.StringHashMap(LlvmBuilder.Value).init(allocator),
             .static_refcounted_backings = collections.DenseMap(u32, LlvmBuilder.Value).init(allocator),
             .static_data_globals = std.AutoHashMap(u32, LlvmBuilder.Value).init(allocator),
@@ -642,8 +639,7 @@ pub const MonoLlvmCodeGen = struct {
         self.tail_scratch_slots.deinit(self.allocator);
         self.clearTailDrivers();
         self.tail_drivers.deinit(self.allocator);
-        self.builtin_functions.deinit();
-        self.cold_shims.deinit();
+        self.symbol_functions.deinit();
         self.clearStaticBytes();
         self.static_bytes.deinit();
         self.static_refcounted_backings.deinit();
@@ -668,8 +664,9 @@ pub const MonoLlvmCodeGen = struct {
         self.tail_scratch_slots.clearRetainingCapacity();
         self.tail_scratch_slots_owner = null;
         self.clearTailDrivers();
-        self.builtin_functions.clearRetainingCapacity();
-        self.cold_shims.clearRetainingCapacity();
+        self.builtin_functions = @splat(null);
+        self.symbol_functions.clearRetainingCapacity();
+        self.cold_shims = @splat(null);
         self.cold_depth = 0;
         self.clearStaticBytes();
         self.static_refcounted_backings.clearRetainingCapacity();
@@ -3377,15 +3374,10 @@ pub const MonoLlvmCodeGen = struct {
     /// clobbers almost no registers in its (hot-loop) caller.
     const ColdShim = struct {
         shim: LlvmBuilder.Function.Index,
+        /// The wrapped builtin. Its signature differs from the shim's when
+        /// the builtin writes a list or string result through its first
+        /// parameter (see `callBuiltinVoid`).
         target: LlvmBuilder.Function.Index,
-        fn_ty: LlvmBuilder.Type,
-        /// The wrapped builtin's own signature. Differs from `fn_ty` for
-        /// shims that adapt an out-parameter builtin to a by-value return.
-        target_fn_ty: LlvmBuilder.Type,
-        /// The wrapped builtin writes a three-word list or string through its
-        /// first parameter; the shim drops that parameter and returns the
-        /// words by value, so the caller's result slot never escapes.
-        by_value_out: bool,
         compiled: bool,
     };
 
@@ -3990,7 +3982,7 @@ pub const MonoLlvmCodeGen = struct {
             },
             .debug => |debug_stmt| {
                 try self.materializeLocalIfDeferred(debug_stmt.message);
-                try self.callBuiltinVoid(builtinSymbol(.dbg_str), &.{try self.ptrType()}, &.{self.slot(debug_stmt.message).ptr});
+                try self.callBuiltinVoid(.dbg_str, &.{try self.ptrType()}, &.{self.slot(debug_stmt.message).ptr});
                 try work.append(wa, .{ .node = debug_stmt.next });
             },
             .expect => |expect_stmt| {
@@ -4046,7 +4038,7 @@ pub const MonoLlvmCodeGen = struct {
                 const region_end = builder.intValue(.i32, expect_err_stmt.region.end.offset) catch return error.OutOfMemory;
 
                 try self.callBuiltinVoid(
-                    builtinSymbol(.expect_err_str),
+                    .expect_err_str,
                     &.{ try self.ptrType(), .i32, .i32 },
                     &.{
                         self.slot(expect_err_stmt.message).ptr,
@@ -4947,7 +4939,7 @@ pub const MonoLlvmCodeGen = struct {
             );
             const update_mode = if (reuse_unique) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
             break :blk try self.callBuiltin(
-                builtinSymbol(.erased_callable_repack),
+                .erased_callable_repack,
                 ptr_ty,
                 &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, self.ptrSizedIntType(), .i8 },
                 &.{
@@ -4962,7 +4954,7 @@ pub const MonoLlvmCodeGen = struct {
         } else blk: {
             const payload_size: u64 = builtins.erased_callable.compilerPayloadSize(capture_size);
             const fresh_ptr = try self.callBuiltin(
-                builtinSymbol(.allocate_with_refcount),
+                .allocate_with_refcount,
                 ptr_ty,
                 &.{ self.ptrSizedIntType(), .i32, .i1 },
                 &.{
@@ -5131,7 +5123,7 @@ pub const MonoLlvmCodeGen = struct {
             return;
         }
         try self.callBuiltinVoid(
-            builtinSymbol(LowLevelBuiltins.listOp(.list_with_capacity)),
+            LowLevelBuiltins.listOp(.list_with_capacity),
             &.{ try self.ptrType(), .i64, .i32, self.ptrSizedIntType(), .i1 },
             &.{
                 target_ptr,
@@ -5230,7 +5222,7 @@ pub const MonoLlvmCodeGen = struct {
         if (layout_val.tag == .box) {
             const abi = self.layouts().builtinBoxAbi(target_layout);
             const data_ptr = try self.callBuiltin(
-                builtinSymbol(.allocate_with_refcount),
+                .allocate_with_refcount,
                 try self.ptrType(),
                 &.{ self.ptrSizedIntType(), .i32, .i1 },
                 &.{
@@ -5412,8 +5404,8 @@ pub const MonoLlvmCodeGen = struct {
             .list_map_extract_unsafe => try self.emitListMapExtractUnsafe(target, arg_locals),
             .list_map_write_unsafe => try self.emitListMapWriteUnsafe(target, arg_locals),
             .list_reverse => try self.emitListReverse(target, arg_locals, unique_args),
-            .list_reserve => try self.emitListReserve(target, "roc_boxy_list_reserve", builtinSymbol(LowLevelBuiltins.listOp(.list_reserve)), arg_locals, unique_args),
-            .list_reserve_for_append => try self.emitListReserve(target, "roc_boxy_list_reserve_for_append", builtinSymbol(LowLevelBuiltins.listOp(.list_reserve_for_append)), arg_locals, unique_args),
+            .list_reserve => try self.emitListReserve(target, "roc_boxy_list_reserve", LowLevelBuiltins.listOp(.list_reserve), arg_locals, unique_args),
+            .list_reserve_for_append => try self.emitListReserve(target, "roc_boxy_list_reserve_for_append", LowLevelBuiltins.listOp(.list_reserve_for_append), arg_locals, unique_args),
             .list_release_excess_capacity => try self.emitListReleaseExcess(target, arg_locals, unique_args),
             .str_is_eq => try self.emitStrIsEq(target, arg_locals),
             .str_is_eq_static_small => try self.emitStrEqStaticSmall(target, arg_locals),
@@ -5429,20 +5421,20 @@ pub const MonoLlvmCodeGen = struct {
             .str_split_first => try self.emitStrSplit(target, arg_locals, .str_split_first, builtins.dev_wrappers.StrSplitFirstLayout),
             .str_split_last => try self.emitStrSplit(target, arg_locals, .str_split_last, builtins.dev_wrappers.StrSplitLastLayout),
             .str_drop_prefix_caseless_ascii => try self.emitStrDropPrefixCaselessAscii(target, arg_locals),
-            .str_concat => try self.emitStrRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_concat)), arg_locals, unique_args),
-            .str_trim => try self.emitStrUnaryRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_trim)), GuardedList.at(arg_locals, 0), unique_args),
-            .str_trim_start => try self.emitStrUnaryRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_trim_start)), GuardedList.at(arg_locals, 0), unique_args),
-            .str_trim_end => try self.emitStrUnaryRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_trim_end)), GuardedList.at(arg_locals, 0), unique_args),
-            .str_with_ascii_lowercased => try self.emitStrUnaryRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_with_ascii_lowercased)), GuardedList.at(arg_locals, 0), unique_args),
-            .str_with_ascii_uppercased => try self.emitStrUnaryRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_with_ascii_uppercased)), GuardedList.at(arg_locals, 0), unique_args),
+            .str_concat => try self.emitStrRetBuiltin(target, LowLevelBuiltins.strOp(.str_concat), arg_locals, unique_args),
+            .str_trim => try self.emitStrUnaryRetBuiltin(target, LowLevelBuiltins.strOp(.str_trim), GuardedList.at(arg_locals, 0), unique_args),
+            .str_trim_start => try self.emitStrUnaryRetBuiltin(target, LowLevelBuiltins.strOp(.str_trim_start), GuardedList.at(arg_locals, 0), unique_args),
+            .str_trim_end => try self.emitStrUnaryRetBuiltin(target, LowLevelBuiltins.strOp(.str_trim_end), GuardedList.at(arg_locals, 0), unique_args),
+            .str_with_ascii_lowercased => try self.emitStrUnaryRetBuiltin(target, LowLevelBuiltins.strOp(.str_with_ascii_lowercased), GuardedList.at(arg_locals, 0), unique_args),
+            .str_with_ascii_uppercased => try self.emitStrUnaryRetBuiltin(target, LowLevelBuiltins.strOp(.str_with_ascii_uppercased), GuardedList.at(arg_locals, 0), unique_args),
             .str_drop_prefix => try self.emitStrDropEdge(target, arg_locals, .prefix),
             .str_drop_suffix => try self.emitStrDropEdge(target, arg_locals, .suffix),
-            .str_split_on => try self.emitStrRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_split_on)), arg_locals, null),
+            .str_split_on => try self.emitStrRetBuiltin(target, LowLevelBuiltins.strOp(.str_split_on), arg_locals, null),
             .str_join_with => try self.emitStrJoinWith(target, arg_locals),
             .str_repeat => try self.emitStrRepeat(target, arg_locals),
             .str_with_capacity => try self.emitStrWithCapacity(target, GuardedList.at(arg_locals, 0)),
             .str_reserve => try self.emitStrReserve(target, arg_locals, unique_args),
-            .str_release_excess_capacity => try self.emitStrUnaryRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_release_excess_capacity)), GuardedList.at(arg_locals, 0), unique_args),
+            .str_release_excess_capacity => try self.emitStrUnaryRetBuiltin(target, LowLevelBuiltins.strOp(.str_release_excess_capacity), GuardedList.at(arg_locals, 0), unique_args),
             .str_to_utf8 => try self.emitStrToUtf8(target, GuardedList.at(arg_locals, 0)),
             .str_from_utf8_lossy => try self.emitStrFromByteList(.str_from_utf8_lossy, target, GuardedList.at(arg_locals, 0)),
             .str_from_utf8_validated => try self.emitStrFromByteList(.str_from_utf8_validated, target, GuardedList.at(arg_locals, 0)),
@@ -5451,7 +5443,7 @@ pub const MonoLlvmCodeGen = struct {
             .str_from_utf32_le_short => try self.emitStrFromByteList(.str_from_utf32_le_short, target, GuardedList.at(arg_locals, 0)),
             .str_from_utf32_be_short => try self.emitStrFromByteList(.str_from_utf32_be_short, target, GuardedList.at(arg_locals, 0)),
             .str_from_utf8 => try self.emitStrFromUtf8(target, GuardedList.at(arg_locals, 0)),
-            .str_inspect => try self.emitStrUnaryRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_inspect)), GuardedList.at(arg_locals, 0), null),
+            .str_inspect => try self.emitStrUnaryRetBuiltin(target, LowLevelBuiltins.strOp(.str_inspect), GuardedList.at(arg_locals, 0), null),
             .dict_pseudo_seed,
             .hasher_finish,
             .hasher_write_bool,
@@ -5820,12 +5812,12 @@ pub const MonoLlvmCodeGen = struct {
         const result = switch (hasher_op) {
             .dict_pseudo_seed => blk: {
                 if (args.len != 0) return error.CompilationFailed;
-                break :blk try self.callBuiltin(builtinSymbol(LowLevelBuiltins.hasherOp(.dict_pseudo_seed)), .i64, &.{}, &.{});
+                break :blk try self.callBuiltin(LowLevelBuiltins.hasherOp(.dict_pseudo_seed), .i64, &.{}, &.{});
             },
             .hasher_finish => blk: {
                 if (args.len != 1) return error.CompilationFailed;
                 const seed = try self.loadHasherState(GuardedList.at(args, 0));
-                break :blk try self.callBuiltin(builtinSymbol(LowLevelBuiltins.hasherOp(.hasher_finish)), .i64, &.{.i64}, &.{seed});
+                break :blk try self.callBuiltin(LowLevelBuiltins.hasherOp(.hasher_finish), .i64, &.{.i64}, &.{seed});
             },
             .hasher_write_bool,
             .hasher_write_u8,
@@ -5842,7 +5834,7 @@ pub const MonoLlvmCodeGen = struct {
                 const value_layout = self.localLayout(GuardedList.at(args, 1));
                 const value = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, value_layout), .i64, value_layout.isSigned());
                 break :blk try self.callBuiltin(
-                    LowLevelBuiltins.hasherOp(op).symbolName(),
+                    LowLevelBuiltins.hasherOp(op),
                     .i64,
                     &.{ .i64, .i8, .i64, .i8 },
                     &.{
@@ -5859,14 +5851,14 @@ pub const MonoLlvmCodeGen = struct {
                 const value = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1)));
                 const bits32 = wip.cast(.bitcast, value, .i32, "") catch return error.OutOfMemory;
                 const bits64 = try self.coerceScalar(bits32, .i64, false);
-                break :blk try self.callBuiltin(builtinSymbol(LowLevelBuiltins.hasherOp(.hasher_write_f32)), .i64, &.{ .i64, .i64 }, &.{ seed, bits64 });
+                break :blk try self.callBuiltin(LowLevelBuiltins.hasherOp(.hasher_write_f32), .i64, &.{ .i64, .i64 }, &.{ seed, bits64 });
             },
             .hasher_write_f64 => blk: {
                 if (args.len != 2) return error.CompilationFailed;
                 const seed = try self.loadHasherState(GuardedList.at(args, 0));
                 const value = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1)));
                 const bits = wip.cast(.bitcast, value, .i64, "") catch return error.OutOfMemory;
-                break :blk try self.callBuiltin(builtinSymbol(LowLevelBuiltins.hasherOp(.hasher_write_f64)), .i64, &.{ .i64, .i64 }, &.{ seed, bits });
+                break :blk try self.callBuiltin(LowLevelBuiltins.hasherOp(.hasher_write_f64), .i64, &.{ .i64, .i64 }, &.{ seed, bits });
             },
             .hasher_write_u128,
             .hasher_write_i128,
@@ -5877,7 +5869,7 @@ pub const MonoLlvmCodeGen = struct {
                 const value = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1)));
                 const parts = try self.splitI128Value(value);
                 break :blk try self.callBuiltin(
-                    LowLevelBuiltins.hasherOp(op).symbolName(),
+                    LowLevelBuiltins.hasherOp(op),
                     .i64,
                     &.{ .i64, .i8, .i64, .i64 },
                     &.{
@@ -5894,7 +5886,7 @@ pub const MonoLlvmCodeGen = struct {
                 var list_args = try self.rocListArgs1(GuardedList.at(args, 1));
                 defer list_args.deinit(self.allocator);
                 break :blk try self.callBuiltin(
-                    builtinSymbol(LowLevelBuiltins.hasherOp(.hasher_write_bytes)),
+                    LowLevelBuiltins.hasherOp(.hasher_write_bytes),
                     .i64,
                     &.{ .i64, .i8, try self.ptrType(), self.ptrSizedIntType() },
                     &.{
@@ -5911,7 +5903,7 @@ pub const MonoLlvmCodeGen = struct {
                 var str_args = try self.rocStrArgs1(GuardedList.at(args, 1));
                 defer str_args.deinit(self.allocator);
                 break :blk try self.callBuiltin(
-                    builtinSymbol(LowLevelBuiltins.hasherOp(.hasher_write_str)),
+                    LowLevelBuiltins.hasherOp(.hasher_write_str),
                     .i64,
                     &.{ .i64, try self.ptrType(), self.ptrSizedIntType(), self.ptrSizedIntType() },
                     &.{ seed, str_args.values.items[0], str_args.values.items[1], str_args.values.items[2] },
@@ -5925,7 +5917,7 @@ pub const MonoLlvmCodeGen = struct {
     fn emitCryptoLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype) Error!void {
         const Arity = enum { zero, one, two };
         const CryptoInfo = struct {
-            name: []const u8,
+            name: BuiltinSymbol,
             arity: Arity,
         };
         const CryptoOp = enum(u16) {
@@ -5940,14 +5932,14 @@ pub const MonoLlvmCodeGen = struct {
         };
         const crypto_op = std.enums.fromInt(CryptoOp, @backingInt(op)) orelse return error.UnsupportedLowLevel;
         const info: CryptoInfo = switch (crypto_op) {
-            .crypto_sha256_hash_bytes => .{ .name = builtinSymbol(LowLevelBuiltins.cryptoOp(.crypto_sha256_hash_bytes)), .arity = Arity.one },
-            .crypto_sha256_hasher_empty => .{ .name = builtinSymbol(LowLevelBuiltins.cryptoOp(.crypto_sha256_hasher_empty)), .arity = Arity.zero },
-            .crypto_sha256_hasher_write => .{ .name = builtinSymbol(LowLevelBuiltins.cryptoOp(.crypto_sha256_hasher_write)), .arity = Arity.two },
-            .crypto_sha256_hasher_finish => .{ .name = builtinSymbol(LowLevelBuiltins.cryptoOp(.crypto_sha256_hasher_finish)), .arity = Arity.one },
-            .crypto_blake3_hash_bytes => .{ .name = builtinSymbol(LowLevelBuiltins.cryptoOp(.crypto_blake3_hash_bytes)), .arity = Arity.one },
-            .crypto_blake3_hasher_empty => .{ .name = builtinSymbol(LowLevelBuiltins.cryptoOp(.crypto_blake3_hasher_empty)), .arity = Arity.zero },
-            .crypto_blake3_hasher_write => .{ .name = builtinSymbol(LowLevelBuiltins.cryptoOp(.crypto_blake3_hasher_write)), .arity = Arity.two },
-            .crypto_blake3_hasher_finish => .{ .name = builtinSymbol(LowLevelBuiltins.cryptoOp(.crypto_blake3_hasher_finish)), .arity = Arity.one },
+            .crypto_sha256_hash_bytes => .{ .name = LowLevelBuiltins.cryptoOp(.crypto_sha256_hash_bytes), .arity = Arity.one },
+            .crypto_sha256_hasher_empty => .{ .name = LowLevelBuiltins.cryptoOp(.crypto_sha256_hasher_empty), .arity = Arity.zero },
+            .crypto_sha256_hasher_write => .{ .name = LowLevelBuiltins.cryptoOp(.crypto_sha256_hasher_write), .arity = Arity.two },
+            .crypto_sha256_hasher_finish => .{ .name = LowLevelBuiltins.cryptoOp(.crypto_sha256_hasher_finish), .arity = Arity.one },
+            .crypto_blake3_hash_bytes => .{ .name = LowLevelBuiltins.cryptoOp(.crypto_blake3_hash_bytes), .arity = Arity.one },
+            .crypto_blake3_hasher_empty => .{ .name = LowLevelBuiltins.cryptoOp(.crypto_blake3_hasher_empty), .arity = Arity.zero },
+            .crypto_blake3_hasher_write => .{ .name = LowLevelBuiltins.cryptoOp(.crypto_blake3_hasher_write), .arity = Arity.two },
+            .crypto_blake3_hasher_finish => .{ .name = LowLevelBuiltins.cryptoOp(.crypto_blake3_hasher_finish), .arity = Arity.one },
         };
 
         var call_args = CallArgs.init();
@@ -6317,7 +6309,7 @@ pub const MonoLlvmCodeGen = struct {
         const lhs_parts = try self.splitI128Value(lhs);
         const rhs_parts = try self.splitI128Value(rhs);
         const overflowed_i32 = try self.callBuiltin(
-            LowLevelBuiltins.checkedMul128(unsigned).symbolName(),
+            LowLevelBuiltins.checkedMul128(unsigned),
             .i32,
             &.{ try self.ptrType(), try self.ptrType(), .i64, .i64, .i64, .i64 },
             &.{ out_low, out_high, lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high },
@@ -6352,7 +6344,7 @@ pub const MonoLlvmCodeGen = struct {
             LowLevelBuiltins.i128Mod(unsigned)
         else
             return error.UnsupportedLowLevel;
-        return self.callI128BinaryBuiltin(builtin_fn.symbolName(), lhs, rhs);
+        return self.callI128BinaryBuiltin(builtin_fn, lhs, rhs);
     }
 
     fn emitIntegerShift(self: *MonoLlvmCodeGen, op: lir.LowLevel, lhs: LlvmBuilder.Value, rhs: LlvmBuilder.Value, target_layout: layout.Idx) Error!LlvmBuilder.Value {
@@ -6384,19 +6376,19 @@ pub const MonoLlvmCodeGen = struct {
         const result = if (op == .dec_mul)
             // Dec multiplication rescales its i128 payload and uses its dedicated
             // builtin overflow path; it is not an integer-family multiplication.
-            try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.decBinaryArith(.dec_mul)), lhs, rhs)
+            try self.callI128BinaryBuiltin(LowLevelBuiltins.decBinaryArith(.dec_mul), lhs, rhs)
         else if (op == .num_div_by)
-            try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.decBinaryArith(.num_div_by)), lhs, rhs)
+            try self.callI128BinaryBuiltin(LowLevelBuiltins.decBinaryArith(.num_div_by), lhs, rhs)
         else if (op == .num_div_trunc_by)
-            try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.decBinaryArith(.num_div_trunc_by)), lhs, rhs)
+            try self.callI128BinaryBuiltin(LowLevelBuiltins.decBinaryArith(.num_div_trunc_by), lhs, rhs)
             // A Dec's payload is a scaled i128; the truncating remainder and the
             // modulo of the raw payloads are the Dec remainder and modulo, so
             // these route through the same i128 wrappers the dev/wasm backends
             // use.
         else if (op == .num_rem_by)
-            try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.i128DivRem(true, false)), lhs, rhs)
+            try self.callI128BinaryBuiltin(LowLevelBuiltins.i128DivRem(true, false), lhs, rhs)
         else if (op == .num_mod_by)
-            try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.i128Mod(false)), lhs, rhs)
+            try self.callI128BinaryBuiltin(LowLevelBuiltins.i128Mod(false), lhs, rhs)
         else
             return error.UnsupportedLowLevel;
         try self.storeScalar(self.slot(target).ptr, .dec, result);
@@ -6406,14 +6398,14 @@ pub const MonoLlvmCodeGen = struct {
     /// result, passing each operand as a 64-bit low/high pair. Dec's payload is
     /// an i128, so its arithmetic wrappers share this shape with the plain i128
     /// ones.
-    fn callI128BinaryBuiltin(self: *MonoLlvmCodeGen, name: []const u8, lhs: LlvmBuilder.Value, rhs: LlvmBuilder.Value) Error!LlvmBuilder.Value {
+    fn callI128BinaryBuiltin(self: *MonoLlvmCodeGen, builtin_fn: BuiltinSymbol, lhs: LlvmBuilder.Value, rhs: LlvmBuilder.Value) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const out_low = try self.allocEntryBlockSlot(.i64, 1, LlvmBuilder.Alignment.fromByteUnits(8), "dec_low");
         const out_high = try self.allocEntryBlockSlot(.i64, 1, LlvmBuilder.Alignment.fromByteUnits(8), "dec_high");
         const lhs_parts = try self.splitI128Value(lhs);
         const rhs_parts = try self.splitI128Value(rhs);
         try self.callBuiltinVoid(
-            name,
+            builtin_fn,
             &.{ try self.ptrType(), try self.ptrType(), .i64, .i64, .i64, .i64 },
             &.{ out_low, out_high, lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high },
         );
@@ -6423,13 +6415,13 @@ pub const MonoLlvmCodeGen = struct {
         return self.combineI128Parts(low, high);
     }
 
-    fn callDecUnaryBuiltin(self: *MonoLlvmCodeGen, name: []const u8, value: LlvmBuilder.Value) Error!LlvmBuilder.Value {
+    fn callDecUnaryBuiltin(self: *MonoLlvmCodeGen, builtin_fn: BuiltinSymbol, value: LlvmBuilder.Value) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const out_low = try self.allocEntryBlockSlot(.i64, 1, LlvmBuilder.Alignment.fromByteUnits(8), "dec_low");
         const out_high = try self.allocEntryBlockSlot(.i64, 1, LlvmBuilder.Alignment.fromByteUnits(8), "dec_high");
         const parts = try self.splitI128Value(value);
         try self.callBuiltinVoid(
-            name,
+            builtin_fn,
             &.{ try self.ptrType(), try self.ptrType(), .i64, .i64 },
             &.{ out_low, out_high, parts.low, parts.high },
         );
@@ -6652,7 +6644,7 @@ pub const MonoLlvmCodeGen = struct {
         );
         const mode = if ((unique_args & (@as(u64, 1) << 1)) != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
         try self.callBuiltinVoid(
-            builtinSymbol(.simd_store_16),
+            .simd_store_16,
             &.{ try self.ptrType(), .i64, .i64, try self.ptrType(), self.ptrSizedIntType(), self.ptrSizedIntType(), .i64, .i8 },
             &.{ self.slot(target).ptr, parts.low, parts.high, list[0], list[1], list[2], index, builder.intValue(.i8, @backingInt(mode)) catch return error.OutOfMemory },
         );
@@ -6666,7 +6658,7 @@ pub const MonoLlvmCodeGen = struct {
         const list = try self.rocListArgFields(self.slot(GuardedList.at(args, 1)).ptr);
         const mode = if ((unique_args & (@as(u64, 1) << 1)) != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
         try self.callBuiltinVoid(
-            builtinSymbol(.simd_append_16),
+            .simd_append_16,
             &.{ try self.ptrType(), .i64, .i64, try self.ptrType(), self.ptrSizedIntType(), self.ptrSizedIntType(), .i8 },
             &.{ self.slot(target).ptr, parts.low, parts.high, list[0], list[1], list[2], builder.intValue(.i8, @backingInt(mode)) catch return error.OutOfMemory },
         );
@@ -6820,7 +6812,7 @@ pub const MonoLlvmCodeGen = struct {
                     const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
                     const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
                     const name = if (vector.laneBits() == 8) "llvm.x86.sse2.pavg.b" else "llvm.x86.sse2.pavg.w";
-                    try self.storeSimdLocal(target, try self.callBuiltin(name, vector_ty, &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
+                    try self.storeSimdLocal(target, try self.callIntrinsic(name, vector_ty, &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
                     return;
                 }
                 const wide_bits: u16 = vector.laneBits() * 2;
@@ -6928,7 +6920,7 @@ pub const MonoLlvmCodeGen = struct {
                 if (self.isX86Simd() and self.hasX86Feature(.ssse3)) {
                     const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
                     const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
-                    const multiplied = try self.callBuiltin("llvm.x86.ssse3.pmul.hr.sw.128", vector_ty, &.{ vector_ty, vector_ty }, &.{ lhs, rhs });
+                    const multiplied = try self.callIntrinsic("llvm.x86.ssse3.pmul.hr.sw.128", vector_ty, &.{ vector_ty, vector_ty }, &.{ lhs, rhs });
                     const minimum = try self.simdRawSplat(16, 8, 0x8000);
                     const lhs_min = wip.icmp(.eq, lhs, minimum, "") catch return error.OutOfMemory;
                     const rhs_min = wip.icmp(.eq, rhs, minimum, "") catch return error.OutOfMemory;
@@ -6940,7 +6932,7 @@ pub const MonoLlvmCodeGen = struct {
                 if (self.isAarch64Simd()) {
                     const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
                     const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
-                    try self.storeSimdLocal(target, try self.callBuiltin("llvm.aarch64.neon.sqrdmulh.v8i16", vector_ty, &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
+                    try self.storeSimdLocal(target, try self.callIntrinsic("llvm.aarch64.neon.sqrdmulh.v8i16", vector_ty, &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
                     return;
                 }
                 const lane_count = vector.laneCount();
@@ -6970,7 +6962,7 @@ pub const MonoLlvmCodeGen = struct {
                 if (self.isX86Simd()) {
                     const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
                     const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
-                    try self.storeSimdLocal(target, try self.callBuiltin("llvm.x86.sse2.pmadd.wd", try self.simdRawType(32, 4), &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
+                    try self.storeSimdLocal(target, try self.callIntrinsic("llvm.x86.sse2.pmadd.wd", try self.simdRawType(32, 4), &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
                     return;
                 }
                 const lhs = try self.simdExtendVector(try self.loadSimdLocal(GuardedList.at(args, 0)), 32, 8, true);
@@ -6984,7 +6976,7 @@ pub const MonoLlvmCodeGen = struct {
                 if (self.isX86Simd() and self.hasX86Feature(.ssse3)) {
                     const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
                     const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
-                    try self.storeSimdLocal(target, try self.callBuiltin("llvm.x86.ssse3.pmadd.ub.sw.128", try self.simdRawType(16, 8), &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
+                    try self.storeSimdLocal(target, try self.callIntrinsic("llvm.x86.ssse3.pmadd.ub.sw.128", try self.simdRawType(16, 8), &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
                     return;
                 }
                 // A u8*i8 product fits in i16, but the sum of two products
@@ -7004,7 +6996,7 @@ pub const MonoLlvmCodeGen = struct {
                 if (self.isX86Simd()) {
                     const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
                     const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
-                    try self.storeSimdLocal(target, try self.callBuiltin("llvm.x86.sse2.psad.bw", try self.simdRawType(64, 2), &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
+                    try self.storeSimdLocal(target, try self.callIntrinsic("llvm.x86.sse2.psad.bw", try self.simdRawType(64, 2), &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
                     return;
                 }
                 try self.emitSimdSad(target, args);
@@ -7179,12 +7171,12 @@ pub const MonoLlvmCodeGen = struct {
             // zeroes. That is one `paddusb`, and emitting it directly keeps the
             // guarantee independent of whether an optimizer is running.
             const biased = wip.callIntrinsic(.normal, .none, .@"uadd.sat", &.{vector_ty}, &.{ indices, try self.simdRawSplat(8, 16, 0x70) }, "") catch return error.OutOfMemory;
-            try self.storeSimdLocal(target, try self.callBuiltin("llvm.x86.ssse3.pshuf.b.128", vector_ty, &.{ vector_ty, vector_ty }, &.{ table, biased }));
+            try self.storeSimdLocal(target, try self.callIntrinsic("llvm.x86.ssse3.pshuf.b.128", vector_ty, &.{ vector_ty, vector_ty }, &.{ table, biased }));
             return;
         }
         // TBL is part of NEON, which Armv8.0-A makes mandatory.
         if (self.isAarch64Simd()) {
-            try self.storeSimdLocal(target, try self.callBuiltin("llvm.aarch64.neon.tbl1.v16i8", vector_ty, &.{ vector_ty, vector_ty }, &.{ table, indices }));
+            try self.storeSimdLocal(target, try self.callIntrinsic("llvm.aarch64.neon.tbl1.v16i8", vector_ty, &.{ vector_ty, vector_ty }, &.{ table, indices }));
             return;
         }
         var result = builder.zeroInitValue(vector_ty) catch return error.OutOfMemory;
@@ -7277,7 +7269,7 @@ pub const MonoLlvmCodeGen = struct {
         if (self.isX86Simd() and self.hasX86Feature(.pclmul)) {
             const vector_ty = try self.simdRawType(64, 2);
             const immediate: u8 = if (high) 0x11 else 0x00;
-            try self.storeSimdLocal(target, try self.callBuiltin(
+            try self.storeSimdLocal(target, try self.callIntrinsic(
                 "llvm.x86.pclmulqdq",
                 vector_ty,
                 &.{ vector_ty, vector_ty, .i8 },
@@ -7289,7 +7281,7 @@ pub const MonoLlvmCodeGen = struct {
         // Armv8.0-A target without it takes the bitwise path below.
         if (self.isAarch64Simd() and self.hasAarch64Feature(.aes)) {
             const byte_vector_ty = try self.simdRawType(8, 16);
-            const product = try self.callBuiltin("llvm.aarch64.neon.pmull64", byte_vector_ty, &.{ .i64, .i64 }, &.{ lhs64, rhs64 });
+            const product = try self.callIntrinsic("llvm.aarch64.neon.pmull64", byte_vector_ty, &.{ .i64, .i64 }, &.{ lhs64, rhs64 });
             try self.storeSimdLocal(target, product);
             return;
         }
@@ -7490,7 +7482,7 @@ pub const MonoLlvmCodeGen = struct {
         const parts = try self.splitI128Value(value);
         const float_ty: LlvmBuilder.Type = if (is_f32) .float else .double;
         const result = try self.callBuiltin(
-            LowLevelBuiltins.int128ToFloat(is_signed, is_f32).symbolName(),
+            LowLevelBuiltins.int128ToFloat(is_signed, is_f32),
             float_ty,
             &.{ .i64, .i64 },
             &.{ parts.low, parts.high },
@@ -7503,7 +7495,7 @@ pub const MonoLlvmCodeGen = struct {
         const parts = try self.splitI128Value(dec_value);
         const float_ty: LlvmBuilder.Type = if (is_f32) .float else .double;
         const result = try self.callBuiltin(
-            LowLevelBuiltins.decToFloat(is_f32).symbolName(),
+            LowLevelBuiltins.decToFloat(is_f32),
             float_ty,
             &.{ .i64, .i64 },
             &.{ parts.low, parts.high },
@@ -7522,7 +7514,7 @@ pub const MonoLlvmCodeGen = struct {
         const payload = try self.loadScalar(self.slot(arg).ptr, .dec);
         const scale = builder.intValue(.i128, builtins.dec.RocDec.one_point_zero_i128) catch return error.OutOfMemory;
         const whole = try self.callI128BinaryBuiltin(
-            builtinSymbol(LowLevelBuiltins.i128DivRem(false, false)),
+            LowLevelBuiltins.i128DivRem(false, false),
             payload,
             scale,
         );
@@ -7540,10 +7532,10 @@ pub const MonoLlvmCodeGen = struct {
         const target_bits: u32 = spec.dst.bits();
         const builder = self.builder orelse return error.CompilationFailed;
         const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
-        const name = if (src_is_f32) builtinSymbol(.f32_to_int_wrap) else builtinSymbol(.f64_to_int_wrap);
+        const builtin_fn: BuiltinSymbol = if (src_is_f32) .f32_to_int_wrap else .f64_to_int_wrap;
         const float_ty: LlvmBuilder.Type = if (src_is_f32) .float else .double;
         try self.callBuiltinVoid(
-            name,
+            builtin_fn,
             &.{ try self.ptrType(), float_ty, .i32, .i32 },
             &.{
                 self.slot(target).ptr,
@@ -7561,8 +7553,8 @@ pub const MonoLlvmCodeGen = struct {
         const value64 = try self.coerceScalar(value, .i64, arg_layout.isSigned());
         const low_ptr = try self.allocEntryBlockSlot(.i64, 1, LlvmBuilder.Alignment.fromByteUnits(8), "dec_low");
         const high_ptr = try self.allocEntryBlockSlot(.i64, 1, LlvmBuilder.Alignment.fromByteUnits(8), "dec_high");
-        const fn_name = if (arg_layout.isSigned()) builtinSymbol(.i64_to_dec) else builtinSymbol(.u64_to_dec);
-        try self.callBuiltinVoid(fn_name, &.{ try self.ptrType(), try self.ptrType(), .i64 }, &.{ low_ptr, high_ptr, value64 });
+        const builtin_fn: BuiltinSymbol = if (arg_layout.isSigned()) .i64_to_dec else .u64_to_dec;
+        try self.callBuiltinVoid(builtin_fn, &.{ try self.ptrType(), try self.ptrType(), .i64 }, &.{ low_ptr, high_ptr, value64 });
         const low = wip.load(.normal, .i64, low_ptr, LlvmBuilder.Alignment.fromByteUnits(8), "") catch return error.OutOfMemory;
         const high = wip.load(.normal, .i64, high_ptr, LlvmBuilder.Alignment.fromByteUnits(8), "") catch return error.OutOfMemory;
         try self.storeScalar(self.slot(target).ptr, .dec, try self.combineI128Parts(low, high));
@@ -7602,7 +7594,7 @@ pub const MonoLlvmCodeGen = struct {
                     break :blk (@as(i64, 1) << shift) - 1;
                 };
                 try self.callBuiltinVoid(
-                    builtinSymbol(LowLevelBuiltins.intTryConvert(false, true)),
+                    LowLevelBuiltins.intTryConvert(false, true),
                     &.{ try self.ptrType(), .i64, .i64, .i64, .i32, .i32 },
                     &.{
                         allocated.ptr,
@@ -7624,7 +7616,7 @@ pub const MonoLlvmCodeGen = struct {
                     break :blk (@as(u64, 1) << shift) - 1;
                 };
                 try self.callBuiltinVoid(
-                    builtinSymbol(LowLevelBuiltins.intTryConvert(false, false)),
+                    LowLevelBuiltins.intTryConvert(false, false),
                     &.{ try self.ptrType(), .i64, .i64, .i32, .i32 },
                     &.{
                         allocated.ptr,
@@ -7642,7 +7634,7 @@ pub const MonoLlvmCodeGen = struct {
         const value128 = try self.coerceScalar(value, .i128, source_signed);
         const parts = try self.splitI128Value(value128);
         try self.callBuiltinVoid(
-            LowLevelBuiltins.intTryConvert(true, source_signed).symbolName(),
+            LowLevelBuiltins.intTryConvert(true, source_signed),
             &.{ try self.ptrType(), .i64, .i64, .i32, .i32, .i32, .i32 },
             &.{
                 allocated.ptr,
@@ -7707,7 +7699,7 @@ pub const MonoLlvmCodeGen = struct {
         const float_ty: LlvmBuilder.Type = if (is_f32) .float else .double;
 
         try self.callBuiltinVoid(
-            if (is_f32) builtinSymbol(.f32_to_int_try_unsafe) else builtinSymbol(.f64_to_int_try_unsafe),
+            if (is_f32) .f32_to_int_try_unsafe else .f64_to_int_try_unsafe,
             &.{ try self.ptrType(), float_ty, .i32, .i32, .i32, .i32, .i32 },
             &.{
                 self.slot(target).ptr,
@@ -7732,7 +7724,7 @@ pub const MonoLlvmCodeGen = struct {
         const value = try self.loadScalar(self.slot(arg).ptr, .f64);
 
         try self.callBuiltinVoid(
-            builtinSymbol(.f64_to_f32_try_unsafe),
+            .f64_to_f32_try_unsafe,
             &.{ try self.ptrType(), .double, .i32, .i32 },
             &.{
                 allocated.ptr,
@@ -7750,7 +7742,7 @@ pub const MonoLlvmCodeGen = struct {
         const parts = try self.splitI128Value(value);
 
         try self.callBuiltinVoid(
-            builtinSymbol(.dec_to_f32_try_unsafe),
+            .dec_to_f32_try_unsafe,
             &.{ try self.ptrType(), .i64, .i64, .i32, .i32 },
             &.{
                 allocated.ptr,
@@ -7769,7 +7761,7 @@ pub const MonoLlvmCodeGen = struct {
         const parts = try self.splitI128Value(value);
 
         try self.callBuiltinVoid(
-            LowLevelBuiltins.int128ToDec(is_signed).symbolName(),
+            LowLevelBuiltins.int128ToDec(is_signed),
             &.{ try self.ptrType(), .i64, .i64, .i32, .i32 },
             &.{
                 allocated.ptr,
@@ -7788,7 +7780,7 @@ pub const MonoLlvmCodeGen = struct {
         const parts = try self.splitI128Value(value);
 
         try self.callBuiltinVoid(
-            builtinSymbol(.dec_to_int_try_unsafe),
+            .dec_to_int_try_unsafe,
             &.{ try self.ptrType(), .i64, .i64, .i32, .i32, .i32, .i32, .i32 },
             &.{
                 self.slot(target).ptr,
@@ -8957,7 +8949,7 @@ pub const MonoLlvmCodeGen = struct {
         const msg_len = builder.intValue(self.ptrSizedIntType(), msg.len) catch return error.OutOfMemory;
         if (!try self.emitDefaultPlatformCrashWithFrames(msg_ptr, msg_len)) {
             try self.callBuiltinVoid(
-                builtinSymbol(.checked_error_crashed),
+                .checked_error_crashed,
                 &.{ try self.ptrType(), self.ptrSizedIntType() },
                 &.{ msg_ptr, msg_len },
             );
@@ -8973,7 +8965,7 @@ pub const MonoLlvmCodeGen = struct {
         const msg = try self.emitStrMatchSourceShape(self.slot(message).ptr);
         if (!try self.emitDefaultPlatformCrashWithFrames(msg.bytes, msg.len)) {
             try self.callBuiltinVoid(
-                builtinSymbol(builtin_fn),
+                builtin_fn,
                 &.{try self.ptrType()},
                 &.{self.slot(message).ptr},
             );
@@ -9106,7 +9098,7 @@ pub const MonoLlvmCodeGen = struct {
             return;
         }
         try self.callBuiltinVoid(
-            builtinSymbol(.str_from_literal),
+            .str_from_literal,
             &.{ try self.ptrType(), try self.ptrType(), self.ptrSizedIntType() },
             &.{
                 out,
@@ -9976,23 +9968,23 @@ pub const MonoLlvmCodeGen = struct {
     /// `unique_args` is non-null for wrappers whose first argument carries the
     /// op's runtime uniqueness check; the update-mode argument is appended just
     /// before roc_ops.
-    fn emitStrRetBuiltin(self: *MonoLlvmCodeGen, target: LocalId, name: []const u8, args: anytype, unique_args: ?u64) Error!void {
+    fn emitStrRetBuiltin(self: *MonoLlvmCodeGen, target: LocalId, builtin_fn: BuiltinSymbol, args: anytype, unique_args: ?u64) Error!void {
         var call_args = try self.rocStrArgs2(GuardedList.at(args, 0), GuardedList.at(args, 1), true);
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         if (unique_args) |mask| try self.appendUpdateModeArg(&call_args, mask);
-        try self.callBuiltinOut(name, call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(builtin_fn, call_args.types.items, call_args.values.items);
     }
 
     /// `unique_args` is non-null for wrappers whose first argument carries the
     /// op's runtime uniqueness check; the update-mode argument is appended just
     /// before roc_ops.
-    fn emitStrUnaryRetBuiltin(self: *MonoLlvmCodeGen, target: LocalId, name: []const u8, arg: LocalId, unique_args: ?u64) Error!void {
+    fn emitStrUnaryRetBuiltin(self: *MonoLlvmCodeGen, target: LocalId, builtin_fn: BuiltinSymbol, arg: LocalId, unique_args: ?u64) Error!void {
         var call_args = try self.rocStrArgs1(arg);
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         if (unique_args) |mask| try self.appendUpdateModeArg(&call_args, mask);
-        try self.callBuiltinOut(name, call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(builtin_fn, call_args.types.items, call_args.values.items);
     }
 
     fn emitStrCountUtf8Bytes(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
@@ -10013,7 +10005,7 @@ pub const MonoLlvmCodeGen = struct {
         );
         try call_args.append(self.allocator, .i64, index);
         const result = try self.callBuiltin(
-            builtinSymbol(LowLevelBuiltins.strOp(.str_get_utf8_byte_unsafe)),
+            LowLevelBuiltins.strOp(.str_get_utf8_byte_unsafe),
             .i8,
             call_args.types.items,
             call_args.values.items,
@@ -10038,7 +10030,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, .i64, start);
         try call_args.append(self.allocator, .i64, length);
         try self.callBuiltinVoid(
-            builtinSymbol(LowLevelBuiltins.strOp(.str_substring_unsafe)),
+            LowLevelBuiltins.strOp(.str_substring_unsafe),
             call_args.types.items,
             call_args.values.items,
         );
@@ -10066,7 +10058,7 @@ pub const MonoLlvmCodeGen = struct {
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), target_slot.ptr);
         try call_args.append(self.allocator, try self.ptrType(), layout_ptr);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(op)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.strOp(op), call_args.types.items, call_args.values.items);
     }
 
     fn emitStrDropPrefixCaselessAscii(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
@@ -10088,7 +10080,7 @@ pub const MonoLlvmCodeGen = struct {
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), target_slot.ptr);
         try call_args.append(self.allocator, try self.ptrType(), layout_ptr);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_drop_prefix_caseless_ascii)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.strOp(.str_drop_prefix_caseless_ascii), call_args.types.items, call_args.values.items);
     }
 
     fn emitStrJoinWith(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
@@ -10102,7 +10094,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         try call_args.types.appendSlice(self.allocator, sep_args.types.items);
         try call_args.values.appendSlice(self.allocator, sep_args.values.items);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_join_with)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.strOp(.str_join_with), call_args.types.items, call_args.values.items);
     }
 
     fn emitStrRepeat(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
@@ -10110,12 +10102,12 @@ pub const MonoLlvmCodeGen = struct {
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), .i64, false));
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_repeat)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.strOp(.str_repeat), call_args.types.items, call_args.values.items);
     }
 
     fn emitStrWithCapacity(self: *MonoLlvmCodeGen, target: LocalId, capacity: LocalId) Error!void {
         const cap = try self.coerceScalar(try self.loadScalar(self.slot(capacity).ptr, self.localLayout(capacity)), .i64, false);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_with_capacity)), &.{ try self.ptrType(), .i64 }, &.{ self.slot(target).ptr, cap });
+        try self.callBuiltinVoid(LowLevelBuiltins.strOp(.str_with_capacity), &.{ try self.ptrType(), .i64 }, &.{ self.slot(target).ptr, cap });
     }
 
     fn emitStrReserve(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
@@ -10125,21 +10117,21 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         try call_args.append(self.allocator, .i64, spare);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_reserve)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.strOp(.str_reserve), call_args.types.items, call_args.values.items);
     }
 
     fn emitStrToUtf8(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         var call_args = try self.rocStrArgs1(arg);
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_to_utf8)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.strOp(.str_to_utf8), call_args.types.items, call_args.values.items);
     }
 
     fn emitStrFromByteList(self: *MonoLlvmCodeGen, comptime op: lir.LowLevel, target: LocalId, arg: LocalId) Error!void {
         var call_args = try self.rocListArgs1(arg);
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(op)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.strOp(op), call_args.types.items, call_args.values.items);
     }
 
     fn emitStrFromUtf8(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
@@ -10163,7 +10155,7 @@ pub const MonoLlvmCodeGen = struct {
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), target_slot.ptr);
         try call_args.append(self.allocator, try self.ptrType(), layout_ptr);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_from_utf8)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.strOp(.str_from_utf8), call_args.types.items, call_args.values.items);
     }
 
     fn emitIntFromStr(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, width: u8, signed: bool) Error!void {
@@ -10176,7 +10168,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, .i8, builder.intValue(.i8, width) catch return error.OutOfMemory);
         try call_args.append(self.allocator, .i1, builder.intValue(.i1, @intFromBool(signed)) catch return error.OutOfMemory);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, disc_offset) catch return error.OutOfMemory);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.numFromStr(.int)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.numFromStr(.int), call_args.types.items, call_args.values.items);
     }
 
     fn emitDecFromStr(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
@@ -10187,7 +10179,7 @@ pub const MonoLlvmCodeGen = struct {
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), allocated.ptr);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, disc_offset) catch return error.OutOfMemory);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.numFromStr(.dec)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.numFromStr(.dec), call_args.types.items, call_args.values.items);
     }
 
     fn emitFloatFromStr(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, width: u8) Error!void {
@@ -10199,7 +10191,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.prepend(self.allocator, try self.ptrType(), allocated.ptr);
         try call_args.append(self.allocator, .i8, builder.intValue(.i8, width) catch return error.OutOfMemory);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, disc_offset) catch return error.OutOfMemory);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.numFromStr(.float)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.numFromStr(.float), call_args.types.items, call_args.values.items);
     }
 
     fn emitNumFromStrPrefix(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, arg: LocalId) Error!void {
@@ -10240,7 +10232,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, try self.ptrType(), layout_ptr);
         const symbol = switch (class) {
             inline .int, .float, .dec => |c| switch (spec.source) {
-                inline .str, .utf8 => |src| builtinSymbol(comptime LowLevelBuiltins.numFromStrPrefix(c, src)),
+                inline .str, .utf8 => |src| comptime LowLevelBuiltins.numFromStrPrefix(c, src),
             },
         };
         try self.callBuiltinVoid(symbol, call_args.types.items, call_args.values.items);
@@ -10255,7 +10247,7 @@ pub const MonoLlvmCodeGen = struct {
         const hi = (self.wip orelse return error.CompilationFailed).bin(.lshr, value, builder.intValue(.i128, 64) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const hi64 = try self.coerceScalar(hi, .i64, false);
         const byte_width: u8 = @intCast(bits / 8);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.numToStr(.int)), &.{ try self.ptrType(), .i64, .i64, .i8, .i1 }, &.{
+        try self.callBuiltinVoid(LowLevelBuiltins.numToStr(.int), &.{ try self.ptrType(), .i64, .i64, .i8, .i1 }, &.{
             self.slot(target).ptr,
             lo,
             hi64,
@@ -10272,7 +10264,7 @@ pub const MonoLlvmCodeGen = struct {
             try self.coerceScalar(wip.cast(.bitcast, value, .i32, "") catch return error.OutOfMemory, .i64, false)
         else
             wip.cast(.bitcast, value, .i64, "") catch return error.OutOfMemory;
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.numToStr(.float)), &.{ try self.ptrType(), .i64, .i1 }, &.{
+        try self.callBuiltinVoid(LowLevelBuiltins.numToStr(.float), &.{ try self.ptrType(), .i64, .i1 }, &.{
             self.slot(target).ptr,
             bits,
             builder.intValue(.i1, @intFromBool(arg_layout == .f32)) catch return error.OutOfMemory,
@@ -10343,7 +10335,7 @@ pub const MonoLlvmCodeGen = struct {
     fn emitNumericSqrt(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         if (self.localLayout(target) == .dec) {
             const value = try self.loadScalar(self.slot(arg).ptr, .dec);
-            const result = try self.callDecUnaryBuiltin(builtinSymbol(LowLevelBuiltins.unaryMathDec(.num_sqrt)), value);
+            const result = try self.callDecUnaryBuiltin(LowLevelBuiltins.unaryMathDec(.num_sqrt), value);
             try self.storeScalar(self.slot(target).ptr, .dec, result);
             return;
         }
@@ -10353,7 +10345,7 @@ pub const MonoLlvmCodeGen = struct {
     fn emitNumericUnaryMath(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, op: lir.LowLevel) Error!void {
         if (self.localLayout(target) == .dec) {
             const value = try self.loadScalar(self.slot(arg).ptr, .dec);
-            const result = try self.callDecUnaryBuiltin(LowLevelBuiltins.unaryMathDec(op).symbolName(), value);
+            const result = try self.callDecUnaryBuiltin(LowLevelBuiltins.unaryMathDec(op), value);
             try self.storeScalar(self.slot(target).ptr, .dec, result);
             return;
         }
@@ -10362,7 +10354,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.emitNumericFloatUnaryBuiltin(
             target,
             arg,
-            LowLevelBuiltins.unaryMathFloat(op, target_layout == .f32).symbolName(),
+            LowLevelBuiltins.unaryMathFloat(op, target_layout == .f32),
         );
     }
 
@@ -10382,7 +10374,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeScalar(self.slot(target).ptr, target_layout, result);
     }
 
-    fn emitNumericFloatUnaryBuiltin(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, name: []const u8) Error!void {
+    fn emitNumericFloatUnaryBuiltin(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, builtin_fn: BuiltinSymbol) Error!void {
         const target_layout = self.localLayout(target);
         const target_ty: LlvmBuilder.Type = switch (target_layout) {
             .f32 => .float,
@@ -10391,7 +10383,7 @@ pub const MonoLlvmCodeGen = struct {
         };
         const value = try self.coerceScalar(try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg)), target_ty, false);
         const result = try self.callBuiltin(
-            name,
+            builtin_fn,
             target_ty,
             &.{target_ty},
             &.{value},
@@ -10411,7 +10403,7 @@ pub const MonoLlvmCodeGen = struct {
         const lhs = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, self.localLayout(GuardedList.at(args, 0))), target_ty, false);
         const rhs = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), target_ty, false);
         const result = try self.callBuiltin(
-            builtin_for(target_layout == .f32).symbolName(),
+            builtin_for(target_layout == .f32),
             target_ty,
             &.{ target_ty, target_ty },
             &.{ lhs, rhs },
@@ -10422,14 +10414,14 @@ pub const MonoLlvmCodeGen = struct {
     fn emitDecPow(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         const lhs = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, .dec);
         const rhs = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, .dec);
-        const result = try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.decBinaryArith(.num_pow)), lhs, rhs);
+        const result = try self.callI128BinaryBuiltin(LowLevelBuiltins.decBinaryArith(.num_pow), lhs, rhs);
         try self.storeScalar(self.slot(target).ptr, .dec, result);
     }
 
     fn emitDecAtan2(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         const lhs = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, .dec);
         const rhs = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, .dec);
-        const result = try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.decBinaryArith(.num_atan2)), lhs, rhs);
+        const result = try self.callI128BinaryBuiltin(LowLevelBuiltins.decBinaryArith(.num_atan2), lhs, rhs);
         try self.storeScalar(self.slot(target).ptr, .dec, result);
     }
 
@@ -10439,7 +10431,7 @@ pub const MonoLlvmCodeGen = struct {
         const lo = try self.coerceScalar(value, .i64, false);
         const hi = (self.wip orelse return error.CompilationFailed).bin(.lshr, value, builder.intValue(.i128, 64) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const hi64 = try self.coerceScalar(hi, .i64, false);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.numToStr(.dec)), &.{ try self.ptrType(), .i64, .i64 }, &.{ self.slot(target).ptr, lo, hi64 });
+        try self.callBuiltinVoid(LowLevelBuiltins.numToStr(.dec), &.{ try self.ptrType(), .i64, .i64 }, &.{ self.slot(target).ptr, lo, hi64 });
     }
 
     const CallArgs = struct {
@@ -10548,11 +10540,11 @@ pub const MonoLlvmCodeGen = struct {
         self: *MonoLlvmCodeGen,
         boxy_elem: ?BoxyListElementDesc,
         boxy_symbol: []const u8,
-        builtin_symbol: []const u8,
+        builtin_fn: BuiltinSymbol,
         call_args: *const CallArgs,
     ) Error!void {
         if (boxy_elem != null) return self.callBoxyVoid(boxy_symbol, call_args.types.items, call_args.values.items);
-        try self.callBuiltinOut(builtin_symbol, call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(builtin_fn, call_args.types.items, call_args.values.items);
     }
 
     fn appendBoxyListElementDescArgs(
@@ -10689,7 +10681,7 @@ pub const MonoLlvmCodeGen = struct {
         }
         var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
         defer call_args.deinit(self.allocator);
-        const result = try self.callBuiltin(builtinSymbol(LowLevelBuiltins.listOp(.list_map_can_reuse)), .i8, call_args.types.items, call_args.values.items);
+        const result = try self.callBuiltin(LowLevelBuiltins.listOp(.list_map_can_reuse), .i8, call_args.types.items, call_args.values.items);
         try self.storeIntToLayout(self.slot(target).ptr, result, self.localLayout(target));
     }
 
@@ -10740,7 +10732,7 @@ pub const MonoLlvmCodeGen = struct {
             return;
         }
         const cap = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, self.localLayout(GuardedList.at(args, 0))), .i64, false);
-        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_with_capacity)), &.{ try self.ptrType(), .i64, .i32, self.ptrSizedIntType(), .i1 }, &.{
+        try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_with_capacity), &.{ try self.ptrType(), .i64, .i32, self.ptrSizedIntType(), .i1 }, &.{
             self.slot(target).ptr,
             cap,
             builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory,
@@ -10834,7 +10826,7 @@ pub const MonoLlvmCodeGen = struct {
         // One bit per list argument (bit 0 = lhs, bit 1 = rhs), as one 8-byte
         // parameter so no two sub-8-byte parameters land adjacent on the stack.
         try call_args.append(self.allocator, .i64, builder.intValue(.i64, unique_args & 0b11) catch return error.OutOfMemory);
-        try self.callListBoxyOrBuiltin(boxy_elem, "roc_boxy_list_concat", builtinSymbol(LowLevelBuiltins.listOp(.list_concat)), &call_args);
+        try self.callListBoxyOrBuiltin(boxy_elem, "roc_boxy_list_concat", LowLevelBuiltins.listOp(.list_concat), &call_args);
     }
 
     fn emitListAppendRangeWithin(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
@@ -10855,7 +10847,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_append_range_within)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_append_range_within), call_args.types.items, call_args.values.items);
     }
 
     fn emitListCopyRangeWithin(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
@@ -10875,7 +10867,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try self.appendListElementRcArgs(&call_args, abi, true, true);
-        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_copy_range_within)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_copy_range_within), call_args.types.items, call_args.values.items);
     }
 
     fn emitListAppendRangeWithinUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
@@ -10894,7 +10886,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 2)).ptr, self.localLayout(GuardedList.at(args, 2))), .i64, false));
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try self.appendListElementRcArgs(&call_args, abi, true, false);
-        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_append_range_within_unsafe)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_append_range_within_unsafe), call_args.types.items, call_args.values.items);
     }
 
     fn emitListAppendLeBytes(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
@@ -10955,7 +10947,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, .i64, count);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, 1) catch return error.OutOfMemory);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_append_le_bytes)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_append_le_bytes), call_args.types.items, call_args.values.items);
         if (done) |join| {
             try brAndEnter(wip, join);
         }
@@ -10986,7 +10978,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_append_sublist)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_append_sublist), call_args.types.items, call_args.values.items);
     }
 
     /// Store the canonical value for a list of zero-width elements into
@@ -11021,7 +11013,7 @@ pub const MonoLlvmCodeGen = struct {
         const boxy_elem = self.boxyListElementDescForLocals(abi, &.{list_local}, target);
         try self.appendListElemDescOrRcArgs(&call_args, abi, boxy_elem, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        try self.callListBoxyOrBuiltin(boxy_elem, "roc_boxy_list_prepend", builtinSymbol(LowLevelBuiltins.listOp(.list_prepend)), &call_args);
+        try self.callListBoxyOrBuiltin(boxy_elem, "roc_boxy_list_prepend", LowLevelBuiltins.listOp(.list_prepend), &call_args);
     }
 
     fn emitListSublist(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype, unique_args: u64) Error!void {
@@ -11065,7 +11057,7 @@ pub const MonoLlvmCodeGen = struct {
             try call_args.append(self.allocator, .i64, try self.coerceScalar(slice.start, .i64, false));
             try call_args.append(self.allocator, .i64, try self.coerceScalar(slice.len, .i64, false));
             try call_args.append(self.allocator, .i1, builder.intValue(.i1, @intFromBool(abi.contains_refcounted)) catch return error.OutOfMemory);
-            try self.callBuiltinVoid(LowLevelBuiltins.listOp(op).symbolName(), call_args.types.items, call_args.values.items);
+            try self.callBuiltinVoid(LowLevelBuiltins.listOp(op), call_args.types.items, call_args.values.items);
         } else {
             try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
             try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
@@ -11077,7 +11069,7 @@ pub const MonoLlvmCodeGen = struct {
             if (boxy_elem != null) {
                 try self.callBoxyVoid("roc_boxy_list_sublist", call_args.types.items, call_args.values.items);
             } else {
-                try self.callBuiltinVoid(LowLevelBuiltins.listOp(op).symbolName(), call_args.types.items, call_args.values.items);
+                try self.callBuiltinVoid(LowLevelBuiltins.listOp(op), call_args.types.items, call_args.values.items);
             }
         }
     }
@@ -11111,7 +11103,7 @@ pub const MonoLlvmCodeGen = struct {
             .dec => {
                 const value = try self.loadScalar(ptr, .dec);
                 const parts = try self.splitI128Value(value);
-                const truncated = try self.callBuiltin(builtinSymbol(.dec_to_i64_trunc), .i64, &.{ .i64, .i64 }, &.{ parts.low, parts.high });
+                const truncated = try self.callBuiltin(.dec_to_i64_trunc, .i64, &.{ .i64, .i64 }, &.{ parts.low, parts.high });
                 return self.coerceScalar(truncated, self.ptrSizedIntType(), true);
             },
             .f32, .f64 => return error.CompilationFailed,
@@ -11147,7 +11139,7 @@ pub const MonoLlvmCodeGen = struct {
         const boxy_elem = self.boxyListElementDescForLocals(abi, &.{list_local}, target);
         try self.appendListElemDescOrRcArgs(&call_args, abi, boxy_elem, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        try self.callListBoxyOrBuiltin(boxy_elem, "roc_boxy_list_drop_at", builtinSymbol(LowLevelBuiltins.listOp(.list_drop_at)), &call_args);
+        try self.callListBoxyOrBuiltin(boxy_elem, "roc_boxy_list_drop_at", LowLevelBuiltins.listOp(.list_drop_at), &call_args);
     }
 
     fn emitListSwap(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
@@ -11164,7 +11156,7 @@ pub const MonoLlvmCodeGen = struct {
         const boxy_elem = self.boxyListElementDescForLocals(abi, &.{list_local}, target);
         try self.appendListElemDescOrRcArgs(&call_args, abi, boxy_elem, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        try self.callListBoxyOrBuiltin(boxy_elem, "roc_boxy_list_swap", builtinSymbol(LowLevelBuiltins.listOp(.list_swap)), &call_args);
+        try self.callListBoxyOrBuiltin(boxy_elem, "roc_boxy_list_swap", LowLevelBuiltins.listOp(.list_swap), &call_args);
     }
 
     fn emitListSet(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
@@ -11190,7 +11182,7 @@ pub const MonoLlvmCodeGen = struct {
         // caller owes no drop afterwards.
         try self.appendListElemDescOrRcArgs(&call_args, abi, boxy_elem, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        try self.callListBoxyOrBuiltin(boxy_elem, "roc_boxy_list_set", builtinSymbol(LowLevelBuiltins.listOp(.list_set)), &call_args);
+        try self.callListBoxyOrBuiltin(boxy_elem, "roc_boxy_list_set", LowLevelBuiltins.listOp(.list_set), &call_args);
     }
 
     fn emitListReplaceUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
@@ -11229,13 +11221,13 @@ pub const MonoLlvmCodeGen = struct {
         const boxy_elem = self.boxyListElementDescForLocals(abi, &.{list_local}, null);
         try self.appendListElemDescOrRcArgs(&call_args, abi, boxy_elem, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        try self.callListBoxyOrBuiltin(boxy_elem, "roc_boxy_list_replace", builtinSymbol(LowLevelBuiltins.listOp(.list_replace_unsafe)), &call_args);
+        try self.callListBoxyOrBuiltin(boxy_elem, "roc_boxy_list_replace", LowLevelBuiltins.listOp(.list_replace_unsafe), &call_args);
     }
 
     fn emitListSlackUnique(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
         defer call_args.deinit(self.allocator);
-        const slack = try self.callBuiltin(builtinSymbol(LowLevelBuiltins.listOp(.list_slack_unique)), .i64, call_args.types.items, call_args.values.items);
+        const slack = try self.callBuiltin(LowLevelBuiltins.listOp(.list_slack_unique), .i64, call_args.types.items, call_args.values.items);
         try self.storeIntToLayout(self.slot(target).ptr, slack, self.localLayout(target));
     }
 
@@ -11250,7 +11242,7 @@ pub const MonoLlvmCodeGen = struct {
         }
         var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
         defer call_args.deinit(self.allocator);
-        const owned = try self.callBuiltin(builtinSymbol(LowLevelBuiltins.listOp(.list_owned_unique)), .i64, call_args.types.items, call_args.values.items);
+        const owned = try self.callBuiltin(LowLevelBuiltins.listOp(.list_owned_unique), .i64, call_args.types.items, call_args.values.items);
         try self.storeIntToLayout(self.slot(target).ptr, owned, self.localLayout(target));
     }
 
@@ -11258,7 +11250,7 @@ pub const MonoLlvmCodeGen = struct {
     /// already has the requested spare untouched; they differ only in the
     /// capacity their builtin (`boxy_symbol` or `builtin_symbol`) picks when
     /// the list has to grow.
-    fn emitListReserve(self: *MonoLlvmCodeGen, target: LocalId, comptime boxy_symbol: []const u8, comptime builtin_symbol: []const u8, args: anytype, unique_args: u64) Error!void {
+    fn emitListReserve(self: *MonoLlvmCodeGen, target: LocalId, comptime boxy_symbol: []const u8, comptime builtin_fn: BuiltinSymbol, args: anytype, unique_args: u64) Error!void {
         const abi = self.layouts().builtinListAbi(self.localLayout(GuardedList.at(args, 0)));
         // A list of zero-sized elements owns no allocation, so it carries a
         // length and nothing else and a reserve cannot change anything
@@ -11343,13 +11335,13 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.br(merge_block) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = slow_block };
-        try self.emitListReserveCall(target, boxy_symbol, builtin_symbol, args, unique_args);
+        try self.emitListReserveCall(target, boxy_symbol, builtin_fn, args, unique_args);
         _ = wip.br(merge_block) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = merge_block };
     }
 
-    fn emitListReserveCall(self: *MonoLlvmCodeGen, target: LocalId, comptime boxy_symbol: []const u8, comptime builtin_symbol: []const u8, args: anytype, unique_args: u64) Error!void {
+    fn emitListReserveCall(self: *MonoLlvmCodeGen, target: LocalId, comptime boxy_symbol: []const u8, comptime builtin_fn: BuiltinSymbol, args: anytype, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const list_local = GuardedList.at(args, 0);
         const abi = self.boxyAwareBuiltinListAbi(self.localLayout(list_local));
@@ -11362,7 +11354,7 @@ pub const MonoLlvmCodeGen = struct {
         const boxy_elem = self.boxyListElementDescForLocals(abi, &.{list_local}, target);
         try self.appendListElemDescOrRcArgs(&call_args, abi, boxy_elem, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        try self.callListBoxyOrBuiltin(boxy_elem, boxy_symbol, builtin_symbol, &call_args);
+        try self.callListBoxyOrBuiltin(boxy_elem, boxy_symbol, builtin_fn, &call_args);
     }
 
     fn emitListReleaseExcess(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
@@ -11383,7 +11375,7 @@ pub const MonoLlvmCodeGen = struct {
         const boxy_elem = self.boxyListElementDescForLocals(abi, &.{list_local}, target);
         try self.appendListElemDescOrRcArgs(&call_args, abi, boxy_elem, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        try self.callListBoxyOrBuiltin(boxy_elem, "roc_boxy_list_release_excess_capacity", builtinSymbol(LowLevelBuiltins.listOp(.list_release_excess_capacity)), &call_args);
+        try self.callListBoxyOrBuiltin(boxy_elem, "roc_boxy_list_release_excess_capacity", LowLevelBuiltins.listOp(.list_release_excess_capacity), &call_args);
     }
 
     fn emitListReverse(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
@@ -11403,7 +11395,7 @@ pub const MonoLlvmCodeGen = struct {
         const boxy_elem = self.boxyListElementDescForLocals(abi, &.{list_local}, target);
         try self.appendListElemDescOrRcArgs(&call_args, abi, boxy_elem, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        try self.callListBoxyOrBuiltin(boxy_elem, "roc_boxy_list_reverse", builtinSymbol(LowLevelBuiltins.listOp(.list_reverse)), &call_args);
+        try self.callListBoxyOrBuiltin(boxy_elem, "roc_boxy_list_reverse", LowLevelBuiltins.listOp(.list_reverse), &call_args);
     }
 
     fn emitBoxBox(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
@@ -11438,7 +11430,7 @@ pub const MonoLlvmCodeGen = struct {
                     null;
                 const mode = if ((unique_args & 1) != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
                 const result = try self.callBuiltin(
-                    builtinSymbol(.box_prepare_update),
+                    .box_prepare_update,
                     ptr_ty,
                     &.{ ptr_ty, self.ptrSizedIntType(), .i32, .i1, ptr_ty, ptr_ty, .i8 },
                     &.{
@@ -11783,17 +11775,17 @@ pub const MonoLlvmCodeGen = struct {
         switch (self.layouts().rcHelperPlan(helper_key)) {
             .noop => {},
             .str_incref => try self.emitRcHelperStrIncref(value_ptr, count_value.?, atomicity),
-            .str_decref => try self.emitRcHelperStrDrop(value_ptr, LowLevelBuiltins.rcHelper(.data_ptr_decref, tableAtomicity(atomicity)).symbolName()),
-            .str_free => try self.emitRcHelperStrDrop(value_ptr, builtinSymbol(LowLevelBuiltins.rcHelper(.data_ptr_free, .atomic))),
+            .str_decref => try self.emitRcHelperStrDrop(value_ptr, LowLevelBuiltins.rcHelper(.data_ptr_decref, tableAtomicity(atomicity))),
+            .str_free => try self.emitRcHelperStrDrop(value_ptr, LowLevelBuiltins.rcHelper(.data_ptr_free, .atomic)),
             .list_incref => |list_plan| try self.emitRcHelperListIncref(list_plan, value_ptr, count_value.?, atomicity),
-            .list_decref => |list_plan| try self.emitRcHelperListDrop(list_plan, value_ptr, atomicity, LowLevelBuiltins.rcHelper(.list_decref, tableAtomicity(atomicity)).symbolName()),
-            .list_free => |list_plan| try self.emitRcHelperListDrop(list_plan, value_ptr, atomicity, builtinSymbol(LowLevelBuiltins.rcHelper(.list_free, .atomic))),
+            .list_decref => |list_plan| try self.emitRcHelperListDrop(list_plan, value_ptr, atomicity, LowLevelBuiltins.rcHelper(.list_decref, tableAtomicity(atomicity))),
+            .list_free => |list_plan| try self.emitRcHelperListDrop(list_plan, value_ptr, atomicity, LowLevelBuiltins.rcHelper(.list_free, .atomic)),
             .box_incref => try self.emitRcHelperBoxIncref(value_ptr, count_value.?, atomicity),
-            .box_decref => |box_plan| try self.emitRcHelperBoxDrop(box_plan, value_ptr, atomicity, LowLevelBuiltins.rcHelper(.box_decref, tableAtomicity(atomicity)).symbolName()),
-            .box_free => |box_plan| try self.emitRcHelperBoxDrop(box_plan, value_ptr, atomicity, builtinSymbol(LowLevelBuiltins.rcHelper(.box_free, .atomic))),
+            .box_decref => |box_plan| try self.emitRcHelperBoxDrop(box_plan, value_ptr, atomicity, LowLevelBuiltins.rcHelper(.box_decref, tableAtomicity(atomicity))),
+            .box_free => |box_plan| try self.emitRcHelperBoxDrop(box_plan, value_ptr, atomicity, LowLevelBuiltins.rcHelper(.box_free, .atomic)),
             .erased_callable_incref => try self.emitRcHelperErasedCallableIncref(value_ptr, count_value.?, atomicity),
-            .erased_callable_decref => try self.emitRcHelperErasedCallableDrop(value_ptr, LowLevelBuiltins.rcHelper(.erased_callable_decref, tableAtomicity(atomicity)).symbolName()),
-            .erased_callable_free => try self.emitRcHelperErasedCallableDrop(value_ptr, builtinSymbol(LowLevelBuiltins.rcHelper(.erased_callable_free, .atomic))),
+            .erased_callable_decref => try self.emitRcHelperErasedCallableDrop(value_ptr, LowLevelBuiltins.rcHelper(.erased_callable_decref, tableAtomicity(atomicity))),
+            .erased_callable_free => try self.emitRcHelperErasedCallableDrop(value_ptr, LowLevelBuiltins.rcHelper(.erased_callable_free, .atomic)),
             .struct_ => |struct_plan| try self.emitRcHelperStruct(struct_plan, value_ptr, count_value, atomicity),
             .tag_union => |tag_plan| try self.emitRcHelperTagUnion(tag_plan, value_ptr, count_value, atomicity),
             .closure => |child_key| {
@@ -11828,8 +11820,8 @@ pub const MonoLlvmCodeGen = struct {
         return wip.cast(.inttoptr, data_ptr, try self.ptrType(), "") catch return error.OutOfMemory;
     }
 
-    fn increfDataPtrBuiltinName(atomicity: RcAtomicity) []const u8 {
-        return LowLevelBuiltins.rcHelper(.data_ptr_incref, tableAtomicity(atomicity)).symbolName();
+    fn increfDataPtrBuiltin(atomicity: RcAtomicity) BuiltinSymbol {
+        return LowLevelBuiltins.rcHelper(.data_ptr_incref, tableAtomicity(atomicity));
     }
 
     fn emitRcHelperStrIncref(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value, count_value: LlvmBuilder.Value, atomicity: RcAtomicity) Error!void {
@@ -11842,13 +11834,13 @@ pub const MonoLlvmCodeGen = struct {
 
         wip.cursor = .{ .block = heap_str };
         const data_ptr = try self.loadStrDataPtrForRc(value_ptr);
-        try self.callBuiltinVoid(increfDataPtrBuiltinName(atomicity), &.{ try self.ptrType(), self.ptrSizedIntType() }, &.{ data_ptr, count_value });
+        try self.callBuiltinVoid(increfDataPtrBuiltin(atomicity), &.{ try self.ptrType(), self.ptrSizedIntType() }, &.{ data_ptr, count_value });
         _ = wip.br(after) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = after };
     }
 
-    fn emitRcHelperStrDrop(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value, builtin_name: []const u8) Error!void {
+    fn emitRcHelperStrDrop(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value, builtin_fn: BuiltinSymbol) Error!void {
         const builder, const wip = try self.builderAndWip();
         const len = try self.loadUsize(try self.offsetPtr(value_ptr, self.rocStrLenOffset()));
         const is_small = wip.icmp(.slt, len, builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
@@ -11859,7 +11851,7 @@ pub const MonoLlvmCodeGen = struct {
         wip.cursor = .{ .block = heap_str };
         const data_ptr = try self.loadStrDataPtrForRc(value_ptr);
         try self.callBuiltinVoid(
-            builtin_name,
+            builtin_fn,
             &.{ try self.ptrType(), .i32, .i1 },
             &.{
                 data_ptr,
@@ -11876,7 +11868,7 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const fields = try self.rocListArgFields(value_ptr);
         try self.callBuiltinVoid(
-            LowLevelBuiltins.rcHelper(.list_incref, tableAtomicity(atomicity)).symbolName(),
+            LowLevelBuiltins.rcHelper(.list_incref, tableAtomicity(atomicity)),
             &.{ try self.ptrType(), self.ptrSizedIntType(), self.ptrSizedIntType(), self.ptrSizedIntType(), .i1 },
             &.{
                 fields[0],
@@ -11888,7 +11880,7 @@ pub const MonoLlvmCodeGen = struct {
         );
     }
 
-    fn emitRcHelperListDrop(self: *MonoLlvmCodeGen, list_plan: layout.RcListPlan, value_ptr: LlvmBuilder.Value, atomicity: RcAtomicity, builtin_name: []const u8) Error!void {
+    fn emitRcHelperListDrop(self: *MonoLlvmCodeGen, list_plan: layout.RcListPlan, value_ptr: LlvmBuilder.Value, atomicity: RcAtomicity, builtin_fn: BuiltinSymbol) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const fields = try self.rocListArgFields(value_ptr);
         // The element callback's C ABI carries no atomicity parameter, so the
@@ -11901,7 +11893,7 @@ pub const MonoLlvmCodeGen = struct {
         else
             null;
         try self.callBuiltinVoid(
-            builtin_name,
+            builtin_fn,
             &.{ try self.ptrType(), self.ptrSizedIntType(), self.ptrSizedIntType(), .i32, self.ptrSizedIntType(), try self.ptrType() },
             &.{
                 fields[0],
@@ -11917,13 +11909,13 @@ pub const MonoLlvmCodeGen = struct {
     fn emitRcHelperBoxIncref(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value, count_value: LlvmBuilder.Value, atomicity: RcAtomicity) Error!void {
         const payload_ptr = try self.loadPointer(value_ptr);
         try self.callBuiltinVoid(
-            increfDataPtrBuiltinName(atomicity),
+            increfDataPtrBuiltin(atomicity),
             &.{ try self.ptrType(), self.ptrSizedIntType() },
             &.{ payload_ptr, count_value },
         );
     }
 
-    fn emitRcHelperBoxDrop(self: *MonoLlvmCodeGen, box_plan: layout.RcBoxPlan, value_ptr: LlvmBuilder.Value, atomicity: RcAtomicity, builtin_name: []const u8) Error!void {
+    fn emitRcHelperBoxDrop(self: *MonoLlvmCodeGen, box_plan: layout.RcBoxPlan, value_ptr: LlvmBuilder.Value, atomicity: RcAtomicity, builtin_fn: BuiltinSymbol) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const payload_ptr = try self.loadPointer(value_ptr);
         // The payload callback's C ABI carries no atomicity parameter, so the
@@ -11934,7 +11926,7 @@ pub const MonoLlvmCodeGen = struct {
         else
             null;
         try self.callBuiltinVoid(
-            builtin_name,
+            builtin_fn,
             &.{ try self.ptrType(), .i32, try self.ptrType() },
             &.{
                 payload_ptr,
@@ -11950,16 +11942,16 @@ pub const MonoLlvmCodeGen = struct {
         // payload allocation, so the single-thread mode uses the data-pointer
         // entry directly.
         try self.callBuiltinVoid(
-            LowLevelBuiltins.rcHelper(.erased_callable_incref, tableAtomicity(atomicity)).symbolName(),
+            LowLevelBuiltins.rcHelper(.erased_callable_incref, tableAtomicity(atomicity)),
             &.{ try self.ptrType(), self.ptrSizedIntType() },
             &.{ payload_ptr, count_value },
         );
     }
 
-    fn emitRcHelperErasedCallableDrop(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value, builtin_name: []const u8) Error!void {
+    fn emitRcHelperErasedCallableDrop(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value, builtin_fn: BuiltinSymbol) Error!void {
         const payload_ptr = try self.loadPointer(value_ptr);
         try self.callBuiltinVoid(
-            builtin_name,
+            builtin_fn,
             &.{try self.ptrType()},
             &.{payload_ptr},
         );
@@ -13185,9 +13177,45 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
+    /// Call a builtin that returns a value. Builtins that return void go
+    /// through `callBuiltinVoid`.
     fn callBuiltin(
         self: *MonoLlvmCodeGen,
-        name: []const u8,
+        f: BuiltinSymbol,
+        ret_type: LlvmBuilder.Type,
+        param_types: []const LlvmBuilder.Type,
+        args: []const LlvmBuilder.Value,
+    ) Error!LlvmBuilder.Value {
+        std.debug.assert(ret_type != .void);
+        return self.emitBuiltinCall(f, ret_type, param_types, args);
+    }
+
+    /// Call a builtin that returns void. On a cold path, a builtin that writes
+    /// a list or string result through its first parameter
+    /// (`writesResultWordTriple`) is called through a shim that returns the
+    /// three words by value instead: handing the caller's result slot to a
+    /// never-inlined call would make the slot's address escape, and an escaped
+    /// slot pins the local to memory for every hot-path update too. On hot
+    /// paths the call is ordinary; the builtin inlines and the store through
+    /// the pointer dissolves.
+    fn callBuiltinVoid(self: *MonoLlvmCodeGen, f: BuiltinSymbol, param_types: []const LlvmBuilder.Type, args: []const LlvmBuilder.Value) Error!void {
+        if (self.cold_depth == 0 or !f.writesResultWordTriple()) {
+            _ = try self.emitBuiltinCall(f, .void, param_types, args);
+            return;
+        }
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const shim = try self.declareColdShim(f, .void, param_types);
+        const result = wip.call(.normal, .preserve_mostcc, .none, shim.shim.typeOf(builder), shim.shim.toValue(builder), args[1..], "") catch return error.OutOfMemory;
+        const out_ptr = args[0];
+        try self.storePointer(out_ptr, wip.extractValue(result, &.{0}, "") catch return error.OutOfMemory);
+        try self.storeListLen(out_ptr, wip.extractValue(result, &.{1}, "") catch return error.OutOfMemory);
+        try self.storeListCapacity(out_ptr, wip.extractValue(result, &.{2}, "") catch return error.OutOfMemory);
+    }
+
+    fn emitBuiltinCall(
+        self: *MonoLlvmCodeGen,
+        f: BuiltinSymbol,
         ret_type: LlvmBuilder.Type,
         param_types: []const LlvmBuilder.Type,
         args: []const LlvmBuilder.Value,
@@ -13201,23 +13229,47 @@ pub const MonoLlvmCodeGen = struct {
             // cold arm. Routing the call through a noinline preserve_most
             // wrapper moves those saves into the wrapper, so the hot loop
             // keeps its values in registers.
-            const shim = try self.declareColdShim(name, ret_type, param_types);
-            // An out-parameter builtin must go through callBuiltinOut, whose
-            // shims drop the out parameter; a full-signature call against one
-            // would corrupt the stack.
-            std.debug.assert(!shim.by_value_out);
-            return wip.call(.normal, .preserve_mostcc, .none, shim.fn_ty, shim.shim.toValue(builder), args, "") catch return error.OutOfMemory;
+            const shim = try self.declareColdShim(f, ret_type, param_types);
+            return wip.call(.normal, .preserve_mostcc, .none, shim.shim.typeOf(builder), shim.shim.toValue(builder), args, "") catch return error.OutOfMemory;
         }
-        const func = try self.declareBuiltin(name, ret_type, param_types);
+        const func = try self.declareBuiltin(f, ret_type, param_types);
         return wip.call(.normal, .ccc, .none, func.typeOf(builder), func.toValue(builder), args, "") catch return error.OutOfMemory;
     }
 
-    fn declareColdShim(self: *MonoLlvmCodeGen, name: []const u8, ret_type: LlvmBuilder.Type, param_types: []const LlvmBuilder.Type) Error!ColdShim {
+    /// Call an LLVM intrinsic. Intrinsics lower to instructions rather than
+    /// calls, so they are never routed through cold shims.
+    fn callIntrinsic(
+        self: *MonoLlvmCodeGen,
+        name: []const u8,
+        ret_type: LlvmBuilder.Type,
+        param_types: []const LlvmBuilder.Type,
+        args: []const LlvmBuilder.Value,
+    ) Error!LlvmBuilder.Value {
+        std.debug.assert(std.mem.startsWith(u8, name, "llvm."));
+        const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
-        if (self.cold_shims.get(name)) |shim| return shim;
-        const target = try self.declareBuiltin(name, ret_type, param_types);
         const fn_ty = builder.fnType(ret_type, param_types, .normal) catch return error.OutOfMemory;
-        const shim_name = try std.fmt.allocPrint(self.allocator, "roc_cold_shim.{s}", .{name});
+        const func = self.symbol_functions.get(name) orelse blk: {
+            const declared = builder.addFunction(fn_ty, builder.strtabString(name) catch return error.OutOfMemory, .default) catch return error.OutOfMemory;
+            try self.symbol_functions.put(name, declared);
+            break :blk declared;
+        };
+        return wip.call(.normal, .ccc, .none, fn_ty, func.toValue(builder), args, "") catch return error.OutOfMemory;
+    }
+
+    /// Declare (once) the cold-path shim for `f`. A builtin that writes a list
+    /// or string result through its first parameter gets a shim without that
+    /// parameter that returns the three words by value; every other builtin's
+    /// shim has the builtin's own signature.
+    fn declareColdShim(self: *MonoLlvmCodeGen, f: BuiltinSymbol, ret_type: LlvmBuilder.Type, param_types: []const LlvmBuilder.Type) Error!ColdShim {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const target = try self.declareBuiltin(f, ret_type, param_types);
+        if (self.cold_shims[@backingInt(f)]) |shim| return shim;
+        const fn_ty = if (f.writesResultWordTriple())
+            builder.fnType(try self.listValueType(), param_types[1..], .normal) catch return error.OutOfMemory
+        else
+            target.typeOf(builder);
+        const shim_name = try std.fmt.allocPrint(self.allocator, "roc_cold_shim.{s}", .{f.symbolName()});
         defer self.allocator.free(shim_name);
         const func = builder.addFunction(fn_ty, builder.strtabString(shim_name) catch return error.OutOfMemory, .default) catch return error.OutOfMemory;
         func.setLinkage(.internal, builder);
@@ -13229,8 +13281,8 @@ pub const MonoLlvmCodeGen = struct {
             try attrs_wip.addFnAttr(.cold, builder);
             func.setAttributes(attrs_wip.finish(builder) catch return error.OutOfMemory, builder);
         }
-        const shim = ColdShim{ .shim = func, .target = target, .fn_ty = fn_ty, .target_fn_ty = fn_ty, .by_value_out = false, .compiled = false };
-        try self.cold_shims.put(name, shim);
+        const shim = ColdShim{ .shim = func, .target = target, .compiled = false };
+        self.cold_shims[@backingInt(f)] = shim;
         return shim;
     }
 
@@ -13239,17 +13291,21 @@ pub const MonoLlvmCodeGen = struct {
     /// when no function is mid-emission.
     fn compilePendingColdShims(self: *MonoLlvmCodeGen) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        var iter = self.cold_shims.valueIterator();
-        while (iter.next()) |shim| {
+        for (&self.cold_shims, 0..) |*entry, index| {
+            const shim = if (entry.*) |*shim| shim else continue;
             if (shim.compiled) continue;
             shim.compiled = true;
+            const f: BuiltinSymbol = @fromBackingInt(@intCast(index));
 
             var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = shim.shim, .strip = true }) catch return error.OutOfMemory;
             defer wip.deinit();
-            const entry = wip.block(0, "entry") catch return error.OutOfMemory;
-            wip.cursor = .{ .block = entry };
+            const entry_block = wip.block(0, "entry") catch return error.OutOfMemory;
+            wip.cursor = .{ .block = entry_block };
 
-            if (shim.by_value_out) {
+            const shim_ty = shim.shim.typeOf(builder);
+            const param_count = shim_ty.functionParameters(builder).len;
+
+            if (f.writesResultWordTriple()) {
                 // Adapt the builtin's out-parameter ABI inside the shim: give
                 // the builtin a slot that is private to this cold function,
                 // then hand the three words back by value.
@@ -13263,13 +13319,12 @@ pub const MonoLlvmCodeGen = struct {
                     "out",
                 ) catch return error.OutOfMemory;
 
-                const param_count = shim.fn_ty.functionParameters(builder).len;
                 const args = try self.allocator.alloc(LlvmBuilder.Value, param_count + 1);
                 defer self.allocator.free(args);
                 args[0] = out_slot;
                 for (args[1..], 0..) |*arg, i| arg.* = wip.arg(@intCast(i));
 
-                _ = wip.call(.normal, .ccc, .none, shim.target_fn_ty, shim.target.toValue(builder), args, "") catch return error.OutOfMemory;
+                _ = wip.call(.normal, .ccc, .none, shim.target.typeOf(builder), shim.target.toValue(builder), args, "") catch return error.OutOfMemory;
 
                 // `self.wip` is null between procs, so read the slot with
                 // this shim's own instruction builder.
@@ -13287,51 +13342,18 @@ pub const MonoLlvmCodeGen = struct {
                 continue;
             }
 
-            const param_count = shim.fn_ty.functionParameters(builder).len;
             const args = try self.allocator.alloc(LlvmBuilder.Value, param_count);
             defer self.allocator.free(args);
             for (args, 0..) |*arg, i| arg.* = wip.arg(@intCast(i));
 
             const result = wip.call(.normal, .ccc, .none, shim.target.typeOf(builder), shim.target.toValue(builder), args, "") catch return error.OutOfMemory;
-            if (shim.fn_ty.functionReturn(builder) == .void) {
+            if (shim_ty.functionReturn(builder) == .void) {
                 _ = wip.retVoid() catch return error.OutOfMemory;
             } else {
                 _ = wip.ret(result) catch return error.OutOfMemory;
             }
             wip.finish() catch return error.OutOfMemory;
         }
-    }
-
-    fn callBuiltinVoid(self: *MonoLlvmCodeGen, name: []const u8, param_types: []const LlvmBuilder.Type, args: []const LlvmBuilder.Value) Error!void {
-        _ = try self.callBuiltin(name, .void, param_types, args);
-    }
-
-    /// Call a void builtin whose first argument is a pointer it writes a
-    /// three-word list or string result through. On hot paths this is an
-    /// ordinary call: the builtin inlines and the store through the pointer
-    /// dissolves. On cold paths the call becomes a shim that returns the
-    /// three words by value instead, because handing the out pointer to a
-    /// never-inlined call would make the result slot's address escape, and an
-    /// escaped slot pins the local to memory for every hot-path update too.
-    fn callBuiltinOut(self: *MonoLlvmCodeGen, name: []const u8, param_types: []const LlvmBuilder.Type, args: []const LlvmBuilder.Value) Error!void {
-        if (self.cold_depth == 0) {
-            _ = try self.callBuiltin(name, .void, param_types, args);
-            return;
-        }
-        const wip = self.wip orelse return error.CompilationFailed;
-        const builder = self.builder orelse return error.CompilationFailed;
-        const shim = try self.declareColdShimOut(name, param_types);
-        if (!shim.by_value_out) {
-            // The shim was first declared by a caller that keeps the full
-            // out-parameter signature; match it.
-            _ = wip.call(.normal, .preserve_mostcc, .none, shim.fn_ty, shim.shim.toValue(builder), args, "") catch return error.OutOfMemory;
-            return;
-        }
-        const result = wip.call(.normal, .preserve_mostcc, .none, shim.fn_ty, shim.shim.toValue(builder), args[1..], "") catch return error.OutOfMemory;
-        const out_ptr = args[0];
-        try self.storePointer(out_ptr, wip.extractValue(result, &.{0}, "") catch return error.OutOfMemory);
-        try self.storeListLen(out_ptr, wip.extractValue(result, &.{1}, "") catch return error.OutOfMemory);
-        try self.storeListCapacity(out_ptr, wip.extractValue(result, &.{2}, "") catch return error.OutOfMemory);
     }
 
     /// Three-word list/string value as an aggregate returned in registers.
@@ -13341,40 +13363,24 @@ pub const MonoLlvmCodeGen = struct {
         return builder.structType(.normal, &.{ try self.ptrType(), usize_ty, usize_ty }) catch return error.OutOfMemory;
     }
 
-    fn declareColdShimOut(self: *MonoLlvmCodeGen, name: []const u8, param_types: []const LlvmBuilder.Type) Error!ColdShim {
+    /// Declare (once) the builtin `f`. Every call site states the same
+    /// signature for a given builtin: it is the wrapper's C ABI.
+    fn declareBuiltin(self: *MonoLlvmCodeGen, f: BuiltinSymbol, ret_type: LlvmBuilder.Type, param_types: []const LlvmBuilder.Type) Error!LlvmBuilder.Function.Index {
         const builder = self.builder orelse return error.CompilationFailed;
-        if (self.cold_shims.get(name)) |shim| return shim;
-        const target = try self.declareBuiltin(name, .void, param_types);
-        const target_fn_ty = builder.fnType(.void, param_types, .normal) catch return error.OutOfMemory;
-        const fn_ty = builder.fnType(try self.listValueType(), param_types[1..], .normal) catch return error.OutOfMemory;
-        const shim_name = try std.fmt.allocPrint(self.allocator, "roc_cold_shim.{s}", .{name});
-        defer self.allocator.free(shim_name);
-        const func = builder.addFunction(fn_ty, builder.strtabString(shim_name) catch return error.OutOfMemory, .default) catch return error.OutOfMemory;
-        func.setLinkage(.internal, builder);
-        func.setCallConv(.preserve_mostcc, builder);
-        {
-            var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
-            defer attrs_wip.deinit(builder);
-            try attrs_wip.addFnAttr(.@"noinline", builder);
-            try attrs_wip.addFnAttr(.cold, builder);
-            func.setAttributes(attrs_wip.finish(builder) catch return error.OutOfMemory, builder);
+        if (self.builtin_functions[@backingInt(f)]) |func| {
+            if (std.debug.runtime_safety and func.typeOf(builder) != (builder.fnType(ret_type, param_types, .normal) catch return error.OutOfMemory)) {
+                llvmInvariantFmt("builtin {s} called with two different signatures", .{f.symbolName()});
+            }
+            return func;
         }
-        const shim = ColdShim{ .shim = func, .target = target, .fn_ty = fn_ty, .target_fn_ty = target_fn_ty, .by_value_out = true, .compiled = false };
-        try self.cold_shims.put(name, shim);
-        return shim;
-    }
-
-    fn declareBuiltin(self: *MonoLlvmCodeGen, name: []const u8, ret_type: LlvmBuilder.Type, param_types: []const LlvmBuilder.Type) Error!LlvmBuilder.Function.Index {
-        const builder = self.builder orelse return error.CompilationFailed;
-        if (self.builtin_functions.get(name)) |func| return func;
         const fn_ty = builder.fnType(ret_type, param_types, .normal) catch return error.OutOfMemory;
         // Always use the plain builtin name so the IR global matches the symbol in
         // the builtin bitcode linked in for inlining. LLVM still applies the target's
         // symbol mangling (e.g. the macOS leading underscore) when emitting the final
         // object, so non-inlined calls still resolve against roc_builtins.o at link.
-        const fn_name = builder.strtabString(name) catch return error.OutOfMemory;
+        const fn_name = builder.strtabString(f.symbolName()) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, fn_name, .default) catch return error.OutOfMemory;
-        try self.builtin_functions.put(name, func);
+        self.builtin_functions[@backingInt(f)] = func;
         return func;
     }
 
@@ -13383,11 +13389,12 @@ pub const MonoLlvmCodeGen = struct {
     /// the end of the link against whichever host object defines it.
     fn declareHostSymbol(self: *MonoLlvmCodeGen, name: []const u8, fn_ty: LlvmBuilder.Type) Error!LlvmBuilder.Function.Index {
         const builder = self.builder orelse return error.CompilationFailed;
-        if (self.builtin_functions.get(name)) |func| return func;
+        std.debug.assert(BuiltinSymbol.fromSymbolName(name) == null);
+        if (self.symbol_functions.get(name)) |func| return func;
         const fn_name = builder.strtabString(name) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, fn_name, .default) catch return error.OutOfMemory;
         func.setLinkage(.extern_weak, builder);
-        try self.builtin_functions.put(name, func);
+        try self.symbol_functions.put(name, func);
         return func;
     }
 
@@ -13395,10 +13402,11 @@ pub const MonoLlvmCodeGen = struct {
     /// pull their archive members at link time, which weak references do not.
     fn declareExternSymbol(self: *MonoLlvmCodeGen, name: []const u8, fn_ty: LlvmBuilder.Type) Error!LlvmBuilder.Function.Index {
         const builder = self.builder orelse return error.CompilationFailed;
-        if (self.builtin_functions.get(name)) |func| return func;
+        std.debug.assert(BuiltinSymbol.fromSymbolName(name) == null);
+        if (self.symbol_functions.get(name)) |func| return func;
         const fn_name = builder.strtabString(name) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, fn_name, .default) catch return error.OutOfMemory;
-        try self.builtin_functions.put(name, func);
+        try self.symbol_functions.put(name, func);
         return func;
     }
 

@@ -18361,6 +18361,18 @@ bounds check's miss arm is cold wherever those inline. The marker stays an
 ordinary identity low-level, and the range prover reads through it to the
 comparison that defined its operand, so a proven check still folds.
 
+Under a cold arm, the LLVM backend calls each Zig builtin through a
+per-builtin `noinline` `preserve_most` shim, so the cold call does not force
+loop-carried values in the hot path out of caller-saved registers. Intrinsics
+are never shimmed. A shim's signature is a function of the builtin alone: a
+builtin the registry declares as writing a list or string result through its
+first parameter (`BuiltinFn.writesResultWordTriple`, comptime-checked against
+the wrapper's signature) gets a shim that drops that parameter, gives the
+builtin a private slot, and returns the three words by value, so the caller's
+result slot never escapes into a non-inlined call; every other builtin's
+shim has the builtin's own signature. Every call site of a builtin states the
+same signature, which is the wrapper's C ABI.
+
 ### Statement Provenance
 
 Every LIR statement records where it came from and why it exists. This is the
