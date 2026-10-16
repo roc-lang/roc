@@ -18363,8 +18363,11 @@ comparison that defined its operand, so a proven check still folds.
 
 Under a cold arm, the LLVM backend calls each Zig builtin through a
 per-builtin `noinline` `preserve_most` shim, so the cold call does not force
-loop-carried values in the hot path out of caller-saved registers. Intrinsics
-are never shimmed. A shim's signature is a function of the builtin alone: a
+loop-carried values in the hot path out of caller-saved registers. The slow
+arm of a diamond the LLVM backend introduces itself (an inline fast path,
+such as the word store of `append_le_bytes` or a reserve that finds the
+spare already there, with the builtin as its fallback) is a cold arm in this
+sense too. Intrinsics are never shimmed. A shim's signature is a function of the builtin alone: a
 builtin the registry declares as writing a list or string result through its
 first parameter (`BuiltinFn.writesResultWordTriple`, comptime-checked against
 the wrapper's signature) gets a shim that drops that parameter, gives the

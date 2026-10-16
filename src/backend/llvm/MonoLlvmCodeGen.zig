@@ -10947,10 +10947,27 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, .i64, count);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, 1) catch return error.OutOfMemory);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_append_le_bytes), call_args.types.items, call_args.values.items);
         if (done) |join| {
+            self.enterInlineSlowArm();
+            try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_append_le_bytes), call_args.types.items, call_args.values.items);
+            self.leaveInlineSlowArm();
             try brAndEnter(wip, join);
+        } else {
+            try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_append_le_bytes), call_args.types.items, call_args.values.items);
         }
+    }
+
+    /// Brackets the slow arm of a diamond this backend introduces itself: an
+    /// inline fast path whose fallback is the builtin. The arm is as cold as
+    /// a `default_is_cold` switch arm, and the builtin call in it takes the
+    /// same cold-path shim, so the result slot it would otherwise be handed
+    /// never escapes and the fast arm's three header stores stay in registers.
+    fn enterInlineSlowArm(self: *MonoLlvmCodeGen) void {
+        self.cold_depth += 1;
+    }
+
+    fn leaveInlineSlowArm(self: *MonoLlvmCodeGen) void {
+        self.cold_depth -= 1;
     }
 
     fn emitListAppendSublist(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
@@ -11335,7 +11352,9 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.br(merge_block) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = slow_block };
+        self.enterInlineSlowArm();
         try self.emitListReserveCall(target, boxy_symbol, builtin_fn, args, unique_args);
+        self.leaveInlineSlowArm();
         _ = wip.br(merge_block) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = merge_block };
@@ -13197,7 +13216,8 @@ pub const MonoLlvmCodeGen = struct {
     /// never-inlined call would make the slot's address escape, and an escaped
     /// slot pins the local to memory for every hot-path update too. On hot
     /// paths the call is ordinary; the builtin inlines and the store through
-    /// the pointer dissolves.
+    /// the pointer dissolves. The slow arm of a backend-emitted inline fast
+    /// path counts as a cold path (`enterInlineSlowArm`).
     fn callBuiltinVoid(self: *MonoLlvmCodeGen, f: BuiltinSymbol, param_types: []const LlvmBuilder.Type, args: []const LlvmBuilder.Value) Error!void {
         if (self.cold_depth == 0 or !f.writesResultWordTriple()) {
             _ = try self.emitBuiltinCall(f, .void, param_types, args);
