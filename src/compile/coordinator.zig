@@ -83,6 +83,7 @@ const WorkerTask = messages.WorkerTask;
 const WorkerResult = messages.WorkerResult;
 const ModuleId = messages.ModuleId;
 const ParseTask = messages.ParseTask;
+const DiscoveredParse = messages.DiscoveredParse;
 const CanonicalizeTask = messages.CanonicalizeTask;
 const CanonicalizeImport = messages.CanonicalizeImport;
 const TypeCheckTask = messages.TypeCheckTask;
@@ -642,6 +643,9 @@ pub const ModuleState = struct {
     validation: can.Can.Validation = .checking,
     /// Declared source pin from the parse/canonicalization producer.
     has_source_version_pin: bool = false,
+    /// Whether this module's source has syntax errors, so later stages work
+    /// from a parse that recovered past them.
+    has_syntax_errors: bool = false,
     /// Owned semantic module payload. Earlier phases populate only `module_env`;
     /// type checking later fills in the checked artifact.
     semantic: ?OwnedSemanticModuleData = null,
@@ -1348,10 +1352,18 @@ pub const Coordinator = struct {
     /// backed by a shared global pool, designed for SMP workloads). In
     /// single-threaded mode, returns gpa for better performance.
     pub fn getWorkerAllocator(self: *const Coordinator) Allocator {
-        return if (threads_available and self.mode == .multi_threaded)
+        return workerAllocatorFor(self.gpa, self.mode);
+    }
+
+    /// The allocator a coordinator created with `gpa` and `mode` gives its
+    /// workers for module environments and results. Anything handed to a
+    /// worker task as if the task had allocated it, such as a
+    /// `DiscoveredParse`, is allocated with this.
+    pub fn workerAllocatorFor(gpa: Allocator, mode: Mode) Allocator {
+        return if (threads_available and mode == .multi_threaded)
             thread_safe_allocator
         else
-            self.gpa;
+            gpa;
     }
 
     /// Initialize a `Coordinator`.
@@ -1381,7 +1393,7 @@ pub const Coordinator = struct {
         // smp_allocator is thread-safe and avoids the per-allocation mmap/munmap
         // serialization on the kernel VM lock that page_allocator incurs.
         const channel_allocator = if (threads_available) thread_safe_allocator else gpa;
-        const worker_allocator = if (threads_available and mode == .multi_threaded) thread_safe_allocator else gpa;
+        const worker_allocator = workerAllocatorFor(gpa, mode);
         const initial_task_capacity = 256;
         return .{
             .gpa = gpa,
@@ -1451,7 +1463,8 @@ pub const Coordinator = struct {
             const payload_alloc = self.getWorkerAllocator();
             while (self.task_channel.tryRecv()) |task| {
                 switch (task) {
-                    .parse, .post_check => {},
+                    .parse => |t| if (t.discovered) |discovered| discovered.deinit(),
+                    .post_check => {},
                     .canonicalize => |t| {
                         t.cached_ast.deinit();
                     },
@@ -2491,8 +2504,30 @@ pub const Coordinator = struct {
 
     /// Enqueue a parse task for a module
     pub fn enqueueParseTask(self: *Coordinator, pkg_name: []const u8, module_id: ModuleId) Allocator.Error!void {
-        const pkg = self.packages.get(pkg_name) orelse return;
-        const mod = pkg.getModule(module_id) orelse return;
+        try self.enqueueParseTaskWith(pkg_name, module_id, null);
+    }
+
+    /// Enqueue the parse task of a module whose source dependency discovery
+    /// already parsed; the task takes ownership of `discovered`.
+    pub fn enqueueDiscoveredParseTask(self: *Coordinator, pkg_name: []const u8, module_id: ModuleId, discovered: DiscoveredParse) Allocator.Error!void {
+        try self.enqueueParseTaskWith(pkg_name, module_id, discovered);
+    }
+
+    fn enqueueParseTaskWith(self: *Coordinator, pkg_name: []const u8, module_id: ModuleId, discovered: ?DiscoveredParse) Allocator.Error!void {
+        errdefer if (discovered) |parsed| parsed.deinit();
+        const pkg = self.packages.get(pkg_name) orelse {
+            if (discovered) |parsed| parsed.deinit();
+            return;
+        };
+        const mod = pkg.getModule(module_id) orelse {
+            if (discovered) |parsed| parsed.deinit();
+            return;
+        };
+        if (discovered) |parsed| {
+            if (!std.mem.eql(u8, parsed.path, mod.path)) {
+                base.invariant("discovered parse of {s} handed to module at {s}", .{ parsed.path, mod.path });
+            }
+        }
 
         mod.phase = .Parsing;
 
@@ -2511,6 +2546,7 @@ pub const Coordinator = struct {
                 .depth = mod.depth,
                 .validation = mod.validation,
                 .is_entry_module = self.isEntryModule(pkg, module_id),
+                .discovered = discovered,
             },
         });
     }
@@ -3942,6 +3978,7 @@ pub const Coordinator = struct {
         mod.source_file_state = result.source_file_state;
         mod.replaceModuleEnv(result.module_env);
         mod.cached_ast = result.cached_ast;
+        mod.has_syntax_errors = result.cached_ast.hasErrors();
 
         // Append reports - we take ownership, so clear result.reports after copying
         for (result.reports.items) |rep| {
@@ -5598,7 +5635,10 @@ pub const Coordinator = struct {
     fn executeParseFallible(self: *Coordinator, task: ParseTask, task_allocs: WorkerTaskAllocators) (Allocator.Error || error{ AccessDenied, FileNotFound, IoError, StreamTooLong })!WorkerResult {
         var parse_timer = startStageTimer(self.roc_ctx.std_io);
 
-        const source_read = try self.readModuleSourceForParse(task.path, task_allocs.module);
+        const source_read: SourceRead = if (task.discovered) |discovered| .{
+            .source = @constCast(discovered.module_env.common.source),
+            .file_state = discovered.source_file_state,
+        } else try self.readModuleSourceForParse(task.path, task_allocs.module);
         const src = source_read.source;
 
         // The stable key names this module's source, basename, entry-module
@@ -5614,50 +5654,34 @@ pub const Coordinator = struct {
             task.is_entry_module,
         );
         const cached_load = self.tryLoadCanonicalizedModule(task, task_allocs, canonicalized_key, source_read) catch |err| {
-            task_allocs.module.free(src);
+            if (task.discovered) |discovered| discovered.deinit() else task_allocs.module.free(src);
             return err;
         };
         // A hit moves `src` into the loaded environment; a miss leaves it to
         // the parse below.
-        if (cached_load) |cached| return cached;
+        if (cached_load) |cached| {
+            if (task.discovered) |discovered| _ = discovered.releaseKeepingSource();
+            return cached;
+        }
 
         // Checked-module disk cache lookup happens after canonicalization, when
         // the coordinator has the exact module identity and import keys.
 
-        // Create ModuleEnv using the long-lived module allocator.
-        const module_alloc = task_allocs.module;
-        const env = module_alloc.create(ModuleEnv) catch |err| {
-            module_alloc.free(src);
-            return err;
-        };
-
-        var env_initialized = false;
-        errdefer {
-            if (env_initialized) {
-                destroyModuleEnvAndSource(env);
-            } else {
-                module_alloc.destroy(env);
-                module_alloc.free(src);
-            }
-        }
-
-        env.* = try ModuleEnv.init(module_alloc, src);
-        env_initialized = true;
         const display_module_name = base.module_path.getModuleBasename(task.module_name);
-        try env.initCIRFields(display_module_name);
-        env.module_role = task.module_role;
+        const parsed = if (task.discovered) |discovered|
+            adoptDiscoveredParse(task, discovered, display_module_name)
+        else
+            try parseModuleSource(task, task_allocs, src, display_module_name);
+        const env = parsed.env;
+        const parse_ast = parsed.ast;
+        errdefer destroyModuleEnvAndSource(env);
+        errdefer parse_ast.deinit();
 
-        try env.common.calcLineStarts(module_alloc);
-
-        // The AST and result payloads outlive this task, so they use the result
+        // The result payloads outlive this task, so they use the result
         // allocator. Only import-discovery intermediates use task scratch below.
         const worker_alloc = task_allocs.result;
         var reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
         errdefer check.module_reports.deinit(worker_alloc, &reports);
-
-        const parse_ast = try parse.file(worker_alloc, &env.common);
-        errdefer parse_ast.deinit();
-        parse_ast.store.emptyScratch();
 
         try check.module_reports.appendSyntax(worker_alloc, &reports, parse_ast, &env.common, task.path);
 
@@ -5718,6 +5742,63 @@ pub const Coordinator = struct {
                 .canonicalized_cache_key = canonicalized_key,
             },
         };
+    }
+
+    const ParsedModule = struct {
+        env: *ModuleEnv,
+        ast: *AST,
+    };
+
+    /// Parse `src`, which this takes ownership of, into a new environment.
+    fn parseModuleSource(
+        task: ParseTask,
+        task_allocs: WorkerTaskAllocators,
+        src: []u8,
+        display_module_name: []const u8,
+    ) Allocator.Error!ParsedModule {
+        // Create ModuleEnv using the long-lived module allocator.
+        const module_alloc = task_allocs.module;
+        const env = module_alloc.create(ModuleEnv) catch |err| {
+            module_alloc.free(src);
+            return err;
+        };
+
+        var env_initialized = false;
+        errdefer {
+            if (env_initialized) {
+                destroyModuleEnvAndSource(env);
+            } else {
+                module_alloc.destroy(env);
+                module_alloc.free(src);
+            }
+        }
+
+        env.* = try ModuleEnv.init(module_alloc, src);
+        env_initialized = true;
+        try env.initCIRFields(display_module_name);
+        env.module_role = task.module_role;
+
+        try env.common.calcLineStarts(module_alloc);
+
+        // The AST outlives this task, so it uses the result allocator.
+        const parse_ast = try parse.file(task_allocs.result, &env.common);
+        parse_ast.store.emptyScratch();
+        return .{ .env = env, .ast = parse_ast };
+    }
+
+    /// Take over the environment and AST that dependency discovery produced
+    /// for this module the same way `parseModuleSource` produces them.
+    fn adoptDiscoveredParse(task: ParseTask, discovered: DiscoveredParse, display_module_name: []const u8) ParsedModule {
+        const env = discovered.module_env;
+        if (!std.mem.eql(u8, env.module_name, display_module_name)) {
+            base.invariant("discovered parse of {s} named {s}, not {s}", .{ discovered.path, env.module_name, display_module_name });
+        }
+        // The display name borrowed the discovered path, which is freed here.
+        env.module_name = display_module_name;
+        env.module_role = task.module_role;
+        env.gpa.free(discovered.path);
+        discovered.ast.store.emptyScratch();
+        return .{ .env = env, .ast = discovered.ast };
     }
 
     /// Execute a canonicalize task (pure function)

@@ -402,7 +402,7 @@ pub const SyntaxChecker = struct {
                     .session = null,
                     .env = env,
                     .absolute_path = abs_path,
-                    .build_succeeded = self.getModuleEnvByPathInEnv(env, document.absolute_path) != null,
+                    .build_succeeded = documentParsedCleanly(env, document.absolute_path),
                     .has_reports = handle.hasDocumentReports(),
                     .reused = true,
                 };
@@ -449,7 +449,7 @@ pub const SyntaxChecker = struct {
             .session = session,
             .env = env,
             .absolute_path = abs_path,
-            .build_succeeded = session.build_succeeded,
+            .build_succeeded = session.build_succeeded and documentParsedCleanly(env, session.absolute_path),
             .has_reports = has_reports,
             .reused = false,
         };
@@ -887,6 +887,14 @@ pub const SyntaxChecker = struct {
     }
 
     /// Look up a ModuleEnv by its file path from a specific BuildEnv.
+    /// Whether the document's module was built from a parse with no syntax
+    /// errors. A module whose parse recovered past an error has a partial
+    /// CIR, which handlers that rewrite the document must not answer from.
+    fn documentParsedCleanly(env: *BuildEnv, path: []const u8) bool {
+        const module_state = env.findModuleByPath(path) orelse return false;
+        return module_state.moduleEnv() != null and !module_state.has_syntax_errors;
+    }
+
     fn getModuleEnvByPathInEnv(_: *SyntaxChecker, env: *BuildEnv, path: []const u8) ?*ModuleEnv {
         const module_state = env.findModuleByPath(path) orelse return null;
         return module_state.moduleEnv();
