@@ -107,10 +107,25 @@ pub const Graph = struct {
     read_starts: []u32 = &.{},
     components: []u32 = &.{},
     summaries: std.ArrayList(Summary) = .empty,
+    /// Each component's dependency components, grouped by component; a
+    /// component whose summary is not materialized is resolved through them
+    /// when a summarizable component that reaches it is materialized.
+    component_dependencies: std.ArrayList(u32) = .empty,
+    component_dependency_starts: []u32 = &.{},
+    /// Nodes at or past this index may be summarized; the rest (a program's
+    /// expressions and statements) only carry facts for them.
+    summary_start: u32 = 0,
     closure_scratch_work: u64 = 0,
 
     pub fn init(allocator: std.mem.Allocator, node_count: u32) Graph {
         return .{ .allocator = allocator, .node_count = node_count };
+    }
+
+    /// A graph whose nodes at or past `summary_start` are the only ones
+    /// `summarize` is asked about. The transitive reads of every other node
+    /// are never materialized on their own.
+    pub fn initWithSummaryStart(allocator: std.mem.Allocator, node_count: u32, summary_start: u32) Graph {
+        return .{ .allocator = allocator, .node_count = node_count, .summary_start = summary_start };
     }
 
     pub fn deinit(self: *Graph) void {
@@ -123,12 +138,16 @@ pub const Graph = struct {
         self.allocator.free(self.components);
         for (self.summaries.items) |*summary| summary.deinit(self.allocator);
         self.summaries.deinit(self.allocator);
+        self.component_dependencies.deinit(self.allocator);
+        self.allocator.free(self.component_dependency_starts);
         self.* = undefined;
     }
 
     pub fn clone(self: *const Graph, allocator: std.mem.Allocator) std.mem.Allocator.Error!Graph {
-        var result = Graph.init(allocator, self.node_count);
+        var result = Graph.initWithSummaryStart(allocator, self.node_count, self.summary_start);
         errdefer result.deinit();
+        try result.component_dependencies.appendSlice(allocator, self.component_dependencies.items);
+        result.component_dependency_starts = try allocator.dupe(u32, self.component_dependency_starts);
         try result.edges.appendSlice(allocator, self.edges.items);
         try result.reads.appendSlice(allocator, self.reads.items);
         try result.late_applications.appendSlice(allocator, self.late_applications.items);
@@ -143,6 +162,7 @@ pub const Graph = struct {
             try result.summaries.append(allocator, .{
                 .reads = reads,
                 .complete = summary.complete,
+                .materialized = summary.materialized,
             });
         }
         return result;
@@ -230,6 +250,10 @@ pub const Graph = struct {
         /// Every retained read cause, not merely a root-deduplicated set.
         reads: []u32,
         complete: bool,
+        /// Whether `reads` and `complete` cover everything the component
+        /// reaches; a component no summarizable node belongs to keeps only
+        /// its own reads and availability.
+        materialized: bool = true,
 
         pub fn deinit(self: *Summary, allocator: std.mem.Allocator) void {
             allocator.free(self.reads);
@@ -242,7 +266,9 @@ pub const Graph = struct {
     pub fn summarize(self: *const Graph, allocator: std.mem.Allocator, owner: NodeId) std.mem.Allocator.Error!Summary {
         self.validate(owner);
         if (self.edge_starts.len == 0) Common.invariant("CTFE demand summary requested before producer seal");
+        if (@backingInt(owner) < self.summary_start) Common.invariant("CTFE demand summary requested for a node the graph does not summarize");
         const summary = self.summaries.items[self.components[@backingInt(owner)]];
+        if (!summary.materialized) Common.invariant("CTFE demand summary of a summarizable node was not materialized");
         return .{
             .reads = try allocator.dupe(u32, summary.reads),
             .complete = summary.complete,
@@ -279,6 +305,12 @@ pub const Graph = struct {
         defer read_set.deinit();
         var dependency_set = try ScratchSet.init(self.allocator, self.node_count);
         defer dependency_set.deinit();
+        var visited_set = try ScratchSet.init(self.allocator, self.node_count);
+        defer visited_set.deinit();
+        var pending = std.ArrayList(u32).empty;
+        defer pending.deinit(self.allocator);
+        var dependency_starts = std.ArrayList(u32).empty;
+        errdefer dependency_starts.deinit(self.allocator);
         var next_index: u32 = 0;
         for (0..self.node_count) |start_index| {
             const start: u32 = @intCast(start_index);
@@ -327,8 +359,10 @@ pub const Graph = struct {
                 read_set.reset(component);
                 dependency_set.reset(component);
                 var complete = true;
+                var summarizable = false;
                 for (members.items) |member| {
                     if (states[member].unavailable) complete = false;
+                    if (member >= self.summary_start) summarizable = true;
                     for (self.read_starts[member]..self.read_starts[member + 1]) |read| try read_set.put(@intCast(read));
                     for (self.edge_starts[member]..self.edge_starts[member + 1]) |edge_index| {
                         const edge = self.edges.items[edge_index];
@@ -343,19 +377,40 @@ pub const Graph = struct {
                     }
                 }
                 dependency_set.work += dependency_set.keys.items.len;
-                for (dependency_set.keys.items) |dependency| {
-                    const summary = summaries.items[dependency];
-                    complete = complete and summary.complete;
-                    for (summary.reads) |read| try read_set.put(read);
+                try dependency_starts.append(self.allocator, @intCast(self.component_dependencies.items.len));
+                try self.component_dependencies.appendSlice(self.allocator, dependency_set.keys.items);
+                if (summarizable) {
+                    // The closure over the dependency components: a
+                    // materialized one stands for everything it reaches, an
+                    // unmaterialized one contributes its own facts and is
+                    // followed through its dependencies.
+                    visited_set.reset(component);
+                    pending.clearRetainingCapacity();
+                    try pending.appendSlice(self.allocator, dependency_set.keys.items);
+                    while (pending.pop()) |dependency| {
+                        if (visited_set.marks[dependency] == visited_set.generation) continue;
+                        try visited_set.put(dependency);
+                        const summary = summaries.items[dependency];
+                        complete = complete and summary.complete;
+                        for (summary.reads) |read| try read_set.put(read);
+                        if (summary.materialized) continue;
+                        const dependency_start = dependency_starts.items[dependency];
+                        const dependency_end = if (dependency + 1 < dependency_starts.items.len) dependency_starts.items[dependency + 1] else self.component_dependencies.items.len;
+                        try pending.appendSlice(self.allocator, self.component_dependencies.items[dependency_start..dependency_end]);
+                    }
                 }
                 const reads = try read_set.sortedKeys();
                 errdefer self.allocator.free(reads);
-                try summaries.append(self.allocator, .{ .reads = reads, .complete = complete });
+                try summaries.append(self.allocator, .{ .reads = reads, .complete = complete, .materialized = summarizable });
             }
         }
+        // Nothing may fail once the graph owns the results, or its deinit
+        // would free them a second time.
+        const owned_dependency_starts = try dependency_starts.toOwnedSlice(self.allocator);
         self.components = components;
         self.summaries = summaries;
-        self.closure_scratch_work = read_set.work + dependency_set.work;
+        self.component_dependency_starts = owned_dependency_starts;
+        self.closure_scratch_work = read_set.work + dependency_set.work + visited_set.work;
     }
 
     fn requireOpen(self: *const Graph) void {
@@ -471,7 +526,7 @@ test "CTFE demand scratch work stays linear after fanout followed by isolated no
         try graph.seal();
         // Two generation resets per component, domain initialization, and
         // one insertion plus one dense visit per outgoing dependency.
-        try std.testing.expectEqual(@as(u64, 8) * width + 3, graph.closure_scratch_work);
+        try std.testing.expectEqual(@as(u64, 13) * width + 5, graph.closure_scratch_work);
     }
 }
 

@@ -83,7 +83,7 @@ pub const Program = struct {
             .fn_tys = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
-            .ctfe_demand = CtfeDemand.Graph.init(allocator, @intCast(input.exprs.len + input.stmts.len + input.fns.len)),
+            .ctfe_demand = CtfeDemand.Graph.initWithSummaryStart(allocator, @intCast(input.exprs.len + input.stmts.len + input.fns.len), @intCast(input.exprs.len + input.stmts.len)),
         };
     }
 

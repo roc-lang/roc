@@ -22493,7 +22493,14 @@ continues evaluation's Solved program rather than preparing its own.
 Shared compile-time execution follows the producer-authored eager demand graph.
 Invoked callable bodies contribute eager reads; capturing their addresses does
 not eagerly evaluate latent bodies. Recursive callable components share demand
-summaries. The root graph is condensed into SCCs and evaluated serially in
+summaries. The graph has a node for every expression, statement and function
+of the lifted program, but only function nodes are ever summarized
+(`ctfe_demand.Graph.initWithSummaryStart`), so sealing materializes the
+transitive reads of a component only when a function belongs to it; a
+component of expressions keeps its own reads and its dependency components,
+and a function's materialization walks those once, stopping at the
+materialized summary of every function it reaches. The root graph is
+condensed into SCCs and evaluated serially in
 dependency order. Every cyclic root component is terminalized before any root
 runs, so cycle diagnostics cannot depend on execution order. Every predecessor
 must be complete before evaluation in every optimization mode. Ordinary reads
