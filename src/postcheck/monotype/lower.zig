@@ -8386,6 +8386,24 @@ const Builder = struct {
         // independently of the callable set its value joins in the caller.
         // A hosted template has no procedure of its own to cache: callers
         // reach the host directly through its declared ABI.
+        if (pack_trace_available and specCensusEnabled() and template.target != .hosted and try self.monoFnTypeMentionsFunction(lower_fn_ty)) {
+            const proc_base = view.names.procBase(template_ref.proc_base);
+            const name: []const u8 = if (proc_base.export_name) |e| view.names.exportNameText(e) else "?";
+            const types = self.program.types.view();
+            var where: []const u8 = "ret";
+            var position: usize = 0;
+            switch (types.get(lower_fn_ty)) {
+                .func => |func| for (types.span(func.args), 0..) |arg, index| {
+                    if (try self.monoTypeMentionsFunction(arg)) {
+                        where = "arg";
+                        position = index;
+                        break;
+                    }
+                },
+                else => where = "self",
+            }
+            std.debug.print("CENSUS_UNKEYED\t{s}\t{s}{d}\t{s}\n", .{ name, where, position, @tagName(spec_identity.callable) });
+        }
         if (template.target != .hosted and !try self.monoFnTypeMentionsFunction(lower_fn_ty)) {
             const key = Ast.specIdentityKey(spec_identity, .{
                 .evidence = fn_template.evidence_declaration.?,
