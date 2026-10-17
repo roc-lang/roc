@@ -336,6 +336,10 @@ pub const Pending = struct {
     /// (`PackFile.ObjectPack`), which only a consumer whose code is linked
     /// takes.
     linked_store: ?*const Store = null,
+    /// Whether the linked store's object packs of the root module itself, the
+    /// tier 2 entries a background build compiled for earlier builds of it,
+    /// are offered too.
+    linked_root_objects: bool = true,
     io: std.Io,
     build_env: *compile.BuildEnv,
 };
@@ -602,11 +606,19 @@ pub const LoadedPacks = struct {
         const artifacts = try pending.build_env.collectVisibleArtifacts(self.allocator, root_artifact);
         defer self.allocator.free(artifacts);
         for (artifacts) |artifact| {
+            if (std.meta.eql(artifact.key, root_artifact.key)) continue;
             const placement = pending.build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
             if (placement.origin != .pkg) continue;
             const dir = try store.identityDir(placement.origin, placement.identity);
             defer self.allocator.free(dir);
             try self.loadObjectDirIntoUnrecorded(pending.io, dir);
+        }
+        if (pending.linked_root_objects) {
+            if (pending.build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
+                const dir = try store.identityDir(placement.origin, placement.identity);
+                defer self.allocator.free(dir);
+                try self.loadObjectDirIntoUnrecorded(pending.io, dir);
+            }
         }
         try self.indexObjectPacks();
     }

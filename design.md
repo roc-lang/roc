@@ -644,6 +644,21 @@ the image, and a hot reload rebuild that would need other objects reports a
 changed host interface. The image splices the dev packs' entries the same way
 an object build does, with the data they carry.
 
+A tier 2 entry, one the program offers by identity alone, can be optimized
+only once an app requests it. After a cached dev build writes its packs, it
+starts a detached `roc build --tier2-objects=<requests>` naming the entries it
+offered by identity that no object served. That build lowers the app exactly
+as the requesting build did, so each entry keeps its identity, compiles with
+LLVM every entry whose call closure an object can define whole (no literal
+conversion, no erased call, and no procedure served from the cache, named by
+site, or holding a copy of such code), and files the object pack under the
+app module in the optimized store, named by its requests. A later dev build
+loads the root module's object packs too and links such an entry in place of
+its dev code. `roc check` never starts one, and `roc run` links only its URL
+packages' objects, so a hot reload session keeps one host program.
+`ROC_BACKGROUND_OBJECTS=off` disables the build and `wait` makes the dev
+build wait for it.
+
 A specialization whose request mentions a function type has no
 reservation-time key: which closures it receives is decided by lambda
 solving. Its earliest hit is therefore in Direct LIR, once Lambda Mono has

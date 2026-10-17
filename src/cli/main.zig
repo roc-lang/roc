@@ -6827,6 +6827,9 @@ const RunObjectCache = struct {
         self.packs.pending = .{
             .store = &self.store,
             .linked_store = if (self.linked_store) |*linked| linked else null,
+            // The host links the same objects for a whole hot reload session,
+            // which a background tier 2 build finishing must not change.
+            .linked_root_objects = false,
             .io = io,
             .build_env = build_env,
         };
@@ -8123,6 +8126,8 @@ fn rocBuildCommand(ctx: *CliCtx, args_in: cli_args.BuildArgs, arg0: []const u8) 
         return runWatchCommand(ctx, arg0, .{ .build = args });
     }
 
+    if (args.tier2_objects) |requests_path| return buildTier2Objects(ctx, args, requests_path);
+
     const result = try rocBuildOnce(ctx, args);
     try finishCheckDiagnostics(ctx, result.diagnostics);
 }
@@ -8630,16 +8635,242 @@ fn compileModuleObjectPack(
     var lowered = pack.lowered;
     defer lowered.deinit();
     defer compile.static_data_exports.deinitStaticData(ctx.gpa, pack.static_data_exports);
+    const comptime_reads = if (lowered.spec_comptime_reads) |*reads| reads else return null;
+    var candidates = std.ArrayList(ObjectPackCandidate).empty;
+    defer candidates.deinit(ctx.gpa);
+    for (lowered.lir_result.spec_procs.items) |spec_proc| {
+        try candidates.append(ctx.gpa, .{ .key = spec_proc.key, .proc = spec_proc.proc, .reads = comptime_reads.get(spec_proc.key) });
+    }
+    return try objectPackBytes(ctx, &lowered, pack.static_data_exports, candidates.items, target);
+}
+
+/// How a dev build compiles its tier 2 entries with LLVM, from
+/// `ROC_BACKGROUND_OBJECTS`: `off` never, `wait` before the build returns,
+/// and otherwise in a detached process the build does not wait for.
+const Tier2ObjectMode = enum { off, wait, detached };
+
+fn tier2ObjectMode() Tier2ObjectMode {
+    const value = std.mem.span(std.c.getenv("ROC_BACKGROUND_OBJECTS") orelse return .detached);
+    if (std.mem.eql(u8, value, "off")) return .off;
+    if (std.mem.eql(u8, value, "wait")) return .wait;
+    return .detached;
+}
+
+/// After a dev build that reads and writes the object cache, start the
+/// build that compiles its tier 2 entries with LLVM (`buildTier2Objects`):
+/// every procedure it offered by identity alone that the object cache did
+/// not serve as a linked object. A later dev build links those objects in
+/// place of the dev code. The requests file is named by its own content, so
+/// a set of entries already compiled is not compiled again.
+fn spawnTier2ObjectBuild(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    build_env: *BuildEnv,
+    linked_store: *const pack_store.Store,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    target: RocTarget,
+) CliMainError!void {
+    if (comptime !llvm_available) return;
+    const mode = tier2ObjectMode();
+    if (mode == .off) return;
+    // The spawned build reconstructs this build from its command line.
+    if (args.synthetic_default_platform or args.source_dir_override != null or args.root_source_url != null or args.synthetic_root_original_path != null) return;
+    const placement = build_env.packPlacementForArtifactKey(root_artifact.key) orelse return;
+
+    const store = &lowered.lir_result.store;
+    const keyed = try ctx.gpa.alloc(bool, store.procSpecCount());
+    defer ctx.gpa.free(keyed);
+    @memset(keyed, false);
+    for (lowered.lir_result.spec_procs.items) |spec_proc| keyed[@backingInt(spec_proc.proc)] = true;
+    var requests = std.ArrayList(lir.ProcIdentity).empty;
+    defer requests.deinit(ctx.gpa);
+    for (store.getProcSpecs(), 0..) |proc, index| {
+        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+        if (proc.abi != .roc or proc.hosted != null or proc.is_static_initializer or proc.c_abi_entry) continue;
+        if (proc.source_monotype_fn == null or proc.code_key != null or keyed[index]) continue;
+        if (try lir.PackProgram.procCopiesSiteCode(ctx.gpa, store, proc_id)) continue;
+        try requests.append(ctx.gpa, proc.identity);
+    }
+    if (requests.items.len == 0) return;
+    std.mem.sort(lir.ProcIdentity, requests.items, {}, struct {
+        fn lessThan(_: void, lhs: lir.ProcIdentity, rhs: lir.ProcIdentity) bool {
+            return std.mem.order(u8, &lhs.bytes, &rhs.bytes) == .lt;
+        }
+    }.lessThan);
+    var hasher = base.Sha256.init(.{});
+    updateHashBytes(&hasher, "roc-tier2-objects-v1");
+    for (requests.items) |identity| hasher.update(&identity.bytes);
+    const key = hasher.finalResult();
+    if (try linked_store.has(placement.origin, placement.identity, key)) return;
+
+    const requests_dir = createUniqueTempDir(ctx) catch return;
+    var spawned = false;
+    defer if (!spawned) compile.CacheCleanup.deleteTempDir(ctx.io.std_io, requests_dir);
+    const requests_path = try std.fs.path.join(ctx.arena, &.{ requests_dir, "tier2-requests" });
+    var bytes = std.ArrayList(u8).empty;
+    defer bytes.deinit(ctx.gpa);
+    try bytes.appendSlice(ctx.gpa, &key);
+    for (requests.items) |identity| try bytes.appendSlice(ctx.gpa, &identity.bytes);
+    std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = requests_path, .data = bytes.items }) catch return;
+
+    const exe = std.process.executablePathAlloc(ctx.io.std_io, ctx.arena) catch return;
+    var argv = std.ArrayList([]const u8).empty;
+    defer argv.deinit(ctx.gpa);
+    var owned = std.ArrayList([]const u8).empty;
+    defer {
+        for (owned.items) |arg| ctx.gpa.free(arg);
+        owned.deinit(ctx.gpa);
+    }
+    try argv.appendSlice(ctx.gpa, &.{ exe, "build", "--opt=dev" });
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--target={s}", .{@tagName(target)});
+    try appendOwnedArg(ctx.gpa, &argv, &owned, "--tier2-objects={s}", .{requests_path});
+    if (args.specialization_strategy) |strategy| {
+        try argv.append(ctx.gpa, switch (strategy) {
+            .lss => "--specialize=yes",
+            .boxy => "--specialize=no",
+        });
+    }
+    if (args.max_threads) |jobs| try appendOwnedArg(ctx.gpa, &argv, &owned, "--jobs={}", .{jobs});
+    try appendResolveLimitArgs(ctx.gpa, &argv, &owned, args.resolve_limits);
+    try appendReplaceDepArgs(ctx.gpa, &argv, &args.resolve_limits.replace_deps);
+    try argv.append(ctx.gpa, args.path);
+
+    var child = std.process.spawn(ctx.io.std_io, .{
+        .argv = argv.items,
+        .stdin = .ignore,
+        .stdout = .ignore,
+        // Tracing shows what the build compiled.
+        .stderr = if (std.c.getenv("ROC_PACK_TRACE") != null) .inherit else .ignore,
+        // Its own process group, so interrupting this build leaves it running.
+        .pgid = if (builtin.os.tag == .windows) null else 0,
+    }) catch return;
+    spawned = true;
+    if (mode == .wait) _ = child.wait(ctx.io.std_io) catch {};
+}
+
+/// The build `spawnTier2ObjectBuild` starts: lower the app exactly as the
+/// dev build that requested it did, compile with LLVM each requested entry an
+/// object can define whole (`objectPackBytes`), offered under the key a dev
+/// build looks the entry up by, and file the object pack under the app
+/// module in the optimized store, named by the requests.
+fn buildTier2Objects(ctx: *CliCtx, args: cli_args.BuildArgs, requests_path: []const u8) CliMainError!void {
+    if (comptime !llvm_available) return;
+    const requests_dir = std.fs.path.dirname(requests_path) orelse return;
+    defer compile.CacheCleanup.deleteTempDir(ctx.io.std_io, requests_dir);
+    const request_bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, requests_path, ctx.gpa, .limited(256 * 1024 * 1024)) catch return;
+    defer ctx.gpa.free(request_bytes);
+    if (request_bytes.len < 32 or request_bytes.len % 32 != 0) return;
+    const key = request_bytes[0..32].*;
+    var requested = std.AutoHashMap(lir.ProcIdentity, void).init(ctx.gpa);
+    defer requested.deinit();
+    var at: usize = 32;
+    while (at < request_bytes.len) : (at += 32) try requested.put(.{ .bytes = request_bytes[at..][0..32].* }, {});
+
+    var reporter = makeReporter(ctx, "roc build", false);
+    defer reporter.deinit();
+    reporter.start();
+    var build_env = try initBuildCommandEnv(ctx, args);
+    defer build_env.deinit();
+    _, const selected = try resolveBuildCommandPlatform(ctx, args, &build_env, &reporter);
+    const target = selected.target;
+    build_env.setTarget(target);
+    // The requesting build read the object cache, which names the app's
+    // procedures by site; an empty one lowers the same procedures and takes
+    // no entry.
+    var no_entries: u8 = 0;
+    const lookup: postcheck.Common.SpecCacheLookup = .{ .context = &no_entries, .find = noObjectCacheEntries };
+    const provision = nativeObjectCodeProvision(target, .dev, true, true);
+    var runtime_lowering = checkedRuntimeLoweringConfig(
+        .linked_output,
+        .dev,
+        currentRuntimeSpecializationStrategy(args.specialization_strategy),
+        base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
+        false,
+    );
+    runtime_lowering.target.spec_cache = lookup;
+    runtime_lowering.target.code_provision = provision;
+    runtime_lowering.target.spec_comptime_reads = true;
+    build_env.setRuntimeLowering(runtime_lowering);
+    build_env.setValidateTargetFilesForSelectedTarget(true);
+    const diag, _ = try typeCheckBuildCommand(ctx, args, &build_env, &reporter);
+    if (diag.errors != 0) return;
+
+    const root_artifact = try checkedArtifactForBuild(ctx, &build_env, args.path);
+    const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(imported_artifacts);
+    const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(relation_artifacts);
+    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, false, lookup, provision);
+    defer lowered.deinit();
+    const static_data_exports = try buildCommandStaticData(ctx, &reporter, root_artifact, imported_artifacts, relation_artifacts, &lowered, target);
+    defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
+    const comptime_reads = if (lowered.spec_comptime_reads) |*reads| reads else return;
+
+    var candidates = std.ArrayList(ObjectPackCandidate).empty;
+    defer candidates.deinit(ctx.gpa);
+    for (lowered.lir_result.store.getProcSpecs(), 0..) |proc, index| {
+        if (proc.code_key != null or !requested.contains(proc.identity)) continue;
+        const source_fn = proc.source_monotype_fn orelse continue;
+        try candidates.append(ctx.gpa, .{
+            .key = postcheck.Common.procIdentityCacheKey(proc.identity.bytes),
+            .proc = @fromBackingInt(@intCast(@as(u32, @intCast(index)))),
+            .reads = comptime_reads.fnReads(source_fn),
+        });
+    }
+    if (std.c.getenv("ROC_PACK_TRACE") != null) {
+        std.debug.print("tier2 requested {d} lowered {d}\n", .{ requested.count(), candidates.items.len });
+        for (candidates.items) |candidate| std.debug.print("tier2 candidate key={x} {s}\n", .{ candidate.key[0..8], lowered.lir_result.store.procDebugName(candidate.proc) orelse "" });
+    }
+    const bytes = (try objectPackBytes(ctx, &lowered, static_data_exports, candidates.items, target)) orelse return;
+    defer ctx.gpa.free(bytes);
+    const placement = build_env.packPlacementForArtifactKey(root_artifact.key) orelse return;
+    var store = pack_store.Store.init(ctx.gpa, .{ .enabled = true, .verbose = false, .roc_ctx = ctx.coreCtx() }, target, linked_pack_policy) catch return;
+    defer store.deinit();
+    store.write(placement.origin, placement.identity, key, bytes) catch |err| {
+        std.log.warn("object cache could not store the tier 2 objects: {}", .{err});
+    };
+    reporter.finish();
+}
+
+fn noObjectCacheEntries(_: *anyopaque, _: [32]u8, _: bool) ?postcheck.Common.SpecCacheHit {
+    return null;
+}
+
+/// A specialization an object pack may offer: the key it is offered under,
+/// its procedure, and what its code reads of compile-time evaluation.
+const ObjectPackCandidate = struct {
+    key: [32]u8,
+    proc: lir.LIR.LirProcSpecId,
+    reads: lir.CheckedPipeline.SpecComptimeReads.Lookup,
+};
+
+/// Compile with LLVM, into one object, every candidate whose code the object
+/// can define whole: its call closure converts no literal, makes no erased
+/// call, and reaches no procedure the object cannot hold (one served from the
+/// object cache, or one named by site, whose current body only the linking
+/// program has, or one holding a copy of such a body). The object exports a
+/// weak C-ABI entry for each. Null when no candidate qualifies or LLVM cannot
+/// compile the code.
+fn objectPackBytes(
+    ctx: *CliCtx,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    static_data_exports: []const compile.static_data_exports.StaticDataExport,
+    candidates: []const ObjectPackCandidate,
+    target: RocTarget,
+) CliMainError!?[]u8 {
+    if (comptime !llvm_available) return null;
     const store = &lowered.lir_result.store;
     const procs = store.getProcSpecs();
 
-    // The specializations an object can offer, by the rules a dev pack
-    // follows, and the entries the object exports for them.
     const converting = try lir.PackProgram.literalConvertingProcs(ctx.gpa, store);
     defer ctx.gpa.free(converting);
     const erased = try lir.PackProgram.erasedCallingProcs(ctx.gpa, store);
     defer ctx.gpa.free(erased);
-    const comptime_reads = if (lowered.spec_comptime_reads) |*reads| reads else return null;
+    // Whether each procedure is one the object cannot hold, decided once.
+    const foreign = try ctx.gpa.alloc(?bool, procs.len);
+    defer ctx.gpa.free(foreign);
+    @memset(foreign, null);
     var specs = std.ArrayList(backend.dev.PackFile.SpecEntry).empty;
     defer specs.deinit(ctx.gpa);
     var identities = std.ArrayList(lir.ProcIdentity).empty;
@@ -8649,17 +8880,23 @@ fn compileModuleObjectPack(
     var arena_state = base.SingleThreadArena.init(ctx.gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    for (lowered.lir_result.spec_procs.items) |spec_proc| {
-        const proc = procs[@backingInt(spec_proc.proc)];
+    for (candidates) |candidate| {
+        const proc = procs[@backingInt(candidate.proc)];
         if (proc.body == null or proc.abi != .roc or proc.hosted != null) continue;
-        const reads = comptime_reads.get(spec_proc.key);
-        if (!reads.offerable) continue;
+        if (!candidate.reads.offerable) continue;
         if (proc.rc_variant_demandable or proc.inlined_at_calls or proc.tail_group != null) continue;
-        const closure = try lir.PackProgram.procCallClosure(ctx.gpa, store, spec_proc.proc);
+        const closure = try lir.PackProgram.procCallClosure(ctx.gpa, store, candidate.proc);
         defer ctx.gpa.free(closure);
         var excluded = false;
-        for (closure, converting, erased) |reached, converts, uses_erased| {
-            if (reached and (converts or uses_erased)) excluded = true;
+        for (closure, converting, erased, foreign, 0..) |reached, converts, uses_erased, *cannot_hold, index| {
+            if (!reached) continue;
+            if (converts or uses_erased) excluded = true;
+            if (cannot_hold.* == null) {
+                const reached_proc = procs[index];
+                cannot_hold.* = (reached_proc.external and !reached_proc.c_abi_entry) or reached_proc.code_key != null or
+                    try lir.PackProgram.procCopiesSiteCode(ctx.gpa, store, @fromBackingInt(@intCast(@as(u32, @intCast(index)))));
+            }
+            if (cannot_hold.*.?) excluded = true;
         }
         if (excluded) continue;
 
@@ -8673,13 +8910,13 @@ fn compileModuleObjectPack(
             const params = store.getLocalSpan(proc.args);
             const arg_layouts = try arena.alloc(layout.Idx, params.len);
             for (arg_layouts, 0..) |*arg_layout, index| arg_layout.* = store.getLocal(lir.LirStore.GuardedList.at(params, index)).layout_idx;
-            try entrypoints.append(ctx.gpa, .{ .symbol_name = symbol, .proc = spec_proc.proc, .arg_layouts = arg_layouts, .ret_layout = proc.ret_layout });
+            try entrypoints.append(ctx.gpa, .{ .symbol_name = symbol, .proc = candidate.proc, .arg_layouts = arg_layouts, .ret_layout = proc.ret_layout });
             break :identity @intCast(identities.items.len - 1);
         };
         try specs.append(ctx.gpa, .{
-            .key = spec_proc.key,
+            .key = candidate.key,
             .artifact = identity_index,
-            .comptime_root_reads = reads.reads,
+            .comptime_root_reads = candidate.reads.reads,
             .rc_borrowed_params = proc.rc_borrowed_params,
             .rc_ret_borrowed = proc.rc_ret_borrowed,
             .rc_ret_lenders = proc.rc_ret_lenders,
@@ -8688,6 +8925,9 @@ fn compileModuleObjectPack(
             .rc_ret_unique_fields = proc.rc_ret_unique_fields,
             .rc_ret_conditions = try GuardedList.dupe(arena, u32, store.getU32Span(proc.rc_ret_conditions)),
         });
+    }
+    if (std.c.getenv("ROC_PACK_TRACE") != null) {
+        for (specs.items) |spec| std.debug.print("object-offer {x}\n", .{spec.key[0..8]});
     }
     if (specs.items.len == 0) return null;
 
@@ -8704,7 +8944,7 @@ fn compileModuleObjectPack(
         defer codegen.deinit();
         codegen.layout_store = &lowered.lir_result.layouts;
         codegen.object_cache_pack = true;
-        try codegen.setStaticDataExports(pack.static_data_exports);
+        try codegen.setStaticDataExports(static_data_exports);
         const generated = codegen.generateEntrypointModule("roc_pack", entrypoints.items) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             // A constant without a link-time image.
@@ -11250,6 +11490,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     if (object_store != null and diag.errors == 0) {
         const store = object_store.?;
         try writePacksToStore(ctx, &build_env, store, root_artifact, imported_artifacts, relation_artifacts, &lowered, if (object_compiler.captured_artifacts) |*set| set else null, args, target);
+        if (linked_store) |*linked| if (target == RocTarget.detectNative()) {
+            try spawnTier2ObjectBuild(ctx, args, &build_env, linked, root_artifact, &lowered, target);
+        };
     }
 
     reporter.begin("Preparing Link Inputs");

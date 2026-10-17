@@ -434,6 +434,7 @@ const CustomCase = enum {
     spliced_procedure_debug_lines,
     linked_object_pack,
     run_object_cache,
+    tier2_object_cache,
     proc_identity_object_cache,
     edited_lambda_object_cache,
     edited_nominal_object_cache,
@@ -2997,6 +2998,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "object cache: an edited app is served higher-order specializations by their procedure identity", .timeout_ms = 600_000, .body = .{ .custom = .proc_identity_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: a dev build links a URL package's optimized object pack and behaves like the uncached build", .timeout_ms = 900_000, .body = .{ .custom = .linked_object_pack } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: roc run links URL package objects into its host executable and splices the app's dev packs", .timeout_ms = 900_000, .body = .{ .custom = .run_object_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "object cache: a dev build compiles its tier 2 entries with LLVM and an edited rebuild links them", .timeout_ms = 900_000, .body = .{ .custom = .tier2_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: spliced procedures keep the debug lines of the cold build", .timeout_ms = 600_000, .body = .{ .custom = .spliced_procedure_debug_lines } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: exports taking and returning boxed closures are offered and served warm", .timeout_ms = 600_000, .body = .{ .custom = .boxed_closure_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev writes identical object-cache packs across thread counts", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_store_thread_count_reproducible } },
@@ -3923,6 +3925,16 @@ var glue_roc_binary_path: []const u8 = "";
 var glue_execution_mode: GlueExecutionMode = .default;
 var platform_specialization_arg: ?[]const u8 = null;
 var project_root_path: []const u8 = "";
+/// `--shared-object-store=<dir>`: every platform and command case reads and
+/// writes this one cache root, so a second run of the suite is served every
+/// object-cache entry the first wrote and must behave the same. Custom cases,
+/// which manage their own caches and check what a cache served, are skipped.
+var shared_object_store: ?[]const u8 = null;
+
+/// The cache root a case's processes use.
+fn caseCacheRoot(dirs: util.TestProcessDirs) []const u8 {
+    return shared_object_store orelse dirs.roc_cache_dir;
+}
 
 const CaseEnv = struct {
     dirs: util.TestProcessDirs,
@@ -3946,10 +3958,13 @@ fn buildCaseEnv(io: std.Io, allocator: Allocator) CliRunnerError!CaseEnv {
     };
     var env_map = try environ.createMap(allocator);
     errdefer env_map.deinit();
-    try env_map.put("ROC_CACHE_DIR", dirs.roc_cache_dir);
-    try env_map.put("XDG_CACHE_HOME", dirs.roc_cache_dir);
+    try env_map.put("ROC_CACHE_DIR", caseCacheRoot(dirs));
+    try env_map.put("XDG_CACHE_HOME", caseCacheRoot(dirs));
     try env_map.put("ZIG_LOCAL_CACHE_DIR", dirs.zig_local_cache_dir);
     try env_map.put("ROC_INSTALL_DIR", dirs.install_dir);
+    // A dev build's detached tier 2 object build would outlive its case;
+    // the case that covers it waits for it.
+    try env_map.put("ROC_BACKGROUND_OBJECTS", "off");
     try util.putIsolatedTempEnv(&env_map, dirs.temp_dir);
 
     return .{
@@ -4018,6 +4033,10 @@ fn runSingleTest(io: std.Io, allocator: Allocator, spec: CliCase, timeout_ms: u6
         return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = reason };
     }
 
+    if (shared_object_store != null and spec.body == .custom) {
+        var timer = harness.Timer.start() catch return .{ .status = .skip, .phase = .setup, .message = "custom cases manage their own caches" };
+        return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "custom cases manage their own caches" };
+    }
     const case_timeout_ms = caseTimeoutMs(spec, timeout_ms);
     return switch (spec.body) {
         .platform => runPlatformCase(io, allocator, spec, case_timeout_ms),
@@ -4126,12 +4145,14 @@ fn runPlatformCase(io: std.Io, allocator: Allocator, spec: CliCase, timeout_ms: 
     var env_map = environ.createMap(allocator) catch
         return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to copy environment" };
     defer env_map.deinit();
-    env_map.put("ROC_CACHE_DIR", dirs.roc_cache_dir) catch
+    env_map.put("ROC_CACHE_DIR", caseCacheRoot(dirs)) catch
         return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to set ROC_CACHE_DIR" };
-    env_map.put("XDG_CACHE_HOME", dirs.roc_cache_dir) catch
+    env_map.put("XDG_CACHE_HOME", caseCacheRoot(dirs)) catch
         return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to set XDG_CACHE_HOME" };
     env_map.put("ZIG_LOCAL_CACHE_DIR", dirs.zig_local_cache_dir) catch
         return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to set ZIG_LOCAL_CACHE_DIR" };
+    env_map.put("ROC_BACKGROUND_OBJECTS", "off") catch
+        return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to set ROC_BACKGROUND_OBJECTS" };
     // Isolate the temp dir so roc's background temp-cleanup thread cannot race
     // other concurrent roc processes on the shared system temp dir. This is the
     // fix for the non-deterministic interpreter-backend access-violation flake.
@@ -4881,6 +4902,7 @@ fn runCustomCase(
         .spliced_procedure_debug_lines => customSplicedProcedureDebugLines(io, allocator, &env, &timer, timeout_ms),
         .linked_object_pack => customLinkedObjectPack(io, allocator, &env, &timer, timeout_ms),
         .run_object_cache => customRunObjectCache(io, allocator, &env, &timer, timeout_ms),
+        .tier2_object_cache => customTier2ObjectCache(io, allocator, &env, &timer, timeout_ms),
         .proc_identity_object_cache => customProcIdentityObjectCache(io, allocator, &env, &timer, timeout_ms),
         .edited_lambda_object_cache => customEditedLambdaObjectCache(io, allocator, &env, &timer, timeout_ms),
         .edited_nominal_object_cache => customEditedNominalObjectCache(io, allocator, &env, &timer, timeout_ms),
@@ -7984,6 +8006,10 @@ const EditStep = struct {
     edits: []const struct { from: []const u8, to: []const u8 } = &.{},
     stdout: []const u8,
     identity_hit: bool,
+    /// The build compiles its tier 2 entries with LLVM before it returns.
+    tier2_objects: bool = false,
+    /// The build links an optimized object-cache entry.
+    linked: bool = false,
 };
 
 /// Build a staged copy of `app_name` (beside `Lib.roc`) once per step,
@@ -8014,9 +8040,13 @@ fn runEditLoop(
             return customInfraFailure(allocator, timer, "failed to clone pack trace environment: {}", .{err}),
     };
     defer trace_env.env_map.deinit();
-    trace_env.env_map.put("ROC_PACK_TRACE", "1") catch |err|
-        return customInfraFailure(allocator, timer, "failed to enable pack tracing: {}", .{err});
+    for ([_][]const u8{ "ROC_PACK_TRACE", "ROC_PACK_STATS" }) |key| {
+        trace_env.env_map.put(key, "1") catch |err|
+            return customInfraFailure(allocator, timer, "failed to enable pack tracing: {}", .{err});
+    }
     for (steps, 0..) |step, index| {
+        trace_env.env_map.put("ROC_BACKGROUND_OBJECTS", if (step.tier2_objects) "wait" else "off") catch |err|
+            return customInfraFailure(allocator, timer, "failed to set the tier 2 object mode: {}", .{err});
         if (step.edits.len != 0) {
             var source = std.Io.Dir.cwd().readFileAlloc(io, app, allocator, .limited(1024 * 1024)) catch |err|
                 return customInfraFailure(allocator, timer, "failed to read the app: {}", .{err});
@@ -8042,12 +8072,39 @@ fn runEditLoop(
         if (step.identity_hit and !hasIdentityHit(built.stderr)) {
             return failureFromRun(allocator, timer, built, "the build was served no specialization by its identity");
         }
+        if (step.linked) {
+            const marker = "linked procs: ";
+            const at = std.mem.find(u8, built.stderr, marker) orelse
+                return failureFromRun(allocator, timer, built, "the build did not report pack statistics");
+            if (countAfterMarker(built.stderr[at + marker.len ..]) == 0) {
+                return failureFromRun(allocator, timer, built, "the build linked no optimized tier 2 entry");
+            }
+        }
         if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
             .args = &.{},
             .stdout_exact = step.stdout,
         })) |failure| return failure;
     }
     return null;
+}
+
+/// A dev build compiles the tier 2 entries it offered with LLVM, those whose
+/// code an object can define whole, and an edited rebuild links the
+/// optimized object in place of the dev code and behaves the same.
+fn customTier2ObjectCache(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    if (builtin.os.tag != .linux and builtin.os.tag != .macos) {
+        return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "optimized object packs link on ELF and Mach-O hosts" };
+    }
+    return runEditLoop(io, allocator, env, timer, timeout_ms, "tier2_object_cache", "test/cli/proc_identity_object_cache/App.roc", "App.roc", &.{
+        .{ .stdout = "64\n7\n24\n", .identity_hit = false, .tier2_objects = true },
+        .{ .edits = &.{.{ .from = "start + 1, 3", .to = "start + 2, 3" }}, .stdout = "64\n7\n32\n", .identity_hit = true, .linked = true },
+    });
 }
 
 /// `Lib.apply_steps` receives the app's own closures. Editing one closure's
@@ -16495,6 +16552,15 @@ fn parseRunnerArgs(allocator: Allocator, process_args: std.process.Args) CliRunn
                 return error.InvalidArgs;
             }
             cross_target = value;
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "--shared-object-store=")) {
+            const value = arg["--shared-object-store=".len..];
+            if (!std.fs.path.isAbsolute(value)) {
+                std.debug.print("--shared-object-store needs an absolute path\n", .{});
+                return error.InvalidArgs;
+            }
+            shared_object_store = value;
             continue;
         }
         if (std.mem.startsWith(u8, arg, "--glue-roc=")) {
