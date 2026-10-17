@@ -333,7 +333,7 @@ const FindLookupContext = struct {
         }
 
         // Check if this expression is a lookup or relevant field access.
-        if (expr == .e_lookup_local or expr == .e_lookup_external or
+        if (expr == .e_lookup_local or expr == .e_lookup_external or expr == .e_lookup_associated_resolved or
             expr == .e_method_call or expr == .e_dispatch_call or expr == .e_type_method_call or
             expr == .e_type_dispatch_call or expr == .e_structural_eq or expr == .e_structural_hash or
             expr == .e_method_eq)

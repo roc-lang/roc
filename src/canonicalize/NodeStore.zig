@@ -3149,6 +3149,7 @@ pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx)
                 .alias = if (p.alias == 0) null else @bitCast(p.alias),
                 .is_wildcard = p.flags & 1 != 0,
                 .kind = @fromBackingInt(@intCast((p.flags >> 1) & 1)),
+                .target = if (p.flags & exposed_item_has_target != 0) p.target else null,
             };
         },
     }
@@ -4278,12 +4279,31 @@ pub fn addExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem, region: b
     node.setPayload(.{ .exposed_item = .{
         .name = @bitCast(exposedItem.name),
         .alias = if (exposedItem.alias) |alias| @bitCast(alias) else 0,
-        .flags = @as(u32, @intFromBool(exposedItem.is_wildcard)) | (@as(u32, @backingInt(exposedItem.kind)) << 1),
+        .flags = @as(u32, @intFromBool(exposedItem.is_wildcard)) |
+            (@as(u32, @backingInt(exposedItem.kind)) << 1) |
+            (if (exposedItem.target != null) exposed_item_has_target else 0),
+        .target = exposedItem.target orelse 0,
     } });
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
     return @fromBackingInt(@intCast(@backingInt(nid)));
+}
+
+/// `ExposedItem` payload flag: `target` holds the declaration the item
+/// resolved to.
+const exposed_item_has_target: u32 = 1 << 2;
+
+/// Record the declaration node in the imported module that an exposed item
+/// of an import resolved to.
+pub fn setExposedItemTarget(store: *NodeStore, exposed_item: CIR.ExposedItem.Idx, target: u32) void {
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(exposed_item)));
+    var node = store.nodes.get(node_idx);
+    var payload = node.getPayload().exposed_item;
+    payload.flags |= exposed_item_has_target;
+    payload.target = target;
+    node.setPayload(.{ .exposed_item = payload });
+    store.nodes.set(node_idx, node);
 }
 
 /// Adds a definition to the store.

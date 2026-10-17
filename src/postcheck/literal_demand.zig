@@ -46,6 +46,7 @@
 //! reached through the types it dispatches on.
 
 const std = @import("std");
+const build_options = @import("build_options");
 const collections = @import("collections");
 const check = @import("check");
 
@@ -58,9 +59,10 @@ const checked = check.CheckedModule;
 const static_dispatch = check.StaticDispatchRegistry;
 const checked_names = check.CanonicalNames;
 
-/// Builds without libc (the playground) never read the environment and
-/// compile no trace output.
-const trace_available = @import("builtin").link_libc;
+/// Builds without libc (the playground) and compilers built without
+/// developer diagnostics never read the environment and compile no trace
+/// output.
+const trace_available = @import("builtin").link_libc and build_options.dev_diagnostics;
 
 /// `ROC_CTFE_DEMAND_TRACE` is set: print every demand decision, from the
 /// analysis to each discovery root and each parked, unparked, and upgraded

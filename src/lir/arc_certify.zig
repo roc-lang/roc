@@ -1056,6 +1056,9 @@ const ValueInfo = struct {
     /// Aggregate projection read from `payload_source`, encoded by
     /// `arc_dismantle.encodeProjection`.
     payload_projection: arc_dismantle.Projection = .none,
+    /// The read was stamped a take: the value claims its stored unit from
+    /// `payload_source` and is never a view of the container's slots.
+    payload_taken: bool = false,
     /// Complete outcome rows and exact argument-transfer receipts for a
     /// direct call result. Empty for every other value.
     call_outcomes: arc_sig.OutcomeSpan = .empty,
@@ -1435,6 +1438,7 @@ const SummaryProvenance = struct {
     /// Immediate container and projection retained for a deferred field take.
     payload_source: u32 = no_dense,
     payload_projection: arc_dismantle.Projection = .none,
+    payload_taken: bool = false,
 };
 
 fn summaryProvenanceEql(a: ?*const SummaryProvenance, b: ?*const SummaryProvenance) bool {
@@ -1443,7 +1447,8 @@ fn summaryProvenanceEql(a: ?*const SummaryProvenance, b: ?*const SummaryProvenan
     return std.mem.eql(u32, a.?.lender_reprs, b.?.lender_reprs) and
         std.mem.eql(u32, a.?.holder_reprs, b.?.holder_reprs) and
         a.?.payload_source == b.?.payload_source and
-        a.?.payload_projection.eql(b.?.payload_projection);
+        a.?.payload_projection.eql(b.?.payload_projection) and
+        a.?.payload_taken == b.?.payload_taken;
 }
 
 const SummaryProvenanceContext = struct {
@@ -1457,6 +1462,7 @@ const SummaryProvenanceContext = struct {
         hasher.update(std.mem.sliceAsBytes(provenance.holder_reprs));
         hasher.update(std.mem.asBytes(&provenance.payload_source));
         hasher.update(std.mem.asBytes(&provenance.payload_projection));
+        hasher.update(std.mem.asBytes(&provenance.payload_taken));
         return hasher.final();
     }
 
@@ -1464,7 +1470,8 @@ const SummaryProvenanceContext = struct {
         return std.mem.eql(u32, a.lender_reprs, b.lender_reprs) and
             std.mem.eql(u32, a.holder_reprs, b.holder_reprs) and
             a.payload_source == b.payload_source and
-            a.payload_projection.eql(b.payload_projection);
+            a.payload_projection.eql(b.payload_projection) and
+            a.payload_taken == b.payload_taken;
     }
 };
 
@@ -2412,9 +2419,44 @@ const Certifier = struct {
     /// field under it is claimed.
     const PendingContainerClaim = struct {
         container: ValueId,
-        field: u32,
+        claim: ClaimSet,
         existing: ClaimSet,
     };
+
+    /// A range of a struct's ownership slots.
+    const SlotRange = struct {
+        first: u32,
+        count: u32,
+    };
+
+    /// The parent a unit-less struct view reads its slots from in place, and
+    /// the view's first slot there. An unstamped struct field read that holds
+    /// no unit and has claimed nothing of its own is a view of its parent's
+    /// slots; claims through it are claims of the parent's slots. A stamped
+    /// take instead claims its whole field as a unit of its own.
+    fn viewParent(self: *Certifier, state: *const State, value: ValueId) ?struct { parent: ValueId, first: u32 } {
+        if (state.balanceOf(value) != 0 or state.conditionalConditionOf(value) != null) return null;
+        if (!state.claimsOf(value).isEmpty()) return null;
+        const info = self.values.items[value];
+        if (info.payload_source == no_value or info.payload_projection.kind != .field or info.payload_taken) return null;
+        if (self.layouts.getLayout(self.store.getLocal(info.origin).layout_idx).tag != .struct_) return null;
+        const parent_layout = self.store.getLocal(self.values.items[info.payload_source].origin).layout_idx;
+        if (self.layouts.getLayout(parent_layout).tag != .struct_) return null;
+        return .{
+            .parent = info.payload_source,
+            .first = self.layouts.ownershipSlotBase(parent_layout, info.payload_projection.first),
+        };
+    }
+
+    /// The required claims of `container` within `range`.
+    fn claimsInRange(self: *Certifier, required: ClaimSet, range: SlotRange) Allocator.Error!ClaimSet {
+        var claim: ClaimSet = .{};
+        var slot = range.first;
+        while (slot < range.first + range.count) : (slot += 1) {
+            if (required.contains(slot)) claim = try claim.withField(self.claim_arena.allocator(), slot);
+        }
+        return claim;
+    }
 
     /// Claims walk up the projection chain: a container without a unit of
     /// its own claims it from its parent first. The chain is followed in a
@@ -2436,6 +2478,9 @@ const Certifier = struct {
         defer pending.deinit(self.allocator);
 
         var value = root;
+        // The slots a view's read addresses in the view's parent, once the
+        // walk has passed through that view.
+        var carried: ?SlotRange = null;
         var claimed = walk: while (true) {
             if (value >= self.values.items.len) break :walk false;
             const value_index: usize = @intCast(value);
@@ -2449,9 +2494,13 @@ const Certifier = struct {
             const container = info.payload_source;
             if (info.payload_projection.isNone()) break :walk false;
             const container_origin = self.values.items[container].origin;
-            const container_layout = self.layouts.getLayout(self.store.getLocal(container_origin).layout_idx);
-            const field: u32 = switch (container_layout.tag) {
-                .struct_ => info.payload_projection.first,
+            const container_layout_idx = self.store.getLocal(container_origin).layout_idx;
+            const container_layout = self.layouts.getLayout(container_layout_idx);
+            const range: SlotRange = switch (container_layout.tag) {
+                .struct_ => carried orelse .{
+                    .first = self.layouts.ownershipSlotBase(container_layout_idx, info.payload_projection.first),
+                    .count = self.layouts.ownershipSlotCount(self.store.getLocal(info.origin).layout_idx),
+                },
                 .tag_union => blk: {
                     if (!arc_dismantle.projectionOwnsAllRc(
                         self.store,
@@ -2460,7 +2509,7 @@ const Certifier = struct {
                         info.origin,
                         info.payload_projection,
                     )) break :walk false;
-                    break :blk 0;
+                    break :blk .{ .first = 0, .count = 1 };
                 },
                 .scalar,
                 .box,
@@ -2474,13 +2523,20 @@ const Certifier = struct {
                 .ptr,
                 => break :walk false,
             };
+            carried = null;
+            if (self.viewParent(state, container)) |view| {
+                carried = .{ .first = view.first + range.first, .count = range.count };
+                value = container;
+                continue :walk;
+            }
             const required = try self.requiredClaims(container) orelse break :walk false;
-            if (!required.contains(field)) break :walk false;
+            const claim = try self.claimsInRange(required, range);
+            if (claim.isEmpty()) break :walk false;
             const existing = state.claimsOf(container);
-            if (existing.contains(field)) {
+            if (existing.intersects(claim)) {
                 // Only a complete projection can spend another whole unit;
                 // repeating a partial field claim would lose its other fields.
-                if (!required.isSingleton(field)) break :walk false;
+                if (!required.eql(claim)) break :walk false;
                 // A second stamped take of the same projection spends that field
                 // from an intact surplus aggregate unit. The first unit remains
                 // represented by the existing claim set.
@@ -2502,7 +2558,7 @@ const Certifier = struct {
                 continue :walk;
             }
             if (state.balanceOf(container) >= 1) {
-                try self.claimContainerField(state, container, field, existing, mutations);
+                try self.claimContainerField(state, container, claim, existing, mutations);
                 break :walk true;
             }
             if (state.conditionalConditionOf(container) != null) break :walk false;
@@ -2511,7 +2567,7 @@ const Certifier = struct {
             // own parent. This is bookkeeping only: the parent claim and child
             // balance are the two sides of the same single runtime ownership
             // unit.
-            try pending.append(self.allocator, .{ .container = container, .field = field, .existing = existing });
+            try pending.append(self.allocator, .{ .container = container, .claim = claim, .existing = existing });
             value = container;
         };
 
@@ -2524,7 +2580,7 @@ const Certifier = struct {
                 .before = before,
                 .after = before + 1,
             } });
-            try self.claimContainerField(state, claim.container, claim.field, claim.existing, mutations);
+            try self.claimContainerField(state, claim.container, claim.claim, claim.existing, mutations);
             claimed = true;
         }
         return claimed;
@@ -2534,11 +2590,11 @@ const Certifier = struct {
         self: *Certifier,
         state: *State,
         container: ValueId,
-        field: u32,
+        claim: ClaimSet,
         existing: ClaimSet,
         mutations: ?*std.ArrayList(OwnershipMutation),
     ) Allocator.Error!void {
-        const updated = try existing.withField(self.state_arena.allocator(), field);
+        const updated = try existing.withAll(self.state_arena.allocator(), claim);
         // A complete claim set has spent exactly one unit. When the value
         // holds further explicit units they are intact, so the spent unit
         // settles now and a dismantle of another unit starts its own claim
@@ -2590,19 +2646,22 @@ const Certifier = struct {
     fn requiredClaims(self: *Certifier, value: ValueId) Allocator.Error!?ClaimSet {
         if (value >= self.values.items.len) return null;
         const origin = self.values.items[value].origin;
-        const layout_idx = self.store.getLocal(origin).layout_idx;
+        return try self.requiredClaimsForLayout(self.store.getLocal(origin).layout_idx);
+    }
+
+    /// A struct's claims are its refcounted ownership slots
+    /// (`layout.Store.ownershipSlotCount`): one per stored unit, with a
+    /// refcounted struct field contributing each of its own slots.
+    fn requiredClaimsForLayout(self: *Certifier, layout_idx: layout_mod.Idx) Allocator.Error!?ClaimSet {
         if (self.claim_layouts.get(layout_idx)) |cached| return cached;
         const origin_layout = self.layouts.getLayout(layout_idx);
         const required: ClaimSet = switch (origin_layout.tag) {
             .struct_ => blk: {
-                const info = self.layouts.getStructInfo(origin_layout);
+                var slots = std.ArrayList(layout_mod.Store.RcSlot).empty;
+                defer slots.deinit(self.allocator);
+                try self.layouts.appendRcSlots(self.allocator, layout_idx, 0, &slots);
                 var fields: ClaimSet = .{};
-                for (0..info.fields.len) |i| {
-                    const field = info.fields.get(@intCast(i));
-                    if (field.is_padding) continue;
-                    if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(field.layout))) continue;
-                    fields = try fields.withField(self.claim_arena.allocator(), field.index);
-                }
+                for (slots.items) |slot| fields = try fields.withField(self.claim_arena.allocator(), slot.slot);
                 break :blk fields;
             },
             // A proven complete projection spends the active tag payload's
@@ -3227,6 +3286,7 @@ const Certifier = struct {
                 arc_dismantle.Projection.none
             else
                 info.payload_projection,
+            .payload_taken = payload_source != no_dense and info.payload_taken,
         };
         const interned = try self.provenance_interner.getOrPutContext(
             self.allocator,
@@ -3251,6 +3311,7 @@ const Certifier = struct {
                 try arena.dupe(u32, self.provenance_holder_scratch.items),
             .payload_source = candidate.payload_source,
             .payload_projection = candidate.payload_projection,
+            .payload_taken = candidate.payload_taken,
         };
         interned.key_ptr.* = provenance.*;
         interned.value_ptr.* = provenance;
@@ -3285,6 +3346,7 @@ const Certifier = struct {
                 }
                 hasher.update(std.mem.asBytes(&provenance.payload_source));
                 hasher.update(std.mem.asBytes(&provenance.payload_projection));
+                hasher.update(std.mem.asBytes(&provenance.payload_taken));
             }
             hasher.update(std.mem.asBytes(&entry.abi_live));
             hasher.update(std.mem.asBytes(&entry.condition));
@@ -3390,6 +3452,7 @@ const Certifier = struct {
                 }
                 self.values.items[value].payload_source = container;
                 self.values.items[value].payload_projection = provenance.payload_projection;
+                self.values.items[value].payload_taken = provenance.payload_taken;
             }
         }
 
@@ -5375,13 +5438,14 @@ const Certifier = struct {
                                 try state.put(&state.variant_discriminants, @backingInt(assign.target), source_value);
                             }
                         },
-                        .field => |op| try self.bindPayloadRead(
+                        .field => |op| try self.bindPayloadReadWithShell(
                             &state,
                             assign.target,
                             op.source,
                             arc_dismantle.encodeProjection(assign.op).?,
                             assign.take_kind,
                             null,
+                            self.store.getU32Span(assign.residual_shell_absent_fields),
                         ),
                         .tag_payload => |op| try self.bindPayloadRead(
                             &state,
@@ -5952,6 +6016,21 @@ const Certifier = struct {
     }
 
     fn bindPayloadRead(self: *Certifier, state: *State, target: LIR.LocalId, source: LIR.LocalId, projection: arc_dismantle.Projection, take_kind: LIR.TakeKind, tag_discriminant: ?u32) CertifyError!void {
+        return self.bindPayloadReadWithShell(state, target, source, projection, take_kind, tag_discriminant, self.store.getU32Span(LIR.U32Span.empty()));
+    }
+
+    /// `shell` names the target's ownership slots a struct view no longer
+    /// holds; see `validateResidualShellFields`.
+    fn bindPayloadReadWithShell(
+        self: *Certifier,
+        state: *State,
+        target: LIR.LocalId,
+        source: LIR.LocalId,
+        projection: arc_dismantle.Projection,
+        take_kind: LIR.TakeKind,
+        tag_discriminant: ?u32,
+        shell: anytype,
+    ) CertifyError!void {
         if (!self.isRc(target) and self.isRc(source) and
             self.layouts.getLayout(self.store.getLocal(source).layout_idx).tag == .struct_)
         {
@@ -5979,7 +6058,7 @@ const Certifier = struct {
             }
         }
         if (!self.isRc(target)) return;
-        if (source_value != no_value and take_kind == .none) try self.requireFieldUntaken(state, source_value, source, target, projection);
+        if (source_value != no_value and take_kind == .none) try self.requireFieldUntaken(state, source_value, source, target, projection, shell);
         const value = if (source_value == no_value)
             try self.bindBorrowedFromImplicitLive(state, target)
         else
@@ -5987,6 +6066,7 @@ const Certifier = struct {
         const info = &self.values.items[value];
         info.payload_source = source_value;
         info.payload_projection = projection;
+        info.payload_taken = take_kind == .take;
     }
 
     /// An RC-bearing projection read observes the stored unit behind the
@@ -5997,18 +6077,49 @@ const Certifier = struct {
     fn requireFieldUntaken(
         self: *Certifier,
         state: *State,
-        container: ValueId,
+        read_container: ValueId,
         source: LIR.LocalId,
         target: LIR.LocalId,
         projection: arc_dismantle.Projection,
+        shell: anytype,
     ) CertifyError!void {
         try self.settleNegativeClaims(state);
+        var container = read_container;
+        const read_layout = self.layouts.getLayout(self.store.getLocal(self.values.items[container].origin).layout_idx);
+        var range: SlotRange = if (read_layout.tag == .struct_) .{
+            .first = self.layouts.ownershipSlotBase(self.store.getLocal(self.values.items[container].origin).layout_idx, projection.first),
+            .count = self.layouts.ownershipSlotCount(self.store.getLocal(target).layout_idx),
+        } else .{ .first = 0, .count = 1 };
+        var steps: usize = 0;
+        while (self.viewParent(state, container)) |view| {
+            steps += 1;
+            if (steps > self.values.items.len) return self.fail("struct view chain contained a cycle", .{});
+            range.first += view.first;
+            container = view.parent;
+        }
         const claims = state.claimsOf(container);
         if (claims.isEmpty()) return;
         const container_origin = self.values.items[container].origin;
         const container_layout = self.layouts.getLayout(self.store.getLocal(container_origin).layout_idx);
         const taken = switch (container_layout.tag) {
-            .struct_ => claims.contains(projection.first),
+            .struct_ => blk: {
+                const required = try self.requiredClaims(container) orelse break :blk false;
+                const in_range = try self.claimsInRange(required, range);
+                if (!claims.intersects(in_range)) break :blk false;
+                // A view may copy slots already given away when its residual
+                // shell names every one of them.
+                if (shell.len == 0) break :blk true;
+                var slot = range.first;
+                while (slot < range.first + range.count) : (slot += 1) {
+                    if (!claims.contains(slot)) continue;
+                    var listed = false;
+                    for (0..shell.len) |index| {
+                        if (GuardedList.at(shell, index) == slot - range.first) listed = true;
+                    }
+                    if (!listed) break :blk true;
+                }
+                break :blk false;
+            },
             .tag_union => true,
             .scalar,
             .box,
@@ -6040,8 +6151,30 @@ const Certifier = struct {
         const absent_fields = self.store.getU32Span(assign.residual_shell_absent_fields);
         const source = switch (assign.op) {
             .local => |local| local,
+            .field => {
+                // A struct view's shell names refcounted slots of its own
+                // layout; the read itself checks them against the claims of
+                // the container it views.
+                if (absent_fields.len == 0) return;
+                const target_layout = self.store.getLocal(assign.target).layout_idx;
+                if (!self.isRc(assign.target) or self.layouts.getLayout(target_layout).tag != .struct_) {
+                    return self.fail("residual-shell field metadata attached to a non-struct field read", .{});
+                }
+                const required = try self.requiredClaimsForLayout(target_layout) orelse ClaimSet{};
+                for (0..absent_fields.len) |index| {
+                    const slot = GuardedList.at(absent_fields, index);
+                    if (!required.contains(slot)) {
+                        return self.fail("residual-shell metadata names non-RC or absent field {d}", .{slot});
+                    }
+                    for (0..index) |earlier| {
+                        if (GuardedList.at(absent_fields, earlier) == slot) {
+                            return self.fail("residual-shell metadata repeats field {d}", .{slot});
+                        }
+                    }
+                }
+                return;
+            },
             .discriminant,
-            .field,
             .tag_payload,
             .tag_payload_struct,
             .list_reinterpret,
@@ -9616,6 +9749,63 @@ test "certify flags a dismantle that leaves a stored unit unspent" {
     const release_first = try f.decrefStmt(first, .str, result_assign);
     const body = try fieldReadStmt(&f, first, pair, 0, release_first);
     _ = try f.addProc(&.{pair}, body, .i64);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "unspent") != null);
+}
+
+/// `outer = { 0: { 0: Str, 1: Str }, 1: Str }` as a parameter, taking
+/// slot 1 through one view and the other slots through a second view
+/// (marked with `second_view_shell`) and directly. `release_a` decides
+/// whether slot 0 is spent.
+fn buildNestedViewTakes(f: *CertifyTest, second_view_shell: []const u32, release_a: bool) Allocator.Error!void {
+    const outer_layout = try f.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = f.pair_str },
+        .{ .index = 1, .layout = .str },
+    });
+    const outer = try f.local(outer_layout);
+    const first_view = try f.local(f.pair_str);
+    const b = try f.local(.str);
+    const second_view = try f.local(f.pair_str);
+    const a = try f.local(.str);
+    const c = try f.local(.str);
+    const result = try f.local(.i64);
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, ret);
+    const release_c = try f.decrefStmt(c, .str, result_assign);
+    const take_c = try takeFieldStmt(f, c, outer, 1, release_c);
+    const after_a = if (release_a) try f.decrefStmt(a, .str, take_c) else take_c;
+    const take_a = if (release_a) try takeFieldStmt(f, a, second_view, 0, after_a) else after_a;
+    const read_second_view = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = second_view,
+        .op = .{ .field = .{ .source = outer, .field_idx = 0 } },
+        .residual_shell_absent_fields = try f.store.addU32Span(second_view_shell),
+        .next = take_a,
+    } }, .test_fixture);
+    const release_b = try f.decrefStmt(b, .str, read_second_view);
+    const take_b = try takeFieldStmt(f, b, first_view, 1, release_b);
+    const body = try fieldReadStmt(f, first_view, outer, 0, take_b);
+    _ = try f.addProc(&.{outer}, body, .i64);
+}
+
+test "certify accepts takes of nested record fields through views" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildNestedViewTakes(&f, &.{1}, true);
+    try f.certify();
+}
+
+test "certify flags a view that copies a taken nested field without naming it absent" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildNestedViewTakes(&f, &.{}, true);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "after the field's stored unit was taken") != null);
+}
+
+test "certify flags a nested field a view dismantle leaves unspent" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildNestedViewTakes(&f, &.{1}, false);
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "unspent") != null);
 }

@@ -7,6 +7,7 @@
 const std = @import("std");
 const collections = @import("collections");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const base = @import("base");
 const check = @import("check");
 const core = @import("lir_core");
@@ -1308,6 +1309,9 @@ pub const PreparedMonotype = struct {
     /// See `TargetConfig.spec_comptime_reads`; it travels to the program's
     /// final consumer.
     spec_comptime_reads: ?SpecComptimeReads = null,
+    /// See `SpecKeyAliases`; Direct LIR offers each specialization's
+    /// procedure under every key that resolved to it.
+    spec_key_aliases: SpecKeyAliases,
 
     /// Take ownership of the program's compile-time demand.
     pub fn takeComptimeDemand(self: *PreparedMonotype) ComptimeDemand {
@@ -1337,6 +1341,7 @@ pub const PreparedMonotype = struct {
             .root_count = self.root_count,
             .test_plan_metadata = metadata,
             .spec_comptime_reads = spec_reads,
+            .spec_key_aliases = try self.spec_key_aliases.clone(self.allocator),
         };
     }
 
@@ -1345,10 +1350,13 @@ pub const PreparedMonotype = struct {
         self.allocator.free(self.test_plan_metadata);
         if (self.comptime_demand) |*demand| demand.deinit();
         if (self.spec_comptime_reads) |*reads| reads.deinit();
+        self.spec_key_aliases.deinit();
         self.* = undefined;
     }
 };
 
+/// See `postcheck.Monotype.Lower.SpecKeyAliases`.
+pub const SpecKeyAliases = postcheck.Monotype.Lower.SpecKeyAliases;
 /// See `postcheck.Monotype.Lower.ComptimeDemand`.
 pub const ComptimeDemand = postcheck.Monotype.Lower.ComptimeDemand;
 /// See `postcheck.Monotype.Lower.SpecComptimeReads`.
@@ -1409,6 +1417,8 @@ pub fn prepareCheckedModulesMonotype(
     errdefer comptime_demand.deinit();
     var spec_comptime_reads: SpecComptimeReads = .{ .allocator = allocator };
     errdefer spec_comptime_reads.deinit();
+    var spec_key_aliases: SpecKeyAliases = .{ .allocator = allocator };
+    errdefer spec_key_aliases.deinit();
     var monotype_scope = PipelineStageScope.begin(target.timing, .monotype);
     defer monotype_scope.end();
     var monotype_timing: ?postcheck.Monotype.Lower.Timing = if (target.timing) |timing|
@@ -1450,6 +1460,7 @@ pub fn prepareCheckedModulesMonotype(
                 .demand_driven_comptime_roots = target.demand_driven_comptime_roots,
                 .comptime_demand_out = if (target.comptime_value_reads) &comptime_demand else null,
                 .spec_comptime_reads_out = if (target.spec_comptime_reads) &spec_comptime_reads else null,
+                .spec_key_aliases_out = &spec_key_aliases,
                 .literal_roots = target.literal_roots,
                 .replay_interface_summaries = target.replay_interface_summaries,
                 .target_usize = target.target_usize,
@@ -1478,6 +1489,7 @@ pub fn prepareCheckedModulesMonotype(
         .test_plan_metadata = test_plan_metadata,
         .comptime_demand = if (target.comptime_value_reads) comptime_demand else null,
         .spec_comptime_reads = if (target.spec_comptime_reads) spec_comptime_reads else null,
+        .spec_key_aliases = spec_key_aliases,
     };
 }
 
@@ -1565,6 +1577,8 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
     }
     var spec_comptime_reads = prepared.spec_comptime_reads;
     errdefer if (spec_comptime_reads) |*reads| reads.deinit();
+    var spec_key_aliases = prepared.spec_key_aliases;
+    errdefer spec_key_aliases.deinit();
     var mono = prepared.program;
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();
@@ -1635,6 +1649,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
         .test_plan_metadata = prepared.test_plan_metadata,
         .lifted_expr_count = lifted_expr_count,
         .spec_comptime_reads = spec_comptime_reads,
+        .spec_key_aliases = spec_key_aliases,
     };
 }
 
@@ -1649,6 +1664,8 @@ pub const PreparedSolved = struct {
     lifted_expr_count: usize,
     /// See `PreparedMonotype.spec_comptime_reads`.
     spec_comptime_reads: ?SpecComptimeReads = null,
+    /// See `PreparedMonotype.spec_key_aliases`.
+    spec_key_aliases: SpecKeyAliases,
 
     /// The evaluated roots this producer program records reads of. Whoever
     /// materializes completed values materializes these and no others.
@@ -1667,6 +1684,7 @@ pub const PreparedSolved = struct {
         self.inline_plan.deinit();
         self.allocator.free(self.test_plan_metadata);
         if (self.spec_comptime_reads) |*reads| reads.deinit();
+        self.spec_key_aliases.deinit();
         self.* = undefined;
     }
 };
@@ -1800,8 +1818,59 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
     if (target.timing) |timing| timing.addSolvedLirParallel(parallel_metrics.?.*);
     lir_gen_timing_scope.end();
     lowered.lir_result.erased_capture_prefix = target.erased_capture_prefix;
+    errdefer lowered.deinit();
+    try offerSpecKeyAliases(allocator, &lowered.lir_result, prepared.spec_key_aliases.items.items);
 
     return .{ .output = lowered, .target = target };
+}
+
+/// List each specialization procedure under every key that resolved to it
+/// (`SpecKeyAliases`), so the keys the program offers do not depend on which
+/// of the requests reached a specialization first. A key the program already
+/// lists names its own specialization and keeps it.
+fn offerSpecKeyAliases(
+    allocator: Allocator,
+    result: *LirProgram.Result,
+    aliases: []const SpecKeyAliases.Alias,
+) Allocator.Error!void {
+    if (aliases.len == 0) return;
+    const Row = struct {
+        key: [32]u8,
+        index: u32,
+
+        fn lessThan(_: void, left: @This(), right: @This()) bool {
+            return switch (std.mem.order(u8, &left.key, &right.key)) {
+                .lt => true,
+                .gt => false,
+                .eq => left.index < right.index,
+            };
+        }
+
+        fn order(key: [32]u8, row: @This()) std.math.Order {
+            return std.mem.order(u8, &key, &row.key);
+        }
+    };
+    const rows = try allocator.alloc(Row, result.spec_procs.items.len);
+    defer allocator.free(rows);
+    for (result.spec_procs.items, rows, 0..) |spec_proc, *row, index| {
+        row.* = .{ .key = spec_proc.key, .index = @intCast(index) };
+    }
+    std.mem.sort(Row, rows, {}, Row.lessThan);
+
+    var offered: ?[32]u8 = null;
+    for (aliases) |alias| {
+        // Aliases are sorted by key, so a key's first target with rows wins.
+        if (offered) |key| if (std.mem.eql(u8, &key, &alias.alias)) continue;
+        if (std.sort.binarySearch(Row, rows, alias.alias, Row.order) != null) continue;
+        const start = std.sort.lowerBound(Row, rows, alias.target, Row.order);
+        var index = start;
+        while (index < rows.len and std.mem.eql(u8, &rows[index].key, &alias.target)) : (index += 1) {
+            var row = result.spec_procs.items[rows[index].index];
+            row.key = alias.alias;
+            try result.spec_procs.append(allocator, row);
+        }
+        if (index != start) offered = alias.alias;
+    }
 }
 
 /// The lowerer owns resetting its per-run output. Prefer the caller's slot so
@@ -1894,7 +1963,7 @@ fn finishLoweredOutput(
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .box_reuse);
     }
     try ReturnSlot.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
-    try StrAppend.run(&lowered.lir_result.store);
+    try StrAppend.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     if (target.tag_reachability) {
         try TagReachability.run(&lowered.lir_result);
     }
@@ -2271,11 +2340,13 @@ test "checked pipeline declarations are referenced" {
 
 /// Print the final LIR of every procedure whose debug name contains
 /// `ROC_LIR_DUMP`, for reading what the passes actually produced. Off unless
-/// the variable is set, and absent on targets without an environment.
+/// the variable is set, and absent on targets without an environment and in
+/// compilers built without developer diagnostics.
 /// Printing the final LIR of selected procedures, for reading what the passes
-/// actually produced. Selected by comptime target so a build without an
-/// environment or a standard error stream carries none of it.
-const LirDump = if (builtin.os.tag == .freestanding) struct {
+/// actually produced. Selected at compile time, so a build without an
+/// environment or a standard error stream, and a compiler built without
+/// developer diagnostics, carries none of it.
+const LirDump = if (builtin.os.tag == .freestanding or !build_options.dev_diagnostics) struct {
     fn filter() ?[]const u8 {
         return null;
     }
@@ -2414,8 +2485,9 @@ test "adopting completed compile-time values drops their initializers and identi
 /// procedure base and template ordinals, callable name, whether the declared
 /// source type has type variables, whether the request type contains a
 /// function type or an erased callable, and the request and solved type
-/// digests. Never enabled by default; it only reads the finished stores.
-const SpecCensus = if (builtin.os.tag == .freestanding) struct {
+/// digests. Never enabled by default; it only reads the finished stores, and a
+/// compiler built without developer diagnostics carries none of it.
+const SpecCensus = if (builtin.os.tag == .freestanding or !build_options.dev_diagnostics) struct {
     fn enabled() bool {
         return false;
     }

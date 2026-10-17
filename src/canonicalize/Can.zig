@@ -1158,6 +1158,8 @@ const DeferredRef = struct {
     diagnostic_region: ?Region = null,
     /// For a file import, the `file_dependencies` entry it records under.
     file_dependency_idx: u32 = 0,
+    /// For an exposed-item check, the exposed item it checks.
+    exposed_item: ?CIR.ExposedItem.Idx = null,
     /// Whether a file import binds the file's raw bytes rather than its text.
     file_import_is_bytes: bool = false,
 };
@@ -1203,6 +1205,7 @@ fn pushDeferredRef(self: *Self, ref: DeferredRef) std.mem.Allocator.Error!Module
         .diagnostic_region_start = if (ref.diagnostic_region) |r| r.start.offset else 0,
         .diagnostic_region_end = if (ref.diagnostic_region) |r| r.end.offset else 0,
         .tag_receiver_end = ref.tag_receiver_end,
+        .exposed_item = if (ref.exposed_item) |item| @backingInt(item) else 0,
     });
     return @fromBackingInt(@intCast(idx));
 }
@@ -7562,6 +7565,7 @@ fn deferImportStatement(
             .selects_type = selects_type,
             .exposes_constructors = exposed_item.is_wildcard,
             .diagnostic_region = self.env.store.getRegionAt(@fromBackingInt(@intCast(@backingInt(exposed_item_idx)))),
+            .exposed_item = exposed_item_idx,
         });
         self.setDeferredRefNode(item_ref, @backingInt(import_stmt_idx));
     }

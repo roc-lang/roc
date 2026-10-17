@@ -36,7 +36,7 @@ pub const Store = struct {
         defer allocator.free(version_dir);
         const mode = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ @tagName(target), opt_name });
         defer allocator.free(mode);
-        const namespace = std.fmt.comptimePrint("objects-v{d}", .{PackFile.format_version});
+        const namespace = compile.config.objectPackNamespace(PackFile.format_version);
         const root = try std.fs.path.join(allocator, &.{ version_dir, namespace, mode });
         return .{ .allocator = allocator, .roc_ctx = cache_config.roc_ctx, .root = root, .verbose = cache_config.verbose };
     }
@@ -62,7 +62,8 @@ pub const Store = struct {
     }
 
     /// Stage the pack beside its final path and rename it into place. A
-    /// pack already present is left alone: it holds the same bytes.
+    /// pack already present is left alone: it holds the same bytes, which
+    /// builds with runtime safety check.
     pub fn write(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
         const dir = try self.identityDir(origin, identity);
         defer self.allocator.free(dir);
@@ -72,7 +73,10 @@ pub const Store = struct {
         };
         const path = try self.packPath(origin, identity, key);
         defer self.allocator.free(path);
-        if (self.roc_ctx.fileExists(path)) return;
+        if (self.roc_ctx.fileExists(path)) {
+            if (std.debug.runtime_safety) try self.verifyCollision(path, bytes);
+            return;
+        }
         const temp_path = try std.fmt.allocPrint(self.allocator, "{s}.tmp", .{path});
         defer self.allocator.free(temp_path);
         self.roc_ctx.writeFile(temp_path, bytes) catch |err| {
@@ -83,6 +87,20 @@ pub const Store = struct {
             self.reportWriteFailure("publish staging file", temp_path, bytes.len, err);
             return error.PackWriteFailed;
         };
+    }
+
+    /// A pack's path is a function of its content, so the pack a writer
+    /// finds already in place holds the bytes it would have written. A pack
+    /// the sweep removed in the meantime has nothing left to compare.
+    fn verifyCollision(self: *const Store, path: []const u8, bytes: []const u8) Allocator.Error!void {
+        const existing = self.roc_ctx.readFile(path, self.allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return,
+        };
+        defer self.allocator.free(existing);
+        if (!std.mem.eql(u8, existing, bytes)) {
+            @import("base").invariant("object-cache pack {s} already holds different bytes", .{path});
+        }
     }
 
     fn reportWriteFailure(self: *const Store, operation: []const u8, path: []const u8, byte_count: usize, err: (CoreCtx.MakePathError || CoreCtx.WriteError || CoreCtx.RenameError)) void {
@@ -329,6 +347,56 @@ test "object cache write failures preserve quiet behavior and report verbose cau
             }
         }
     }
+}
+
+test "the cache sweep finds and ages the packs the store writes" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const cache_root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(cache_root);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const cache_config: compile.CacheConfig = .{
+        .cache_dir = cache_root,
+        .roc_ctx = CoreCtx.default(allocator, arena.allocator(), io),
+    };
+    var store = try Store.init(allocator, cache_config, .x64glibc, "dev");
+    defer store.deinit();
+
+    const local_identity = @as([32]u8, @splat(1));
+    const pkg_identity = @as([32]u8, @splat(2));
+    const key = @as([32]u8, @splat(3));
+    try store.write(.local, local_identity, key, "local pack");
+    try store.write(.pkg, pkg_identity, key, "pkg pack");
+    // A second writer of the same pack finds it in place with its bytes.
+    try store.write(.pkg, pkg_identity, key, "pkg pack");
+    try std.testing.expect(try store.has(.local, local_identity, key));
+    try std.testing.expect(try store.has(.pkg, pkg_identity, key));
+
+    // A namespace of another pack format beside the store's own.
+    const version_dir = try cache_config.getVersionCacheDir(allocator);
+    defer allocator.free(version_dir);
+    const stale_dir = try std.fs.path.join(allocator, &.{ version_dir, compile.config.objectPackNamespace(PackFile.format_version - 1), "x64glibc-dev", "pkg" });
+    defer allocator.free(stale_dir);
+    try std.Io.Dir.cwd().createDirPath(io, stale_dir);
+
+    const limits: compile.CacheCleanup.Limits = .{
+        .object_pack_format_version = PackFile.format_version,
+        .max_size_bytes = std.math.maxInt(u64),
+    };
+    const now_ns = compile.CacheCleanup.nowNs(io);
+    var stats: compile.CacheCleanup.CleanupStats = .{};
+    compile.CacheCleanup.sweep(io, cache_root, limits, now_ns + 2 * compile.CacheCleanup.Config.LOCAL_PACK_MAX_AGE_NS, &stats);
+    try std.testing.expectEqual(@as(u32, 1), stats.stale_namespaces_deleted);
+    try std.testing.expectEqual(@as(u32, 1), stats.cache_files_deleted);
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, stale_dir, .{}));
+    try std.testing.expect(!try store.has(.local, local_identity, key));
+    try std.testing.expect(try store.has(.pkg, pkg_identity, key));
+
+    compile.CacheCleanup.sweep(io, cache_root, limits, now_ns + compile.CacheCleanup.Config.PERSISTENT_MAX_AGE_NS + std.time.ns_per_s, &stats);
+    try std.testing.expect(!try store.has(.pkg, pkg_identity, key));
 }
 
 /// What a lazily loaded store needs once checking has produced the module
