@@ -53,6 +53,8 @@ pub const Options = struct {
     compiler_version: ?[]const u8 = null,
     /// Borrowed, invocation-owned builtin facts. Never shared between threads.
     builtin_facts: ?*BuiltinFacts = null,
+    /// Absolute working directory that messages show paths relative to.
+    working_dir: ?[]const u8 = null,
 };
 
 /// Report of the result of formatting Roc files including the count of successes, failures, and any files that need to be reformatted
@@ -98,7 +100,7 @@ fn formatFilePathReportingFailure(
     options: Options,
     io: std.Io,
     stderr: *std.Io.Writer,
-) std.Io.Writer.Error!enum { formatted, failed, not_roc_file } {
+) (Allocator.Error || std.Io.Writer.Error)!enum { formatted, failed, not_roc_file } {
     if (formatFilePath(gpa, base_dir, path, unformatted_files, options, io, stderr)) |_| {
         return .formatted;
     } else |err| switch (err) {
@@ -138,7 +140,9 @@ fn formatFilePathReportingFailure(
         error.WouldBlock,
         error.WriteFailed,
         => {
-            try stderr.print("Failed to format {f}: {any}\n", .{ base.bidi.Display{ .bytes = display_path }, err });
+            const shown_path = try @import("reporting").displayPath(gpa, display_path, options.working_dir);
+            defer gpa.free(shown_path);
+            try stderr.print("Failed to format {f}: {any}\n", .{ base.bidi.Display{ .bytes = shown_path }, err });
             return .failed;
         },
     }
@@ -173,7 +177,7 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
                 if (!std.mem.eql(u8, std.fs.path.extension(entry.basename), ".roc")) continue;
                 const file_path = try std.fs.path.join(gpa, &.{ path, entry.path });
                 defer gpa.free(file_path);
-                switch (try formatFilePathReportingFailure(gpa, base_dir, file_path, entry.path, if (unformatted_files) |*to_reformat| to_reformat else null, shared_options, io, stderr)) {
+                switch (try formatFilePathReportingFailure(gpa, base_dir, file_path, file_path, if (unformatted_files) |*to_reformat| to_reformat else null, shared_options, io, stderr)) {
                     .formatted => success_count += 1,
                     .failed => failed_count += 1,
                     .not_roc_file => {},

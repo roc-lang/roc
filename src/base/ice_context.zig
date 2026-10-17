@@ -229,22 +229,30 @@ pub fn writeContext(w: *std.Io.Writer, report: Report) std.Io.Writer.Error!void 
         try w.writeAll("Work in progress on ");
         try writeThread(w, report);
         try w.writeAll(", outermost first:\n");
-        for (report.frames) |frame| try writeFrame(w, frame, report.resolve_names);
+        for (report.frames) |frame| try writeFrame(w, frame, report.cwd, report.resolve_names);
         if (report.dropped != 0) {
             try w.print("  ({d} deeper frames were not recorded)\n", .{report.dropped});
         }
     }
 
     if (report.invocation) |args| {
+        // Run from the reporter's working directory, which paths are shown
+        // relative to.
         try w.writeAll("\nReproduce with:\n  ");
-        if (report.cwd) |cwd| {
-            try w.writeAll("cd ");
-            try writeShellWord(w, cwd);
-            try w.writeAll(" && ");
-        }
         for (args, 0..) |arg, i| {
             if (i != 0) try w.writeByte(' ');
-            try writeShellWord(w, arg);
+            if (i == 0) {
+                var program_buf: [std.fs.max_path_bytes]u8 = undefined;
+                var program: std.Io.Writer = .fixed(&program_buf);
+                try writeRelativePath(&program, report.cwd, arg);
+                const relative = program.buffered();
+                // A shell looks a word without a separator up on the PATH.
+                const in_cwd = std.fs.path.isAbsolute(arg) and std.mem.findAny(u8, relative, "/\\") == null;
+                if (in_cwd) try w.writeAll("." ++ std.fs.path.sep_str);
+                try writeShellWord(w, relative);
+            } else {
+                try writeShellWord(w, arg);
+            }
         }
         try w.writeByte('\n');
     }
@@ -260,7 +268,7 @@ fn writeThread(w: *std.Io.Writer, report: Report) std.Io.Writer.Error!void {
     }
 }
 
-fn writeFrame(w: *std.Io.Writer, frame: Frame, resolve_names: bool) std.Io.Writer.Error!void {
+fn writeFrame(w: *std.Io.Writer, frame: Frame, cwd: ?[]const u8, resolve_names: bool) std.Io.Writer.Error!void {
     const label = frame.phase.label();
     try w.print("  {s}", .{label});
     try w.splatByteAll(' ', max_label_len + 2 - label.len);
@@ -271,7 +279,9 @@ fn writeFrame(w: *std.Io.Writer, frame: Frame, resolve_names: bool) std.Io.Write
     }
     if (frame.module_path) |path| {
         if (separate) try w.writeByte(' ');
-        try w.print("({s})", .{path});
+        try w.writeByte('(');
+        try writeRelativePath(w, cwd, path);
+        try w.writeByte(')');
         separate = true;
     }
     if (frame.stage) |stage| {
@@ -296,6 +306,47 @@ const max_label_len = blk: {
     for (std.enums.values(Phase)) |phase| longest = @max(longest, phase.label().len);
     break :blk longest;
 };
+
+/// Write `path` relative to the absolute directory `cwd`. Relative paths, and
+/// absolute paths on a different Windows drive than `cwd`, have no other
+/// spelling. Reports are written while crashing, so this does not allocate.
+fn writeRelativePath(w: *std.Io.Writer, cwd: ?[]const u8, path: []const u8) std.Io.Writer.Error!void {
+    const base_dir = cwd orelse return w.writeAll(path);
+    if (!std.fs.path.isAbsolute(path)) return w.writeAll(path);
+    const separators = "/\\";
+    var common: usize = 0;
+    {
+        var base_parts = std.mem.tokenizeAny(u8, base_dir, separators);
+        var path_parts = std.mem.tokenizeAny(u8, path, separators);
+        while (base_parts.next()) |base_part| {
+            const path_part = path_parts.next() orelse break;
+            if (!pathComponentsEql(base_part, path_part)) break;
+            common += 1;
+        }
+    }
+    if (builtin.os.tag == .windows and common == 0) return w.writeAll(path);
+
+    var wrote = false;
+    var base_parts = std.mem.tokenizeAny(u8, base_dir, separators);
+    for (0..common) |_| _ = base_parts.next();
+    while (base_parts.next()) |_| {
+        if (wrote) try w.writeByte(std.fs.path.sep);
+        try w.writeAll("..");
+        wrote = true;
+    }
+    var path_parts = std.mem.tokenizeAny(u8, path, separators);
+    for (0..common) |_| _ = path_parts.next();
+    while (path_parts.next()) |part| {
+        if (wrote) try w.writeByte(std.fs.path.sep);
+        try w.writeAll(part);
+        wrote = true;
+    }
+    if (!wrote) try w.writeByte('.');
+}
+
+fn pathComponentsEql(a: []const u8, b: []const u8) bool {
+    return if (builtin.os.tag == .windows) std.ascii.eqlIgnoreCase(a, b) else std.mem.eql(u8, a, b);
+}
 
 /// Write `word` so a POSIX shell reads it back unchanged.
 fn writeShellWord(w: *std.Io.Writer, word: []const u8) std.Io.Writer.Error!void {
@@ -382,7 +433,7 @@ fn testNames(_: *const anyopaque, id: u32) ?[]const u8 {
 test "report names every frame, the thread, and the reproducing command" {
     const sentinel: u8 = 0;
     const report_frames = [_]Frame{
-        .{ .phase = .type_check, .module_name = "Json.Decode", .module_path = "/src/Json/Decode.roc" },
+        .{ .phase = .type_check, .module_name = "Json.Decode", .module_path = "/home/me/Decode.roc" },
         .{ .phase = .post_check, .stage = "lambda_solve" },
         .{ .phase = .codegen, .stage = "dev backend", .proc = .{ .id = 7, .names = .{ .context = &sentinel, .nameFn = testNames } } },
         .{ .phase = .interpret, .proc = .{ .id = 9, .names = .{ .context = &sentinel, .nameFn = testNames } } },
@@ -401,19 +452,53 @@ test "report names every frame, the thread, and the reproducing command" {
         \\Roc hit an internal compiler error. This is a bug in the compiler, not in your code.
         \\
         \\Work in progress on thread 42 (compile worker 3), outermost first:
-        \\  type-check    module Json.Decode (/src/Json/Decode.roc)
+        \\  type-check    module Json.Decode (Decode.roc)
         \\  post-check    lambda_solve
         \\  codegen       dev backend, proc 7 (main!)
         \\  interpret     proc 9
         \\
         \\Reproduce with:
-        \\  cd /home/me && roc check 'my app/main.roc' --opt=dev
+        \\  roc check 'my app/main.roc' --opt=dev
         \\
         \\Please report this at https://github.com/roc-lang/roc/issues and include
         \\the command above along with the panic message and stack trace below.
         \\
         \\
     , w.buffered());
+}
+
+test "report paths are relative to the working directory" {
+    const sep = std.fs.path.sep_str;
+    const root = if (builtin.os.tag == .windows) "C:\\" else "/";
+    const cases = .{
+        .{ root ++ "home" ++ sep ++ "me", root ++ "home" ++ sep ++ "me" ++ sep ++ "app" ++ sep ++ "main.roc", "app" ++ sep ++ "main.roc" },
+        .{ root ++ "home" ++ sep ++ "me" ++ sep ++ "app", root ++ "home" ++ sep ++ "me" ++ sep ++ "lib" ++ sep ++ "Lib.roc", ".." ++ sep ++ "lib" ++ sep ++ "Lib.roc" },
+        .{ root ++ "home" ++ sep ++ "me", root ++ "home" ++ sep ++ "me", "." },
+        .{ root ++ "home" ++ sep ++ "me", "app" ++ sep ++ "main.roc", "app" ++ sep ++ "main.roc" },
+    };
+    inline for (cases) |case| {
+        var buffer: [256]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&buffer);
+        try writeRelativePath(&w, case[0], case[1]);
+        try std.testing.expectEqualStrings(case[2], w.buffered());
+    }
+}
+
+test "reproducing command names the compiler relative to the working directory" {
+    // The command is spelled for a POSIX shell.
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    const cwd = "/home/me";
+    const cases = .{
+        .{ cwd ++ "/roc", "./roc" },
+        .{ cwd ++ "/bin/roc", "bin/roc" },
+        .{ "roc", "roc" },
+    };
+    inline for (cases) |case| {
+        var buffer: [256]u8 = undefined;
+        var w: std.Io.Writer = .fixed(&buffer);
+        try writeContext(&w, .{ .frames = &.{}, .invocation = &.{ case[0], "check" }, .cwd = cwd });
+        try std.testing.expect(std.mem.endsWith(u8, w.buffered(), "\nReproduce with:\n  " ++ case[1] ++ " check\n"));
+    }
 }
 
 test "report without frames or invocation names only the thread" {

@@ -4744,9 +4744,9 @@ pub const Coordinator = struct {
             },
             .type_check => "Type Checking Failed",
         };
-        const headline = try std.fmt.allocPrint(self.gpa, "{s}: {s}.", .{ mod.path, @errorName(operation_error) });
-        defer self.gpa.free(headline);
-        const report = try Report.init(self.gpa, title, headline, .fatal);
+        const after = try std.fmt.allocPrint(self.gpa, ": {s}.", .{@errorName(operation_error)});
+        defer self.gpa.free(after);
+        const report = try Report.initWithPath(self.gpa, title, "", mod.path, after, .fatal);
         try appendReportOwned(self.gpa, &mod.reports, report);
         return operation_error;
     }
