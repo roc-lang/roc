@@ -1818,6 +1818,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .target = try self.mapLocal(s.target),
                     .value = s.value,
                     .fresh_alternative = s.fresh_alternative,
+                    .list_len = s.list_len,
                     .next = s.next,
                 } },
                 .assign_call => |s| .{ .assign_call = .{

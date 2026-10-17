@@ -1111,6 +1111,10 @@ pub const CFStmt = union(enum) {
         /// argument unique—and clears this, so no consumer after ARC sees
         /// it set.
         fresh_alternative: ?LirProcSpecId = null,
+        /// For a read of a compile-time list of copies held as static data
+        /// in `value`: its item count, which the read's value has in either
+        /// form ARC chooses. Range proving binds it as the list's length.
+        list_len: ?u64 = null,
         next: CFStmtId,
     },
     assign_call: struct {
