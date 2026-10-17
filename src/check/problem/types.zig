@@ -795,11 +795,11 @@ pub const StaticDispatch = union(enum) {
     undetermined_type: UndeterminedType,
 };
 
-/// A requirement failed on a type that nothing in the program determined: a
+/// A requirement failed on a type that never resolved to a concrete type: a
 /// defaulting decision chose the type, and the chosen default cannot satisfy
-/// every requirement on it. Reported once per defaulted type, in terms of the
-/// type as the program wrote it—never the default the checker chose, which
-/// the user did not write.
+/// every requirement on it. Reported once per defaulted type as a missing
+/// method, in terms of the type as the program wrote it—never the default the
+/// checker chose, which the user did not write.
 pub const UndeterminedType = struct {
     /// Where the undetermined type comes from: the literal itself, or the
     /// expression that owns the failed requirement.
@@ -941,9 +941,9 @@ pub const TypeDoesNotSupportMap = struct {
 };
 
 /// Error when a compiler-derived `parser_for` or `encoder_for` is used at a type
-/// that nothing in the program ever determines fully (for example the element
+/// part of which never resolves to a concrete type (for example the element
 /// type of `List.parser_for(format)` when the parsed list is never used), so
-/// there is no single codec to derive.
+/// that part has no method to derive the codec from.
 pub const UndeterminedCodecType = struct {
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,

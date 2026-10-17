@@ -56,7 +56,7 @@ x = {
 # EXPECTED
 EXPECTED PACKAGE PATH - multiline_string_complex.md:4:6:4:17
 TYPE MISMATCH - multiline_string_complex.md:40:6:40:8
-TYPE NOT DETERMINED - multiline_string_complex.md:37:3:37:4
+MISSING METHOD - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
 ~~~clojure
 (reports
@@ -104,10 +104,18 @@ TYPE NOT DETERMINED - multiline_string_complex.md:37:3:37:4
 			(annotation-end)))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 37 3) (end 37 4))
 		(headline
-			(reflow "Nothing in this program determines the type of this number."))
+			(reflow "This number's type never resolved to a concrete type, so it has no")
+			(reflow " ")
+			(annotated code "minus")
+			(reflow " ")
+			(reflow "method for")
+			(reflow " ")
+			(annotated code "-")
+			(reflow " ")
+			(reflow "to call."))
 		(document
 			(source-region (file "multiline_string_complex.md") (start 37 3) (end 37 4) (annotation error) (line-text "\t\t0 - \\\\"))
 			(line-break)
@@ -120,16 +128,7 @@ TYPE NOT DETERMINED - multiline_string_complex.md:37:3:37:4
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated operator "-")
-			(reflow " ")
-			(reflow "to use.")
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a suffix or a type annotation saying which type it should be."))))
+			(reflow "Giving the number a suffix, using it somewhere that requires a specific type, or annotating it will give it one."))))
 ~~~
 # TOKENS
 ~~~zig
