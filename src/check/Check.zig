@@ -38554,13 +38554,6 @@ const GeneralizedSchemeRequirementKey = struct {
     callable_shape: [32]u8,
 };
 
-const GeneralizedAttachedConstraintKey = struct {
-    fn_name: Ident.Idx,
-    origin_tag: std.meta.Tag(StaticDispatchConstraint.Origin),
-    origin_flag: bool,
-    callable_shape: [32]u8,
-};
-
 fn generalizedCallableShape(
     self: *Self,
     anchors: *const collections.DenseMap(Var, void),
@@ -38591,11 +38584,15 @@ fn dispatchConstraintOriginFlag(origin: StaticDispatchConstraint.Origin) bool {
     };
 }
 
-/// Collapse requirements that ask for the same target with the same finalized
-/// callable shape. Variables exposed through the enclosing scheme remain fixed
-/// anchors; only requirement-private generalized variables may be renamed.
-/// This keeps repeated helper uses compact without conflating call results that
-/// a caller can still specialize differently.
+/// Make each generalized type's requirements of one method a single
+/// relation. A type has one method of each name, so every dot call and
+/// where-clause requirement of that method on the type relates to one callable
+/// type; requirements that cannot are a method conflict
+/// (`relateGeneralizedSameMethodRequirements`). Side-table requirements, whose
+/// receivers need not be generalized types, collapse only when they ask for
+/// the same target with the same finalized callable shape: variables exposed
+/// through the enclosing scheme remain fixed anchors there, and only
+/// requirement-private generalized variables may be renamed.
 ///
 /// Two same-shape requirements are one relation, so their callables are
 /// unified before the duplicate is dropped: the union-find then records which
@@ -38738,8 +38735,8 @@ fn deduplicateGeneralizedDispatchRequirements(
     defer snapshot.deinit(self.gpa);
     var retained_constraints: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty;
     defer retained_constraints.deinit(self.gpa);
-    var retained_by_key = std.AutoHashMap(GeneralizedAttachedConstraintKey, Var).init(self.gpa);
-    defer retained_by_key.deinit();
+    var retained_by_name = std.AutoHashMap(Ident.Idx, Var).init(self.gpa);
+    defer retained_by_name.deinit();
 
     while (pending_receivers.pop()) |receiver_var| {
         // Unifying two callables appends merged constraint ranges to the
@@ -38754,27 +38751,29 @@ fn deduplicateGeneralizedDispatchRequirements(
             try snapshot.appendSlice(self.gpa, constraints);
         }
 
-        retained_by_key.clearRetainingCapacity();
-        for (snapshot.items) |constraint| {
+        // A type has one method of each name, so a generalized type's
+        // requirements of one method are one relation: they become its
+        // scheme's single requirement of that method.
+        retained_by_name.clearRetainingCapacity();
+        const conflicted = for (snapshot.items) |constraint| {
             // Literal metadata is aggregated by the literal-specific path.
             if (constraint.origin == .from_literal) continue;
-            const key = GeneralizedAttachedConstraintKey{
-                .fn_name = constraint.fn_name,
-                .origin_tag = std.meta.activeTag(constraint.origin),
-                .origin_flag = dispatchConstraintOriginFlag(constraint.origin),
-                .callable_shape = try self.generalizedCallableShape(&anchors, &callable_shapes, constraint.fn_var, value, env),
-            };
-            const entry = try retained_by_key.getOrPut(key);
+            const entry = try retained_by_name.getOrPut(constraint.fn_name);
             if (!entry.found_existing) {
                 entry.value_ptr.* = constraint.fn_var;
                 continue;
             }
-            const merged = try self.unifyEquivalentGeneralizedCallables(entry.value_ptr.*, constraint.fn_var, env);
+            if (self.types.resolveVar(entry.value_ptr.*).var_ == self.types.resolveVar(constraint.fn_var).var_) continue;
+            const relation = try self.relateGeneralizedSameMethodRequirements(entry.value_ptr.*, constraint, receiver_var, scheme_var, value, env);
             self.canonical_key_writer.invalidateAnchoredKeys();
-            if (merged) {
-                try self.appendGeneralizedIdentityVars(entry.value_ptr.*, &pending_receivers, value, env);
+            switch (relation) {
+                .merged => try self.appendGeneralizedIdentityVars(entry.value_ptr.*, &pending_receivers, value, env),
+                .erroneous => {},
+                .conflict => break true,
             }
-        }
+        } else false;
+        // The conflict poisoned the receiver, which holds no requirements.
+        if (conflicted) continue;
 
         const resolved = self.types.resolveVar(receiver_var);
         const constraints_range = contentConstraintRange(resolved.desc.content) orelse continue;
@@ -38788,12 +38787,27 @@ fn deduplicateGeneralizedDispatchRequirements(
             }
             const fn_root = self.types.resolveVar(constraint.fn_var).var_;
             var duplicate = false;
-            for (retained_constraints.items) |retained| {
+            for (retained_constraints.items) |*retained| {
                 if (retained.origin == .from_literal) continue;
                 if (!retained.fn_name.eql(constraint.fn_name)) continue;
-                if (std.meta.activeTag(retained.origin) != std.meta.activeTag(constraint.origin)) continue;
-                if (dispatchConstraintOriginFlag(retained.origin) != dispatchConstraintOriginFlag(constraint.origin)) continue;
                 if (self.types.resolveVar(retained.fn_var).var_ != fn_root) continue;
+                // A dot call and a where-clause requirement are both uses of
+                // the one method; operators and literal conversions keep one
+                // relation per semantic origin.
+                const both_uses = isMethodUseOrigin(retained.origin) and isMethodUseOrigin(constraint.origin);
+                if (!both_uses and
+                    (std.meta.activeTag(retained.origin) != std.meta.activeTag(constraint.origin) or
+                        dispatchConstraintOriginFlag(retained.origin) != dispatchConstraintOriginFlag(constraint.origin)))
+                {
+                    continue;
+                }
+                // The where-clause relation carries whether a body requires it.
+                if (constraint.origin == .where_clause) {
+                    const body_required = constraint.origin.where_clause.body_required or
+                        (retained.origin == .where_clause and retained.origin.where_clause.body_required);
+                    retained.* = constraint;
+                    retained.origin.where_clause.body_required = body_required;
+                }
                 duplicate = true;
                 break;
             }
@@ -39003,6 +39017,70 @@ test "issue 11350 singleton dispatch requirements need no deduplication scratch"
 /// Establish two same-shape generalized callables as one relation. Returns
 /// false, leaving the store untouched, when the unifier cannot prove them
 /// equal (the shape digest was a collision).
+fn isMethodUseOrigin(origin: StaticDispatchConstraint.Origin) bool {
+    return switch (origin) {
+        .method_call, .where_clause => true,
+        .desugared_binop, .desugared_unaryop, .from_literal => false,
+    };
+}
+
+const SameMethodRelation = enum { merged, conflict, erroneous };
+
+/// Relate two requirements of one method on a generalized type. When they
+/// cannot be one relation, the uses that introduced them require the type to
+/// have two different methods of that name, which no type can: that is
+/// reported as a method conflict, and the type is poisoned so it reports
+/// nothing further. The report points at the use that introduced the second
+/// requirement when that use is part of `scheme_var`, the definition being
+/// generalized; a requirement another definition introduced is reported at
+/// the definition (`value` when it names one).
+fn relateGeneralizedSameMethodRequirements(
+    self: *Self,
+    retained_fn_var: Var,
+    duplicate: StaticDispatchConstraint,
+    receiver_var: Var,
+    scheme_var: Var,
+    value: ?Var,
+    env: *Env,
+) Allocator.Error!SameMethodRelation {
+    var probe = try self.beginCommitProbe(env);
+    const result = try probe.unify(retained_fn_var, duplicate.fn_var);
+    if (result.isEstablished()) {
+        try probe.commit();
+        return .merged;
+    }
+    probe.rollback();
+    if (!result.isProblem()) return .erroneous;
+
+    const unify_env = self.unifyEnv();
+    const use_var = self.methodConflictUseVar(duplicate, scheme_var, value);
+    _ = try self.problems.appendProblem(.{ .type_mismatch = .{
+        .types = .{
+            .expected_var = retained_fn_var,
+            .expected_snapshot = try self.snapshotVarForError(retained_fn_var),
+            .actual_var = use_var,
+            .actual_snapshot = try self.snapshotVarForError(duplicate.fn_var),
+        },
+        .method_conflict = .{
+            .method_name = duplicate.fn_name,
+            .first_type = try unifier.methodTypeDisplay(&unify_env, retained_fn_var),
+            .second_type = try unifier.methodTypeDisplay(&unify_env, duplicate.fn_var),
+        },
+    } });
+    self.types.assertNoSavepointActive();
+    try self.types.poisonOnMismatch(receiver_var, receiver_var);
+    return .conflict;
+}
+
+fn methodConflictUseVar(self: *Self, duplicate: StaticDispatchConstraint, scheme_var: Var, value: ?Var) Var {
+    const intro_var = if (constraintIntroExpr(duplicate)) |expr| ModuleEnv.varFrom(expr) else duplicate.fn_var;
+    const definition_region = self.getRegionAt(scheme_var);
+    const intro_region = self.getRegionAt(intro_var);
+    const within = intro_region.start.offset >= definition_region.start.offset and
+        intro_region.end.offset <= definition_region.end.offset;
+    return if (within) intro_var else value orelse scheme_var;
+}
+
 fn unifyEquivalentGeneralizedCallables(self: *Self, retained_fn_var: Var, duplicate_fn_var: Var, env: *Env) Allocator.Error!bool {
     if (self.types.resolveVar(retained_fn_var).var_ == self.types.resolveVar(duplicate_fn_var).var_) return false;
     var probe = try self.beginCommitProbe(env);
