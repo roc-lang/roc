@@ -1488,6 +1488,8 @@ const ModuleView = *const ModuleViewData;
 
 const ModuleViewData = struct {
     code_generation_key: ?checked.ModuleId = null,
+    /// The pairing's filling key when this is a paired platform.
+    platform_app_filling: ?[32]u8 = null,
     key: checked.ModuleId,
     module_env: *const can.ModuleEnv,
     module_identity: checked.ModuleIdentity,
@@ -4825,6 +4827,19 @@ const TemplateDeclarations = struct {
         const view = self.builder.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         return view.templateDeclaration(template_ref.template);
     }
+
+    /// The declaration identity of a module's top-level definition. A
+    /// definition outside every declaration unit is named by its module's
+    /// key, as the checked artifact names such an item.
+    pub fn definition(self: TemplateDeclarations, module: names.CheckedModuleDigest, def: @FieldType(static_dispatch.MethodTarget, "def_idx")) [32]u8 {
+        const view = self.builder.moduleForDigest(module);
+        return view.declaration_identities.definition(def) orelse view.key.bytes;
+    }
+
+    /// The identity of a module's type environment.
+    pub fn typeEnvironment(self: TemplateDeclarations, module: names.CheckedModuleDigest) [32]u8 {
+        return self.builder.moduleForDigest(module).declaration_identities.type_identity;
+    }
 };
 
 fn codecContractIdentityDigest(contract: ?Ast.CodecContractIdentity) names.TypeDigest {
@@ -6379,6 +6394,15 @@ const Builder = struct {
             Common.invariant("root source module count differs from explicit request count");
         }
         try self.prepareComptimeRootDeclarations();
+        if (@import("builtin").os.tag != .freestanding and std.c.getenv("ROC_PACK_STATS") != null) {
+            var compile_time: usize = 0;
+            var complete: usize = 0;
+            for (all_requests) |request| {
+                if (request.abi == .compile_time) compile_time += 1;
+                if (request.evaluation_complete) complete += 1;
+            }
+            std.debug.print("monotype roots: requests={d} compile_time={d} evaluation_complete={d}\n", .{ all_requests.len, compile_time, complete });
+        }
         var demanded_later_requests = std.ArrayList(checked.RootRequest).empty;
         defer demanded_later_requests.deinit(self.allocator);
         var demanded_later_sources = std.ArrayList(checked.ModuleId).empty;
@@ -7130,10 +7154,9 @@ const Builder = struct {
                     },
                 };
                 var hasher = TypeDigestHasher.init();
-                hasher.update("roc-checked-root-storage-initializer-v1");
-                hasher.update(&key.module.bytes);
-                hashU32(&hasher, @backingInt(key.root));
-                hasher.update(&self.program.types.typeDigest(&self.program.names, ty).bytes);
+                hasher.update("roc-checked-root-storage-initializer-v2");
+                hasher.update(&view.declaration_identities.root(key.root));
+                hasher.update(&self.program.types.declarationDigestCached(&self.program.names, ty, self.program.declarations.nominalDeclarations(), null).bytes);
                 const initializer = if (body) |value| try self.program.addDef(.{
                     .symbol = self.symbols.fresh(),
                     .root_identity = .{ .bytes = hasher.finalResult() },
@@ -7216,10 +7239,9 @@ const Builder = struct {
                     completion = .value;
                     const body = try self.restoreConstNodeAtType(view, view, root.payload.const_node, ty);
                     var hasher = TypeDigestHasher.init();
-                    hasher.update("roc-checked-root-storage-initializer-v1");
-                    hasher.update(&key.module.bytes);
-                    hashU32(&hasher, use.root);
-                    const identity = self.program.types.typeDigest(&self.program.names, ty);
+                    hasher.update("roc-checked-root-storage-initializer-v2");
+                    hasher.update(&view.declaration_identities.root(key.root));
+                    const identity = self.program.types.declarationDigestCached(&self.program.names, ty, self.program.declarations.nominalDeclarations(), null);
                     hasher.update(&identity.bytes);
                     const digest = hasher.finalResult();
                     initializer = try self.program.addDef(.{
@@ -7677,7 +7699,7 @@ const Builder = struct {
         return try self.program.addDef(.{
             .symbol = self.symbols.fresh(),
             .fn_def = null,
-            .root_identity = self.procedureBindingRootIdentity(view, binding_id, fn_ty),
+            .root_identity = self.procedureBindingRootIdentity(view, request.source, binding_id, fn_ty),
             .args = try self.program.addTypedLocalSpan(args),
             .body = .{ .roc = body },
             .ret = fn_data.ret,
@@ -7688,9 +7710,13 @@ const Builder = struct {
     /// restores and the Monotype type it restores it at.
     fn staticDataRequestIdentity(self: *Builder, view: ModuleView, request: Common.StaticDataRequest, ret_ty: Type.TypeId) names.TypeDigest {
         var hasher = TypeDigestHasher.init();
-        hasher.update("roc.monotype.static-data-request.v1");
-        hasher.update(&view.key.bytes);
-        hasher.update(&request.const_locator.artifact.bytes);
+        hasher.update("roc.monotype.static-data-request.v2");
+        // The constant is named by its declaration, so the thunk's identity
+        // survives an edit elsewhere in the requesting module.
+        const owner_view = self.moduleForKeyBytes(request.const_locator.artifact.bytes) orelse
+            Common.invariant("static data request names a checked module that is not in the lowering input");
+        hasher.update(&owner_view.declaration_identities.constTemplate(request.const_locator.template));
+        hasher.update(&view.declaration_identities.type_identity);
         switch (request.const_locator.owner) {
             .top_level_binding => |owner| {
                 hasher.update("top-level-binding");
@@ -7716,12 +7742,25 @@ const Builder = struct {
 
     /// Identity of a procedure-binding root: the checked binding and the
     /// function type it is exposed at.
-    fn procedureBindingRootIdentity(self: *Builder, view: ModuleView, binding_id: checked.TopLevelProcedureBindingId, fn_ty: Type.TypeId) names.TypeDigest {
+    fn procedureBindingRootIdentity(self: *Builder, view: ModuleView, source: checked.RootSource, binding_id: checked.TopLevelProcedureBindingId, fn_ty: Type.TypeId) names.TypeDigest {
         var hasher = TypeDigestHasher.init();
-        hasher.update("roc.monotype.procedure-binding-root.v1");
-        hasher.update(&view.key.bytes);
-        hashU32(&hasher, @backingInt(binding_id));
-        hasher.update(&self.program.types.specializationDigest(&self.program.names, fn_ty).bytes);
+        hasher.update("roc.monotype.procedure-binding-root.v2");
+        switch (source) {
+            // A root of a top-level definition is named by the definition's
+            // declaration identity, so it survives an edit elsewhere in its
+            // module. A definition outside every declaration unit is named by
+            // its module's key, as the checked artifact names such an item.
+            .def => |def| {
+                hasher.update("definition");
+                hasher.update(&(view.declaration_identities.definition(def) orelse view.key.bytes));
+            },
+            .expr, .statement, .required_binding, .hoisted => {
+                hasher.update("binding");
+                hasher.update(&view.key.bytes);
+                hashU32(&hasher, @backingInt(binding_id));
+            },
+        }
+        hasher.update(&self.program.types.declarationDigestCached(&self.program.names, fn_ty, self.program.declarations.nominalDeclarations(), null).bytes);
         return .{ .bytes = hasher.finalResult() };
     }
 
@@ -8897,6 +8936,7 @@ const Builder = struct {
             .source_fn_key = source_fn_key,
             .mono_fn_ty = lower_fn_ty,
             .evidence_digest = fn_template.evidence_digest,
+            .evidence_declaration = fn_template.evidence_declaration,
             .const_evidence = fn_template.const_evidence,
             .const_evidence_frames = fn_template.const_evidence_frames,
             .const_evidence_frame_head = fn_template.const_evidence_frame_head,
@@ -9007,6 +9047,7 @@ const Builder = struct {
                     lower_fn_ty,
                 );
                 hosted_fn_template.evidence_digest = fn_template.evidence_digest;
+                hosted_fn_template.evidence_declaration = fn_template.evidence_declaration;
                 hosted_fn_template.const_evidence = fn_template.const_evidence;
                 hosted_fn_template.const_evidence_frames = fn_template.const_evidence_frames;
                 hosted_fn_template.const_evidence_frame_head = fn_template.const_evidence_frame_head;
@@ -10628,6 +10669,7 @@ const Builder = struct {
                 .source_fn_key = source_fn_key,
                 .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
                 .evidence_digest = evidence_digest,
+                .evidence_declaration = Ast.fnEvidenceDeclarationDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head, TemplateDeclarations{ .builder = self }),
                 .const_evidence = try source_ctx.draft.addConstFnEvidence(stored_evidence.nodes),
                 .const_evidence_frames = try source_ctx.draft.addConstFnEvidenceFrames(stored_evidence.frames),
                 .const_evidence_frame_head = stored_evidence.head,
@@ -11839,7 +11881,7 @@ const Builder = struct {
             for (view.platform_required_bindings.bindings) |binding| {
                 const this: Common.PlatformRequirementFilling = .{
                     .app_module = binding.app_value.artifact.bytes,
-                    .relation = binding.relation.bytes,
+                    .relation = view.platform_app_filling orelse Common.invariant("a paired platform's view has no filling key"),
                 };
                 if (filling) |existing| {
                     if (!std.meta.eql(existing, this)) Common.invariant("one lowering input had two platform/app requirement relations");
@@ -13300,6 +13342,7 @@ const Builder = struct {
             .source_fn_key = source_fn_key,
             .mono_fn_ty = DraftTypeCell.fromGraphNode(request_fn_node),
             .evidence_digest = evidence_digest,
+            .evidence_declaration = Ast.fnEvidenceDeclarationDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head, TemplateDeclarations{ .builder = self }),
             .const_evidence = draft_evidence.nodes,
             .const_evidence_frames = draft_evidence.frames,
             .const_evidence_frame_head = stored_evidence.head,
@@ -15975,6 +16018,7 @@ const Builder = struct {
             .source_fn_key = fn_value.source_fn_key,
             .mono_fn_ty = ty,
             .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
+            .evidence_declaration = Ast.fnEvidenceDeclarationDigest(&.{}, &.{}, null, TemplateDeclarations{ .builder = self }),
         });
         const lambda_args = switch (kind) {
             .parser => try fn_ctx.addTypedLocalSpan(&.{
@@ -16846,6 +16890,7 @@ const DraftFnTemplate = struct {
     source_fn_key: names.TypeDigest,
     mono_fn_ty: DraftTypeCell,
     evidence_digest: Ast.EvidenceDigest = .{},
+    evidence_declaration: ?Ast.EvidenceDigest = null,
     const_evidence: DraftSpan(check.ConstStore.ConstFnEvidence) = DraftSpan(check.ConstStore.ConstFnEvidence).empty(),
     const_evidence_frames: DraftSpan(check.ConstStore.ConstFnEvidenceFrame) = DraftSpan(check.ConstStore.ConstFnEvidenceFrame).empty(),
     const_evidence_frame_head: ?u32 = null,
@@ -20997,6 +21042,7 @@ const BodyDraftStore = struct {
             .source_fn_key = template.source_fn_key,
             .mono_fn_ty = try template.mono_fn_ty.sealCommitted(committed_types),
             .evidence_digest = template.evidence_digest,
+            .evidence_declaration = template.evidence_declaration,
             .const_evidence = .{ .start = evidence_start + template.const_evidence.start, .len = template.const_evidence.len },
             .const_evidence_frames = .{ .start = evidence_frames_start + template.const_evidence_frames.start, .len = template.const_evidence_frames.len },
             .const_evidence_frame_head = template.const_evidence_frame_head,
@@ -24239,6 +24285,7 @@ const BodyContext = struct {
                 .const_evidence_frames = draft_evidence.frames,
                 .const_evidence_frame_head = stored_evidence.head,
                 .evidence_digest = evidence_digest,
+                .evidence_declaration = Ast.fnEvidenceDeclarationDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head, TemplateDeclarations{ .builder = self.builder }),
             },
         });
     }
@@ -48123,6 +48170,7 @@ const BodyContext = struct {
             .const_evidence_frames = draft_evidence.frames,
             .const_evidence_frame_head = stored_evidence.head,
             .evidence_digest = evidence_digest,
+            .evidence_declaration = Ast.fnEvidenceDeclarationDigest(stored_evidence.nodes, stored_evidence.frames, stored_evidence.head, TemplateDeclarations{ .builder = self.builder }),
         } });
         const lambda_args = switch (kind) {
             .parser => try self.draft.addTypedLocalSpan(&.{
@@ -55452,6 +55500,7 @@ const BodyContext = struct {
             .source_fn_key = generatedCodecRuntimeKey("roc.generated_structural_parser_runtime", self.current_fn_key, plan.expr),
             .mono_fn_ty = ret_ty,
             .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
+            .evidence_declaration = Ast.fnEvidenceDeclarationDigest(&.{}, &.{}, null, TemplateDeclarations{ .builder = self.builder }),
         });
         var parser_expr = try self.addExpr(.{ .ty = ret_ty, .data = .{ .lambda = .{
             .fn_id = .{ .draft = fn_id },
@@ -55561,6 +55610,7 @@ const BodyContext = struct {
             .source_fn_key = runtime_source_fn_key,
             .mono_fn_ty = ret_ty,
             .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
+            .evidence_declaration = Ast.fnEvidenceDeclarationDigest(&.{}, &.{}, null, TemplateDeclarations{ .builder = self.builder }),
         });
         var encoder_expr = try self.addExpr(.{ .ty = ret_ty, .data = .{ .lambda = .{
             .fn_id = .{ .draft = fn_id },
@@ -57014,6 +57064,7 @@ const BodyContext = struct {
             .source_fn_key = generatedEncoderCallbackKey(self.current_fn_key, source_expr, lambda_index),
             .mono_fn_ty = lambda_ty,
             .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
+            .evidence_declaration = Ast.fnEvidenceDeclarationDigest(&.{}, &.{}, null, TemplateDeclarations{ .builder = self.builder }),
         });
         return try self.addExpr(.{ .ty = lambda_ty, .data = .{ .lambda = .{
             .fn_id = .{ .draft = fn_id },
@@ -68846,6 +68897,7 @@ const HashDeriver = struct {
 fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
     return .{
         .code_generation_key = view.code_generation_key,
+        .platform_app_filling = if (view.platform_app_filling) |filling| filling.bytes else null,
         .key = view.key,
         .module_env = view.module_env,
         .module_identity = view.module_identity,

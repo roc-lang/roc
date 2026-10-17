@@ -428,7 +428,12 @@ const CompileTimeObjectCache = struct {
         defer self.allocator.free(keyed);
         @memset(keyed, false);
         for (lowered.lir_result.spec_procs.items) |spec| keyed[@backingInt(spec.proc)] = true;
-        for (lowered.lir_result.identity_offers.items) |offer| keyed[@backingInt(offer.proc)] = true;
+        for (lowered.lir_result.identity_offers.items) |offer| if (offer.proc) |proc| {
+            keyed[@backingInt(proc)] = true;
+        };
+        for (lowered.lir_result.store.getProcSpecs(), 0..) |proc, index| {
+            if (proc.derived_from != null) keyed[index] = true;
+        }
         const generated = try self.allocator.alloc(bool, keyed.len);
         defer self.allocator.free(generated);
         @memset(generated, false);
@@ -535,8 +540,16 @@ const CompileTimeObjectCache = struct {
             if (!generated[@backingInt(spec.proc)]) continue;
             if (cachePublicationOwner(spec.owner, requester, builtin_owner)) |owner| try owners.put(owner.bytes, {});
         }
+        // A derived procedure's offer belongs to its base's owner.
+        var generated_bases = std.AutoHashMap([32]u8, void).init(self.allocator);
+        defer generated_bases.deinit();
+        for (lowered.lir_result.store.getProcSpecs(), 0..) |proc, index| {
+            if (!generated[index]) continue;
+            if (proc.derived_from) |derived_base| try generated_bases.put(derived_base.bytes, {});
+        }
         for (lowered.lir_result.identity_offers.items) |offer| {
-            if (!generated[@backingInt(offer.proc)]) continue;
+            const generated_here = (if (offer.proc) |proc| generated[@backingInt(proc)] else false) or generated_bases.contains(offer.identity.bytes);
+            if (!generated_here) continue;
             if (cachePublicationOwner(offer.owner, requester, builtin_owner)) |owner| try owners.put(owner.bytes, {});
         }
         // Each owner's offers select the artifacts they serve; the artifacts
@@ -9545,39 +9558,58 @@ fn selectOwnerOffers(
         });
     }
     // Every procedure lowered from a template is offered under its identity
-    // as well (design.md "Identity Offers"), under the same conditions.
+    // as well (design.md "Identity Offers"), under the same conditions, and
+    // so is every procedure derived from one by a pass after Direct LIR (an
+    // ownership variant or a call variant), with the facts of its base.
+    var base_facts = std.AutoHashMap([32]u8, DerivedOfferBase).init(allocator);
+    defer base_facts.deinit();
     for (lowered.lir_result.identity_offers.items) |offer| {
-        var requested = true;
+        var owned = true;
         if (filter.checked_owner) |owner| {
             const declared = if (filter.requester) |requester|
                 cachePublicationOwner(offer.owner, requester, filter.builtin_owner.?)
             else
                 offer.owner;
-            requested = if (declared) |placement| owner.eql(placement) else false;
+            owned = if (declared) |placement| owner.eql(placement) else false;
         }
-        if (filter.generated_roots) |generated| requested = requested and generated[@backingInt(offer.proc)];
         const demand = offer.demand orelse unreachable;
-        const proc = procs[@backingInt(offer.proc)];
         if (!demand.permitsRetirement() or demand.literal_reads.len != 0) {
-            if (trace) std.debug.print("withhold-identity {s} reason={s} name={s}\n", .{ &proc.identity.symbolHex(), if (!demand.permitsRetirement()) "incomplete-demand" else "literal-reads", lowered.lir_result.store.procDebugName(offer.proc) orelse "" });
+            if (trace) std.debug.print("withhold-identity {s} reason={s}\n", .{ &offer.identity.symbolHex(), if (!demand.permitsRetirement()) "incomplete-demand" else "literal-reads" });
             continue;
         }
-        const artifact = plan.artifact_by_proc.get(offer.proc) orelse {
-            if (trace) std.debug.print("withhold-identity {s} reason=no-artifact name={s}\n", .{ &proc.identity.symbolHex(), lowered.lir_result.store.procDebugName(offer.proc) orelse "" });
-            continue;
-        };
         const entry_reads = if (offer.mono_fn) |mono_fn|
             comptime_reads.getFn(mono_fn)
         else if (offer.mono_def) |mono_def|
             comptime_reads.getDef(mono_def)
         else
             lir.CheckedPipeline.SpecComptimeReads.Lookup{ .offerable = true, .reads = &.{} };
-        if (!entry_reads.offerable or proc.rc_variant_demandable or proc.inlined_at_calls or proc.tail_group != null or !plan.eligible[artifact]) {
+        if (!entry_reads.offerable) {
+            withheld += 1;
+            if (trace) std.debug.print("withhold-identity {s} reason=evaluates-root\n", .{&offer.identity.symbolHex()});
+            continue;
+        }
+        // A derived procedure's code reads what its base's does, so it is
+        // offered with the base's facts whether or not the base itself is.
+        try base_facts.put(offer.identity.bytes, .{
+            .owned = owned,
+            .demand = offer.demand,
+            .platform_requirement_relation = offer.platform_requirement_relation,
+            .comptime_root_reads = entry_reads.reads,
+        });
+        const offer_proc = offer.proc orelse continue;
+        var requested = owned;
+        if (filter.generated_roots) |generated| requested = requested and generated[@backingInt(offer_proc)];
+        const proc = procs[@backingInt(offer_proc)];
+        const artifact = plan.artifact_by_proc.get(offer_proc) orelse {
+            if (trace) std.debug.print("withhold-identity {s} reason=no-artifact name={s}\n", .{ &proc.identity.symbolHex(), lowered.lir_result.store.procDebugName(offer_proc) orelse "" });
+            continue;
+        };
+        if (proc.rc_variant_demandable or proc.inlined_at_calls or proc.tail_group != null or !plan.eligible[artifact]) {
             withheld += 1;
             if (trace) std.debug.print("withhold-identity {s} reason={s} name={s}\n", .{
                 &proc.identity.symbolHex(),
-                if (!entry_reads.offerable) "evaluates-root" else if (proc.rc_variant_demandable) "ownership-variants" else if (proc.inlined_at_calls) "inlined" else if (proc.tail_group != null) "tail-group" else "serving-closure",
-                lowered.lir_result.store.procDebugName(offer.proc) orelse "",
+                if (proc.rc_variant_demandable) "ownership-variants" else if (proc.inlined_at_calls) "inlined" else if (proc.tail_group != null) "tail-group" else "serving-closure",
+                lowered.lir_result.store.procDebugName(offer_proc) orelse "",
             });
             continue;
         }
@@ -9585,11 +9617,11 @@ fn selectOwnerOffers(
         // whose artifact is another definition's is not offered by identity.
         const definition = set.artifacts[artifact];
         if (definition.kind != .proc or !std.mem.eql(u8, &definition.kind.proc.bytes, &proc.identity.bytes) or definition.callable_contract == null) {
-            if (trace) std.debug.print("withhold-identity {s} reason={s} name={s}\n", .{ &proc.identity.symbolHex(), if (definition.callable_contract == null) "no-contract" else "other-definition", lowered.lir_result.store.procDebugName(offer.proc) orelse "" });
+            if (trace) std.debug.print("withhold-identity {s} reason={s} name={s}\n", .{ &proc.identity.symbolHex(), if (definition.callable_contract == null) "no-contract" else "other-definition", lowered.lir_result.store.procDebugName(offer_proc) orelse "" });
             continue;
         }
         if (requested) try roots.append(allocator, @intCast(specs.items.len));
-        if (trace) std.debug.print("offer-identity {s} {s}\n", .{ &proc.identity.symbolHex(), lowered.lir_result.store.procDebugName(offer.proc) orelse "" });
+        if (trace) std.debug.print("offer-identity {s} {s}\n", .{ &proc.identity.symbolHex(), lowered.lir_result.store.procDebugName(offer_proc) orelse "" });
         try specs.append(allocator, .{
             .key = proc.identity.bytes,
             .by_identity = true,
@@ -9597,6 +9629,51 @@ fn selectOwnerOffers(
             .demand = offer.demand,
             .platform_requirement_relation = offer.platform_requirement_relation,
             .comptime_root_reads = entry_reads.reads,
+            .rc_borrowed_params = proc.rc_borrowed_params,
+            .rc_ret_borrowed = proc.rc_ret_borrowed,
+            .rc_ret_lenders = proc.rc_ret_lenders,
+            .rc_read_only_params = proc.rc_read_only_params,
+            .rc_ret_unique = proc.rc_ret_unique,
+            .rc_ret_unique_fields = proc.rc_ret_unique_fields,
+            .rc_ret_conditions = try GuardedList.dupe(conditions_arena.allocator(), u32, lowered.lir_result.store.getU32Span(proc.rc_ret_conditions)),
+        });
+    }
+    for (procs, 0..) |proc, index| {
+        const derived_base = proc.derived_from orelse continue;
+        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+        const facts = base_facts.get(derived_base.bytes) orelse {
+            if (trace) std.debug.print("withhold-derived {s} reason=base-unoffered name={s}\n", .{ &proc.identity.symbolHex(), lowered.lir_result.store.procDebugName(proc_id) orelse "" });
+            continue;
+        };
+        const artifact = plan.artifact_by_proc.get(proc_id) orelse {
+            if (trace) std.debug.print("withhold-derived {s} reason=no-artifact name={s}\n", .{ &proc.identity.symbolHex(), lowered.lir_result.store.procDebugName(proc_id) orelse "" });
+            continue;
+        };
+        if (proc.inlined_at_calls or proc.tail_group != null or !plan.eligible[artifact]) {
+            withheld += 1;
+            if (trace) std.debug.print("withhold-derived {s} reason={s} name={s}\n", .{
+                &proc.identity.symbolHex(),
+                if (proc.inlined_at_calls) "inlined" else if (proc.tail_group != null) "tail-group" else "serving-closure",
+                lowered.lir_result.store.procDebugName(proc_id) orelse "",
+            });
+            continue;
+        }
+        const definition = set.artifacts[artifact];
+        if (definition.kind != .proc or !std.mem.eql(u8, &definition.kind.proc.bytes, &proc.identity.bytes) or definition.callable_contract == null) {
+            if (trace) std.debug.print("withhold-derived {s} reason={s} name={s}\n", .{ &proc.identity.symbolHex(), if (definition.callable_contract == null) "no-contract" else "other-definition", lowered.lir_result.store.procDebugName(proc_id) orelse "" });
+            continue;
+        }
+        var requested = facts.owned;
+        if (filter.generated_roots) |generated| requested = requested and generated[index];
+        if (requested) try roots.append(allocator, @intCast(specs.items.len));
+        if (trace) std.debug.print("offer-derived {s} {s}\n", .{ &proc.identity.symbolHex(), lowered.lir_result.store.procDebugName(proc_id) orelse "" });
+        try specs.append(allocator, .{
+            .key = proc.identity.bytes,
+            .by_identity = true,
+            .artifact = artifact,
+            .demand = facts.demand,
+            .platform_requirement_relation = facts.platform_requirement_relation,
+            .comptime_root_reads = facts.comptime_root_reads,
             .rc_borrowed_params = proc.rc_borrowed_params,
             .rc_ret_borrowed = proc.rc_ret_borrowed,
             .rc_ret_lenders = proc.rc_ret_lenders,
@@ -9686,6 +9763,16 @@ fn selectOwnerOffers(
     }
     return .{ .specs = selected_specs, .materializer_reads = materializer_reads, .selected = selected, .conditions = conditions_arena };
 }
+
+/// The facts an identity offer's base supplies to the offers of the
+/// procedures derived from it.
+const DerivedOfferBase = struct {
+    /// Whether the owner being written requests the base's offers.
+    owned: bool,
+    demand: ?lir.Program.CachedCtfeDemand,
+    platform_requirement_relation: ?[32]u8,
+    comptime_root_reads: []const lir.CheckedPipeline.ComptimeRootRead,
+};
 
 /// The LIR fingerprint of one procedure of `lowered`, which is the same in
 /// every program that lowers that procedure identically.

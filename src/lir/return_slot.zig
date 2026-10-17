@@ -43,6 +43,11 @@ pub fn run(store: *LirStore, layouts: *layout_mod.Store) ResourceError!void {
     try body_clone.CallResultFusion(Spec).run(store, layouts);
 }
 
+/// `run`, linking variants the object cache offers instead of cloning them.
+pub fn runWithCache(store: *LirStore, layouts: *layout_mod.Store, cache: body_clone.VariantCache) ResourceError!void {
+    try body_clone.CallResultFusion(Spec).runWithCache(store, layouts, cache);
+}
+
 /// The consumer this pass fuses: a `ptr_store` of the call result into a
 /// destination pointing at the result's own layout.
 const Spec = struct {
@@ -102,8 +107,20 @@ const Spec = struct {
         };
     }
 
-    pub fn createVariant(layouts: State, store: *LirStore, key: VariantKey) ResourceError!LIR.LirProcSpecId {
-        const out_ptr = try store.addLocal(.{ .layout_idx = try layouts.insertPtr(key.result_layout) });
+    /// The variant stores through a pointer to the result layout and returns
+    /// nothing; the result layout's content digest names its shape.
+    pub fn variantShape(layouts: State, key: VariantKey) ResourceError!body_clone.CallVariantShape {
+        return .{
+            .leading_layouts = .{try layouts.insertPtr(key.result_layout)},
+            .leading_count = 1,
+            .extra_frame_locals = 1,
+            .ret_layout = .zst,
+            .shape_digest = try layouts.contentDigest(key.result_layout),
+        };
+    }
+
+    pub fn createVariant(store: *LirStore, key: VariantKey, variant_shape: body_clone.CallVariantShape) ResourceError!LIR.LirProcSpecId {
+        const out_ptr = try store.addLocal(.{ .layout_idx = variant_shape.leading_layouts[0] });
         const store_unit = try store.addLocal(.{ .layout_idx = .zst });
         return try body_clone.cloneCallVariant(
             ReturnSlotRewriter,
@@ -114,6 +131,7 @@ const Spec = struct {
                 .leading_args = &.{out_ptr},
                 .extra_frame_locals = &.{store_unit},
                 .ret_layout = .zst,
+                .shape_digest = variant_shape.shape_digest,
             },
         );
     }

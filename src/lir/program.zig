@@ -564,6 +564,12 @@ pub const CachedCtfeRead = struct {
     cause: CtfeDemandCause,
 };
 
+/// A checked root, by module identity and root index.
+pub const RootUse = struct {
+    module: [32]u8,
+    root: u32,
+};
+
 pub const LiteralRepresentation = @import("literal_recipe.zig").Representation;
 
 /// A binder's type within a cached literal local context, in persistent form.
@@ -956,7 +962,10 @@ pub const SpecProc = struct {
 /// program that assigns the same identity to a procedure it is about to lower
 /// links this procedure's code instead (design.md "Identity Offers").
 pub const IdentityOffer = struct {
-    proc: LIR.LirProcSpecId,
+    /// The offered procedure; null once compaction dropped it while keeping
+    /// a procedure derived from it, whose offer carries these facts.
+    proc: ?LIR.LirProcSpecId,
+    identity: LIR.ProcIdentity,
     /// Checked template owner, as `SpecProc.owner`.
     owner: ?checked.ModuleId = null,
     /// As `SpecProc.platform_requirement_relation`.
@@ -997,6 +1006,10 @@ pub const Result = struct {
     /// Every procedure this program lowered from a function template that
     /// the object cache may serve by identity.
     identity_offers: std.ArrayList(IdentityOffer) = .empty,
+    /// The platform/app relation this program was lowered under, which the
+    /// object-cache lookups of the passes after Direct LIR depend on; null
+    /// when no app fills a platform requirement.
+    platform_requirement_relation: ?[32]u8 = null,
     /// Discovery summaries of the specializations this program lowered only
     /// for discovery.
     discovery_summaries: std.ArrayList(DiscoverySummary) = .empty,

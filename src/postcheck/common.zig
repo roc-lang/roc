@@ -120,10 +120,13 @@ pub const DeclarationNames = struct {
 };
 
 /// How the program's app fills its platform's requirements: the app module
-/// whose values fill them, and the relation key naming that filling. Which
-/// app procedure a platform requirement resolves to is not determined by the
-/// platform's source or types, so a procedure whose code reaches one digests
-/// the relation into its identity (`Lifted.Program.fnSourceDigest`).
+/// whose values fill them, and the filling key naming which app declarations
+/// fill them (`CheckedArtifact.PlatformAppFillingKey`). Which app procedure a
+/// platform requirement resolves to is not determined by the platform's
+/// source or types, so a procedure whose code reaches one digests the
+/// filling key into its identity (`Lifted.Program.fnSourceDigest`), and an
+/// object-cache offer of such a procedure serves only a program with the same
+/// filling key.
 pub const PlatformRequirementFilling = struct {
     app_module: [32]u8,
     relation: [32]u8,

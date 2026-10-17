@@ -15,6 +15,7 @@ const Arc = @import("arc.zig");
 const ImmortalLocals = @import("immortal_locals.zig");
 const TailDrive = @import("tail_drive.zig");
 const ProcPasses = @import("proc_passes.zig");
+const BodyClone = @import("body_clone.zig");
 const ReturnSlot = @import("return_slot.zig");
 const StrAppend = @import("str_append.zig");
 const SingleUseInline = @import("single_use_inline.zig");
@@ -1871,8 +1872,18 @@ fn finishLoweredOutput(
     if (target.reuse_boxes) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .box_reuse);
     }
-    try ReturnSlot.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
-    try StrAppend.run(&lowered.lir_result.store);
+    // A call variant or an ownership variant the object cache offers under
+    // the identity the derived procedure would have is linked instead of
+    // derived (design.md "Identity Offers").
+    var served_storage = try BodyClone.ServedRootStorage.init(allocator, &lowered.lir_result.static_data_values);
+    defer served_storage.deinit();
+    const variant_cache: BodyClone.VariantCache = .{
+        .lookup = if (target.code_provision.permitsNativeObjects()) target.spec_cache else null,
+        .relation = lowered.lir_result.platform_requirement_relation,
+        .storage = &served_storage,
+    };
+    try ReturnSlot.runWithCache(&lowered.lir_result.store, &lowered.lir_result.layouts, variant_cache);
+    try StrAppend.runWithCache(&lowered.lir_result.store, variant_cache);
     if (target.tag_reachability) {
         try TagReachability.run(&lowered.lir_result);
     }
@@ -1917,6 +1928,7 @@ fn finishLoweredOutput(
         .thread_confined_rc = target.thread_confined_rc,
         .post_check_executor = if (target.post_check_executor) |*executor| executor else null,
         .metrics_out = arc_metrics,
+        .variant_cache = variant_cache,
     });
     if (target.timing) |timing| timing.addArcParallel(arc_metrics.?.*);
     arc_timing_scope.end();

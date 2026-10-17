@@ -42,7 +42,7 @@ pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.
 
 /// Version of the checked-module envelope: its magic, header layout, and body
 /// order. Platform-pairing entries share the envelope.
-const checked_envelope_version: u32 = 13;
+const checked_envelope_version: u32 = 14;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order.

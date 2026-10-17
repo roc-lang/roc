@@ -234,7 +234,7 @@ const Pass = struct {
         self.assignCompactStaticDataIds();
         try self.remapReachableProcBodies();
         self.remapReachableProcStmtRefs();
-        self.remapRootProcs();
+        try self.remapRootProcs();
         self.remapConstRoots();
         self.remapStaticDataInitializers();
         try self.remapFrozenExports();
@@ -474,7 +474,7 @@ const Pass = struct {
         }
     }
 
-    fn remapRootProcs(self: *Pass) void {
+    fn remapRootProcs(self: *Pass) Allocator.Error!void {
         for (self.result.root_procs.items) |*proc| {
             proc.* = self.remapProc(proc.*);
         }
@@ -491,14 +491,22 @@ const Pass = struct {
             kept += 1;
         }
         self.result.spec_procs.shrinkRetainingCapacity(kept);
+        // An identity offer whose procedure was unreachable stays, without
+        // a procedure, while a reachable procedure derived from it needs
+        // its facts.
+        var derived_bases = std.AutoHashMap([32]u8, void).init(self.result.store.allocator);
+        defer derived_bases.deinit();
+        for (self.result.store.getProcSpecs()) |proc| {
+            if (proc.derived_from) |derived_base| try derived_bases.put(derived_base.bytes, {});
+        }
         var kept_offers: usize = 0;
         for (self.result.identity_offers.items) |offer| {
-            const new_proc = self.old_to_new[@backingInt(offer.proc)] orelse {
+            var remapped = offer;
+            remapped.proc = if (offer.proc) |proc| self.old_to_new[@backingInt(proc)] else null;
+            if (remapped.proc == null and !derived_bases.contains(offer.identity.bytes)) {
                 if (offer.demand) |demand| demand.deinit(self.result.store.allocator);
                 continue;
-            };
-            var remapped = offer;
-            remapped.proc = new_proc;
+            }
             self.result.identity_offers.items[kept_offers] = remapped;
             kept_offers += 1;
         }

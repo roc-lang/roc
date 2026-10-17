@@ -297,6 +297,12 @@ fn hashCheckingContextIdentity(identity: CheckingContextIdentity) [32]u8 {
     } else {
         hasher.update(&[_]u8{0});
     }
+    if (identity.platform_app_filling) |filling| {
+        hasher.update(&[_]u8{1});
+        hasher.update(&filling.bytes);
+    } else {
+        hasher.update(&[_]u8{0});
+    }
     hashU32(&hasher, @intCast(identity.imports.len));
     for (identity.imports) |import_identity| {
         hasher.update(&import_identity.import_name_hash);
@@ -382,6 +388,10 @@ pub const CheckingContextIdentity = struct {
     imports: []ImportIdentity = &.{},
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     platform_app_relation: ?PlatformAppRelationKey = null,
+    /// The pairing's filling key, set with `platform_app_relation`; it names
+    /// the code the pairing generates where the relation key names the exact
+    /// app the pairing was made for.
+    platform_app_filling: ?PlatformAppFillingKey = null,
     explicit_roots: []const ExplicitRootRequestInput = &.{},
     /// How the module's compile-time roots were established. An app root
     /// checked without its entrypoint contract reports no problem for a
@@ -395,6 +405,7 @@ pub const CheckingContextIdentity = struct {
         explicit_roots: SerializedSlice(ExplicitRootRequestInput) = .{},
         platform_requirement_context: artifact_serialize.SerializedOptional(PlatformRequirementContextKey) = .{},
         platform_app_relation: artifact_serialize.SerializedOptional(PlatformAppRelationKey) = .{},
+        platform_app_filling: artifact_serialize.SerializedOptional(PlatformAppFillingKey) = .{},
         validation: artifact_serialize.SerializedScalar(can.Can.Validation, .checking) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CheckingContextIdentity, @This());
         pub const serialize = Serde.serialize;
@@ -407,6 +418,7 @@ pub const CheckingContextIdentity = struct {
         publish_imports: []const PublishImportArtifact,
         platform_requirement_context: ?PlatformRequirementContextKey,
         platform_app_relation: ?PlatformAppRelationKey,
+        platform_app_filling: ?PlatformAppFillingKey,
         explicit_roots: []const ExplicitRootRequestInput,
         validation: can.Can.Validation,
     ) Allocator.Error!CheckingContextIdentity {
@@ -433,6 +445,7 @@ pub const CheckingContextIdentity = struct {
             .imports = imports,
             .platform_requirement_context = platform_requirement_context,
             .platform_app_relation = platform_app_relation,
+            .platform_app_filling = platform_app_filling,
             .explicit_roots = roots,
             .validation = validation,
         };
@@ -9188,7 +9201,7 @@ fn expectSingleNominalBackingPayload(allocator: Allocator, module_name: []const 
     };
     _ = try names.internModuleIdentity(&module_identity.stable_hash);
 
-    var checking_context_identity = try CheckingContextIdentity.fromModule(allocator, module, &.{}, null, null, &.{}, .checking);
+    var checking_context_identity = try CheckingContextIdentity.fromModule(allocator, module, &.{}, null, null, null, &.{}, .checking);
     defer checking_context_identity.deinit(allocator);
     const artifact_key = CheckedModuleArtifactKey.computeFromSourceHash(
         hashModuleSourceInputs(module_env),
@@ -23970,6 +23983,34 @@ pub const PlatformAppRelationKey = struct {
     }
 };
 
+/// Which app declarations fill a platform's requirements: the declaration
+/// identity of the app value filling each required declaration, in
+/// declaration order, under the platform's requirement context. Unlike the
+/// relation key, it names no module key, so an edit of the app that leaves
+/// those declarations' identities unchanged leaves it unchanged; everything
+/// that names the code a pairing generates (procedure identities, the
+/// pairing's code-generation key, declaration identities of the paired
+/// platform) digests this key, never the relation key.
+pub const PlatformAppFillingKey = struct {
+    bytes: [32]u8 = @as([32]u8, @splat(0)),
+
+    pub fn compute(requirement_context: PlatformRequirementContextKey, fillings: []const ?[32]u8) PlatformAppFillingKey {
+        var hasher = base.Sha256.init(.{});
+        hasher.update("roc.platform-app-filling.v1");
+        hasher.update(&requirement_context.bytes);
+        hashU32(&hasher, @intCast(fillings.len));
+        for (fillings) |filling| {
+            if (filling) |identity| {
+                hasher.update(&[_]u8{1});
+                hasher.update(&identity);
+            } else {
+                hasher.update(&[_]u8{0});
+            }
+        }
+        return .{ .bytes = hasher.finalResult() };
+    }
+};
+
 /// Public `PlatformRequiredDeclarationId` declaration.
 pub const PlatformRequiredDeclarationId = enum(u32) { _ };
 /// Public `PlatformRequiredBindingId` declaration.
@@ -24181,6 +24222,7 @@ pub const PlatformRequiredBindingInput = struct {
 /// Public `PlatformAppRelation` declaration.
 pub const PlatformAppRelation = struct {
     key: PlatformAppRelationKey,
+    filling: PlatformAppFillingKey,
     requirement_context: PlatformRequirementContextKey,
     platform_module_idx: u32,
     app_artifact: CheckedModuleArtifactKey,
@@ -24202,6 +24244,7 @@ pub const PlatformAppRelation = struct {
         allocator.free(self.checked_error_requires);
         self.* = .{
             .key = .{},
+            .filling = .{},
             .requirement_context = .{},
             .platform_module_idx = 0,
             .app_artifact = .{},
@@ -26453,6 +26496,17 @@ fn buildPlatformAppRelationFromDeclarations(
     errdefer checked_error_requires.deinit(allocator);
 
     const relation_key = PlatformAppRelationKey.compute(app_artifact.key, requirement_context);
+    const fillings = try allocator.alloc(?[32]u8, declarations.len);
+    defer allocator.free(fillings);
+    for (declarations, fillings) |declaration, *filling| {
+        const solution = app_artifact.platform_requirement_solutions.lookupByRequiredIndex(declaration.requires_idx) orelse {
+            filling.* = null;
+            continue;
+        };
+        filling.* = app_artifact.declaration_identities.definition(solution.def) orelse
+            checkedArtifactInvariant("platform requirement solution names an app definition with no declaration identity", .{});
+    }
+    const filling_key = PlatformAppFillingKey.compute(requirement_context, fillings);
 
     for (declarations) |declaration| {
         // The checker records successful solutions as exact app value/type
@@ -26552,6 +26606,7 @@ fn buildPlatformAppRelationFromDeclarations(
 
     return .{
         .key = relation_key,
+        .filling = filling_key,
         .requirement_context = requirement_context,
         .platform_module_idx = module_idx,
         .app_artifact = app_artifact.key,
@@ -26625,10 +26680,11 @@ pub const PlatformPairing = struct {
     /// versioning folds it into the platform-pairing cache entry's admission hash.
     // Bump the version for changes to the borrowed-column mask interpretation as
     // well as other semantics not visible in the serialized layout fingerprint.
-    pub const SERIALIZED_VERSION_HASH: [32]u8 = artifact_serialize.rootLayoutVersionHash(Serialized, 2);
+    pub const SERIALIZED_VERSION_HASH: [32]u8 = artifact_serialize.rootLayoutVersionHash(Serialized, 3);
 
     pub const Serialized = extern struct {
         relation: [32]u8,
+        filling: [32]u8,
         borrowed_types: u16,
         has_dependent_evaluation: bool,
         checked_types: CheckedTypeStore.Serialized,
@@ -26703,6 +26759,7 @@ pub const PlatformPairing = struct {
             },
             .serialized_only_fields = &.{
                 "relation", // `checking_context_identity.platform_app_relation`.
+                "filling", // `checking_context_identity.platform_app_filling`.
                 "borrowed_types", // Which `checked_types` columns are borrowed.
                 "has_dependent_evaluation", // Whether the evaluation columns are persisted.
                 "templates", // `checked_procedure_templates.templates`.
@@ -26716,6 +26773,7 @@ pub const PlatformPairing = struct {
         pub fn serialize(self: *Serialized, artifact: *const CheckedModuleArtifact, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
             std.debug.assert(artifact.pairing_arena != null and artifact.evaluation_state == .finalized);
             self.relation = artifact.checking_context_identity.platform_app_relation.?.bytes;
+            self.filling = artifact.checking_context_identity.platform_app_filling.?.bytes;
             self.borrowed_types = artifact.checked_types.borrowed_columns.bits.mask;
             self.has_dependent_evaluation = artifact.root_requests.compile_time_requests.len != 0;
             var delta = artifact.checked_types;
@@ -26773,6 +26831,7 @@ pub const PlatformPairing = struct {
             result.pairing_arena = arena;
             result.evaluation_state = .finalized;
             result.checking_context_identity.platform_app_relation = .{ .bytes = self.relation };
+            result.checking_context_identity.platform_app_filling = .{ .bytes = self.filling };
             result.checked_types = self.checked_types.deserialize(address);
             inline for (@typeInfo(CheckedTypeStore.BorrowedColumn).@"enum".field_names) |field_name| {
                 const bit = @backingInt(@field(CheckedTypeStore.BorrowedColumn, field_name));
@@ -26836,6 +26895,7 @@ pub fn pairCheckedPlatform(
     for (platform.platform_type_inputs.requirements, type_keys) |required, *key| key.* = platform.checked_types.roots.items[@backingInt(required.root)].key;
     const relation = try buildPlatformAppRelationFromDeclarations(session, platform.module_identity.module_idx, platform.platformRequirementContextKey(), platform.platform_required_declarations.declarations, type_keys, app);
     result.checking_context_identity.platform_app_relation = relation.key;
+    result.checking_context_identity.platform_app_filling = relation.filling;
     const relations = [_]ImportedModuleView{importedView(app)};
     // Pairing extends the platform's checked scope with the app and its scope.
     // Keep each producer's order and retain the result in the pairing cache.
@@ -32899,7 +32959,11 @@ pub const CheckedModuleArtifact = struct {
     /// app binding environment. Local checked IDs retain the module's key.
     pub fn codeGenerationKey(self: *const CheckedModuleArtifact) CheckedModuleArtifactKey {
         if (self.pairing_arena == null) return self.key;
-        return CheckedModuleArtifactKey.computeFromSourceHash(self.key.source_hash, self.module_identity, self.checking_context_identity, self.direct_import_artifact_keys);
+        // The code a pairing generates depends on which app declarations fill
+        // the platform's requirements, not on the app module's key.
+        var context = self.checking_context_identity;
+        context.platform_app_relation = null;
+        return CheckedModuleArtifactKey.computeFromSourceHash(self.key.source_hash, self.module_identity, context, self.direct_import_artifact_keys);
     }
 
     pub fn moduleEnv(self: *CheckedModuleArtifact) *ModuleEnv {
@@ -33132,8 +33196,9 @@ pub const CheckedModuleArtifact = struct {
             // plans add one. Promoted local procedure templates and callable
             // contract types add one each, and the single-source-call template
             // list one more. Nested procedure runtime captures add one. The
-            // compile-time root read table adds its rows and refs.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 238);
+            // compile-time root read table adds its rows and refs. The
+            // checking context's optional filling key adds one.
+            if (artifact_serialize.relocatablePointerCount(Serialized) != 239) @compileError(std.fmt.comptimePrint("relocatable pointer count {d}", .{artifact_serialize.relocatablePointerCount(Serialized)}));
         }
 
         /// Every field but the inline POD `key` and `module_identity`: the
@@ -35104,6 +35169,8 @@ pub const ImportedModuleView = struct {
     const_store: *const ConstStore,
     compile_time_root_reads: *const CompileTimeRootReadTable = &no_compile_time_root_reads,
     declaration_identities: *const DeclarationIdentities = &no_declaration_identities,
+    /// The pairing's filling key when this is a paired platform.
+    platform_app_filling: ?PlatformAppFillingKey = null,
 
     /// The keys of the modules this module imports directly.
     pub fn directImportKeys(self: ImportedModuleView) []const CheckedModuleArtifactKey {
@@ -35124,6 +35191,7 @@ pub const LoweringModuleView = struct {
 pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
     return .{
         .code_generation_key = if (artifact.pairing_arena != null) artifact.codeGenerationKey() else null,
+        .platform_app_filling = artifact.checking_context_identity.platform_app_filling,
         .key = artifact.key,
         .module_env = artifact.moduleEnvConst(),
         .canonical_names = &artifact.canonical_names,
@@ -36342,6 +36410,7 @@ pub fn checkedModuleKeyFromTypedModule(
         inputs.imports,
         inputs.platform_requirement_context,
         inputs.platform_app_relation,
+        null,
         inputs.explicit_roots,
         inputs.validation,
     );
@@ -36656,8 +36725,8 @@ fn computeDeclarationIdentities(inputs: DeclarationIdentityInputs) Allocator.Err
         identityHashBytes(&context_hasher, @tagName(checking.validation));
         context_hasher.update(&.{@intFromBool(checking.platform_requirement_context != null)});
         if (checking.platform_requirement_context) |key| context_hasher.update(&key.bytes);
-        context_hasher.update(&.{@intFromBool(checking.platform_app_relation != null)});
-        if (checking.platform_app_relation) |key| context_hasher.update(&key.bytes);
+        context_hasher.update(&.{@intFromBool(checking.platform_app_filling != null)});
+        if (checking.platform_app_filling) |key| context_hasher.update(&key.bytes);
         identityHashU32(&context_hasher, @intCast(checking.explicit_roots.len));
         for (checking.explicit_roots) |explicit| hashExplicitRootRequestInput(&context_hasher, explicit);
     }
@@ -36791,6 +36860,12 @@ fn computeDeclarationIdentities(inputs: DeclarationIdentityInputs) Allocator.Err
             }
         }.lessThan);
         result.nominals = nominals;
+    }
+    if (builtin.os.tag != .freestanding and std.c.getenv("ROC_DECL_TRACE") != null) {
+        std.debug.print("decl-identities module={s} context={x} types={x} units={d}\n", .{ module_env.module_name, std.fmt.bytesToHex(module_context[0..8], .lower), std.fmt.bytesToHex(type_identity[0..8], .lower), units.items.len });
+        for (units.items) |unit| {
+            std.debug.print("decl-unit {d}-{d} unresolved={} local_edges={d} external_edges={d} local={s} identity={s} text={s}\n", .{ unit.region.start.offset, unit.region.end.offset, unit.unresolved, unit.local_edges.items.len, unit.external_edges.items.len, std.fmt.bytesToHex(unit.local[0..8], .lower), std.fmt.bytesToHex(unit.identity[0..8], .lower), source[unit.region.start.offset..@min(unit.region.end.offset, unit.region.start.offset + 40)] });
+        }
     }
     return result;
 }
@@ -37171,6 +37246,7 @@ pub fn publishFromTypedModule(
         inputs.imports,
         inputs.platform_requirement_context,
         if (inputs.platform_app_relation) |relation| relation.key else null,
+        if (inputs.platform_app_relation) |relation| relation.filling else null,
         inputs.explicit_roots,
         inputs.validation,
     );
@@ -39071,6 +39147,7 @@ test "CheckingContextIdentity serialize/deserialize round-trip (slices + optiona
         .explicit_roots = roots,
         .platform_requirement_context = prc, // present
         .platform_app_relation = null, // absent
+        .platform_app_filling = null,
     };
 
     const rt = try artifact_serialize.roundTripForTest(gpa, CheckingContextIdentity, &ident);

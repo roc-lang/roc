@@ -3286,6 +3286,9 @@ pub const Store = struct {
                     try sink.writeBytes("declaration");
                     try sink.writeBytes(&identity);
                 } else {
+                    if (mode == .declaration and @import("builtin").os.tag != .freestanding and std.c.getenv("ROC_IDENTITY_TRACE") != null) {
+                        std.debug.print("named-undeclared module={s} source_decl={?d} name={s} generated={} iter={s}\n", .{ std.fmt.bytesToHex(name_store.moduleIdentityBytes(named.def.module)[0..8], .lower), named.def.source_decl, name_store.typeNameText(named.def.type_name), named.def.generated != null, @tagName(named.def.iterator_kind) });
+                    }
                     try sink.writeBytes(&named.named_type.module.bytes);
                     if (mode == .full or mode == .identity_only) try sink.writeU32(@backingInt(named.named_type.ty));
                     try sink.writeBytes(name_store.moduleIdentityBytes(named.def.module));

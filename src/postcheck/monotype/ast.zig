@@ -610,7 +610,7 @@ pub fn fnEvidenceDeclarationDigest(
     resolver: anytype,
 ) EvidenceDigest {
     var hasher = TypeDigestHasher.init();
-    writeBytes(&hasher, "roc.monotype.fn_evidence.declaration.v1");
+    writeBytes(&hasher, "roc.monotype.fn_evidence.declaration.v2");
     writeU32(&hasher, @intCast(evidence.len));
     for (evidence) |entry| {
         writeU8(&hasher, @backingInt(entry));
@@ -622,9 +622,20 @@ pub fn fnEvidenceDeclarationDigest(
                         writeBytes(&hasher, "procedure");
                         writeBytes(&hasher, &resolver.template(procedure.template));
                     },
-                    .local_proc, .structural => {
-                        writeBytes(&hasher, &target.view.bytes);
-                        writeMethodTarget(&hasher, target.method, target.method_callable_key);
+                    // A local procedure is named by the declaration it is
+                    // nested in and its position there; a structural target
+                    // by the type environment that derived it. Neither names
+                    // its module's key.
+                    .local_proc => |local| {
+                        writeBytes(&hasher, "local-proc");
+                        writeBytes(&hasher, &resolver.definition(target.view, target.method.def_idx));
+                        writeU32(&hasher, @backingInt(local.binder));
+                        writeU32(&hasher, @backingInt(local.expr));
+                    },
+                    .structural => |kind| {
+                        writeBytes(&hasher, "structural");
+                        writeBytes(&hasher, &resolver.typeEnvironment(target.view));
+                        writeU8(&hasher, @backingInt(kind));
                     },
                 }
                 writeBytes(&hasher, &target.method_callable_key.bytes);
@@ -651,7 +662,7 @@ pub fn fnEvidenceDeclarationDigest(
                         writeBytes(&hasher, &content.bytes);
                     } else {
                         writeU8(&hasher, 0);
-                        writeBytes(&hasher, &checked_structural.view.bytes);
+                        writeBytes(&hasher, &resolver.typeEnvironment(checked_structural.view));
                     }
                     writeBytes(&hasher, &checked_structural.dispatcher_key.bytes);
                     writeBytes(&hasher, &checked_structural.callable_key.bytes);

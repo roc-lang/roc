@@ -582,10 +582,20 @@ which app value fills a platform's requirement is chosen by the app, not by
 the platform's source or types. So a function that references a function of
 the app from outside the app (which only a requirement can), or references a
 function that does, digests the program's platform/app relation key into its
-identity (`Lifted.Program.fnReachesPlatformRequirement`). The relation key is a
-function of the app's checked module key, which the app's own procedure identities
-already digest, so such a platform procedure is shared exactly as widely as
-the app procedures it reaches; every other platform procedure keeps one
+identity (`Lifted.Program.fnReachesPlatformRequirement`). What it digests is
+the pairing's filling key (`CheckedArtifact.PlatformAppFillingKey`): the
+declaration identity of the app value filling each platform requirement, in
+declaration order, under the platform's requirement context. The relation key
+(`PlatformAppRelationKey`), which names the exact app module the pairing was
+made for, stays the cache identity of the paired platform's checked output,
+whose binding rows carry that app's own indices; but nothing that names
+generated code digests it. The paired platform's code-generation key, its
+declaration identities and the object-cache offers of requirement-reaching
+procedures digest the filling key instead, so an edit of the app that leaves
+the filling declarations' identities unchanged (a comment, a change to a
+declaration the filling values do not reach) leaves every platform procedure
+identity unchanged, and such a platform procedure is shared exactly as widely
+as the app declarations it reaches; every other platform procedure keeps one
 identity across apps.
 
 ### Read-Only Type Analysis
@@ -15057,9 +15067,23 @@ nominals in the request type by their declaration identity
 (`Type.Store.declarationDigestCached`, which takes the identities as an
 explicit `NominalDeclarations` argument: they are program data, never stored on
 a `TypeDef`). A pairing lowers its platform's bodies against one app, so its
-code-generation key joins every template identity it lowers. A definition whose
-references cannot all be named by declaration carries its artifact key, which
-only costs reuse.
+code-generation key, which digests the pairing's filling key, joins every
+template identity it lowers. A definition whose references cannot all be named
+by declaration carries its artifact key, which only costs reuse.
+
+Every function template, not only a keyed one, carries its evidence digested
+by declaration (`FnTemplate.evidence_declaration`,
+`fnEvidenceDeclarationDigest`), and a procedure's identity digests that form
+(`Lifted.Program.fnSourceDigest`): a procedure target by its template's
+identity, a local procedure target by the identity of the definition it is
+nested in and its position there, and a structural target or a checked
+structural edge by the identity of the type environment that derived it.
+Compile-time root storage initializers and static-data request thunks are
+named by the root's or the constant's declaration identity and its Monotype
+type. None of these digests a module key, so a lambda of the app, the
+specializations of imported functions whose callable sets hold it, and the
+restored values of the app's roots keep their identities across an edit that
+leaves their declarations alone.
 
 An edit to one definition therefore leaves the keys of everything that does not
 reach it unchanged, and the store keeps every revision's packs beside each
@@ -15120,10 +15144,36 @@ SpecConstr or lambda solving for the procedures they serve, because the identity
 is computed from their output; they remove Direct LIR body lowering, the LIR
 passes, ARC emission, static data and codegen for the served closures.
 
-Call variants a later pass derives (`arc-variant`, ReturnSlot and StrAppend
-clones) are never identity offers: the first are withheld with their base when
-demandable, the others hash a program-local index and are created after the
-identity point.
+A procedure a pass after Direct LIR derives from a template procedure is
+offered and served by identity too. An ARC ownership variant's identity is its
+base's with the demanded signature's content (`arc-variant`); a ReturnSlot or
+StrAppend clone's is its base's with the shape the clone is specialized to
+(`call-variant`: leading argument count, extra frame locals, and the content
+digest of the layout a return-slot clone stores through, or a fixed tag for
+the string accumulator). Both are functions of the base's identity and of
+content alone, so they name the same code in every program. Every derived
+procedure records the identity of the Direct LIR procedure it derives from
+through any chain of derivations (`LirProcSpec.derived_from`), and the writer
+offers it with that base's facts (demand, compile-time root reads, platform
+relation) and its own refcount signature, under the base's owner, whenever the
+base has an identity offer whose demand permits retirement and whose code
+evaluates no root in place; the base's own `rc_variant_demandable` withholding
+does not apply, since a variant is the demanded signature. A base compaction
+dropped keeps its identity offer without a procedure while a kept procedure
+derives from it, so the variants of a base nothing calls directly are still
+offered.
+
+The passes ask before deriving: ReturnSlot and StrAppend compute the clone's
+shape and identity without cloning, and ARC's variant table computes the
+variant identity before emitting (`body_clone.VariantCache`). A hit becomes an
+`external` stub at the signature the clone or variant would have, with the
+offer's refcount facts, and the base's body is not cloned or re-emitted for
+it. The storage such a hit needs is already declared: the served code
+materializes the roots the base's code does, through the wrappers this program
+defines for them, so the pass links the offer only when every root it names
+has a slot with a materializer wrapper here (`ServedRootStorage`), and marks
+those slots as read by a retired body so reachability keeps their wrappers
+when the base itself becomes unreachable.
 
 A compiler-generated body retains its own source key. A field-names iterator
 step, a structural parser or encoder runtime, and a
@@ -20133,7 +20183,13 @@ identity and its local by position in the procedure's frame. Under
 LIR fingerprint with program numbering canonicalized, by the key a pack
 serves it by, and the CLI suite checks that each offered key has one
 fingerprint across a build, an edited warm build, and the edited source's
-cold build.
+cold build. Under `ROC_IDENTITY_TRACE`, every procedure identity prints with
+the digests it is made of (the lifted function's source digest and its
+template, evidence and type components, the identity renderer's argument,
+result and capture digests, the declaration units of each checked module, and
+every named type, callable set member or field default the renderer could not
+name by declaration), so two builds' traces show which component an edit
+moved.
 
 ### Outcome-Conditioned Argument Restitution
 

@@ -337,6 +337,7 @@ pub fn runBorrowed(
     lowerer.keepLoweredSpecProcs();
     try lowerer.writeRuntimeSchemas();
     lowerer.result.finishExpectSites();
+    lowerer.result.platform_requirement_relation = if (solved.lifted.platform_requirement_filling) |filling| filling.relation else null;
 
     return lowerer.finish();
 }
@@ -3106,6 +3107,13 @@ const Lowerer = struct {
                 if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup identity {s} {s}\n", .{ &identity.symbolHex(), if (identity_hit) "hit" else if (!storage_declarable) "storage-miss" else "miss" });
             }
         }
+        if (pack_trace_available and std.c.getenv("ROC_IDENTITY_TRACE") != null) {
+            const trace_loc: base.SourceLoc = switch (source_fn.body) {
+                .roc => |body_id| self.solved.lifted.exprLoc(body_id),
+                .hosted => base.SourceLoc.none,
+            };
+            std.debug.print("proc-identity {s} fn={d} loc={d}:{d}:{d} abi={s} captures={d}\n", .{ &identity.symbolHex(), @backingInt(spec.source), trace_loc.file, trace_loc.line, trace_loc.column, @tagName(spec.abi), self.captureSpan(spec.captures).len });
+        }
         if (plain_spec) if (literal_producer) |root| if (root.recipe) |recipe| if (recipe.required_native_identity) |required| {
             if (!std.mem.eql(u8, &required, &identity.bytes)) Common.invariant("declared literal producer's prepared object identity differed from its recipe");
             const hit = cached orelse Common.invariant("retired literal-bearing consumer has no declared native producer object");
@@ -3221,6 +3229,7 @@ const Lowerer = struct {
         if (identity_contract and (source_fn.body == .roc or cached != null)) {
             try self.result.identity_offers.append(self.allocator, .{
                 .proc = proc,
+                .identity = identity,
                 .owner = if (source_fn.source) |template| checkedSpecOwner(template) else null,
                 .platform_requirement_relation = dependency_relation,
                 .demand = try self.cachedDemand(spec.source),

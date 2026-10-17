@@ -1756,6 +1756,14 @@ pub const LirProcSpec = struct {
     /// only the base signature and no body, so a proc with this bit set is
     /// never offered as one.
     rc_variant_demandable: bool = false,
+    /// The identity of the Direct LIR procedure this one was derived from by
+    /// a pass after Direct LIR, through any chain of ownership variants and
+    /// call variants. A derived procedure's identity is derived from the
+    /// base's, and its code reads what the base's does, so the object cache
+    /// offers and serves it with the base's facts (design.md "Identity
+    /// Offers"). Named by identity, not by procedure, so compaction can drop
+    /// the base.
+    derived_from: ?ProcIdentity = null,
 };
 
 test "Symbol size and alignment" {

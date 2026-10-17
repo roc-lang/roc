@@ -1239,11 +1239,37 @@ pub const Program = struct {
         writeIdentityBytes(&hasher, if (fn_.iterator_fusion_scope) "iterator-fusion" else "plain");
         // The app procedure a platform requirement resolves to is chosen by
         // the app, not by this function's source or types.
-        if (try self.fnReachesPlatformRequirement(fn_id)) {
+        const reaches_requirement = try self.fnReachesPlatformRequirement(fn_id);
+        if (reaches_requirement) {
             writeIdentityBytes(&hasher, "platform-requirement");
             hasher.update(&self.platform_requirement_filling.?.relation);
         }
-        return hasher.finalResult();
+        const digest = hasher.finalResult();
+        if (@import("builtin").os.tag != .freestanding and std.c.getenv("ROC_IDENTITY_TRACE") != null) {
+            var parts: [4][8]u8 = @splat(@splat(0));
+            if (fn_.source) |template| {
+                var h = TypeDigestHasher.init();
+                writeFnDefDigest(&h, &self.names, &self.declarations, template.fn_def);
+                parts[0] = h.finalResult()[0..8].*;
+                parts[1] = (if (template.evidence_declaration) |evidence| evidence.bytes else template.evidence_digest.bytes)[0..8].*;
+                parts[2] = self.types.declarationDigestCached(&self.names, template.mono_fn_ty, self.declarations.nominalDeclarations(), null).bytes[0..8].*;
+                if (Mono.generatedBodyKey(template)) |body_key| parts[3] = body_key.bytes[0..8].*;
+            }
+            std.debug.print("fn-source fn={d} kind={s} template={s} evidence={s}{s} mono={s} generated={s} clone={s} fusion={} requirement={} => {s}\n", .{
+                @backingInt(fn_id),
+                if (fn_.source) |template| @tagName(template.fn_def) else "root",
+                std.fmt.bytesToHex(parts[0], .lower),
+                if (fn_.source) |template| (if (template.evidence_declaration != null) "decl:" else "digest:") else "",
+                std.fmt.bytesToHex(parts[1], .lower),
+                std.fmt.bytesToHex(parts[2], .lower),
+                std.fmt.bytesToHex(parts[3], .lower),
+                if (fn_.spec_constr_pattern) |pattern| std.fmt.bytesToHex(pattern.bytes[0..8], .lower) else @as([16]u8, "none            ".*),
+                fn_.iterator_fusion_scope,
+                reaches_requirement,
+                std.fmt.bytesToHex(digest[0..8], .lower),
+            });
+        }
+        return digest;
     }
 
     /// Whether a function's code reaches a value filling a platform
