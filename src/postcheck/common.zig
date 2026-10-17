@@ -409,9 +409,6 @@ pub const SpecCacheHit = struct {
     /// the hit demands them as if it had lowered the body (design.md
     /// "Demand-Driven Compile-Time Evaluation").
     comptime_root_reads: []const ComptimeRootRead = &.{},
-    /// Producer-owned reachability summary: null means independent of app
-    /// filling; otherwise the code requires this exact platform/app relation.
-    platform_requirement_relation: ?[32]u8 = null,
     rc_borrowed_params: u64,
     rc_ret_borrowed: bool,
     rc_ret_lenders: u64,
@@ -422,6 +419,17 @@ pub const SpecCacheHit = struct {
     rc_ret_conditions: []const u32,
 };
 
+/// The object-cache key of a procedure served by its identity alone: a
+/// specialization whose request mentions functions, so no reservation-time
+/// key names it, is looked up once Lambda Mono has decided its identity
+/// (design.md "Object Cache Store").
+pub fn procIdentityCacheKey(identity: [32]u8) [32]u8 {
+    var hasher = base.Sha256.init(.{});
+    hasher.update("roc.object-cache.proc-identity.v1");
+    hasher.update(&identity);
+    return hasher.finalResult();
+}
+
 /// The object cache's answer for a specialization key, asked when Monotype
 /// reserves the specialization and before its body exists. The consumer that
 /// owns the cache supplies the context and the lookup.
@@ -429,7 +437,7 @@ pub const SpecCacheLookup = struct {
     context: *anyopaque,
     /// `accept_linked`: whether the asking consumer's code is linked, so a
     /// linked-object entry (`SpecCacheHit.c_abi_entry`) can serve it.
-    find: *const fn (context: *anyopaque, key: [32]u8, current_relation: ?[32]u8, accept_linked: bool) ?SpecCacheHit,
+    find: *const fn (context: *anyopaque, key: [32]u8, accept_linked: bool) ?SpecCacheHit,
 
     /// Session capability identity, not a persistent cache key. Equal providers
     /// expose the same immutable offer and artifact collection to both readers.
@@ -437,7 +445,7 @@ pub const SpecCacheLookup = struct {
         return self.context == other.context and self.find == other.find;
     }
 
-    pub fn lookup(self: SpecCacheLookup, key: [32]u8, current_relation: ?[32]u8, accept_linked: bool) ?SpecCacheHit {
-        return self.find(self.context, key, current_relation, accept_linked);
+    pub fn lookup(self: SpecCacheLookup, key: [32]u8, accept_linked: bool) ?SpecCacheHit {
+        return self.find(self.context, key, accept_linked);
     }
 };
