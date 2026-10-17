@@ -7655,7 +7655,11 @@ from the target, backend, symbol names, builtin names, or emitted code. The mode
 changes optimization work, not source meaning or the stage route.
 
 Monotype Lifted closure lifting outputs complete function capture slots and
-function-reference/direct-call operands. When `.none` skips SpecConstr, the
+function-reference/direct-call operands. A call whose function is a function
+definition written as its callee, such as `x |> (|a| a + n)`, is lifted as a
+direct call to that function with the definition's capture values as its
+capture operands, evaluated before the arguments; it constructs no function
+value. When `.none` skips SpecConstr, the
 pipeline consumes that output directly and must not repeat capture analysis.
 SpecConstr can change free-variable use while cloning and rewriting function
 bodies, so SpecConstr owns one exact capture finalization before it returns its
@@ -7671,8 +7675,8 @@ reconstruct uses from emitted code. Lambda Solved does not change the lifted
 expression graph, so function ids and use counts remain exact across that
 boundary.
 
-The solved inline plan admits capture-free functions with exactly one non-cold
-external direct call and no function-value or root uses. A single call-site proof
+The solved inline plan admits functions with exactly one non-cold external
+direct call and no function-value or root uses. A single call-site proof
 permits ordinary statements, branches, local loops, and typed join points because
 lowering the body once cannot duplicate stored code. That proof follows the
 unique call's owning functions through the selected inline plan. If an owning
@@ -7686,7 +7690,10 @@ Solved-to-LIR lowering only substitutes arguments and dumbly lowers a selected
 body at its unique call site. An argument that is a plain read of a caller
 lexical binding at the parameter's exact type and committed layout binds the
 parameter to that caller local itself; every other argument is evaluated into
-a fresh temp as for a call. The inlined body writes no caller local other than
+a fresh temp as for a call. Captures are substituted the same way: each capture
+operand of the call is evaluated, before the arguments as a capture record
+would be, and bound to the callee's capture local, so an inlined call builds no
+capture record. The inlined body writes no caller local other than
 the call's result target, which is excluded, so the substituted local holds
 the argument value for the whole body. A snapshot temp would instead be a
 second name bound before the body's branches: when the caller keeps the
@@ -7702,9 +7709,15 @@ source calls at exactly one site and never uses as a value, among those no
 other module can call: promoted local procedures, and source definitions that
 are neither exposed nor methods, since another module can dispatch to any
 method (`CheckedProcedureTemplateTable.single_source_call_templates`).
-Monotype stamps the flag on each function template, and a capture-free body
-without a procedure-relative return that has it is a source-single-use
-candidate. Every call to it in any program is that one site, lowered in some
+A nested function site qualifies the same way
+(`NestedProcSite.single_source_call`): its expression is the function of a
+call, or the whole value of a non-recursive binding of one name whose only
+reference is the function of a call. A site inside a defaulted-field
+expression never qualifies, since that expression is lowered at every
+construction site that omits its field.
+Monotype stamps the flag on each function template, and a body without a
+procedure-relative return that has it is a source-single-use candidate,
+whether or not it captures. Every call to it in any program is that one site, lowered in some
 specialization of the function containing it, so lowering inlines the call
 wherever the function it is lowering is not a wrapper: a wrapper body can be
 lowered more than once into one procedure, which a body with its own locals

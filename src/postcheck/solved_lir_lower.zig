@@ -2196,7 +2196,7 @@ const Lowerer = struct {
                 .call_proc => |call| {
                     const callee = Lifted.directCallee(call).local;
                     const target = try l.ensureOwnFnSpec(callee, .finite);
-                    try self.prepareCall(target, call.is_cold);
+                    try self.prepareCall(target, call.is_cold, .direct);
                     try self.addExprs(call.args);
                     for (view.captureOperandSpan(call.captures)) |capture| try self.add(.{ .expr = capture.value });
                     // A call can be lowered at an inherited destination type,
@@ -2221,7 +2221,7 @@ const Lowerer = struct {
                     if (content == .callable) {
                         const variants = l.types.fnVariantSpan(content.callable);
                         for (0..variants.len) |index| {
-                            try self.prepareCall(GuardedList.at(variants, index).target, false);
+                            try self.prepareCall(GuardedList.at(variants, index).target, false, .callable_variant);
                         }
                     }
                 },
@@ -2319,10 +2319,16 @@ const Lowerer = struct {
             }
         }
 
-        fn prepareCall(self: *WorkerPreparation, target: Type.FnId, is_cold: bool) Common.LowerError!void {
+        /// How a prepared call reaches its target. Lowering inlines a
+        /// capturing target only at a direct call, which supplies each
+        /// capture value; a callable variant passes its capture payload.
+        const PreparedCallKind = enum { direct, callable_variant };
+
+        fn prepareCall(self: *WorkerPreparation, target: Type.FnId, is_cold: bool, kind: PreparedCallKind) Common.LowerError!void {
             try self.add(.{ .proc = target });
             const spec = self.lowerer.fn_specs.items[@backingInt(target)];
-            if (spec.abi == .finite and spec.capture_ty == null and !is_cold and !spec.return_reuse.enabled()) {
+            const captures_allowed = kind == .direct or spec.capture_ty == null;
+            if (spec.abi == .finite and captures_allowed and !is_cold and !spec.return_reuse.enabled()) {
                 if (try self.lowerer.inlineBodyForKnownCall(target, null)) |body| try self.add(.{ .expr = body });
             }
         }
@@ -6095,6 +6101,12 @@ const Lowerer = struct {
         capture_arg: ?LIR.LocalId,
         is_cold: bool,
         next: LIR.CFStmtId,
+        /// Owned. The capture values of a call the inline plan selected, in
+        /// the callee's capture order. They are evaluated before the
+        /// arguments, as a capture record would be, and bound to the
+        /// callee's capture locals instead of being packed into one.
+        capture_values: []Lifted.ExprId = &.{},
+        /// The capture value types, then the argument types.
         arg_tys: []Type.TypeId = &.{},
         lowered: ?LoweredExprLocals = null,
         /// The argument positions an inlined call bound directly to the
@@ -6108,9 +6120,12 @@ const Lowerer = struct {
         callee: Type.FnId,
         /// Owned.
         arg_locals: []LIR.LocalId,
+        /// Owned. One local per callee capture, in capture order.
+        capture_locals: []LIR.LocalId,
         body_expr: Lifted.ExprId,
         next: LIR.CFStmtId,
-        /// The bindings the callee's arguments shadowed, once installed.
+        /// The bindings the callee's arguments and captures shadowed, once
+        /// installed.
         saved: ?[]?LIR.LocalId = null,
     };
 
@@ -6559,6 +6574,8 @@ const Lowerer = struct {
             .known_call => |*task| {
                 self.allocator.free(task.args);
                 task.args = &.{};
+                self.allocator.free(task.capture_values);
+                task.capture_values = &.{};
                 self.allocator.free(task.arg_tys);
                 task.arg_tys = &.{};
                 if (task.lowered) |lowered| lowered.deinit(self.allocator);
@@ -6570,6 +6587,8 @@ const Lowerer = struct {
                 self.restoreInlineCallArgs(task);
                 self.allocator.free(task.arg_locals);
                 task.arg_locals = &.{};
+                self.allocator.free(task.capture_locals);
+                task.capture_locals = &.{};
             },
             .callable_call => |*task| {
                 self.allocator.free(task.variants);
@@ -7939,6 +7958,28 @@ const Lowerer = struct {
             } } };
         }
         if (capture_items.len != task.capture_operands.len) Common.invariant("direct call capture operand count differed from callee capture count");
+        if (!task.is_cold and return_reuse == .none) {
+            if (try self.inlineBodyForKnownCall(task.target_fn, task.where.owner) != null) {
+                const capture_values = try self.allocator.alloc(Lifted.ExprId, capture_items.len);
+                errdefer self.allocator.free(capture_values);
+                for (capture_items, task.capture_operands, capture_values) |capture, operand, *value| {
+                    const capture_id = capture.capture_id orelse Common.invariant("member capture had no CaptureId");
+                    if (operand.id != capture_id) Common.invariant("capture operand CaptureId did not match its member capture slot");
+                    value.* = operand.value;
+                }
+                return .{ .tail = .{ .known_call = .{
+                    .where = task.where,
+                    .target = task.target,
+                    .result_ty = task.result_ty,
+                    .callee = task.target_fn,
+                    .args = args,
+                    .capture_arg = null,
+                    .is_cold = false,
+                    .next = task.next,
+                    .capture_values = capture_values,
+                } } };
+            }
+        }
         task.capture_ty = self.fn_entries.items[@backingInt(task.target_fn)].spec.capture_ty orelse
             Common.invariant("capturing direct call target had no capture record type");
         task.capture_local = try self.addTemp(task.capture_ty);
@@ -7963,8 +8004,24 @@ const Lowerer = struct {
         const callee = task.callee;
         const where = task.where;
         const target = task.target;
-        task.arg_tys = try self.lowerFnSpecArgTypes(callee);
-        task.lowered = try self.lowerExprsToTempsAtTypes(task.args, task.arg_tys);
+        const capture_count = task.capture_values.len;
+        if (capture_count == 0) {
+            task.arg_tys = try self.lowerFnSpecArgTypes(callee);
+            task.lowered = try self.lowerExprsToTempsAtTypes(task.args, task.arg_tys);
+        } else {
+            const arg_tys = try self.lowerFnSpecArgTypes(callee);
+            defer self.allocator.free(arg_tys);
+            const capture_fields = self.capturedFieldsOfSpec(callee);
+            if (capture_fields.len != capture_count) Common.invariant("inlined call capture value count differed from callee capture count");
+            task.arg_tys = try self.allocator.alloc(Type.TypeId, capture_count + arg_tys.len);
+            for (task.arg_tys[0..capture_count], 0..) |*ty, i| ty.* = GuardedList.at(capture_fields, i).ty;
+            @memcpy(task.arg_tys[capture_count..], arg_tys);
+            const values = try self.allocator.alloc(Lifted.ExprId, capture_count + task.args.len);
+            defer self.allocator.free(values);
+            @memcpy(values[0..capture_count], task.capture_values);
+            @memcpy(values[capture_count..], task.args);
+            task.lowered = try self.lowerExprsToTempsAtTypes(values, task.arg_tys);
+        }
         const lowered = task.lowered.?;
 
         const callee_ret_ty = self.fn_entries.items[@backingInt(callee)].ret;
@@ -8000,18 +8057,22 @@ const Lowerer = struct {
                     substituted[i] = source != null;
                     if (source) |local| lowered.ids[i] = local;
                 }
-                const arg_locals = try self.allocator.dupe(LIR.LocalId, lowered.ids);
+                const capture_locals = try self.allocator.dupe(LIR.LocalId, lowered.ids[0..capture_count]);
+                errdefer self.allocator.free(capture_locals);
+                const arg_locals = try self.allocator.dupe(LIR.LocalId, lowered.ids[capture_count..]);
                 frame.cursor = 1;
                 return .{ .call = .{ .inline_call = .{
                     .where = where,
                     .target = call_target,
                     .callee = callee,
                     .arg_locals = arg_locals,
+                    .capture_locals = capture_locals,
                     .body_expr = body_expr,
                     .next = after_call,
                 } } };
             }
         }
+        if (capture_count != 0) Common.invariant("a call with capture values was not inlined");
 
         const extra_arg_count = @as(usize, @intFromBool(task.capture_arg != null)) +
             @as(usize, @intFromBool(has_return_reuse));
@@ -8048,7 +8109,6 @@ const Lowerer = struct {
         }
         const spec = self.fn_specs.items[@backingInt(task.callee)];
         if (spec.abi != .finite) Common.invariant("attempted to inline a non-finite function spec");
-        if (spec.capture_ty != null) Common.invariant("attempted to inline a capturing function spec");
 
         const source_fn = self.solved.lifted.getFn(spec.source);
         const fn_content = self.solved.types.rootContent(spec.solved_fn_ty);
@@ -8058,14 +8118,16 @@ const Lowerer = struct {
         const lifted_args = self.solved.lifted.typedLocalSpan(source_fn.args);
         if (solved_args.len != lifted_args.len) Common.invariant("direct Lambda Mono function arity changed after Lambda Solved");
         if (task.arg_locals.len != lifted_args.len) Common.invariant("inline call argument count differed from function arity");
+        const captures = self.captureSpan(spec.captures);
+        if (task.capture_locals.len != captures.len) Common.invariant("inline call capture count differed from function captures");
 
-        const saved = try self.allocator.alloc(?LIR.LocalId, lifted_args.len);
+        const saved = try self.allocator.alloc(?LIR.LocalId, lifted_args.len + captures.len);
         errdefer self.allocator.free(saved);
         for (0..lifted_args.len) |i| {
-            const arg = GuardedList.at(lifted_args, i);
-            const entry = try self.local_map.getOrPut(arg.local);
-            saved[i] = if (entry.found_existing) entry.value_ptr.* else null;
-            entry.value_ptr.* = task.arg_locals[i];
+            saved[i] = try self.shadowLocal(GuardedList.at(lifted_args, i).local, task.arg_locals[i]);
+        }
+        for (0..captures.len) |i| {
+            saved[lifted_args.len + i] = try self.shadowLocal(GuardedList.at(captures, i).local, task.capture_locals[i]);
         }
         task.saved = saved;
 
@@ -8078,21 +8140,51 @@ const Lowerer = struct {
         return .{ .call = exprTask(callee_parent, task.target, task.body_expr, null, task.next) };
     }
 
-    /// Put back the bindings an inlined call's arguments shadowed.
+    /// Put back the bindings an inlined call's arguments and captures
+    /// shadowed, in the reverse of the order they were installed.
     fn restoreInlineCallArgs(self: *Lowerer, task: *InlineCallTask) void {
         const saved = task.saved orelse return;
         const spec = self.fn_specs.items[@backingInt(task.callee)];
         const lifted_args = self.solved.lifted.typedLocalSpan(self.solved.lifted.getFn(spec.source).args);
-        for (0..lifted_args.len) |i| {
-            const arg = GuardedList.at(lifted_args, i);
-            if (saved[i]) |previous| {
-                self.local_map.getPtr(arg.local).?.* = previous;
-            } else {
-                _ = self.local_map.remove(arg.local);
-            }
+        const captures = self.captureSpan(spec.captures);
+        var i = captures.len;
+        while (i > 0) {
+            i -= 1;
+            self.restoreShadowedLocal(GuardedList.at(captures, i).local, saved[lifted_args.len + i]);
+        }
+        i = lifted_args.len;
+        while (i > 0) {
+            i -= 1;
+            self.restoreShadowedLocal(GuardedList.at(lifted_args, i).local, saved[i]);
         }
         self.allocator.free(saved);
         task.saved = null;
+    }
+
+    /// Bind `local` to `value`, returning the binding it shadows.
+    fn shadowLocal(self: *Lowerer, local: Lifted.LocalId, value: LIR.LocalId) std.mem.Allocator.Error!?LIR.LocalId {
+        const entry = try self.local_map.getOrPut(local);
+        const previous = if (entry.found_existing) entry.value_ptr.* else null;
+        entry.value_ptr.* = value;
+        return previous;
+    }
+
+    fn restoreShadowedLocal(self: *Lowerer, local: Lifted.LocalId, previous: ?LIR.LocalId) void {
+        if (previous) |binding| {
+            self.local_map.getPtr(local).?.* = binding;
+        } else {
+            _ = self.local_map.remove(local);
+        }
+    }
+
+    /// The capture record fields of a capturing specialization, in capture
+    /// order.
+    fn capturedFieldsOfSpec(self: *const Lowerer, fn_id: Type.FnId) @TypeOf(self.types.captureFieldSpan(undefined)) {
+        const capture_ty = self.fn_specs.items[@backingInt(fn_id)].capture_ty orelse
+            Common.invariant("capturing specialization had no capture record type");
+        const content = self.types.get(capture_ty);
+        if (content != .capture_record) Common.invariant("function capture argument was not a capture record");
+        return self.types.captureFieldSpan(content.capture_record);
     }
 
     fn valueCallStep(
@@ -9929,7 +10021,6 @@ const Lowerer = struct {
         const body_expr = self.inline_plan.bodyForCall(spec.source, owner) orelse return null;
 
         if (spec.abi != .finite) Common.invariant("inline plan selected a non-finite function spec");
-        if (spec.capture_ty != null) Common.invariant("inline plan selected a capturing function spec");
 
         return body_expr;
     }

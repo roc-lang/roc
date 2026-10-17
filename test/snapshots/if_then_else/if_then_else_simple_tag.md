@@ -45,7 +45,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+if (Bool.True) Ok(0) else Err(1)
 ~~~
 # CANONICALIZE
 ~~~clojure

@@ -11525,7 +11525,12 @@ const Builder = struct {
     fn singleSourceCall(self: *Builder, template: Ast.FnTemplate) bool {
         const checked_template = switch (template.fn_def) {
             .local_template, .imported_template => |checked_template| checked_template,
-            .nested, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => return false,
+            .nested => |nested| {
+                if (nested.default_root != null) return false;
+                const view = self.moduleForDigest(names.procTemplateModuleDigest(nested.owner));
+                return view.nested_proc_sites.sites[@backingInt(nested.site)].single_source_call;
+            },
+            .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => return false,
         };
         const view = self.moduleForDigest(names.procTemplateModuleDigest(checked_template));
         return view.templates.templateHasSingleSourceCall(checked_template.template);
