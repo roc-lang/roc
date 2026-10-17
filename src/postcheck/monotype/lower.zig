@@ -27337,7 +27337,7 @@ const BodyContext = struct {
         const input_arena = &expansion.input_arena;
         const holes = try self.parametricRequestHoles(input_arena.allocator(), template_ref, callee_view, &template, edge.subst);
         const hole_classes = try input_arena.allocator().alloc(?NodeId, holes.nodes.len);
-        const input = try InterfaceConstraints.captureWithHoles(self.graph, input_arena.allocator(), request_roots.items, holes.nodes, hole_classes);
+        const input = try InterfaceConstraints.captureRequestWithHoles(self.graph, input_arena.allocator(), request_roots.items, holes.nodes, hole_classes);
         for (hole_classes) |hole_class| if (hole_class != null) {
             self.builder.count("interface_parametric_requests");
             break;
@@ -52188,7 +52188,7 @@ const BodyContext = struct {
 
         var scratch = self.graph.acquireArena();
         defer self.graph.releaseArena(scratch);
-        const input = try InterfaceConstraints.capture(self.graph, scratch.allocator(), roots.items);
+        const input = try InterfaceConstraints.captureRequest(self.graph, scratch.allocator(), roots.items);
         const shape = try input.identityInto(self.graph, scratch.allocator());
         const request_bytes = try scratch.allocator().alloc(u8, shape.bytes.len + subst.len);
         @memcpy(request_bytes[0..shape.bytes.len], shape.bytes);
@@ -52311,7 +52311,7 @@ const BodyContext = struct {
             },
             .checked_error => {},
         };
-        const input = try InterfaceConstraints.capture(self.graph, scratch.allocator(), input_roots);
+        const input = try InterfaceConstraints.captureRequest(self.graph, scratch.allocator(), input_roots);
         const request = try input.identityInto(self.graph, scratch.allocator());
         // This relation consumes only the selected checked signature, not its
         // nested dispatch evidence. Its source identity, substitution, and

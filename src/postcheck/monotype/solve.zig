@@ -492,21 +492,45 @@ pub const InterfaceConstraints = struct {
         }
     };
 
+    /// Capture the constraints a relation produced over `roots`, including
+    /// the finished-type witness of each open class.
     pub fn capture(graph: *InstGraph, allocator: Allocator, roots: []const NodeId) Allocator.Error!InterfaceConstraints {
-        return try captureWithHoles(graph, allocator, roots, &.{}, &.{});
+        return try captureRoots(graph, allocator, roots, &.{}, &.{}, .record);
     }
 
-    /// Capture `roots` with each representation-neutral class in `holes`
-    /// recorded as an unconstrained variable. `hole_classes[i]` receives the
-    /// class a hole stood for, or null when `holes[i]` carries representation
-    /// authority and was captured as itself. Structure reaching a hole stays
-    /// open rather than settling.
-    pub fn captureWithHoles(
+    /// Capture a request's input interface. An open class's finished-type
+    /// witness says how the requester's graph reached the class, not what
+    /// the request constrains, so the input omits it.
+    pub fn captureRequest(graph: *InstGraph, allocator: Allocator, roots: []const NodeId) Allocator.Error!InterfaceConstraints {
+        return try captureRoots(graph, allocator, roots, &.{}, &.{}, .omit);
+    }
+
+    /// Capture a request's input interface, as `captureRequest` does, with
+    /// each representation-neutral class in `holes` recorded as an
+    /// unconstrained variable. `hole_classes[i]` receives the class a hole
+    /// stood for, or null when `holes[i]` carries representation authority
+    /// and was captured as itself. Structure reaching a hole stays open
+    /// rather than settling.
+    pub fn captureRequestWithHoles(
         graph: *InstGraph,
         allocator: Allocator,
         roots: []const NodeId,
         holes: []const NodeId,
         hole_classes: []?NodeId,
+    ) Allocator.Error!InterfaceConstraints {
+        return try captureRoots(graph, allocator, roots, holes, hole_classes, .omit);
+    }
+
+    /// Whether a capture records each open class's finished-type witness.
+    const FinishedWitnesses = enum { record, omit };
+
+    fn captureRoots(
+        graph: *InstGraph,
+        allocator: Allocator,
+        roots: []const NodeId,
+        holes: []const NodeId,
+        hole_classes: []?NodeId,
+        finished_witnesses: FinishedWitnesses,
     ) Allocator.Error!InterfaceConstraints {
         std.debug.assert(holes.len == hole_classes.len);
         @memset(hole_classes, null);
@@ -541,6 +565,7 @@ pub const InterfaceConstraints = struct {
             .holes = hole_roots,
             .hole_positions = hole_positions,
             .hole_classes = hole_classes,
+            .finished_witnesses = finished_witnesses,
             .node_ids = scratch.node_ids,
             .kind_ids = scratch.kind_ids,
             .shareable = scratch.shareable,
@@ -1096,6 +1121,7 @@ pub const InterfaceConstraints = struct {
         /// `hole_scan_limit` of them.
         hole_positions: ?*const collections.DenseMapUnmanaged(NodeId, u32) = null,
         hole_classes: []?NodeId = &.{},
+        finished_witnesses: FinishedWitnesses,
 
         const hole_scan_limit = 16;
 
@@ -1281,7 +1307,12 @@ pub const InterfaceConstraints = struct {
             captured.forced_dynamic = membership.forced_dynamic;
             captured.constructor_evidence = self.graph.requestPropagatesConstructorEvidence(raw);
             captured.private_backing = self.graph.private_backing_roots.items[@backingInt(root)];
-            if (self.graph.classFinishedMono(root)) |ty| captured.finished = try self.retained.sealType(ty);
+            switch (self.finished_witnesses) {
+                .record => if (self.graph.classFinishedMono(root)) |ty| {
+                    captured.finished = try self.retained.sealType(ty);
+                },
+                .omit => {},
+            }
             if ((try self.graph.content(root)) == .named and self.graph.related_named_instances.contains(root)) {
                 const named = (try self.graph.content(root)).named;
                 const next_group: u32 = @intCast(self.related_ids.count());
@@ -14223,9 +14254,9 @@ test "interface constraints capture representation-neutral holes as variables" {
     const str_list = try graph.newNode(.{ .list = str_node });
 
     var u8_classes: [1]?NodeId = undefined;
-    const u8_constraints = try InterfaceConstraints.captureWithHoles(graph, graph.arena(), &.{ u8_list, u8_node }, &.{u8_node}, &u8_classes);
+    const u8_constraints = try InterfaceConstraints.captureRequestWithHoles(graph, graph.arena(), &.{ u8_list, u8_node }, &.{u8_node}, &u8_classes);
     var str_classes: [1]?NodeId = undefined;
-    const str_constraints = try InterfaceConstraints.captureWithHoles(graph, graph.arena(), &.{ str_list, str_node }, &.{str_node}, &str_classes);
+    const str_constraints = try InterfaceConstraints.captureRequestWithHoles(graph, graph.arena(), &.{ str_list, str_node }, &.{str_node}, &str_classes);
     try std.testing.expect(u8_classes[0] != null);
     try std.testing.expect(str_classes[0] != null);
     // Requests that differ only in a hole's settled instantiation share one identity.
@@ -14244,7 +14275,7 @@ test "interface constraints capture representation-neutral holes as variables" {
     graph.private_backing_roots.items[@backingInt(private_node)] = true;
     const private_list = try graph.newNode(.{ .list = private_node });
     var private_classes: [1]?NodeId = undefined;
-    const private_constraints = try InterfaceConstraints.captureWithHoles(graph, graph.arena(), &.{ private_list, private_node }, &.{private_node}, &private_classes);
+    const private_constraints = try InterfaceConstraints.captureRequestWithHoles(graph, graph.arena(), &.{ private_list, private_node }, &.{private_node}, &private_classes);
     try std.testing.expect(private_classes[0] == null);
     try std.testing.expect(!try (try private_constraints.identity(graph)).eql(try u8_constraints.identity(graph), &types, &name_store));
 }
@@ -14360,6 +14391,41 @@ test "interface constraints preserve finalized private representation witnesses"
     const replayed = (try constraints.instantiate(graph))[0];
     try std.testing.expect(try graph.containsFinishedMono(replayed));
     try std.testing.expect(!graph.sameClass(imported, replayed));
+}
+
+test "interface request identity omits finished witnesses of open classes" {
+    const allocator = std.testing.allocator;
+    var types = Type.Store.init(allocator);
+    defer types.deinit();
+    var name_store = names.NameStore.init(allocator);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(allocator, &types, &name_store);
+    defer graph.destroy();
+    const private = try graph.newNode(try graph.namedContent(.{
+        .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1) },
+        .def = .{
+            .module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xC4)))),
+            .type_name = try name_store.internTypeName("RequestedPrivate"),
+        },
+        .kind = .@"opaque",
+        .builtin_owner = null,
+        .args = &.{},
+        .backing = .{ .node = try graph.newNode(.empty_record), .use = .runtime_layout_only, .authority = .generated_private },
+    }));
+    var retained = GraphTypeFinals.initRetainedTypeView(graph);
+    defer retained.deinit();
+    const imported = try graph.importMono(try retained.sealType(try graph.activeTypeViewForNode(private)));
+    try std.testing.expect(try graph.containsFinishedMono(imported));
+    try std.testing.expect(!try graph.containsFinishedMono(private));
+
+    const live_request = try InterfaceConstraints.captureRequest(graph, graph.arena(), &.{private});
+    const imported_request = try InterfaceConstraints.captureRequest(graph, graph.arena(), &.{imported});
+    try std.testing.expect(try (try live_request.identity(graph)).eql(try imported_request.identity(graph), &types, &name_store));
+    const detached = (try imported_request.instantiate(graph))[0];
+    try std.testing.expect(!try graph.containsFinishedMono(detached));
+
+    const produced = try InterfaceConstraints.capture(graph, graph.arena(), &.{imported});
+    try std.testing.expect(!try (try produced.identity(graph)).eql(try imported_request.identity(graph), &types, &name_store));
 }
 
 test "interface constraints keep cycles open when a later edge reaches a variable" {

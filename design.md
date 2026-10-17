@@ -13664,6 +13664,23 @@ preceding explicit relations. Applying defaults is never part of cache identity.
 Digests select buckets; exact input constraints and evidence are the collision
 authorities.
 
+A request's input omits the finished-type witness of every open class. The
+witness records how the requesting graph reached a class, not what the request
+constrains: a body lowered at its sealed request imports every cell of its root
+from a finished Monotype, while the expansion that reached the same callee
+inside that body's caller related live cells of identical structure. Requests
+that differ only in witnesses therefore share one input identity and one
+summary, and expansion runs on detached inputs that carry none. Relating a
+summary back leaves each request cell's own witness in place, so replay and
+fresh expansion agree. A witness that expansion itself attaches to a class is
+part of its output constraints and is replayed like any other. Keying on input
+witnesses would make every body on a call chain re-expand the transitive
+interfaces its caller's expansion already summarized, and a witness on
+structure enclosing a parametric hole would carry the hole's contents into the
+identity. The pins are the monotype capture test "interface request identity
+omits finished witnesses of open classes" and the compile test "interface
+summaries from a caller's expansion serve the callee's own body".
+
 A Roc template without evidence parameters cannot dispatch on its quantified
 variables, so its interface relates a quantified variable only by unification
 when every occurrence of that variable in its checked function type is a value
