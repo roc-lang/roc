@@ -596,6 +596,15 @@ recently used persistent cache files of every family until the cache fits
 `CacheConfig.max_size_mb`. Eviction only deletes files; it never changes what
 a build writes.
 
+A pack's line entries index the pack's own source-file table, which names
+each file by its module's content identity in the order the lines first use
+it. Splicing binds each to the receiving program's file for the same module
+identity, so DWARF line programs cover spliced procedures exactly as they do
+compiled ones. A procedure can be served across an edit of its module, since
+its identity does not depend on where it sits in the file; its lines then name
+a module version the program does not have, and they are not emitted rather
+than misattributed.
+
 ### Read-Only Type Analysis
 
 Read-only type analysis must not use permanent solver allocation as scratch.
