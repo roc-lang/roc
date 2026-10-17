@@ -2754,6 +2754,16 @@ fn closedResultRowOrNull(view: ModuleView, checked_fn_root: checked.CheckedTypeI
     }
 }
 
+/// Whether two tag spans list the same labels in the same order, each at
+/// the same payload arity.
+fn sameTagLabels(left: []const InstTag, right: []const InstTag) bool {
+    if (left.len != right.len) return false;
+    for (left, right) |left_tag, right_tag| {
+        if (left_tag.name != right_tag.name or left_tag.payloads.len != right_tag.payloads.len) return false;
+    }
+    return true;
+}
+
 fn graphTagByName(
     tags: []const InstTag,
     name: names.TagNameId,
@@ -27070,6 +27080,11 @@ const BodyContext = struct {
         ops_start: usize,
         next: usize,
         results_start: usize,
+        /// The checked tags when the checked row is closed and every one of
+        /// its tags is in the produced closed row: the
+        /// children relate the checked tags' payloads, and the witness is
+        /// the checked row (`includedRowPayloadOps`).
+        included_tags: ?[]const InstTag = null,
     };
 
     /// Relate a checked node to the value actually produced, returning the
@@ -27118,7 +27133,14 @@ const BodyContext = struct {
             }
 
             _ = frames.pop();
-            const witness = if (failed) null else try self.buildProducedValueWitness(frame, results.items[frame.results_start..]);
+            const witness = if (failed)
+                null
+            else if (frame.included_tags) |checked_tags|
+                try self.buildIncludedRowWitness(frame.checked_node, checked_tags, results.items[frame.results_start..])
+            else if (self.childWitnessesAreChecked(ops.items[frame.ops_start..], results.items[frame.results_start..]))
+                frame.checked_node
+            else
+                try self.buildProducedValueWitness(frame, results.items[frame.results_start..]);
             ops.shrinkRetainingCapacity(frame.ops_start);
             results.shrinkRetainingCapacity(frame.results_start);
             const checked_root = self.graph.rootNode(frame.checked_node);
@@ -27177,6 +27199,7 @@ const BodyContext = struct {
         if (try self.producedPairCompletesRequest(checked_root, produced_root, completions)) return produced_node;
 
         const ops_start = ops.items.len;
+        var included_tags: ?[]const InstTag = null;
         const matched: bool = matched: {
             const checked_content = (try self.graph.content(checked_root));
             const produced_content = (try self.graph.content(produced_root));
@@ -27236,7 +27259,10 @@ const BodyContext = struct {
                 },
                 .tag_union => |checked_row| switch (produced_content) {
                     .tag_union => |produced_row| {
-                        if (checked_row.tags.len != produced_row.tags.len) break :matched false;
+                        if (!sameTagLabels(checked_row.tags, produced_row.tags)) {
+                            included_tags = try self.includedRowPayloadOps(checked_root, produced_root, ops);
+                            break :matched included_tags != null;
+                        }
                         if (!(try self.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .tag_union))) break :matched false;
                         for (checked_row.tags, produced_row.tags) |checked_tag, produced_tag| {
                             try ops.append(gpa, .{ .tag = .{
@@ -27269,9 +27295,86 @@ const BodyContext = struct {
             .ops_start = ops_start,
             .next = ops_start,
             .results_start = results.items.len,
+            .included_tags = included_tags,
         });
         pushed = true;
         return null;
+    }
+
+    /// A closed checked row whose every tag is in a closed produced row
+    /// relates tag by tag, whatever order the two rows list their tags in:
+    /// each checked tag's payloads to the produced tag of its label. The value was produced at the produced row,
+    /// and Lambda Solved joins the read with its producer (design.md "Row
+    /// Joins"), so the checked row is not unified with the wider one here.
+    /// Returns the checked tags after appending their payload pairs, or null
+    /// when the rows are not in that relation.
+    fn includedRowPayloadOps(
+        self: *BodyContext,
+        checked_root: NodeId,
+        produced_root: NodeId,
+        ops: *std.ArrayListUnmanaged(ProducedValueOp),
+    ) Allocator.Error!?[]const InstTag {
+        if (!(try self.graph.tagRowIsClosed(checked_root)) or !(try self.graph.tagRowIsClosed(produced_root))) return null;
+        const checked_row = (try self.graph.tagRowNodesOrNull(checked_root)) orelse return null;
+        const produced_row = (try self.graph.tagRowNodesOrNull(produced_root)) orelse return null;
+        if (checked_row.tags.len > produced_row.tags.len) return null;
+        for (checked_row.tags) |checked_tag| {
+            const produced_tag = graphTagByName(produced_row.tags, checked_tag.name) orelse return null;
+            if (checked_tag.payloads.len != produced_tag.payloads.len) return null;
+        }
+        for (checked_row.tags) |checked_tag| {
+            const produced_tag = graphTagByName(produced_row.tags, checked_tag.name).?;
+            for (checked_tag.payloads, produced_tag.payloads) |checked_payload, produced_payload| {
+                try ops.append(self.allocator, .{ .child = .{ .checked = checked_payload, .produced = produced_payload } });
+            }
+        }
+        return try self.graph.arena().dupe(InstTag, checked_row.tags);
+    }
+
+    /// Whether a matched container's children all relate to their checked
+    /// side while some differs from its produced side. The produced
+    /// container rebuilt around them would pair the produced row's tags or a
+    /// named type's produced arguments with checked children (an included
+    /// row below, `includedRowPayloadOps`), so the witness is the checked
+    /// container, whose children these are.
+    fn childWitnessesAreChecked(self: *BodyContext, frame_ops: []const ProducedValueOp, children: []const NodeId) bool {
+        var index: usize = 0;
+        var differs = false;
+        for (frame_ops) |op| switch (op) {
+            .child => |child| {
+                if (!self.graph.sameClass(children[index], child.checked)) return false;
+                differs = differs or !self.graph.sameClass(children[index], child.produced);
+                index += 1;
+            },
+            .field_name, .tag => {},
+        };
+        return differs;
+    }
+
+    /// An included row's witness (`includedRowPayloadOps`): the checked row,
+    /// with each payload at its witness; the checked node itself when no
+    /// payload's witness differs.
+    fn buildIncludedRowWitness(self: *BodyContext, checked_node: NodeId, checked_tags: []const InstTag, children: []const NodeId) Allocator.Error!NodeId {
+        const tags = try self.graph.arena().alloc(InstTag, checked_tags.len);
+        var changed = false;
+        var offset: usize = 0;
+        for (checked_tags, tags) |checked_tag, *out| {
+            const payloads = try self.graph.arena().dupe(NodeId, children[offset..][0..checked_tag.payloads.len]);
+            offset += checked_tag.payloads.len;
+            for (payloads, checked_tag.payloads) |payload, checked_payload| {
+                changed = changed or !self.graph.sameClass(payload, checked_payload);
+            }
+            out.* = .{
+                .name = checked_tag.name,
+                .checked_name = checked_tag.checked_name,
+                .payloads = payloads,
+            };
+        }
+        if (!changed) return checked_node;
+        return try self.graph.newNode(.{ .tag_union = .{
+            .tags = tags,
+            .ext = try self.graph.newNode(.empty_tag_union),
+        } });
     }
 
     /// A pair whose containers do not match relates through their shared

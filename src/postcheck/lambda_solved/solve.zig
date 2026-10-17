@@ -204,6 +204,16 @@ const Solver = struct {
     /// Per clone context, parallel to `leaf_contexts`: what its expansions
     /// have registered so far.
     leaf_context_shapes: std.ArrayList(LeafContextShape),
+    /// One map per lazily expanded named type that holds a tag row, from the
+    /// Monotype of each positional component it created to that component's
+    /// var. A named type's arguments are the types its backing was
+    /// instantiated at, so a backing position of an argument's Monotype is
+    /// that argument: a row joined through the backing is the argument's row
+    /// too (design.md "Row Joins").
+    arg_scopes: std.ArrayList(collections.DenseMap(MonoType.TypeId, Type.TypeVarId)),
+    /// The argument scope a leaf created under a scoped expansion reads its
+    /// positional components from.
+    leaf_arg_scopes: collections.DenseMap(Type.TypeVarId, u32),
     /// Per lifted Monotype: whether a cycle is reachable from it.
     reaches_cycle: []bool,
     /// Pools for the short-lived maps the solver creates per work item (clone
@@ -386,6 +396,8 @@ const Solver = struct {
             .leaf_origins = collections.DenseMap(Type.TypeVarId, MonoType.TypeId).init(allocator),
             .leaf_contexts = .empty,
             .leaf_context_shapes = .empty,
+            .arg_scopes = .empty,
+            .leaf_arg_scopes = collections.DenseMap(Type.TypeVarId, u32).init(allocator),
             .reaches_cycle = masks.reaches_cycle,
             .solved_set_pool = collections.DenseMapPool(Type.TypeVarId, void).init(allocator),
             .solved_position_pool = collections.DenseMapPool(Type.TypeVarId, u32).init(allocator),
@@ -429,6 +441,9 @@ const Solver = struct {
         for (self.leaf_contexts.items) |*ctx| ctx.deinit();
         self.leaf_contexts.deinit(self.allocator);
         self.leaf_context_shapes.deinit(self.allocator);
+        for (self.arg_scopes.items) |*scope| scope.deinit();
+        self.arg_scopes.deinit(self.allocator);
+        self.leaf_arg_scopes.deinit();
         self.allocator.free(self.reaches_cycle);
         self.shared_clones.deinit();
         self.leaf_origins.deinit();
@@ -1790,7 +1805,14 @@ const Solver = struct {
         var cloner = TypeCloner.init(self);
         cloner.lazy_ctx = ctx;
         defer cloner.deinit();
-        const content = try cloner.lowerContent(self.lifted.types.get(leaf.id));
+        const mono_content = self.lifted.types.get(leaf.id);
+        cloner.arg_scope = if (mono_content == .named and self.contains_tag_row[@backingInt(leaf.id)])
+            .{ .id = try self.newArgScope(), .registers = true }
+        else if (self.leaf_arg_scopes.get(root)) |scope|
+            .{ .id = scope, .registers = false }
+        else
+            null;
+        const content = try cloner.lowerContent(mono_content);
         self.program.types.set(root, content);
         self.registerNamedBacking(content);
         return content;
@@ -1861,6 +1883,12 @@ const Solver = struct {
         if (self.shared_leaf_context) |shared| return shared;
         const index = try self.newLeafContext();
         self.shared_leaf_context = index;
+        return index;
+    }
+
+    fn newArgScope(self: *Solver) Allocator.Error!u32 {
+        const index: u32 = @intCast(self.arg_scopes.items.len);
+        try self.arg_scopes.append(self.allocator, collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(self.allocator));
         return index;
     }
 
@@ -4251,6 +4279,12 @@ const TypeCloner = struct {
     lazy_ctx: ?u32 = null,
     /// Callable-bearing children the current lazy expansion has registered.
     lazy_children: u32 = 0,
+    /// The argument scope (`Solver.arg_scopes`) of the lazy expansion: a
+    /// named type's own, which registers its positional components, or the
+    /// one the expanding leaf was created under, which only reads it.
+    arg_scope: ?ArgScope = null,
+
+    const ArgScope = struct { id: u32, registers: bool };
 
     fn init(solver: *Solver) TypeCloner {
         return .{
@@ -4330,8 +4364,15 @@ const TypeCloner = struct {
             const callable_free = self.solver.isCallableFree(ty);
             const sharing = self.solver.leafSharing(ty);
             if (sharing == .positional) {
+                if (self.arg_scope) |scope| {
+                    if (self.solver.arg_scopes.items[scope.id].get(ty)) |existing| return existing;
+                }
                 const created = try self.solver.program.types.add(.{ .mono = .{ .id = ty, .ctx = Type.no_leaf_context } });
                 try self.solver.leaf_origins.put(created, ty);
+                if (self.arg_scope) |scope| {
+                    try self.solver.leaf_arg_scopes.put(created, scope.id);
+                    if (scope.registers) try self.solver.arg_scopes.items[scope.id].put(ty, created);
+                }
                 return created;
             }
             const ctx = if (sharing == .shared) try self.solver.sharedLeafContext() else parent_ctx;
@@ -4351,6 +4392,7 @@ const TypeCloner = struct {
             const created = try self.solver.program.types.add(.{ .mono = .{ .id = ty, .ctx = ctx } });
             try self.solver.leaf_origins.put(created, ty);
             try map.put(ty, created);
+            if (self.arg_scope) |scope| try self.solver.leaf_arg_scopes.put(created, scope.id);
             // Every leaf registered outside the shared context is retired
             // when it expands or joins a class (`retireContextLeaf`).
             if (sharing != .shared) shape.unexpanded += 1;
