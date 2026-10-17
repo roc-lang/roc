@@ -13825,12 +13825,17 @@ recursive entries remain graph-local. Replay must agree with fresh checked
 relation expansion, including unresolved state and relationships between roots.
 Agreement is judged up to what a producing graph chooses arbitrarily: local
 numbering, the order in which a row's members were joined, a named-instance
-group with a single member inside the interface, and whether a class that
-finished as a settled type and carries no other evidence was captured as open
-structure or as its settled leaf. Recursive-slot and forced-dynamic membership
-decide only iterator representations, so they are no evidence on a class that
-finished as a type containing no iterator interface. An unchanged summary
-stands for its input.
+group with a single member inside the interface, whether a class whose content
+is settled and carries no other evidence was captured as open structure or as
+its settled leaf, and whether an open class carries a finished-type witness.
+A witness is no evidence: replaying an unchanged summary relates nothing back,
+while a fresh expansion relates witnessed copies of its settled leaves, so
+whether a class acquired one records which history reached it (pinned by the
+monotype test "interface agreement ignores finished witnesses of open
+classes"). Recursive-slot
+and forced-dynamic membership decide only iterator representations, so they
+are no evidence on a class that settles as a type containing no iterator
+interface. An unchanged summary stands for its input.
 
 Digest discovery encodes each uncached node's scalar bytes once and retains
 ordered child offsets. Acyclic resolution and cyclic-group reduction replay

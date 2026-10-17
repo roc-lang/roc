@@ -608,6 +608,16 @@ pub const InterfaceConstraints = struct {
     pub fn instantiate(self: InterfaceConstraints, graph: *InstGraph) Allocator.Error![]const NodeId {
         const node_ids = try graph.allocator.alloc(NodeId, self.nodes.len);
         defer graph.allocator.free(node_ids);
+        try self.instantiateNodes(graph, node_ids);
+        const roots = try graph.arena().alloc(NodeId, self.roots.len);
+        for (self.roots, roots) |root, *out| out.* = node_ids[@backingInt(root)];
+        return roots;
+    }
+
+    /// Instantiate every captured node, writing the graph node standing for
+    /// each into `node_ids`.
+    fn instantiateNodes(self: InterfaceConstraints, graph: *InstGraph, node_ids: []NodeId) Allocator.Error!void {
+        std.debug.assert(node_ids.len == self.nodes.len);
         const kind_ids = try graph.allocator.alloc(FieldKindId, self.kinds.len);
         defer graph.allocator.free(kind_ids);
         var instance = Instance{
@@ -677,7 +687,6 @@ pub const InterfaceConstraints = struct {
                 try graph.bindRelatedNamedBacking(id, (try graph.content(id)).named);
             }
         }
-        return try mapValue(&instance, []const NodeId, self.roots);
     }
 
     /// Copy into another cache's arena, relocating the interned leaves and
@@ -746,13 +755,18 @@ pub const InterfaceConstraints = struct {
     }
 
     /// Identity of these constraints up to what a producing graph chooses
-    /// arbitrarily: local numbering and the order in which a row's members
-    /// were joined. Two expansions of one request constrain its interface
-    /// identically exactly when these bytes agree.
+    /// arbitrarily: local numbering, the order in which a row's members were
+    /// joined, and which open classes carry a finished-type witness. Two
+    /// expansions of one request constrain its interface identically exactly
+    /// when these bytes agree.
     pub fn equivalenceIdentityInto(self: InterfaceConstraints, graph: *InstGraph, allocator: Allocator) Allocator.Error![]const u8 {
         var arena = base.SingleThreadArena.init(graph.allocator);
         defer arena.deinit();
-        var renumberer = EquivalenceRenumberer{ .source = self, .types = graph.types, .name_store = graph.name_store, .allocator = arena.allocator() };
+        // An open class without a witness reads its settled type from an
+        // instance of these constraints.
+        const instance = try arena.allocator().alloc(NodeId, self.nodes.len);
+        try self.instantiateNodes(graph, instance);
+        var renumberer = EquivalenceRenumberer{ .source = self, .graph = graph, .instance = instance, .types = graph.types, .name_store = graph.name_store, .allocator = arena.allocator() };
         const constraints = try renumberer.run();
         var writer = IdentityWriter{ .graph = graph };
         defer {
@@ -766,13 +780,19 @@ pub const InterfaceConstraints = struct {
     /// Renumbers captured nodes and field kinds in breadth-first order from
     /// the roots, visiting each row's members in label order. A related group
     /// with one member relates nothing within the interface and is dropped,
-    /// and an open node that finished as a settled type and carries no other
+    /// and an open node whose content is settled and carries no other
     /// evidence is that settled leaf, whichever form its capture chose.
     /// Recursive-slot and forced-dynamic membership only decide iterator
-    /// representations, so they are no evidence on a class that finished as a
-    /// type containing no iterator interface.
+    /// representations, so they are no evidence on a class that settles as a
+    /// type containing no iterator interface. A finished-type witness records
+    /// which history reached a class, so it is no evidence either: a replayed
+    /// unchanged summary relates nothing back, while a fresh expansion relates
+    /// witnessed copies of its settled leaves.
     const EquivalenceRenumberer = struct {
         source: InterfaceConstraints,
+        graph: *InstGraph,
+        /// The graph node instantiating each captured node.
+        instance: []const NodeId,
         types: *Type.Store,
         name_store: *const names.NameStore,
         allocator: Allocator,
@@ -811,6 +831,7 @@ pub const InterfaceConstraints = struct {
                         continue;
                     }
                     var open = try mapValue(self, OpenNode, try self.sortedRows(self.source.open_nodes[index]));
+                    open.finished = null;
                     if (open.related_group) |group| if (self.group_sizes.get(group).? == 1) {
                         open.related_group = null;
                     };
@@ -849,39 +870,73 @@ pub const InterfaceConstraints = struct {
             }
         };
 
-        /// The greatest set of open nodes that finished as settled types, carry
-        /// no evidence beyond their content and refer only to settled leaves
-        /// or other members of the set.
+        /// The greatest set of open nodes whose content is settled, carry no
+        /// evidence beyond their content and refer only to settled leaves or
+        /// other members of the set, each with its settled type: its witness,
+        /// or the type its instance settles as.
         fn collapseSettled(self: *EquivalenceRenumberer) Allocator.Error!void {
             for (self.source.open_nodes) |open| if (open.related_group) |group| {
                 const entry = try self.group_sizes.getOrPut(self.allocator, group);
                 entry.value_ptr.* = if (entry.found_existing) entry.value_ptr.* + 1 else 1;
             };
             const children = try self.allocator.alloc([]const NodeId, self.source.nodes.len);
+            var candidates: collections.DenseMapUnmanaged(NodeId, void) = .empty;
             for (self.source.nodes, children, 0..) |captured, *out, index| {
                 out.* = &.{};
                 const open = switch (captured) {
                     .mono => continue,
                     .open => |open_index| self.source.open_nodes[open_index],
                 };
-                const ty = open.finished orelse continue;
+                switch (open.content) {
+                    .unresolved => continue,
+                    .named => |named| if (named.generated_iterator != null) continue,
+                    .redirect, .leaf, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+                }
                 const vacuous_group = if (open.related_group) |group| self.group_sizes.get(group).? == 1 else true;
                 if (open.source != null or open.constructor_evidence or open.private_backing or !vacuous_group) continue;
-                if ((open.recursive_slot or open.forced_dynamic) and try self.containsIterator(ty)) continue;
                 var collected = Children{ .allocator = self.allocator };
                 _ = try mapValue(&collected, InstNode, open.content);
                 if (collected.kinds != 0) continue;
                 out.* = collected.nodes.items;
-                try self.settled.put(self.allocator, @fromBackingInt(@intCast(index)), ty);
+                try candidates.put(self.allocator, @fromBackingInt(@intCast(index)), {});
             }
+            try self.pruneUnsettled(&candidates, children);
+            // Every remaining candidate's content is settled, so its type is
+            // known; iterator membership may still be evidence.
+            var types: collections.DenseMapUnmanaged(NodeId, Type.TypeId) = .empty;
+            var iterator_evidence: std.ArrayList(NodeId) = .empty;
+            var it = candidates.keyIterator();
+            while (it.next()) |id| {
+                const open = self.source.open_nodes[self.source.nodes[@backingInt(id.*)].open];
+                const ty = open.finished orelse try self.graph.activeTypeViewForNode(self.instance[@backingInt(id.*)]);
+                if ((open.recursive_slot or open.forced_dynamic) and try self.containsIterator(ty)) {
+                    try iterator_evidence.append(self.allocator, id.*);
+                }
+                try types.put(self.allocator, id.*, ty);
+            }
+            if (iterator_evidence.items.len != 0) {
+                for (iterator_evidence.items) |id| _ = candidates.remove(id);
+                try self.pruneUnsettled(&candidates, children);
+            }
+            var settled = candidates.keyIterator();
+            while (settled.next()) |id| try self.settled.put(self.allocator, id.*, types.get(id.*).?);
+        }
+
+        /// Remove each candidate that refers to an open node outside the set,
+        /// until none does.
+        fn pruneUnsettled(
+            self: *EquivalenceRenumberer,
+            candidates: *collections.DenseMapUnmanaged(NodeId, void),
+            children: []const []const NodeId,
+        ) Allocator.Error!void {
             var changed = true;
             while (changed) {
                 changed = false;
-                var it = self.settled.keyIterator();
+                var it = candidates.keyIterator();
                 while (it.next()) |id| {
                     for (children[@backingInt(id.*)]) |child| {
-                        if (self.source.nodes[@backingInt(child)] == .mono or self.settled.contains(child)) continue;
-                        _ = self.settled.remove(id.*);
+                        if (self.source.nodes[@backingInt(child)] == .mono or candidates.contains(child)) continue;
+                        _ = candidates.remove(id.*);
                         changed = true;
                         break;
                     }
@@ -14426,6 +14481,53 @@ test "interface request identity omits finished witnesses of open classes" {
 
     const produced = try InterfaceConstraints.capture(graph, graph.arena(), &.{imported});
     try std.testing.expect(!try (try produced.identity(graph)).eql(try imported_request.identity(graph), &types, &name_store));
+}
+
+test "interface agreement ignores finished witnesses of open classes" {
+    const allocator = std.testing.allocator;
+    var types = Type.Store.init(allocator);
+    defer types.deinit();
+    var name_store = names.NameStore.init(allocator);
+    defer name_store.deinit();
+    const graph = try InstGraph.create(allocator, &types, &name_store);
+    defer graph.destroy();
+    const def: Type.TypeDef = .{
+        .module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xC5)))),
+        .type_name = try name_store.internTypeName("Agreed"),
+    };
+    const Instances = struct {
+        fn new(g: *InstGraph, d: Type.TypeDef) Allocator.Error!NodeId {
+            return try g.newNode(try g.namedContent(.{
+                .named_type = .{ .module = .{}, .ty = testCheckedTypeId(1) },
+                .def = d,
+                .kind = .nominal,
+                .builtin_owner = null,
+                .args = &.{},
+                .backing = .{ .node = try g.newNode(.empty_record), .use = .inspectable },
+            }));
+        }
+    };
+    const settled = try Instances.new(graph, def);
+    var retained = GraphTypeFinals.initRetainedTypeView(graph);
+    defer retained.deinit();
+    const durable = try retained.sealType(try graph.activeTypeViewForNode(settled));
+
+    // Each class is related to a named instance outside the interface, so
+    // capture keeps it open; one of them also carries a finished witness.
+    const live = try Instances.new(graph, def);
+    try graph.relateNamedInstances(live, try Instances.new(graph, def));
+    const witnessed = try graph.importMono(durable);
+    try graph.relateNamedInstances(witnessed, try Instances.new(graph, def));
+
+    const live_capture = try InterfaceConstraints.capture(graph, graph.arena(), &.{live});
+    const witnessed_capture = try InterfaceConstraints.capture(graph, graph.arena(), &.{witnessed});
+    const settled_capture = try InterfaceConstraints.capture(graph, graph.arena(), &.{settled});
+    try std.testing.expect(live_capture.nodes[0] == .open and live_capture.open_nodes[0].finished == null);
+    try std.testing.expect(witnessed_capture.nodes[0] == .open and witnessed_capture.open_nodes[0].finished != null);
+    try std.testing.expect(settled_capture.nodes[0] == .mono);
+    const expected = try settled_capture.equivalenceIdentityInto(graph, graph.arena());
+    try std.testing.expectEqualSlices(u8, expected, try live_capture.equivalenceIdentityInto(graph, graph.arena()));
+    try std.testing.expectEqualSlices(u8, expected, try witnessed_capture.equivalenceIdentityInto(graph, graph.arena()));
 }
 
 test "interface constraints keep cycles open when a later edge reaches a variable" {
