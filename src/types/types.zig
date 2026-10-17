@@ -1239,10 +1239,10 @@ pub const StaticDispatchConstraint = struct {
         /// implementation actually dispatches (so an unpinnable instantiated
         /// receiver is a genuine ambiguity) from a phantom contract the body never
         /// uses (which stays a valid polymorphic signature). The bit rides the
-        /// constraint itself through instantiation, including across module
-        /// boundaries where the originating scheme's body is not otherwise
-        /// visible—module-local provenance like `intro_expr` cannot substitute
-        /// for it.
+        /// constraint itself through instantiation and unification merges (see
+        /// unify.zig), including across module boundaries where the originating
+        /// scheme's body is not otherwise visible—module-local provenance like
+        /// `intro_expr` cannot substitute for it.
         where_clause: struct { body_required: bool = false },
         from_literal: LiteralInfo, // From a literal conversion (from_numeral, from_quote, or from_interpolation)
 
