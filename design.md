@@ -23259,6 +23259,22 @@ compiler started with `ROC_DEBUG_FORCE_ICE=<phase>[:<module or stage>]`
 panics on purpose when a matching frame is pushed; CLI tests use it to pin
 each phase's report.
 
+### Developer Diagnostics
+
+The compiler's developer-only environment variables (`ROC_LIR_DUMP`,
+`ROC_SPEC_CENSUS`, `ROC_PACK_TRACE`, `ROC_PACK_STATS`, `ROC_CTFE_DEMAND_TRACE`,
+`ROC_DEV_PACK_OBJECTS`, `ROC_DEV_PACK_HITS`, `ROC_DEV_ARTIFACT_ROUNDTRIP` and
+`ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE`) are honored only by a compiler for
+which `build_options.dev_diagnostics` is true: every Debug compiler, and any
+other build made with `-Ddev-diagnostics`. Every site tests that constant at
+compile time, so a release compiler neither reads these variables nor
+carries the code they enable, and an end user's environment cannot change
+what it does. The constant reads each executable's own optimize mode, since
+the release executable shares its modules with the development one. CLI
+cases that set one of these variables skip against a compiler without them.
+Performance work that needs them on an optimized compiler builds it with
+`zig build roc -Doptimize=ReleaseFast -Ddev-diagnostics`.
+
 
 ## Integer SIMD Builtins
 

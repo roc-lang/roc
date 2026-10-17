@@ -7,6 +7,7 @@
 const std = @import("std");
 const collections = @import("collections");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const base = @import("base");
 const check = @import("check");
 const core = @import("lir_core");
@@ -2271,11 +2272,13 @@ test "checked pipeline declarations are referenced" {
 
 /// Print the final LIR of every procedure whose debug name contains
 /// `ROC_LIR_DUMP`, for reading what the passes actually produced. Off unless
-/// the variable is set, and absent on targets without an environment.
+/// the variable is set, and absent on targets without an environment and in
+/// compilers built without developer diagnostics.
 /// Printing the final LIR of selected procedures, for reading what the passes
-/// actually produced. Selected by comptime target so a build without an
-/// environment or a standard error stream carries none of it.
-const LirDump = if (builtin.os.tag == .freestanding) struct {
+/// actually produced. Selected at compile time, so a build without an
+/// environment or a standard error stream, and a compiler built without
+/// developer diagnostics, carries none of it.
+const LirDump = if (builtin.os.tag == .freestanding or !build_options.dev_diagnostics) struct {
     fn filter() ?[]const u8 {
         return null;
     }
@@ -2414,8 +2417,9 @@ test "adopting completed compile-time values drops their initializers and identi
 /// procedure base and template ordinals, callable name, whether the declared
 /// source type has type variables, whether the request type contains a
 /// function type or an erased callable, and the request and solved type
-/// digests. Never enabled by default; it only reads the finished stores.
-const SpecCensus = if (builtin.os.tag == .freestanding) struct {
+/// digests. Never enabled by default; it only reads the finished stores, and a
+/// compiler built without developer diagnostics carries none of it.
+const SpecCensus = if (builtin.os.tag == .freestanding or !build_options.dev_diagnostics) struct {
     fn enabled() bool {
         return false;
     }

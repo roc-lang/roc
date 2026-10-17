@@ -556,6 +556,34 @@ const Skip = union(enum) {
 /// The roc binary under test is built in this runner's optimize mode, and
 /// only a Debug compiler honors ROC_DEBUG_FORCE_ICE.
 const forced_ice_skip: Skip = if (builtin.mode == .debug) .never else .{ .always = "ROC_DEBUG_FORCE_ICE requires a Debug compiler" };
+
+/// The roc binary under test is also built with this runner's
+/// `-Ddev-diagnostics`, so `build_options.dev_diagnostics` says whether it
+/// honors the developer-diagnostic environment variables. Each case listed
+/// here sets one of them and checks what it changes or prints.
+const dev_diagnostics_cases = [_]CustomCase{
+    .native_build_artifact_round_trip,
+    .native_build_pack_objects,
+    .native_build_pack_hits,
+    .early_ctfe_cache,
+    .shared_early_object_cache,
+    .issue_11627_static_data_names_cache,
+    .issue_11673_callable_cache,
+    .issue_11710_shared_object_cache,
+    .issue_11826_cache_ownership_variants,
+    .cache_fingerprints_agree,
+    .check_compile_time_pack,
+    .optimized_multi_module_compiles_once,
+    .glue_plugin_cache_hit,
+};
+
+fn devDiagnosticsSkip(custom: CustomCase) ?[]const u8 {
+    if (comptime build_options.dev_diagnostics) return null;
+    for (dev_diagnostics_cases) |case| {
+        if (case == custom) return "requires a compiler with developer diagnostics (a Debug build, or -Ddev-diagnostics)";
+    }
+    return null;
+}
 /// How a forced-ICE report spells the module paths of test/cli/ice_context.
 /// The runner joins its working directory to the test's forward-slash path,
 /// and the compiler joins an imported module's file name with the host's
@@ -4000,7 +4028,11 @@ fn caseTimeoutMs(spec: CliCase, fallback_timeout_ms: u64) u64 {
 }
 
 fn runSingleTest(io: std.Io, allocator: Allocator, spec: CliCase, timeout_ms: u64) TestResult {
-    if (skipReason(spec.skip)) |reason| {
+    const dev_diagnostics_skip = switch (spec.body) {
+        .custom => |custom| devDiagnosticsSkip(custom),
+        .platform, .command, .glue_runtime, .snapshot_program => null,
+    };
+    if (skipReason(spec.skip) orelse dev_diagnostics_skip) |reason| {
         var timer = harness.Timer.start() catch return .{ .status = .skip, .phase = .setup, .message = reason };
         return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = reason };
     }

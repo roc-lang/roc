@@ -14,6 +14,7 @@
 const std = @import("std");
 const invariant = @import("base").invariant;
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 
 const layout = @import("layout");
@@ -1259,6 +1260,8 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
 
 /// `ROC_DEV_ARTIFACT_ROUNDTRIP` makes every object compile also assemble the
 /// program from its own procedure artifacts and panic if the result differs.
+/// A compiler built without developer diagnostics never reads it.
 fn artifactRoundTripRequested() bool {
+    if (comptime !build_options.dev_diagnostics) return false;
     return std.c.getenv("ROC_DEV_ARTIFACT_ROUNDTRIP") != null;
 }
