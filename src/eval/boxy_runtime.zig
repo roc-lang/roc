@@ -14,6 +14,7 @@ const lir = @import("lir");
 const builtins = @import("builtins");
 const build_options = @import("build_options");
 const lir_value = @import("value.zig");
+const value_semantics = @import("value_semantics");
 
 const LIR = lir.LIR;
 const LirStore = lir.LirStore;
@@ -4888,7 +4889,12 @@ pub const BoxyRuntime = struct {
         value_layout: layout_mod.Idx,
         desc: *const LirProgram.BoxyTypeDesc,
     ) Error!bool {
-        return try self.layoutEq(hooks, lhs, rhs, value_layout, desc);
+        const shapes = EqShapes(@TypeOf(hooks)){ .runtime = self, .hooks = hooks };
+        return try value_semantics.structural.EqEval(EqShapes(@TypeOf(hooks))).eq(
+            shapes,
+            .{ .value = lhs, .layout = value_layout, .desc = desc },
+            .{ .value = rhs, .layout = value_layout, .desc = desc },
+        );
     }
 
     /// The payload a non-null box pointer holds, or the zero-sized payload.
@@ -4896,262 +4902,393 @@ pub const BoxyRuntime = struct {
         return if (self.readBoxedDataPointer(boxed)) |data_ptr| .{ .ptr = data_ptr } else Value.zst;
     }
 
-    fn layoutEq(
-        self: *const BoxyRuntime,
-        hooks: anytype,
+    // Structural equality and hashing //
+    //
+    // A descriptor-described value compares and hashes exactly as derived
+    // `is_eq` and `to_hash` do at its type: the shared value-semantics
+    // evaluators own the component order, the tag handling, and the hash
+    // folding, and these contexts only read descriptors and bytes for them.
+
+    /// A record's or tuple's fields: one nested descriptor per field.
+    const StructPair = struct {
         lhs: Value,
         rhs: Value,
-        layout_idx: layout_mod.Idx,
         desc: *const LirProgram.BoxyTypeDesc,
-    ) Error!bool {
-        const layout_val = self.layout_store.getLayout(layout_idx);
-        if ((layout_val.tag == .box or layout_val.tag == .box_of_zst) and desc.payload_layout != layout_idx) {
-            // A payload-direct Box descriptor describes the boxed value.
-            if (layout_val.tag == .box_of_zst) return try self.layoutEq(hooks, Value.zst, Value.zst, .zst, desc);
-            return try self.layoutEq(hooks, self.boxedPayloadValue(lhs), self.boxedPayloadValue(rhs), layout_val.getIdx(), desc);
-        }
-        if (desc.eq_rejected) return hooks.crashCheckedError(rejected_method_message);
-        if (desc.eq_method) |method| {
-            const result = try hooks.callDescriptorMethod(.equality, method, &.{
-                .{ .value = lhs, .layout = layout_idx, .source_desc = desc },
-                .{ .value = rhs, .layout = layout_idx, .source_desc = desc },
-            });
-            const adapter = self.requireBoxyMethodSlot(method).adapter;
-            const bool_layout = adapter.ret_layout orelse return self.invariantFailedError(
-                "LIR/interpreter invariant violated: is_eq method slot named no Bool result layout",
-                .{},
-            );
-            if (result.layout == bool_layout) return result.value.read(u8) != 0;
-            // The worker returned its own storage of the Bool; read it as the
-            // slot's Bool, consuming an owned copy of the result.
-            const bool_desc = try hooks.resolveDescRef(adapter.ret_desc orelse return self.invariantFailedError(
-                "LIR/interpreter invariant violated: is_eq method slot named no Bool result descriptor",
-                .{},
-            ));
-            if (result.borrowed) {
-                try self.performBoxyLayoutDrop(hooks, result.value, result.layout, result.desc, .incref, 1, .atomic);
-            }
-            const converted = try self.materializeCallResult(hooks, result.value, result.layout, result.desc, bool_desc, bool_layout);
-            return converted.value.read(u8) != 0;
-        }
-        if (desc.presence_slot_present_discriminant != null) {
-            return try self.presenceSlotEq(hooks, lhs, rhs, layout_idx, desc);
-        }
-        if (layout_val.tag == .erased_box) {
-            // Erased storage: the boxed allocation's descriptor describes the value.
-            const payload_desc = try self.boxyBoxAllocationPayloadDesc(hooks, layout_idx, desc) orelse return true;
-            const payload_layout = payload_desc.payload_layout;
-            const payload_is_zst = self.helper.sizeOf(payload_layout) == 0;
-            const lhs_payload = self.readBoxedDataPointer(lhs);
-            const rhs_payload = self.readBoxedDataPointer(rhs);
-            if (!payload_is_zst and (lhs_payload == null or rhs_payload == null)) {
-                return self.invariantFailedError(
-                    "LIR/interpreter invariant violated: non-zero-sized boxy equality payload layout {d} had a null box pointer",
-                    .{@backingInt(payload_layout)},
-                );
-            }
-            if (payload_is_zst) return try self.layoutEq(hooks, Value.zst, Value.zst, payload_layout, payload_desc);
-            return try self.layoutEq(hooks, .{ .ptr = lhs_payload.? }, .{ .ptr = rhs_payload.? }, payload_layout, payload_desc);
-        }
-        switch (desc.shape) {
-            .primitive => {
-                if (layout_val.tag != .scalar) {
-                    return self.invariantFailedError(
-                        "LIR/interpreter invariant violated: primitive boxy equality descriptor had non-scalar layout {d}",
-                        .{@backingInt(layout_idx)},
-                    );
-                }
-                const size = self.helper.sizeOf(layout_idx);
-                return switch (layout_val.getScalar().tag) {
-                    .str => builtins.str.strEqual(valueToRocStr(lhs), valueToRocStr(rhs)),
-                    .frac => switch (size) {
-                        4 => lhs.read(f32) == rhs.read(f32),
-                        8 => lhs.read(f64) == rhs.read(f64),
-                        16 => lhs.read(i128) == rhs.read(i128),
-                        else => return self.invariantFailedError(
-                            "LIR/interpreter invariant violated: fraction boxy equality had {d}-byte layout {d}",
-                            .{ size, @backingInt(layout_idx) },
-                        ),
-                    },
-                    .int, .opaque_ptr, .vector => scalarBytesEqual(lhs.readBytes(size), rhs.readBytes(size)),
-                };
-            },
-            .record, .tuple => return try self.structEq(hooks, lhs, rhs, layout_idx, desc),
-            .tag_union => switch (layout_val.tag) {
-                .zst => {
-                    const variant = self.requireBoxyTagVariantByDiscriminant(desc, 0);
-                    return try self.tagPayloadsEq(hooks, variant, Value.zst, Value.zst, .zst);
-                },
-                // A recursive tag union is stored behind a box pointer.
-                .tag_union, .box => return try self.tagUnionEq(hooks, lhs, rhs, layout_idx, desc),
-                .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => return self.invariantFailedError(
-                    "LIR/interpreter invariant violated: tag union boxy equality descriptor had layout {d} ({s})",
-                    .{ @backingInt(layout_idx), @tagName(layout_val.tag) },
-                ),
-            },
-            .list => return try self.listEq(hooks, lhs, rhs, layout_idx, desc),
-            .box => {
-                const payload_desc = try self.requireNestedBoxyDesc(hooks, desc, 0, "box payload");
-                return switch (layout_val.tag) {
-                    .box => try self.layoutEq(hooks, self.boxedPayloadValue(lhs), self.boxedPayloadValue(rhs), layout_val.getIdx(), payload_desc),
-                    .box_of_zst => try self.layoutEq(hooks, Value.zst, Value.zst, .zst, payload_desc),
-                    .scalar, .zst, .erased_box, .list, .list_of_zst, .struct_, .tag_union, .closure, .erased_callable, .ptr => return self.invariantFailedError(
-                        "LIR/interpreter invariant violated: box boxy equality descriptor had layout {d} ({s})",
-                        .{ @backingInt(layout_idx), @tagName(layout_val.tag) },
-                    ),
-                };
-            },
-            .function, .erased, .internal => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: boxy equality reached a {s} descriptor for layout {d}",
-                .{ @tagName(desc.shape), @backingInt(layout_idx) },
-            ),
-        }
+        /// Null when the aggregate stores all of its fields in no bytes.
+        struct_idx: ?layout_mod.StructIdx,
+    };
+
+    /// Where a tag union's payloads are read from.
+    const TagBases = struct {
+        lhs: Value,
+        rhs: Value,
+        /// The layout the variant payloads are found in.
+        base_layout: layout_mod.Idx,
+        desc: *const LirProgram.BoxyTypeDesc,
+        lhs_discriminant: u32,
+        rhs_discriminant: u32,
+        /// A field-presence slot's payloads are found through its base layout.
+        presence_slot: bool,
+    };
+
+    const ListPair = struct {
+        lhs: builtins.list.RocList,
+        rhs: builtins.list.RocList,
+        list_layout: layout_mod.Idx,
+        elem_layout: layout_mod.Idx,
+        elem_size: usize,
+        elem_desc: *const LirProgram.BoxyTypeDesc,
+    };
+
+    /// A record's or tuple's field `index`, or null for padding.
+    fn structField(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        value: Value,
+        desc: *const LirProgram.BoxyTypeDesc,
+        struct_idx: ?layout_mod.StructIdx,
+        index: u32,
+    ) Error!?StoredValue {
+        if (desc.shape == .record and self.requireBoxyFieldNames(desc.field_names)[index] == .padding_field) return null;
+        // A field's own method can instantiate more runtime descriptors,
+        // whose append-only backing table can reallocate, so each field's ref
+        // is read after the previous field is visited.
+        const field_desc = try hooks.resolveDescRef(self.requireBoxyDescRefs(desc.nested_descs)[index]);
+        const idx = struct_idx orelse return .{ .value = Value.zst, .layout = .zst, .desc = field_desc };
+        return .{
+            .value = value.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(idx, index)),
+            .layout = self.layout_store.getStructFieldLayoutByOriginalIndex(idx, index),
+            .desc = field_desc,
+        };
     }
 
-    /// Compare a record or tuple field by field. Padding fields hold no value.
-    fn structEq(
+    /// The struct a record or tuple descriptor's value is stored in.
+    fn structStorage(
         self: *const BoxyRuntime,
-        hooks: anytype,
-        lhs: Value,
-        rhs: Value,
-        struct_layout: layout_mod.Idx,
+        layout_idx: layout_mod.Idx,
         desc: *const LirProgram.BoxyTypeDesc,
-    ) Error!bool {
-        // A field's own `is_eq` can instantiate more runtime descriptors.
-        // Retain the span and reborrow each ref after recursive calls, because
-        // their append-only backing table can reallocate during those calls.
-        const desc_span = desc.nested_descs;
-        const field_names_span = desc.field_names;
-        const field_count: u32 = desc_span.len;
-        const named = desc.shape == .record;
-        if (named and self.requireBoxyFieldNames(field_names_span).len != field_count) {
+        comptime what: []const u8,
+    ) Error!?layout_mod.StructIdx {
+        const field_count: u32 = desc.nested_descs.len;
+        if (desc.shape == .record and self.requireBoxyFieldNames(desc.field_names).len != field_count) {
             return self.invariantFailedError(
-                "LIR/interpreter invariant violated: record equality descriptor had {d} field names for {d} fields",
-                .{ self.requireBoxyFieldNames(field_names_span).len, field_count },
+                "LIR/interpreter invariant violated: record " ++ what ++ " descriptor had {d} field names for {d} fields",
+                .{ self.requireBoxyFieldNames(desc.field_names).len, field_count },
             );
         }
-        const layout_val = self.layout_store.getLayout(struct_layout);
-        const struct_idx = switch (layout_val.tag) {
+        const layout_val = self.layout_store.getLayout(layout_idx);
+        return switch (layout_val.tag) {
             .struct_ => blk: {
                 const struct_idx = layout_val.getStruct().idx;
                 if (self.layout_store.getStructData(struct_idx).fields.count != field_count) {
                     return self.invariantFailedError(
-                        "LIR/interpreter invariant violated: struct equality descriptor had {d} fields for layout {d}",
-                        .{ field_count, @backingInt(struct_layout) },
+                        "LIR/interpreter invariant violated: struct " ++ what ++ " descriptor had {d} fields for layout {d}",
+                        .{ field_count, @backingInt(layout_idx) },
                     );
                 }
                 break :blk struct_idx;
             },
             .zst => null,
             .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .tag_union, .closure, .erased_callable, .ptr => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: struct equality descriptor had layout {d} ({s})",
-                .{ @backingInt(struct_layout), @tagName(layout_val.tag) },
+                "LIR/interpreter invariant violated: struct " ++ what ++ " descriptor had layout {d} ({s})",
+                .{ @backingInt(layout_idx), @tagName(layout_val.tag) },
             ),
         };
-        var field_index: u32 = 0;
-        while (field_index < field_count) : (field_index += 1) {
-            if (named and self.requireBoxyFieldNames(field_names_span)[field_index] == .padding_field) continue;
-            const field_desc = try hooks.resolveDescRef(self.requireBoxyDescRefs(desc_span)[field_index]);
-            const equal = if (struct_idx) |idx| blk: {
-                const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(idx, field_index);
-                const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(idx, field_index);
-                break :blk try self.layoutEq(hooks, lhs.offset(field_offset), rhs.offset(field_offset), field_layout, field_desc);
-            } else try self.layoutEq(hooks, Value.zst, Value.zst, .zst, field_desc);
-            if (!equal) return false;
-        }
-        return true;
     }
 
-    fn tagUnionEq(
-        self: *const BoxyRuntime,
-        hooks: anytype,
-        lhs: Value,
-        rhs: Value,
-        union_layout: layout_mod.Idx,
-        desc: *const LirProgram.BoxyTypeDesc,
-    ) Error!bool {
-        const lhs_base = self.resolveTagUnionBaseValue(lhs, union_layout);
-        const rhs_base = self.resolveTagUnionBaseValue(rhs, union_layout);
-        const discriminant = self.helper.readTagDiscriminant(lhs_base.value, lhs_base.layout);
-        if (discriminant != self.helper.readTagDiscriminant(rhs_base.value, rhs_base.layout)) return false;
-        if (self.boxyTagExtDiscriminant(desc)) |ext_discriminant| {
-            if (discriminant == ext_discriminant) {
-                const ext_desc = try self.resolveBoxyTagExtDesc(hooks, desc);
-                const ext_payload_layout = self.requireBoxyTagPayloadLayout(desc.payload_layout, ext_discriminant);
-                return try self.layoutEq(hooks, lhs_base.value, rhs_base.value, ext_payload_layout, ext_desc);
-            }
-        }
-        const variant = self.requireBoxyTagVariantByDiscriminant(desc, discriminant);
-        return try self.tagPayloadsEq(hooks, variant, lhs_base.value, rhs_base.value, variant.payload_layout);
-    }
-
-    /// Compare `variant`'s payloads, stored in `payload_layout`.
-    fn tagPayloadsEq(
+    /// Payload `index` of `variant`, whose payloads are stored in
+    /// `payload_layout` at `payload_value`: the payload itself when there is
+    /// one, otherwise a struct of them.
+    fn variantPayload(
         self: *const BoxyRuntime,
         hooks: anytype,
         variant: LirProgram.BoxyTagVariant,
-        lhs: Value,
-        rhs: Value,
+        payload_value: Value,
         payload_layout: layout_mod.Idx,
-    ) Error!bool {
-        if (variant.payload_count == 0) return true;
-        if (variant.payload_count == 1) {
-            return try self.layoutEq(hooks, lhs, rhs, payload_layout, try self.requireBoxyPayloadDesc(hooks, variant, 0));
-        }
+        index: u32,
+        comptime what: []const u8,
+    ) Error!StoredValue {
+        const payload_desc = try self.requireBoxyPayloadDesc(hooks, variant, index);
+        if (variant.payload_count == 1) return .{ .value = payload_value, .layout = payload_layout, .desc = payload_desc };
         const payload_layout_val = self.layout_store.getLayout(payload_layout);
-        const struct_idx = switch (payload_layout_val.tag) {
-            .struct_ => payload_layout_val.getStruct().idx,
-            .zst => null,
+        return switch (payload_layout_val.tag) {
+            .struct_ => blk: {
+                const idx = payload_layout_val.getStruct().idx;
+                break :blk .{
+                    .value = payload_value.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(idx, index)),
+                    .layout = self.layout_store.getStructFieldLayoutByOriginalIndex(idx, index),
+                    .desc = payload_desc,
+                };
+            },
+            .zst => .{ .value = Value.zst, .layout = .zst, .desc = payload_desc },
             .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .tag_union, .closure, .erased_callable, .ptr => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: multi-payload tag equality had payload layout {d} ({s})",
+                "LIR/interpreter invariant violated: multi-payload tag " ++ what ++ " had payload layout {d} ({s})",
                 .{ @backingInt(payload_layout), @tagName(payload_layout_val.tag) },
             ),
         };
-        var payload_index: u32 = 0;
-        while (payload_index < variant.payload_count) : (payload_index += 1) {
-            const field_desc = try self.requireBoxyPayloadDesc(hooks, variant, payload_index);
-            const equal = if (struct_idx) |idx| blk: {
-                const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(idx, payload_index);
-                const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(idx, payload_index);
-                break :blk try self.layoutEq(hooks, lhs.offset(field_offset), rhs.offset(field_offset), field_layout, field_desc);
-            } else try self.layoutEq(hooks, Value.zst, Value.zst, .zst, field_desc);
-            if (!equal) return false;
-        }
-        return true;
     }
 
-    fn listEq(
+    /// Where `variant`'s payloads are stored in a union whose base holds
+    /// them at `base_layout`.
+    fn variantPayloadLayout(
+        self: *const BoxyRuntime,
+        bases: TagBases,
+        variant: LirProgram.BoxyTagVariant,
+        discriminant: u32,
+    ) layout_mod.Idx {
+        if (bases.presence_slot) return self.requireBoxyTagPayloadLayout(bases.base_layout, discriminant);
+        if (self.layout_store.getLayout(bases.base_layout).tag == .zst) return .zst;
+        return variant.payload_layout;
+    }
+
+    fn listPair(
         self: *const BoxyRuntime,
         hooks: anytype,
-        lhs: Value,
+        lhs: StoredValue,
         rhs: Value,
-        list_layout: layout_mod.Idx,
-        desc: *const LirProgram.BoxyTypeDesc,
+    ) Error!ListPair {
+        const elem_layout = self.listElemLayout(lhs.layout);
+        return .{
+            .lhs = self.valueToRocListForLayout(lhs.value, lhs.layout),
+            .rhs = self.valueToRocListForLayout(rhs, lhs.layout),
+            .list_layout = lhs.layout,
+            .elem_layout = elem_layout,
+            .elem_size = self.helper.sizeOf(elem_layout),
+            .elem_desc = try self.requireNestedBoxyDesc(hooks, lhs.desc, 0, "list item"),
+        };
+    }
+
+    fn listItem(self: *const BoxyRuntime, list: builtins.list.RocList, pair: ListPair, index: u64) Error!StoredValue {
+        if (pair.elem_size == 0) return .{ .value = Value.zst, .layout = pair.elem_layout, .desc = pair.elem_desc };
+        const bytes = list.bytes orelse return self.listBytesMissing(pair.list_layout);
+        return .{ .value = .{ .ptr = bytes + @as(usize, @intCast(index)) * pair.elem_size }, .layout = pair.elem_layout, .desc = pair.elem_desc };
+    }
+
+    /// Descriptor-described values as the shared equality evaluator reads
+    /// them.
+    fn EqShapes(comptime Hooks: type) type {
+        return struct {
+            runtime: *const BoxyRuntime,
+            hooks: Hooks,
+
+            const Shapes = @This();
+            const Rules = value_semantics.structural.EqEval(Shapes);
+
+            pub const WalkError = Error;
+            pub const Operand = StoredValue;
+            pub const Aggregate = StructPair;
+            pub const TagUnion = TagBases;
+            pub const List = ListPair;
+
+            fn pair(lhs: Value, rhs: Value, layout_idx: layout_mod.Idx, desc: *const LirProgram.BoxyTypeDesc) Rules.Pair {
+                return .{
+                    .lhs = .{ .value = lhs, .layout = layout_idx, .desc = desc },
+                    .rhs = .{ .value = rhs, .layout = layout_idx, .desc = desc },
+                };
+            }
+
+            pub fn eqStep(shapes: Shapes, lhs: StoredValue, rhs: StoredValue) Error!Rules.Step {
+                const self = shapes.runtime;
+                const hooks = shapes.hooks;
+                const layout_idx = lhs.layout;
+                const desc = lhs.desc;
+                const layout_val = self.layout_store.getLayout(layout_idx);
+                if ((layout_val.tag == .box or layout_val.tag == .box_of_zst) and desc.payload_layout != layout_idx) {
+                    // A payload-direct Box descriptor describes the boxed value.
+                    if (layout_val.tag == .box_of_zst) return .{ .retarget = pair(Value.zst, Value.zst, .zst, desc) };
+                    return .{ .retarget = pair(self.boxedPayloadValue(lhs.value), self.boxedPayloadValue(rhs.value), layout_val.getIdx(), desc) };
+                }
+                if (desc.eq_rejected) return hooks.crashCheckedError(rejected_method_message);
+                if (desc.eq_method) |method| return .{ .done = try self.callEqMethod(hooks, method, lhs, rhs) };
+                if (desc.presence_slot_present_discriminant != null) {
+                    const lhs_base = self.resolveBoxyTagBaseValue(lhs.value, layout_idx, desc);
+                    const rhs_base = self.resolveBoxyTagBaseValue(rhs.value, layout_idx, desc);
+                    const base_is_zst = self.helper.sizeOf(lhs_base.layout) == 0;
+                    return .{ .tag_union = .{
+                        .lhs = lhs_base.value,
+                        .rhs = rhs_base.value,
+                        .base_layout = lhs_base.layout,
+                        .desc = desc,
+                        .lhs_discriminant = if (base_is_zst) 0 else self.helper.readTagDiscriminant(lhs_base.value, lhs_base.layout),
+                        .rhs_discriminant = if (base_is_zst) 0 else self.helper.readTagDiscriminant(rhs_base.value, rhs_base.layout),
+                        .presence_slot = true,
+                    } };
+                }
+                if (layout_val.tag == .erased_box) {
+                    // Erased storage: the boxed allocation's descriptor describes the value.
+                    const payload_desc = try self.boxyBoxAllocationPayloadDesc(hooks, layout_idx, desc) orelse return .always_equal;
+                    const payload_layout = payload_desc.payload_layout;
+                    const payload_is_zst = self.helper.sizeOf(payload_layout) == 0;
+                    const lhs_payload = self.readBoxedDataPointer(lhs.value);
+                    const rhs_payload = self.readBoxedDataPointer(rhs.value);
+                    if (!payload_is_zst and (lhs_payload == null or rhs_payload == null)) {
+                        return self.invariantFailedError(
+                            "LIR/interpreter invariant violated: non-zero-sized boxy equality payload layout {d} had a null box pointer",
+                            .{@backingInt(payload_layout)},
+                        );
+                    }
+                    if (payload_is_zst) return .{ .retarget = pair(Value.zst, Value.zst, payload_layout, payload_desc) };
+                    return .{ .retarget = pair(.{ .ptr = lhs_payload.? }, .{ .ptr = rhs_payload.? }, payload_layout, payload_desc) };
+                }
+                switch (desc.shape) {
+                    .primitive => {
+                        if (layout_val.tag != .scalar) {
+                            return self.invariantFailedError(
+                                "LIR/interpreter invariant violated: primitive boxy equality descriptor had non-scalar layout {d}",
+                                .{@backingInt(layout_idx)},
+                            );
+                        }
+                        const size = self.helper.sizeOf(layout_idx);
+                        return .{ .done = switch (layout_val.getScalar().tag) {
+                            .str => builtins.str.strEqual(valueToRocStr(lhs.value), valueToRocStr(rhs.value)),
+                            .frac => switch (size) {
+                                4 => lhs.value.read(f32) == rhs.value.read(f32),
+                                8 => lhs.value.read(f64) == rhs.value.read(f64),
+                                16 => lhs.value.read(i128) == rhs.value.read(i128),
+                                else => return self.invariantFailedError(
+                                    "LIR/interpreter invariant violated: fraction boxy equality had {d}-byte layout {d}",
+                                    .{ size, @backingInt(layout_idx) },
+                                ),
+                            },
+                            .int, .opaque_ptr, .vector => scalarBytesEqual(lhs.value.readBytes(size), rhs.value.readBytes(size)),
+                        } };
+                    },
+                    .record, .tuple => return .{ .components = .{
+                        .lhs = lhs.value,
+                        .rhs = rhs.value,
+                        .desc = desc,
+                        .struct_idx = try self.structStorage(layout_idx, desc, "equality"),
+                    } },
+                    .tag_union => switch (layout_val.tag) {
+                        .zst => return .{ .tag_union = .{
+                            .lhs = Value.zst,
+                            .rhs = Value.zst,
+                            .base_layout = .zst,
+                            .desc = desc,
+                            .lhs_discriminant = 0,
+                            .rhs_discriminant = 0,
+                            .presence_slot = false,
+                        } },
+                        // A recursive tag union is stored behind a box pointer.
+                        .tag_union, .box => {
+                            const lhs_base = self.resolveTagUnionBaseValue(lhs.value, layout_idx);
+                            const rhs_base = self.resolveTagUnionBaseValue(rhs.value, layout_idx);
+                            return .{ .tag_union = .{
+                                .lhs = lhs_base.value,
+                                .rhs = rhs_base.value,
+                                .base_layout = lhs_base.layout,
+                                .desc = desc,
+                                .lhs_discriminant = self.helper.readTagDiscriminant(lhs_base.value, lhs_base.layout),
+                                .rhs_discriminant = self.helper.readTagDiscriminant(rhs_base.value, rhs_base.layout),
+                                .presence_slot = false,
+                            } };
+                        },
+                        .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => return self.invariantFailedError(
+                            "LIR/interpreter invariant violated: tag union boxy equality descriptor had layout {d} ({s})",
+                            .{ @backingInt(layout_idx), @tagName(layout_val.tag) },
+                        ),
+                    },
+                    .list => return .{ .list = try self.listPair(hooks, lhs, rhs.value) },
+                    .box => {
+                        const payload_desc = try self.requireNestedBoxyDesc(hooks, desc, 0, "box payload");
+                        return switch (layout_val.tag) {
+                            .box => .{ .retarget = pair(self.boxedPayloadValue(lhs.value), self.boxedPayloadValue(rhs.value), layout_val.getIdx(), payload_desc) },
+                            .box_of_zst => .{ .retarget = pair(Value.zst, Value.zst, .zst, payload_desc) },
+                            .scalar, .zst, .erased_box, .list, .list_of_zst, .struct_, .tag_union, .closure, .erased_callable, .ptr => return self.invariantFailedError(
+                                "LIR/interpreter invariant violated: box boxy equality descriptor had layout {d} ({s})",
+                                .{ @backingInt(layout_idx), @tagName(layout_val.tag) },
+                            ),
+                        };
+                    },
+                    .function, .erased, .internal => return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: boxy equality reached a {s} descriptor for layout {d}",
+                        .{ @tagName(desc.shape), @backingInt(layout_idx) },
+                    ),
+                }
+            }
+
+            pub fn componentCount(_: Shapes, aggregate: StructPair) u32 {
+                return aggregate.desc.nested_descs.len;
+            }
+
+            pub fn componentOperands(shapes: Shapes, aggregate: StructPair, index: u32) Error!?Rules.Pair {
+                const lhs = (try shapes.runtime.structField(shapes.hooks, aggregate.lhs, aggregate.desc, aggregate.struct_idx, index)) orelse return null;
+                return .{ .lhs = lhs, .rhs = .{ .value = if (aggregate.struct_idx) |idx|
+                    aggregate.rhs.offset(shapes.runtime.layout_store.getStructFieldOffsetByOriginalIndex(idx, index))
+                else
+                    Value.zst, .layout = lhs.layout, .desc = lhs.desc } };
+            }
+
+            pub fn variants(shapes: Shapes, bases: TagBases) Error!value_semantics.structural.VariantPair(StoredValue) {
+                const self = shapes.runtime;
+                if (bases.lhs_discriminant != bases.rhs_discriminant) return .different;
+                const discriminant = bases.lhs_discriminant;
+                if (!bases.presence_slot) {
+                    if (self.boxyTagExtDiscriminant(bases.desc)) |ext_discriminant| {
+                        if (discriminant == ext_discriminant) {
+                            const ext_desc = try self.resolveBoxyTagExtDesc(shapes.hooks, bases.desc);
+                            return .{ .extension = pair(bases.lhs, bases.rhs, self.requireBoxyTagPayloadLayout(bases.desc.payload_layout, ext_discriminant), ext_desc) };
+                        }
+                    }
+                }
+                return .{ .same = discriminant };
+            }
+
+            pub fn payloadCount(shapes: Shapes, bases: TagBases, discriminant: u32) u32 {
+                return shapes.runtime.requireBoxyTagVariantByDiscriminant(bases.desc, discriminant).payload_count;
+            }
+
+            pub fn payloadOperands(shapes: Shapes, bases: TagBases, discriminant: u32, index: u32) Error!Rules.Pair {
+                const self = shapes.runtime;
+                const variant = self.requireBoxyTagVariantByDiscriminant(bases.desc, discriminant);
+                const payload_layout = self.variantPayloadLayout(bases, variant, discriminant);
+                const lhs = try self.variantPayload(shapes.hooks, variant, bases.lhs, payload_layout, index, "equality");
+                const rhs = try self.variantPayload(shapes.hooks, variant, bases.rhs, payload_layout, index, "equality");
+                return .{ .lhs = lhs, .rhs = rhs };
+            }
+
+            pub fn listLens(_: Shapes, list: ListPair) [2]u64 {
+                return .{ list.lhs.len(), list.rhs.len() };
+            }
+
+            pub fn itemOperands(shapes: Shapes, list: ListPair, index: u64) Error!Rules.Pair {
+                return .{
+                    .lhs = try shapes.runtime.listItem(list.lhs, list, index),
+                    .rhs = try shapes.runtime.listItem(list.rhs, list, index),
+                };
+            }
+        };
+    }
+
+    /// Call the type's own `is_eq`, which `lhs`'s descriptor carries.
+    fn callEqMethod(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        method: LirProgram.BoxyMethodSlotId,
+        lhs: StoredValue,
+        rhs: StoredValue,
     ) Error!bool {
-        const lhs_list = self.valueToRocListForLayout(lhs, list_layout);
-        const rhs_list = self.valueToRocListForLayout(rhs, list_layout);
-        if (lhs_list.len() != rhs_list.len()) return false;
-        const elem_layout = self.listElemLayout(list_layout);
-        const elem_size = self.helper.sizeOf(elem_layout);
-        const elem_desc = try self.requireNestedBoxyDesc(hooks, desc, 0, "list item");
-        var index: usize = 0;
-        while (index < lhs_list.len()) : (index += 1) {
-            const equal = if (elem_size == 0)
-                try self.layoutEq(hooks, Value.zst, Value.zst, elem_layout, elem_desc)
-            else blk: {
-                const lhs_bytes = lhs_list.bytes orelse return self.listBytesMissing(list_layout);
-                const rhs_bytes = rhs_list.bytes orelse return self.listBytesMissing(list_layout);
-                break :blk try self.layoutEq(
-                    hooks,
-                    .{ .ptr = lhs_bytes + index * elem_size },
-                    .{ .ptr = rhs_bytes + index * elem_size },
-                    elem_layout,
-                    elem_desc,
-                );
-            };
-            if (!equal) return false;
+        const result = try hooks.callDescriptorMethod(.equality, method, &.{
+            .{ .value = lhs.value, .layout = lhs.layout, .source_desc = lhs.desc },
+            .{ .value = rhs.value, .layout = rhs.layout, .source_desc = rhs.desc },
+        });
+        const adapter = self.requireBoxyMethodSlot(method).adapter;
+        const bool_layout = adapter.ret_layout orelse return self.invariantFailedError(
+            "LIR/interpreter invariant violated: is_eq method slot named no Bool result layout",
+            .{},
+        );
+        if (result.layout == bool_layout) return result.value.read(u8) != 0;
+        // The worker returned its own storage of the Bool; read it as the
+        // slot's Bool, consuming an owned copy of the result.
+        const bool_desc = try hooks.resolveDescRef(adapter.ret_desc orelse return self.invariantFailedError(
+            "LIR/interpreter invariant violated: is_eq method slot named no Bool result descriptor",
+            .{},
+        ));
+        if (result.borrowed) {
+            try self.performBoxyLayoutDrop(hooks, result.value, result.layout, result.desc, .incref, 1, .atomic);
         }
-        return true;
+        const converted = try self.materializeCallResult(hooks, result.value, result.layout, result.desc, bool_desc, bool_layout);
+        return converted.value.read(u8) != 0;
     }
 
     fn listBytesMissing(self: *const BoxyRuntime, list_layout: layout_mod.Idx) Error {
@@ -5159,38 +5296,6 @@ pub const BoxyRuntime = struct {
             "LIR/interpreter invariant violated: non-empty list layout {d} had null bytes during boxy equality",
             .{@backingInt(list_layout)},
         );
-    }
-
-    fn presenceSlotEq(
-        self: *const BoxyRuntime,
-        hooks: anytype,
-        lhs: Value,
-        rhs: Value,
-        layout_idx: layout_mod.Idx,
-        desc: *const LirProgram.BoxyTypeDesc,
-    ) Error!bool {
-        const present_discriminant = desc.presence_slot_present_discriminant orelse
-            return self.invariantFailedError(
-                "LIR/interpreter invariant violated: presence-slot equality lacked its Present discriminant",
-                .{},
-            );
-        const lhs_base = self.resolveBoxyTagBaseValue(lhs, layout_idx, desc);
-        const rhs_base = self.resolveBoxyTagBaseValue(rhs, layout_idx, desc);
-        const base_is_zst = self.helper.sizeOf(lhs_base.layout) == 0;
-        const discriminant = if (base_is_zst) @as(u16, 0) else self.helper.readTagDiscriminant(lhs_base.value, lhs_base.layout);
-        const rhs_discriminant = if (base_is_zst) @as(u16, 0) else self.helper.readTagDiscriminant(rhs_base.value, rhs_base.layout);
-        if (discriminant != rhs_discriminant) return false;
-        if (discriminant != present_discriminant) return true;
-        const present = self.requireBoxyTagVariantByDiscriminant(desc, present_discriminant);
-        if (present.payload_count != 1) {
-            return self.invariantFailedError(
-                "LIR/interpreter invariant violated: presence-slot equality Present arm had {d} payloads",
-                .{present.payload_count},
-            );
-        }
-        const payload_layout = self.requireBoxyTagPayloadLayout(lhs_base.layout, present_discriminant);
-        const payload_desc = try self.requireBoxyPayloadDesc(hooks, present, 0);
-        return try self.layoutEq(hooks, lhs_base.value, rhs_base.value, payload_layout, payload_desc);
     }
 
     /// Feed `value`, stored in `value_layout` as `desc` describes, into the
@@ -5204,113 +5309,239 @@ pub const BoxyRuntime = struct {
         desc: *const LirProgram.BoxyTypeDesc,
         hasher: u64,
     ) Error!u64 {
-        return try self.layoutHash(hooks, value, value_layout, desc, hasher);
+        const shapes = HashShapes(@TypeOf(hooks)){ .runtime = self, .hooks = hooks };
+        return try value_semantics.structural.HashEval(HashShapes(@TypeOf(hooks))).hash(
+            shapes,
+            .{ .stored = .{ .value = value, .layout = value_layout, .desc = desc } },
+            hasher,
+        );
     }
 
     fn hashU64(hasher: u64, domain: builtins.hash.HasherDomain, value: u64, width: u8) u64 {
         return builtins.hash.hasher_write_u64(hasher, @backingInt(domain), value, width);
     }
 
-    fn layoutHash(
-        self: *const BoxyRuntime,
-        hooks: anytype,
+    /// A value to hash. A tag row's extension hashes its variants at their
+    /// index in the complete row, so it carries that row's descriptor.
+    const HashOperand = struct {
+        stored: StoredValue,
+        row: ?*const LirProgram.BoxyTypeDesc = null,
+    };
+
+    /// A tag value and the row its variant indexes count in.
+    const HashTag = struct {
         value: Value,
-        layout_idx: layout_mod.Idx,
+        layout: layout_mod.Idx,
         desc: *const LirProgram.BoxyTypeDesc,
-        hasher: u64,
-    ) Error!u64 {
-        const layout_val = self.layout_store.getLayout(layout_idx);
-        if ((layout_val.tag == .box or layout_val.tag == .box_of_zst) and desc.payload_layout != layout_idx) {
-            // A payload-direct Box descriptor describes the boxed value.
-            if (layout_val.tag == .box_of_zst) return try self.layoutHash(hooks, Value.zst, .zst, desc, hasher);
-            return try self.layoutHash(hooks, self.boxedPayloadValue(value), layout_val.getIdx(), desc, hasher);
-        }
-        if (desc.hash_rejected) return hooks.crashCheckedError(rejected_method_message);
-        if (desc.hash_method) |method| return try self.callHashMethod(hooks, method, value, layout_idx, desc, hasher);
-        if (layout_val.tag == .erased_box) {
-            // Erased storage: the boxed allocation's descriptor describes the value.
-            const payload_desc = try self.boxyBoxAllocationPayloadDesc(hooks, layout_idx, desc) orelse return hasher;
-            const payload_layout = payload_desc.payload_layout;
-            const payload = self.readBoxedDataPointer(value) orelse {
-                if (self.helper.sizeOf(payload_layout) != 0) {
-                    return self.invariantFailedError(
-                        "LIR/interpreter invariant violated: non-zero-sized boxy hash payload layout {d} had a null box pointer",
-                        .{@backingInt(payload_layout)},
-                    );
+        row: *const LirProgram.BoxyTypeDesc,
+    };
+
+    /// Descriptor-described values as the shared hash evaluator reads them.
+    fn HashShapes(comptime Hooks: type) type {
+        return struct {
+            runtime: *const BoxyRuntime,
+            hooks: Hooks,
+
+            const Shapes = @This();
+            const Rules = value_semantics.structural.HashEval(Shapes);
+
+            pub const WalkError = Error;
+            pub const Operand = HashOperand;
+            pub const Hasher = u64;
+            pub const Aggregate = StructPair;
+            pub const TagUnion = HashTag;
+            pub const List = ListPair;
+
+            fn operand(value: Value, layout_idx: layout_mod.Idx, desc: *const LirProgram.BoxyTypeDesc) HashOperand {
+                return .{ .stored = .{ .value = value, .layout = layout_idx, .desc = desc } };
+            }
+
+            pub fn hashStep(shapes: Shapes, hashed: HashOperand, hasher: u64) Error!Rules.Step {
+                const self = shapes.runtime;
+                const hooks = shapes.hooks;
+                const value = hashed.stored.value;
+                const layout_idx = hashed.stored.layout;
+                const desc = hashed.stored.desc;
+                const layout_val = self.layout_store.getLayout(layout_idx);
+                // A row's extension hashes within the complete row.
+                if (hashed.row) |row| return try shapes.tagInRow(value, layout_idx, desc, row);
+                if ((layout_val.tag == .box or layout_val.tag == .box_of_zst) and desc.payload_layout != layout_idx) {
+                    // A payload-direct Box descriptor describes the boxed value.
+                    if (layout_val.tag == .box_of_zst) return .{ .retarget = operand(Value.zst, .zst, desc) };
+                    return .{ .retarget = operand(self.boxedPayloadValue(value), layout_val.getIdx(), desc) };
                 }
-                return try self.layoutHash(hooks, Value.zst, payload_layout, payload_desc, hasher);
-            };
-            return try self.layoutHash(hooks, .{ .ptr = payload }, payload_layout, payload_desc, hasher);
-        }
-        if (desc.is_bool) {
-            // Bool's layout stores `False` as 0 and `True` as 1.
-            const tag_base = self.resolveTagUnionBaseValue(value, layout_idx);
-            const discriminant = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
-            return hashU64(hasher, .bool, discriminant, 1);
-        }
-        switch (desc.shape) {
-            .primitive => {
-                if (layout_val.tag != .scalar) {
-                    return self.invariantFailedError(
-                        "LIR/interpreter invariant violated: primitive boxy hash descriptor had non-scalar layout {d}",
-                        .{@backingInt(layout_idx)},
-                    );
+                if (desc.hash_rejected) return hooks.crashCheckedError(rejected_method_message);
+                if (desc.hash_method) |method| return .{ .done = try self.callHashMethod(hooks, method, value, layout_idx, desc, hasher) };
+                if (layout_val.tag == .erased_box) {
+                    // Erased storage: the boxed allocation's descriptor describes the value.
+                    const payload_desc = try self.boxyBoxAllocationPayloadDesc(hooks, layout_idx, desc) orelse return .nothing;
+                    const payload_layout = payload_desc.payload_layout;
+                    const payload = self.readBoxedDataPointer(value) orelse {
+                        if (self.helper.sizeOf(payload_layout) != 0) {
+                            return self.invariantFailedError(
+                                "LIR/interpreter invariant violated: non-zero-sized boxy hash payload layout {d} had a null box pointer",
+                                .{@backingInt(payload_layout)},
+                            );
+                        }
+                        return .{ .retarget = operand(Value.zst, payload_layout, payload_desc) };
+                    };
+                    return .{ .retarget = operand(.{ .ptr = payload }, payload_layout, payload_desc) };
                 }
-                const scalar = layout_val.getScalar();
-                return switch (scalar.tag) {
-                    .str => blk: {
-                        const bytes = readRocStr(value);
-                        break :blk builtins.hash.hasher_write_bytes(hasher, @backingInt(builtins.hash.HasherDomain.str), bytes.ptr, bytes.len);
+                if (desc.is_bool) {
+                    // Bool's layout stores `False` as 0 and `True` as 1.
+                    const tag_base = self.resolveTagUnionBaseValue(value, layout_idx);
+                    const discriminant = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
+                    return .{ .done = hashU64(hasher, .bool, discriminant, 1) };
+                }
+                switch (desc.shape) {
+                    .primitive => {
+                        if (layout_val.tag != .scalar) {
+                            return self.invariantFailedError(
+                                "LIR/interpreter invariant violated: primitive boxy hash descriptor had non-scalar layout {d}",
+                                .{@backingInt(layout_idx)},
+                            );
+                        }
+                        const scalar = layout_val.getScalar();
+                        return .{ .done = switch (scalar.tag) {
+                            .str => blk: {
+                                const bytes = readRocStr(value);
+                                break :blk builtins.hash.hasher_write_bytes(hasher, @backingInt(builtins.hash.HasherDomain.str), bytes.ptr, bytes.len);
+                            },
+                            .int => switch (scalar.getInt()) {
+                                .u8 => hashU64(hasher, .u8, value.read(u8), 1),
+                                .i8 => hashU64(hasher, .i8, @as(u8, @bitCast(value.read(i8))), 1),
+                                .u16 => hashU64(hasher, .u16, value.read(u16), 2),
+                                .i16 => hashU64(hasher, .i16, @as(u16, @bitCast(value.read(i16))), 2),
+                                .u32 => hashU64(hasher, .u32, value.read(u32), 4),
+                                .i32 => hashU64(hasher, .i32, @as(u32, @bitCast(value.read(i32))), 4),
+                                .u64 => hashU64(hasher, .u64, value.read(u64), 8),
+                                .i64 => hashU64(hasher, .i64, @bitCast(value.read(i64)), 8),
+                                .u128 => hashU128(hasher, .u128, value.read(u128)),
+                                .i128 => hashU128(hasher, .i128, @bitCast(value.read(i128))),
+                            },
+                            .frac => switch (scalar.getFrac()) {
+                                .f32 => builtins.hash.hasher_write_f32_bits(hasher, @bitCast(value.read(f32))),
+                                .f64 => builtins.hash.hasher_write_f64_bits(hasher, @bitCast(value.read(f64))),
+                                .dec => hashU128(hasher, .dec, @bitCast(value.read(i128))),
+                            },
+                            // A SIMD value hashes its 128 bits.
+                            .vector => hashU128(hasher, .u128, value.read(u128)),
+                            .opaque_ptr => return self.invariantFailedError(
+                                "LIR/interpreter invariant violated: boxy hash reached an opaque pointer for layout {d}",
+                                .{@backingInt(layout_idx)},
+                            ),
+                        } };
                     },
-                    .int => switch (scalar.getInt()) {
-                        .u8 => hashU64(hasher, .u8, value.read(u8), 1),
-                        .i8 => hashU64(hasher, .i8, @as(u8, @bitCast(value.read(i8))), 1),
-                        .u16 => hashU64(hasher, .u16, value.read(u16), 2),
-                        .i16 => hashU64(hasher, .i16, @as(u16, @bitCast(value.read(i16))), 2),
-                        .u32 => hashU64(hasher, .u32, value.read(u32), 4),
-                        .i32 => hashU64(hasher, .i32, @as(u32, @bitCast(value.read(i32))), 4),
-                        .u64 => hashU64(hasher, .u64, value.read(u64), 8),
-                        .i64 => hashU64(hasher, .i64, @bitCast(value.read(i64)), 8),
-                        .u128 => hashU128(hasher, .u128, value.read(u128)),
-                        .i128 => hashU128(hasher, .i128, @bitCast(value.read(i128))),
+                    .record, .tuple => return .{ .components = .{
+                        .lhs = value,
+                        .rhs = value,
+                        .desc = desc,
+                        .struct_idx = try self.structStorage(layout_idx, desc, "hash"),
+                    } },
+                    .tag_union => return try shapes.tagInRow(value, layout_idx, desc, desc),
+                    .list => return .{ .list = try self.listPair(hooks, hashed.stored, value) },
+                    .box => {
+                        const payload_desc = try self.requireNestedBoxyDesc(hooks, desc, 0, "box payload");
+                        return switch (layout_val.tag) {
+                            .box => .{ .retarget = operand(self.boxedPayloadValue(value), layout_val.getIdx(), payload_desc) },
+                            .box_of_zst => .{ .retarget = operand(Value.zst, .zst, payload_desc) },
+                            .scalar, .zst, .erased_box, .list, .list_of_zst, .struct_, .tag_union, .closure, .erased_callable, .ptr => return self.invariantFailedError(
+                                "LIR/interpreter invariant violated: box boxy hash descriptor had layout {d} ({s})",
+                                .{ @backingInt(layout_idx), @tagName(layout_val.tag) },
+                            ),
+                        };
                     },
-                    .frac => switch (scalar.getFrac()) {
-                        .f32 => builtins.hash.hasher_write_f32_bits(hasher, @bitCast(value.read(f32))),
-                        .f64 => builtins.hash.hasher_write_f64_bits(hasher, @bitCast(value.read(f64))),
-                        .dec => hashU128(hasher, .dec, @bitCast(value.read(i128))),
-                    },
-                    // A SIMD value hashes its 128 bits.
-                    .vector => hashU128(hasher, .u128, value.read(u128)),
-                    .opaque_ptr => self.invariantFailedError(
-                        "LIR/interpreter invariant violated: boxy hash reached an opaque pointer for layout {d}",
-                        .{@backingInt(layout_idx)},
+                    .function, .erased, .internal => return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: boxy hash reached a {s} descriptor for layout {d}",
+                        .{ @tagName(desc.shape), @backingInt(layout_idx) },
                     ),
-                };
-            },
-            .record, .tuple => return try self.structHash(hooks, value, layout_idx, desc, hasher),
-            .tag_union => {
-                var row_names = std.ArrayList(LIR.BoxyNameId).empty;
-                defer row_names.deinit(self.scratch);
-                try self.collectBoxyRowTagNames(hooks, desc, &row_names);
-                return try self.tagUnionHashInRow(hooks, value, layout_idx, desc, row_names.items, hasher);
-            },
-            .list => return try self.listHash(hooks, value, layout_idx, desc, hasher),
-            .box => {
-                const payload_desc = try self.requireNestedBoxyDesc(hooks, desc, 0, "box payload");
-                return switch (layout_val.tag) {
-                    .box => try self.layoutHash(hooks, self.boxedPayloadValue(value), layout_val.getIdx(), payload_desc, hasher),
-                    .box_of_zst => try self.layoutHash(hooks, Value.zst, .zst, payload_desc, hasher),
-                    .scalar, .zst, .erased_box, .list, .list_of_zst, .struct_, .tag_union, .closure, .erased_callable, .ptr => return self.invariantFailedError(
-                        "LIR/interpreter invariant violated: box boxy hash descriptor had layout {d} ({s})",
+                }
+            }
+
+            /// A tag value of the row `row` describes, through its extension
+            /// chain.
+            fn tagInRow(
+                shapes: Shapes,
+                value: Value,
+                layout_idx: layout_mod.Idx,
+                desc: *const LirProgram.BoxyTypeDesc,
+                row: *const LirProgram.BoxyTypeDesc,
+            ) Error!Rules.Step {
+                const self = shapes.runtime;
+                const layout_val = self.layout_store.getLayout(layout_idx);
+                switch (layout_val.tag) {
+                    .zst, .tag_union, .box => {},
+                    .erased_box => {
+                        const payload_desc = try self.boxyBoxAllocationPayloadDesc(shapes.hooks, layout_idx, desc) orelse
+                            return self.invariantFailedError("LIR/interpreter invariant violated: erased tag row had no payload descriptor", .{});
+                        const payload = self.readBoxedDataPointer(value);
+                        const payload_value: Value = if (payload) |ptr| .{ .ptr = ptr } else Value.zst;
+                        return .{ .retarget = .{ .stored = .{ .value = payload_value, .layout = payload_desc.payload_layout, .desc = payload_desc }, .row = row } };
+                    },
+                    .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: tag union boxy hash descriptor had layout {d} ({s})",
                         .{ @backingInt(layout_idx), @tagName(layout_val.tag) },
                     ),
-                };
-            },
-            .function, .erased, .internal => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: boxy hash reached a {s} descriptor for layout {d}",
-                .{ @tagName(desc.shape), @backingInt(layout_idx) },
-            ),
-        }
+                }
+                return .{ .tag_union = .{ .value = value, .layout = layout_idx, .desc = desc, .row = row } };
+            }
+
+            pub fn componentCount(_: Shapes, aggregate: StructPair) u32 {
+                return aggregate.desc.nested_descs.len;
+            }
+
+            pub fn componentOperand(shapes: Shapes, aggregate: StructPair, index: u32) Error!?HashOperand {
+                const field = (try shapes.runtime.structField(shapes.hooks, aggregate.lhs, aggregate.desc, aggregate.struct_idx, index)) orelse return null;
+                return .{ .stored = field };
+            }
+
+            pub fn variant(shapes: Shapes, tag: HashTag) Error!value_semantics.structural.HashVariant(HashOperand) {
+                const self = shapes.runtime;
+                var discriminant: u32 = 0;
+                if (self.layout_store.getLayout(tag.layout).tag != .zst) {
+                    const tag_base = self.resolveTagUnionBaseValue(tag.value, tag.layout);
+                    discriminant = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
+                    if (self.boxyTagExtDiscriminant(tag.desc)) |ext_discriminant| {
+                        if (discriminant == ext_discriminant) {
+                            const ext_desc = try self.resolveBoxyTagExtDesc(shapes.hooks, tag.desc);
+                            const ext_payload_layout = self.requireBoxyTagPayloadLayout(tag.desc.payload_layout, ext_discriminant);
+                            return .{ .extension = .{ .stored = .{ .value = tag_base.value, .layout = ext_payload_layout, .desc = ext_desc }, .row = tag.row } };
+                        }
+                    }
+                }
+                const name = self.requireBoxyTagVariantByDiscriminant(tag.desc, discriminant).name;
+                var row_names = std.ArrayList(LIR.BoxyNameId).empty;
+                defer row_names.deinit(self.scratch);
+                try self.collectBoxyRowTagNames(shapes.hooks, tag.row, &row_names);
+                return .{ .variant = .{ .discriminant = discriminant, .row_index = self.rowTagIndex(row_names.items, name) } };
+            }
+
+            pub fn payloadCount(shapes: Shapes, tag: HashTag, discriminant: u32) u32 {
+                return shapes.runtime.requireBoxyTagVariantByDiscriminant(tag.desc, discriminant).payload_count;
+            }
+
+            pub fn payloadOperand(shapes: Shapes, tag: HashTag, discriminant: u32, index: u32) Error!HashOperand {
+                const self = shapes.runtime;
+                const variant_info = self.requireBoxyTagVariantByDiscriminant(tag.desc, discriminant);
+                if (self.layout_store.getLayout(tag.layout).tag == .zst) {
+                    return .{ .stored = try self.variantPayload(shapes.hooks, variant_info, Value.zst, .zst, index, "hash") };
+                }
+                const tag_base = self.resolveTagUnionBaseValue(tag.value, tag.layout);
+                return .{ .stored = try self.variantPayload(shapes.hooks, variant_info, tag_base.value, variant_info.payload_layout, index, "hash") };
+            }
+
+            pub fn writeU64(_: Shapes, hasher: u64, value: u64) u64 {
+                return hashU64(hasher, .u64, value, 8);
+            }
+
+            pub fn listLen(_: Shapes, list: ListPair) u64 {
+                return list.lhs.len();
+            }
+
+            pub fn itemOperand(shapes: Shapes, list: ListPair, index: u64) Error!HashOperand {
+                return .{ .stored = try shapes.runtime.listItem(list.lhs, list, index) };
+            }
+        };
     }
 
     fn hashU128(hasher: u64, domain: builtins.hash.HasherDomain, bits: u128) u64 {
@@ -5352,61 +5583,6 @@ pub const BoxyRuntime = struct {
         return converted.value.read(u64);
     }
 
-    /// Hash a record's fields, or a tuple's elements, in order. Padding fields
-    /// hold no value.
-    fn structHash(
-        self: *const BoxyRuntime,
-        hooks: anytype,
-        value: Value,
-        struct_layout: layout_mod.Idx,
-        desc: *const LirProgram.BoxyTypeDesc,
-        hasher: u64,
-    ) Error!u64 {
-        // A field's own `to_hash` can instantiate more runtime descriptors.
-        // Retain the span and reborrow each ref after recursive calls, because
-        // their append-only backing table can reallocate during those calls.
-        const desc_span = desc.nested_descs;
-        const field_names_span = desc.field_names;
-        const field_count: u32 = desc_span.len;
-        const named = desc.shape == .record;
-        if (named and self.requireBoxyFieldNames(field_names_span).len != field_count) {
-            return self.invariantFailedError(
-                "LIR/interpreter invariant violated: record hash descriptor had {d} field names for {d} fields",
-                .{ self.requireBoxyFieldNames(field_names_span).len, field_count },
-            );
-        }
-        const layout_val = self.layout_store.getLayout(struct_layout);
-        const struct_idx = switch (layout_val.tag) {
-            .struct_ => blk: {
-                const struct_idx = layout_val.getStruct().idx;
-                if (self.layout_store.getStructData(struct_idx).fields.count != field_count) {
-                    return self.invariantFailedError(
-                        "LIR/interpreter invariant violated: struct hash descriptor had {d} fields for layout {d}",
-                        .{ field_count, @backingInt(struct_layout) },
-                    );
-                }
-                break :blk struct_idx;
-            },
-            .zst => null,
-            .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .tag_union, .closure, .erased_callable, .ptr => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: struct hash descriptor had layout {d} ({s})",
-                .{ @backingInt(struct_layout), @tagName(layout_val.tag) },
-            ),
-        };
-        var state = hasher;
-        var field_index: u32 = 0;
-        while (field_index < field_count) : (field_index += 1) {
-            if (named and self.requireBoxyFieldNames(field_names_span)[field_index] == .padding_field) continue;
-            const field_desc = try hooks.resolveDescRef(self.requireBoxyDescRefs(desc_span)[field_index]);
-            state = if (struct_idx) |idx| blk: {
-                const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(idx, field_index);
-                const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(idx, field_index);
-                break :blk try self.layoutHash(hooks, value.offset(field_offset), field_layout, field_desc, state);
-            } else try self.layoutHash(hooks, Value.zst, .zst, field_desc, state);
-        }
-        return state;
-    }
-
     /// Every tag name the row `desc` describes, through its extension chain.
     fn collectBoxyRowTagNames(
         self: *const BoxyRuntime,
@@ -5440,51 +5616,6 @@ pub const BoxyRuntime = struct {
             self.invariantFailedError("LIR/interpreter invariant violated: erased tag row extension had no payload descriptor", .{});
     }
 
-    /// Hash a tag value of the row `row_names` names: the variant's index in
-    /// the complete row, ordered as tag layouts order tags, then its payloads.
-    fn tagUnionHashInRow(
-        self: *const BoxyRuntime,
-        hooks: anytype,
-        value: Value,
-        union_layout: layout_mod.Idx,
-        desc: *const LirProgram.BoxyTypeDesc,
-        row_names: []const LIR.BoxyNameId,
-        hasher: u64,
-    ) Error!u64 {
-        const layout_val = self.layout_store.getLayout(union_layout);
-        switch (layout_val.tag) {
-            .zst => {
-                const variant = self.requireBoxyTagVariantByDiscriminant(desc, 0);
-                const state = hashU64(hasher, .u64, self.rowTagIndex(row_names, variant.name), 8);
-                return try self.tagPayloadsHash(hooks, variant, Value.zst, .zst, state);
-            },
-            .erased_box => {
-                const payload_desc = try self.boxyBoxAllocationPayloadDesc(hooks, union_layout, desc) orelse
-                    return self.invariantFailedError("LIR/interpreter invariant violated: erased tag row had no payload descriptor", .{});
-                const payload = self.readBoxedDataPointer(value);
-                const payload_value: Value = if (payload) |ptr| .{ .ptr = ptr } else Value.zst;
-                return try self.tagUnionHashInRow(hooks, payload_value, payload_desc.payload_layout, payload_desc, row_names, hasher);
-            },
-            .tag_union, .box => {},
-            .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: tag union boxy hash descriptor had layout {d} ({s})",
-                .{ @backingInt(union_layout), @tagName(layout_val.tag) },
-            ),
-        }
-        const tag_base = self.resolveTagUnionBaseValue(value, union_layout);
-        const discriminant = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
-        if (self.boxyTagExtDiscriminant(desc)) |ext_discriminant| {
-            if (discriminant == ext_discriminant) {
-                const ext_desc = try self.resolveBoxyTagExtDesc(hooks, desc);
-                const ext_payload_layout = self.requireBoxyTagPayloadLayout(desc.payload_layout, ext_discriminant);
-                return try self.tagUnionHashInRow(hooks, tag_base.value, ext_payload_layout, ext_desc, row_names, hasher);
-            }
-        }
-        const variant = self.requireBoxyTagVariantByDiscriminant(desc, discriminant);
-        const state = hashU64(hasher, .u64, self.rowTagIndex(row_names, variant.name), 8);
-        return try self.tagPayloadsHash(hooks, variant, tag_base.value, variant.payload_layout, state);
-    }
-
     /// The index of `name` among `row_names` in tag layout order.
     fn rowTagIndex(self: *const BoxyRuntime, row_names: []const LIR.BoxyNameId, name: LIR.BoxyNameId) u64 {
         var index: u64 = 0;
@@ -5494,77 +5625,357 @@ pub const BoxyRuntime = struct {
         return index;
     }
 
-    /// Hash `variant`'s payloads, stored in `payload_layout`, in order.
-    fn tagPayloadsHash(
-        self: *const BoxyRuntime,
-        hooks: anytype,
-        variant: LirProgram.BoxyTagVariant,
-        payload_value: Value,
-        payload_layout: layout_mod.Idx,
-        hasher: u64,
-    ) Error!u64 {
-        if (variant.payload_count == 0) return hasher;
-        if (variant.payload_count == 1) {
-            return try self.layoutHash(hooks, payload_value, payload_layout, try self.requireBoxyPayloadDesc(hooks, variant, 0), hasher);
+    // Inspection //
+    //
+    // A descriptor-described value renders exactly as the statically lowered
+    // inspection of its type does: both read their representation into the
+    // shared value-semantics shape, and the shared rules decide every literal
+    // and the order of every part.
+
+    const InspectRules = value_semantics.InspectSpec(InspectShapes);
+    const inspect_text = value_semantics.inspect.text;
+
+    /// A value as inspection reads it.
+    const InspectValue = union(enum) {
+        stored: StoredValue,
+        /// What an erased box whose allocation carries no descriptor holds.
+        empty_record,
+    };
+
+    /// A value stored in `layout` as `desc` describes it.
+    const StoredValue = struct {
+        value: Value,
+        layout: layout_mod.Idx,
+        desc: *const LirProgram.BoxyTypeDesc,
+    };
+
+    /// A record or tuple: one nested descriptor per field.
+    const InspectStruct = struct {
+        value: Value,
+        desc: *const LirProgram.BoxyTypeDesc,
+        /// Null when the aggregate stores all of its fields in no bytes.
+        struct_idx: ?layout_mod.StructIdx,
+    };
+
+    /// A nominal's `to_inspect` override and the value it renders.
+    const InspectOverride = struct {
+        method: LirProgram.BoxyMethodSlotId,
+        receiver: StoredValue,
+    };
+
+    /// The shapes of descriptor-described values, as the shared inspect
+    /// rules read them. A tag union's variant is named by its discriminant.
+    const InspectShapes = struct {
+        runtime: *const BoxyRuntime,
+
+        pub const Ty = InspectValue;
+        pub const Primitive = StoredValue;
+        pub const Record = InspectStruct;
+        pub const Tuple = InspectStruct;
+        pub const TagUnion = StoredValue;
+        pub const PresenceSlot = StoredValue;
+        pub const Override = InspectOverride;
+        pub const Child = u32;
+        pub const Label = []const u8;
+
+        pub fn recordSlotCount(_: InspectShapes, record: InspectStruct) u32 {
+            return record.desc.nested_descs.len;
         }
-        const payload_layout_val = self.layout_store.getLayout(payload_layout);
-        const struct_idx = switch (payload_layout_val.tag) {
-            .struct_ => payload_layout_val.getStruct().idx,
+
+        pub fn recordField(shapes: InspectShapes, record: InspectStruct, slot: u32) ?value_semantics.inspect.RecordField(InspectShapes) {
+            const name = shapes.runtime.requireBoxyFieldNames(record.desc.field_names)[slot];
+            // Padding holds no value.
+            if (name == .padding_field) return null;
+            return .{ .label = shapes.runtime.store.getBoxyName(name), .child = slot };
+        }
+
+        pub fn tupleElemCount(_: InspectShapes, tuple: InspectStruct) u32 {
+            return tuple.desc.nested_descs.len;
+        }
+
+        pub fn tupleElem(_: InspectShapes, _: InspectStruct, index: u32) u32 {
+            return index;
+        }
+
+        pub fn variantCount(shapes: InspectShapes, tag_union: StoredValue) u32 {
+            return @intCast(shapes.runtime.requireBoxyTagVariants(tag_union.desc.tag_variants).len);
+        }
+
+        pub fn variantName(shapes: InspectShapes, tag_union: StoredValue, discriminant: u32) []const u8 {
+            return shapes.runtime.store.getBoxyName(shapes.runtime.requireBoxyTagVariantByDiscriminant(tag_union.desc, discriminant).name);
+        }
+
+        pub fn payloadCount(shapes: InspectShapes, tag_union: StoredValue, discriminant: u32) u32 {
+            return shapes.runtime.requireBoxyTagVariantByDiscriminant(tag_union.desc, discriminant).payload_count;
+        }
+
+        pub fn payload(_: InspectShapes, _: StoredValue, _: u32, index: u32) u32 {
+            return index;
+        }
+    };
+
+    fn storedOrZst(self: *const BoxyRuntime, boxed: Value, payload_layout: layout_mod.Idx, desc: *const LirProgram.BoxyTypeDesc) StoredValue {
+        return if (self.readBoxedDataPointer(boxed)) |data_ptr|
+            .{ .value = .{ .ptr = data_ptr }, .layout = payload_layout, .desc = desc }
+        else
+            .{ .value = Value.zst, .layout = .zst, .desc = desc };
+    }
+
+    /// Read `inspected` into the shared value-semantics shape. The
+    /// descriptor's shape selects the reading; the layout only locates bytes.
+    fn inspectShape(self: *const BoxyRuntime, hooks: anytype, inspected: InspectValue) Error!InspectRules.Shape {
+        const stored = switch (inspected) {
+            .stored => |stored| stored,
+            .empty_record => return .empty_record,
+        };
+        const value = stored.value;
+        const layout_idx = stored.layout;
+        const desc = stored.desc;
+        const layout_val = self.layout_store.getLayout(layout_idx);
+        if ((layout_val.tag == .box or layout_val.tag == .box_of_zst) and desc.payload_layout != layout_idx) {
+            // A payload-direct Box descriptor describes the boxed value.
+            if (layout_val.tag == .box_of_zst) return .{ .box = .{ .stored = .{ .value = Value.zst, .layout = .zst, .desc = desc } } };
+            return .{ .box = .{ .stored = self.storedOrZst(value, layout_val.getIdx(), desc) } };
+        }
+        if (desc.inspect_method) |method| return .{ .nominal = .{ .override = .{ .method = method, .receiver = stored }, .backing = null } };
+        if (desc.inspect_opaque) return .{ .nominal = .{ .override = null, .backing = null } };
+        if (desc.presence_slot_present_discriminant != null) return .{ .presence_slot = stored };
+        if (layout_val.tag == .erased_box) {
+            // Erased storage: the boxed allocation's descriptor describes the value.
+            const payload_desc = try self.boxyBoxAllocationPayloadDesc(hooks, layout_idx, desc) orelse
+                return .{ .box = .empty_record };
+            const payload: InspectValue = if (self.readBoxedDataPointer(value)) |data_ptr|
+                .{ .stored = .{ .value = .{ .ptr = data_ptr }, .layout = payload_desc.payload_layout, .desc = payload_desc } }
+            else if (self.helper.sizeOf(payload_desc.payload_layout) != 0)
+                return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: non-zero-sized boxy inspect payload layout {d} had a null box pointer",
+                    .{@backingInt(payload_desc.payload_layout)},
+                )
+            else
+                .{ .stored = .{ .value = Value.zst, .layout = payload_desc.payload_layout, .desc = payload_desc } };
+            // A Box descriptor that names this storage itself means the erased
+            // value is that Box, whose allocation holds the payload.
+            if (desc.shape == .box and payload_desc != desc) return .{ .box = payload };
+            return .{ .transparent = payload };
+        }
+        switch (desc.shape) {
+            .primitive => {
+                if (layout_val.tag != .scalar) {
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: primitive boxy inspect descriptor had non-scalar layout {d}",
+                        .{@backingInt(layout_idx)},
+                    );
+                }
+                if (layout_val.getScalar().tag == .vector) {
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: SIMD inspect reached descriptor walking without an explicit inspect method",
+                        .{},
+                    );
+                }
+                return .{ .primitive = stored };
+            },
+            .record => return .{ .record = try self.inspectStruct(stored) },
+            .tuple => return .{ .tuple = try self.inspectStruct(stored) },
+            .tag_union => switch (layout_val.tag) {
+                // A recursive tag union is stored behind a box pointer.
+                .zst, .tag_union, .box => return .{ .tag_union = stored },
+                .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: tag union boxy inspect descriptor had layout {d} ({s})",
+                    .{ @backingInt(layout_idx), @tagName(layout_val.tag) },
+                ),
+            },
+            .list => return .{ .list = inspected },
+            .box => {
+                const payload_desc = try self.requireNestedBoxyDesc(hooks, desc, 0, "box payload");
+                return switch (layout_val.tag) {
+                    .box => .{ .box = .{ .stored = self.storedOrZst(value, layout_val.getIdx(), payload_desc) } },
+                    .box_of_zst => .{ .box = .{ .stored = .{ .value = Value.zst, .layout = .zst, .desc = payload_desc } } },
+                    .scalar, .zst, .erased_box, .list, .list_of_zst, .struct_, .tag_union, .closure, .erased_callable, .ptr => return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: box boxy inspect descriptor had layout {d} ({s})",
+                        .{ @backingInt(layout_idx), @tagName(layout_val.tag) },
+                    ),
+                };
+            },
+            .function => return .function,
+            .erased, .internal => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: boxy inspect reached a {s} descriptor for layout {d}",
+                .{ @tagName(desc.shape), @backingInt(layout_idx) },
+            ),
+        }
+    }
+
+    /// A record or tuple's fields. Its descriptor holds one nested descriptor
+    /// per field, so every field renders, including zero-sized ones; a
+    /// zero-sized aggregate stores all of its fields in no bytes.
+    fn inspectStruct(self: *const BoxyRuntime, stored: StoredValue) Error!InspectStruct {
+        const desc = stored.desc;
+        const field_count: u32 = desc.nested_descs.len;
+        if (desc.shape == .record and self.requireBoxyFieldNames(desc.field_names).len != field_count) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: record inspect descriptor had {d} field names for {d} fields",
+                .{ self.requireBoxyFieldNames(desc.field_names).len, field_count },
+            );
+        }
+        const layout_val = self.layout_store.getLayout(stored.layout);
+        const struct_idx: ?layout_mod.StructIdx = switch (layout_val.tag) {
+            .struct_ => blk: {
+                const struct_idx = layout_val.getStruct().idx;
+                if (self.layout_store.getStructData(struct_idx).fields.count != field_count) {
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: struct inspect descriptor had {d} fields for layout {d}",
+                        .{ field_count, @backingInt(stored.layout) },
+                    );
+                }
+                break :blk struct_idx;
+            },
             .zst => null,
             .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .tag_union, .closure, .erased_callable, .ptr => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: multi-payload tag hash had payload layout {d} ({s})",
-                .{ @backingInt(payload_layout), @tagName(payload_layout_val.tag) },
+                "LIR/interpreter invariant violated: struct inspect descriptor had layout {d} ({s})",
+                .{ @backingInt(stored.layout), @tagName(layout_val.tag) },
             ),
         };
-        var state = hasher;
-        var payload_index: u32 = 0;
-        while (payload_index < variant.payload_count) : (payload_index += 1) {
-            const field_desc = try self.requireBoxyPayloadDesc(hooks, variant, payload_index);
-            state = if (struct_idx) |idx| blk: {
-                const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(idx, payload_index);
-                const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(idx, payload_index);
-                break :blk try self.layoutHash(hooks, payload_value.offset(field_offset), field_layout, field_desc, state);
-            } else try self.layoutHash(hooks, Value.zst, .zst, field_desc, state);
-        }
-        return state;
+        return .{ .value = stored.value, .desc = desc, .struct_idx = struct_idx };
     }
 
-    /// Hash a list as `List.to_hash` does: its length, then each item.
-    fn listHash(
-        self: *const BoxyRuntime,
-        hooks: anytype,
-        value: Value,
-        list_layout: layout_mod.Idx,
-        desc: *const LirProgram.BoxyTypeDesc,
-        hasher: u64,
-    ) Error!u64 {
-        const list = self.valueToRocListForLayout(value, list_layout);
-        const elem_layout = self.listElemLayout(list_layout);
-        const elem_size = self.helper.sizeOf(elem_layout);
-        const elem_desc = try self.requireNestedBoxyDesc(hooks, desc, 0, "list item");
-        var state = hashU64(hasher, .u64, list.len(), 8);
-        var index: usize = 0;
-        while (index < list.len()) : (index += 1) {
-            state = if (elem_size == 0)
-                try self.layoutHash(hooks, Value.zst, elem_layout, elem_desc, state)
-            else blk: {
-                const bytes = list.bytes orelse return self.listBytesMissing(list_layout);
-                break :blk try self.layoutHash(hooks, .{ .ptr = bytes + index * elem_size }, elem_layout, elem_desc, state);
-            };
-        }
-        return state;
-    }
-
-    fn appendInspectMethodIfPresent(
+    /// Render `value`, stored in `layout_idx`, as `desc` describes it.
+    fn appendLayoutInspect(
         self: *const BoxyRuntime,
         hooks: anytype,
         out: *std.ArrayList(u8),
         value: Value,
-        value_layout: layout_mod.Idx,
+        layout_idx: layout_mod.Idx,
         desc: *const LirProgram.BoxyTypeDesc,
-    ) Error!bool {
-        const method = desc.inspect_method orelse return false;
-        const result = try hooks.callDescriptorMethod(.inspect, method, &.{.{ .value = value, .layout = value_layout, .source_desc = desc }});
+    ) Error!void {
+        return try self.appendInspectValue(hooks, out, .{ .stored = .{ .value = value, .layout = layout_idx, .desc = desc } });
+    }
+
+    fn appendInspectValue(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        out: *std.ArrayList(u8),
+        inspected: InspectValue,
+    ) Error!void {
+        const shapes = InspectShapes{ .runtime = self };
+        switch (InspectRules.actionForShape(shapes, try self.inspectShape(hooks, inspected))) {
+            .literal => |text| try out.appendSlice(self.eval_arena, text),
+            .primitive => |stored| switch (self.layout_store.getLayout(stored.layout).getScalar().tag) {
+                .str => try self.appendQuotedInspectBytes(out, readRocStr(stored.value)),
+                .int, .frac, .opaque_ptr => try self.appendScalarInspect(out, stored.value, stored.layout),
+                .vector => unreachable,
+            },
+            .record => |record| {
+                var sink = InspectStructSink(@TypeOf(hooks)){ .runtime = self, .hooks = hooks, .out = out, .aggregate = record };
+                try InspectRules.recordParts(shapes, record, &sink);
+            },
+            .tuple => |tuple| {
+                var sink = InspectStructSink(@TypeOf(hooks)){ .runtime = self, .hooks = hooks, .out = out, .aggregate = tuple };
+                try InspectRules.tupleParts(shapes, tuple, &sink);
+            },
+            .tag_union => |tag_union| try self.appendTagUnionInspect(hooks, out, tag_union),
+            .presence_slot => |slot| try self.appendPresenceSlotInspect(hooks, out, slot),
+            .list => |list| try self.appendListInspect(hooks, out, list.stored),
+            .box => |payload| {
+                try out.appendSlice(self.eval_arena, inspect_text.box_open);
+                try self.appendInspectValue(hooks, out, payload);
+                try out.appendSlice(self.eval_arena, inspect_text.box_close);
+            },
+            .override => |override| try self.appendInspectMethod(hooks, out, override),
+            .transparent => |inner| try self.appendInspectValue(hooks, out, inner),
+            .uninhabited => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: boxy inspect reached a value of a tag union with no variants",
+                .{},
+            ),
+            // Descriptors render Bool by its variant names, carry no nominal
+            // backing edge, and are themselves the runtime descriptor.
+            .bool => return self.invariantFailedError("LIR/interpreter invariant violated: descriptor-driven inspect reached a bare Bool rendering", .{}),
+            .backing => return self.invariantFailedError("LIR/interpreter invariant violated: descriptor-driven inspect reached a nominal backing rendering", .{}),
+            .descriptor => return self.invariantFailedError("LIR/interpreter invariant violated: descriptor-driven inspect deferred to a runtime descriptor", .{}),
+        }
+    }
+
+    /// Renders a record's or tuple's parts: literals, then each field by its
+    /// nested descriptor.
+    fn InspectStructSink(comptime Hooks: type) type {
+        return struct {
+            runtime: *const BoxyRuntime,
+            hooks: Hooks,
+            out: *std.ArrayList(u8),
+            aggregate: InspectStruct,
+
+            pub fn literal(sink: *@This(), bytes: []const u8) Error!void {
+                try sink.out.appendSlice(sink.runtime.eval_arena, bytes);
+            }
+
+            pub fn label(sink: *@This(), bytes: []const u8) Error!void {
+                try sink.out.appendSlice(sink.runtime.eval_arena, bytes);
+            }
+
+            pub fn child(sink: *@This(), field_index: u32) Error!void {
+                const runtime = sink.runtime;
+                // A field's custom inspector can instantiate more runtime
+                // descriptors, whose append-only backing table can reallocate,
+                // so each field's ref is read after the previous field renders.
+                const field_desc = try sink.hooks.resolveDescRef(runtime.requireBoxyDescRefs(sink.aggregate.desc.nested_descs)[field_index]);
+                const idx = sink.aggregate.struct_idx orelse return try runtime.appendLayoutInspect(sink.hooks, sink.out, Value.zst, .zst, field_desc);
+                const field_layout = runtime.layout_store.getStructFieldLayoutByOriginalIndex(idx, field_index);
+                const field_offset = runtime.layout_store.getStructFieldOffsetByOriginalIndex(idx, field_index);
+                try runtime.appendLayoutInspect(sink.hooks, sink.out, sink.aggregate.value.offset(field_offset), field_layout, field_desc);
+            }
+        };
+    }
+
+    /// Renders one variant's parts: literals, then each payload by its
+    /// descriptor. A variant's payloads are stored in `payload_layout`: the
+    /// payload itself when there is one, otherwise a struct of them.
+    fn InspectPayloadSink(comptime Hooks: type) type {
+        return struct {
+            runtime: *const BoxyRuntime,
+            hooks: Hooks,
+            out: *std.ArrayList(u8),
+            variant: LirProgram.BoxyTagVariant,
+            payload_value: Value,
+            payload_layout: layout_mod.Idx,
+
+            pub fn literal(sink: *@This(), bytes: []const u8) Error!void {
+                try sink.out.appendSlice(sink.runtime.eval_arena, bytes);
+            }
+
+            pub fn label(sink: *@This(), bytes: []const u8) Error!void {
+                try sink.out.appendSlice(sink.runtime.eval_arena, bytes);
+            }
+
+            pub fn child(sink: *@This(), payload_index: u32) Error!void {
+                const runtime = sink.runtime;
+                const payload_desc = try runtime.requireBoxyPayloadDesc(sink.hooks, sink.variant, payload_index);
+                if (sink.variant.payload_count == 1) {
+                    return try runtime.appendLayoutInspect(sink.hooks, sink.out, sink.payload_value, sink.payload_layout, payload_desc);
+                }
+                const payload_layout_val = runtime.layout_store.getLayout(sink.payload_layout);
+                switch (payload_layout_val.tag) {
+                    .struct_ => {
+                        const idx = payload_layout_val.getStruct().idx;
+                        const field_layout = runtime.layout_store.getStructFieldLayoutByOriginalIndex(idx, payload_index);
+                        const field_offset = runtime.layout_store.getStructFieldOffsetByOriginalIndex(idx, payload_index);
+                        try runtime.appendLayoutInspect(sink.hooks, sink.out, sink.payload_value.offset(field_offset), field_layout, payload_desc);
+                    },
+                    .zst => try runtime.appendLayoutInspect(sink.hooks, sink.out, Value.zst, .zst, payload_desc),
+                    .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .tag_union, .closure, .erased_callable, .ptr => return runtime.invariantFailedError(
+                        "LIR/interpreter invariant violated: multi-payload tag inspect had payload layout {d} ({s})",
+                        .{ @backingInt(sink.payload_layout), @tagName(payload_layout_val.tag) },
+                    ),
+                }
+            }
+        };
+    }
+
+    fn appendInspectMethod(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        out: *std.ArrayList(u8),
+        override: InspectOverride,
+    ) Error!void {
+        const receiver = override.receiver;
+        const result = try hooks.callDescriptorMethod(.inspect, override.method, &.{.{ .value = receiver.value, .layout = receiver.layout, .source_desc = receiver.desc }});
         if (result.layout != .str) {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: to_inspect worker returned layout {d} instead of Str",
@@ -5583,117 +5994,113 @@ pub const BoxyRuntime = struct {
                 .atomic,
             );
         }
-        return true;
     }
 
-    /// Render `value`, stored in `layout_idx`, as `desc` describes it. The
-    /// descriptor's shape selects the rendering; the layout only locates bytes.
-    fn appendLayoutInspect(
+    fn appendTagUnionInspect(
         self: *const BoxyRuntime,
         hooks: anytype,
         out: *std.ArrayList(u8),
-        value: Value,
-        layout_idx: layout_mod.Idx,
-        desc: *const LirProgram.BoxyTypeDesc,
+        tag_union: StoredValue,
     ) Error!void {
-        const layout_val = self.layout_store.getLayout(layout_idx);
-        if ((layout_val.tag == .box or layout_val.tag == .box_of_zst) and desc.payload_layout != layout_idx) {
-            // A payload-direct Box descriptor describes the boxed value.
-            try out.appendSlice(self.eval_arena, "Box(");
-            if (layout_val.tag == .box) {
-                if (self.readBoxedDataPointer(value)) |data_ptr| {
-                    try self.appendLayoutInspect(hooks, out, .{ .ptr = data_ptr }, layout_val.getIdx(), desc);
-                } else {
-                    try self.appendLayoutInspect(hooks, out, Value.zst, .zst, desc);
+        const desc = tag_union.desc;
+        var discriminant: u32 = 0;
+        var payload_value = Value.zst;
+        var payload_layout: layout_mod.Idx = .zst;
+        if (self.layout_store.getLayout(tag_union.layout).tag != .zst) {
+            const tag_base = self.resolveTagUnionBaseValue(tag_union.value, tag_union.layout);
+            discriminant = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
+            if (self.boxyTagExtDiscriminant(desc)) |ext_discriminant| {
+                if (discriminant == ext_discriminant) {
+                    const ext_desc = try self.resolveBoxyTagExtDesc(hooks, desc);
+                    const ext_payload_layout = self.requireBoxyTagPayloadLayout(desc.payload_layout, ext_discriminant);
+                    const ext_value = try self.materializeLocalValue(hooks, tag_base.value, ext_payload_layout);
+                    return try self.appendBoxyInspect(hooks, out, ext_value, ext_payload_layout, ext_desc);
                 }
-            } else {
-                try self.appendLayoutInspect(hooks, out, Value.zst, .zst, desc);
             }
-            try out.append(self.eval_arena, ')');
+            payload_value = tag_base.value;
+            payload_layout = self.requireBoxyTagVariantByDiscriminant(desc, discriminant).payload_layout;
+        }
+        var sink = InspectPayloadSink(@TypeOf(hooks)){
+            .runtime = self,
+            .hooks = hooks,
+            .out = out,
+            .variant = self.requireBoxyTagVariantByDiscriminant(desc, discriminant),
+            .payload_value = payload_value,
+            .payload_layout = payload_layout,
+        };
+        try InspectRules.variantParts(InspectShapes{ .runtime = self }, tag_union, discriminant, &sink);
+    }
+
+    fn appendPresenceSlotInspect(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        out: *std.ArrayList(u8),
+        slot: StoredValue,
+    ) Error!void {
+        const desc = slot.desc;
+        const present_discriminant = desc.presence_slot_present_discriminant orelse
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: presence-slot inspect lacked its Present discriminant",
+                .{},
+            );
+        const missing_discriminant = try self.missingPresenceSlotDiscriminant(desc);
+        const tag_base = self.resolveBoxyTagBaseValue(slot.value, slot.layout, desc);
+        const discriminant = if (self.helper.sizeOf(tag_base.layout) == 0)
+            @as(u32, 0)
+        else
+            self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
+        if (discriminant == missing_discriminant) {
+            try out.appendSlice(self.eval_arena, inspect_text.missing);
             return;
         }
-        if (try self.appendInspectMethodIfPresent(hooks, out, value, layout_idx, desc)) return;
-        if (desc.inspect_opaque) {
-            try out.appendSlice(self.eval_arena, "<opaque>");
-            return;
+        if (discriminant != present_discriminant) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: presence-slot inspect read unexpected discriminant {d}",
+                .{discriminant},
+            );
         }
-        if (desc.presence_slot_present_discriminant != null) {
-            return try self.appendPresenceSlotInspect(hooks, out, value, layout_idx, desc);
+
+        const present = self.requireBoxyTagVariantByDiscriminant(desc, present_discriminant);
+        if (present.payload_count != 1) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: presence-slot inspect Present arm had {d} payloads",
+                .{present.payload_count},
+            );
         }
-        if (layout_val.tag == .erased_box) {
-            // Erased storage: the boxed allocation's descriptor describes the value.
-            const payload_desc = try self.boxyBoxAllocationPayloadDesc(hooks, layout_idx, desc) orelse {
-                try out.appendSlice(self.eval_arena, "Box({})");
-                return;
-            };
-            // A Box descriptor that names this storage itself means the erased
-            // value is that Box, whose allocation holds the payload.
-            const erased_value_is_box = desc.shape == .box and payload_desc != desc;
-            if (erased_value_is_box) try out.appendSlice(self.eval_arena, "Box(");
-            if (self.readBoxedDataPointer(value)) |data_ptr| {
-                try self.appendLayoutInspect(hooks, out, .{ .ptr = data_ptr }, payload_desc.payload_layout, payload_desc);
-            } else if (self.helper.sizeOf(payload_desc.payload_layout) != 0) {
-                return self.invariantFailedError(
-                    "LIR/interpreter invariant violated: non-zero-sized boxy inspect payload layout {d} had a null box pointer",
-                    .{@backingInt(payload_desc.payload_layout)},
-                );
+        const payload_layout = self.requireBoxyTagPayloadLayout(tag_base.layout, present_discriminant);
+        const payload_desc = try self.requireBoxyPayloadDesc(hooks, present, 0);
+        return try self.appendLayoutInspect(hooks, out, tag_base.value, payload_layout, payload_desc);
+    }
+
+    fn appendListInspect(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        out: *std.ArrayList(u8),
+        list_value: StoredValue,
+    ) Error!void {
+        const list_layout = list_value.layout;
+        const list = self.valueToRocListForLayout(list_value.value, list_layout);
+        const elem_layout = self.listElemLayout(list_layout);
+        const elem_size = self.helper.sizeOf(elem_layout);
+        const elem_desc = try self.requireNestedBoxyDesc(hooks, list_value.desc, 0, "list item");
+
+        try out.appendSlice(self.eval_arena, inspect_text.list_open);
+        var index: usize = 0;
+        while (index < list.len()) : (index += 1) {
+            try out.appendSlice(self.eval_arena, InspectRules.listSeparator(index));
+            if (elem_size == 0) {
+                try self.appendLayoutInspect(hooks, out, Value.zst, elem_layout, elem_desc);
             } else {
-                try self.appendLayoutInspect(hooks, out, Value.zst, payload_desc.payload_layout, payload_desc);
-            }
-            if (erased_value_is_box) try out.append(self.eval_arena, ')');
-            return;
-        }
-        switch (desc.shape) {
-            .primitive => {
-                if (layout_val.tag != .scalar) {
+                const bytes = list.bytes orelse {
                     return self.invariantFailedError(
-                        "LIR/interpreter invariant violated: primitive boxy inspect descriptor had non-scalar layout {d}",
-                        .{@backingInt(layout_idx)},
+                        "LIR/interpreter invariant violated: non-empty list layout {d} had null bytes during boxy inspect",
+                        .{@backingInt(list_layout)},
                     );
-                }
-                switch (layout_val.getScalar().tag) {
-                    .str => try self.appendQuotedInspectBytes(out, readRocStr(value)),
-                    .int, .frac, .opaque_ptr => try self.appendScalarInspect(out, value, layout_idx),
-                    .vector => return self.invariantFailedError(
-                        "LIR/interpreter invariant violated: SIMD inspect reached descriptor walking without an explicit inspect method",
-                        .{},
-                    ),
-                }
-            },
-            .record, .tuple => try self.appendStructInspect(hooks, out, value, layout_idx, desc),
-            .tag_union => switch (layout_val.tag) {
-                .zst => try self.appendZstTagInspect(hooks, out, desc),
-                // A recursive tag union is stored behind a box pointer.
-                .tag_union, .box => try self.appendTagUnionInspect(hooks, out, value, layout_idx, desc),
-                .scalar, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => return self.invariantFailedError(
-                    "LIR/interpreter invariant violated: tag union boxy inspect descriptor had layout {d} ({s})",
-                    .{ @backingInt(layout_idx), @tagName(layout_val.tag) },
-                ),
-            },
-            .list => try self.appendListInspect(hooks, out, value, layout_idx, desc),
-            .box => {
-                const payload_desc = try self.requireNestedBoxyDesc(hooks, desc, 0, "box payload");
-                try out.appendSlice(self.eval_arena, "Box(");
-                switch (layout_val.tag) {
-                    .box => if (self.readBoxedDataPointer(value)) |data_ptr| {
-                        try self.appendLayoutInspect(hooks, out, .{ .ptr = data_ptr }, layout_val.getIdx(), payload_desc);
-                    } else {
-                        try self.appendLayoutInspect(hooks, out, Value.zst, .zst, payload_desc);
-                    },
-                    .box_of_zst => try self.appendLayoutInspect(hooks, out, Value.zst, .zst, payload_desc),
-                    .scalar, .zst, .erased_box, .list, .list_of_zst, .struct_, .tag_union, .closure, .erased_callable, .ptr => return self.invariantFailedError(
-                        "LIR/interpreter invariant violated: box boxy inspect descriptor had layout {d} ({s})",
-                        .{ @backingInt(layout_idx), @tagName(layout_val.tag) },
-                    ),
-                }
-                try out.append(self.eval_arena, ')');
-            },
-            .function => try out.appendSlice(self.eval_arena, "<function>"),
-            .erased, .internal => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: boxy inspect reached a {s} descriptor for layout {d}",
-                .{ @tagName(desc.shape), @backingInt(layout_idx) },
-            ),
+                };
+                try self.appendLayoutInspect(hooks, out, .{ .ptr = bytes + index * elem_size }, elem_layout, elem_desc);
+            }
         }
+        try out.appendSlice(self.eval_arena, inspect_text.list_close);
     }
 
     /// The descriptor at position `index` of `desc`'s nested descriptors.
@@ -5727,48 +6134,6 @@ pub const BoxyRuntime = struct {
                 .{ self.store.getBoxyName(variant.name), payload_index },
             );
         return try hooks.resolveDescRef(desc_ref);
-    }
-
-    fn appendPresenceSlotInspect(
-        self: *const BoxyRuntime,
-        hooks: anytype,
-        out: *std.ArrayList(u8),
-        value: Value,
-        layout_idx: layout_mod.Idx,
-        desc: *const LirProgram.BoxyTypeDesc,
-    ) Error!void {
-        const present_discriminant = desc.presence_slot_present_discriminant orelse
-            return self.invariantFailedError(
-                "LIR/interpreter invariant violated: presence-slot inspect lacked its Present discriminant",
-                .{},
-            );
-        const missing_discriminant = try self.missingPresenceSlotDiscriminant(desc);
-        const tag_base = self.resolveBoxyTagBaseValue(value, layout_idx, desc);
-        const discriminant = if (self.helper.sizeOf(tag_base.layout) == 0)
-            @as(u32, 0)
-        else
-            self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
-        if (discriminant == missing_discriminant) {
-            try out.appendSlice(self.eval_arena, "<missing>");
-            return;
-        }
-        if (discriminant != present_discriminant) {
-            return self.invariantFailedError(
-                "LIR/interpreter invariant violated: presence-slot inspect read unexpected discriminant {d}",
-                .{discriminant},
-            );
-        }
-
-        const present = self.requireBoxyTagVariantByDiscriminant(desc, present_discriminant);
-        if (present.payload_count != 1) {
-            return self.invariantFailedError(
-                "LIR/interpreter invariant violated: presence-slot inspect Present arm had {d} payloads",
-                .{present.payload_count},
-            );
-        }
-        const payload_layout = self.requireBoxyTagPayloadLayout(tag_base.layout, present_discriminant);
-        const payload_desc = try self.requireBoxyPayloadDesc(hooks, present, 0);
-        return try self.appendLayoutInspect(hooks, out, tag_base.value, payload_layout, payload_desc);
     }
 
     fn appendScalarInspect(
@@ -5842,193 +6207,6 @@ pub const BoxyRuntime = struct {
             try out.append(self.eval_arena, byte);
         }
         try out.append(self.eval_arena, '"');
-    }
-
-    fn appendListInspect(
-        self: *const BoxyRuntime,
-        hooks: anytype,
-        out: *std.ArrayList(u8),
-        value: Value,
-        list_layout: layout_mod.Idx,
-        desc: *const LirProgram.BoxyTypeDesc,
-    ) Error!void {
-        const list = self.valueToRocListForLayout(value, list_layout);
-        const elem_layout = self.listElemLayout(list_layout);
-        const elem_size = self.helper.sizeOf(elem_layout);
-        const elem_desc = try self.requireNestedBoxyDesc(hooks, desc, 0, "list item");
-
-        try out.append(self.eval_arena, '[');
-        var index: usize = 0;
-        while (index < list.len()) : (index += 1) {
-            if (index != 0) try out.appendSlice(self.eval_arena, ", ");
-            if (elem_size == 0) {
-                try self.appendLayoutInspect(hooks, out, Value.zst, elem_layout, elem_desc);
-            } else {
-                const bytes = list.bytes orelse {
-                    return self.invariantFailedError(
-                        "LIR/interpreter invariant violated: non-empty list layout {d} had null bytes during boxy inspect",
-                        .{@backingInt(list_layout)},
-                    );
-                };
-                try self.appendLayoutInspect(hooks, out, .{ .ptr = bytes + index * elem_size }, elem_layout, elem_desc);
-            }
-        }
-        try out.append(self.eval_arena, ']');
-    }
-
-    /// Render a record or tuple. Its descriptor holds one nested descriptor
-    /// per field, so every field renders, including zero-sized ones; a
-    /// zero-sized aggregate stores all of its fields in no bytes.
-    fn appendStructInspect(
-        self: *const BoxyRuntime,
-        hooks: anytype,
-        out: *std.ArrayList(u8),
-        value: Value,
-        struct_layout: layout_mod.Idx,
-        desc: *const LirProgram.BoxyTypeDesc,
-    ) Error!void {
-        // A field's custom inspector can instantiate more runtime descriptors.
-        // Retain the span and reborrow each ref after recursive calls, because
-        // their append-only backing table can reallocate during those calls.
-        const desc_span = desc.nested_descs;
-        const field_count: u32 = desc_span.len;
-        const named = desc.shape == .record;
-        const field_names = self.requireBoxyFieldNames(desc.field_names);
-        if (named and field_names.len != field_count) {
-            return self.invariantFailedError(
-                "LIR/interpreter invariant violated: record inspect descriptor had {d} field names for {d} fields",
-                .{ field_names.len, field_count },
-            );
-        }
-        const layout_val = self.layout_store.getLayout(struct_layout);
-        const struct_idx = switch (layout_val.tag) {
-            .struct_ => blk: {
-                const struct_idx = layout_val.getStruct().idx;
-                if (self.layout_store.getStructData(struct_idx).fields.count != field_count) {
-                    return self.invariantFailedError(
-                        "LIR/interpreter invariant violated: struct inspect descriptor had {d} fields for layout {d}",
-                        .{ field_count, @backingInt(struct_layout) },
-                    );
-                }
-                break :blk struct_idx;
-            },
-            .zst => null,
-            .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .tag_union, .closure, .erased_callable, .ptr => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: struct inspect descriptor had layout {d} ({s})",
-                .{ @backingInt(struct_layout), @tagName(layout_val.tag) },
-            ),
-        };
-
-        var rendered_count: u32 = 0;
-        for (field_names) |name| {
-            if (name != .padding_field) rendered_count += 1;
-        }
-        if (!named) rendered_count = field_count;
-        if (rendered_count == 0) {
-            try out.appendSlice(self.eval_arena, if (named) "{}" else "()");
-            return;
-        }
-        try out.appendSlice(self.eval_arena, if (named) "{ " else "(");
-        var field_index: u32 = 0;
-        var written: u32 = 0;
-        while (field_index < field_count) : (field_index += 1) {
-            if (named) {
-                const name = self.requireBoxyFieldNames(desc.field_names)[field_index];
-                // Padding holds no value.
-                if (name == .padding_field) continue;
-                if (written != 0) try out.appendSlice(self.eval_arena, ", ");
-                try out.appendSlice(self.eval_arena, self.store.getBoxyName(name));
-                try out.appendSlice(self.eval_arena, ": ");
-            } else if (written != 0) {
-                try out.appendSlice(self.eval_arena, ", ");
-            }
-            written += 1;
-            const field_desc = try hooks.resolveDescRef(self.requireBoxyDescRefs(desc_span)[field_index]);
-            if (struct_idx) |idx| {
-                const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(idx, field_index);
-                const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(idx, field_index);
-                try self.appendLayoutInspect(hooks, out, value.offset(field_offset), field_layout, field_desc);
-            } else {
-                try self.appendLayoutInspect(hooks, out, Value.zst, .zst, field_desc);
-            }
-        }
-        try out.appendSlice(self.eval_arena, if (named) " }" else ")");
-    }
-
-    fn appendZstTagInspect(
-        self: *const BoxyRuntime,
-        hooks: anytype,
-        out: *std.ArrayList(u8),
-        desc: *const LirProgram.BoxyTypeDesc,
-    ) Error!void {
-        const variant = self.requireBoxyTagVariantByDiscriminant(desc, 0);
-        try out.appendSlice(self.eval_arena, self.store.getBoxyName(variant.name));
-        try self.appendTagPayloadsInspect(hooks, out, variant, Value.zst, .zst);
-    }
-
-    /// Render `variant`'s payloads, stored in `payload_layout`, as the
-    /// parenthesized list that follows its tag name.
-    fn appendTagPayloadsInspect(
-        self: *const BoxyRuntime,
-        hooks: anytype,
-        out: *std.ArrayList(u8),
-        variant: LirProgram.BoxyTagVariant,
-        payload_value: Value,
-        payload_layout: layout_mod.Idx,
-    ) Error!void {
-        if (variant.payload_count == 0) return;
-        try out.append(self.eval_arena, '(');
-        if (variant.payload_count == 1) {
-            try self.appendLayoutInspect(hooks, out, payload_value, payload_layout, try self.requireBoxyPayloadDesc(hooks, variant, 0));
-            try out.append(self.eval_arena, ')');
-            return;
-        }
-        const payload_layout_val = self.layout_store.getLayout(payload_layout);
-        const struct_idx = switch (payload_layout_val.tag) {
-            .struct_ => payload_layout_val.getStruct().idx,
-            .zst => null,
-            .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .tag_union, .closure, .erased_callable, .ptr => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: multi-payload tag inspect had payload layout {d} ({s})",
-                .{ @backingInt(payload_layout), @tagName(payload_layout_val.tag) },
-            ),
-        };
-        var payload_index: u32 = 0;
-        while (payload_index < variant.payload_count) : (payload_index += 1) {
-            if (payload_index != 0) try out.appendSlice(self.eval_arena, ", ");
-            const field_desc = try self.requireBoxyPayloadDesc(hooks, variant, payload_index);
-            if (struct_idx) |idx| {
-                const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(idx, payload_index);
-                const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(idx, payload_index);
-                try self.appendLayoutInspect(hooks, out, payload_value.offset(field_offset), field_layout, field_desc);
-            } else {
-                try self.appendLayoutInspect(hooks, out, Value.zst, .zst, field_desc);
-            }
-        }
-        try out.append(self.eval_arena, ')');
-    }
-
-    fn appendTagUnionInspect(
-        self: *const BoxyRuntime,
-        hooks: anytype,
-        out: *std.ArrayList(u8),
-        value: Value,
-        union_layout: layout_mod.Idx,
-        desc: *const LirProgram.BoxyTypeDesc,
-    ) Error!void {
-        const tag_base = self.resolveTagUnionBaseValue(value, union_layout);
-        const discriminant = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
-        if (self.boxyTagExtDiscriminant(desc)) |ext_discriminant| {
-            if (discriminant == ext_discriminant) {
-                const ext_desc = try self.resolveBoxyTagExtDesc(hooks, desc);
-                const ext_payload_layout = self.requireBoxyTagPayloadLayout(desc.payload_layout, ext_discriminant);
-                const ext_value = try self.materializeLocalValue(hooks, tag_base.value, ext_payload_layout);
-                return try self.appendBoxyInspect(hooks, out, ext_value, ext_payload_layout, ext_desc);
-            }
-        }
-
-        const variant = self.requireBoxyTagVariantByDiscriminant(desc, discriminant);
-        try out.appendSlice(self.eval_arena, self.store.getBoxyName(variant.name));
-        try self.appendTagPayloadsInspect(hooks, out, variant, tag_base.value, variant.payload_layout);
     }
 
     pub fn requireBoxyDict(self: *const BoxyRuntime, dict_id: LIR.BoxyDictId) *const LirProgram.BoxyDict {

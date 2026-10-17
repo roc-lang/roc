@@ -1044,6 +1044,7 @@ fn createAndRunBuiltinCompiler(
             .{ .name = "roc_target", .module = roc_modules.roc_target },
             .{ .name = "static_data", .module = roc_modules.static_data },
             .{ .name = "sljmp", .module = roc_modules.sljmp },
+            .{ .name = "value_semantics", .module = roc_modules.value_semantics },
         },
     });
     // The interpreter's hosted-call trampoline is hand-written assembly; attach
@@ -1737,6 +1738,8 @@ pub fn build(b: *std.Build) void {
     const run_test_simd_differential_step = b.step("run-test-simd-differential", "Run the exhaustive integer-SIMD oracle corpus through every compiler consumer");
     const build_test_eval_host_effects_runner_step = b.step("build-test-eval-host-effects-runner", "Build runtime host-effects eval test runner");
     const run_test_eval_host_effects_step = b.step("run-test-eval-host-effects", "Run runtime host-effects eval tests across supported backends");
+    const build_test_strategy_differential_runner_step = b.step("build-test-strategy-differential-runner", "Build the cross-strategy differential harness");
+    const run_test_strategy_differential_step = b.step("run-test-strategy-differential", "Run every eval and host-effects program under both lowering strategies and require agreement");
     const build_playground_step = b.step("build-playground", "Build the WASM playground");
     const build_playground_wasm_archive_step = b.step("build-playground-wasm-archive", "Build playground.wasm and zstd-compress it under zig-out/lib/playground");
     const build_repl_wasm_step = b.step("build-repl-wasm", "Build the dedicated REPL WebAssembly module");
@@ -3058,6 +3061,35 @@ pub fn build(b: *std.Build) void {
         null,
         build_test_eval_host_effects_runner_step,
         run_test_eval_host_effects_step,
+        eval_host_effects_run_args,
+    );
+
+    const strategy_differential_exe = b.addExecutable(.{
+        .name = "strategy-differential-runner",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/eval/test/strategy_differential_runner.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    strategy_differential_exe.stack_size = stack_budget.roc_stack_size;
+    configureBackend(strategy_differential_exe, target);
+    roc_modules.addAll(strategy_differential_exe);
+    strategy_differential_exe.root_module.addImport("builtins", roc_modules.builtins);
+    strategy_differential_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    strategy_differential_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
+    strategy_differential_exe.root_module.addImport("test_harness", createTestHarnessModule(b, roc_modules));
+    strategy_differential_exe.root_module.addImport("simd_test_sources", simd_test_sources_module);
+    strategy_differential_exe.step.dependOn(&write_compiled_builtins.step);
+    llvm_support.add(strategy_differential_exe);
+    _ = install_and_run(
+        b,
+        no_bin,
+        strategy_differential_exe,
+        null,
+        build_test_strategy_differential_runner_step,
+        run_test_strategy_differential_step,
         eval_host_effects_run_args,
     );
 
@@ -4556,6 +4588,7 @@ pub fn build(b: *std.Build) void {
     build_ci_step.dependOn(build_test_lsp_integration_runner_step);
     build_ci_step.dependOn(build_test_eval_runner_step);
     build_ci_step.dependOn(build_test_eval_host_effects_runner_step);
+    build_ci_step.dependOn(build_test_strategy_differential_runner_step);
     build_ci_step.dependOn(build_web_step);
     // CI runs `run-test-repl-wasm` and `run-test-echo-wasm` on a shard after
     // MiniCI, so their native runners are built here with the modules.
@@ -5222,6 +5255,7 @@ fn buildBoxyRuntimeObject(
     boxy_eval_module.addImport("collections", roc_modules.collections);
     boxy_eval_module.addImport("builtins", roc_modules.builtins);
     boxy_eval_module.addImport("build_options", roc_modules.build_options);
+    boxy_eval_module.addImport("value_semantics", roc_modules.value_semantics);
 
     obj.root_module.addImport("base", roc_modules.base);
     obj.root_module.addImport("builtins", roc_modules.builtins);

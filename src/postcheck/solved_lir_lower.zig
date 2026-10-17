@@ -13,6 +13,7 @@ const check = @import("check");
 const collections = @import("collections");
 const layout = @import("layout");
 const Common = @import("common.zig");
+const value_semantics = @import("value_semantics");
 const AnyAll = collections.AnyAll;
 const ComptimeScalarValues = @import("comptime_scalar_values.zig");
 const match_tree = @import("match_tree.zig");
@@ -9942,28 +9943,138 @@ const Lowerer = struct {
     /// into `target`. Aggregate types are decomposed in Monotype lowering, so
     /// this only ever sees a scalar/str/zst leaf or a transparent nominal wrapper.
     fn lowerHashLocalsInto(self: *Lowerer, where: LowerSite, target: LIR.LocalId, value: LIR.LocalId, hasher: LIR.LocalId, value_ty: Type.TypeId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        var ty = value_ty;
-        while (true) return switch (self.types.get(ty)) {
-            .primitive => |primitive| try self.lowerPrimitiveHashLocalsInto(where, target, value, hasher, primitive, next),
-            // Hashing a zero-sized value contributes nothing; thread the hasher through.
-            .zst => try self.assignLocal(where, target, hasher, next),
-            .named => |named| {
-                const backing = named.backing orelse Common.invariant("named hash reached direct LIR without runtime backing");
-                ty = backing.ty;
-                continue;
-            },
-            .record,
-            .tuple,
-            .tag_union,
-            .capture_record,
-            .list,
-            .box,
-            .callable,
-            .erased_fn,
-            .erased_capture_ptr,
-            => Common.invariant("aggregate/owned hash reached direct LIR structural hash lowering"),
-        };
+        return try HashWalk.lower(.{ .l = self, .where = where }, .{ .target = target, .value = value, .hasher = hasher, .ty = value_ty, .next = next });
     }
+
+    const HashWalk = value_semantics.structural.HashLower(HashLowering);
+
+    /// A type with no values, for walker steps Monotype leaves no direct LIR
+    /// lowering to reach.
+    const Never = enum {};
+
+    /// Solved types as the shared structural-hash walker lowers them.
+    const HashLowering = struct {
+        l: *Lowerer,
+        where: LowerSite,
+
+        pub const Ty = Type.TypeId;
+        pub const Local = LIR.LocalId;
+        pub const Stmt = LIR.CFStmtId;
+        pub const WalkError = Common.LowerError;
+        pub const Wrap = Never;
+        pub const TagUnion = Never;
+        pub const SwitchBranch = LIR.CFSwitchBranch;
+        pub const JoinPoint = LIR.JoinPointId;
+        pub const PayloadOperand = struct { local: LIR.LocalId, ty: Type.TypeId };
+
+        pub fn allocator(ctx: HashLowering) Allocator {
+            return ctx.l.allocator;
+        }
+
+        pub fn hashStep(ctx: HashLowering, request: HashWalk.Request) Common.LowerError!HashWalk.Step {
+            return switch (ctx.l.types.get(request.ty)) {
+                .primitive => |primitive| .{ .done = try ctx.l.lowerPrimitiveHashLocalsInto(ctx.where, request.target, request.value, request.hasher, primitive, request.next) },
+                // Hashing a zero-sized value contributes nothing.
+                .zst => .nothing,
+                .named => |named| .{ .retarget = (named.backing orelse Common.invariant("named hash reached direct LIR without runtime backing")).ty },
+                .record,
+                .tuple,
+                .tag_union,
+                .capture_record,
+                .list,
+                .box,
+                .callable,
+                .erased_fn,
+                .erased_capture_ptr,
+                => Common.invariant("aggregate/owned hash reached direct LIR structural hash lowering"),
+            };
+        }
+
+        pub fn wrapRequest(_: HashLowering, wrap: Never, _: HashWalk.Request) HashWalk.Request {
+            switch (wrap) {}
+        }
+
+        pub fn unwrap(_: HashLowering, wrap: Never, _: HashWalk.Request, _: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+            switch (wrap) {}
+        }
+
+        pub fn releaseWrap(_: HashLowering, wrap: Never) void {
+            switch (wrap) {}
+        }
+
+        pub fn assignLocal(ctx: HashLowering, target: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+            return try ctx.l.assignLocal(ctx.where, target, source, next);
+        }
+
+        pub fn hasherLocal(ctx: HashLowering, like: LIR.LocalId) Common.LowerError!LIR.LocalId {
+            return try ctx.l.addLocalForLayout(ctx.l.result.store.getLocal(like).layout_idx);
+        }
+
+        pub fn componentLocal(ctx: HashLowering, ty: Type.TypeId) Common.LowerError!LIR.LocalId {
+            return try ctx.l.addTemp(ty);
+        }
+
+        pub fn isZstLocal(ctx: HashLowering, local: LIR.LocalId) bool {
+            return ctx.l.isZstLocal(local);
+        }
+
+        pub fn readField(ctx: HashLowering, dest: LIR.LocalId, source: LIR.LocalId, field_index: u32, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+            return try ctx.l.assignRefRead(ctx.where, dest, ctx.l.localFieldLayout(source, field_index), .{ .field = .{ .source = source, .field_idx = field_index } }, next);
+        }
+
+        pub fn joinPoint(ctx: HashLowering) LIR.JoinPointId {
+            return ctx.l.freshJoinPointId();
+        }
+
+        pub fn jump(ctx: HashLowering, id: LIR.JoinPointId) Common.LowerError!LIR.CFStmtId {
+            return try ctx.l.joinJump(ctx.where, id);
+        }
+
+        pub fn resultJoin(ctx: HashLowering, id: LIR.JoinPointId, target: LIR.LocalId, next: LIR.CFStmtId, body: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+            return try ctx.l.result.store.addCFStmt(.{ .join = .{
+                .id = id,
+                .params = try ctx.l.result.store.addLocalSpan(&[_]LIR.LocalId{target}),
+                .body = next,
+                .remainder = body,
+            } }, ctx.where.glue());
+        }
+
+        pub fn discriminantLocal(ctx: HashLowering) Common.LowerError!LIR.LocalId {
+            return try ctx.l.addLocalForLayout(.u32);
+        }
+
+        pub fn readDiscriminant(ctx: HashLowering, dest: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+            return try ctx.l.addAssignRef(ctx.where.source(), dest, .{ .discriminant = .{ .source = source } }, next);
+        }
+
+        pub fn discriminantSwitch(ctx: HashLowering, cond: LIR.LocalId, branches: []const LIR.CFSwitchBranch, default: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+            return try ctx.l.discriminantSwitchStmt(ctx.where, cond, branches, default);
+        }
+
+        pub fn unreachableDiscriminant(ctx: HashLowering) Common.LowerError!LIR.CFStmtId {
+            return try ctx.l.result.store.addCFStmt(.{ .runtime_error = {} }, ctx.where.glue());
+        }
+
+        pub fn variantCount(_: HashLowering, tag_union: Never) u32 {
+            switch (tag_union) {}
+        }
+
+        pub fn payloadCount(_: HashLowering, tag_union: Never, _: u32) u32 {
+            switch (tag_union) {}
+        }
+
+        pub fn writeVariantIndex(_: HashLowering, _: LIR.LocalId, _: LIR.LocalId, _: u32, _: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+            Common.invariant("direct LIR structural hash reached a tag union, which Monotype decomposes");
+        }
+
+        pub fn payloadOperand(_: HashLowering, tag_union: Never, _: HashWalk.Request, _: u32, _: u32) Common.LowerError!PayloadOperand {
+            switch (tag_union) {}
+        }
+
+        pub fn readPayload(_: HashLowering, tag_union: Never, _: HashWalk.Request, _: u32, _: u32, _: PayloadOperand, _: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+            switch (tag_union) {}
+        }
+    };
 
     fn lowerPrimitiveHashLocalsInto(
         self: *Lowerer,
@@ -11345,231 +11456,159 @@ const Lowerer = struct {
     }
 
     /// Lower `target = lhs == rhs` (or `!=` when negated) at type `ty`,
-    /// continuing at `next`. Statements are built back to front; an
-    /// aggregate's part comparisons nest, and each unfinished aggregate waits
-    /// in an `EqFrame` on an explicit stack while a part's comparison is
-    /// built, so type nesting never becomes native call depth.
+    /// continuing at `next`, through the shared structural-equality walker,
+    /// whose explicit frame stack keeps type nesting from becoming native
+    /// call depth.
     fn lowerEqLocalsInto(self: *Lowerer, where: LowerSite, target: LIR.LocalId, lhs: LIR.LocalId, rhs: LIR.LocalId, ty: Type.TypeId, negated: bool, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        var frames: std.ArrayList(EqFrame) = .empty;
-        defer {
-            for (frames.items) |*frame| frame.deinit(self.allocator);
-            frames.deinit(self.allocator);
-        }
-        var request = EqRequest{ .target = target, .lhs = lhs, .rhs = rhs, .ty = ty, .negated = negated, .next = next };
-        outer: while (true) {
-            var result: LIR.CFStmtId = switch (try self.beginEq(where, request)) {
-                .done => |stmt| stmt,
-                .frame => |frame| blk: {
-                    try frames.append(self.allocator, frame);
-                    const top = &frames.items[frames.items.len - 1];
-                    if (try self.nextEqPart(where, top)) |part| {
-                        request = part;
-                        continue :outer;
-                    }
-                    break :blk try self.finishEqFrame(where, &frames);
-                },
-            };
-            while (frames.items.len != 0) {
-                const top = &frames.items[frames.items.len - 1];
-                try self.eqPartLowered(where, top, result);
-                if (try self.nextEqPart(where, top)) |part| {
-                    request = part;
-                    continue :outer;
-                }
-                result = try self.finishEqFrame(where, &frames);
-            }
-            return result;
-        }
+        return try EqWalk.lower(.{ .l = self, .where = where }, .{ .target = target, .lhs = lhs, .rhs = rhs, .ty = ty, .negated = negated, .next = next });
     }
 
-    fn finishEqFrame(self: *Lowerer, where: LowerSite, frames: *std.ArrayList(EqFrame)) Common.LowerError!LIR.CFStmtId {
-        const result = try self.finishEq(where, &frames.items[frames.items.len - 1]);
-        var finished = frames.pop().?;
-        finished.deinit(self.allocator);
-        return result;
-    }
+    const EqWalk = value_semantics.structural.EqLower(EqLowering);
+    const StructuralComponent = value_semantics.structural.Component(Type.TypeId);
 
-    const EqRequest = struct {
-        target: LIR.LocalId,
-        lhs: LIR.LocalId,
-        rhs: LIR.LocalId,
-        ty: Type.TypeId,
-        negated: bool,
-        next: LIR.CFStmtId,
-    };
+    /// Solved types as the shared structural-equality walker lowers them.
+    const EqLowering = struct {
+        l: *Lowerer,
+        where: LowerSite,
 
-    /// An aggregate comparison waiting on its parts' comparisons. Parts are
-    /// compared right to left, so the AND fold nests later parts inside
-    /// earlier ones.
-    const EqFrame = struct {
-        request: EqRequest,
-        kind: union(enum) {
-            /// A record's, capture record's, or tuple's field types. Owned.
-            fields: []Type.TypeId,
-            tag_union: struct {
-                /// The union's variants. Owned.
-                tags: []Type.Tag,
-                /// Each lowered variant's payload comparison. Owned.
-                branches: []LIR.CFSwitchBranch,
-                success: LIR.CFStmtId,
-                lhs_disc: LIR.LocalId,
-                rhs_disc: LIR.LocalId,
-                same_disc: LIR.LocalId,
-                /// The variant whose payloads are being compared.
-                variant: usize = 0,
-            },
-        },
-        /// Where a part comparison continues when its part is equal.
-        current: LIR.CFStmtId,
-        /// Where any unequal part continues.
-        failed: LIR.CFStmtId,
-        /// Parts of the current variant, or fields, not yet compared.
-        remaining: usize,
-        /// The part whose comparison is being lowered.
-        part: ?struct { lhs: LIR.LocalId, rhs: LIR.LocalId, index: usize } = null,
+        pub const Ty = Type.TypeId;
+        pub const Local = LIR.LocalId;
+        pub const Stmt = LIR.CFStmtId;
+        pub const WalkError = Common.LowerError;
+        pub const Wrap = Never;
+        pub const TagUnion = Type.Span;
+        pub const SwitchBranch = LIR.CFSwitchBranch;
+        /// Both ends write the result before the comparison's continuation.
+        pub const Outcome = struct { equal: LIR.CFStmtId, unequal: LIR.CFStmtId };
+        pub const PayloadOperands = struct { lhs: LIR.LocalId, rhs: LIR.LocalId, ty: Type.TypeId };
 
-        fn deinit(frame: *EqFrame, allocator: Allocator) void {
-            switch (frame.kind) {
-                .fields => |fields| allocator.free(fields),
-                .tag_union => |tag_union| {
-                    allocator.free(tag_union.tags);
-                    allocator.free(tag_union.branches);
-                },
-            }
+        pub fn allocator(ctx: EqLowering) Allocator {
+            return ctx.l.allocator;
         }
-    };
 
-    const EqBegin = union(enum) {
-        done: LIR.CFStmtId,
-        frame: EqFrame,
-    };
-
-    fn beginEq(self: *Lowerer, where: LowerSite, start: EqRequest) Common.LowerError!EqBegin {
-        var request = start;
-        while (true) {
-            const target = request.target;
-            const negated = request.negated;
-            const next = request.next;
-            switch (self.types.get(request.ty)) {
-                .primitive => |primitive| return .{ .done = try self.lowerPrimitiveEqLocalsInto(where, target, request.lhs, request.rhs, primitive, negated, next) },
-                .zst => return .{ .done = try self.assignBool(where, target, !negated, next) },
-                .named => |named| {
-                    const backing = named.backing orelse Common.invariant("named equality reached direct LIR without runtime backing");
-                    request.ty = backing.ty;
-                    continue;
+        pub fn eqStep(ctx: EqLowering, request: EqWalk.Request) Common.LowerError!EqWalk.Step {
+            const l = ctx.l;
+            return switch (l.types.get(request.ty)) {
+                .primitive => |primitive| .{ .done = try l.lowerPrimitiveEqLocalsInto(ctx.where, request.target, request.lhs, request.rhs, primitive, request.negated, request.next) },
+                .zst => .always_equal,
+                .named => |named| .{ .retarget = (named.backing orelse Common.invariant("named equality reached direct LIR without runtime backing")).ty },
+                .record => |fields| .{ .components = try ctx.fieldComponents(l.types.fieldSpan(fields)) },
+                .capture_record => |fields| .{ .components = try ctx.fieldComponents(l.types.captureFieldSpan(fields)) },
+                .tuple => |items| blk: {
+                    const item_tys = l.types.span(items);
+                    const components = try l.allocator.alloc(StructuralComponent, item_tys.len);
+                    for (components, 0..) |*component, index| component.* = .{ .ty = GuardedList.at(item_tys, index), .field_index = @intCast(index) };
+                    break :blk .{ .components = components };
                 },
-                .record => |fields| return .{ .frame = try self.fieldsEqFrame(where, request, self.types.fieldSpan(fields)) },
-                .capture_record => |fields| return .{ .frame = try self.fieldsEqFrame(where, request, self.types.captureFieldSpan(fields)) },
-                .tuple => |items| {
-                    const current = try self.assignBool(where, target, !negated, next);
-                    const failed = try self.assignBool(where, target, negated, next);
-                    const item_tys = try GuardedList.dupe(self.allocator, Type.TypeId, self.types.span(items));
-                    return .{ .frame = .{ .request = request, .kind = .{ .fields = item_tys }, .current = current, .failed = failed, .remaining = item_tys.len } };
-                },
-                .tag_union => |tag_span| {
-                    if (self.isZstLocal(request.lhs) and self.isZstLocal(request.rhs)) {
-                        return .{ .done = try self.assignBool(where, target, !negated, next) };
-                    }
-                    const success = try self.assignBool(where, target, !negated, next);
-                    const failed = try self.assignBool(where, target, negated, next);
-                    const lhs_disc = try self.addLocalForLayout(.u32);
-                    const rhs_disc = try self.addLocalForLayout(.u32);
-                    const same_disc = try self.addLocalForLayout(.bool);
-                    const tags = try GuardedList.dupe(self.allocator, Type.Tag, self.types.tagSpan(tag_span));
-                    errdefer self.allocator.free(tags);
-                    const branches = try self.allocator.alloc(LIR.CFSwitchBranch, tags.len);
-                    return .{ .frame = .{
-                        .request = request,
-                        .kind = .{ .tag_union = .{
-                            .tags = tags,
-                            .branches = branches,
-                            .success = success,
-                            .lhs_disc = lhs_disc,
-                            .rhs_disc = rhs_disc,
-                            .same_disc = same_disc,
-                        } },
-                        .current = success,
-                        .failed = failed,
-                        .remaining = if (tags.len == 0) 0 else self.types.span(tags[0].payloads).len,
-                    } };
-                },
+                .tag_union => |tags| .{ .tag_union = tags },
                 .list, .box, .callable, .erased_fn, .erased_capture_ptr => Common.invariant("non-structural equality reached direct LIR structural equality lowering"),
+            };
+        }
+
+        /// The components of a record or capture record; `fields` is any
+        /// span whose entries carry a `ty`.
+        fn fieldComponents(ctx: EqLowering, fields: anytype) Common.LowerError![]const StructuralComponent {
+            const components = try ctx.l.allocator.alloc(StructuralComponent, fields.len);
+            for (components, 0..) |*component, index| component.* = .{ .ty = GuardedList.at(fields, index).ty, .field_index = @intCast(index) };
+            return components;
+        }
+
+        pub fn wrapRequest(_: EqLowering, wrap: Never, _: EqWalk.Request) EqWalk.Request {
+            switch (wrap) {}
+        }
+
+        pub fn unwrap(_: EqLowering, wrap: Never, _: EqWalk.Request, _: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+            switch (wrap) {}
+        }
+
+        pub fn releaseWrap(_: EqLowering, wrap: Never) void {
+            switch (wrap) {}
+        }
+
+        pub fn outcome(ctx: EqLowering, request: EqWalk.Request) Common.LowerError!Outcome {
+            return .{
+                .equal = try ctx.l.assignBool(ctx.where, request.target, !request.negated, request.next),
+                .unequal = try ctx.l.assignBool(ctx.where, request.target, request.negated, request.next),
+            };
+        }
+
+        pub fn finishOutcome(_: EqLowering, _: EqWalk.Request, _: Outcome, body: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+            return body;
+        }
+
+        pub fn assignBool(ctx: EqLowering, target: LIR.LocalId, value: bool, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+            return try ctx.l.assignBool(ctx.where, target, value, next);
+        }
+
+        pub fn boolLocal(ctx: EqLowering) Common.LowerError!LIR.LocalId {
+            return try ctx.l.addLocalForLayout(.bool);
+        }
+
+        pub fn componentLocal(ctx: EqLowering, ty: Type.TypeId) Common.LowerError!LIR.LocalId {
+            return try ctx.l.addTemp(ty);
+        }
+
+        pub fn isZstLocal(ctx: EqLowering, local: LIR.LocalId) bool {
+            return ctx.l.isZstLocal(local);
+        }
+
+        pub fn readField(ctx: EqLowering, dest: LIR.LocalId, source: LIR.LocalId, field_index: u32, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+            return try ctx.l.assignRefRead(ctx.where, dest, ctx.l.localFieldLayout(source, field_index), .{ .field = .{ .source = source, .field_idx = field_index } }, next);
+        }
+
+        pub fn boolSwitch(ctx: EqLowering, cond: LIR.LocalId, then: LIR.CFStmtId, otherwise: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+            return try ctx.l.boolSwitchNoContinuation(ctx.where, cond, then, otherwise);
+        }
+
+        pub fn discriminantLocal(ctx: EqLowering) Common.LowerError!LIR.LocalId {
+            return try ctx.l.addLocalForLayout(.u32);
+        }
+
+        pub fn readDiscriminant(ctx: EqLowering, dest: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+            return try ctx.l.addAssignRef(ctx.where.source(), dest, .{ .discriminant = .{ .source = source } }, next);
+        }
+
+        pub fn discriminantsEqual(ctx: EqLowering, target: LIR.LocalId, lhs: LIR.LocalId, rhs: LIR.LocalId, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+            const eq_op: LIR.LowLevel = .num_is_eq;
+            return try ctx.l.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = target,
+                .op = eq_op,
+                .rc_effect = eq_op.rcEffect(),
+                .args = try ctx.l.result.store.addLocalSpan(&[_]LIR.LocalId{ lhs, rhs }),
+                .next = next,
+            } }, ctx.where.source());
+        }
+
+        pub fn discriminantSwitch(ctx: EqLowering, cond: LIR.LocalId, branches: []const LIR.CFSwitchBranch, default: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+            return try ctx.l.discriminantSwitchStmt(ctx.where, cond, branches, default);
+        }
+
+        pub fn variantCount(ctx: EqLowering, tags: Type.Span) u32 {
+            return @intCast(ctx.l.types.tagSpan(tags).len);
+        }
+
+        pub fn payloadCount(ctx: EqLowering, tags: Type.Span, variant: u32) u32 {
+            return @intCast(ctx.l.types.span(GuardedList.at(ctx.l.types.tagSpan(tags), variant).payloads).len);
+        }
+
+        pub fn payloadOperands(ctx: EqLowering, tags: Type.Span, _: EqWalk.Request, variant: u32, index: u32) Common.LowerError!PayloadOperands {
+            const ty = GuardedList.at(ctx.l.types.span(GuardedList.at(ctx.l.types.tagSpan(tags), variant).payloads), index);
+            return .{ .lhs = try ctx.l.addTemp(ty), .rhs = try ctx.l.addTemp(ty), .ty = ty };
+        }
+
+        pub fn readPayloads(ctx: EqLowering, tags: Type.Span, request: EqWalk.Request, variant: u32, index: u32, operands: PayloadOperands, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+            const payload_count = ctx.payloadCount(tags, variant);
+            const payload_idx: ?u32 = if (payload_count == 1) null else index;
+            var current = next;
+            if (!ctx.l.isZstLocal(operands.rhs)) {
+                current = try ctx.l.assignRefRead(ctx.where, operands.rhs, ctx.l.localTagPayloadLayout(request.rhs, variant, payload_idx), tagPayloadRefOp(request.rhs, variant, payload_idx), current);
             }
+            if (!ctx.l.isZstLocal(operands.lhs)) {
+                current = try ctx.l.assignRefRead(ctx.where, operands.lhs, ctx.l.localTagPayloadLayout(request.lhs, variant, payload_idx), tagPayloadRefOp(request.lhs, variant, payload_idx), current);
+            }
+            return current;
         }
-    }
-
-    /// A frame comparing the fields of a record or capture record; `fields`
-    /// is any span whose entries carry a `ty`.
-    fn fieldsEqFrame(self: *Lowerer, where: LowerSite, request: EqRequest, fields: anytype) Common.LowerError!EqFrame {
-        const current = try self.assignBool(where, request.target, !request.negated, request.next);
-        const failed = try self.assignBool(where, request.target, request.negated, request.next);
-        const field_tys = try self.allocator.alloc(Type.TypeId, fields.len);
-        for (field_tys, 0..) |*field_ty, index| field_ty.* = GuardedList.at(fields, index).ty;
-        return .{ .request = request, .kind = .{ .fields = field_tys }, .current = current, .failed = failed, .remaining = field_tys.len };
-    }
-
-    /// The comparison of the frame's next part, after emitting the switch it
-    /// feeds; null when every part is compared. Moves a tag union to its next
-    /// variant as each variant's payloads finish.
-    fn nextEqPart(self: *Lowerer, where: LowerSite, frame: *EqFrame) Common.LowerError!?EqRequest {
-        switch (frame.kind) {
-            .fields => {},
-            .tag_union => |*tag_union| while (frame.remaining == 0) {
-                if (tag_union.variant == tag_union.tags.len) return null;
-                tag_union.branches[tag_union.variant] = .{ .value = @intCast(tag_union.variant), .body = frame.current };
-                tag_union.variant += 1;
-                frame.current = tag_union.success;
-                if (tag_union.variant == tag_union.tags.len) return null;
-                frame.remaining = self.types.span(tag_union.tags[tag_union.variant].payloads).len;
-            },
-        }
-        if (frame.remaining == 0) return null;
-        frame.remaining -= 1;
-        const index = frame.remaining;
-        const part_ty = switch (frame.kind) {
-            .fields => |fields| fields[index],
-            .tag_union => |tag_union| GuardedList.at(self.types.span(tag_union.tags[tag_union.variant].payloads), index),
-        };
-        const lhs_part = try self.addTemp(part_ty);
-        const rhs_part = try self.addTemp(part_ty);
-        const eq = try self.addLocalForLayout(.bool);
-        frame.current = try self.boolSwitchNoContinuation(where, eq, frame.current, frame.failed);
-        frame.part = .{ .lhs = lhs_part, .rhs = rhs_part, .index = index };
-        return .{ .target = eq, .lhs = lhs_part, .rhs = rhs_part, .ty = part_ty, .negated = false, .next = frame.current };
-    }
-
-    /// Continue the frame at its part's comparison, reading each side's
-    /// part in front of it.
-    fn eqPartLowered(self: *Lowerer, where: LowerSite, frame: *EqFrame, compare: LIR.CFStmtId) Common.LowerError!void {
-        const part = frame.part.?;
-        frame.part = null;
-        var current = compare;
-        const lhs = frame.request.lhs;
-        const rhs = frame.request.rhs;
-        switch (frame.kind) {
-            .fields => {
-                const field_index: u32 = @intCast(part.index);
-                if (!self.isZstLocal(part.rhs)) {
-                    current = try self.assignRefRead(where, part.rhs, self.localFieldLayout(rhs, field_index), .{ .field = .{ .source = rhs, .field_idx = field_index } }, current);
-                }
-                if (!self.isZstLocal(part.lhs)) {
-                    current = try self.assignRefRead(where, part.lhs, self.localFieldLayout(lhs, field_index), .{ .field = .{ .source = lhs, .field_idx = field_index } }, current);
-                }
-            },
-            .tag_union => |tag_union| {
-                const variant_index: u32 = @intCast(tag_union.variant);
-                const payload_count = self.types.span(tag_union.tags[tag_union.variant].payloads).len;
-                const payload_idx: ?u32 = if (payload_count == 1) null else @as(u32, @intCast(part.index));
-                if (!self.isZstLocal(part.rhs)) {
-                    current = try self.assignRefRead(where, part.rhs, self.localTagPayloadLayout(rhs, variant_index, payload_idx), tagPayloadRefOp(rhs, variant_index, payload_idx), current);
-                }
-                if (!self.isZstLocal(part.lhs)) {
-                    current = try self.assignRefRead(where, part.lhs, self.localTagPayloadLayout(lhs, variant_index, payload_idx), tagPayloadRefOp(lhs, variant_index, payload_idx), current);
-                }
-            },
-        }
-        frame.current = current;
-    }
+    };
 
     fn tagPayloadRefOp(source: LIR.LocalId, variant_index: u32, payload_idx: ?u32) LIR.RefOp {
         return if (payload_idx) |index| .{ .tag_payload = .{
@@ -11584,31 +11623,13 @@ const Lowerer = struct {
         } };
     }
 
-    fn finishEq(self: *Lowerer, where: LowerSite, frame: *EqFrame) Common.LowerError!LIR.CFStmtId {
-        const tag_union = switch (frame.kind) {
-            .fields => return frame.current,
-            .tag_union => |tag_union| tag_union,
-        };
-        const lhs = frame.request.lhs;
-        const rhs = frame.request.rhs;
-        const failed = frame.failed;
-        const payload_switch = try self.result.store.addCFStmt(.{ .switch_stmt = .{
-            .cond = tag_union.lhs_disc,
-            .branches = try self.result.store.addCFSwitchBranches(tag_union.branches),
-            .default_branch = failed,
+    fn discriminantSwitchStmt(self: *Lowerer, where: LowerSite, cond: LIR.LocalId, branches: []const LIR.CFSwitchBranch, default: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        return try self.result.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = cond,
+            .branches = try self.result.store.addCFSwitchBranches(branches),
+            .default_branch = default,
             .continuation = null,
         } }, where.glue());
-        const disc_switch = try self.boolSwitchNoContinuation(where, tag_union.same_disc, payload_switch, failed);
-        const eq_op: LIR.LowLevel = .num_is_eq;
-        const compare_disc = try self.result.store.addCFStmt(.{ .assign_low_level = .{
-            .target = tag_union.same_disc,
-            .op = eq_op,
-            .rc_effect = eq_op.rcEffect(),
-            .args = try self.result.store.addLocalSpan(&[_]LIR.LocalId{ tag_union.lhs_disc, tag_union.rhs_disc }),
-            .next = disc_switch,
-        } }, where.source());
-        const read_rhs = try self.addAssignRef(where.source(), tag_union.rhs_disc, .{ .discriminant = .{ .source = rhs } }, compare_disc);
-        return try self.addAssignRef(where.source(), tag_union.lhs_disc, .{ .discriminant = .{ .source = lhs } }, read_rhs);
     }
 
     fn lowerPrimitiveEqLocalsInto(

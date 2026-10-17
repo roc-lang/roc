@@ -751,7 +751,7 @@ pub const MethodRegistryEntry = struct {
     /// (design.md "Inspect Overrides"). `null` is the decision that inspection
     /// renders the owner's default form: the method is ineligible, is not
     /// `to_inspect`, or its declaration was rejected (`target` is `null`).
-    /// Only `lookupInspectOverride` reads it; ordinary method dispatch ignores
+    /// Only `inspectOverride` reads it; ordinary method dispatch ignores
     /// it.
     inspect_override: ?CheckedTypeId = null,
     /// The evidence of inspection's use of this override at
@@ -798,7 +798,7 @@ pub const MethodRegistry = struct {
     /// or null when the registry recorded no override (an ineligible or
     /// rejected declaration) and inspection renders the value's default form.
     /// `key.method` names `to_inspect`.
-    pub fn lookupInspectOverride(self: *const MethodRegistry, key: MethodKey) ?InspectOverride {
+    pub fn inspectOverride(self: *const MethodRegistry, key: MethodKey) ?InspectOverride {
         var normalized = key;
         collections.CompactWriter.zeroValuePadding(MethodKey, @ptrCast(&normalized));
         const found = artifact_serialize.binarySearchByKey(MethodRegistryEntry, MethodKey, self.entries, normalized, methodEntryOrder) orelse return null;
@@ -877,7 +877,7 @@ pub const MethodRegistry = struct {
             // A rejected `to_inspect` is never an inspect override: inspection
             // renders its owner's values in the default form (design.md
             // "Inspect Overrides"). This entry is that decision; inspection
-            // reads it through `lookupInspectOverride`.
+            // reads it through `inspectOverride`.
             if (methodBindingIsRejectedDeclaration(module, entry.value)) {
                 try entries.append(allocator, .{
                     .key = method_key,

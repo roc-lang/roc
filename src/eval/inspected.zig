@@ -3018,7 +3018,24 @@ pub fn llvmEvalBoolRootModules(
 }
 
 fn legacyInspectedRun(allocator: Allocator, comptime backend_kind: InspectedRun.Backend, lowered: *const LoweredProgram) Error!EvalRunResult {
-    const result = try InspectedRun.run(allocator, backend_kind, .{
+    const result = try inspectedRunResult(allocator, backend_kind, lowered);
+    result.deinitEvents(allocator);
+    return switch (result.outcome) {
+        .returned => |output| .{
+            .output = output,
+            .allocation_count = result.allocation_count,
+        },
+        .crashed => |message| {
+            allocator.free(message);
+            return error.Crash;
+        },
+    };
+}
+
+/// Execute an inspect-wrapped program, returning its semantic outcome and the
+/// host events it produced in order.
+pub fn inspectedRunResult(allocator: Allocator, comptime backend_kind: InspectedRun.Backend, lowered: *const LoweredProgram) Error!InspectedRun.Result {
+    return try InspectedRun.run(allocator, backend_kind, .{
         .store = &lowered.view.store,
         .layouts = &lowered.view.layouts,
         .boxy_tables = boxy_runtime.BoxyTables.fromImageView(&lowered.view),
@@ -3031,17 +3048,6 @@ fn legacyInspectedRun(allocator: Allocator, comptime backend_kind: InspectedRun.
         .interpreter => .reject,
         .dev, .wasm, .llvm => {},
     });
-    result.deinitEvents(allocator);
-    return switch (result.outcome) {
-        .returned => |output| .{
-            .output = output,
-            .allocation_count = result.allocation_count,
-        },
-        .crashed => |message| {
-            allocator.free(message);
-            return error.Crash;
-        },
-    };
 }
 
 /// Evaluate a lowered program via the LIR interpreter and return the output string.

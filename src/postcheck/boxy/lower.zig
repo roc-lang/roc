@@ -15,6 +15,8 @@ const lir_core = @import("lir_core");
 const types = @import("types");
 
 const Common = @import("../common.zig");
+const value_semantics = @import("value_semantics");
+const inspect_text = value_semantics.inspect.text;
 const Layouts = @import("layouts.zig");
 const Plan = @import("plan.zig");
 const LiteralRequirements = @import("literal_requirements.zig");
@@ -5695,7 +5697,7 @@ const ProcedureBuilder = struct {
         const source_rep = self.plan.representations.items[@backingInt(rep_id)];
         const source_module = Plan.moduleViewForKey(self.modules, source_rep.source_type.module);
         const owner = methodOwnerForProcedureType(source_module, source_rep.source_type.ty) orelse return null;
-        const target_lookup = Plan.lookupInspectOverride(self.methodSearchModules(), source_module, owner) orelse return null;
+        const target_lookup = Plan.inspectOverrideFor(self.methodSearchModules(), source_module, owner) orelse return null;
         const source = switch (target_lookup.target.kind) {
             .procedure => |procedure| Plan.WorkerSource{ .procedure_template = procedure.template },
             .local_proc,
@@ -34308,6 +34310,185 @@ const ProcBodyBuilder = struct {
         return .{ .done = stmt };
     }
 
+    const InspectRules = value_semantics.InspectSpec(InspectShapes);
+
+    /// Boxy representations as the shared inspect rules read them. A
+    /// component is named by its index among its representation's children,
+    /// or among its variant's payloads.
+    const InspectShapes = struct {
+        builder: *ProcBodyBuilder,
+
+        pub const Ty = Plan.TypeRepId;
+        pub const Primitive = checked.CheckedPrimitive;
+        pub const Record = Plan.TypeRepId;
+        pub const Tuple = Plan.TypeRepId;
+        pub const TagUnion = Plan.TypeRepId;
+        pub const PresenceSlot = Plan.TypeRepId;
+        pub const Override = Plan.WorkerPlanId;
+        pub const Child = u32;
+        pub const Label = []const u8;
+
+        fn rep(shapes: InspectShapes, rep_id: Plan.TypeRepId) Plan.TypeRepresentation {
+            return shapes.builder.parent.plan.representations.items[@backingInt(rep_id)];
+        }
+
+        fn children(shapes: InspectShapes, rep_id: Plan.TypeRepId) []const Plan.RepChild {
+            return shapes.builder.parent.plan.childSlice(shapes.rep(rep_id).children);
+        }
+
+        fn variants(shapes: InspectShapes, rep_id: Plan.TypeRepId) []const Plan.TagVariant {
+            return shapes.builder.parent.plan.tagVariantSlice(shapes.rep(rep_id).tag_variants);
+        }
+
+        pub fn recordSlotCount(shapes: InspectShapes, record: Plan.TypeRepId) u32 {
+            return @intCast(shapes.children(record).len);
+        }
+
+        pub fn recordField(shapes: InspectShapes, record: Plan.TypeRepId, slot: u32) ?value_semantics.inspect.RecordField(InspectShapes) {
+            const child = shapes.children(record)[slot];
+            switch (child.role) {
+                .record_field => |label| return .{ .label = shapes.builder.module.canonical_names.?.recordFieldLabelText(label), .child = slot },
+                .record_ext => {
+                    shapes.builder.requireEmptyRecordExtension(child.rep);
+                    return null;
+                },
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("record inspect representation had a non-record child role"),
+            }
+        }
+
+        pub fn tupleElemCount(shapes: InspectShapes, tuple: Plan.TypeRepId) u32 {
+            return @intCast(shapes.children(tuple).len);
+        }
+
+        pub fn tupleElem(_: InspectShapes, _: Plan.TypeRepId, index: u32) u32 {
+            return index;
+        }
+
+        pub fn variantCount(shapes: InspectShapes, tag_union: Plan.TypeRepId) u32 {
+            return @intCast(shapes.variants(tag_union).len);
+        }
+
+        pub fn variantName(shapes: InspectShapes, tag_union: Plan.TypeRepId, variant: u32) []const u8 {
+            return shapes.builder.tagVariantNameText(shapes.variants(tag_union)[variant]);
+        }
+
+        pub fn payloadCount(shapes: InspectShapes, tag_union: Plan.TypeRepId, variant: u32) u32 {
+            return @intCast(shapes.builder.parent.plan.childSlice(shapes.variants(tag_union)[variant].payloads).len);
+        }
+
+        pub fn payload(_: InspectShapes, _: Plan.TypeRepId, _: u32, index: u32) u32 {
+            return index;
+        }
+    };
+
+    /// How inspection reads a representation.
+    fn inspectShape(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) InspectRules.Shape {
+        const rep = self.parent.plan.representations.items[@backingInt(rep_id)];
+        return switch (rep.kind) {
+            .in_progress => boxyLowerInvariant("in-progress boxy representation reached inspect lowering"),
+            .dynamic => .dynamic,
+            .erased_callable => .function,
+            // Compiler-owned encoding evidence exposes no structure.
+            .generated_field,
+            .generated_field_names,
+            .generated_tag_union_spec,
+            => .{ .nominal = .{ .override = null, .backing = null } },
+            .list => .{ .list = self.repQuery().requiredSingleChild(rep_id, .list_elem).rep },
+            .box => .{ .box = self.repQuery().requiredSingleChild(rep_id, .box_payload).rep },
+            .primitive => |primitive| .{ .primitive = primitive },
+            .bool_tag_union => .bool,
+            .empty_record => .empty_record,
+            .empty_tag_union => .{ .tag_union = rep_id },
+            .alias => .{ .transparent = self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep },
+            .nominal => |kind| switch (kind) {
+                .transparent => .{ .nominal = .{
+                    .override = self.parent.inspectOverrideWorkerForRep(rep_id),
+                    .backing = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep,
+                } },
+                .opaque_nominal => .{ .nominal = .{ .override = self.parent.inspectOverrideWorkerForRep(rep_id), .backing = null } },
+                .builtin_other => .{ .nominal = .{ .override = null, .backing = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep } },
+            },
+            .record => .{ .record = rep_id },
+            .tuple => .{ .tuple = rep_id },
+            .tag_union => if (rep.presence_slot_present_discriminant != null)
+                .{ .presence_slot = rep_id }
+            else if (self.tagUnionRepHasExtension(rep))
+                // An open row's extension is known only by its descriptor.
+                .dynamic
+            else
+                .{ .tag_union = rep_id },
+        };
+    }
+
+    /// Collects one rendering's parts, naming each component by where it is
+    /// read from `source`.
+    const InspectPartSink = struct {
+        builder: *ProcBodyBuilder,
+        parts: *std.ArrayList(InspectPart),
+        source: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
+        kind: union(enum) {
+            /// Record fields, numbered in order as LIR reads them.
+            record: struct { next_field: u32 = 0 },
+            tuple,
+            variant: u32,
+        },
+
+        pub fn literal(sink: *InspectPartSink, bytes: []const u8) Allocator.Error!void {
+            try sink.parts.append(sink.builder.parent.allocator, .{ .literal = bytes });
+        }
+
+        pub fn label(sink: *InspectPartSink, bytes: []const u8) Allocator.Error!void {
+            try sink.parts.append(sink.builder.parent.allocator, .{ .literal = bytes });
+        }
+
+        pub fn child(sink: *InspectPartSink, index: u32) Allocator.Error!void {
+            const plan = sink.builder.parent.plan;
+            const part: InspectPart = switch (sink.kind) {
+                .record => |*record| part: {
+                    const field_index = record.next_field;
+                    record.next_field += 1;
+                    break :part .{ .field = .{
+                        .source = sink.source,
+                        .field_index = field_index,
+                        .rep = plan.childSlice(plan.representations.items[@backingInt(sink.rep_id)].children)[index].rep,
+                    } };
+                },
+                .tuple => part: {
+                    const elem = plan.childSlice(plan.representations.items[@backingInt(sink.rep_id)].children)[index];
+                    const elem_index = switch (elem.role) {
+                        .tuple_elem => |elem_index| elem_index,
+                        .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tuple inspect representation had a non-tuple child role"),
+                    };
+                    if (elem_index > std.math.maxInt(u32)) {
+                        boxyLowerInvariant("tuple inspect element index exceeded LIR field index range");
+                    }
+                    break :part .{ .field = .{ .source = sink.source, .field_index = @intCast(elem_index), .rep = elem.rep } };
+                },
+                .variant => |variant_index| part: {
+                    const variant = plan.tagVariantSlice(plan.representations.items[@backingInt(sink.rep_id)].tag_variants)[variant_index];
+                    const payloads = plan.childSlice(variant.payloads);
+                    const payload_child = payloads[index];
+                    switch (payload_child.role) {
+                        .tag_payload => |payload| {
+                            if (payload.tag != variant.name or payload.index != index) {
+                                boxyLowerInvariant("tag inspect payload span did not match its payload child roles");
+                            }
+                        },
+                        .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tag inspect variant payload span included a non-payload child"),
+                    }
+                    break :part .{ .tag_payload = .{
+                        .source = sink.source,
+                        .variant_index = variant_index,
+                        .payload_index = if (payloads.len == 1) null else index,
+                        .rep = payload_child.rep,
+                    } };
+                },
+            };
+            try sink.parts.append(sink.builder.parent.allocator, part);
+        }
+    };
+
     /// The rendering of `request` when it needs no component rendering;
     /// otherwise null, with the frame that builds it pushed.
     fn beginInspect(self: *ProcBodyBuilder, frames: *std.ArrayList(InspectFrame), root: InspectRequest) Allocator.Error!?LIR.CFStmtId {
@@ -34317,18 +34498,11 @@ const ProcBodyBuilder = struct {
             const source = request.source;
             const rep_id = request.rep_id;
             const next = request.next;
-            const rep = self.parent.plan.representations.items[@backingInt(rep_id)];
-            switch (rep.kind) {
-                .in_progress => boxyLowerInvariant("in-progress boxy representation reached inspect lowering"),
-                .dynamic => return try self.lowerDescriptorInspectLocalsInto(target, source, rep_id, next),
-                .erased_callable => return try self.assignStringBytesLiteral(target, "<function>", next),
-                .generated_field,
-                .generated_field_names,
-                .generated_tag_union_spec,
-                => return try self.assignStringBytesLiteral(target, "<opaque>", next),
+            switch (InspectRules.actionForShape(.{ .builder = self }, self.inspectShape(rep_id))) {
+                .literal => |text| return try self.assignStringBytesLiteral(target, text, next),
+                .descriptor => return try self.lowerDescriptorInspectLocalsInto(target, source, rep_id, next),
                 .list => return try self.beginListInspect(frames, request),
-                .box => {
-                    const payload_rep = self.repQuery().requiredSingleChild(rep_id, .box_payload).rep;
+                .box => |payload_rep| {
                     const payload = try self.addFrameLocalForRep(payload_rep);
                     const prefix = try self.addFrameLocal(.str);
                     const rendered = try self.addFrameLocal(.str);
@@ -34336,7 +34510,7 @@ const ProcBodyBuilder = struct {
                     const suffix = try self.addFrameLocal(.str);
 
                     var continuation = try self.assignStrConcat(target, with_value, suffix, next);
-                    continuation = try self.assignStringBytesLiteral(suffix, ")", continuation);
+                    continuation = try self.assignStringBytesLiteral(suffix, inspect_text.box_close, continuation);
                     continuation = try self.assignStrConcat(with_value, prefix, rendered, continuation);
                     return try self.pushInspectFrameFirst(
                         frames,
@@ -34345,31 +34519,20 @@ const ProcBodyBuilder = struct {
                     );
                 },
                 .primitive => |primitive| return try self.lowerPrimitiveInspectLocalsInto(target, source, rep_id, primitive, next),
-                .bool_tag_union => return try self.lowerBoolInspectLocalsInto(target, source, next),
-                .empty_record => return try self.assignStringBytesLiteral(target, "{}", next),
-                .empty_tag_union => return try self.parent.result.store.addCFStmt(.{ .crash = .{
-                    .msg = .{ .literal = try self.parent.result.store.insertString("uninhabited value reached Str.inspect") },
+                .bool => return try self.lowerBoolInspectLocalsInto(target, source, next),
+                .uninhabited => return try self.parent.result.store.addCFStmt(.{ .crash = .{
+                    .msg = .{ .literal = try self.parent.result.store.insertString(inspect_text.uninhabited_crash) },
                 } }, self.derivedOrigin()),
-                .alias => {
-                    request.rep_id = self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep;
+                .transparent => |backing_rep| {
+                    request.rep_id = backing_rep;
                     continue;
                 },
-                .nominal => |kind| switch (kind) {
-                    .transparent => {
-                        if (try self.lowerToInspectMethodInto(target, source, rep_id, next)) |method_call| return method_call;
-                        return try self.beginNominalInspect(frames, request);
-                    },
-                    .opaque_nominal => return try self.lowerToInspectMethodInto(target, source, rep_id, next) orelse
-                        try self.assignStringBytesLiteral(target, "<opaque>", next),
-                    .builtin_other => return try self.beginNominalInspect(frames, request),
-                },
+                .override => |worker| return try self.lowerToInspectWorkerInto(target, source, worker, next),
+                .backing => return try self.beginNominalInspect(frames, request),
                 .record => return try self.beginRecordInspect(frames, request),
                 .tuple => return try self.beginTupleInspect(frames, request),
-                .tag_union => {
-                    if (rep.presence_slot_present_discriminant != null) return try self.beginPresenceSlotInspect(frames, request);
-                    if (self.tagUnionRepHasExtension(rep)) return try self.lowerDescriptorInspectLocalsInto(target, source, rep_id, next);
-                    return try self.beginTagUnionInspect(frames, request);
-                },
+                .tag_union => return try self.beginTagUnionInspect(frames, request),
+                .presence_slot => return try self.beginPresenceSlotInspect(frames, request),
             }
         }
     }
@@ -34461,62 +34624,18 @@ const ProcBodyBuilder = struct {
     }
 
     fn beginRecordInspect(self: *ProcBodyBuilder, frames: *std.ArrayList(InspectFrame), request: InspectRequest) Allocator.Error!?LIR.CFStmtId {
-        const rep = self.parent.plan.representations.items[@backingInt(request.rep_id)];
-        const children = self.parent.plan.childSlice(rep.children);
-        const field_count = recordEqualityFieldCount(children);
-        if (field_count == 0) return try self.assignStringBytesLiteral(request.target, "{}", request.next);
-
         var parts = std.ArrayList(InspectPart).empty;
         defer parts.deinit(self.parent.allocator);
-        try parts.append(self.parent.allocator, .{ .literal = "{ " });
-
-        var field_index: u32 = 0;
-        for (children) |child| {
-            switch (child.role) {
-                .record_field => |label| {
-                    if (field_index != 0) try parts.append(self.parent.allocator, .{ .literal = ", " });
-                    try parts.append(self.parent.allocator, .{ .literal = self.module.canonical_names.?.recordFieldLabelText(label) });
-                    try parts.append(self.parent.allocator, .{ .literal = ": " });
-                    try parts.append(self.parent.allocator, .{ .field = .{
-                        .source = request.source,
-                        .field_index = field_index,
-                        .rep = child.rep,
-                    } });
-                    field_index += 1;
-                },
-                .record_ext => self.requireEmptyRecordExtension(child.rep),
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("record inspect representation had a non-record child role"),
-            }
-        }
-        try parts.append(self.parent.allocator, .{ .literal = " }" });
+        var sink = InspectPartSink{ .builder = self, .parts = &parts, .source = request.source, .rep_id = request.rep_id, .kind = .{ .record = .{} } };
+        try InspectRules.recordParts(.{ .builder = self }, request.rep_id, &sink);
         return try self.pushInspectFrame(frames, .{ .parts = try self.beginInspectParts(request.target, parts.items, request.next) });
     }
 
     fn beginTupleInspect(self: *ProcBodyBuilder, frames: *std.ArrayList(InspectFrame), request: InspectRequest) Allocator.Error!?LIR.CFStmtId {
-        const rep = self.parent.plan.representations.items[@backingInt(request.rep_id)];
-        const children = self.parent.plan.childSlice(rep.children);
-        if (children.len == 0) return try self.assignStringBytesLiteral(request.target, "()", request.next);
-
         var parts = std.ArrayList(InspectPart).empty;
         defer parts.deinit(self.parent.allocator);
-        try parts.append(self.parent.allocator, .{ .literal = "(" });
-        for (children, 0..) |child, ordinal| {
-            switch (child.role) {
-                .tuple_elem => |index| {
-                    if (ordinal != 0) try parts.append(self.parent.allocator, .{ .literal = ", " });
-                    if (index > std.math.maxInt(u32)) {
-                        boxyLowerInvariant("tuple inspect element index exceeded LIR field index range");
-                    }
-                    try parts.append(self.parent.allocator, .{ .field = .{
-                        .source = request.source,
-                        .field_index = @intCast(index),
-                        .rep = child.rep,
-                    } });
-                },
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tuple inspect representation had a non-tuple child role"),
-            }
-        }
-        try parts.append(self.parent.allocator, .{ .literal = ")" });
+        var sink = InspectPartSink{ .builder = self, .parts = &parts, .source = request.source, .rep_id = request.rep_id, .kind = .tuple };
+        try InspectRules.tupleParts(.{ .builder = self }, request.rep_id, &sink);
         return try self.pushInspectFrame(frames, .{ .parts = try self.beginInspectParts(request.target, parts.items, request.next) });
     }
 
@@ -34526,53 +34645,25 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
         source: LIR.LocalId,
-        variant: Plan.TagVariant,
+        rep_id: Plan.TypeRepId,
         variant_index: u32,
         next: LIR.CFStmtId,
     ) Allocator.Error!union(enum) { done: LIR.CFStmtId, parts: InspectPartsState } {
-        const payloads = self.parent.plan.childSlice(variant.payloads);
-        if (payloads.len == 0) {
-            return .{ .done = try self.assignStringBytesLiteral(target, self.tagVariantNameText(variant), next) };
-        }
-
         var parts = std.ArrayList(InspectPart).empty;
         defer parts.deinit(self.parent.allocator);
-        try parts.append(self.parent.allocator, .{ .literal = self.tagVariantNameText(variant) });
-        try parts.append(self.parent.allocator, .{ .literal = "(" });
-        for (payloads, 0..) |child, index| {
-            switch (child.role) {
-                .tag_payload => |payload| {
-                    if (payload.tag != variant.name or payload.index != index) {
-                        boxyLowerInvariant("tag inspect payload span did not match its payload child roles");
-                    }
-                },
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tag inspect variant payload span included a non-payload child"),
-            }
-            if (index != 0) try parts.append(self.parent.allocator, .{ .literal = ", " });
-            if (index > std.math.maxInt(u32)) {
-                boxyLowerInvariant("tag inspect payload index exceeded LIR payload index range");
-            }
-            try parts.append(self.parent.allocator, .{ .tag_payload = .{
-                .source = source,
-                .variant_index = variant_index,
-                .payload_index = if (payloads.len == 1) null else @as(u32, @intCast(index)),
-                .rep = child.rep,
-            } });
+        var sink = InspectPartSink{ .builder = self, .parts = &parts, .source = source, .rep_id = rep_id, .kind = .{ .variant = variant_index } };
+        try InspectRules.variantParts(.{ .builder = self }, rep_id, variant_index, &sink);
+        if (parts.items.len == 1) {
+            return .{ .done = try self.assignStringBytesLiteral(target, parts.items[0].literal, next) };
         }
-        try parts.append(self.parent.allocator, .{ .literal = ")" });
         return .{ .parts = try self.beginInspectParts(target, parts.items, next) };
     }
 
     fn beginTagUnionInspect(self: *ProcBodyBuilder, frames: *std.ArrayList(InspectFrame), request: InspectRequest) Allocator.Error!?LIR.CFStmtId {
         const rep = self.parent.plan.representations.items[@backingInt(request.rep_id)];
         const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
-        if (variants.len == 0) {
-            return try self.parent.result.store.addCFStmt(.{ .crash = .{
-                .msg = .{ .literal = try self.parent.result.store.insertString("uninhabited value reached Str.inspect") },
-            } }, self.derivedOrigin());
-        }
         if (variants.len == 1 and self.isZstLocal(request.source)) {
-            return switch (try self.beginTagInspectVariant(request.target, request.source, variants[0], 0, request.next)) {
+            return switch (try self.beginTagInspectVariant(request.target, request.source, request.rep_id, 0, request.next)) {
                 .done => |stmt| stmt,
                 .parts => |parts| try self.pushInspectFrame(frames, .{ .parts = parts }),
             };
@@ -34725,7 +34816,7 @@ const ProcBodyBuilder = struct {
                     if (tag.index > std.math.maxInt(u32)) {
                         boxyLowerInvariant("tag inspect variant index exceeded LIR variant range");
                     }
-                    switch (try self.beginTagInspectVariant(request.target, request.source, variants[tag.index], @intCast(tag.index), try self.joinJump(tag.done))) {
+                    switch (try self.beginTagInspectVariant(request.target, request.source, request.rep_id, @intCast(tag.index), try self.joinJump(tag.done))) {
                         .done => |stmt| {
                             tag.branches[tag.index] = .{ .value = @intCast(tag.index), .body = stmt };
                             tag.index += 1;
@@ -34761,7 +34852,7 @@ const ProcBodyBuilder = struct {
                         .next = present_body,
                     } }, self.derivedOrigin());
                 }
-                const missing_body = try self.assignStringBytesLiteral(request.target, "<missing>", try self.joinJump(presence.done));
+                const missing_body = try self.assignStringBytesLiteral(request.target, inspect_text.missing, try self.joinJump(presence.done));
                 const branches = [_]LIR.CFSwitchBranch{
                     .{ .value = presence.missing_discriminant, .body = missing_body },
                     .{ .value = presence.present_discriminant, .body = present_body },
@@ -34789,7 +34880,7 @@ const ProcBodyBuilder = struct {
                     .box_unbox,
                     child.?,
                 );
-                continuation = try self.assignStringBytesLiteral(box.prefix, "Box(", continuation);
+                continuation = try self.assignStringBytesLiteral(box.prefix, inspect_text.box_open, continuation);
                 return self.finishInspectFrame(frames, continuation);
             },
             .list => |list| {
@@ -34800,8 +34891,8 @@ const ProcBodyBuilder = struct {
                 }
                 continuation = try self.assignStrConcat(list.with_sep, list.out, list.sep, continuation);
 
-                const empty_sep = try self.assignStringBytesLiteral(list.sep, "", continuation);
-                const comma_sep = try self.assignStringBytesLiteral(list.sep, ", ", continuation);
+                const empty_sep = try self.assignStringBytesLiteral(list.sep, InspectRules.listSeparator(0), continuation);
+                const comma_sep = try self.assignStringBytesLiteral(list.sep, InspectRules.listSeparator(1), continuation);
                 const sep_switch = try self.boolSwitchNoContinuation(list.is_first, empty_sep, comma_sep);
                 const compare_first = try self.assignBinaryLowLevel(list.is_first, .num_is_eq, list.index, list.zero, sep_switch);
                 const step = try self.assignIntLiteral(list.zero, 0, compare_first);
@@ -34812,7 +34903,7 @@ const ProcBodyBuilder = struct {
                 var initial_jump = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = list.join_id } }, self.derivedOrigin());
                 initial_jump = try self.setLocalInitializeJoinParam(list.out, list.initial_out, initial_jump);
                 initial_jump = try self.setLocalInitializeJoinParam(list.index, list.zero_index, initial_jump);
-                initial_jump = try self.assignStringBytesLiteral(list.initial_out, "[", initial_jump);
+                initial_jump = try self.assignStringBytesLiteral(list.initial_out, inspect_text.list_open, initial_jump);
                 initial_jump = try self.assignIntLiteral(list.zero_index, 0, initial_jump);
                 initial_jump = try self.assignUnaryLowLevel(list.len, .list_len, request.source, initial_jump);
 
@@ -34970,8 +35061,8 @@ const ProcBodyBuilder = struct {
         source: LIR.LocalId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const false_body = try self.assignStringBytesLiteral(target, "False", next);
-        const true_body = try self.assignStringBytesLiteral(target, "True", next);
+        const false_body = try self.assignStringBytesLiteral(target, InspectRules.boolText(false), next);
+        const true_body = try self.assignStringBytesLiteral(target, InspectRules.boolText(true), next);
         const discriminant = try self.addFrameLocal(.u32);
         const branches = [_]LIR.CFSwitchBranch{.{ .value = Common.bool_true_discriminant, .body = true_body }};
         const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
@@ -34995,7 +35086,7 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const close = try self.addFrameLocal(.str);
         const concat = try self.assignStrConcat(target, out, close, next);
-        return try self.assignStringBytesLiteral(close, "]", concat);
+        return try self.assignStringBytesLiteral(close, inspect_text.list_close, concat);
     }
 
     fn concatStringLocalsInto(
@@ -35046,154 +35137,83 @@ const ProcBodyBuilder = struct {
 
     // Structural equality //
     //
-    // Equality over a representation compares its components, and components
-    // follow type nesting, so each comparison still waiting on a component's
-    // comparison is a frame on one heap-backed stack. Comparisons are built
-    // from their continuation backward; frames allocate locals, join points,
-    // and statements in the order a direct recursive build would.
+    // The shared structural-equality walker owns what comparing a
+    // representation means: the order components are compared in, the
+    // short-circuit on the first unequal one, and how tag discriminants and
+    // payloads are compared. This context decides how each representation
+    // is compared and emits the reads and joins.
 
-    const EqRequest = struct {
-        target: LIR.LocalId,
-        lhs: LIR.LocalId,
-        rhs: LIR.LocalId,
-        rep_id: Plan.TypeRepId,
-        negated: bool,
-        next: LIR.CFStmtId,
-    };
+    const EqWalk = value_semantics.structural.EqLower(EqLowering);
+    const EqRequest = EqWalk.Request;
 
-    const EqStep = union(enum) {
-        /// The frame needs this component comparison next.
-        request: EqRequest,
-        /// The frame finished with this statement and was popped.
-        done: LIR.CFStmtId,
-    };
-
-    /// A comparison waiting on its components' comparisons.
-    const EqFrame = struct {
-        /// Whether the frame's last requested comparison is still due.
-        awaiting: bool = false,
-        state: union(enum) {
-            /// Compare at another representation, then convert both
-            /// operands into it.
-            convert: struct { request: EqRequest, lhs_actual: LIR.LocalId, rhs_actual: LIR.LocalId, actual: Plan.TypeRepId },
-            /// Compare the box payloads, then unbox both operands.
-            unbox: struct { request: EqRequest, lhs_payload: LIR.LocalId, rhs_payload: LIR.LocalId, payload_rep: Plan.TypeRepId },
-            nominal: struct {
-                request: EqRequest,
-                scope: NominalBackingFormalScope,
-                backing_rep: Plan.TypeRepId,
-                /// The backing operands, when the nominal's declared fields
-                /// store differently from its backing.
-                backing: ?struct { lhs: LIR.LocalId, rhs: LIR.LocalId } = null,
-            },
-            /// A record's fields or a tuple's elements, last first.
-            fields: struct {
-                request: EqRequest,
-                kind: enum { record, tuple },
-                done: LIR.JoinPointId,
-                current: LIR.CFStmtId,
-                failed: LIR.CFStmtId,
-                remaining: usize,
-                field_index: u32,
-                pending: struct { lhs_field: LIR.LocalId, rhs_field: LIR.LocalId, field_index: u32 } = undefined,
-            },
-            tag: *EqTagState,
+    /// A comparison delegated to another representation of the operands.
+    const EqWrap = union(enum) {
+        /// Compare at another representation, then convert both operands
+        /// into it.
+        convert: struct { lhs_actual: LIR.LocalId, rhs_actual: LIR.LocalId, actual: Plan.TypeRepId },
+        /// Compare the box payloads, then unbox both operands.
+        unbox: struct { lhs_payload: LIR.LocalId, rhs_payload: LIR.LocalId, payload_rep: Plan.TypeRepId },
+        nominal: struct {
+            scope: NominalBackingFormalScope,
+            backing_rep: Plan.TypeRepId,
+            /// The backing operands, when the nominal's declared fields
+            /// store differently from its backing.
+            backing: ?struct { lhs: LIR.LocalId, rhs: LIR.LocalId } = null,
         },
     };
 
-    /// A tag union comparison: one switch branch per variant, each comparing
-    /// its payloads last first.
-    const EqTagState = struct {
-        request: EqRequest,
-        done: LIR.JoinPointId,
-        success: LIR.CFStmtId,
-        failed: LIR.CFStmtId,
-        lhs_disc: LIR.LocalId,
-        rhs_disc: LIR.LocalId,
-        same_disc: LIR.LocalId,
-        branches: []LIR.CFSwitchBranch,
-        variant: usize = 0,
-        /// The current variant's payloads still to compare.
-        remaining: usize = 0,
-        started: bool = false,
-        current: LIR.CFStmtId = undefined,
-        source_has_payload_desc: bool = false,
-        pending: struct { child: Plan.RepChild, lhs_payload: ExtractedTagPayloadLocal, rhs_payload: ExtractedTagPayloadLocal, index: usize } = undefined,
-    };
+    const EqLowering = struct {
+        builder: *ProcBodyBuilder,
 
-    fn lowerEqRepLocalsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        lhs: LIR.LocalId,
-        rhs: LIR.LocalId,
-        rep_id: Plan.TypeRepId,
-        negated: bool,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const allocator = self.parent.allocator;
-        var frames: std.ArrayList(EqFrame) = .empty;
-        defer {
-            var index = frames.items.len;
-            while (index > 0) {
-                index -= 1;
-                self.releaseEqFrame(&frames.items[index]);
-            }
-            frames.deinit(allocator);
-        }
-        var value = try self.beginEq(&frames, .{ .target = target, .lhs = lhs, .rhs = rhs, .rep_id = rep_id, .negated = negated, .next = next });
-        while (frames.items.len != 0) {
-            switch (try self.stepEqFrame(&frames, value)) {
-                .request => |request| value = try self.beginEq(&frames, request),
-                .done => |stmt| value = stmt,
-            }
-        }
-        return value.?;
-    }
+        pub const Ty = Plan.TypeRepId;
+        pub const Local = LIR.LocalId;
+        pub const Stmt = LIR.CFStmtId;
+        pub const WalkError = Allocator.Error;
+        pub const Wrap = EqWrap;
+        pub const TagUnion = Plan.TypeRepId;
+        pub const SwitchBranch = LIR.CFSwitchBranch;
+        /// Both ends write the result and jump to `done`, which continues.
+        pub const Outcome = struct { equal: LIR.CFStmtId, unequal: LIR.CFStmtId, done: LIR.JoinPointId };
+        pub const PayloadOperands = struct {
+            lhs: LIR.LocalId,
+            rhs: LIR.LocalId,
+            ty: Plan.TypeRepId,
+            lhs_payload: ExtractedTagPayloadLocal,
+            rhs_payload: ExtractedTagPayloadLocal,
+        };
 
-    /// Free what an unfinished frame owns and leave the scope it holds, as
-    /// the direct build's defers would.
-    fn releaseEqFrame(self: *ProcBodyBuilder, frame: *EqFrame) void {
-        switch (frame.state) {
-            .convert, .unbox, .fields => {},
-            .nominal => |nominal| self.dropNominalBackingFormalScope(nominal.scope),
-            .tag => |state| {
-                self.parent.allocator.free(state.branches);
-                self.parent.allocator.destroy(state);
-            },
+        pub fn allocator(ctx: EqLowering) Allocator {
+            return ctx.builder.parent.allocator;
         }
-    }
 
-    /// The comparison of `request` when it needs no component comparison;
-    /// otherwise null, with the frame that builds it pushed.
-    fn beginEq(self: *ProcBodyBuilder, frames: *std.ArrayList(EqFrame), root: EqRequest) Allocator.Error!?LIR.CFStmtId {
-        var request = root;
-        while (true) {
+        pub fn eqStep(ctx: EqLowering, request: EqRequest) Allocator.Error!EqWalk.Step {
+            const self = ctx.builder;
             const target = request.target;
             const lhs = request.lhs;
             const rhs = request.rhs;
-            const rep_id = request.rep_id;
+            const rep_id = request.ty;
             const negated = request.negated;
             const next = request.next;
             switch (try self.derivedStep(.equality, rep_id)) {
                 .expand => {},
-                .call => |index| return try self.lowerDerivedEqCallInto(target, lhs, rhs, index, negated, next),
-                .scheme_dictionary => |requirement| return try self.lowerDerivedEqDictionaryCallInto(target, lhs, rhs, rep_id, requirement, negated, next),
-                .descriptor => return try self.lowerDescriptorEqLocalsInto(target, lhs, rhs, rep_id, negated, next),
-                .checked_error => return try self.lowerCheckedErrorDispatchInto("method dispatch failed to check"),
+                .call => |index| return .{ .done = try self.lowerDerivedEqCallInto(target, lhs, rhs, index, negated, next) },
+                .scheme_dictionary => |requirement| return .{ .done = try self.lowerDerivedEqDictionaryCallInto(target, lhs, rhs, rep_id, requirement, negated, next) },
+                .descriptor => return .{ .done = try self.lowerDescriptorEqLocalsInto(target, lhs, rhs, rep_id, negated, next) },
+                .checked_error => return .{ .done = try self.lowerCheckedErrorDispatchInto("method dispatch failed to check") },
                 .helper => {
-                    if (!negated) return try self.lowerDerivedHelperCallInto(.equality, target, lhs, rhs, rep_id, next);
+                    if (!negated) return .{ .done = try self.lowerDerivedHelperCallInto(.equality, target, lhs, rhs, rep_id, next) };
                     const raw = try self.addFrameLocal(.bool);
-                    return try self.lowerDerivedHelperCallInto(.equality, raw, lhs, rhs, rep_id, try self.negateBoolInto(target, raw, next));
+                    return .{ .done = try self.lowerDerivedHelperCallInto(.equality, raw, lhs, rhs, rep_id, try self.negateBoolInto(target, raw, next)) };
                 },
                 .convert => |actual| {
                     const lhs_actual = try self.addFrameLocalForRep(actual);
                     const rhs_actual = try self.addFrameLocalForRep(actual);
-                    return try self.pushEqFrame(frames, .{ .convert = .{ .request = request, .lhs_actual = lhs_actual, .rhs_actual = rhs_actual, .actual = actual } });
+                    return .{ .wrap = .{ .convert = .{ .lhs_actual = lhs_actual, .rhs_actual = rhs_actual, .actual = actual } } };
                 },
                 .unbox => |payload_rep| {
                     const lhs_payload = try self.addFrameLocalForRep(payload_rep);
                     const rhs_payload = try self.addFrameLocalForRep(payload_rep);
-                    return try self.pushEqFrame(frames, .{ .unbox = .{ .request = request, .lhs_payload = lhs_payload, .rhs_payload = rhs_payload, .payload_rep = payload_rep } });
+                    return .{ .wrap = .{ .unbox = .{ .lhs_payload = lhs_payload, .rhs_payload = rhs_payload, .payload_rep = payload_rep } } };
                 },
             }
             const rep = self.parent.plan.representations.items[@backingInt(rep_id)];
@@ -35208,326 +35228,282 @@ const ProcBodyBuilder = struct {
                 .list,
                 .box,
                 => boxyLowerInvariant("derived equality expanded a component its step dispatches"),
-                .primitive => |primitive| return try self.lowerPrimitiveEqLocalsInto(target, lhs, rhs, primitive, negated, next),
-                .bool_tag_union => return try self.lowerBoolEqLocalsInto(target, lhs, rhs, negated, next),
+                .primitive => |primitive| return .{ .done = try self.lowerPrimitiveEqLocalsInto(target, lhs, rhs, primitive, negated, next) },
+                .bool_tag_union => return .{ .done = try self.lowerBoolEqLocalsInto(target, lhs, rhs, negated, next) },
                 .empty_record,
                 .empty_tag_union,
-                => return try self.assignBoolLiteral(target, !negated, next),
-                .alias => {
-                    request.rep_id = self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep;
-                    continue;
-                },
+                => return .always_equal,
+                .alias => return .{ .retarget = self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep },
                 .nominal => {
                     const scope = try self.enterNominalBackingFormalScope(rep_id);
                     errdefer self.dropNominalBackingFormalScope(scope);
                     const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
-                    const backing: @FieldType(@FieldType(@FieldType(EqFrame, "state"), "nominal"), "backing") = if (rep.declared_fields.len == 0) null else backing: {
+                    const backing: @FieldType(@FieldType(EqWrap, "nominal"), "backing") = if (rep.declared_fields.len == 0) null else backing: {
                         const backing_layout = self.workerRuntimeLayoutForRep(backing_rep).layoutIdx();
                         const lhs_backing = try self.addFrameLocal(backing_layout);
                         const rhs_backing = try self.addFrameLocal(backing_layout);
                         break :backing .{ .lhs = lhs_backing, .rhs = rhs_backing };
                     };
-                    try frames.append(self.parent.allocator, .{ .state = .{ .nominal = .{
-                        .request = request,
-                        .scope = scope,
-                        .backing_rep = backing_rep,
-                        .backing = backing,
-                    } } });
-                    return null;
+                    return .{ .wrap = .{ .nominal = .{ .scope = scope, .backing_rep = backing_rep, .backing = backing } } };
                 },
-                .record, .tuple => {
-                    const done = self.freshJoinPointId();
-                    const current = try self.assignBoolLiteral(target, !negated, try self.joinJump(done));
-                    const failed = try self.assignBoolLiteral(target, negated, try self.joinJump(done));
-                    const children = self.parent.plan.childSlice(rep.children);
-                    return try self.pushEqFrame(frames, .{ .fields = .{
-                        .request = request,
-                        .kind = if (rep.kind == .record) .record else .tuple,
-                        .done = done,
-                        .current = current,
-                        .failed = failed,
-                        .remaining = children.len,
-                        .field_index = if (rep.kind == .record) recordEqualityFieldCount(children) else 0,
-                    } });
+                .record => return .{ .components = try self.recordComponents(self.parent.plan.childSlice(rep.children)) },
+                .tuple => return .{ .components = try self.tupleComponents(self.parent.plan.childSlice(rep.children)) },
+                .tag_union => return .{ .tag_union = rep_id },
+            }
+        }
+
+        pub fn wrapRequest(_: EqLowering, wrap: EqWrap, request: EqRequest) EqRequest {
+            var inner = request;
+            switch (wrap) {
+                .convert => |convert| {
+                    inner.lhs = convert.lhs_actual;
+                    inner.rhs = convert.rhs_actual;
+                    inner.ty = convert.actual;
                 },
-                .tag_union => {
-                    if (self.isZstLocal(lhs) and self.isZstLocal(rhs)) {
-                        return try self.assignBoolLiteral(target, !negated, next);
+                .unbox => |unbox| {
+                    inner.lhs = unbox.lhs_payload;
+                    inner.rhs = unbox.rhs_payload;
+                    inner.ty = unbox.payload_rep;
+                },
+                .nominal => |nominal| {
+                    if (nominal.backing) |operands| {
+                        inner.lhs = operands.lhs;
+                        inner.rhs = operands.rhs;
                     }
-                    const done = self.freshJoinPointId();
-                    const success = try self.assignBoolLiteral(target, !negated, try self.joinJump(done));
-                    const failed = try self.assignBoolLiteral(target, negated, try self.joinJump(done));
-                    const lhs_disc = try self.addFrameLocal(.u32);
-                    const rhs_disc = try self.addFrameLocal(.u32);
-                    const same_disc = try self.addFrameLocal(.bool);
-                    const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
-                    const state = try self.parent.allocator.create(EqTagState);
-                    errdefer self.parent.allocator.destroy(state);
-                    const branches = try self.parent.allocator.alloc(LIR.CFSwitchBranch, variants.len);
-                    state.* = .{
-                        .request = request,
-                        .done = done,
-                        .success = success,
-                        .failed = failed,
-                        .lhs_disc = lhs_disc,
-                        .rhs_disc = rhs_disc,
-                        .same_disc = same_disc,
-                        .branches = branches,
-                    };
-                    return try self.pushEqFrame(frames, .{ .tag = state });
+                    inner.ty = nominal.backing_rep;
+                },
+            }
+            return inner;
+        }
+
+        pub fn unwrap(ctx: EqLowering, wrap: EqWrap, request: EqRequest, compared: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            const self = ctx.builder;
+            switch (wrap) {
+                .convert => |convert| {
+                    const after_rhs = try self.assignRepresentationBoundary(convert.rhs_actual, request.rhs, convert.actual, request.ty, compared);
+                    return try self.assignRepresentationBoundary(convert.lhs_actual, request.lhs, convert.actual, request.ty, after_rhs);
+                },
+                .unbox => |unbox| {
+                    const after_rhs = try self.assignBoxBoundary(unbox.rhs_payload, request.rhs, unbox.payload_rep, .box_unbox, compared);
+                    return try self.assignBoxBoundary(unbox.lhs_payload, request.lhs, unbox.payload_rep, .box_unbox, after_rhs);
+                },
+                .nominal => |nominal| {
+                    const lowered = if (nominal.backing) |operands| lowered: {
+                        const after_rhs = try self.assignRepresentationBoundary(operands.rhs, request.rhs, nominal.backing_rep, request.ty, compared);
+                        break :lowered try self.assignRepresentationBoundary(operands.lhs, request.lhs, nominal.backing_rep, request.ty, after_rhs);
+                    } else compared;
+                    return try self.leaveNominalBackingFormalScope(nominal.scope, lowered);
                 },
             }
         }
-    }
 
-    fn pushEqFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(EqFrame), state: @FieldType(EqFrame, "state")) Allocator.Error!?LIR.CFStmtId {
-        var frame: EqFrame = .{ .state = state };
-        frames.append(self.parent.allocator, frame) catch |err| {
-            self.releaseEqFrame(&frame);
-            return err;
-        };
-        return null;
-    }
-
-    fn finishEqFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(EqFrame), stmt: LIR.CFStmtId) EqStep {
-        var frame = frames.pop().?;
-        switch (frame.state) {
-            // A finished nominal comparison has left its scope already.
-            .nominal => {},
-            .convert, .unbox, .fields, .tag => self.releaseEqFrame(&frame),
-        }
-        return .{ .done = stmt };
-    }
-
-    fn stepEqFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(EqFrame), delivered: ?LIR.CFStmtId) Allocator.Error!EqStep {
-        const frame = &frames.items[frames.items.len - 1];
-        const child: ?LIR.CFStmtId = if (frame.awaiting)
-            delivered orelse boxyLowerInvariant("boxy equality frame resumed without its component comparison")
-        else
-            null;
-        frame.awaiting = false;
-        switch (frame.state) {
-            .convert => |convert| {
-                const request = convert.request;
-                const continuation = child orelse {
-                    frame.awaiting = true;
-                    return .{ .request = .{ .target = request.target, .lhs = convert.lhs_actual, .rhs = convert.rhs_actual, .rep_id = convert.actual, .negated = request.negated, .next = request.next } };
-                };
-                const after_rhs = try self.assignRepresentationBoundary(convert.rhs_actual, request.rhs, convert.actual, request.rep_id, continuation);
-                return self.finishEqFrame(frames, try self.assignRepresentationBoundary(convert.lhs_actual, request.lhs, convert.actual, request.rep_id, after_rhs));
-            },
-            .unbox => |unbox| {
-                const request = unbox.request;
-                const continuation = child orelse {
-                    frame.awaiting = true;
-                    return .{ .request = .{ .target = request.target, .lhs = unbox.lhs_payload, .rhs = unbox.rhs_payload, .rep_id = unbox.payload_rep, .negated = request.negated, .next = request.next } };
-                };
-                const after_rhs = try self.assignBoxBoundary(unbox.rhs_payload, request.rhs, unbox.payload_rep, .box_unbox, continuation);
-                return self.finishEqFrame(frames, try self.assignBoxBoundary(unbox.lhs_payload, request.lhs, unbox.payload_rep, .box_unbox, after_rhs));
-            },
-            .nominal => |nominal| {
-                const request = nominal.request;
-                const lowered_child = child orelse {
-                    frame.awaiting = true;
-                    const operands = nominal.backing orelse return .{ .request = .{ .target = request.target, .lhs = request.lhs, .rhs = request.rhs, .rep_id = nominal.backing_rep, .negated = request.negated, .next = request.next } };
-                    return .{ .request = .{ .target = request.target, .lhs = operands.lhs, .rhs = operands.rhs, .rep_id = nominal.backing_rep, .negated = request.negated, .next = request.next } };
-                };
-                const lowered = if (nominal.backing) |operands| lowered: {
-                    const after_rhs = try self.assignRepresentationBoundary(operands.rhs, request.rhs, nominal.backing_rep, request.rep_id, lowered_child);
-                    break :lowered try self.assignRepresentationBoundary(operands.lhs, request.lhs, nominal.backing_rep, request.rep_id, after_rhs);
-                } else lowered_child;
-                const stmt = try self.leaveNominalBackingFormalScope(nominal.scope, lowered);
-                return self.finishEqFrame(frames, stmt);
-            },
-            .fields => |*fields| {
-                const request = fields.request;
-                if (child) |compare| {
-                    var current = compare;
-                    const pending = fields.pending;
-                    if (!self.isZstLocal(pending.rhs_field)) {
-                        current = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-                            .target = pending.rhs_field,
-                            .op = .{ .field = .{
-                                .source = request.rhs,
-                                .field_idx = pending.field_index,
-                            } },
-                            .next = current,
-                        } }, self.derivedOrigin());
-                    }
-                    if (!self.isZstLocal(pending.lhs_field)) {
-                        current = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-                            .target = pending.lhs_field,
-                            .op = .{ .field = .{
-                                .source = request.lhs,
-                                .field_idx = pending.field_index,
-                            } },
-                            .next = current,
-                        } }, self.derivedOrigin());
-                    }
-                    fields.current = current;
-                }
-                const children = self.parent.plan.childSlice(self.parent.plan.representations.items[@backingInt(request.rep_id)].children);
-                while (fields.remaining > 0) {
-                    fields.remaining -= 1;
-                    const field = children[fields.remaining];
-                    const field_index: u32 = switch (fields.kind) {
-                        .record => switch (field.role) {
-                            .record_field => field_index: {
-                                fields.field_index -= 1;
-                                break :field_index fields.field_index;
-                            },
-                            .record_ext => {
-                                self.requireEmptyRecordExtension(field.rep);
-                                continue;
-                            },
-                            .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("record equality representation had a non-record child role"),
-                        },
-                        .tuple => switch (field.role) {
-                            .tuple_elem => |index| field_index: {
-                                if (index > std.math.maxInt(u32)) {
-                                    boxyLowerInvariant("tuple equality element index exceeded LIR field index range");
-                                }
-                                break :field_index @intCast(index);
-                            },
-                            .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tuple equality representation had a non-tuple child role"),
-                        },
-                    };
-                    const lhs_field = try self.addFrameLocalForRep(field.rep);
-                    const rhs_field = try self.addFrameLocalForRep(field.rep);
-                    const eq = try self.addFrameLocal(.bool);
-                    const on_compared = try self.boolSwitchNoContinuation(eq, fields.current, fields.failed);
-                    fields.pending = .{ .lhs_field = lhs_field, .rhs_field = rhs_field, .field_index = field_index };
-                    frame.awaiting = true;
-                    return .{ .request = .{ .target = eq, .lhs = lhs_field, .rhs = rhs_field, .rep_id = field.rep, .negated = false, .next = on_compared } };
-                }
-                return self.finishEqFrame(frames, try self.derivedResultJoin(fields.done, request.target, request.next, fields.current));
-            },
-            .tag => |state| {
-                if (child) |compare| try self.finishEqTagPayload(state, compare);
-                if (try self.nextEqTagPayload(state)) |request| {
-                    frame.awaiting = true;
-                    return .{ .request = request };
-                }
-                return self.finishEqFrame(frames, try self.finishEqTag(state));
-            },
-        }
-    }
-
-    /// The next payload comparison of a tag union comparison, or null once
-    /// every variant's branch is built.
-    fn nextEqTagPayload(self: *ProcBodyBuilder, state: *EqTagState) Allocator.Error!?EqRequest {
-        const request = state.request;
-        const rep = self.parent.plan.representations.items[@backingInt(request.rep_id)];
-        const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
-        while (state.variant < variants.len) {
-            const variant = variants[state.variant];
-            const payloads = self.parent.plan.childSlice(variant.payloads);
-            if (!state.started) {
-                if (state.variant > std.math.maxInt(u32)) {
-                    boxyLowerInvariant("tag-union equality variant index exceeded LIR variant range");
-                }
-                state.started = true;
-                state.current = state.success;
-                state.remaining = payloads.len;
-                state.source_has_payload_desc = rep.descriptor != null or
-                    self.parent.result.store.getLocal(request.lhs).boxy_desc != null or
-                    self.parent.result.store.getLocal(request.rhs).boxy_desc != null;
+        pub fn releaseWrap(ctx: EqLowering, wrap: EqWrap) void {
+            switch (wrap) {
+                .convert, .unbox => {},
+                .nominal => |nominal| ctx.builder.dropNominalBackingFormalScope(nominal.scope),
             }
-            if (state.remaining > 0) {
-                state.remaining -= 1;
-                const i = state.remaining;
-                const payload_child = payloads[i];
-                switch (payload_child.role) {
-                    .tag_payload => |payload| {
-                        if (payload.tag != variant.name or payload.index != @as(u32, @intCast(i))) {
-                            boxyLowerInvariant("tag equality payload span did not match its payload child roles");
-                        }
-                    },
-                    .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tag equality variant payload span included a non-payload child"),
-                }
-                const lhs_payload = try self.addExtractedTagPayloadLocal(payload_child.rep, state.source_has_payload_desc);
-                const rhs_payload = try self.addExtractedTagPayloadLocal(payload_child.rep, state.source_has_payload_desc);
-                const eq = try self.addFrameLocal(.bool);
-                const on_compared = try self.boolSwitchNoContinuation(eq, state.current, state.failed);
-                state.pending = .{ .child = payload_child, .lhs_payload = lhs_payload, .rhs_payload = rhs_payload, .index = i };
-                return .{ .target = eq, .lhs = lhs_payload.local, .rhs = rhs_payload.local, .rep_id = payload_child.rep, .negated = false, .next = on_compared };
-            }
-            state.branches[state.variant] = .{
-                .value = @intCast(state.variant),
-                .body = state.current,
-            };
-            state.variant += 1;
-            state.started = false;
         }
-        return null;
+
+        pub fn outcome(ctx: EqLowering, request: EqRequest) Allocator.Error!Outcome {
+            const self = ctx.builder;
+            const done = self.freshJoinPointId();
+            const equal = try self.assignBoolLiteral(request.target, !request.negated, try self.joinJump(done));
+            const unequal = try self.assignBoolLiteral(request.target, request.negated, try self.joinJump(done));
+            return .{ .equal = equal, .unequal = unequal, .done = done };
+        }
+
+        pub fn finishOutcome(ctx: EqLowering, request: EqRequest, ends: Outcome, body: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.derivedResultJoin(ends.done, request.target, request.next, body);
+        }
+
+        pub fn assignBool(ctx: EqLowering, target: LIR.LocalId, value: bool, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.assignBoolLiteral(target, value, next);
+        }
+
+        pub fn boolLocal(ctx: EqLowering) Allocator.Error!LIR.LocalId {
+            return try ctx.builder.addFrameLocal(.bool);
+        }
+
+        pub fn componentLocal(ctx: EqLowering, rep_id: Plan.TypeRepId) Allocator.Error!LIR.LocalId {
+            return try ctx.builder.addFrameLocalForRep(rep_id);
+        }
+
+        pub fn isZstLocal(ctx: EqLowering, local: LIR.LocalId) bool {
+            return ctx.builder.isZstLocal(local);
+        }
+
+        pub fn readField(ctx: EqLowering, dest: LIR.LocalId, source: LIR.LocalId, field_index: u32, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.derivedFieldRead(dest, source, field_index, next);
+        }
+
+        pub fn boolSwitch(ctx: EqLowering, cond: LIR.LocalId, then: LIR.CFStmtId, otherwise: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.boolSwitchNoContinuation(cond, then, otherwise);
+        }
+
+        pub fn discriminantLocal(ctx: EqLowering) Allocator.Error!LIR.LocalId {
+            return try ctx.builder.addFrameLocal(.u32);
+        }
+
+        pub fn readDiscriminant(ctx: EqLowering, dest: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.derivedDiscriminantRead(dest, source, next);
+        }
+
+        pub fn discriminantsEqual(ctx: EqLowering, target: LIR.LocalId, lhs: LIR.LocalId, rhs: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = target,
+                .op = .num_is_eq,
+                .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
+                .args = try ctx.builder.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ lhs, rhs }),
+                .next = next,
+            } }, ctx.builder.derivedOrigin());
+        }
+
+        pub fn discriminantSwitch(ctx: EqLowering, cond: LIR.LocalId, branches: []const LIR.CFSwitchBranch, default: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.derivedDiscriminantSwitch(cond, branches, default);
+        }
+
+        pub fn variantCount(ctx: EqLowering, rep_id: Plan.TypeRepId) u32 {
+            return @intCast(ctx.builder.repTagVariants(rep_id).len);
+        }
+
+        pub fn payloadCount(ctx: EqLowering, rep_id: Plan.TypeRepId, variant: u32) u32 {
+            return @intCast(ctx.builder.parent.plan.childSlice(ctx.builder.repTagVariants(rep_id)[variant].payloads).len);
+        }
+
+        pub fn payloadOperands(ctx: EqLowering, rep_id: Plan.TypeRepId, request: EqRequest, variant: u32, index: u32) Allocator.Error!PayloadOperands {
+            const self = ctx.builder;
+            const payload_child = self.variantPayloadChild(rep_id, variant, index);
+            const source_has_payload_desc = self.parent.plan.representations.items[@backingInt(rep_id)].descriptor != null or
+                self.parent.result.store.getLocal(request.lhs).boxy_desc != null or
+                self.parent.result.store.getLocal(request.rhs).boxy_desc != null;
+            const lhs_payload = try self.addExtractedTagPayloadLocal(payload_child.rep, source_has_payload_desc);
+            const rhs_payload = try self.addExtractedTagPayloadLocal(payload_child.rep, source_has_payload_desc);
+            return .{ .lhs = lhs_payload.local, .rhs = rhs_payload.local, .ty = payload_child.rep, .lhs_payload = lhs_payload, .rhs_payload = rhs_payload };
+        }
+
+        pub fn readPayloads(ctx: EqLowering, rep_id: Plan.TypeRepId, request: EqRequest, variant: u32, index: u32, operands: PayloadOperands, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            const self = ctx.builder;
+            const current = try self.readVariantPayload(operands.rhs_payload, operands.ty, request.rhs, rep_id, variant, index, next);
+            return try self.readVariantPayload(operands.lhs_payload, operands.ty, request.lhs, rep_id, variant, index, current);
+        }
+    };
+
+    fn lowerEqRepLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        lhs: LIR.LocalId,
+        rhs: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
+        negated: bool,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        return try EqWalk.lower(.{ .builder = self }, .{ .target = target, .lhs = lhs, .rhs = rhs, .ty = rep_id, .negated = negated, .next = next });
     }
 
-    /// Read one payload pair for its comparison, extending the variant's
-    /// branch backward.
-    fn finishEqTagPayload(self: *ProcBodyBuilder, state: *EqTagState, compare: LIR.CFStmtId) Allocator.Error!void {
-        const request = state.request;
-        const rep = self.parent.plan.representations.items[@backingInt(request.rep_id)];
-        const variant = self.parent.plan.tagVariantSlice(rep.tag_variants)[state.variant];
-        const payloads = self.parent.plan.childSlice(variant.payloads);
-        const pending = state.pending;
-        if (pending.index > std.math.maxInt(u32)) {
-            boxyLowerInvariant("tag equality payload index exceeded LIR payload index range");
+    /// A record's fields in LIR field order. Owned by the caller.
+    fn recordComponents(self: *ProcBodyBuilder, children: []const Plan.RepChild) Allocator.Error![]const StructuralComponent {
+        const components = try self.parent.allocator.alloc(StructuralComponent, recordEqualityFieldCount(children));
+        var field_index: u32 = 0;
+        for (children) |child| {
+            switch (child.role) {
+                .record_field => {
+                    components[field_index] = .{ .ty = child.rep, .field_index = field_index };
+                    field_index += 1;
+                },
+                .record_ext => self.requireEmptyRecordExtension(child.rep),
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("record representation had a non-record child role"),
+            }
         }
-        var current = try self.assignConcreteTagPayloadRead(
-            pending.rhs_payload.local,
-            pending.child.rep,
-            pending.rhs_payload.desc_local,
-            request.rhs,
-            request.rep_id,
+        return components;
+    }
+
+    /// A tuple's elements in LIR field order. Owned by the caller.
+    fn tupleComponents(self: *ProcBodyBuilder, children: []const Plan.RepChild) Allocator.Error![]const StructuralComponent {
+        const components = try self.parent.allocator.alloc(StructuralComponent, children.len);
+        for (children, components) |child, *component| {
+            switch (child.role) {
+                .tuple_elem => |index| {
+                    if (index > std.math.maxInt(u32)) {
+                        boxyLowerInvariant("tuple element index exceeded LIR field index range");
+                    }
+                    component.* = .{ .ty = child.rep, .field_index = @intCast(index) };
+                },
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tuple representation had a non-tuple child role"),
+            }
+        }
+        return components;
+    }
+
+    const StructuralComponent = value_semantics.structural.Component(Plan.TypeRepId);
+
+    fn repTagVariants(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) []const Plan.TagVariant {
+        return self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@backingInt(rep_id)].tag_variants);
+    }
+
+    /// Payload `index` of `variant`, checked against its payload role.
+    fn variantPayloadChild(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId, variant_index: u32, index: u32) Plan.RepChild {
+        const variant = self.repTagVariants(rep_id)[variant_index];
+        const payload_child = self.parent.plan.childSlice(variant.payloads)[index];
+        switch (payload_child.role) {
+            .tag_payload => |payload| {
+                if (payload.tag != variant.name or payload.index != index) {
+                    boxyLowerInvariant("tag payload span did not match its payload child roles");
+                }
+            },
+            .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tag variant payload span included a non-payload child"),
+        }
+        return payload_child;
+    }
+
+    /// Read payload `index` of `variant` from `source` into `payload`.
+    fn readVariantPayload(
+        self: *ProcBodyBuilder,
+        payload: ExtractedTagPayloadLocal,
+        payload_rep: Plan.TypeRepId,
+        source: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
+        variant_index: u32,
+        index: u32,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const variant = self.repTagVariants(rep_id)[variant_index];
+        return try self.assignConcreteTagPayloadRead(
+            payload.local,
+            payload_rep,
+            payload.desc_local,
+            source,
+            rep_id,
             variant.name,
-            @intCast(state.variant),
-            @intCast(pending.index),
-            payloads.len,
-            compare,
+            variant_index,
+            index,
+            self.parent.plan.childSlice(variant.payloads).len,
+            next,
         );
-        current = try self.assignConcreteTagPayloadRead(
-            pending.lhs_payload.local,
-            pending.child.rep,
-            pending.lhs_payload.desc_local,
-            request.lhs,
-            request.rep_id,
-            variant.name,
-            @intCast(state.variant),
-            @intCast(pending.index),
-            payloads.len,
-            current,
-        );
-        state.current = current;
     }
 
-    /// The tag union comparison once every variant's branch is built.
-    fn finishEqTag(self: *ProcBodyBuilder, state: *EqTagState) Allocator.Error!LIR.CFStmtId {
-        const request = state.request;
-        const payload_switch = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
-            .cond = state.lhs_disc,
-            .branches = try self.parent.result.store.addCFSwitchBranches(state.branches),
-            .default_branch = state.failed,
+    fn derivedFieldRead(self: *ProcBodyBuilder, dest: LIR.LocalId, source: LIR.LocalId, field_index: u32, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = dest,
+            .op = .{ .field = .{ .source = source, .field_idx = field_index } },
+            .next = next,
+        } }, self.derivedOrigin());
+    }
+
+    fn derivedDiscriminantRead(self: *ProcBodyBuilder, dest: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = dest,
+            .op = .{ .discriminant = .{ .source = source } },
+            .next = next,
+        } }, self.derivedOrigin());
+    }
+
+    fn derivedDiscriminantSwitch(self: *ProcBodyBuilder, cond: LIR.LocalId, branches: []const LIR.CFSwitchBranch, default: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        return try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = cond,
+            .branches = try self.parent.result.store.addCFSwitchBranches(branches),
+            .default_branch = default,
             .continuation = null,
         } }, self.derivedOrigin());
-        const disc_switch = try self.boolSwitchNoContinuation(state.same_disc, payload_switch, state.failed);
-        const compare_disc = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
-            .target = state.same_disc,
-            .op = .num_is_eq,
-            .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
-            .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ state.lhs_disc, state.rhs_disc }),
-            .next = disc_switch,
-        } }, self.derivedOrigin());
-        const read_rhs = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-            .target = state.rhs_disc,
-            .op = .{ .discriminant = .{ .source = request.rhs } },
-            .next = compare_disc,
-        } }, self.derivedOrigin());
-        const read_lhs = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-            .target = state.lhs_disc,
-            .op = .{ .discriminant = .{ .source = request.lhs } },
-            .next = read_rhs,
-        } }, self.derivedOrigin());
-        return try self.derivedResultJoin(state.done, request.target, request.next, read_lhs);
     }
 
     /// How a derived method handles one component.
@@ -36021,171 +35997,64 @@ const ProcBodyBuilder = struct {
 
     // Structural hashing //
     //
-    // Hashing a representation hashes its components, and components follow
-    // type nesting, so each hash still waiting on a component's hash is a
-    // frame on one heap-backed stack. Hashes are built from their
-    // continuation backward; frames allocate locals, join points, and
-    // statements in the order a direct recursive build would.
+    // Structural hashing //
+    //
+    // The shared structural-hash walker owns what hashing a representation
+    // means: components and payloads feed the hasher first to last, and a
+    // tag value writes its variant index first. This context decides how
+    // each representation is hashed and emits the reads and joins.
 
-    const HashRequest = struct {
-        target: LIR.LocalId,
-        value: LIR.LocalId,
-        hasher: LIR.LocalId,
-        rep_id: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    };
+    const HashWalk = value_semantics.structural.HashLower(HashLowering);
+    const HashRequest = HashWalk.Request;
 
-    const HashStep = union(enum) {
-        /// The frame needs this component hash next.
-        request: HashRequest,
-        /// The frame finished with this statement and was popped.
-        done: LIR.CFStmtId,
-    };
-
-    const HashComponent = struct {
-        rep: Plan.TypeRepId,
-        field_index: u32,
-    };
-
-    /// One tag variant's hash: its discriminant, then its payloads last
-    /// first.
-    const HashVariantState = struct {
-        request: HashRequest,
-        variant: Plan.TagVariant,
-        variant_index: u32,
-        after_discriminant: LIR.LocalId,
-        intermediate_hashers: []LIR.LocalId = &.{},
-        source_has_payload_desc: bool = false,
-        remaining: usize,
-        current: LIR.CFStmtId,
-        pending: ExtractedTagPayloadLocal = undefined,
-    };
-
-    const HashFrame = struct {
-        /// Whether the frame's last requested hash is still due.
-        awaiting: bool = false,
-        state: union(enum) {
-            convert: struct { request: HashRequest, converted: LIR.LocalId, actual: Plan.TypeRepId },
-            unbox: struct { request: HashRequest, payload: LIR.LocalId, payload_rep: Plan.TypeRepId },
-            nominal: struct {
-                request: HashRequest,
-                scope: NominalBackingFormalScope,
-                backing_rep: Plan.TypeRepId,
-                backing: ?LIR.LocalId,
-            },
-            /// A record's fields or a tuple's elements, last first.
-            fields: struct {
-                request: HashRequest,
-                components: []HashComponent,
-                intermediate_hashers: []LIR.LocalId,
-                remaining: usize,
-                current: LIR.CFStmtId,
-                pending_field: LIR.LocalId = undefined,
-            },
-            variant: HashVariantState,
-            tag: struct {
-                request: HashRequest,
-                discriminant: LIR.LocalId,
-                done: LIR.JoinPointId,
-                branches: []LIR.CFSwitchBranch,
-                index: usize = 0,
-                variant: ?HashVariantState = null,
-            },
+    /// A hash delegated to another representation of the value.
+    const HashWrap = union(enum) {
+        convert: struct { converted: LIR.LocalId, actual: Plan.TypeRepId },
+        unbox: struct { payload: LIR.LocalId, payload_rep: Plan.TypeRepId },
+        nominal: struct {
+            scope: NominalBackingFormalScope,
+            backing_rep: Plan.TypeRepId,
+            backing: ?LIR.LocalId,
         },
     };
 
-    fn lowerHashRepLocalsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        value: LIR.LocalId,
-        hasher: LIR.LocalId,
-        rep_id: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const allocator = self.parent.allocator;
-        var frames: std.ArrayList(HashFrame) = .empty;
-        defer {
-            var index = frames.items.len;
-            while (index > 0) {
-                index -= 1;
-                self.releaseHashFrame(&frames.items[index]);
-            }
-            frames.deinit(allocator);
-        }
-        var result = try self.beginHash(&frames, .{ .target = target, .value = value, .hasher = hasher, .rep_id = rep_id, .next = next });
-        while (frames.items.len != 0) {
-            switch (try self.stepHashFrame(&frames, result)) {
-                .request => |request| result = try self.beginHash(&frames, request),
-                .done => |stmt| result = stmt,
-            }
-        }
-        return result.?;
-    }
+    const HashLowering = struct {
+        builder: *ProcBodyBuilder,
 
-    /// Free what an unfinished frame owns and leave the scope it holds, as
-    /// the direct build's defers would.
-    fn releaseHashFrame(self: *ProcBodyBuilder, frame: *HashFrame) void {
-        const allocator = self.parent.allocator;
-        switch (frame.state) {
-            .convert, .unbox => {},
-            .nominal => |nominal| self.dropNominalBackingFormalScope(nominal.scope),
-            .fields => |fields| {
-                allocator.free(fields.components);
-                allocator.free(fields.intermediate_hashers);
-            },
-            .variant => |variant| allocator.free(variant.intermediate_hashers),
-            .tag => |tag| {
-                allocator.free(tag.branches);
-                if (tag.variant) |variant| allocator.free(variant.intermediate_hashers);
-            },
-        }
-    }
-
-    fn pushHashFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(HashFrame), state: @FieldType(HashFrame, "state")) Allocator.Error!?LIR.CFStmtId {
-        var frame: HashFrame = .{ .state = state };
-        frames.append(self.parent.allocator, frame) catch |err| {
-            self.releaseHashFrame(&frame);
-            return err;
+        pub const Ty = Plan.TypeRepId;
+        pub const Local = LIR.LocalId;
+        pub const Stmt = LIR.CFStmtId;
+        pub const WalkError = Allocator.Error;
+        pub const Wrap = HashWrap;
+        pub const TagUnion = Plan.TypeRepId;
+        pub const SwitchBranch = LIR.CFSwitchBranch;
+        pub const JoinPoint = LIR.JoinPointId;
+        pub const PayloadOperand = struct {
+            local: LIR.LocalId,
+            ty: Plan.TypeRepId,
+            payload: ExtractedTagPayloadLocal,
         };
-        return null;
-    }
 
-    fn finishHashFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(HashFrame), stmt: LIR.CFStmtId) HashStep {
-        var frame = frames.pop().?;
-        switch (frame.state) {
-            // A finished nominal hash has left its scope already.
-            .nominal => {},
-            .convert, .unbox, .fields, .variant, .tag => self.releaseHashFrame(&frame),
+        pub fn allocator(ctx: HashLowering) Allocator {
+            return ctx.builder.parent.allocator;
         }
-        return .{ .done = stmt };
-    }
 
-    /// The hash of `request` when it needs no component hash; otherwise
-    /// null, with the frame that builds it pushed.
-    fn beginHash(self: *ProcBodyBuilder, frames: *std.ArrayList(HashFrame), root: HashRequest) Allocator.Error!?LIR.CFStmtId {
-        const allocator = self.parent.allocator;
-        var request = root;
-        while (true) {
+        pub fn hashStep(ctx: HashLowering, request: HashRequest) Allocator.Error!HashWalk.Step {
+            const self = ctx.builder;
             const target = request.target;
             const value = request.value;
             const hasher = request.hasher;
-            const rep_id = request.rep_id;
+            const rep_id = request.ty;
             const next = request.next;
             switch (try self.derivedStep(.hash, rep_id)) {
                 .expand => {},
-                .call => |index| return try self.lowerDerivedComponentCallInto(target, &.{ value, hasher }, index, next),
-                .scheme_dictionary => |requirement| return try self.lowerDerivedDictionaryCallInto(target, &.{ value, hasher }, rep_id, requirement, next),
-                .descriptor => return try self.lowerDescriptorHashLocalsInto(target, value, hasher, rep_id, next),
-                .checked_error => return try self.lowerCheckedErrorDispatchInto("method dispatch failed to check"),
-                .helper => return try self.lowerDerivedHelperCallInto(.hash, target, value, hasher, rep_id, next),
-                .convert => |actual| {
-                    const converted = try self.addFrameLocalForRep(actual);
-                    return try self.pushHashFrame(frames, .{ .convert = .{ .request = request, .converted = converted, .actual = actual } });
-                },
-                .unbox => |payload_rep| {
-                    const payload = try self.addFrameLocalForRep(payload_rep);
-                    return try self.pushHashFrame(frames, .{ .unbox = .{ .request = request, .payload = payload, .payload_rep = payload_rep } });
-                },
+                .call => |index| return .{ .done = try self.lowerDerivedComponentCallInto(target, &.{ value, hasher }, index, next) },
+                .scheme_dictionary => |requirement| return .{ .done = try self.lowerDerivedDictionaryCallInto(target, &.{ value, hasher }, rep_id, requirement, next) },
+                .descriptor => return .{ .done = try self.lowerDescriptorHashLocalsInto(target, value, hasher, rep_id, next) },
+                .checked_error => return .{ .done = try self.lowerCheckedErrorDispatchInto("method dispatch failed to check") },
+                .helper => return .{ .done = try self.lowerDerivedHelperCallInto(.hash, target, value, hasher, rep_id, next) },
+                .convert => |actual| return .{ .wrap = .{ .convert = .{ .converted = try self.addFrameLocalForRep(actual), .actual = actual } } },
+                .unbox => |payload_rep| return .{ .wrap = .{ .unbox = .{ .payload = try self.addFrameLocalForRep(payload_rep), .payload_rep = payload_rep } } },
             }
             const rep = self.parent.plan.representations.items[@backingInt(rep_id)];
             switch (rep.kind) {
@@ -36199,327 +36068,165 @@ const ProcBodyBuilder = struct {
                 .list,
                 .box,
                 => boxyLowerInvariant("derived hash expanded a component its step dispatches"),
-                .primitive => |primitive| return try self.lowerPrimitiveHashLocalsInto(target, value, hasher, primitive, next),
-                .bool_tag_union => return try self.lowerPrimitiveHashLocalsInto(target, value, hasher, .bool, next),
+                .primitive => |primitive| return .{ .done = try self.lowerPrimitiveHashLocalsInto(target, value, hasher, primitive, next) },
+                .bool_tag_union => return .{ .done = try self.lowerPrimitiveHashLocalsInto(target, value, hasher, .bool, next) },
                 .empty_record,
                 .empty_tag_union,
-                => return try self.assignLocal(target, hasher, next),
-                .alias => {
-                    request.rep_id = self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep;
-                    continue;
-                },
+                => return .nothing,
+                .alias => return .{ .retarget = self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep },
                 .nominal => {
                     const scope = try self.enterNominalBackingFormalScope(rep_id);
                     errdefer self.dropNominalBackingFormalScope(scope);
                     const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
                     const backing: ?LIR.LocalId = if (rep.declared_fields.len == 0) null else try self.addFrameLocalForRep(backing_rep);
-                    try frames.append(allocator, .{ .state = .{ .nominal = .{
-                        .request = request,
-                        .scope = scope,
-                        .backing_rep = backing_rep,
-                        .backing = backing,
-                    } } });
-                    return null;
+                    return .{ .wrap = .{ .nominal = .{ .scope = scope, .backing_rep = backing_rep, .backing = backing } } };
                 },
-                .record, .tuple => {
-                    const children = self.parent.plan.childSlice(rep.children);
-                    const components = if (rep.kind == .record)
-                        try self.recordHashComponents(children)
+                .record => return .{ .components = try self.recordComponents(self.parent.plan.childSlice(rep.children)) },
+                .tuple => return .{ .components = try self.tupleComponents(self.parent.plan.childSlice(rep.children)) },
+                .tag_union => return .{ .tag_union = rep_id },
+            }
+        }
+
+        pub fn wrapRequest(_: HashLowering, wrap: HashWrap, request: HashRequest) HashRequest {
+            var inner = request;
+            switch (wrap) {
+                .convert => |convert| {
+                    inner.value = convert.converted;
+                    inner.ty = convert.actual;
+                },
+                .unbox => |unbox| {
+                    inner.value = unbox.payload;
+                    inner.ty = unbox.payload_rep;
+                },
+                .nominal => |nominal| {
+                    if (nominal.backing) |backing| inner.value = backing;
+                    inner.ty = nominal.backing_rep;
+                },
+            }
+            return inner;
+        }
+
+        pub fn unwrap(ctx: HashLowering, wrap: HashWrap, request: HashRequest, hashed: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            const self = ctx.builder;
+            switch (wrap) {
+                .convert => |convert| return try self.assignRepresentationBoundary(convert.converted, request.value, convert.actual, request.ty, hashed),
+                .unbox => |unbox| return try self.assignBoxBoundary(unbox.payload, request.value, unbox.payload_rep, .box_unbox, hashed),
+                .nominal => |nominal| {
+                    const lowered = if (nominal.backing) |backing|
+                        try self.assignRepresentationBoundary(backing, request.value, nominal.backing_rep, request.ty, hashed)
                     else
-                        try self.tupleHashComponents(children);
-                    errdefer allocator.free(components);
-                    if (components.len == 0) {
-                        allocator.free(components);
-                        return try self.assignLocal(target, hasher, next);
-                    }
-                    const intermediate_hashers = try self.intermediateHashers(hasher, components.len);
-                    return try self.pushHashFrame(frames, .{ .fields = .{
-                        .request = request,
-                        .components = components,
-                        .intermediate_hashers = intermediate_hashers,
-                        .remaining = components.len,
-                        .current = next,
-                    } });
-                },
-                .tag_union => {
-                    const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
-                    if (variants.len == 1 and self.isZstLocal(value)) {
-                        return try self.pushHashFrame(frames, .{ .variant = try self.beginHashVariant(request, variants[0], 0) });
-                    }
-                    const discriminant = try self.addFrameLocal(.u32);
-                    const done = self.freshJoinPointId();
-                    const branches = try allocator.alloc(LIR.CFSwitchBranch, variants.len);
-                    return try self.pushHashFrame(frames, .{ .tag = .{
-                        .request = request,
-                        .discriminant = discriminant,
-                        .done = done,
-                        .branches = branches,
-                    } });
+                        hashed;
+                    return try self.leaveNominalBackingFormalScope(nominal.scope, lowered);
                 },
             }
         }
-    }
 
-    /// The hashers a chain of `count` component hashes threads between its
-    /// input and output hashers.
-    fn intermediateHashers(self: *ProcBodyBuilder, hasher: LIR.LocalId, count: usize) Allocator.Error![]LIR.LocalId {
-        const hasher_layout = self.parent.result.store.getLocal(hasher).layout_idx;
-        const intermediate_hashers = try self.parent.allocator.alloc(LIR.LocalId, count - 1);
-        errdefer self.parent.allocator.free(intermediate_hashers);
-        for (intermediate_hashers) |*local| {
-            local.* = try self.addFrameLocal(hasher_layout);
-        }
-        return intermediate_hashers;
-    }
-
-    fn recordHashComponents(self: *ProcBodyBuilder, children: []const Plan.RepChild) Allocator.Error![]HashComponent {
-        const components = try self.parent.allocator.alloc(HashComponent, recordEqualityFieldCount(children));
-        var field_index: u32 = 0;
-        for (children) |child| {
-            switch (child.role) {
-                .record_field => {
-                    components[field_index] = .{
-                        .rep = child.rep,
-                        .field_index = field_index,
-                    };
-                    field_index += 1;
-                },
-                .record_ext => self.requireEmptyRecordExtension(child.rep),
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("record hash representation had a non-record child role"),
+        pub fn releaseWrap(ctx: HashLowering, wrap: HashWrap) void {
+            switch (wrap) {
+                .convert, .unbox => {},
+                .nominal => |nominal| ctx.builder.dropNominalBackingFormalScope(nominal.scope),
             }
         }
-        return components;
-    }
 
-    fn tupleHashComponents(self: *ProcBodyBuilder, children: []const Plan.RepChild) Allocator.Error![]HashComponent {
-        const components = try self.parent.allocator.alloc(HashComponent, children.len);
-        for (children, components) |child, *component| {
-            switch (child.role) {
-                .tuple_elem => |index| {
-                    if (index > std.math.maxInt(u32)) {
-                        boxyLowerInvariant("tuple hash element index exceeded LIR field index range");
-                    }
-                    component.* = .{
-                        .rep = child.rep,
-                        .field_index = @intCast(index),
-                    };
-                },
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tuple hash representation had a non-tuple child role"),
-            }
+        pub fn assignLocal(ctx: HashLowering, target: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.assignLocal(target, source, next);
         }
-        return components;
-    }
 
-    fn stepHashFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(HashFrame), delivered: ?LIR.CFStmtId) Allocator.Error!HashStep {
-        const frame = &frames.items[frames.items.len - 1];
-        const child: ?LIR.CFStmtId = if (frame.awaiting)
-            delivered orelse boxyLowerInvariant("boxy hash frame resumed without its component hash")
-        else
-            null;
-        frame.awaiting = false;
-        switch (frame.state) {
-            .convert => |convert| {
-                const request = convert.request;
-                const hash = child orelse {
-                    frame.awaiting = true;
-                    return .{ .request = .{ .target = request.target, .value = convert.converted, .hasher = request.hasher, .rep_id = convert.actual, .next = request.next } };
-                };
-                return self.finishHashFrame(frames, try self.assignRepresentationBoundary(convert.converted, request.value, convert.actual, request.rep_id, hash));
-            },
-            .unbox => |unbox| {
-                const request = unbox.request;
-                const hash = child orelse {
-                    frame.awaiting = true;
-                    return .{ .request = .{ .target = request.target, .value = unbox.payload, .hasher = request.hasher, .rep_id = unbox.payload_rep, .next = request.next } };
-                };
-                return self.finishHashFrame(frames, try self.assignBoxBoundary(unbox.payload, request.value, unbox.payload_rep, .box_unbox, hash));
-            },
-            .nominal => |nominal| {
-                const request = nominal.request;
-                const hash = child orelse {
-                    frame.awaiting = true;
-                    return .{ .request = .{ .target = request.target, .value = nominal.backing orelse request.value, .hasher = request.hasher, .rep_id = nominal.backing_rep, .next = request.next } };
-                };
-                const lowered = if (nominal.backing) |backing|
-                    try self.assignRepresentationBoundary(backing, request.value, nominal.backing_rep, request.rep_id, hash)
-                else
-                    hash;
-                return self.finishHashFrame(frames, try self.leaveNominalBackingFormalScope(nominal.scope, lowered));
-            },
-            .fields => |*fields| {
-                const request = fields.request;
-                if (child) |hash| {
-                    var current = hash;
-                    const component = fields.components[fields.remaining];
-                    if (!self.isZstLocal(fields.pending_field)) {
-                        current = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-                            .target = fields.pending_field,
-                            .op = .{ .field = .{
-                                .source = request.value,
-                                .field_idx = component.field_index,
-                            } },
-                            .next = current,
-                        } }, self.derivedOrigin());
-                    }
-                    fields.current = current;
-                }
-                if (fields.remaining == fields.components.len) {
-                    const hasher_layout = self.parent.result.store.getLocal(request.hasher).layout_idx;
-                    if (self.parent.result.store.getLocal(request.target).layout_idx != hasher_layout) {
-                        boxyLowerInvariant("structural hash target layout differed from input hasher layout");
-                    }
-                }
-                if (fields.remaining == 0) return self.finishHashFrame(frames, fields.current);
-                fields.remaining -= 1;
-                const i = fields.remaining;
-                const input_hasher = if (i == 0) request.hasher else fields.intermediate_hashers[i - 1];
-                const output_hasher = if (i == fields.components.len - 1) request.target else fields.intermediate_hashers[i];
-                const component = fields.components[i];
-                fields.pending_field = try self.addFrameLocalForRep(component.rep);
-                frame.awaiting = true;
-                return .{ .request = .{ .target = output_hasher, .value = fields.pending_field, .hasher = input_hasher, .rep_id = component.rep, .next = fields.current } };
-            },
-            .variant => |*variant| {
-                if (child) |hash| try self.finishHashVariantPayload(variant, hash);
-                if (try self.nextHashVariantPayload(variant)) |request| {
-                    frame.awaiting = true;
-                    return .{ .request = request };
-                }
-                return self.finishHashFrame(frames, try self.finishHashVariant(variant));
-            },
-            .tag => |*tag| {
-                const request = tag.request;
-                const variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@backingInt(request.rep_id)].tag_variants);
-                if (child) |hash| try self.finishHashVariantPayload(&tag.variant.?, hash);
-                while (true) {
-                    if (tag.variant) |*variant| {
-                        if (try self.nextHashVariantPayload(variant)) |component| {
-                            frame.awaiting = true;
-                            return .{ .request = component };
-                        }
-                        tag.branches[tag.index] = .{
-                            .value = @intCast(tag.index),
-                            .body = try self.finishHashVariant(variant),
-                        };
-                        self.parent.allocator.free(variant.intermediate_hashers);
-                        tag.variant = null;
-                        tag.index += 1;
-                    }
-                    if (tag.index == variants.len) break;
-                    if (tag.index > std.math.maxInt(u32)) {
-                        boxyLowerInvariant("tag-union hash variant index exceeded LIR variant range");
-                    }
-                    tag.variant = try self.beginHashVariant(.{
-                        .target = request.target,
-                        .value = request.value,
-                        .hasher = request.hasher,
-                        .rep_id = request.rep_id,
-                        .next = try self.joinJump(tag.done),
-                    }, variants[tag.index], @intCast(tag.index));
-                }
-                const bad_discriminant = try self.parent.result.store.addCFStmt(.runtime_error, self.derivedOrigin());
-                const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
-                    .cond = tag.discriminant,
-                    .branches = try self.parent.result.store.addCFSwitchBranches(tag.branches),
-                    .default_branch = bad_discriminant,
-                    .continuation = null,
-                } }, self.derivedOrigin());
-                const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-                    .target = tag.discriminant,
-                    .op = .{ .discriminant = .{ .source = request.value } },
-                    .next = switch_stmt,
-                } }, self.derivedOrigin());
-                return self.finishHashFrame(frames, try self.derivedResultJoin(tag.done, request.target, request.next, read_discriminant));
-            },
+        pub fn hasherLocal(ctx: HashLowering, like: LIR.LocalId) Allocator.Error!LIR.LocalId {
+            return try ctx.builder.addFrameLocal(ctx.builder.parent.result.store.getLocal(like).layout_idx);
         }
-    }
 
-    /// Begin one tag variant's hash, which `request.next` follows.
-    fn beginHashVariant(self: *ProcBodyBuilder, request: HashRequest, variant: Plan.TagVariant, variant_index: u32) Allocator.Error!HashVariantState {
-        const payloads = self.parent.plan.childSlice(variant.payloads);
-        const hasher_layout = self.parent.result.store.getLocal(request.hasher).layout_idx;
-        const after_discriminant = if (payloads.len == 0) request.target else try self.addFrameLocal(hasher_layout);
-        for (payloads, 0..) |child, index| {
-            switch (child.role) {
-                .tag_payload => |payload| {
-                    if (payload.tag != variant.name or payload.index != index) {
-                        boxyLowerInvariant("tag hash payload span did not match its payload child roles");
-                    }
-                },
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tag hash variant payload span included a non-payload child"),
-            }
+        pub fn componentLocal(ctx: HashLowering, rep_id: Plan.TypeRepId) Allocator.Error!LIR.LocalId {
+            return try ctx.builder.addFrameLocalForRep(rep_id);
         }
-        var state: HashVariantState = .{
-            .request = request,
-            .variant = variant,
-            .variant_index = variant_index,
-            .after_discriminant = after_discriminant,
-            .remaining = payloads.len,
-            .current = request.next,
-        };
-        if (payloads.len != 0) {
-            state.source_has_payload_desc = self.parent.plan.representations.items[@backingInt(request.rep_id)].descriptor != null or
+
+        pub fn isZstLocal(ctx: HashLowering, local: LIR.LocalId) bool {
+            return ctx.builder.isZstLocal(local);
+        }
+
+        pub fn readField(ctx: HashLowering, dest: LIR.LocalId, source: LIR.LocalId, field_index: u32, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.derivedFieldRead(dest, source, field_index, next);
+        }
+
+        pub fn joinPoint(ctx: HashLowering) LIR.JoinPointId {
+            return ctx.builder.freshJoinPointId();
+        }
+
+        pub fn jump(ctx: HashLowering, id: LIR.JoinPointId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.joinJump(id);
+        }
+
+        pub fn resultJoin(ctx: HashLowering, id: LIR.JoinPointId, target: LIR.LocalId, next: LIR.CFStmtId, body: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.derivedResultJoin(id, target, next, body);
+        }
+
+        pub fn discriminantLocal(ctx: HashLowering) Allocator.Error!LIR.LocalId {
+            return try ctx.builder.addFrameLocal(.u32);
+        }
+
+        pub fn readDiscriminant(ctx: HashLowering, dest: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.derivedDiscriminantRead(dest, source, next);
+        }
+
+        pub fn discriminantSwitch(ctx: HashLowering, cond: LIR.LocalId, branches: []const LIR.CFSwitchBranch, default: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.derivedDiscriminantSwitch(cond, branches, default);
+        }
+
+        pub fn unreachableDiscriminant(ctx: HashLowering) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.parent.result.store.addCFStmt(.runtime_error, ctx.builder.derivedOrigin());
+        }
+
+        pub fn variantCount(ctx: HashLowering, rep_id: Plan.TypeRepId) u32 {
+            return @intCast(ctx.builder.repTagVariants(rep_id).len);
+        }
+
+        pub fn payloadCount(ctx: HashLowering, rep_id: Plan.TypeRepId, variant: u32) u32 {
+            return @intCast(ctx.builder.parent.plan.childSlice(ctx.builder.repTagVariants(rep_id)[variant].payloads).len);
+        }
+
+        pub fn writeVariantIndex(ctx: HashLowering, target: LIR.LocalId, hasher: LIR.LocalId, variant: u32, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            const self = ctx.builder;
+            const index_value = try self.addFrameLocal(.u64);
+            const write = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = target,
+                .op = .hasher_write_u64,
+                .rc_effect = LIR.LowLevel.hasher_write_u64.rcEffect(),
+                .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ hasher, index_value }),
+                .next = next,
+            } }, self.derivedOrigin());
+            return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = index_value,
+                .value = .{ .i128_literal = .{
+                    .value = variant,
+                    .layout_idx = .u64,
+                } },
+                .next = write,
+            } }, self.derivedOrigin());
+        }
+
+        pub fn payloadOperand(ctx: HashLowering, rep_id: Plan.TypeRepId, request: HashRequest, variant: u32, index: u32) Allocator.Error!PayloadOperand {
+            const self = ctx.builder;
+            const payload_child = self.variantPayloadChild(rep_id, variant, index);
+            const source_has_payload_desc = self.parent.plan.representations.items[@backingInt(rep_id)].descriptor != null or
                 self.parent.result.store.getLocal(request.value).boxy_desc != null;
-            state.intermediate_hashers = try self.intermediateHashers(after_discriminant, payloads.len);
+            const payload = try self.addExtractedTagPayloadLocal(payload_child.rep, source_has_payload_desc);
+            return .{ .local = payload.local, .ty = payload_child.rep, .payload = payload };
         }
-        return state;
-    }
 
-    /// The next payload hash of a variant, or null once every payload is
-    /// hashed.
-    fn nextHashVariantPayload(self: *ProcBodyBuilder, state: *HashVariantState) Allocator.Error!?HashRequest {
-        if (state.remaining == 0) return null;
-        const payloads = self.parent.plan.childSlice(state.variant.payloads);
-        state.remaining -= 1;
-        const i = state.remaining;
-        const input_hasher = if (i == 0) state.after_discriminant else state.intermediate_hashers[i - 1];
-        const output_hasher = if (i == payloads.len - 1) state.request.target else state.intermediate_hashers[i];
-        const payload = payloads[i];
-        state.pending = try self.addExtractedTagPayloadLocal(payload.rep, state.source_has_payload_desc);
-        return .{ .target = output_hasher, .value = state.pending.local, .hasher = input_hasher, .rep_id = payload.rep, .next = state.current };
-    }
-
-    /// Read one payload for its hash, extending the variant's hash backward.
-    fn finishHashVariantPayload(self: *ProcBodyBuilder, state: *HashVariantState, hash: LIR.CFStmtId) Allocator.Error!void {
-        const payloads = self.parent.plan.childSlice(state.variant.payloads);
-        const i = state.remaining;
-        const payload = payloads[i];
-        if (i > std.math.maxInt(u32)) {
-            boxyLowerInvariant("tag hash payload index exceeded LIR payload index range");
+        pub fn readPayload(ctx: HashLowering, rep_id: Plan.TypeRepId, request: HashRequest, variant: u32, index: u32, operand: PayloadOperand, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.readVariantPayload(operand.payload, operand.ty, request.value, rep_id, variant, index, next);
         }
-        state.current = try self.assignConcreteTagPayloadRead(
-            state.pending.local,
-            payload.rep,
-            state.pending.desc_local,
-            state.request.value,
-            state.request.rep_id,
-            state.variant.name,
-            state.variant_index,
-            @intCast(i),
-            payloads.len,
-            hash,
-        );
-    }
+    };
 
-    /// The variant's hash once its payloads are hashed: the discriminant
-    /// written first.
-    fn finishHashVariant(self: *ProcBodyBuilder, state: *HashVariantState) Allocator.Error!LIR.CFStmtId {
-        const discriminant_value = try self.addFrameLocal(.u64);
-        const current = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
-            .target = state.after_discriminant,
-            .op = .hasher_write_u64,
-            .rc_effect = LIR.LowLevel.hasher_write_u64.rcEffect(),
-            .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ state.request.hasher, discriminant_value }),
-            .next = state.current,
-        } }, self.derivedOrigin());
-        return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
-            .target = discriminant_value,
-            .value = .{ .i128_literal = .{
-                .value = state.variant_index,
-                .layout_idx = .u64,
-            } },
-            .next = current,
-        } }, self.derivedOrigin());
+    fn lowerHashRepLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        value: LIR.LocalId,
+        hasher: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        return try HashWalk.lower(.{ .builder = self }, .{ .target = target, .value = value, .hasher = hasher, .ty = rep_id, .next = next });
     }
 
     fn lowerPrimitiveHashLocalsInto(
@@ -52060,7 +51767,7 @@ test "boxy lowerer inspects concrete lists with an index and string accumulator 
 
     const close = out.lir_result.store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_literal;
     switch (close.value) {
-        .str_literal => |literal| try std.testing.expectEqualStrings("]", out.lir_result.store.getStringLiteral(literal)),
+        .str_literal => |literal| try std.testing.expectEqualStrings(inspect_text.list_close, out.lir_result.store.getStringLiteral(literal)),
         .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const finish = out.lir_result.store.getCFStmtImmediate(close.next).assign_low_level;
@@ -52718,7 +52425,7 @@ test "boxy lowerer inspects concrete Box payloads" {
 
     const prefix = out.lir_result.store.getCFStmtImmediate(boxed.next).assign_literal;
     switch (prefix.value) {
-        .str_literal => |literal| try std.testing.expectEqualStrings("Box(", out.lir_result.store.getStringLiteral(literal)),
+        .str_literal => |literal| try std.testing.expectEqualStrings(inspect_text.box_open, out.lir_result.store.getStringLiteral(literal)),
         .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const unboxed = out.lir_result.store.getCFStmtImmediate(prefix.next).assign_low_level;

@@ -32,6 +32,7 @@ const Ident = base.Ident;
 const checked = check.CheckedModule;
 const checked_names = check.CanonicalNames;
 const static_dispatch = check.StaticDispatchRegistry;
+const value_semantics = @import("value_semantics");
 const RecordFieldLabelId = @TypeOf(@as(checked.CheckedRecordField, undefined).name);
 const TagLabelId = @TypeOf(@as(checked.CheckedTag, undefined).name);
 const MethodNameId = @TypeOf(@as(checked.CheckedStaticDispatchConstraint, undefined).fn_name);
@@ -6160,7 +6161,7 @@ const Builder = struct {
             .inspect => blk: {
                 if (rep.kind != .nominal and rep.kind != .primitive) break :blk null;
                 const owner = methodOwnerForModuleType(view, rep.source_type.ty) orelse break :blk null;
-                break :blk lookupInspectOverride(self.methodSearchModules(), view, owner);
+                break :blk inspectOverrideFor(self.methodSearchModules(), view, owner);
             },
             .equality, .hash => |method| blk: {
                 if (rep.kind != .nominal) break :blk null;
@@ -22120,54 +22121,71 @@ pub fn lookupMethodTargetByText(
 /// The checked `to_inspect` override that inspection calls for `owner`,
 /// or null when inspection renders the owner's default form. The view
 /// that declares `owner.to_inspect` is selected exactly as method dispatch
-/// selects it; that declaration's checked eligibility is the answer.
-pub fn lookupInspectOverride(
+/// selects it: the owner's view, then the imports, then the relation
+/// modules.
+pub fn inspectOverrideFor(
     modules: MethodSearchModules,
     owner_view: ModuleView,
     owner: static_dispatch.MethodOwner,
 ) ?MethodTargetLookup {
-    if (inspectOverrideInView(owner_view, owner_view, owner)) |decision| return decision.target;
-    for (modules.imports) |imported| {
-        const view = moduleViewFromImported(imported);
-        if (moduleKeyEqual(view.key, owner_view.key)) continue;
-        if (inspectOverrideInView(view, owner_view, owner)) |decision| return decision.target;
-    }
-    for (modules.relation_modules) |relation| {
-        const view = moduleViewFromImported(relation);
-        if (moduleKeyEqual(view.key, owner_view.key)) continue;
-        if (inspectOverrideInView(view, owner_view, owner)) |decision| return decision.target;
-    }
-    return null;
+    return value_semantics.lookupInspectOverride(InspectOverrideViews{
+        .modules = modules,
+        .owner_view = owner_view,
+        .owner = owner,
+    });
 }
 
-const InspectOverrideDecision = struct {
-    target: ?MethodTargetLookup,
-};
-
-fn inspectOverrideInView(
-    candidate: ModuleView,
+/// The views inspection searches for an owner's `to_inspect`.
+const InspectOverrideViews = struct {
+    modules: MethodSearchModules,
     owner_view: ModuleView,
     owner: static_dispatch.MethodOwner,
-) ?InspectOverrideDecision {
-    const owner_names = owner_view.canonical_names orelse return null;
-    const candidate_names = candidate.canonical_names orelse return null;
-    const candidate_owner = methodOwnerInNames(owner_names, candidate_names, owner) orelse return null;
-    const candidate_method = candidate_names.lookupMethodName("to_inspect") orelse return null;
-    const key: static_dispatch.MethodKey = .{ .owner = candidate_owner, .method = candidate_method };
-    // A declared `to_inspect` decides inspection in this view; the registry
-    // records an override only for an eligible, unrejected declaration.
-    _ = candidate.method_registry.lookup(key) orelse return null;
-    const override = candidate.method_registry.lookupInspectOverride(key) orelse return .{ .target = null };
-    // Inspection calls the method at its checked `T -> Str` instance.
-    var target = override.target;
-    target.callable_ty = override.callable_ty;
-    return .{ .target = .{
-        .view = candidate,
-        .method = candidate_method,
-        .target = target,
-        .inspect_evidence = override.evidence,
-    } };
-}
+
+    pub const Found = MethodTargetLookup;
+
+    /// A searched view; the owner's own view is searched first, and a
+    /// later view with the owner view's key is not searched again.
+    const Candidate = struct { module: ModuleView, after_owner: bool };
+
+    pub fn viewCount(views: InspectOverrideViews) usize {
+        return 1 + views.modules.imports.len + views.modules.relation_modules.len;
+    }
+
+    pub fn view(views: InspectOverrideViews, index: usize) Candidate {
+        if (index == 0) return .{ .module = views.owner_view, .after_owner = false };
+        const searched = index - 1;
+        const imported = if (searched < views.modules.imports.len)
+            views.modules.imports[searched]
+        else
+            views.modules.relation_modules[searched - views.modules.imports.len];
+        return .{ .module = moduleViewFromImported(imported), .after_owner = true };
+    }
+
+    pub fn inspectKey(views: InspectOverrideViews, candidate: Candidate) ?static_dispatch.MethodKey {
+        if (candidate.after_owner and moduleKeyEqual(candidate.module.key, views.owner_view.key)) return null;
+        const owner_names = views.owner_view.canonical_names orelse return null;
+        const candidate_names = candidate.module.canonical_names orelse return null;
+        const candidate_owner = methodOwnerInNames(owner_names, candidate_names, views.owner) orelse return null;
+        const candidate_method = candidate_names.lookupMethodName("to_inspect") orelse return null;
+        return .{ .owner = candidate_owner, .method = candidate_method };
+    }
+
+    pub fn registry(_: InspectOverrideViews, candidate: Candidate) *const static_dispatch.MethodRegistry {
+        return candidate.module.method_registry;
+    }
+
+    pub fn found(_: InspectOverrideViews, candidate: Candidate, key: static_dispatch.MethodKey, override: static_dispatch.InspectOverride) MethodTargetLookup {
+        // Inspection calls the method at its checked `T -> Str` instance.
+        var target = override.target;
+        target.callable_ty = override.callable_ty;
+        return .{
+            .view = candidate.module,
+            .method = key.method,
+            .target = target,
+            .inspect_evidence = override.evidence,
+        };
+    }
+};
 
 /// Find the method target for `owner` in one candidate module view.
 pub fn lookupMethodTargetInView(
