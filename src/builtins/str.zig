@@ -28,7 +28,7 @@ const InPlace = enum(u8) {
 
 const MASK_ISIZE: isize = std.math.minInt(isize);
 const SMALL_STR_BIT: usize = @as(usize, @bitCast(MASK_ISIZE));
-const SEAMLESS_SLICE_TAG: usize = 1;
+const SEAMLESS_SLICE_TAG = @import("list.zig").SEAMLESS_SLICE_TAG;
 
 /// TODO
 pub const SMALL_STR_MAX_LENGTH = SMALL_STRING_SIZE - 1;
@@ -74,9 +74,37 @@ pub const RocStr = extern struct {
     /// low bit stays free for the seamless-slice tag.
     pub const capacity_shift = 1;
 
+    /// The low seven bits of a small RocStr's final byte: its length.
+    pub const small_str_len_mask: u8 = ~small_str_flag;
+
+    /// Byte offset of `field` in a RocStr laid out for a target whose words are
+    /// `target_word_size` bytes.
+    pub fn targetFieldOffset(comptime field: std.meta.FieldEnum(RocStr), target_word_size: u32) u32 {
+        return utils.targetWordOffset(@offsetOf(RocStr, @tagName(field)), target_word_size);
+    }
+
+    /// Byte offset of the final byte (the small-string flag byte) of a RocStr
+    /// laid out for a target whose words are `target_word_size` bytes.
+    pub fn targetFlagByteOffset(target_word_size: u32) u32 {
+        return word_count * target_word_size - 1;
+    }
+
+    /// The small-string flag as a bit of the `length` word, on a little-endian
+    /// target whose words are `target_word_size` bytes. The flag byte is the
+    /// final byte of the layout, which is the high byte of `length`.
+    pub fn targetSmallStrBit(target_word_size: u32) u64 {
+        return @as(u64, small_str_flag) << @intCast(target_word_size * 8 - 8);
+    }
+
     comptime {
         std.debug.assert(word_count * @sizeOf(usize) == @sizeOf(RocStr));
         std.debug.assert(SMALL_STR_BIT == @as(usize, small_str_flag) << (@bitSizeOf(usize) - 8));
+        std.debug.assert(SMALL_STR_BIT == targetSmallStrBit(@sizeOf(usize)));
+        // The flag byte is the high byte of `length`, so `length` must be the final word.
+        std.debug.assert(@offsetOf(RocStr, "length") + @sizeOf(usize) == @sizeOf(RocStr));
+        std.debug.assert(targetFieldOffset(.length, @sizeOf(usize)) == @offsetOf(RocStr, "length"));
+        std.debug.assert(targetFieldOffset(.capacity_or_alloc_ptr, @sizeOf(usize)) == @offsetOf(RocStr, "capacity_or_alloc_ptr"));
+        std.debug.assert(targetFieldOffset(.bytes, @sizeOf(usize)) == @offsetOf(RocStr, "bytes"));
     }
 
     pub inline fn empty() RocStr {
@@ -115,7 +143,7 @@ pub const RocStr = extern struct {
 
     /// Recover the small-string length from a RocStr's final byte.
     pub fn smallStrLenFromFlagByte(byte: u8) u8 {
-        return byte & ~small_str_flag;
+        return byte & small_str_len_mask;
     }
 
     pub inline fn encodeSliceAllocationPtr(ptr: [*]u8) usize {
