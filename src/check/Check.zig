@@ -7241,13 +7241,8 @@ fn numeralDispatcherStrConversion(self: *Self, dispatcher_var: Var) Allocator.Er
 /// that method.
 fn numeralStrConversion(self: *Self) Allocator.Error!problem.StrConversion {
     const to_str = try self.toStrMethodName();
-    // Building a candidate's nominal content appends to the store; the lookup
-    // only reads it, so nothing built here outlives it.
-    var savepoint = try self.types.createSavepoint();
-    defer self.types.rollbackToSavepoint(&savepoint);
     for (numeral_default_candidates) |num_kind| {
-        const content = try self.mkNumberTypeContent(num_kind);
-        if (!self.nominalHasMethod(content.structure.nominal_type, to_str)) return .none;
+        if (!self.builtinNumberHasMethod(num_kind, to_str)) return .none;
     }
     return .to_str;
 }
@@ -40807,13 +40802,8 @@ fn builtinLiteralCandidatesLackMethod(
 ) Allocator.Error!bool {
     switch (literal_defaulting.defaultTargetForKind(kind)) {
         .dec => {
-            // Building a candidate's nominal content appends to the store;
-            // the lookup only reads it, so nothing built here outlives it.
-            var savepoint = try self.types.createSavepoint();
-            defer self.types.rollbackToSavepoint(&savepoint);
             for (numeral_default_candidates) |num_kind| {
-                const content = try self.mkNumberTypeContent(num_kind);
-                if (self.nominalHasMethod(content.structure.nominal_type, method_name)) return false;
+                if (self.builtinNumberHasMethod(num_kind, method_name)) return false;
             }
             return true;
         },
@@ -40828,6 +40818,14 @@ fn builtinLiteralCandidatesLackMethod(
             unreachable;
         },
     }
+}
+
+/// Whether the builtin number type `num_kind` has the method `method_name`,
+/// looked up by the type's declaration without building its type.
+fn builtinNumberHasMethod(self: *Self, num_kind: CIR.NumKind, method_name: Ident.Idx) bool {
+    const source_decl = self.sourceDeclForBuiltinNominal(.{ .num = num_kind });
+    const owner_env, _ = self.builtinOwnerEnvForSourceDecl(source_decl, "number type");
+    return self.lookupStaticDispatchMethodBinding(owner_env, source_decl, self.cir, method_name) != null;
 }
 
 fn nominalHasMethod(self: *Self, nominal_type: types_mod.NominalType, method_name: Ident.Idx) bool {
