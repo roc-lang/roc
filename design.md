@@ -2445,6 +2445,23 @@ zeroed unused bytes. Longer literals use the allocating runtime constructor.
 This is representation lowering of explicit LIR literal bytes; it introduces no
 ownership decisions and leaves all explicit LIR ARC statements intact.
 
+The physical runtime representation of values is defined once, by the structs
+and constants in `src/builtins`: `RocStr` and `RocList` field order and word
+count, the small-string flag and length mask, the seamless-slice tag, the
+capacity shift, the refcount word's position, data-pointer tag bits, and the
+static-data refcount sentinel, and `RocDec`'s scale. Every backend and
+`layout.Store` derives these facts from those definitions, scaling field
+offsets to the target word size with the builtins' target-width helpers, and
+never re-spells them as literals. Where emitted code depends on a particular
+value (for example a signed test of the length word standing in for the
+small-string flag, or `i32.eqz` standing in for the static sentinel), the
+emitting helper comptime-asserts that dependency. Copies that cannot import
+`builtins`, such as the freestanding default-platform views and the Python
+debugger scripts, are locked to the canonical definitions by tests. Likewise,
+each platform C ABI's argument-register counts are declared once in
+`layout.abi`, and the dev backend's register lists comptime-assert their
+lengths against them.
+
 Static ownership reasoning lives in exactly one place: LIR ARC insertion.
 ARC insertion computes a whole-program borrows-with-lifetimes solution and
 emits explicit RC statements from it (see ARC Borrow Inference). No other

@@ -6,6 +6,7 @@ const Allocator = std.mem.Allocator;
 const tracy = @import("tracy");
 const base = @import("base");
 const collections = @import("collections");
+const builtins = @import("builtins");
 
 const layout_mod = @import("layout.zig");
 const graph_mod = @import("./graph.zig");
@@ -2870,12 +2871,12 @@ pub const Store = struct {
             .scalar => switch (layout.getScalar().tag) {
                 .int => @intCast(layout.getScalar().getInt().size()),
                 .frac => @intCast(layout.getScalar().getFrac().size()),
-                .str => 3 * target_usize.size(), // ptr, encoded capacity, byte length
+                .str => builtins.str.RocStr.word_count * target_usize.size(),
                 .opaque_ptr => target_usize.size(),
                 .vector => 16,
             },
             .box, .box_of_zst, .erased_box, .erased_callable, .ptr => target_usize.size(),
-            .list, .list_of_zst => 3 * target_usize.size(), // ptr, length, capacity
+            .list, .list_of_zst => builtins.list.RocList.word_count * target_usize.size(),
             .struct_ => self.getStructData(layout.getStruct().idx).size.get(target_usize),
             // A closure's captures follow its header, aligned; captures
             // that are themselves a closure nest the same way.
