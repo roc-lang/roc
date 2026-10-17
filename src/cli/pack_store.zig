@@ -1696,56 +1696,6 @@ pub const LoadedPacks = struct {
     /// offers every spec of the offer's pack whose root it holds, and
     /// admission queues the literal producers those offers and the pack's
     /// materializer reads name. Returns whether the set gained artifacts or
-    /// Whether a loaded pack already offers `spec` for the artifact whose
-    /// content address is `address`, with the same facts, so writing the
-    /// offer again would add nothing a reader could use. Facts are compared
-    /// as the reader indexes them: the relation, the refcount signature, the
-    /// compile-time root reads and the demand.
-    pub fn carriesOffer(self: *const LoadedPacks, spec: PackFile.SpecEntry, address: [32]u8, scratch: Allocator) bool {
-        const table = if (spec.by_identity) &self.identity_candidates else &self.candidates;
-        const list = table.get(spec.key) orelse return false;
-        for (list.items) |candidate| {
-            const view = &self.store_packs.items[candidate.pack].view;
-            if (view.specIsIdentity(candidate.spec) != spec.by_identity) continue;
-            if (!sameOptionalKey(view.specRelation(candidate.spec), spec.platform_requirement_relation)) continue;
-            if (!std.mem.eql(u8, &view.contentAddress(view.specArtifact(candidate.spec)), &address)) continue;
-            const stored = view.spec(candidate.spec, scratch) catch return false;
-            if (sameOfferFacts(stored, spec)) return true;
-        }
-        return false;
-    }
-
-    fn sameOptionalKey(left: ?[32]u8, right: ?[32]u8) bool {
-        if ((left == null) != (right == null)) return false;
-        return left == null or std.mem.eql(u8, &left.?, &right.?);
-    }
-
-    fn sameOfferFacts(stored: PackFile.SpecEntry, spec: PackFile.SpecEntry) bool {
-        if (stored.rc_borrowed_params != spec.rc_borrowed_params or stored.rc_ret_borrowed != spec.rc_ret_borrowed or
-            stored.rc_ret_lenders != spec.rc_ret_lenders or stored.rc_read_only_params != spec.rc_read_only_params or
-            stored.rc_ret_unique != spec.rc_ret_unique or stored.rc_ret_unique_fields != spec.rc_ret_unique_fields) return false;
-        if (!std.mem.eql(u32, stored.rc_ret_conditions, spec.rc_ret_conditions)) return false;
-        if (stored.comptime_root_reads.len != spec.comptime_root_reads.len) return false;
-        for (stored.comptime_root_reads, spec.comptime_root_reads) |left, right| {
-            if (left.root != right.root or !std.mem.eql(u8, &left.module, &right.module)) return false;
-        }
-        // The modules an offer lists follow from its facts and its root's
-        // closure, which the address fixes, so equal facts list equal modules.
-        if ((stored.demand == null) != (spec.demand == null)) return false;
-        const left = stored.demand orelse return true;
-        const right = spec.demand.?;
-        if (left.version != right.version or left.complete != right.complete) return false;
-        if (left.eager_reads.len != right.eager_reads.len or left.literal_reads.len != right.literal_reads.len) return false;
-        for (left.eager_reads, right.eager_reads) |a, b| if (!std.meta.eql(a, b)) return false;
-        for (left.literal_reads, right.literal_reads) |a, b| {
-            if (!std.meta.eql(a.cause, b.cause)) return false;
-            if (a.recipe.checked_expr != b.recipe.checked_expr or a.recipe.kind != b.recipe.kind) return false;
-            if (!std.mem.eql(u8, &a.recipe.module, &b.recipe.module) or !std.mem.eql(u8, &a.recipe.producer_key, &b.recipe.producer_key) or
-                !std.mem.eql(u8, &a.recipe.object_identity, &b.recipe.object_identity)) return false;
-        }
-        return true;
-    }
-
     /// offers, which indexing then covers.
     fn admitClosure(self: *LoadedPacks, candidate: Candidate, pending: *std.ArrayList(PendingOffer)) LoadError!bool {
         const id = candidate.pack;

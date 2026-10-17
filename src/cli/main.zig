@@ -568,14 +568,6 @@ const CompileTimeObjectCache = struct {
         const union_selected = try self.allocator.alloc(bool, set.artifacts.len);
         defer self.allocator.free(union_selected);
         @memset(union_selected, false);
-        // Every artifact's content address, so an offer the store already
-        // carries for the same artifact can be recognized before selection.
-        var all_names = try backend.dev.ProcArtifact.ContentNames.init(self.allocator, &set);
-        defer all_names.deinit();
-        var all_graph = try backend.dev.ArtifactClosure.init(self.allocator, &set);
-        defer all_graph.deinit();
-        const all_addresses = try all_graph.contentAddresses(&all_names);
-        defer self.allocator.free(all_addresses);
         var owner_keys = owners.keyIterator();
         while (owner_keys.next()) |owner_bytes| {
             const owner = check.CheckedArtifact.ModuleId{ .bytes = owner_bytes.* };
@@ -583,8 +575,6 @@ const CompileTimeObjectCache = struct {
             const placement = build_env.packPlacementForArtifactKey(producer.key) orelse continue;
             var offers = try selectOwnerOffers(self.allocator, &set, lowered, .{
                 .carried_reads = &self.packs.materializer_reads,
-                .store = &self.packs,
-                .addresses = all_addresses,
                 .generated_roots = generated,
                 .checked_owner = owner,
                 .requester = requester,
@@ -608,13 +598,12 @@ const CompileTimeObjectCache = struct {
         // edit.
         var serving = try backend.dev.ArtifactClosure.selectMarked(self.allocator, &set, union_selected);
         defer serving.deinit();
-        // A selection is closed under edges, so its members' addresses are
-        // the addresses they have in the whole set.
-        const addresses = try self.allocator.alloc([32]u8, serving.set.artifacts.len);
+        var names = try backend.dev.ProcArtifact.ContentNames.init(self.allocator, &serving.set);
+        defer names.deinit();
+        var graph = try backend.dev.ArtifactClosure.init(self.allocator, &serving.set);
+        defer graph.deinit();
+        const addresses = try graph.contentAddresses(&names);
         defer self.allocator.free(addresses);
-        for (serving.old_to_new, 0..) |maybe_new, old| {
-            if (maybe_new) |new| addresses[new] = all_addresses[old];
-        }
         const carried = try self.allocator.alloc(bool, addresses.len);
         defer self.allocator.free(carried);
         var carried_count: usize = 0;
@@ -9128,11 +9117,6 @@ test "CTFE publication keeps builtin instantiations with the declared requester"
 const PackOfferFilter = struct {
     /// Literal reads of the code this program carries from loaded packs.
     carried_reads: ?*const std.AutoHashMapUnmanaged([32]u8, lir.Program.CachedLiteralRead) = null,
-    /// The loaded store and the content address of every artifact of the
-    /// set; an offer a loaded pack already carries identically is not
-    /// written again.
-    store: ?*const pack_store.LoadedPacks = null,
-    addresses: ?[]const [32]u8 = null,
     generated_roots: ?[]const bool = null,
     checked_owner: ?check.CheckedArtifact.ModuleId = null,
     requester: ?check.CheckedArtifact.ModuleId = null,
@@ -9475,9 +9459,6 @@ fn selectOwnerOffers(
     errdefer conditions_arena.deinit();
     const trace = std.c.getenv("ROC_PACK_TRACE") != null;
     var withheld: usize = 0;
-    var carried_offers: usize = 0;
-    var scratch = std.heap.ArenaAllocator.init(allocator);
-    defer scratch.deinit();
     const procs = lowered.lir_result.store.getProcSpecs();
     var roots = std.ArrayList(u32).empty;
     defer roots.deinit(allocator);
@@ -9554,13 +9535,14 @@ fn selectOwnerOffers(
             });
             continue;
         }
+        if (requested) try roots.append(allocator, @intCast(specs.items.len));
         // An entry this program spliced from a pack is offered again with
         // its producer's code; only a body lowered here has a fingerprint.
         if (trace and proc.body != null) {
             const fingerprint = try procFingerprint(allocator, lowered, spec_proc.proc);
             std.debug.print("offer {x} {x:0>16} {s}\n", .{ &spec_proc.key, fingerprint, lowered.lir_result.store.procDebugName(spec_proc.proc) orelse "" });
         }
-        const entry: backend.dev.PackFile.SpecEntry = .{
+        try specs.append(allocator, .{
             .key = spec_proc.key,
             .artifact = artifact,
             .demand = spec_proc.demand,
@@ -9573,13 +9555,7 @@ fn selectOwnerOffers(
             .rc_ret_unique = proc.rc_ret_unique,
             .rc_ret_unique_fields = proc.rc_ret_unique_fields,
             .rc_ret_conditions = try GuardedList.dupe(conditions_arena.allocator(), u32, lowered.lir_result.store.getU32Span(proc.rc_ret_conditions)),
-        };
-        if (offerCarried(filter, &scratch, entry)) {
-            carried_offers += 1;
-            continue;
-        }
-        if (requested) try roots.append(allocator, @intCast(specs.items.len));
-        try specs.append(allocator, entry);
+        });
     }
     // Every procedure lowered from a template is offered under its identity
     // as well (design.md "Identity Offers"), under the same conditions, and
@@ -9644,8 +9620,9 @@ fn selectOwnerOffers(
             if (trace) std.debug.print("withhold-identity {s} reason={s} name={s}\n", .{ &proc.identity.symbolHex(), if (definition.callable_contract == null) "no-contract" else "other-definition", lowered.lir_result.store.procDebugName(offer_proc) orelse "" });
             continue;
         }
+        if (requested) try roots.append(allocator, @intCast(specs.items.len));
         if (trace) std.debug.print("offer-identity {s} {s}\n", .{ &proc.identity.symbolHex(), lowered.lir_result.store.procDebugName(offer_proc) orelse "" });
-        const entry: backend.dev.PackFile.SpecEntry = .{
+        try specs.append(allocator, .{
             .key = proc.identity.bytes,
             .by_identity = true,
             .artifact = artifact,
@@ -9659,13 +9636,7 @@ fn selectOwnerOffers(
             .rc_ret_unique = proc.rc_ret_unique,
             .rc_ret_unique_fields = proc.rc_ret_unique_fields,
             .rc_ret_conditions = try GuardedList.dupe(conditions_arena.allocator(), u32, lowered.lir_result.store.getU32Span(proc.rc_ret_conditions)),
-        };
-        if (offerCarried(filter, &scratch, entry)) {
-            carried_offers += 1;
-            continue;
-        }
-        if (requested) try roots.append(allocator, @intCast(specs.items.len));
-        try specs.append(allocator, entry);
+        });
     }
     for (procs, 0..) |proc, index| {
         const derived_base = proc.derived_from orelse continue;
@@ -9694,8 +9665,9 @@ fn selectOwnerOffers(
         }
         var requested = facts.owned;
         if (filter.generated_roots) |generated| requested = requested and generated[index];
+        if (requested) try roots.append(allocator, @intCast(specs.items.len));
         if (trace) std.debug.print("offer-derived {s} {s}\n", .{ &proc.identity.symbolHex(), lowered.lir_result.store.procDebugName(proc_id) orelse "" });
-        const entry: backend.dev.PackFile.SpecEntry = .{
+        try specs.append(allocator, .{
             .key = proc.identity.bytes,
             .by_identity = true,
             .artifact = artifact,
@@ -9709,13 +9681,7 @@ fn selectOwnerOffers(
             .rc_ret_unique = proc.rc_ret_unique,
             .rc_ret_unique_fields = proc.rc_ret_unique_fields,
             .rc_ret_conditions = try GuardedList.dupe(conditions_arena.allocator(), u32, lowered.lir_result.store.getU32Span(proc.rc_ret_conditions)),
-        };
-        if (offerCarried(filter, &scratch, entry)) {
-            carried_offers += 1;
-            continue;
-        }
-        if (requested) try roots.append(allocator, @intCast(specs.items.len));
-        try specs.append(allocator, entry);
+        });
     }
     if (plan.offer_graph == null) plan.offer_graph = try PackOfferGraph.init(allocator, plan, specs.items);
     const graph = &plan.offer_graph.?;
@@ -9723,7 +9689,7 @@ fn selectOwnerOffers(
     errdefer selected_specs.deinit(allocator);
     try graph.select(roots.items, selected, specs.items, &selected_specs, allocator);
     if (trace) {
-        std.debug.print("pack: {d} artifacts, {d} specs offered, {d} withheld, {d} already in the store\n", .{ set.artifacts.len, selected_specs.items.len, withheld, carried_offers });
+        std.debug.print("pack: {d} artifacts, {d} specs offered, {d} withheld\n", .{ set.artifacts.len, selected_specs.items.len, withheld });
     }
     // Every checked module an offer's facts and serving closure name, so a
     // program lacking one declines the offer without admitting its closure.
@@ -9807,15 +9773,6 @@ const DerivedOfferBase = struct {
     platform_requirement_relation: ?[32]u8,
     comptime_root_reads: []const lir.CheckedPipeline.ComptimeRootRead,
 };
-
-/// Whether a loaded pack already offers `entry` for the same artifact with
-/// the same facts (`LoadedPacks.carriesOffer`).
-fn offerCarried(filter: PackOfferFilter, scratch: *std.heap.ArenaAllocator, entry: backend.dev.PackFile.SpecEntry) bool {
-    const store = filter.store orelse return false;
-    const addresses = filter.addresses orelse return false;
-    _ = scratch.reset(.retain_capacity);
-    return store.carriesOffer(entry, addresses[entry.artifact], scratch.allocator());
-}
 
 /// The LIR fingerprint of one procedure of `lowered`, which is the same in
 /// every program that lowers that procedure identically.

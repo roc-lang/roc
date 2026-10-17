@@ -745,16 +745,12 @@ from two programs' graphs gives every member one address. A build writes one
 pack of artifacts, holding those of its serving closures that no loaded pack
 carries, into the store's `artifacts` directory under the pack's content
 digest, and one pack of offers per owner under the owner's placement, whose
-rows are references naming each offer's root by address. An offer a loaded
-pack already carries for the same key or identity, the same artifact address
-and the same facts (relation, refcount signature, compile-time root reads,
-demand) is not written again: a reader indexes the stored one identically
-(`LoadedPacks.carriesOffer`). Offers stay scoped
+rows are references naming each offer's root by address. Offers stay scoped
 to the visible modules; artifacts are universal within the store's compiler,
 target and policy namespace, since an address names one artifact wherever it
 is carried. An edit therefore adds to the store only the artifacts it compiled
-anew and the offers whose facts changed, and the artifacts a program is served
-are the same bytes however many revisions and owners offer them.
+anew, and the artifacts a program is served are the same bytes however many
+revisions and owners offer them.
 
 Native providers are immutable physical capabilities selected before producer
 lowering. Checking and native dev output use one authoritative ordinary body
