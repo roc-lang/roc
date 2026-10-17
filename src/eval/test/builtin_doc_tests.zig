@@ -4,6 +4,7 @@
 //!   * It must pass `roc check` (driven by `parseAndCheckProgramForProblems`).
 //!   * If the block contains top-level `expect` statements, those expects are
 //!     lowered as test roots and run by the dev backend, as `roc test` runs them.
+//!     Hosts without the dev backend skip these blocks.
 //!   * Otherwise, the block is evaluated through `compileInspectedProgram`.
 //!
 //! When a block fails, the source is written to a debug file under
@@ -14,6 +15,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
+const backend = @import("backend");
 const testing = std.testing;
 
 /// Forking is needed so a single crashing block (e.g. annotation-only function
@@ -574,9 +576,14 @@ fn runCheck(
 /// null when every one passes, or an owned message naming each that failed.
 fn runExpects(allocator: Allocator, source: []const u8) BuiltinDocTestError!?[]u8 {
     var run = test_helpers.devEvalTopLevelExpects(allocator, source, &.{}, prePublishedBuiltin()) catch |err| {
-        return try dupeErr(allocator, "devEvalTopLevelExpects: {s}", .{@errorName(err)});
+        return switch (err) {
+            error.TypeCheckError => try dupeErr(allocator, "check produced diagnostics or problems", .{}),
+            else => try dupeErr(allocator, "devEvalTopLevelExpects: {s}", .{@errorName(err)}),
+        };
     };
     defer run.deinit(allocator);
+
+    if (run.batch.results.len == 0) return try dupeErr(allocator, "expect block lowered no test roots", .{});
 
     var message = std.ArrayList(u8).empty;
     defer message.deinit(allocator);
@@ -640,6 +647,72 @@ test "runExpects reports a false inline expect a top-level expect reaches" {
     );
     defer if (result) |msg| allocator.free(msg);
     try testing.expect(result != null);
+}
+
+fn expectRunExpectsMessage(source: []const u8, expected: ?[]const u8) BuiltinDocTestError!void {
+    if (comptime !backend.host_lir_codegen_available) return error.SkipZigTest;
+    const allocator = base.defaultGpa();
+    const message = try runExpects(allocator, source);
+    defer if (message) |m| allocator.free(m);
+    if (expected) |text| {
+        try testing.expectEqualStrings(text, message orelse return error.TestUnexpectedResult);
+    } else {
+        try testing.expectEqual(@as(?[]u8, null), message);
+    }
+}
+
+test "runExpects passes a true expect" {
+    try expectRunExpectsMessage("expect 1.I64 == 1\n", null);
+}
+
+test "runExpects fails a false expect" {
+    try expectRunExpectsMessage("expect 1.I64 == 2\n", "`expect 1.I64 == 2`: evaluated to False");
+}
+
+test "runExpects counts each failed expect" {
+    try expectRunExpectsMessage("expect 1.I64 == 1\nexpect 1.I64 == 2\n", "`expect 1.I64 == 2`: evaluated to False");
+}
+
+test "runExpects passes a true expect that calls a Builtin function" {
+    try expectRunExpectsMessage("expect List.first([3.I64]) == Ok(3)\n", null);
+}
+
+test "runExpects fails a false expect that calls a Builtin function" {
+    try expectRunExpectsMessage("expect List.first([3.I64]) == Ok(4)\n", "`expect List.first([3.I64]) == Ok(4)`: evaluated to False");
+}
+
+test "runExpects fails a true expect whose callee fails an inline expect" {
+    try expectRunExpectsMessage(
+        \\check = |n| {
+        \\    expect n == 2
+        \\    n
+        \\}
+        \\
+        \\expect check(1.I64) == 1
+        \\
+    , "inline expects failed 1 time(s)");
+}
+
+test "runExpects fails an expect that crashes" {
+    try expectRunExpectsMessage(
+        \\boom : I64 -> Bool
+        \\boom = |_| crash "boom"
+        \\
+        \\expect boom(1)
+        \\
+    , "`expect boom(1)`: boom");
+}
+
+test "runExpects runs only expects in a block with a definition" {
+    try expectRunExpectsMessage("x = 1.I64\n\nexpect x == 2\n", "`expect x == 2`: evaluated to False");
+}
+
+test "runExpects reports a block without expects" {
+    try expectRunExpectsMessage("x = 1.I64\n", "expect block lowered no test roots");
+}
+
+test "runExpects reports a block that fails checking" {
+    try expectRunExpectsMessage("expect 1.I64 == \"a\"\n", "check produced diagnostics or problems");
 }
 
 fn runEval(
@@ -719,7 +792,10 @@ fn processBlock(allocator: Allocator, block: *const Block) BuiltinDocTestError!P
     if (try checkAccordingToKind(allocator, block)) |msg| return .{ .failed = msg };
 
     switch (block.kind) {
-        .expects_only => return forkResultToProcess(allocator, runInChild(allocator, workerExpects, block.source)),
+        .expects_only => {
+            if (comptime !backend.host_lir_codegen_available) return .success;
+            return forkResultToProcess(allocator, runInChild(allocator, workerExpects, block.source));
+        },
         .module_with_def => {
             const name = block.last_def_name orelse {
                 return .{ .failed = try dupeErr(allocator, "module-style block has no top-level definition to use as main", .{}) };

@@ -1125,6 +1125,8 @@ pub fn devEvalTopLevelExpects(
     });
     defer cleanupParseAndCanonical(allocator, resources);
 
+    if (try parsedResourcesHaveErrorDiagnostics(allocator, &resources)) return error.TypeCheckError;
+
     var requests = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
     defer requests.deinit(allocator);
     var test_plan = std.ArrayList(lir.CheckedPipeline.RootTestPlanMetadata).empty;
@@ -1141,6 +1143,11 @@ pub fn devEvalTopLevelExpects(
             .root_index = index,
         });
     }
+
+    if (requests.items.len == 0) return .{
+        .regions = &.{},
+        .batch = .{ .results = &.{}, .expect_counts = &.{} },
+    };
 
     const import_views = try parsedImportViews(allocator, &resources);
     defer allocator.free(import_views);
@@ -1608,6 +1615,8 @@ pub const LowerToLirOptions = struct {
     /// List.map and List.update paths; the copy paths are still covered by
     /// shared-list, slice, and layout-mismatch cases.
     list_in_place_map: bool = true,
+    /// Root requests to lower instead of the artifact's runtime requests.
+    root_requests: ?[]const check.CheckedArtifact.RootRequest = null,
 };
 
 fn lowerParsedProgramToLirWithOptions(
@@ -1688,7 +1697,7 @@ fn lowerCheckedRootWithViews(
             .root = check.CheckedArtifact.loweringView(root_module),
             .imports = import_views,
         },
-        .{ .requests = root_module.root_requests.runtime_requests },
+        .{ .requests = options.root_requests orelse root_module.root_requests.runtime_requests },
         lowerToLirTarget(target_usize, options),
     );
     defer lowered.deinit();
