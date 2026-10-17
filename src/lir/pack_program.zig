@@ -355,7 +355,9 @@ test "closed export types admit functions inside a box but not type variables" {
     // Pool slots: [0] the function's argument, [1] the boxed function, [2]
     // the boxed rigid.
     const type_id_pool = [_]checked.CheckedTypeId{ unit, func, free_rigid };
-    const label: check.CanonicalNames.RecordFieldLabelId = @fromBackingInt(@intCast(0));
+    var names = check.CanonicalNames.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    const label = try names.internRecordFieldLabel("f");
     const fields = [_]checked.CheckedRecordField{.{ .name = label, .ty = func, .kind = .required }};
     const types = checked.CheckedTypeStoreView{
         .stored_payloads = &payloads,
