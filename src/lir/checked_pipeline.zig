@@ -998,19 +998,42 @@ pub const CodeProvision = enum {
     host_dev_objects,
     /// Native dev emission with its own target-specific splice source.
     target_dev_objects,
+    /// As `host_dev_objects`, emitted as an object file that is linked, so the
+    /// link can also take object-cache objects (`LIR.LirProcSpec.c_abi_entry`).
+    host_linked_dev_objects,
+    /// As `target_dev_objects`, emitted as an object file that is linked.
+    target_linked_dev_objects,
 
     pub fn permitsNativeObjects(self: CodeProvision) bool {
         return self != .source_bodies;
     }
 
+    /// Whether the consumer's code is linked, so an object-cache entry that
+    /// is a linked object can serve it.
+    pub fn permitsLinkedObjects(self: CodeProvision) bool {
+        return switch (self) {
+            .host_linked_dev_objects, .target_linked_dev_objects => true,
+            .source_bodies, .host_dev_objects, .target_dev_objects => false,
+        };
+    }
+
     /// Domain compatibility is necessary but not sufficient for shared body
     /// elision: the session must also prove both readers own the same provider.
-    /// Other targets may still splice objects in their own continuation.
+    /// Other targets may still splice objects in their own continuation. A
+    /// shared producer never elides a body for a linked object: compile-time
+    /// evaluation runs code in process, where nothing is linked.
     pub fn sharedDomain(self: CodeProvision, other: CodeProvision) CodeProvision {
-        return if (self == .host_dev_objects and other == .host_dev_objects)
+        return if (self.hostDomain() and other.hostDomain())
             .host_dev_objects
         else
             .source_bodies;
+    }
+
+    fn hostDomain(self: CodeProvision) bool {
+        return switch (self) {
+            .host_dev_objects, .host_linked_dev_objects => true,
+            .source_bodies, .target_dev_objects, .target_linked_dev_objects => false,
+        };
     }
 };
 
@@ -1453,6 +1476,7 @@ pub fn prepareCheckedModulesMonotype(
                     prepared_target.comptime_closure_hits,
                     target.code_provision,
                 )) target.spec_cache else null,
+                .spec_cache_accepts_linked = target.code_provision.permitsLinkedObjects(),
                 .post_check_executor = target.post_check_executor,
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
@@ -1510,7 +1534,7 @@ test "early cache requires declared native provision and the CTFE observation pr
 test "shared producer native provision requires every consumer in the host dev domain" {
     for (std.enums.values(CodeProvision)) |host| {
         for (std.enums.values(CodeProvision)) |runtime| {
-            const expected: CodeProvision = if (host == .host_dev_objects and runtime == .host_dev_objects) .host_dev_objects else .source_bodies;
+            const expected: CodeProvision = if ((host == .host_dev_objects or host == .host_linked_dev_objects) and (runtime == .host_dev_objects or runtime == .host_linked_dev_objects)) .host_dev_objects else .source_bodies;
             try std.testing.expectEqual(expected, host.sharedDomain(runtime));
             try std.testing.expectEqual(expected, runtime.sharedDomain(host));
         }
@@ -1798,6 +1822,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
     var lowered = try postcheck.SolvedLirLower.runBorrowed(allocator, target.target_usize, &prepared.program, .{
         .root_manifest = consumer.roots,
         .spec_cache = if (target.code_provision.permitsNativeObjects()) target.spec_cache else null,
+        .spec_cache_accepts_linked = target.code_provision.permitsLinkedObjects(),
         .comptime_closure_hits = target.comptime_closure_hits,
         .inline_plan = prepared.inline_plan.view(),
         .keep_specialization_procs = target.keep_specialization_procs,

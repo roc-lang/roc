@@ -350,14 +350,14 @@ fn compileWithCodeGen(
         var external_procs = std.ArrayList(lir.LIR.LirProcSpecId).empty;
         defer external_procs.deinit(allocator);
         for (proc_specs, 0..) |proc, index| {
-            if (proc.external) external_procs.append(allocator, @fromBackingInt(@intCast(@as(u32, @intCast(index))))) catch return CompilationError.OutOfMemory;
+            if (proc.external and !proc.c_abi_entry) external_procs.append(allocator, @fromBackingInt(@intCast(@as(u32, @intCast(index))))) catch return CompilationError.OutOfMemory;
         }
         spliceExternalProcs(CodeGen, allocator, &codegen, proc_specs, external_procs.items, source, &spliced_data) catch return CompilationError.OutOfMemory;
     }
     var demand = std.ArrayList(lir.LIR.LirProcSpecId).empty;
     defer demand.deinit(allocator);
     for (proc_specs, 0..) |proc, index| {
-        if (proc.is_static_initializer or proc.external) continue;
+        if (proc.is_static_initializer or (proc.external and !proc.c_abi_entry)) continue;
         demand.append(allocator, @fromBackingInt(@intCast(index))) catch return CompilationError.OutOfMemory;
     }
     var native_metrics: NativeProcCompiler.Metrics = .{};

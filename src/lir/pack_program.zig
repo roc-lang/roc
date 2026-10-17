@@ -368,6 +368,175 @@ test "closed export types admit functions inside a box but not type variables" {
     try std.testing.expect(!try checkedTypeIsClosed(allocator, types, boxed_rigid));
 }
 
+/// Which procedures make an erased call or build an erased callable, by
+/// procedure id. The erased-call runtime those use is passed this program's
+/// layout indices, so a linked object-cache object cannot offer an entry
+/// whose code reaches one. Caller owns the result.
+pub fn erasedCallingProcs(allocator: Allocator, store: *const LirStore) Allocator.Error![]bool {
+    const erased = try allocator.alloc(bool, store.procSpecCount());
+    errdefer allocator.free(erased);
+    @memset(erased, false);
+    const seen = try allocator.alloc(bool, store.cfStmtCount());
+    defer allocator.free(seen);
+    var visited = std.ArrayList(LIR.CFStmtId).empty;
+    defer visited.deinit(allocator);
+    var work = std.ArrayList(LIR.CFStmtId).empty;
+    defer work.deinit(allocator);
+    @memset(seen, false);
+    for (erased, 0..) |*result, index| {
+        for (visited.items) |stmt_id| seen[@backingInt(stmt_id)] = false;
+        visited.clearRetainingCapacity();
+        work.clearRetainingCapacity();
+        const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(index)));
+        if (proc.abi == .erased_callable) {
+            result.* = true;
+            continue;
+        }
+        const body = proc.body orelse continue;
+        try work.append(allocator, body);
+        while (work.pop()) |stmt_id| {
+            if (seen[@backingInt(stmt_id)]) continue;
+            seen[@backingInt(stmt_id)] = true;
+            try visited.append(allocator, stmt_id);
+            const uses_runtime = switch (store.getCFStmtImmediate(stmt_id).*) {
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                => true,
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => false,
+            };
+            if (uses_runtime) {
+                result.* = true;
+                break;
+            }
+            try BodyClone.appendSuccessors(store, &work, stmt_id, allocator);
+        }
+    }
+    return erased;
+}
+
+/// The procedures `root`'s code reaches through direct calls, `root`
+/// included, as a set over `store`'s procedures. Caller owns the result.
+pub fn procCallClosure(allocator: Allocator, store: *const LirStore, root: LIR.LirProcSpecId) Allocator.Error![]bool {
+    const reached = try allocator.alloc(bool, store.procSpecCount());
+    errdefer allocator.free(reached);
+    @memset(reached, false);
+    const seen = try allocator.alloc(bool, store.cfStmtCount());
+    defer allocator.free(seen);
+    @memset(seen, false);
+    var procs = std.ArrayList(LIR.LirProcSpecId).empty;
+    defer procs.deinit(allocator);
+    var work = std.ArrayList(LIR.CFStmtId).empty;
+    defer work.deinit(allocator);
+    try procs.append(allocator, root);
+    reached[@backingInt(root)] = true;
+    while (procs.pop()) |proc_id| {
+        const body = store.getProcSpecImmediate(proc_id).body orelse continue;
+        try work.append(allocator, body);
+        while (work.pop()) |stmt_id| {
+            if (seen[@backingInt(stmt_id)]) continue;
+            seen[@backingInt(stmt_id)] = true;
+            const callee: ?LIR.LirProcSpecId = switch (store.getCFStmtImmediate(stmt_id).*) {
+                .assign_call => |call| call.proc,
+                .assign_packed_erased_fn => |packed_fn| packed_fn.proc,
+                .assign_literal => |literal| literal.fresh_alternative,
+                .init_uninitialized,
+                .assign_ref,
+                .assign_call_erased,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => null,
+            };
+            if (callee) |reached_callee| {
+                const callee_id = reached_callee;
+                if (!reached[@backingInt(callee_id)]) {
+                    reached[@backingInt(callee_id)] = true;
+                    try procs.append(allocator, callee_id);
+                }
+            }
+            try BodyClone.appendSuccessors(store, &work, stmt_id, allocator);
+        }
+    }
+    return reached;
+}
+
 /// Which procedures convert a specialized custom literal when they run, by
 /// procedure id: a crash carrying a literal's rejection site is the `Err` arm
 /// of that conversion. A program that evaluated its literal roots at compile

@@ -166,6 +166,9 @@ pub const RootManifest = struct {
 pub const Options = struct {
     /// The object cache asked for closed specializations.
     spec_cache: ?Common.SpecCacheLookup = null,
+    /// Whether this program's code is linked, so the cache may serve it a
+    /// linked-object entry (`Common.SpecCacheHit.c_abi_entry`).
+    spec_cache_accepts_linked: bool = false,
     /// Whether the cache may also serve specializations the compile-time
     /// roots reach. The evaluator splices those entries into its own image,
     /// which is only faithful when no compile-time-only exhaustiveness site
@@ -766,6 +769,7 @@ const Lowerer = struct {
     completed_scalar_values: ?*const ComptimeScalarValues.CompletedScalarValues,
     proc_debug_names: bool,
     spec_cache: ?Common.SpecCacheLookup,
+    spec_cache_accepts_linked: bool,
     comptime_closure_hits: bool,
     /// This consumer's explicit share of the producer's roots and requests.
     root_manifest: ?RootManifest,
@@ -1066,6 +1070,7 @@ const Lowerer = struct {
             .completed_scalar_values = options.completed_scalar_values,
             .proc_debug_names = options.proc_debug_names,
             .spec_cache = options.spec_cache,
+            .spec_cache_accepts_linked = options.spec_cache_accepts_linked,
             .comptime_closure_hits = options.comptime_closure_hits,
             .root_manifest = options.root_manifest,
             .comptime_phase = true,
@@ -2878,7 +2883,8 @@ const Lowerer = struct {
         // record is the cached procedure only for its own lifted function:
         // a SpecConstr clone or a second lowering of the same template has a
         // body and lowers normally.
-        if (source_fn.body == .hosted) if (source_fn.source) |template| if (template.cached) |hit| {
+        if (source_fn.body == .hosted) if (source_fn.source) |template| if (template.cached) |monotype_hit| {
+            const hit = self.linkedEntryFor(template, monotype_hit, relation);
             if (self.comptime_phase and !self.comptime_closure_hits) {
                 Common.invariant("early object cache hit reached CTFE without the checked-program eligibility proof");
             }
@@ -2902,7 +2908,7 @@ const Lowerer = struct {
             if (self.spec_cache) |cache| {
                 if (source_fn.source) |template| {
                     if (template.spec_key) |key| {
-                        if (cache.lookup(key.bytes, relation)) |hit| {
+                        if (cache.lookup(key.bytes, relation, self.spec_cache_accepts_linked)) |hit| {
                             if (std.mem.eql(u8, &hit.identity, &identity.bytes)) cached = hit;
                             if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} {s}\n", .{ key.bytes[0..8], if (cached != null) "hit" else "identity-mismatch" });
                         } else if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} miss\n", .{key.bytes[0..8]});
@@ -2995,6 +3001,7 @@ const Lowerer = struct {
             .abi = if (spec.abi == .erased) .erased_callable else .roc,
             .hosted = try self.hostedProcForSource(source_fn.source),
             .external = cached != null,
+            .c_abi_entry = if (cached) |hit| hit.c_abi_entry else false,
             .rc_borrowed_params = if (cached) |hit| hit.rc_borrowed_params else 0,
             .rc_ret_borrowed = if (cached) |hit| hit.rc_ret_borrowed else false,
             .rc_ret_lenders = if (cached) |hit| hit.rc_ret_lenders else 0,
@@ -5225,6 +5232,21 @@ const Lowerer = struct {
             .erased_callable => "erased-return-reuse",
         };
         return .{ .bytes = try renderer.specIdentity(spec.source, spec.solved_fn_ty, self.captureSpan(spec.captures), @tagName(spec.abi), return_reuse) };
+    }
+
+    /// The cache entry this consumer takes for a specialization Monotype
+    /// completed from `monotype_hit`. A producer shared with compile-time
+    /// evaluation never takes a linked-object entry, since evaluation runs
+    /// in process; a consumer whose code is linked takes the linked entry of
+    /// the same procedure when there is one, with that entry's ownership
+    /// signature.
+    fn linkedEntryFor(self: *Lowerer, template: Mono.FnTemplate, monotype_hit: Common.SpecCacheHit, relation: ?[32]u8) Common.SpecCacheHit {
+        if (monotype_hit.c_abi_entry or !self.spec_cache_accepts_linked) return monotype_hit;
+        const cache = self.spec_cache orelse return monotype_hit;
+        const key = template.spec_key orelse return monotype_hit;
+        const linked = cache.lookup(key.bytes, relation, true) orelse return monotype_hit;
+        if (!linked.c_abi_entry or !std.mem.eql(u8, &linked.identity, &monotype_hit.identity)) return monotype_hit;
+        return linked;
     }
 
     /// Identity of a static-initializer procedure. These procedures exist only
