@@ -1243,12 +1243,14 @@ fn startBackgroundCacheCleanup(gpa: Allocator, arena: Allocator, std_io: std.Io)
     // artifacts are written. The background thread itself is CoreCtx-free and
     // allocation-free; it only borrows this path (copied in by value).
     const cleanup_ctx = CoreCtx.default(gpa, arena, std_io);
-    const cache_base: []const u8 = blk: {
-        const cfg = cache_config_mod.CacheConfig{ .roc_ctx = cleanup_ctx };
-        break :blk cfg.getEffectiveCacheDir(arena) catch "";
-    };
+    const cfg = cache_config_mod.CacheConfig{ .roc_ctx = cleanup_ctx };
+    const cache_base: []const u8 = cfg.getEffectiveCacheDir(arena) catch "";
     if (cache_base.len != 0) {
-        if (compile.CacheCleanup.startBackgroundCleanup(cache_base, std_io)) |_| {
+        const limits: compile.CacheCleanup.Limits = .{
+            .object_pack_format_version = backend.dev.PackFile.format_version,
+            .max_size_bytes = @as(u64, cfg.max_size_mb) * 1024 * 1024,
+        };
+        if (compile.CacheCleanup.startBackgroundCleanup(cache_base, std_io, limits)) |_| {
             // Thread started successfully, will run in background.
         } else |_| {
             // Non-fatal: cleanup failure shouldn't prevent compilation.

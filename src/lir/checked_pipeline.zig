@@ -1894,7 +1894,7 @@ fn finishLoweredOutput(
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .box_reuse);
     }
     try ReturnSlot.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
-    try StrAppend.run(&lowered.lir_result.store);
+    try StrAppend.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     if (target.tag_reachability) {
         try TagReachability.run(&lowered.lir_result);
     }

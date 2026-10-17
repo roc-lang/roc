@@ -36,7 +36,7 @@ pub const Store = struct {
         defer allocator.free(version_dir);
         const mode = try std.fmt.allocPrint(allocator, "{s}-{s}", .{ @tagName(target), opt_name });
         defer allocator.free(mode);
-        const namespace = std.fmt.comptimePrint("objects-v{d}", .{PackFile.format_version});
+        const namespace = compile.config.objectPackNamespace(PackFile.format_version);
         const root = try std.fs.path.join(allocator, &.{ version_dir, namespace, mode });
         return .{ .allocator = allocator, .roc_ctx = cache_config.roc_ctx, .root = root, .verbose = cache_config.verbose };
     }
@@ -329,6 +329,54 @@ test "object cache write failures preserve quiet behavior and report verbose cau
             }
         }
     }
+}
+
+test "the cache sweep finds and ages the packs the store writes" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const cache_root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(cache_root);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const cache_config: compile.CacheConfig = .{
+        .cache_dir = cache_root,
+        .roc_ctx = CoreCtx.default(allocator, arena.allocator(), io),
+    };
+    var store = try Store.init(allocator, cache_config, .x64glibc, "dev");
+    defer store.deinit();
+
+    const local_identity = @as([32]u8, @splat(1));
+    const pkg_identity = @as([32]u8, @splat(2));
+    const key = @as([32]u8, @splat(3));
+    try store.write(.local, local_identity, key, "local pack");
+    try store.write(.pkg, pkg_identity, key, "pkg pack");
+    try std.testing.expect(try store.has(.local, local_identity, key));
+    try std.testing.expect(try store.has(.pkg, pkg_identity, key));
+
+    // A namespace of another pack format beside the store's own.
+    const version_dir = try cache_config.getVersionCacheDir(allocator);
+    defer allocator.free(version_dir);
+    const stale_dir = try std.fs.path.join(allocator, &.{ version_dir, compile.config.objectPackNamespace(PackFile.format_version - 1), "x64glibc-dev", "pkg" });
+    defer allocator.free(stale_dir);
+    try std.Io.Dir.cwd().createDirPath(io, stale_dir);
+
+    const limits: compile.CacheCleanup.Limits = .{
+        .object_pack_format_version = PackFile.format_version,
+        .max_size_bytes = std.math.maxInt(u64),
+    };
+    const now_ns = compile.CacheCleanup.nowNs(io);
+    var stats: compile.CacheCleanup.CleanupStats = .{};
+    compile.CacheCleanup.sweep(io, cache_root, limits, now_ns + 2 * compile.CacheCleanup.Config.LOCAL_PACK_MAX_AGE_NS, &stats);
+    try std.testing.expectEqual(@as(u32, 1), stats.stale_namespaces_deleted);
+    try std.testing.expectEqual(@as(u32, 1), stats.cache_files_deleted);
+    try std.testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(io, stale_dir, .{}));
+    try std.testing.expect(!try store.has(.local, local_identity, key));
+    try std.testing.expect(try store.has(.pkg, pkg_identity, key));
+
+    compile.CacheCleanup.sweep(io, cache_root, limits, now_ns + compile.CacheCleanup.Config.PERSISTENT_MAX_AGE_NS + std.time.ns_per_s, &stats);
+    try std.testing.expect(!try store.has(.pkg, pkg_identity, key));
 }
 
 /// What a lazily loaded store needs once checking has produced the module

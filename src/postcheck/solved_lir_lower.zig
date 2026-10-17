@@ -275,6 +275,7 @@ pub fn runBorrowed(
     try lowerer.result.store.setSourceFiles(solved.lifted.sourceFiles());
     try lowerer.result.setLoweringModules(solved.lifted.loweringModules());
     try lowerer.prepareExpectSites();
+    try lowerer.indexSourceFns();
     try lowerer.lowerInlineScopes();
     try lowerer.lower();
     try lowerer.bindRoots();
@@ -1338,8 +1339,6 @@ const Lowerer = struct {
     }
 
     fn lower(self: *Lowerer) Common.LowerError!void {
-        try self.indexSourceFns();
-
         const produced_roots = self.solved.lifted.rootsView();
         if (if (self.root_manifest) |manifest| manifest.roots else null) |selected| {
             try self.roots.ensureTotalCapacity(self.allocator, selected.len);
@@ -1444,7 +1443,7 @@ const Lowerer = struct {
         for (lifted.inline_scopes, 0..) |scope, index| {
             const expected: LIR.InlineScopeId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             const actual = try self.result.store.addInlineScope(.{
-                .source_symbol = lirSymbol(scope.source_symbol),
+                .source_identity = self.inlineSourceIdentity(scope.source_symbol),
                 .source_name = try self.lowerInlineScopeSourceName(scope.source_symbol),
                 .source_loc = scope.source_loc,
                 .call_site = scope.call_site,
@@ -1452,6 +1451,18 @@ const Lowerer = struct {
             });
             if (actual != expected) Common.invariant("LIR inline-scope identities diverged from lifted inline-scope identities");
         }
+    }
+
+    /// Identity of the lifted function an inline scope stands for: its
+    /// checked source digest, which names the function the same way in every
+    /// program.
+    fn inlineSourceIdentity(self: *const Lowerer, source_symbol: Common.Symbol) LIR.ProcIdentity {
+        var hasher = base.TypeDigestHasher.init();
+        hasher.update("roc.proc.inline-source.v1");
+        const source = self.source_digests[@backingInt(self.sourceFnForSymbol(source_symbol))] orelse
+            Common.invariant("an inline scope named a lifted function without a checked source identity");
+        hasher.update(&source);
+        return .{ .bytes = hasher.finalResult() };
     }
 
     fn lowerInlineScopeSourceName(
@@ -1488,7 +1499,7 @@ const Lowerer = struct {
         while (chain.pop()) |scope_id| {
             const source_scope = self.solved.lifted.inlineScope(scope_id);
             rebased = try self.result.store.addInlineScope(.{
-                .source_symbol = lirSymbol(source_scope.source_symbol),
+                .source_identity = self.inlineSourceIdentity(source_scope.source_symbol),
                 .source_name = try self.lowerInlineScopeSourceName(source_scope.source_symbol),
                 .source_loc = source_scope.source_loc,
                 .call_site = source_scope.call_site,
@@ -1506,7 +1517,7 @@ const Lowerer = struct {
         body_expr: Lifted.ExprId,
     ) Common.LowerError!LIR.InlineScopeId {
         return try self.result.store.addInlineScope(.{
-            .source_symbol = lirSymbol(source_fn.symbol),
+            .source_identity = self.inlineSourceIdentity(source_fn.symbol),
             .source_name = try self.lowerInlineScopeSourceName(source_fn.symbol),
             .source_loc = self.solved.lifted.exprLoc(body_expr),
             .call_site = where.loc,
@@ -3035,7 +3046,7 @@ const Lowerer = struct {
         return .{ .start = @intCast(start), .len = @intCast(args.len) };
     }
 
-    fn sourceFnForSymbol(self: *Lowerer, symbol: Common.Symbol) Lifted.FnId {
+    fn sourceFnForSymbol(self: *const Lowerer, symbol: Common.Symbol) Lifted.FnId {
         return self.source_symbols.get(symbol) orelse
             Common.invariant("direct Lambda Mono callable member referenced a missing lifted function symbol");
     }
