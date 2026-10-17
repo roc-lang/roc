@@ -73,6 +73,15 @@ pub const take_binding_alias_owned_variant_test = TestSpec{
     .description = "Regression test: a taken field passed to an owned variant is released exactly once",
 };
 
+/// The slow arms of the LLVM backend's inline list fast paths: a byte append
+/// into a unique list with and without a spare word of capacity, and a
+/// reserve with and without the spare already there.
+pub const inline_list_slow_arms_test = TestSpec{
+    .roc_file = "test/fx/inline_list_slow_arms.roc",
+    .io_spec = "0<abcde|1>219 12112725369229970337 50 17131679588414959641",
+    .description = "Inline list fast paths and their builtin slow arms leave the same bytes",
+};
+
 /// All fx platform tests that can be run with --test mode IO specs.
 /// These tests work with cross-compilation because they only test
 /// the compiled binary's IO behavior, not build-time features.

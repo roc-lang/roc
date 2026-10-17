@@ -670,6 +670,11 @@ pub const ExposedItem = struct {
     alias: ?base.Ident.Idx,
     is_wildcard: bool,
     kind: Kind,
+    /// For an item of an `import ... exposing [...]` list, the node of the
+    /// declaration in the imported module that import resolution selected: a
+    /// value definition, or a type declaration statement. Null for a module
+    /// header's own exposes and for an item the module does not expose.
+    target: ?u32 = null,
 
     pub fn pushToSExprTree(self: *const ExposedItem, _: anytype, cir: anytype, tree: anytype) Allocator.Error!void {
         const begin = try tree.beginNamedNode("exposed");

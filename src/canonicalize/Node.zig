@@ -1358,7 +1358,7 @@ pub const Payload = extern union {
         name: u32,
         alias: u32,
         flags: u32,
-        _reserved: [4]u8 = .{ 0, 0, 0, 0 },
+        target: u32 = 0,
     };
 
     pub const IfBranch = extern struct {
