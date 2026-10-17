@@ -229,7 +229,7 @@ Client(effects) := { effects : effects }.{
 	first = |client, items, n| {
 		pinned : List(Str)
 		pinned = items
-		if n == 0 Ok(Str.join_with(pinned, "")) else second(client, items, n - 1)
+		if (n == 0) Ok(Str.join_with(pinned, "")) else second(client, items, n - 1)
 	}
 
 	second : Client(_), List(_), U64 -> Try(Str, [Refused(Str), ..others])

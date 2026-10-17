@@ -2057,7 +2057,7 @@ MaybeMultiline(a) : [ # Comment after tag union open
 
 SomeFunc(a) : Maybe(a), a -> Maybe(a)
 
-add_one_oneline = |num| if num 2 else 5
+add_one_oneline = |num| if (num) 2 else 5
 
 add_one : U64 -> U64
 add_one = |num| {
