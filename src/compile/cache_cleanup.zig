@@ -809,13 +809,17 @@ test "cleanupPersistentCache deletes old cache files at each family depth" {
     try Dir.cwd().access(std.testing.io, wasm_host_lock, .{});
 }
 
-fn writeTestFile(dir_path: []const u8, name: []const u8, data: []const u8, last_use_ns: i128) (Dir.CreateDirPathError || Dir.OpenError || Dir.WriteFileError || Dir.SetTimestampsError)!void {
+/// Write a cache file whose last use is `last_use_ns`. The timestamps are
+/// set through the open file, which every host supports.
+fn writeTestFile(dir_path: []const u8, name: []const u8, data: []const u8, last_use_ns: i128) (Dir.CreateDirPathError || Dir.OpenError || Dir.WriteFileError || std.Io.File.OpenError || std.Io.File.SetTimestampsError)!void {
     try Dir.cwd().createDirPath(std.testing.io, dir_path);
     var dir = try Dir.cwd().openDir(std.testing.io, dir_path, .{});
     defer dir.close(std.testing.io);
     try dir.writeFile(std.testing.io, .{ .sub_path = name, .data = data });
+    const file = try dir.openFile(std.testing.io, name, .{ .mode = .read_write });
+    defer file.close(std.testing.io);
     const stamp: std.Io.File.SetTimestamp = .{ .new = .{ .nanoseconds = @intCast(last_use_ns) } };
-    try dir.setTimestamps(std.testing.io, name, .{ .access_timestamp = stamp, .modify_timestamp = stamp });
+    try file.setTimestamps(std.testing.io, .{ .access_timestamp = stamp, .modify_timestamp = stamp });
 }
 
 test "object pack sweep deletes stale format namespaces and ages current packs by origin" {
