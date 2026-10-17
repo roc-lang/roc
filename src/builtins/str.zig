@@ -5162,7 +5162,7 @@ fn defaultPlatformView(canonical: RocStr) @import("roc_str_view").RocStr {
     return std.mem.bytesToValue(@import("roc_str_view").RocStr, std.mem.asBytes(&canonical));
 }
 
-fn expectDefaultPlatformViewAgrees(canonical: RocStr) !void {
+fn expectDefaultPlatformViewAgrees(canonical: RocStr) error{TestExpectedEqual}!void {
     const view = defaultPlatformView(canonical);
 
     try std.testing.expectEqual(canonical.isSmallStr(), view.isSmallStr());

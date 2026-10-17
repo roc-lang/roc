@@ -269,10 +269,13 @@ pub fn lower(
     };
 }
 
-/// Argument-register file sizes of each platform C ABI. Classification here and
-/// the dev backend's argument-register lists both consume these counts; each
-/// register list comptime-asserts its length against them.
+// Argument-register file sizes of each platform C ABI. Classification here and
+// the dev backend's argument-register lists both consume these counts; each
+// register list comptime-asserts its length against them.
+
+/// System V x86-64 general-purpose argument registers.
 pub const sysv_gp_registers: u8 = 6;
+/// AAPCS64 general-purpose argument registers.
 pub const aarch64_gp_registers: u8 = 8;
 /// SSE (System V) and SIMD/FP (AAPCS64) argument registers.
 pub const simd_argument_registers: u8 = 8;
