@@ -1333,6 +1333,11 @@ pub const View = struct {
         return self.columns.specs[index].key;
     }
 
+    /// Whether the offer at `index` serves lookups by procedure identity.
+    pub fn specIsIdentity(self: *const View, index: usize) bool {
+        return self.columns.specs[index].by_identity != 0;
+    }
+
     /// Whether offer `index` is an identity offer (`SpecEntry.by_identity`).
     pub fn specByIdentity(self: *const View, index: usize) bool {
         return self.columns.specs[index].by_identity != 0;
