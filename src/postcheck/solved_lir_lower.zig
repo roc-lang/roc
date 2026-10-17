@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const base = @import("base");
 const builtins = @import("builtins");
 const can = @import("can");
@@ -15394,9 +15395,10 @@ test "direct LIR lower declarations are referenced" {
 }
 
 /// Whether a root's procedure runs in the compile-time evaluator.
-/// Builds without libc (the playground) never read the environment and
-/// compile no trace output.
-const pack_trace_available = @import("builtin").link_libc;
+/// Builds without libc (the playground) and compilers built without
+/// developer diagnostics never read the environment and compile no trace
+/// output.
+const pack_trace_available = @import("builtin").link_libc and build_options.dev_diagnostics;
 
 /// `ROC_PACK_TRACE` is set: print every object cache lookup.
 fn packTraceEnabled() bool {
