@@ -20201,6 +20201,14 @@ the complete required set, with every field claim validated against that set.
 Ownership-complete aggregate reads and borrowed pure aliases form explicit
 ownership places. The place graph is solved to a fixpoint, so a nested read
 chain such as tag payload to struct field keeps the root aggregate's unit key.
+A take binding, unconditional or owned-only, holds the field unit its take
+consumed, so it starts an ownership place of its own: its aliases and
+projections take the take binding's unit key, never the root's, and moving
+one of them into a call moves the unit the take binding holds. In an emission
+whose owned-only take does not apply, that binding holds no unit, and a move
+through it retains exactly as a move through the binding itself would.
+Parameter benefits still trace each place back to its root, since the root's
+owned override is what activates the take.
 When one ownership place is read repeatedly by ownership-complete struct-field
 or tag-payload reads along a single control-flow path, dismantle analysis
 chooses the earliest same-root, same-layout read that dominates each later read

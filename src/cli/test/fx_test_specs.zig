@@ -64,6 +64,15 @@ pub const issue_12196_cold_list_builds_test = TestSpec{
     .description = "Regression test: cold-path list literal and List.with_capacity share a builtin",
 };
 
+/// Repro for https://github.com/roc-lang/roc/issues/12328: a field taken out of
+/// a dying record and passed to a function's owned variant, which takes a
+/// field out of its argument in turn, is released exactly once.
+pub const take_binding_alias_owned_variant_test = TestSpec{
+    .roc_file = "test/fx/take_binding_alias_owned_variant.roc",
+    .io_spec = "0<abcdef|1>once: 197|1>looped: 603",
+    .description = "Regression test: a taken field passed to an owned variant is released exactly once",
+};
+
 /// The slow arms of the LLVM backend's inline list fast paths: a byte append
 /// into a unique list with and without a spare word of capacity, and a
 /// reserve with and without the spare already there.

@@ -435,6 +435,18 @@ test "fx platform cold-path list literal and List.with_capacity (speed backend)"
     try runIoSpecTest("--opt=speed", fx_test_specs.issue_12196_cold_list_builds_test);
 }
 
+test "fx platform taken field passed to an owned variant is released once (interpreter)" {
+    try runIoSpecTest("--opt=interpreter", fx_test_specs.take_binding_alias_owned_variant_test);
+}
+
+test "fx platform taken field passed to an owned variant is released once (dev backend)" {
+    try runIoSpecTest("--opt=dev", fx_test_specs.take_binding_alias_owned_variant_test);
+}
+
+test "fx platform taken field passed to an owned variant is released once (speed backend)" {
+    try runIoSpecTest("--opt=speed", fx_test_specs.take_binding_alias_owned_variant_test);
+}
+
 test "fx platform inline list fast paths and their slow arms (dev backend)" {
     try runIoSpecTest("--opt=dev", fx_test_specs.inline_list_slow_arms_test);
 }
