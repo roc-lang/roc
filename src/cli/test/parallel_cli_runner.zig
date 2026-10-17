@@ -430,6 +430,7 @@ const CustomCase = enum {
     default_platform_build_wasm32,
     default_platform_wasm32_archive_reproducible,
     native_build_thread_count_reproducible,
+    native_build_pack_store_thread_count_reproducible,
     native_build_artifact_round_trip,
     native_build_pack_objects,
     native_build_pack_hits,
@@ -2983,6 +2984,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive succeeds", .body = .{ .custom = .default_platform_build_wasm32 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive output is reproducible", .body = .{ .custom = .default_platform_wasm32_archive_reproducible } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev output is identical across thread counts and repeated builds", .timeout_ms = 600_000, .body = .{ .custom = .native_build_thread_count_reproducible } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build native dev writes identical object-cache packs across thread counts", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_store_thread_count_reproducible } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev output assembled from its own procedure artifacts is identical", .timeout_ms = 600_000, .body = .{ .custom = .native_build_artifact_round_trip } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev pack programs are deterministic and round-trip through artifacts", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_objects } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11673: imported callable identity survives cold warm and sibling builds", .timeout_ms = 600_000, .body = .{ .custom = .issue_11673_callable_cache } },
@@ -4859,6 +4861,7 @@ fn runCustomCase(
         .default_platform_build_wasm32 => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .wasm32),
         .default_platform_wasm32_archive_reproducible => customDefaultPlatformWasm32ArchiveReproducible(io, allocator, &env, &timer, timeout_ms),
         .native_build_thread_count_reproducible => customNativeBuildThreadCountReproducible(io, allocator, &env, &timer, timeout_ms),
+        .native_build_pack_store_thread_count_reproducible => customNativeBuildPackStoreThreadCountReproducible(io, allocator, &env, &timer, timeout_ms),
         .native_build_artifact_round_trip => customNativeBuildArtifactRoundTrip(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_objects => customNativeBuildPackObjects(io, allocator, &env, &timer, timeout_ms),
         .issue_11673_callable_cache => customIssue11673CallableCache(io, allocator, &env, &timer, timeout_ms),
@@ -7694,6 +7697,130 @@ fn customNativeBuildThreadCountReproducible(
         }
         if (!std.mem.eql(u8, outputs[1], outputs[2])) {
             return customFailure(allocator, timer, "{s}: native dev build bytes differ between two builds with the default worker count", .{roc_file});
+        }
+    }
+    return null;
+}
+
+/// Apps whose cold dev builds must write the same object-cache packs, with
+/// the same spec tables, on one worker lane and on many. The roc-parser app
+/// reaches specializations through requests less specific than their own
+/// solutions, whose keys a scheduling-dependent store would offer only in
+/// some orders.
+const pack_store_reproducible_apps = [_][]const u8{
+    "test/cli/issue_9889_roc_parser/Issue10167BoxedParserConst.roc",
+    "test/fx/hello_world.roc",
+    "test/str/app_diamond.roc",
+};
+
+/// Every object-cache pack under `cache_root`, by its path relative to it.
+const PackStoreFiles = struct {
+    paths: std.ArrayList([]u8) = .empty,
+    contents: std.ArrayList([]u8) = .empty,
+
+    fn deinit(self: *PackStoreFiles, allocator: Allocator) void {
+        for (self.paths.items) |path| allocator.free(path);
+        for (self.contents.items) |bytes| allocator.free(bytes);
+        self.paths.deinit(allocator);
+        self.contents.deinit(allocator);
+    }
+
+    fn read(io: std.Io, allocator: Allocator, cache_root: []const u8) CliRunnerError!PackStoreFiles {
+        var result: PackStoreFiles = .{};
+        errdefer result.deinit(allocator);
+        var cache = try std.Io.Dir.cwd().openDir(io, cache_root, .{ .iterate = true });
+        defer cache.close(io);
+        var walker = try cache.walk(allocator);
+        defer walker.deinit();
+        while (try walker.next(io)) |entry| {
+            if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".rpk")) continue;
+            const path = try allocator.dupe(u8, entry.path);
+            result.paths.append(allocator, path) catch |err| {
+                allocator.free(path);
+                return err;
+            };
+            const bytes = try cache.readFileAlloc(io, entry.path, allocator, .limited(1024 * 1024 * 1024));
+            result.contents.append(allocator, bytes) catch |err| {
+                allocator.free(bytes);
+                return err;
+            };
+        }
+        return result;
+    }
+
+    fn find(self: *const PackStoreFiles, path: []const u8) ?[]const u8 {
+        for (self.paths.items, self.contents.items) |candidate, bytes| {
+            if (std.mem.eql(u8, candidate, path)) return bytes;
+        }
+        return null;
+    }
+};
+
+/// A cold cached dev build on one worker lane and one on the default lane
+/// count, each with its own cache root, must write the same pack files with
+/// the same bytes: which specializations a store holds, and under which keys,
+/// is a function of the program, not of scheduling.
+fn customNativeBuildPackStoreThreadCountReproducible(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    for (pack_store_reproducible_apps, 0..) |roc_file, app_index| {
+        const variants = [_]struct { suffix: []const u8, jobs: ?[]const u8 }{
+            .{ .suffix = "jobs1", .jobs = "--jobs=1" },
+            .{ .suffix = "default", .jobs = null },
+        };
+        var stores: [variants.len]PackStoreFiles = @splat(.{});
+        defer for (&stores) |*store| store.deinit(allocator);
+        for (variants, 0..) |variant, variant_index| {
+            const cache_root = std.fmt.allocPrint(allocator, "{s}/pack_store_repro_{d}_{s}_cache", .{ env.dirs.work_dir, app_index, variant.suffix }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate cache root: {}", .{err});
+            std.Io.Dir.cwd().createDirPath(io, cache_root) catch |err|
+                return customInfraFailure(allocator, timer, "failed to create {s}: {}", .{ cache_root, err });
+            var store_env = CaseEnv{
+                .dirs = env.dirs,
+                .env_map = env.env_map.clone(allocator) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to clone pack store environment: {}", .{err}),
+            };
+            defer store_env.env_map.deinit();
+            for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+                store_env.env_map.put(key, cache_root) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to set the cache root: {}", .{err});
+            }
+            const output_path = std.fmt.allocPrint(allocator, "{s}/pack_store_repro_{d}_{s}", .{ env.dirs.work_dir, app_index, variant.suffix }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+            const out_arg = outputArg(allocator, output_path) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+            const args: []const []const u8 = if (variant.jobs) |jobs|
+                &.{ "build", "--opt=dev", jobs, out_arg }
+            else
+                &.{ "build", "--opt=dev", out_arg };
+            if (runRocAndCheck(io, allocator, &store_env, timer, timeout_ms, .{
+                .args = args,
+                .roc_file = roc_file,
+                .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+                .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+            })) |failure| return failure;
+            stores[variant_index] = PackStoreFiles.read(io, allocator, cache_root) catch |err|
+                return customInfraFailure(allocator, timer, "failed to read the packs under {s}: {}", .{ cache_root, err });
+        }
+
+        if (stores[0].paths.items.len == 0) {
+            return customFailure(allocator, timer, "{s}: the cached build wrote no packs", .{roc_file});
+        }
+        for (stores[0].paths.items, stores[0].contents.items) |path, bytes| {
+            const other = stores[1].find(path) orelse
+                return customFailure(allocator, timer, "{s}: pack {s} was written with --jobs=1 but not with the default worker count", .{ roc_file, path });
+            if (!std.mem.eql(u8, bytes, other)) {
+                return customFailure(allocator, timer, "{s}: pack {s} differs between --jobs=1 and the default worker count", .{ roc_file, path });
+            }
+        }
+        for (stores[1].paths.items) |path| {
+            if (stores[0].find(path) == null) {
+                return customFailure(allocator, timer, "{s}: pack {s} was written with the default worker count but not with --jobs=1", .{ roc_file, path });
+            }
         }
     }
     return null;

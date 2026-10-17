@@ -809,7 +809,7 @@ test "cleanupPersistentCache deletes old cache files at each family depth" {
     try Dir.cwd().access(std.testing.io, wasm_host_lock, .{});
 }
 
-fn writeTestFile(dir_path: []const u8, name: []const u8, data: []const u8, last_use_ns: i128) !void {
+fn writeTestFile(dir_path: []const u8, name: []const u8, data: []const u8, last_use_ns: i128) (Dir.CreateDirPathError || Dir.OpenError || Dir.WriteFileError || Dir.SetTimestampsError)!void {
     try Dir.cwd().createDirPath(std.testing.io, dir_path);
     var dir = try Dir.cwd().openDir(std.testing.io, dir_path, .{});
     defer dir.close(std.testing.io);

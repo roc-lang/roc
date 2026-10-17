@@ -572,6 +572,30 @@ already digest, so such a platform procedure is shared exactly as widely as
 the app procedures it reaches; every other platform procedure keeps one
 identity across apps.
 
+Names a procedure's code carries for the procedures it was built from are
+content identities too. A fused call variant (`body_clone.cloneCallVariant`)
+digests its leading arguments' and return's layouts by content, never by
+layout index. An inline scope names the procedure it inlined by identity
+(`InlineScope.source_identity`): the procedure's own `ProcIdentity` for a
+scope LIR inlining made, and a digest of the lifted function's checked source
+for a scope SpecConstr made. The LLVM backend names inlined debug subprograms
+and source frames from it.
+
+### Object Cache Store
+
+Packs live under `<cache root>/<compiler version>/objects-v<pack format>/
+<target>-<opt>/<local|pkg>/<module identity>/<key>.rpk`. A pack's path is a
+function of its content, so a writer stages it beside its path, renames it
+into place, and leaves a pack already present alone; builds with runtime
+safety compare the bytes they would have written with the pack in place. The
+background sweep (`cache_cleanup.sweep`) deletes every `objects-v*` namespace
+of a format other than the compiler's own, ages the current namespace's
+`local/` packs (rewritten by every edit) on one day and its `pkg/` packs on
+thirty, by last use (`max(atime, mtime)`), and then deletes the least
+recently used persistent cache files of every family until the cache fits
+`CacheConfig.max_size_mb`. Eviction only deletes files; it never changes what
+a build writes.
+
 ### Read-Only Type Analysis
 
 Read-only type analysis must not use permanent solver allocation as scratch.
@@ -14760,6 +14784,16 @@ checked source identity. A record keeps whichever requester reserved it, so a
 requester-derived component in either identity would make two programs that
 reach one specialization through differently annotated call sites disagree—one
 key naming two procedure identities.
+
+The keys a program offers are the keys of its requests, whatever order the
+requests arrive in. A record's body can solve to a type more specific than the
+request that reserved it, and the record then serves a later request at that
+solved type through its solved view. Had the later request arrived first, it
+would have reserved its own record under its own key. So the index remembers
+every request it served through a solved view (`SpecBuilder.solvedViewHits`),
+Monotype turns each closed one into a key alias (`SpecKeyAliases`), and Direct
+LIR lists the record's procedure under the alias key as well, unless the
+program already lists that key for a record of its own.
 
 A procedure identity hashes its source specialization, ABI choices, and solved
 argument, result, and capture types; the one exception is the plain procedure

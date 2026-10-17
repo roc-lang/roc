@@ -62,7 +62,8 @@ pub const Store = struct {
     }
 
     /// Stage the pack beside its final path and rename it into place. A
-    /// pack already present is left alone: it holds the same bytes.
+    /// pack already present is left alone: it holds the same bytes, which
+    /// builds with runtime safety check.
     pub fn write(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
         const dir = try self.identityDir(origin, identity);
         defer self.allocator.free(dir);
@@ -72,7 +73,10 @@ pub const Store = struct {
         };
         const path = try self.packPath(origin, identity, key);
         defer self.allocator.free(path);
-        if (self.roc_ctx.fileExists(path)) return;
+        if (self.roc_ctx.fileExists(path)) {
+            if (std.debug.runtime_safety) try self.verifyCollision(path, bytes);
+            return;
+        }
         const temp_path = try std.fmt.allocPrint(self.allocator, "{s}.tmp", .{path});
         defer self.allocator.free(temp_path);
         self.roc_ctx.writeFile(temp_path, bytes) catch |err| {
@@ -83,6 +87,20 @@ pub const Store = struct {
             self.reportWriteFailure("publish staging file", temp_path, bytes.len, err);
             return error.PackWriteFailed;
         };
+    }
+
+    /// A pack's path is a function of its content, so the pack a writer
+    /// finds already in place holds the bytes it would have written. A pack
+    /// the sweep removed in the meantime has nothing left to compare.
+    fn verifyCollision(self: *const Store, path: []const u8, bytes: []const u8) Allocator.Error!void {
+        const existing = self.roc_ctx.readFile(path, self.allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return,
+        };
+        defer self.allocator.free(existing);
+        if (!std.mem.eql(u8, existing, bytes)) {
+            @import("base").invariant("object-cache pack {s} already holds different bytes", .{path});
+        }
     }
 
     fn reportWriteFailure(self: *const Store, operation: []const u8, path: []const u8, byte_count: usize, err: (CoreCtx.MakePathError || CoreCtx.WriteError || CoreCtx.RenameError)) void {
@@ -351,6 +369,8 @@ test "the cache sweep finds and ages the packs the store writes" {
     const pkg_identity = @as([32]u8, @splat(2));
     const key = @as([32]u8, @splat(3));
     try store.write(.local, local_identity, key, "local pack");
+    try store.write(.pkg, pkg_identity, key, "pkg pack");
+    // A second writer of the same pack finds it in place with its bytes.
     try store.write(.pkg, pkg_identity, key, "pkg pack");
     try std.testing.expect(try store.has(.local, local_identity, key));
     try std.testing.expect(try store.has(.pkg, pkg_identity, key));

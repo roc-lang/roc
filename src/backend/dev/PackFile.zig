@@ -4,7 +4,8 @@
 //! The encoding is a pure function of its inputs (fixed-width little-endian
 //! integers, length-prefixed bytes, artifacts in set order, specs in table
 //! order), so two builds of the same module write identical files and the
-//! store's rename-into-place protocol never has to compare contents.
+//! store's rename-into-place protocol leaves a pack already in place alone
+//! (builds with runtime safety compare the bytes).
 //!
 //! Line entries preserve exact SourceLoc values and order. Their file indices
 //! are meaningful only with the originating LIR source-file domain; a persistent
