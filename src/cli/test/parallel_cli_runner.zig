@@ -433,6 +433,7 @@ const CustomCase = enum {
     boxed_closure_object_cache,
     spliced_procedure_debug_lines,
     linked_object_pack,
+    run_object_cache,
     proc_identity_object_cache,
     edited_lambda_object_cache,
     edited_nominal_object_cache,
@@ -2995,6 +2996,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "object cache: editing an app lambda's body keeps the package specializations that receive it cached, calling the edited lambda", .timeout_ms = 600_000, .body = .{ .custom = .edited_lambda_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: an edited app is served higher-order specializations by their procedure identity", .timeout_ms = 600_000, .body = .{ .custom = .proc_identity_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: a dev build links a URL package's optimized object pack and behaves like the uncached build", .timeout_ms = 900_000, .body = .{ .custom = .linked_object_pack } },
+    .{ .id = 0, .suite = .subcommands, .name = "object cache: roc run links URL package objects into its host executable and splices the app's dev packs", .timeout_ms = 900_000, .body = .{ .custom = .run_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: spliced procedures keep the debug lines of the cold build", .timeout_ms = 600_000, .body = .{ .custom = .spliced_procedure_debug_lines } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: exports taking and returning boxed closures are offered and served warm", .timeout_ms = 600_000, .body = .{ .custom = .boxed_closure_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev writes identical object-cache packs across thread counts", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_store_thread_count_reproducible } },
@@ -4878,6 +4880,7 @@ fn runCustomCase(
         .boxed_closure_object_cache => customBoxedClosureObjectCache(io, allocator, &env, &timer, timeout_ms),
         .spliced_procedure_debug_lines => customSplicedProcedureDebugLines(io, allocator, &env, &timer, timeout_ms),
         .linked_object_pack => customLinkedObjectPack(io, allocator, &env, &timer, timeout_ms),
+        .run_object_cache => customRunObjectCache(io, allocator, &env, &timer, timeout_ms),
         .proc_identity_object_cache => customProcIdentityObjectCache(io, allocator, &env, &timer, timeout_ms),
         .edited_lambda_object_cache => customEditedLambdaObjectCache(io, allocator, &env, &timer, timeout_ms),
         .edited_nominal_object_cache => customEditedNominalObjectCache(io, allocator, &env, &timer, timeout_ms),
@@ -8217,6 +8220,72 @@ fn customLinkedObjectPack(
         }
     }
     if (object_packs == 0) return customFailure(allocator, timer, "no optimized object pack was written", .{});
+    return null;
+}
+
+/// `roc run` reads the object cache: its host executable links a URL
+/// package's optimized object pack, which the streamed image calls by name,
+/// and its image splices the dev packs a build of the same app wrote. Every
+/// run prints exactly what a run without the store prints.
+fn customRunObjectCache(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    if (builtin.os.tag != .linux and builtin.os.tag != .macos) {
+        return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "optimized object packs link on ELF and Mach-O hosts" };
+    }
+    const cache_root = std.fmt.allocPrint(allocator, "{s}/run_object_cache", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate cache root: {}", .{err});
+    seedLinkedObjectPackage(io, allocator, cache_root) catch |err|
+        return customInfraFailure(allocator, timer, "failed to seed the URL package: {}", .{err});
+    var store_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone the store environment: {}", .{err}),
+    };
+    defer store_env.env_map.deinit();
+    for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+        store_env.env_map.put(key, cache_root) catch |err|
+            return customInfraFailure(allocator, timer, "failed to set the cache root: {}", .{err});
+    }
+    store_env.env_map.put("ROC_PACK_STATS", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable pack statistics: {}", .{err});
+
+    const method_exe = std.fmt.allocPrint(allocator, "{s}/run_object_cache_method", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+    const method_out = outputArg(allocator, method_exe) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+    const Step = struct { roc_file: []const u8, args: []const []const u8, stdout: []const u8, counter: ?[]const u8 };
+    const steps = [_]Step{
+        .{ .roc_file = "test/cli/linked_object_pack/App.roc", .args = &.{ "run", "--no-cache", "--opt=dev" }, .stdout = "sum of squares to 10: 385\n506\n", .counter = null },
+        .{ .roc_file = "test/cli/linked_object_pack/App.roc", .args = &.{ "run", "--opt=dev" }, .stdout = "sum of squares to 10: 385\n506\n", .counter = "linked procs: " },
+        .{ .roc_file = "test/cli/linked_object_pack/App.roc", .args = &.{ "run", "--opt=dev" }, .stdout = "sum of squares to 10: 385\n506\n", .counter = "linked procs: " },
+        // A build writes the app's dev packs; a run is served from them.
+        .{ .roc_file = "test/cli/proc_identity_object_cache/Method.roc", .args = &.{ "build", "--opt=dev", method_out }, .stdout = "", .counter = null },
+        .{ .roc_file = "test/cli/proc_identity_object_cache/Method.roc", .args = &.{ "run", "--opt=dev" }, .stdout = "total 15\n", .counter = "external procs: " },
+    };
+    for (steps) |step| {
+        const step_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a run");
+        const ran = runRocInEnv(io, allocator, &store_env, step.args, step.roc_file, .relative, &.{}, null, step_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "run spawn error: {}", .{err});
+        if (!processSucceeded(ran.term) or std.mem.find(u8, ran.stderr, "panic") != null) {
+            return failureFromRun(allocator, timer, ran, "the command did not succeed");
+        }
+        if (step.stdout.len != 0 and !std.mem.eql(u8, ran.stdout, step.stdout)) {
+            return failureFromRun(allocator, timer, ran, "the run printed something other than an uncached run prints");
+        }
+        if (step.counter) |marker| {
+            const at = std.mem.find(u8, ran.stderr, marker) orelse
+                return failureFromRun(allocator, timer, ran, "the cached run did not report pack statistics");
+            if (countAfterMarker(ran.stderr[at + marker.len ..]) == 0) {
+                return failureFromRun(allocator, timer, ran, "the cached run took no object-cache entry");
+            }
+        }
+    }
     return null;
 }
 

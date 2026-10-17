@@ -1463,6 +1463,8 @@ fn generatePlatformHostShimFromLirData(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
     platform_entrypoints: []const lir.LirImage.PlatformEntrypoint,
+    /// The C-ABI entries of object-cache objects linked beside the shim.
+    package_symbols: []const []const u8,
     embedded_lir_image: ?[]const u8,
     image_cache_len: usize,
     default_run_start: bool,
@@ -1508,6 +1510,7 @@ fn generatePlatformHostShimFromLirData(
         "roc_platform_shim",
         shim_entrypoints,
         hosted_symbols,
+        package_symbols,
         embedded_lir_image,
         default_run_start,
     ) catch |err| {
@@ -1523,6 +1526,11 @@ fn generatePlatformHostShimFromLirData(
     const abi_digest = try entrypointAbiDigestFromLirData(ctx, store, layouts, platform_entrypoints, target);
     hash.update(&abi_digest);
     for (hosted_symbols) |symbol| {
+        hash.update(symbol);
+        hash.update(&[_]u8{0});
+    }
+    hash.update("packages");
+    for (package_symbols) |symbol| {
         hash.update(symbol);
         hash.update(&[_]u8{0});
     }
@@ -1641,6 +1649,7 @@ fn generatePlatformHostShim(
         &view.store,
         &view.layouts,
         view.platform_entrypoints,
+        &.{},
         if (embed_image) lir_image else null,
         lir_image.len,
         default_run_start,
@@ -2842,6 +2851,12 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
     var checked_host_identity: [32]u8 = undefined;
     var diagnostics = CheckDiagnosticCounts{};
 
+    // A dev run reads the object cache: its image splices the dev packs'
+    // entries, and its host executable links its URL packages' objects.
+    const run_object_cache: ?*RunObjectCache = if (args.opt == .dev and !args.no_cache) try RunObjectCache.create(ctx, false) else null;
+    defer if (run_object_cache) |cache| cache.destroy(ctx.gpa);
+    var run_package_objects: RunPackageObjects = .{};
+
     // The platform is the one package resolution selected, after applying
     // `--replace-dep`, so the host linked below belongs to the platform the
     // app was checked against. Lowering precedes linking so the host shim uses
@@ -2875,8 +2890,22 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                     args.opt,
                     specialization_strategy,
                     &reporter,
+                    run_object_cache,
                 );
                 const result = if (lowered_result) |*value| value else unreachable;
+                if (run_object_cache) |cache| {
+                    run_package_objects = try RunPackageObjects.collect(ctx.arena, cache);
+                    // Cache statistics are diagnostic output, printed only on request.
+                    if (std.c.getenv("ROC_PACK_STATS") != null) {
+                        var external_procs: usize = 0;
+                        var linked_procs: usize = 0;
+                        for (result.lowered.lir_result.store.getProcSpecs()) |proc| {
+                            if (proc.external) external_procs += 1;
+                            if (proc.c_abi_entry) linked_procs += 1;
+                        }
+                        std.debug.print("pack hits: {d} external procs: {d} linked procs: {d} linked objects: {d}\n", .{ cache.packs.hits, external_procs, linked_procs, run_package_objects.objects.len });
+                    }
+                }
                 entrypoint_names = result.entrypoint_names;
                 hosted_symbols = result.hosted_symbols;
                 checked_host_identity = result.checked_host_identity;
@@ -2892,6 +2921,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                     args.opt,
                     specialization_strategy,
                     &reporter,
+                    null,
                 );
                 defer lowered.deinit();
                 const shm_result = try publishLirImage(ctx, &lowered);
@@ -3016,6 +3046,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                     &lowered.lir_result.store,
                     &lowered.lir_result.layouts,
                     platform_entrypoints,
+                    run_package_objects.symbols,
                     null,
                     0,
                     false,
@@ -3097,6 +3128,14 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                         object_files.append(path) catch {
                             return error.OutOfMemory;
                         };
+                    }
+                    // The object-cache objects whose entries the image calls.
+                    for (run_package_objects.objects, 0..) |object, index| {
+                        const object_path = try std.fs.path.join(ctx.arena, &.{ temp_dir_path, try std.fmt.allocPrint(ctx.arena, "roc_pack_{d}.o", .{index}) });
+                        backend.writeFileWindowsAvSafe(ctx.io.std_io, object_path, object) catch |err| {
+                            return ctx.fail(.{ .file_write_failed = .{ .path = object_path, .err = err } });
+                        };
+                        try object_files.append(object_path);
                     }
                 },
                 .win_gui => {
@@ -3189,7 +3228,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         const result = if (lowered_result) |*value| value else unreachable;
         const lowered = &result.lowered;
         const internal_static_data = successfulInternalStaticData(result, "default roc command");
-        shm_handle_opt = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered, internal_static_data, args.watch);
+        shm_handle_opt = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered, internal_static_data, if (run_object_cache) |cache| cache.packs.spliceSource() else null, args.watch);
     }
 
     const shm_handle = shm_handle_opt orelse {
@@ -3688,6 +3727,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
         resolutionConfigFromLimits(args.resolve_limits),
         !args.no_cache,
         &reporter,
+        null,
     );
     defer lowered_result.deinit();
 
@@ -3755,6 +3795,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
             platform_entrypoints,
+            &.{},
             null,
             0,
             true,
@@ -3804,7 +3845,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
     // Default apps never hot reload—they compile through throwaway synthetic
     // source files, so there is nothing stable to reload. They just run once.
     const internal_static_data = successfulInternalStaticData(&lowered_result, "default app run");
-    const shm_handle = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered, internal_static_data, false);
+    const shm_handle = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered, internal_static_data, null, false);
     defer closeSharedMemoryHandle(shm_handle);
 
     const termination = if (comptime is_windows)
@@ -6098,6 +6139,10 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         break :blk null;
     };
 
+    // The running host links the same object packs the first generation's
+    // did; a rebuild needing others changes the host identity below.
+    const run_object_cache: ?*RunObjectCache = if (source_rewrite == null and !args.no_cache) try RunObjectCache.create(ctx, false) else null;
+    defer if (run_object_cache) |cache| cache.destroy(ctx.gpa);
     var lowered_result = try lowerLirWithBuildEnv(
         ctx,
         ctx.gpa,
@@ -6111,6 +6156,7 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         resolutionConfigFromLimits(args.resolve_limits),
         !args.no_cache,
         null,
+        run_object_cache,
     );
     defer lowered_result.deinit();
 
@@ -6136,6 +6182,7 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         lowered_result.entrypoint_names,
         lowered,
         successfulInternalStaticData(&lowered_result, "hot reload compiler"),
+        if (run_object_cache) |cache| cache.packs.spliceSource() else null,
         .{
             .generation = args.generation,
             .descriptor_offset = args.descriptor_offset,
@@ -6156,6 +6203,7 @@ fn writeDevRunImageToSharedMemory(
     entrypoint_names: []const []const u8,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     internal_static_data: []const backend.StaticDataExport,
+    splice_source: ?backend.dev.SpliceSource,
     hot_reload_allocation: ?HotReloadImageAllocation,
 ) CliMainError!DevRunImagePublication {
     if (comptime !backend.host_lir_codegen_available) {
@@ -6201,6 +6249,52 @@ fn writeDevRunImageToSharedMemory(
         codegen.enable_hot_reload = hot_reload_allocation != null;
 
         const proc_specs = store.getProcSpecs();
+        // The object-cache entries this program was served are placed first,
+        // with the data their code carries.
+        var spliced_data = std.ArrayList(backend.dev.ProcArtifact.DataItem).empty;
+        defer spliced_data.deinit(ctx.gpa);
+        if (splice_source) |source| {
+            var external_procs = std.ArrayList(lir.LIR.LirProcSpecId).empty;
+            defer external_procs.deinit(ctx.gpa);
+            for (proc_specs, 0..) |proc, index| {
+                if (proc.external and !proc.c_abi_entry) try external_procs.append(ctx.gpa, @fromBackingInt(@intCast(@as(u32, @intCast(index)))));
+            }
+            try backend.dev.spliceExternalProcs(backend.HostLirCodeGen, ctx.gpa, &codegen, proc_specs, external_procs.items, source, &spliced_data);
+        }
+        var spliced_relocations = std.ArrayList([]backend.StaticDataRelocation).empty;
+        defer {
+            for (spliced_relocations.items) |relocations| ctx.gpa.free(relocations);
+            spliced_relocations.deinit(ctx.gpa);
+        }
+        {
+            var defined = std.StringHashMap(void).init(ctx.gpa);
+            defer defined.deinit();
+            for (readonly_data.items) |data_export| try defined.put(data_export.symbol_name, {});
+            for (spliced_data.items) |item| {
+                if ((try defined.getOrPut(item.name)).found_existing) continue;
+                const relocations = try ctx.gpa.alloc(backend.StaticDataRelocation, item.relocations.len);
+                spliced_relocations.append(ctx.gpa, relocations) catch |err| {
+                    ctx.gpa.free(relocations);
+                    return err;
+                };
+                for (item.relocations, relocations) |relocation, *out| out.* = .{
+                    .offset = relocation.offset,
+                    .target_symbol_name = relocation.name,
+                    .target = .named,
+                    .addend = relocation.addend,
+                    .kind = if (relocation.function) .function_pointer else .address,
+                };
+                try readonly_data.append(ctx.gpa, .{
+                    .symbol_name = item.name,
+                    .bytes = item.bytes,
+                    .symbol_offset = item.symbol_offset,
+                    .alignment = item.alignment,
+                    .is_global = false,
+                    .is_exported = false,
+                    .relocations = relocations,
+                });
+            }
+        }
         try codegen.compileAllProcSpecs(proc_specs);
 
         const static_rc_helpers = try backend.collectRequiredRcHelpers(ctx.gpa, readonly_data.items);
@@ -6214,7 +6308,7 @@ fn writeDevRunImageToSharedMemory(
 
         const code_symbols = try ctx.gpa.alloc(
             backend.RunImage.CodeSymbolInput,
-            runtime_proc_count + static_rc_helpers.len,
+            runtime_proc_count + static_rc_helpers.len + codegen.spliced_helper_offsets.count(),
         );
         var initialized_code_symbols: usize = 0;
         defer {
@@ -6249,6 +6343,20 @@ fn writeDevRunImageToSharedMemory(
             code_symbols[initialized_code_symbols] = .{
                 .name = try backend.atomicRcHelperSymbolName(ctx.gpa, layouts, helper_key),
                 .code_offset = code_offset,
+            };
+            initialized_code_symbols += 1;
+        }
+        // Refcount helpers spliced object-cache code carries, which its data
+        // may name.
+        var named = std.StringHashMap(void).init(ctx.gpa);
+        defer named.deinit();
+        for (code_symbols[0..initialized_code_symbols]) |symbol| try named.put(symbol.name, {});
+        var spliced_helpers = codegen.spliced_helper_offsets.iterator();
+        while (spliced_helpers.next()) |helper| {
+            if (named.contains(helper.key_ptr.*)) continue;
+            code_symbols[initialized_code_symbols] = .{
+                .name = try ctx.gpa.dupe(u8, helper.key_ptr.*),
+                .code_offset = helper.value_ptr.*,
             };
             initialized_code_symbols += 1;
         }
@@ -6313,7 +6421,7 @@ fn writeDevRunImageToSharedMemory(
                 allocation.region_start,
                 generated_code,
                 entrypoints,
-                code_symbols,
+                code_symbols[0..initialized_code_symbols],
                 codegen.getSymbolNames(),
                 relocations,
                 readonly_data.items,
@@ -6345,7 +6453,7 @@ fn writeDevRunImageToSharedMemory(
             shm.page_size,
             generated_code,
             entrypoints,
-            code_symbols,
+            code_symbols[0..initialized_code_symbols],
             codegen.getSymbolNames(),
             relocations,
             readonly_data.items,
@@ -6380,6 +6488,7 @@ fn publishDevRunImage(
     entrypoint_names: []const []const u8,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     internal_static_data: []const backend.StaticDataExport,
+    splice_source: ?backend.dev.SpliceSource,
     enable_hot_reload: bool,
 ) CliMainError!SharedMemoryHandle {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
@@ -6410,6 +6519,7 @@ fn publishDevRunImage(
         entrypoint_names,
         lowered,
         internal_static_data,
+        splice_source,
         hot_reload_allocation,
     );
     if (enable_hot_reload) {
@@ -6562,6 +6672,7 @@ fn lowerLirWithBuildEnv(
     resolution_config: compile.package_resolution.Config,
     enable_checked_cache: bool,
     reporter: ?*progress.Reporter,
+    object_cache: ?*RunObjectCache,
 ) CliMainError!LoweredCoordinatorResult {
     var build_env = try initRunBuildEnv(ctx, .{
         .source_dir_override = source_dir_override,
@@ -6574,7 +6685,7 @@ fn lowerLirWithBuildEnv(
     defer build_env.deinit();
     const display_path = runDisplayPath(roc_file_path, synthetic_default_app);
     try discoverRunDependencies(ctx, &build_env, roc_file_path, display_path, reporter);
-    return lowerDiscoveredLir(ctx, &build_env, lir_allocator, artifact, display_path, opt, specialization_strategy, reporter);
+    return lowerDiscoveredLir(ctx, &build_env, lir_allocator, artifact, display_path, opt, specialization_strategy, reporter, object_cache);
 }
 
 /// What configures the build environment behind a run's checked program.
@@ -6674,6 +6785,100 @@ fn discoverRunDependencies(
 }
 
 /// Check and lower a discovered run to its runtime artifact.
+/// The object cache a `roc run` dev program reads: the host's dev packs,
+/// spliced into its image, and the optimized object packs of its URL
+/// packages, linked into its host executable. The image is compiled after
+/// the build environment that loads the packs is gone, so this outlives it,
+/// and its fields stay where the packs' loader points at them.
+const RunObjectCache = struct {
+    store: pack_store.Store,
+    linked_store: ?pack_store.Store,
+    packs: pack_store.LoadedPacks,
+
+    /// Null without a cache root.
+    fn create(ctx: *CliCtx, verbose: bool) Allocator.Error!?*RunObjectCache {
+        const config = CacheConfig{ .enabled = true, .verbose = verbose, .roc_ctx = ctx.coreCtx() };
+        const native = RocTarget.detectNative();
+        var store = pack_store.Store.init(ctx.gpa, config, native, @tagName(cli_args.OptLevel.dev)) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.NoHomeDirectory => return null,
+        };
+        errdefer store.deinit();
+        var linked_store: ?pack_store.Store = if (llvm_available) pack_store.Store.init(ctx.gpa, config, native, linked_pack_policy) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.NoHomeDirectory => return null,
+        } else null;
+        errdefer if (linked_store) |*linked| linked.deinit();
+        const self = try ctx.gpa.create(RunObjectCache);
+        self.* = .{ .store = store, .linked_store = linked_store, .packs = pack_store.LoadedPacks.init(ctx.gpa) };
+        return self;
+    }
+
+    fn destroy(self: *RunObjectCache, gpa: Allocator) void {
+        self.packs.deinit();
+        if (self.linked_store) |*linked| linked.deinit();
+        self.store.deinit();
+        gpa.destroy(self);
+    }
+
+    /// Load the packs of `build_env`'s modules once checking has produced
+    /// them.
+    fn attach(self: *RunObjectCache, io: std.Io, build_env: *BuildEnv) void {
+        self.packs.pending = .{
+            .store = &self.store,
+            .linked_store = if (self.linked_store) |*linked| linked else null,
+            .io = io,
+            .build_env = build_env,
+        };
+    }
+
+    /// Load the object packs the host executable links, then stop reading
+    /// the build environment, which does not outlive lowering.
+    fn detach(self: *RunObjectCache) void {
+        _ = self.packs.loadedObjectPacks();
+        self.packs.pending = null;
+    }
+
+    fn codeProvision(self: *const RunObjectCache) lir.CheckedPipeline.CodeProvision {
+        return if (self.linked_store != null) .host_linked_dev_objects else .host_dev_objects;
+    }
+};
+
+/// The object-cache objects a `roc run` host executable links, and the C-ABI
+/// entries in them an image may call.
+const RunPackageObjects = struct {
+    objects: []const []const u8 = &.{},
+    symbols: []const []const u8 = &.{},
+
+    fn collect(arena: Allocator, cache: *RunObjectCache) Allocator.Error!RunPackageObjects {
+        const packs = cache.packs.loadedObjectPacks();
+        const objects = try arena.alloc([]const u8, packs.len);
+        var symbols = std.ArrayList([]const u8).empty;
+        var seen = std.StringHashMap(void).init(arena);
+        for (packs, objects) |pack, *object| {
+            object.* = pack.object;
+            for (pack.specs) |spec| {
+                var buffer: [lir.ProcIdentity.symbol_name_len]u8 = undefined;
+                const name = try arena.dupe(u8, pack.identities[spec.artifact].writeCAbiEntryName(&buffer));
+                if ((try seen.getOrPut(name)).found_existing) continue;
+                try symbols.append(arena, name);
+            }
+        }
+        return .{ .objects = objects, .symbols = try symbols.toOwnedSlice(arena) };
+    }
+
+    /// What the host executable's identity adds for these objects, so a
+    /// cached host links the same ones and a hot reload rebuild serves only
+    /// entries the running host links.
+    fn digest(self: RunPackageObjects) [32]u8 {
+        var hasher = base.Sha256.init(.{});
+        updateHashBytes(&hasher, "roc-run-package-objects-v1");
+        updateHashU32(&hasher, @intCast(self.objects.len));
+        for (self.objects) |object| updateHashBytes(&hasher, object);
+        return hasher.finalResult();
+    }
+};
+
 fn lowerDiscoveredLir(
     ctx: *CliCtx,
     build_env: *BuildEnv,
@@ -6683,14 +6888,22 @@ fn lowerDiscoveredLir(
     opt: cli_args.OptLevel,
     specialization_strategy: base.SpecializationStrategy,
     reporter: ?*progress.Reporter,
+    object_cache: ?*RunObjectCache,
 ) CliMainError!LoweredCoordinatorResult {
-    build_env.setRuntimeLowering(checkedRuntimeLoweringConfig(
+    var runtime_lowering = checkedRuntimeLoweringConfig(
         .{ .platform_entrypoints = artifact },
         opt,
         specialization_strategy,
         base.target.TargetUsize.native,
         false,
-    ));
+    );
+    if (object_cache) |cache| {
+        cache.attach(ctx.io.std_io, build_env);
+        runtime_lowering.target.spec_cache = cache.packs.specCacheLookup();
+        runtime_lowering.target.code_provision = cache.codeProvision();
+    }
+    defer if (object_cache) |cache| cache.detach();
+    build_env.setRuntimeLowering(runtime_lowering);
 
     if (reporter) |r| r.begin("Type Checking");
     build_env.compileDiscovered() catch |err| {
@@ -6717,6 +6930,12 @@ fn lowerDiscoveredLir(
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
 
+    // A URL package's optimized pack is built once its modules are checked
+    // and before this program lowers, so this run already links it.
+    if (object_cache) |cache| if (cache.linked_store) |*store| {
+        try writeLinkedPacksToStore(ctx, build_env, store, root_artifact, imported_artifacts, relation_artifacts, specialization_strategy, RocTarget.detectNative());
+    };
+
     if (reporter) |r| r.begin(loweringProgressLabel(specialization_strategy));
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     if (reporter != null and reporter.?.always) spec_timing.enableDetailedMonotypeBody();
@@ -6734,8 +6953,8 @@ fn lowerDiscoveredLir(
         build_env.postCheckExecutor(),
         &spec_timing,
         build_env.runtimeProgramSession(),
-        null,
-        .source_bodies,
+        if (object_cache) |cache| cache.packs.specCacheLookup() else null,
+        if (object_cache) |cache| cache.codeProvision() else .source_bodies,
     );
     errdefer lowered.deinit();
     if (reporter) |r| finishPostCheckLowering(r, &spec_timing, specialization_strategy);
@@ -6763,7 +6982,7 @@ fn lowerDiscoveredLir(
     );
     const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
     defer ctx.gpa.free(platform_entrypoints);
-    const checked_host_identity = try checkedInterpreterHostIdentity(
+    const interface_identity = try checkedInterpreterHostIdentity(
         ctx.gpa,
         root_artifact,
         &lowered.lir_result.store,
@@ -6773,6 +6992,13 @@ fn lowerDiscoveredLir(
         lowered.target_usize,
         hosted_table,
     );
+    // The host executable links the object packs the image may call into.
+    const checked_host_identity = if (object_cache) |cache| identity: {
+        var hasher = base.Sha256.init(.{});
+        hasher.update(&interface_identity);
+        hasher.update(&(try RunPackageObjects.collect(ctx.arena, cache)).digest());
+        break :identity hasher.finalResult();
+    } else interface_identity;
 
     return .{
         .lowered = lowered,
@@ -6817,6 +7043,7 @@ pub fn buildLirImageWithBuildEnv(
         resolution_config,
         enable_checked_cache,
         reporter,
+        null,
     );
     defer lowered_result.deinit();
     return publishLirImage(ctx, &lowered_result);
@@ -8179,11 +8406,10 @@ fn lowerModulePack(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     roots: []const check.CheckedArtifact.RootRequest,
     opt: cli_args.OptLevel,
-    args: cli_args.BuildArgs,
+    specialization_strategy: base.SpecializationStrategy,
     target: RocTarget,
 ) CliMainError!LoweredModulePack {
     const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
-    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
     const own_imports = try build_env.collectImportedArtifactViews(ctx.gpa, artifact);
     defer ctx.gpa.free(own_imports);
     // A platform's internal modules bind their hosted functions through the
@@ -8241,7 +8467,7 @@ fn compileModulePack(
     target: RocTarget,
 ) CliMainError!ModulePack {
     const module_name = artifact.canonical_names.moduleNameText(artifact.module_identity.module_name);
-    const pack = try lowerModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args.opt, args, target);
+    const pack = try lowerModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args.opt, currentRuntimeSpecializationStrategy(args.specialization_strategy), target);
     var lowered = pack.lowered;
     errdefer lowered.deinit();
     const static_data_exports = pack.static_data_exports;
@@ -8362,7 +8588,7 @@ fn writeLinkedPacksToStore(
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     app_imports: []const check.CheckedArtifact.ImportedModuleView,
     app_relations: []const check.CheckedArtifact.ImportedModuleView,
-    args: cli_args.BuildArgs,
+    specialization_strategy: base.SpecializationStrategy,
     target: RocTarget,
 ) CliMainError!void {
     const artifacts = try build_env.collectVisibleArtifacts(ctx.gpa, root_artifact);
@@ -8374,7 +8600,7 @@ fn writeLinkedPacksToStore(
         const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
         defer ctx.gpa.free(roots);
         if (roots.len == 0) continue;
-        const bytes = (try compileModuleObjectPack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args, target)) orelse continue;
+        const bytes = (try compileModuleObjectPack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, specialization_strategy, target)) orelse continue;
         defer ctx.gpa.free(bytes);
         store.write(placement.origin, placement.identity, artifact.codeGenerationKey().bytes, bytes) catch |err| {
             std.log.warn("object cache could not store a module's optimized pack: {}", .{err});
@@ -8396,11 +8622,11 @@ fn compileModuleObjectPack(
     app_relations: []const check.CheckedArtifact.ImportedModuleView,
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     roots: []const check.CheckedArtifact.RootRequest,
-    args: cli_args.BuildArgs,
+    specialization_strategy: base.SpecializationStrategy,
     target: RocTarget,
 ) CliMainError!?[]u8 {
     if (comptime !llvm_available) return null;
-    const pack = try lowerModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, .speed, args, target);
+    const pack = try lowerModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, .speed, specialization_strategy, target);
     var lowered = pack.lowered;
     defer lowered.deinit();
     defer compile.static_data_exports.deinitStaticData(ctx.gpa, pack.static_data_exports);
@@ -10926,7 +11152,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // A URL package's optimized pack is built once its modules are checked
     // and before this program lowers, so this build already links it.
     if (linked_store) |*store| {
-        if (diag.errors == 0) try writeLinkedPacksToStore(ctx, &build_env, store, root_artifact, imported_artifacts, relation_artifacts, args, target);
+        if (diag.errors == 0) try writeLinkedPacksToStore(ctx, &build_env, store, root_artifact, imported_artifacts, relation_artifacts, currentRuntimeSpecializationStrategy(args.specialization_strategy), target);
     }
     var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, if (loaded_packs) |packs| packs.specCacheLookup() else null, nativeObjectCodeProvision(target, args.opt, loaded_packs != null, linked_store != null));
     defer lowered.deinit();

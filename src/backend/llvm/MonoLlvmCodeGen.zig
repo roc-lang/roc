@@ -762,6 +762,7 @@ pub const MonoLlvmCodeGen = struct {
         module_name: []const u8,
         entrypoints: []const ShimEntrypoint,
         hosted_symbols: []const []const u8,
+        package_symbols: []const []const u8,
         image: ?[]const u8,
         default_run_start: bool,
     ) Error!GenerateResult {
@@ -824,6 +825,35 @@ pub const MonoLlvmCodeGen = struct {
         const count_var = builder.addVariable(builder.strtabString(shim_symbols.roc_shim_hosted_count) catch return error.OutOfMemory, usize_ty, .default) catch return error.OutOfMemory;
         count_var.setMutability(.constant, &builder);
         count_var.setInitializer(builder.intConst(usize_ty, hosted_symbols.len) catch return error.OutOfMemory, &builder) catch return error.OutOfMemory;
+
+        // The C-ABI entries of the object-cache objects linked beside this
+        // module, with their names, so the machine-code shim can resolve an
+        // image's call to one by name.
+        var package_fn_consts = std.ArrayList(LlvmBuilder.Constant).empty;
+        defer package_fn_consts.deinit(self.allocator);
+        var package_name_consts = std.ArrayList(LlvmBuilder.Constant).empty;
+        defer package_name_consts.deinit(self.allocator);
+        for (package_symbols) |symbol| {
+            const func = builder.addFunction(dummy_fn_ty, builder.strtabString(symbol) catch return error.OutOfMemory, .default) catch return error.OutOfMemory;
+            try package_fn_consts.append(self.allocator, func.toConst(&builder));
+            const symbol_z = self.allocator.dupeSentinel(u8, symbol, 0) catch return error.OutOfMemory;
+            defer self.allocator.free(symbol_z);
+            try package_name_consts.append(self.allocator, (try self.staticBytes(symbol_z[0 .. symbol_z.len + 1])).toConst().?);
+        }
+        if (package_symbols.len == 0) {
+            try package_fn_consts.append(self.allocator, builder.nullConst(ptr_ty) catch return error.OutOfMemory);
+            try package_name_consts.append(self.allocator, builder.nullConst(ptr_ty) catch return error.OutOfMemory);
+        }
+        const package_table_ty = builder.arrayType(@max(package_symbols.len, 1), ptr_ty) catch return error.OutOfMemory;
+        const package_fns_var = builder.addVariable(builder.strtabString(shim_symbols.roc_shim_package_fns) catch return error.OutOfMemory, package_table_ty, .default) catch return error.OutOfMemory;
+        package_fns_var.setMutability(.constant, &builder);
+        package_fns_var.setInitializer(builder.arrayConst(package_table_ty, package_fn_consts.items) catch return error.OutOfMemory, &builder) catch return error.OutOfMemory;
+        const package_names_var = builder.addVariable(builder.strtabString(shim_symbols.roc_shim_package_names) catch return error.OutOfMemory, package_table_ty, .default) catch return error.OutOfMemory;
+        package_names_var.setMutability(.constant, &builder);
+        package_names_var.setInitializer(builder.arrayConst(package_table_ty, package_name_consts.items) catch return error.OutOfMemory, &builder) catch return error.OutOfMemory;
+        const package_count_var = builder.addVariable(builder.strtabString(shim_symbols.roc_shim_package_count) catch return error.OutOfMemory, usize_ty, .default) catch return error.OutOfMemory;
+        package_count_var.setMutability(.constant, &builder);
+        package_count_var.setInitializer(builder.intConst(usize_ty, package_symbols.len) catch return error.OutOfMemory, &builder) catch return error.OutOfMemory;
 
         // Embedded LIR image bytes, when building a standalone interpreter binary.
         const image_ref: @FieldType(ShimTarget, "image") = if (image) |bytes| .{

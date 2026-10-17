@@ -678,6 +678,14 @@ pub const LoadedPacks = struct {
 
     /// The objects of every object pack that served a specialization, which
     /// the program links beside its own object.
+    /// Every optimized object pack of the modules in view, which a program
+    /// whose linked executable is built ahead of its code (`roc run`'s host)
+    /// links whole. Loads them when no lookup has.
+    pub fn loadedObjectPacks(self: *LoadedPacks) []const PackFile.ObjectPack {
+        self.ensureLinkedLoaded();
+        return self.object_packs.items;
+    }
+
     pub fn linkedObjects(self: *const LoadedPacks, allocator: Allocator) Allocator.Error![]const []const u8 {
         var objects = std.ArrayList([]const u8).empty;
         errdefer objects.deinit(allocator);

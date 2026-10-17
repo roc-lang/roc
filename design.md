@@ -621,8 +621,8 @@ program's own layout indices, and a module whose object needs the runtime at
 all gets no object pack.
 
 Only a consumer whose code is linked takes an object pack's entry
-(`CodeProvision.permitsLinkedObjects`): a `roc build --opt=dev` program,
-never compile-time evaluation or an in-memory `roc run` image, and never a
+(`CodeProvision.permitsLinkedObjects`): a `roc build --opt=dev` program or
+a `roc run --opt=dev` image, never compile-time evaluation, and never a
 producer shared with compile-time evaluation, which instead takes the dev
 entry of the same procedure and lets the linked consumer switch to the
 object's entry in Direct LIR. Such a procedure is `external` with
@@ -633,6 +633,16 @@ offers an entry whose code reaches a linked entry, so a program that splices
 dev code never needs an object it did not ask for. A build whose store lacks
 a URL-package module's object pack builds it once the module is checked and
 before the program lowers, so that build already links it.
+
+`roc run --opt=dev` links every object pack of its URL packages into the
+cached host program, beside a table of their C-ABI entries that the
+generated platform shim defines (`roc_shim_package_names`), and its image,
+streamed to that host program, calls an entry by name: the machine-code shim
+resolves it from the table as it resolves hosted functions. The object packs
+are part of the host program's identity, so editing the app reloads only
+the image, and a hot reload rebuild that would need other objects reports a
+changed host interface. The image splices the dev packs' entries the same way
+an object build does, with the data they carry.
 
 A specialization whose request mentions a function type has no
 reservation-time key: which closures it receives is decided by lambda
