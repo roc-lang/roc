@@ -895,7 +895,11 @@ pub fn Compiler(comptime Ctx: type) type {
                         i += 1;
                         continue;
                     }
-                    const run = self.runLength(rows[i..], col.occ, kind);
+                    // A guarded literal's test is a predicate of its own, so
+                    // one passing says nothing about another: each row tests
+                    // alone, and a miss anywhere in it (its test, a later
+                    // column, or its guard) continues with the rows after it.
+                    const run = if (kind == .guard_lit) 1 else self.runLength(rows[i..], col.occ, kind);
                     std.debug.assert(run > 0);
                     try segments.append(self.arena, .{ .start = i, .end = i + run, .kind = .{ .group = .{ .occ = col.occ, .ty = col.ty, .kind = kind } } });
                     i += run;

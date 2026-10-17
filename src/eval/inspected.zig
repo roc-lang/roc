@@ -1682,15 +1682,16 @@ fn lowerCheckedRootWithViews(
     const shm_allocator = shm.allocator();
     const image_header = try shm_allocator.create(LirImage.Header);
 
-    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
-        allocator,
-        .{
-            .root = check.CheckedArtifact.loweringView(root_module),
-            .imports = import_views,
-        },
-        .{ .requests = root_module.root_requests.runtime_requests },
-        lowerToLirTarget(target_usize, options),
-    );
+    const modules: lir.CheckedPipeline.CheckedModuleSet = .{
+        .root = check.CheckedArtifact.loweringView(root_module),
+        .imports = import_views,
+    };
+    const roots: lir.CheckedPipeline.RootRequestSet = .{ .requests = root_module.root_requests.runtime_requests };
+    const target = lowerToLirTarget(target_usize, options);
+    var lowered = switch (target.specialization_strategy) {
+        .lss => try lir.CheckedPipeline.lowerCheckedModulesToLir(allocator, modules, roots, target),
+        .boxy => try CompileTimeFinalization.lowerBoxyRuntime(allocator, modules, roots, target),
+    };
     defer lowered.deinit();
 
     const image_data = try @import("static_data").buildStaticDataForWidth(allocator, .{

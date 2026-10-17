@@ -13018,11 +13018,17 @@ LIR interpreter and the dev backend, and requires all four executions to agree
 on the inspect string or crash message, the `dbg` transcript, and the
 expect-failure transcript. An execution a case cannot run (a backend the case
 skips, a backend the host lacks) is counted and reported per reason, never
-silently skipped. The harness's own corpus builds its values from a mutable
-local, which is never a compile-time dependency, so each strategy's runtime
-rendering, equality, hashing, and matching run rather than a compile-time
-constant; a comptime check fails the build until every `ShapeKind` has an
-inspect, an equality, and a hashing case (or a stated exemption).
+silently skipped. An eval case whose `.boxy` executions do not yet agree is
+listed in `strategy_differential_gaps.zig` with the failure it shows and a
+reason; the harness counts these per reason, and fails on any unlisted
+failure, on a listed case that now agrees, and on an entry naming no case, so
+the list only shrinks. The harness's own corpus builds its values from a seed
+read after a `dbg` statement, which no compile-time evaluation performs, and
+requires each case to report that `dbg` at runtime, so each strategy's
+runtime rendering, equality, hashing, and matching run rather than a
+compile-time constant; a comptime check fails the build until every
+`ShapeKind` has an inspect, an equality, and a hashing case (or a stated
+exemption).
 
 The compiler does not perform production-release ABI equivalence verification
 between `.lss` and `.boxy`. Doing so would spend end-user time on an invariant

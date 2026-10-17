@@ -15,7 +15,10 @@
 //! and the harness's own cases (`strategy_differential_corpus.zig`), which pin
 //! `to_inspect` override selection, shape coverage for inspect, equality, and
 //! hashing, and match lowering. A case that a strategy or backend cannot run
-//! is counted and reported per reason, never silently skipped.
+//! is counted and reported per reason, never silently skipped. Eval cases
+//! whose `.boxy` executions do not yet agree are listed with their failure
+//! and reason in `strategy_differential_gaps.zig`; the run counts them per
+//! reason and fails on any unlisted failure and on any stale entry.
 //!
 //! Cases run through `test_harness.ProcessPool`: forked children on POSIX,
 //! persistent `--worker-stream` worker processes on Windows. Each case is
@@ -36,6 +39,7 @@ const InspectedRun = eval.InspectedRun;
 const eval_tests = @import("eval_tests.zig");
 const host_effects_tests = @import("host_effects_tests.zig");
 const corpus = @import("strategy_differential_corpus.zig");
+const known_gaps = @import("strategy_differential_gaps.zig");
 
 const posix = std.posix;
 
@@ -43,6 +47,7 @@ const RunnerError = std.mem.Allocator.Error || std.fmt.ParseIntError || test_har
     InvalidArgument,
     Diverged,
     NothingExecuted,
+    StaleKnownGap,
     UnexpectedChildFailure,
     Unexpected,
 };
@@ -100,6 +105,10 @@ const Totals = struct {
     wrong: usize = 0,
     compile_skip: usize = 0,
     child_failed: usize = 0,
+    /// Failures a known strategy gap states, counted by reason.
+    known_gap: usize = 0,
+    /// Known gaps whose case now agrees, or that name no case.
+    stale_gap: usize = 0,
 };
 
 const ReasonEntry = struct {
@@ -198,6 +207,20 @@ fn runCase(gpa: std.mem.Allocator, io: std.Io, case: Case) std.mem.Allocator.Err
         };
         defer compiled.deinit(gpa);
 
+        // The harness's own programs exist to run; one the checker rejects
+        // exercises nothing.
+        if (case.origin == .harness and strategy_index == 0) {
+            var problem_count = compiled.resources.checker.problems.problems.items.len;
+            for (compiled.resources.extra_modules) |module| problem_count += module.checker.problems.problems.items.len;
+            if (problem_count != 0) {
+                return .{ .status = .wrong, .detail = try std.fmt.allocPrint(
+                    gpa,
+                    "  case:        {s}\n  the program has {d} checking problem(s)\n",
+                    .{ case.name, problem_count },
+                ) };
+            }
+        }
+
         for (backends, 0..) |backend, backend_index| {
             const slot = strategy_index * backends.len + backend_index;
             labels[slot] = .{ .strategy = strategy, .backend = backend };
@@ -255,6 +278,19 @@ fn runCase(gpa: std.mem.Allocator, io: std.Io, case: Case) std.mem.Allocator.Err
     }
 
     const ref = reference orelse return .{ .status = .compile_skip, .unsupported = owned_unsupported };
+    // The harness's own programs read a seed after a `dbg` no compile-time
+    // evaluation performs; without it at runtime, the values they test were
+    // computed while checking and neither strategy's runtime ran.
+    if (case.origin == .harness) switch (ref.attempt) {
+        .ran => |execution| if (execution.dbg_events.len == 0) {
+            return .{ .status = .wrong, .unsupported = owned_unsupported, .detail = try std.fmt.allocPrint(
+                gpa,
+                "  case:        {s}\n  reported no dbg at runtime, so its values were computed while checking\n",
+                .{case.name},
+            ) };
+        },
+        .failed => {},
+    };
     if (case.expected) |expected| switch (ref.attempt) {
         .ran => |execution| if (execution.crashed or !std.mem.eql(u8, execution.output, expected)) {
             return .{ .status = .wrong, .unsupported = owned_unsupported, .detail = try std.fmt.allocPrint(
@@ -357,12 +393,33 @@ const Report = struct {
     gpa: std.mem.Allocator,
     totals: Totals = .{},
     reasons: std.StringHashMap(ReasonEntry),
+    /// Each known gap by case name, with whether a case it names ran.
+    gaps: std.StringHashMap(GapState),
+    gap_counts: [std.enums.values(known_gaps.Reason).len]usize = @splat(0),
     saw_failure: bool = false,
+
+    const GapState = struct {
+        gap: known_gaps.Gap,
+        seen: bool = false,
+    };
+
+    fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Report {
+        var report = Report{ .gpa = gpa, .reasons = .init(gpa), .gaps = .init(gpa) };
+        errdefer report.deinit();
+        for (known_gaps.gaps) |gap| {
+            const entry = try report.gaps.getOrPut(gap.case);
+            // Each case is listed once.
+            std.debug.assert(!entry.found_existing);
+            entry.value_ptr.* = .{ .gap = gap };
+        }
+        return report;
+    }
 
     fn deinit(self: *Report) void {
         var it = self.reasons.iterator();
         while (it.next()) |entry| self.gpa.free(entry.key_ptr.*);
         self.reasons.deinit();
+        self.gaps.deinit();
     }
 
     fn record(self: *Report, case: Case, result: CaseResult) std.mem.Allocator.Error!void {
@@ -386,6 +443,23 @@ const Report = struct {
                     entry.value_ptr.* = .{ .count = 1, .examples = .{ case.name, undefined, undefined }, .example_count = 1 };
                 }
             }
+        }
+
+        if (self.gaps.getPtr(case.name)) |state| {
+            state.seen = true;
+            if (gapStatesStatus(state.gap.status, result.status)) {
+                self.totals.known_gap += 1;
+                self.gap_counts[@intFromEnum(state.gap.reason)] += 1;
+                logVerbose("KNOWN-GAP  {s}: {s}\n", .{ case.name, state.gap.reason.text() });
+                return;
+            }
+            if (result.status == .pass) {
+                self.totals.stale_gap += 1;
+                self.saw_failure = true;
+                std.debug.print("STALE-GAP  {s}: now agrees under both strategies; delete its entry in strategy_differential_gaps.zig\n", .{case.name});
+                return;
+            }
+            // A failure the gap does not state is reported like any other.
         }
 
         switch (result.status) {
@@ -419,6 +493,13 @@ const Report = struct {
         }
     }
 };
+
+fn gapStatesStatus(gap_status: known_gaps.Status, status: CaseStatus) bool {
+    return switch (gap_status) {
+        .diverged => status == .diverged,
+        .child_failed => status == .child_failed,
+    };
+}
 
 fn statusByte(status: CaseStatus) u8 {
     return switch (status) {
@@ -514,7 +595,16 @@ const Pool = test_harness.ProcessPool(Case, CaseResult, .{
     .use_process_groups = true,
 });
 
-fn collectCases(gpa: std.mem.Allocator, cases: *std.ArrayList(Case), include_opt_in: bool) std.mem.Allocator.Error!void {
+/// The inspected rendering of a `Str` whose contents need no escaping.
+fn inspectedStrLiteral(gpa: std.mem.Allocator, contents: []const u8) RunnerError![]const u8 {
+    for (contents) |byte| {
+        if (byte == '"' or byte == '\\' or byte < 0x20) return error.Unexpected;
+    }
+    return std.fmt.allocPrint(gpa, "\"{s}\"", .{contents});
+}
+
+/// `arena` owns the case text built here, which lives as long as the run.
+fn collectCases(gpa: std.mem.Allocator, arena: std.mem.Allocator, cases: *std.ArrayList(Case), include_opt_in: bool) RunnerError!void {
     for (corpus.cases) |case| {
         try cases.append(gpa, .{
             .name = case.name,
@@ -532,7 +622,9 @@ fn collectCases(gpa: std.mem.Allocator, cases: *std.ArrayList(Case), include_opt
             // at runtime, so neither strategy is exercised.
             .problem, .problem_and_crash, .comptime_f32_bits, .comptime_f64_bits, .comptime_f32_list_bits, .comptime_f64_list_bits => continue,
             .inspect_str => |text| text,
-            .allocations_at_most => |allocation| allocation.output,
+            // Allocation cases state the contents of the `Str` they
+            // produce; every execution here renders that `Str` inspected.
+            .allocations_at_most => |allocation| try inspectedStrLiteral(arena, allocation.output),
             .crash => null,
         };
         try cases.append(gpa, .{
@@ -593,7 +685,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
 
     var cases: std.ArrayList(Case) = .empty;
     defer cases.deinit(gpa);
-    try collectCases(gpa, &cases, cli.filters.len != 0);
+    try collectCases(gpa, args_arena.allocator(), &cases, cli.filters.len != 0);
 
     var run_list: std.ArrayList(Case) = .empty;
     defer run_list.deinit(gpa);
@@ -619,7 +711,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
     // run list built above matches the parent's and indices stay aligned.
     if (Pool.runWorkerMode(io, cli, run_list.items, cli.timeout_ms)) return;
 
-    var report = Report{ .gpa = gpa, .reasons = .init(gpa) };
+    var report = try Report.init(gpa);
     defer report.deinit();
     var timer = try test_harness.Timer.start();
 
@@ -637,7 +729,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
         const worker_argv_template = try test_harness.buildWorkerArgvTemplate(io, args_arena.allocator(), init.minimal.args);
         const cpu_count = std.Thread.getCpuCount() catch 4;
         const job_limit = @max(cli.max_threads orelse @min(cpu_count, run_list.items.len), 1);
-        Pool.run(io, run_list.items, results, job_limit, cli.timeout_ms, gpa, worker_argv_template);
+        Pool.runWithSpans(io, run_list.items, results, null, job_limit, cli.timeout_ms, gpa, worker_argv_template, cli.child_debug);
 
         for (run_list.items, results) |case, result| try report.record(case, result);
     }
@@ -649,7 +741,8 @@ pub fn main(init: std.process.Init) RunnerError!void {
             "  diverged:            {d}\n" ++
             "  agreed but wrong:    {d}\n" ++
             "  did not compile:     {d}\n" ++
-            "  child failures:      {d}\n",
+            "  child failures:      {d}\n" ++
+            "  known strategy gaps: {d}\n",
         .{
             run_list.items.len,
             timer.read() / std.time.ns_per_ms,
@@ -658,8 +751,32 @@ pub fn main(init: std.process.Init) RunnerError!void {
             totals.wrong,
             totals.compile_skip,
             totals.child_failed,
+            totals.known_gap,
         },
     );
+
+    // Every gap names a case of the full run.
+    if (cli.filters.len == 0 and !harness_only) {
+        var it = report.gaps.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.seen) continue;
+            report.totals.stale_gap += 1;
+            std.debug.print("STALE-GAP  {s}: names no case; delete its entry in strategy_differential_gaps.zig\n", .{entry.key_ptr.*});
+        }
+    }
+
+    if (report.totals.known_gap > 0) {
+        std.debug.print("\nknown strategy gaps (counted, not skipped):\n", .{});
+        for (report.gap_counts, 0..) |count, index| {
+            if (count == 0) continue;
+            const reason: known_gaps.Reason = @enumFromInt(index);
+            std.debug.print("  {d:>5}  {s}\n", .{ count, reason.text() });
+        }
+    }
+
+    std.debug.print("\nshape coverage exemptions:\n", .{});
+    for (corpus.equality_exemptions) |exemption| std.debug.print("  equality {s}: {s}\n", .{ @tagName(exemption.kind), exemption.reason });
+    for (corpus.hash_exemptions) |exemption| std.debug.print("  hashing  {s}: {s}\n", .{ @tagName(exemption.kind), exemption.reason });
 
     if (report.reasons.count() > 0) {
         std.debug.print("\nexecutions not run (stated coverage gaps):\n", .{});
@@ -680,6 +797,10 @@ pub fn main(init: std.process.Init) RunnerError!void {
     if (totals.child_failed > 0) {
         std.debug.print("\nFAILED: {d} case(s) died (compiler panic, backend crash, or timeout)\n", .{totals.child_failed});
         return error.UnexpectedChildFailure;
+    }
+    if (report.totals.stale_gap > 0) {
+        std.debug.print("\nFAILED: {d} stale known gap(s)\n", .{report.totals.stale_gap});
+        return error.StaleKnownGap;
     }
     if (totals.pass == 0) {
         std.debug.print("\nFAILED: no case executed under both strategies\n", .{});

@@ -1090,6 +1090,21 @@ fn sealUndemandedRoots(modules: []const ProgramModule) void {
 /// Boxy alone pays for this second representation of literal results. Normal
 /// finalization already owns all language observations, so there are no report
 /// destinations or debug sinks here. Operational failures still propagate.
+/// Lower a `.boxy` runtime program whose modules finished checking outside a
+/// program session: its literal roots are evaluated and their value slots
+/// completed first, exactly as `ProgramSession.takeRuntime` does for a
+/// session's runtime consumer.
+pub fn lowerBoxyRuntime(
+    allocator: Allocator,
+    modules: lir.CheckedPipeline.CheckedModuleSet,
+    roots: lir.CheckedPipeline.RootRequestSet,
+    target: lir.CheckedPipeline.TargetConfig,
+) RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
+    std.debug.assert(target.specialization_strategy == .boxy);
+    try lir.CheckedPipeline.requireHostedProceduresBound(modules, target);
+    return materializeBoxyLiterals(allocator, modules, roots, target);
+}
+
 fn materializeBoxyLiterals(
     allocator: Allocator,
     modules: lir.CheckedPipeline.CheckedModuleSet,
