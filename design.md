@@ -13679,7 +13679,7 @@ interfaces its caller's expansion already summarized, and a witness on
 structure enclosing a parametric hole would carry the hole's contents into the
 identity. The pins are the monotype capture test "interface request identity
 omits finished witnesses of open classes" and the compile test "interface
-summaries from a caller's expansion serve the callee's own body".
+summary replay into a body's finished request lowers like a fresh expansion".
 
 A Roc template without evidence parameters cannot dispatch on its quantified
 variables, so its interface relates a quantified variable only by unification
