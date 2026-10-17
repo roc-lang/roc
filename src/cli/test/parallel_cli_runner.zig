@@ -432,6 +432,7 @@ const CustomCase = enum {
     native_build_thread_count_reproducible,
     native_build_pack_store_thread_count_reproducible,
     boxed_closure_object_cache,
+    spliced_procedure_debug_lines,
     native_build_artifact_round_trip,
     native_build_pack_objects,
     native_build_pack_hits,
@@ -3014,6 +3015,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive succeeds", .body = .{ .custom = .default_platform_build_wasm32 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive output is reproducible", .body = .{ .custom = .default_platform_wasm32_archive_reproducible } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev output is identical across thread counts and repeated builds", .timeout_ms = 600_000, .body = .{ .custom = .native_build_thread_count_reproducible } },
+    .{ .id = 0, .suite = .subcommands, .name = "object cache: spliced procedures keep the debug lines of the cold build", .timeout_ms = 600_000, .body = .{ .custom = .spliced_procedure_debug_lines } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: exports taking and returning boxed closures are offered and served warm", .timeout_ms = 600_000, .body = .{ .custom = .boxed_closure_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev writes identical object-cache packs across thread counts", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_store_thread_count_reproducible } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev output assembled from its own procedure artifacts is identical", .timeout_ms = 600_000, .body = .{ .custom = .native_build_artifact_round_trip } },
@@ -4901,6 +4903,7 @@ fn runCustomCase(
         .native_build_thread_count_reproducible => customNativeBuildThreadCountReproducible(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_store_thread_count_reproducible => customNativeBuildPackStoreThreadCountReproducible(io, allocator, &env, &timer, timeout_ms),
         .boxed_closure_object_cache => customBoxedClosureObjectCache(io, allocator, &env, &timer, timeout_ms),
+        .spliced_procedure_debug_lines => customSplicedProcedureDebugLines(io, allocator, &env, &timer, timeout_ms),
         .native_build_artifact_round_trip => customNativeBuildArtifactRoundTrip(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_objects => customNativeBuildPackObjects(io, allocator, &env, &timer, timeout_ms),
         .issue_11673_callable_cache => customIssue11673CallableCache(io, allocator, &env, &timer, timeout_ms),
@@ -7191,12 +7194,21 @@ fn runLlvmObjdump(
     output_path: []const u8,
     timeout_ms: u64,
 ) CliRunnerError!?std.process.RunResult {
-    const candidates = [_][]const []const u8{
+    return runFirstAvailable(io, allocator, env, &.{
         &.{ "llvm-objdump", "-d", "--no-show-raw-insn", "--symbolize-operands", output_path },
         &.{ "/usr/lib/llvm-18/bin/llvm-objdump", "-d", "--no-show-raw-insn", "--symbolize-operands", output_path },
         &.{ "/usr/bin/llvm-objdump", "-d", "--no-show-raw-insn", "--symbolize-operands", output_path },
-    };
+    }, timeout_ms);
+}
 
+/// Run the first of `candidates` whose program exists; null when none does.
+fn runFirstAvailable(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    candidates: []const []const []const u8,
+    timeout_ms: u64,
+) CliRunnerError!?std.process.RunResult {
     for (candidates) |argv| {
         return runRawInEnv(io, allocator, env, argv, project_root_path, null, timeout_ms) catch |err| switch (err) {
             error.AccessDenied,
@@ -7917,6 +7929,115 @@ fn customBoxedClosureObjectCache(
             .args = &.{},
             .stdout_exact = expected,
         })) |failure| return failure;
+    }
+    return null;
+}
+
+/// The source lines (`<file> <line>`) a decoded DWARF line table attributes
+/// code to in `file`, sorted and without duplicates.
+fn decodedSourceLines(allocator: Allocator, decoded: []const u8, file: []const u8) CliRunnerError![]const []const u8 {
+    var result: std.ArrayListUnmanaged([]const u8) = .empty;
+    errdefer result.deinit(allocator);
+    var rows = std.mem.splitScalar(u8, decoded, '\n');
+    while (rows.next()) |row| {
+        var fields = std.mem.tokenizeAny(u8, row, " \t");
+        const name = fields.next() orelse continue;
+        if (!std.mem.eql(u8, name, file)) continue;
+        const line = fields.next() orelse continue;
+        try result.append(allocator, try std.fmt.allocPrint(allocator, "{s} {s}", .{ name, line }));
+    }
+    std.mem.sort([]const u8, result.items, {}, struct {
+        fn lessThan(_: void, left: []const u8, right: []const u8) bool {
+            return std.mem.order(u8, left, right) == .lt;
+        }
+    }.lessThan);
+    var kept: usize = 0;
+    for (result.items) |item| {
+        if (kept != 0 and std.mem.eql(u8, result.items[kept - 1], item)) continue;
+        result.items[kept] = item;
+        kept += 1;
+    }
+    result.shrinkRetainingCapacity(kept);
+    return try result.toOwnedSlice(allocator);
+}
+
+/// A warm dev build splices `Elem`'s procedures from the cold build's packs.
+/// Their line entries are bound to the warm program's source files, so the
+/// debug line table attributes the same `Elem.roc` lines to code in both
+/// builds.
+fn customSplicedProcedureDebugLines(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    if (builtin.os.tag != .linux) {
+        return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "decoded DWARF line assertion runs only on Linux CI hosts" };
+    }
+    const roc_file = "test/cli/boxed_closure_object_cache/App.roc";
+    var stats_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone pack statistics environment: {}", .{err}),
+    };
+    defer stats_env.env_map.deinit();
+    stats_env.env_map.put("ROC_PACK_STATS", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable pack statistics: {}", .{err});
+    const builds = [_]struct { name: []const u8, cache: bool }{
+        .{ .name = "uncached", .cache = false },
+        .{ .name = "cold", .cache = true },
+        .{ .name = "warm", .cache = true },
+    };
+    var lines: [builds.len][]const []const u8 = undefined;
+    for (builds, 0..) |build, index| {
+        const exe = std.fmt.allocPrint(allocator, "{s}/spliced_lines_{s}", .{ env.dirs.work_dir, build.name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const out_arg = outputArg(allocator, exe) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+        const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
+        const args: []const []const u8 = if (build.cache) &.{ "build", "--opt=dev", out_arg } else &.{ "build", "--no-cache", "--opt=dev", out_arg };
+        const built = runRocInEnv(io, allocator, &stats_env, args, roc_file, .relative, &.{}, null, build_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+        if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
+            return failureFromRun(allocator, timer, built, "dev build did not succeed");
+        }
+        if (std.mem.eql(u8, build.name, "warm")) {
+            const hits_marker = "pack hits: ";
+            const hits_at = std.mem.find(u8, built.stderr, hits_marker) orelse
+                return failureFromRun(allocator, timer, built, "the warm build did not report pack hits");
+            if (countAfterMarker(built.stderr[hits_at + hits_marker.len ..]) == 0) {
+                return failureFromRun(allocator, timer, built, "the warm build spliced no procedure");
+            }
+        }
+        const dump_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before objdump started");
+        const dumped = runFirstAvailable(io, allocator, env, &.{
+            &.{ "objdump", "--dwarf=decodedline", exe },
+            &.{ "/usr/bin/objdump", "--dwarf=decodedline", exe },
+        }, dump_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "objdump spawn error: {}", .{err});
+        const decoded = dumped orelse
+            return .{ .status = .skip, .phase = .run, .duration_ns = timer.read(), .run_ns = timer.read(), .message = "objdump unavailable on this Linux runner" };
+        if (checkCommandExpectation(allocator, decoded, .{ .args = &.{} })) |message| {
+            return failureFromRun(allocator, timer, decoded, message);
+        }
+        lines[index] = decodedSourceLines(allocator, decoded.stdout, "Elem") catch |err|
+            return customInfraFailure(allocator, timer, "failed to read decoded lines: {}", .{err});
+    }
+    if (lines[0].len == 0) {
+        return customFailure(allocator, timer, "the uncached build attributes no code to Elem.roc", .{});
+    }
+    for (lines[1..], builds[1..]) |build_lines, build| {
+        if (build_lines.len != lines[0].len) {
+            return customFailure(allocator, timer, "the {s} build attributes code to {d} Elem.roc lines, the uncached build to {d}", .{ build.name, build_lines.len, lines[0].len });
+        }
+        for (build_lines, lines[0]) |line, expected| {
+            if (!std.mem.eql(u8, line, expected)) {
+                return customFailure(allocator, timer, "the {s} build attributes code to Elem.roc line '{s}' where the uncached build has '{s}'", .{ build.name, line, expected });
+            }
+        }
     }
     return null;
 }
