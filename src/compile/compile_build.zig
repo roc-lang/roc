@@ -3005,20 +3005,23 @@ pub const BuildEnv = struct {
                     .{module_name},
                 );
             };
+            const public_type_decl: ?CIR.Statement.Idx = switch (public_target.selection) {
+                .type_decl => |statement| statement,
+                .whole_module => null,
+                // The header's own diagnostic reports it; no type is public.
+                .missing_nested_type => continue,
+                .unresolved_nested_type => base.invariant(
+                    "build env invariant violated: public module '{s}' has an unresolved nested type",
+                    .{module_name},
+                ),
+            };
             try public_modules.append(allocator, .{
                 .name = module_name,
                 .path = module_state.path,
                 .semantic = module_data,
                 .package_name = root_name,
                 .public_order = @intCast(public_index),
-                .public_type_decl = switch (public_target.selection) {
-                    .type_decl => |statement| statement,
-                    .whole_module => null,
-                    .unresolved_nested_type => base.invariant(
-                        "build env invariant violated: public module '{s}' has an unresolved nested type",
-                        .{module_name},
-                    ),
-                },
+                .public_type_decl = public_type_decl,
             });
         }
 
@@ -3050,6 +3053,7 @@ pub const BuildEnv = struct {
                 const source_decl: ?CIR.Statement.Idx = switch (public_target.selection) {
                     .type_decl => |statement| statement,
                     .whole_module => null,
+                    .missing_nested_type => continue,
                     .unresolved_nested_type => base.invariant(
                         "build env invariant violated: compiled public module '{s}' has an unresolved nested type",
                         .{public_module.name},

@@ -2587,6 +2587,11 @@ A package target consists of a lowercase package alias, one `.`, and its public
 module name; any later dotted segments are nested types. Package consumers
 cannot name the package's internal source path. A package header may bind a
 public module name to one exact internal target with an explicit local import.
+A header entry such as `Util.Inner` selects a nested type; whether `Util`
+defines it is settled once, when `Util` completes, as either the selected
+declaration or an explicit missing outcome. That missing outcome is user-facing:
+the header's own import resolution reports it at the entry, and each package
+import of that public name reports it at the import.
 
 Resolution normalizes local targets to one package-root-relative logical path
 before graph insertion. That logical path is the module identity, so distinct
