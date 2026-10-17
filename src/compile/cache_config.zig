@@ -331,7 +331,9 @@ pub const Constants = struct {
     ///      and error-record field offsets.
     /// 151: an import's exposed items record the declaration import
     ///      resolution selected for them.
-    pub const CACHE_VERSION = 151;
+    /// 152: a nested procedure site records whether its module's source
+    ///      calls it at exactly one site.
+    pub const CACHE_VERSION = 152;
 };
 
 /// Configuration for the Roc cache system.

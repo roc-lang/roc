@@ -3541,26 +3541,69 @@ test "mutually recursive direct wrappers are not inlined" {
     , .wrappers);
 }
 
-test "capturing direct wrapper is not inlined" {
+test "single-use capturing lambda is inlined with its captures bound" {
+    // The lambda captures `offset`. Inlining binds the capture to the
+    // caller's value, so the root calls `callee` itself, twice, and passes
+    // no capture record anywhere. `callee` is called twice and is not a
+    // wrapper, so it stays a procedure; the loop keeps `main` from being a
+    // wrapper, which dev never inlines a source-single-use body into.
     const allocator = std.testing.allocator;
-    var lowered_source = try lowerModule(allocator,
-        \\callee : U64 -> U64
-        \\callee = |x| x + 1
-        \\
-        \\main : U64 -> U64
-        \\main = |offset| {
-        \\    wrapper = |x| callee(x + offset)
-        \\    wrapper(41)
-        \\}
-    , .wrappers);
-    defer lowered_source.deinit(allocator);
+    for ([_]lir.CheckedPipeline.InlineMode{ .wrappers, .wrappers_and_source_single_use }) |inline_mode| {
+        var lowered_source = try lowerModule(allocator,
+            \\callee : U64 -> U64
+            \\callee = |x| {
+            \\    y = x * 3
+            \\    if y > 10 y else x
+            \\}
+            \\
+            \\main : U64 -> U64
+            \\main = |offset| {
+            \\    var $total = 0
+            \\    var $i = 0
+            \\    while $i < offset {
+            \\        $total = $total + $i
+            \\        $i = $i + 1
+            \\    }
+            \\    wrapper = |x| callee(x + offset)
+            \\    wrapper($total) + callee(offset)
+            \\}
+        , inline_mode);
+        defer lowered_source.deinit(allocator);
 
-    const root_calls = try collectAssignCallProcs(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
-    defer allocator.free(root_calls);
+        const root_calls = try collectAssignCallProcs(allocator, &lowered_source.lowered, try rootProc(&lowered_source.lowered));
+        defer allocator.free(root_calls);
 
-    try std.testing.expectEqual(@as(usize, 1), root_calls.len);
-    const target_shape = try collectProcShape(allocator, &lowered_source.lowered, root_calls[0]);
-    try std.testing.expectEqual(@as(usize, 2), target_shape.arg_count);
+        try std.testing.expectEqual(@as(usize, 2), root_calls.len);
+        for (root_calls) |call| {
+            const target_shape = try collectProcShape(allocator, &lowered_source.lowered, call);
+            try std.testing.expectEqual(@as(usize, 1), target_shape.arg_count);
+        }
+    }
+}
+
+test "issue 12029: recursion through an inlined capturing lambda is a loop" {
+    // The lambda captures `n` and is called once where it is written, so it
+    // is inlined and `capturing_lambda` calls itself in tail position.
+    const allocator = std.testing.allocator;
+    for ([_]lir.CheckedPipeline.InlineMode{ .wrappers, .wrappers_and_source_single_use }) |inline_mode| {
+        var lowered_source = try lowerModule(allocator,
+            \\capturing_lambda : U64 -> U64
+            \\capturing_lambda = |n| if n == 0 0 else 0 |> (|_| capturing_lambda(n - 1))
+            \\
+            \\main : U64
+            \\main = capturing_lambda(10)
+        , inline_mode);
+        defer lowered_source.deinit(allocator);
+
+        const target = try rootDirectCallTarget(allocator, &lowered_source.lowered);
+        try std.testing.expectEqual(
+            LIR.TailTransform.tce,
+            lowered_source.lowered.lir_result.store.getProcSpecImmediate(target).tail_transform,
+        );
+        const target_calls = try collectAssignCallProcs(allocator, &lowered_source.lowered, target);
+        defer allocator.free(target_calls);
+        try std.testing.expectEqual(@as(usize, 0), target_calls.len);
+    }
 }
 // ─── TRMC pass outcomes through the full pipeline ───
 
