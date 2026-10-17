@@ -30,12 +30,12 @@ written_method = written.foo()
 ~~~
 # EXPECTED
 MISSING METHOD - defaulted_type_diagnostics.md:22:26:22:29
-TYPE NOT DETERMINED - defaulted_type_diagnostics.md:15:18:15:25
-TYPE NOT DETERMINED - defaulted_type_diagnostics.md:17:17:17:20
-TYPE NOT DETERMINED - defaulted_type_diagnostics.md:9:18:9:20
-TYPE NOT DETERMINED - defaulted_type_diagnostics.md:11:21:11:23
+MISSING METHOD - defaulted_type_diagnostics.md:15:18:15:25
+MISSING METHOD - defaulted_type_diagnostics.md:17:17:17:20
+MISSING METHOD - defaulted_type_diagnostics.md:9:18:9:20
+MISSING METHOD - defaulted_type_diagnostics.md:11:21:11:23
 TYPE MISMATCH - defaulted_type_diagnostics.md:13:34:13:37
-TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
+MISSING METHOD - defaulted_type_diagnostics.md:7:16:7:17
 # PROBLEMS
 ~~~clojure
 (reports
@@ -74,10 +74,18 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 			(reflow "associated with it in the type's declaration.")))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 15 18) (end 15 25))
 		(headline
-			(reflow "Nothing in this program determines the type of this string."))
+			(reflow "This string's type never resolved to a concrete type, so it has no")
+			(reflow " ")
+			(annotated code "is_gt")
+			(reflow " ")
+			(reflow "method for")
+			(reflow " ")
+			(annotated code ">")
+			(reflow " ")
+			(reflow "to call."))
 		(document
 			(source-region (file "defaulted_type_diagnostics.md") (start 15 18) (end 15 25) (annotation error) (line-text "string_compare = \"apple\" > \"banana\""))
 			(line-break)
@@ -90,13 +98,6 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated operator ">")
-			(reflow " ")
-			(reflow "to use.")
-			(line-break)
-			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
 			(reflow "None of the built-in string types")
@@ -107,10 +108,14 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 			(reflow ".")))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 17 17) (end 17 20))
 		(headline
-			(reflow "Nothing in this program determines the type of this string."))
+			(reflow "This string's type never resolved to a concrete type, so it has no")
+			(reflow " ")
+			(annotated code "foo")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "defaulted_type_diagnostics.md") (start 17 17) (end 17 20) (annotation error) (line-text "string_method = \"s\".foo()"))
 			(line-break)
@@ -123,13 +128,6 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated code "foo")
-			(reflow " ")
-			(reflow "method to use.")
-			(line-break)
-			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
 			(reflow "None of the built-in string types")
@@ -140,10 +138,14 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 			(reflow ".")))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 9 18) (end 9 20))
 		(headline
-			(reflow "Nothing in this program determines the type of this number."))
+			(reflow "This number's type never resolved to a concrete type, so it has no")
+			(reflow " ")
+			(annotated code "foo")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "defaulted_type_diagnostics.md") (start 9 18) (end 9 20) (annotation error) (line-text "literal_method = 35.foo()"))
 			(line-break)
@@ -156,13 +158,6 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated code "foo")
-			(reflow " ")
-			(reflow "method to use.")
-			(line-break)
-			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
 			(reflow "None of the built-in number types")
@@ -173,10 +168,14 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 			(reflow ".")))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 11 21) (end 11 23))
 		(headline
-			(reflow "Nothing in this program determines the type of this number."))
+			(reflow "This number's type never resolved to a concrete type, so it has no")
+			(reflow " ")
+			(annotated code "plus")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "defaulted_type_diagnostics.md") (start 11 21) (end 11 23) (annotation error) (line-text "literal_signature = 35.plus(\"s\")"))
 			(line-break)
@@ -189,16 +188,7 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated code "plus")
-			(reflow " ")
-			(reflow "method to use.")
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a suffix or a type annotation saying which type it should be.")))
+			(reflow "Giving the number a suffix, using it somewhere that requires a specific type, or annotating it will give it one.")))
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
@@ -213,10 +203,14 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 			(reflow "Add a type annotation saying which type it should be.")))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 7 16) (end 7 17))
 		(headline
-			(reflow "Nothing in this program determines a type this needs."))
+			(reflow "A type this needs never resolved to a concrete type, so it has no")
+			(reflow " ")
+			(annotated code "d")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "defaulted_type_diagnostics.md") (start 7 16) (end 7 17) (annotation error) (line-text "materialized = g(|n| n + 1)"))
 			(line-break)
@@ -229,16 +223,7 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated code "d")
-			(reflow " ")
-			(reflow "method to use.")
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be."))))
+			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one."))))
 ~~~
 # TOKENS
 ~~~zig

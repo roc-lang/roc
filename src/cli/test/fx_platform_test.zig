@@ -1774,10 +1774,10 @@ test "fx platform fold_rev static dispatch regression" {
 }
 
 test "fx platform invalid nested where-clause static dispatch fails in check" {
-    // Regression test for #9657: nothing in the program determines the types
-    // this where-clause constrains, and the default chosen for them lacks the
+    // Regression test for #9657: the types this where-clause constrains never
+    // resolve to concrete types, and the default chosen for them lacks the
     // required methods, so check must reject the contract before post-check
-    // lowering, reporting the type as undetermined.
+    // lowering, reporting the type as one that never resolved.
     const allocator = testing.allocator;
 
     var env = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
@@ -1800,7 +1800,7 @@ test "fx platform invalid nested where-clause static dispatch fails in check" {
         .stderr = check_result.stderr,
         .term = check_result.term,
     });
-    try testing.expect(std.mem.find(u8, check_result.stderr, "type not determined") != null);
+    try testing.expect(std.mem.find(u8, check_result.stderr, "never resolved to a") != null);
     try testing.expect(std.mem.find(u8, check_result.stderr, "postcheck invariant violated") == null);
 }
 

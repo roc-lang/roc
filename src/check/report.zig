@@ -2800,81 +2800,118 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    /// Build a report for a static dispatch whose receiver's type nothing in
-    /// the program determines and no instantiation can ever pin down: the
-    /// dispatch cannot choose a method. Like a defaulted type a requirement
-    /// rejects (`buildUndeterminedType`), it is reported as a type the program
-    /// does not determine.
+    /// Build a report for a static dispatch whose receiver's type is a type
+    /// variable that never resolved to a concrete type, and that no
+    /// instantiation can ever pin down. Methods belong to concrete types, so
+    /// the variable has no method for the dispatch to call: it is reported as
+    /// a missing method, naming the variable when the program wrote one.
     fn buildStaticDispatchUnresolvedDispatcher(
         self: *Self,
         data: UnresolvedDispatcher,
     ) Allocator.Error!Report {
         // For a desugared operator, the report names the source operator
-        // symbol rather than the internal method (`==` not `is_eq`, `+` not
+        // symbol alongside the method it calls (`==` calls `is_eq`, `+` calls
         // `plus`).
         const operator: ?[]const u8 = if (data.is_binop) self.getOperatorForMethod(data.method_name) else null;
         const is_equality = data.is_binop and data.method_name.eql(self.can_ir.idents.is_eq);
-        const equality_operator: []const u8 = if (data.binop_negated) "!=" else operator orelse "==";
+        const operator_text: ?[]const u8 = if (is_equality)
+            (if (data.binop_negated) "!=" else operator orelse "==")
+        else
+            operator;
 
         // When the dispatch is hidden inside a helper, the call site (primary
-        // region) and the argument whose type leaves the dispatched-on type
-        // undetermined (secondary region) differ, and the report shows both.
-        // When they coincide, the dispatch is the call site itself.
+        // region) and the argument the receiver's type comes from (secondary
+        // region) differ, and the report shows both. When they coincide, the
+        // dispatch is the call site itself.
         const hidden_argument: ?Region = if (data.secondary_region) |secondary|
             if (secondary.start.offset != data.region.start.offset or
                 secondary.end.offset != data.region.end.offset) secondary else null
         else
             null;
 
-        var report = try Report.init(self.gpa, "Type Not Determined", "", .runtime_error);
+        // A variable the program wrote (such as `output` in an annotation)
+        // is named; one inference introduced has no name the reader has seen.
+        const variable_name: ?Ident.Idx = switch (self.snapshots.?.getContentUnwrapAlias(data.dispatcher_snapshot)) {
+            .flex => |flex| flex.name,
+            .rigid => |rigid| rigid.name,
+            .structure, .alias, .recursive, .err => null,
+        };
+
+        var report = try Report.init(self.gpa, "Missing Method", "", .runtime_error);
         errdefer report.deinit();
-        if (hidden_argument != null) {
-            if (is_equality) {
-                try D.renderSliceInto(&.{
-                    D.bytes("This call compares values with"),
-                    D.bytes(equality_operator).withAnnotation(.inline_code),
-                    D.bytes(", but nothing in this program determines their type.").withNoPrecedingSpace(),
-                }, self, &report, &report.headline);
-            } else if (operator) |operator_text| {
-                try D.renderSliceInto(&.{
-                    D.bytes("This call uses the"),
-                    D.bytes(operator_text).withAnnotation(.inline_code),
-                    D.bytes("operator, but nothing in this program determines the type it operates on."),
-                }, self, &report, &report.headline);
+
+        var subject_buffer: [4]Doc = undefined;
+        const subject: []const Doc = if (variable_name) |name| blk: {
+            subject_buffer[0] = D.bytes(if (operator_text != null) "values of type" else "a value of type");
+            subject_buffer[1] = D.ident(name).withAnnotation(.inline_code);
+            subject_buffer[2] = D.bytes(",").withNoPrecedingSpace();
+            subject_buffer[3] = D.bytes("which never resolved to a concrete type,");
+            break :blk subject_buffer[0..4];
+        } else blk: {
+            subject_buffer[0] = D.bytes(if (operator_text != null)
+                "values whose type never resolved to a concrete type,"
+            else
+                "a value whose type never resolved to a concrete type,");
+            break :blk subject_buffer[0..1];
+        };
+
+        var headline_buffer: [12]Doc = undefined;
+        var headline_len: usize = 0;
+        if (operator_text) |text| {
+            if (hidden_argument != null) {
+                headline_buffer[0] = D.bytes("This call uses the");
+                headline_buffer[1] = D.bytes(text).withAnnotation(.inline_code);
+                headline_buffer[2] = D.bytes("operator on");
+                headline_len = 3;
             } else {
-                try D.renderSliceInto(&.{
-                    D.bytes("This call uses a"),
-                    D.ident(data.method_name).withAnnotation(.inline_code),
-                    D.bytes("method, but nothing in this program determines the type it is called on."),
-                }, self, &report, &report.headline);
+                headline_buffer[0] = D.bytes("This");
+                headline_buffer[1] = D.bytes(text).withAnnotation(.inline_code);
+                headline_buffer[2] = D.bytes(if (is_equality) "compares" else "operates on");
+                headline_len = 3;
             }
-        } else if (is_equality) {
-            try D.renderSliceInto(&.{
-                D.bytes("Nothing in this program determines the type of the values this"),
-                D.bytes(equality_operator).withAnnotation(.inline_code),
-                D.bytes("compares."),
-            }, self, &report, &report.headline);
-        } else if (operator) |operator_text| {
-            try D.renderSliceInto(&.{
-                D.bytes("Nothing in this program determines the type this"),
-                D.bytes(operator_text).withAnnotation(.inline_code),
-                D.bytes("operates on."),
-            }, self, &report, &report.headline);
+        } else if (hidden_argument != null) {
+            headline_buffer[0] = D.bytes("This call uses a");
+            headline_buffer[1] = D.ident(data.method_name).withAnnotation(.inline_code);
+            headline_buffer[2] = D.bytes("method on");
+            headline_len = 3;
         } else {
-            try D.renderSliceInto(&.{
-                D.bytes("Nothing in this program determines the type this"),
-                D.ident(data.method_name).withAnnotation(.inline_code),
-                D.bytes("method is called on."),
-            }, self, &report, &report.headline);
+            headline_buffer[0] = D.bytes("This");
+            headline_buffer[1] = D.ident(data.method_name).withAnnotation(.inline_code);
+            headline_buffer[2] = D.bytes("call is on");
+            headline_len = 3;
         }
+        for (subject) |doc| {
+            headline_buffer[headline_len] = doc;
+            headline_len += 1;
+        }
+        headline_buffer[headline_len] = D.bytes(if (operator_text != null) "so they have no" else "so it has no");
+        headline_buffer[headline_len + 1] = D.ident(data.method_name).withAnnotation(.inline_code);
+        headline_len += 2;
+        if (operator_text) |text| {
+            headline_buffer[headline_len] = D.bytes("method for");
+            headline_buffer[headline_len + 1] = D.bytes(text).withAnnotation(.inline_code);
+            headline_buffer[headline_len + 2] = D.bytes("to call.");
+            headline_len += 3;
+        } else {
+            headline_buffer[headline_len] = D.bytes("method.");
+            headline_len += 1;
+        }
+        try D.renderSliceInto(headline_buffer[0..headline_len], self, &report, &report.headline);
 
         try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         if (hidden_argument) |secondary| {
-            try D.renderSlice(&.{
-                D.bytes("This argument's type does not determine it:"),
-            }, self, &report);
+            if (variable_name) |name| {
+                try D.renderSlice(&.{
+                    D.ident(name).withAnnotation(.inline_code),
+                    D.bytes("comes from this argument:"),
+                }, self, &report);
+            } else {
+                try D.renderSlice(&.{
+                    D.bytes("That type comes from this argument:"),
+                }, self, &report);
+            }
             try report.document.addLineBreak();
 
             const secondary_info = self.module_env.calcRegionInfo(secondary);
@@ -2882,29 +2919,11 @@ pub const ReportBuilder = struct {
             try report.document.addLineBreak();
         }
 
-        if (is_equality) {
-            try D.renderSlice(&.{
-                D.bytes("Without knowing which type it is, there's no way to tell how to compare them."),
-            }, self, &report);
-        } else if (operator) |operator_text| {
-            try D.renderSlice(&.{
-                D.bytes("Without knowing which type it is, there's no way to tell which"),
-                D.bytes(operator_text).withAnnotation(.binary_operator),
-                D.bytes("to use."),
-            }, self, &report);
-        } else {
-            try D.renderSlice(&.{
-                D.bytes("Without knowing which type it is, there's no way to tell which"),
-                D.ident(data.method_name).withAnnotation(.inline_code),
-                D.bytes("method to use."),
-            }, self, &report);
-        }
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-
         try D.renderSlice(&.{
-            D.bytes("Hint:").withAnnotation(.emphasized),
-            D.bytes("Add a type annotation saying which type it should be."),
+            D.bytes(if (operator_text != null)
+                "Using the values somewhere that requires a specific type, or annotating them, will give them one."
+            else
+                "Using the value somewhere that requires a specific type, or annotating it, will give it one."),
         }, self, &report);
 
         return report;
@@ -3252,12 +3271,14 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: UndeterminedCodecType,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Undetermined Codec Type", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Missing Method", "", .runtime_error);
         errdefer report.deinit();
         try D.renderSliceInto(&.{
             D.bytes("The compiler derives"),
             D.ident(data.method_name).withAnnotation(.inline_code),
-            D.bytes("here, which needs every part of the type it works on, but part of that type is never determined."),
+            D.bytes("here from every part of the type it works on, but part of that type never resolved to a concrete type, so that part has no"),
+            D.ident(data.method_name).withAnnotation(.inline_code),
+            D.bytes("method."),
         }, self, &report, &report.headline);
 
         try self.addConstraintFailureHighlight(&report, data.owner_region, data.fn_var);
@@ -3274,10 +3295,10 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    /// Build a report for a requirement that failed on a type nothing in the
-    /// program determines. The type is shown as the program wrote it; the
-    /// default the compiler chose for it is never named, because the user
-    /// never wrote it.
+    /// Build a report for a requirement that failed on a type that never
+    /// resolved to a concrete type, so it has no method to satisfy it. The type
+    /// is shown as the program wrote it; the default the compiler chose for it
+    /// is never named, because the user never wrote it.
     fn buildUndeterminedType(
         self: *Self,
         data: UndeterminedType,
@@ -3287,15 +3308,30 @@ pub const ReportBuilder = struct {
             .string_literal_shared_with_number, .number_literal_shared_with_string => return self.buildUndeterminedSharedLiteralType(data),
         }
 
-        var report = try Report.init(self.gpa, "Type Not Determined", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Missing Method", "", .runtime_error);
         errdefer report.deinit();
-        const headline: []const u8 = switch (data.subject) {
-            .number_literal => "Nothing in this program determines the type of this number.",
-            .string_literal => "Nothing in this program determines the type of this string.",
-            .value => "Nothing in this program determines a type this needs.",
+        const subject: []const u8 = switch (data.subject) {
+            .number_literal => "This number's type never resolved to a concrete type, so it has no",
+            .string_literal => "This string's type never resolved to a concrete type, so it has no",
+            .value => "A type this needs never resolved to a concrete type, so it has no",
             .string_literal_shared_with_number, .number_literal_shared_with_string => unreachable,
         };
-        try D.renderSliceInto(&.{D.bytes(headline)}, self, &report, &report.headline);
+        const operator: ?[]const u8 = if (data.is_binop) self.getOperatorForMethod(data.method_name) else null;
+        if (operator) |operator_text| {
+            try D.renderSliceInto(&.{
+                D.bytes(subject),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("method for"),
+                D.bytes(operator_text).withAnnotation(.inline_code),
+                D.bytes("to call."),
+            }, self, &report, &report.headline);
+        } else {
+            try D.renderSliceInto(&.{
+                D.bytes(subject),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("method."),
+            }, self, &report, &report.headline);
+        }
 
         const region_info = self.module_env.calcRegionInfo(data.region);
         try report.document.addSourceRegion(
@@ -3312,23 +3348,6 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addCodeBlock(snapshot_str);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-
-        const operator: ?[]const u8 = if (data.is_binop) self.getOperatorForMethod(data.method_name) else null;
-        if (operator) |operator_text| {
-            try D.renderSlice(&.{
-                D.bytes("Without knowing which type it is, there's no way to tell which"),
-                D.bytes(operator_text).withAnnotation(.binary_operator),
-                D.bytes("to use."),
-            }, self, &report);
-        } else {
-            try D.renderSlice(&.{
-                D.bytes("Without knowing which type it is, there's no way to tell which"),
-                D.ident(data.method_name).withAnnotation(.inline_code),
-                D.bytes("method to use."),
-            }, self, &report);
-        }
         try report.document.addLineBreak();
         try report.document.addLineBreak();
 
@@ -3358,15 +3377,13 @@ pub const ReportBuilder = struct {
             return report;
         }
 
-        const hint: []const u8 = switch (data.subject) {
-            .number_literal => "Add a suffix or a type annotation saying which type it should be.",
-            .string_literal, .value => "Add a type annotation saying which type it should be.",
+        const remedy: []const u8 = switch (data.subject) {
+            .number_literal => "Giving the number a suffix, using it somewhere that requires a specific type, or annotating it will give it one.",
+            .string_literal => "Using the string somewhere that requires a specific type, or annotating it, will give it one.",
+            .value => "Using the value somewhere that requires a specific type, or annotating it, will give it one.",
             .string_literal_shared_with_number, .number_literal_shared_with_string => unreachable,
         };
-        try D.renderSlice(&.{
-            D.bytes("Hint:").withAnnotation(.emphasized),
-            D.bytes(hint),
-        }, self, &report);
+        try D.renderSlice(&.{D.bytes(remedy)}, self, &report);
 
         return report;
     }

@@ -6706,8 +6706,9 @@ method relates that method's signature. A call on a type name such as
 parser's `value` or the encoder's value argument is what determines them.
 Derivation needs every part of the receiver: a receiver that is still
 undetermined after numeric defaulting waits for the final codec boundary, and
-one that is undetermined there is reported as an undetermined codec type and
-its call becomes a checked runtime error.
+one that is undetermined there is reported as a missing method on a part of
+the type that never resolved to a concrete type, and its call becomes a
+checked runtime error.
 
 `StaticDispatchPlanTable.generated_codec_derivations` stores each parser/encoder
 derivation as an explicit generated-codec contract. It records every generated
@@ -15577,10 +15578,11 @@ A default is a type the checker chose, not one the program wrote, so no
 diagnostic ever names it. When a requirement fails on a class that a
 defaulting decision chose—literal defaulting, including the shared-literal
 head default, or a specialization default materialization—the checker
-reports one `undetermined_type` problem ("type not determined") for that
-class instead of a missing-method or mismatch report against the default
-owner. The report states what the type must support and that nothing in the
-program determines it. The hint depends on whether a built-in type could
+reports one `undetermined_type` problem for that class instead of a
+missing-method or mismatch report against the default owner. It is titled
+"missing method": the report says the type never resolved to a concrete type,
+so it has no method the requirement can use, and states what the type must
+support. The hint depends on whether a built-in type could
 satisfy the failed requirement. When the class holds a literal, the checker
 looks up the failed method on every built-in type that literal's kind can
 default to—the defaulting oracle's numeral candidates
@@ -15591,7 +15593,8 @@ number (or string) type supports the operator or has the method, naming the
 operator for a desugared operator and the method otherwise. The claim is
 scoped to built-in types because a user nominal that converts literals of
 that kind may still have the method. Otherwise, and for a defaulted type that
-holds no literal, the hint asks for a suffix (numbers only) or an annotation.
+holds no literal, the report says that a suffix (numbers only), a use that
+requires a specific type, or an annotation gives the type one.
 The lookup checks the method's existence only, not its signature.
 
 Each defaulting decision records, immediately before it commits, every
@@ -15658,12 +15661,13 @@ defaults to `Str`, but the `T0` payload is a separate type variable that
 nothing relates to any value, and `unwrap`'s body requires `concat` on it. The
 call is a direct call edge, so that requirement must resolve during checking,
 and it cannot. Such a receiver is reported as an `unresolved_dispatcher`
-problem with the title "type not determined", like a defaulted type a
-requirement rejects (Diagnostics About Defaulted Types). The report says
-which method or operator needs the type, and when the dispatch is inside the
-called function it also shows the argument whose type leaves the receiver
-undetermined; it never describes the receiver as a type that is missing a
-method. The call becomes a runtime error.
+problem titled "missing method", like a defaulted type a requirement rejects
+(Diagnostics About Defaulted Types): methods belong to concrete types, so a
+type variable that never resolved to one has no method for the dispatch to
+call. The report names the variable when the program wrote one, says which
+method or operator needs it, and when the dispatch is inside the called
+function also shows the argument the receiver's type comes from. The call
+becomes a runtime error.
 
 A generalized constrained function instantiation is also an explicit pinning
 frontier for receivers reachable from that function's argument positions. This
