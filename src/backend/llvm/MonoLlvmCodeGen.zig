@@ -365,6 +365,12 @@ pub const MonoLlvmCodeGen = struct {
     static_data_symbols: std.StringHashMap(LlvmBuilder.Constant),
     /// Distinguishes callable exports from independent modules in one JIT library.
     static_symbol_prefix: []const u8 = "",
+    /// Emit an object-cache pack's object: every procedure, static datum,
+    /// and helper is internal to the object, and each entrypoint is a weak
+    /// C-ABI entry, so the object links beside the program and beside other
+    /// packs' objects (two of which may export the same entry) without any
+    /// other name in common.
+    object_cache_pack: bool = false,
     runtime_error_func: ?LlvmBuilder.Function.Index = null,
     rc_helpers: std.AutoHashMap(u64, RcHelperEntry),
     /// Atomic helpers required by relocations in the separately emitted
@@ -925,6 +931,7 @@ pub const MonoLlvmCodeGen = struct {
             if (self.target.ofmt == .elf) try self.embedGdbScript(&builder);
         }
 
+        if (self.object_cache_pack) try self.definePackStaticData();
         const procs = self.store.getProcSpecs();
         try self.compileAllProcSpecs(procs);
         for (self.static_data_rc_helpers) |helper_key| {
@@ -2517,7 +2524,7 @@ pub const MonoLlvmCodeGen = struct {
     /// procedure a static-data relocation points at can; entrypoints reach
     /// their procedure through a wrapper compiled into this same module.
     fn procNeedsExternalLinkage(self: *const MonoLlvmCodeGen, proc_id: LirProcSpecId) bool {
-        if (self.proc_symbol_mode != .lir_symbol) return false;
+        if (self.proc_symbol_mode != .lir_symbol or self.object_cache_pack) return false;
         for (self.static_data_procs) |referenced| {
             if (referenced == proc_id) return true;
         }
@@ -2811,7 +2818,7 @@ pub const MonoLlvmCodeGen = struct {
         const wrapper_ty = builder.fnType(ret_ty, param_types.items, .normal) catch return error.OutOfMemory;
         const wrapper_name = try self.exportedFunctionName(builder, symbol_name);
         const wrapper = builder.addFunction(wrapper_ty, wrapper_name, .default) catch return error.OutOfMemory;
-        wrapper.setLinkage(.external, builder);
+        wrapper.setLinkage(if (self.object_cache_pack) .weak_odr else .external, builder);
         try self.addGeneratedFunctionStackProbeAttrs(&attrs_wip);
         wrapper.setAttributes(attrs_wip.finish(builder) catch return error.OutOfMemory, builder);
         self.configureExportCallConv(wrapper, builder);
@@ -3070,7 +3077,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn configureExportCallConv(self: *MonoLlvmCodeGen, func: LlvmBuilder.Function.Index, builder: *LlvmBuilder) void {
-        if (self.target.os.tag == .windows) {
+        if (self.target.os.tag == .windows and !self.object_cache_pack) {
             func.ptrConst(builder).global.setDllStorageClass(.dllexport, builder);
         }
         if (self.target.cpu.arch != .x86_64) return;
@@ -9160,9 +9167,23 @@ pub const MonoLlvmCodeGen = struct {
     /// function pointer, or a pointer field the target's word alignment
     /// cannot place in a packed struct.
     fn frozenExportConstant(self: *MonoLlvmCodeGen, data_export: lir.Program.StaticDataExport) Error!?LlvmBuilder.Constant {
+        const image = (try self.frozenExportImage(data_export, true)) orelse return null;
+        return image.value;
+    }
+
+    /// The type and, with `with_value`, the constant of a frozen export's
+    /// image: its bytes as chunks, with each address relocation a
+    /// pointer-sized field. The type depends only on where the relocations
+    /// sit, so it is known before any relocation target is declared.
+    fn frozenExportImage(
+        self: *MonoLlvmCodeGen,
+        data_export: lir.Program.StaticDataExport,
+        comptime with_value: bool,
+    ) Error!?struct { ty: LlvmBuilder.Type, value: if (with_value) LlvmBuilder.Constant else void } {
         const builder = self.builder orelse return error.CompilationFailed;
         if (data_export.relocations.len == 0) {
-            return builder.stringConst(builder.string(data_export.bytes) catch return error.OutOfMemory) catch return error.OutOfMemory;
+            const bytes = builder.stringConst(builder.string(data_export.bytes) catch return error.OutOfMemory) catch return error.OutOfMemory;
+            return .{ .ty = bytes.typeOf(builder), .value = if (with_value) bytes else {} };
         }
         const word: usize = self.targetWordSize();
         for (data_export.relocations) |relocation| {
@@ -9189,27 +9210,64 @@ pub const MonoLlvmCodeGen = struct {
             if (offset > cursor) {
                 const chunk = builder.stringConst(builder.string(data_export.bytes[cursor..offset]) catch return error.OutOfMemory) catch return error.OutOfMemory;
                 try field_types.append(self.allocator, chunk.typeOf(builder));
-                try field_values.append(self.allocator, chunk);
+                if (with_value) try field_values.append(self.allocator, chunk);
             }
-            const target = try self.staticDataSymbol(relocation.target_symbol_name);
-            const addend = builder.intConst(.i64, relocation.addend) catch return error.OutOfMemory;
-            const address = builder.gepConst(.normal, .i8, target, null, &.{addend}) catch return error.OutOfMemory;
+            if (with_value) {
+                const target = try self.staticDataSymbol(relocation.target_symbol_name);
+                const addend = builder.intConst(.i64, relocation.addend) catch return error.OutOfMemory;
+                const address = builder.gepConst(.normal, .i8, target, null, &.{addend}) catch return error.OutOfMemory;
+                try field_values.append(self.allocator, address);
+            }
             try field_types.append(self.allocator, try self.ptrType());
-            try field_values.append(self.allocator, address);
             cursor = offset + word;
         }
         if (cursor < data_export.bytes.len) {
             const tail = builder.stringConst(builder.string(data_export.bytes[cursor..]) catch return error.OutOfMemory) catch return error.OutOfMemory;
             try field_types.append(self.allocator, tail.typeOf(builder));
-            try field_values.append(self.allocator, tail);
+            if (with_value) try field_values.append(self.allocator, tail);
         }
         const struct_ty = builder.structType(.@"packed", field_types.items) catch return error.OutOfMemory;
-        return builder.structConst(struct_ty, field_values.items) catch return error.OutOfMemory;
+        return .{
+            .ty = struct_ty,
+            .value = if (with_value) builder.structConst(struct_ty, field_values.items) catch return error.OutOfMemory else {},
+        };
+    }
+
+    /// Define every static-data export inside an object-cache pack's object
+    /// as an internal constant, so the object carries the data its code
+    /// reads and links beside any other object without a name in common.
+    /// Every export is declared before any is initialized, so constants that
+    /// point at one another resolve. An export whose image has no constant
+    /// form here (a code pointer, or a pointer field off word alignment)
+    /// fails the pack, which is then not written.
+    fn definePackStaticData(self: *MonoLlvmCodeGen) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const variables = self.allocator.alloc(LlvmBuilder.Variable.Index, self.static_data_exports.len) catch return error.OutOfMemory;
+        defer self.allocator.free(variables);
+        for (self.static_data_exports, variables, 0..) |data_export, *variable, row| {
+            const image = (try self.frozenExportImage(data_export, false)) orelse return error.CompilationFailed;
+            const name = builder.strtabStringFmt(".roc.pack_data.{d}", .{row}) catch return error.OutOfMemory;
+            variable.* = builder.addVariable(name, image.ty, .default) catch return error.OutOfMemory;
+            variable.ptrConst(builder).global.setLinkage(.internal, builder);
+            variable.setMutability(.constant, builder);
+            variable.setAlignment(LlvmBuilder.Alignment.fromByteUnits(@max(data_export.alignment, 1)), builder);
+            const offset = builder.intConst(.i64, data_export.symbol_offset) catch return error.OutOfMemory;
+            const address = builder.gepConst(.normal, .i8, variable.toConst(builder), null, &.{offset}) catch return error.OutOfMemory;
+            const key = self.allocator.dupe(u8, data_export.symbol_name) catch return error.OutOfMemory;
+            errdefer self.allocator.free(key);
+            try self.static_data_symbols.put(key, address);
+        }
+        for (self.static_data_exports, variables) |data_export, variable| {
+            const initializer = (try self.frozenExportConstant(data_export)) orelse return error.CompilationFailed;
+            variable.setInitializer(initializer, builder) catch return error.OutOfMemory;
+        }
     }
 
     /// Declares a readonly-object symbol once and returns its address.
     fn staticDataSymbol(self: *MonoLlvmCodeGen, symbol_name: []const u8) Error!LlvmBuilder.Constant {
         if (self.static_data_symbols.get(symbol_name)) |existing| return existing;
+        // A pack's object defines all of its data itself.
+        if (self.object_cache_pack) return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
         const key = self.allocator.dupe(u8, symbol_name) catch return error.OutOfMemory;
         errdefer self.allocator.free(key);
@@ -11692,8 +11750,9 @@ pub const MonoLlvmCodeGen = struct {
             },
         }) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, fn_name, .default) catch return error.OutOfMemory;
-        func.setLinkage(if (is_static_data_helper) .external else .internal, builder);
-        if (is_static_data_helper and self.target.os.tag == .windows) {
+        const helper_exported = is_static_data_helper and !self.object_cache_pack;
+        func.setLinkage(if (helper_exported) .external else .internal, builder);
+        if (helper_exported and self.target.os.tag == .windows) {
             func.ptrConst(builder).global.setDllStorageClass(.dllexport, builder);
         }
         var attrs: LlvmBuilder.FunctionAttributes.Wip = .{};

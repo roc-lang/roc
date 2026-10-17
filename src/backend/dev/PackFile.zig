@@ -204,25 +204,7 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
         }
     }
 
-    for (specs) |spec| {
-        try writer.raw(&spec.key);
-        try writer.word(spec.artifact);
-        try writer.byte(@intFromBool(spec.platform_requirement_relation != null));
-        if (spec.platform_requirement_relation) |relation| try writer.raw(&relation);
-        try writer.word(@intCast(spec.comptime_root_reads.len));
-        for (spec.comptime_root_reads) |root_read| {
-            try writer.raw(&root_read.module);
-            try writer.word(root_read.root);
-        }
-        try writer.wide(spec.rc_borrowed_params);
-        try writer.byte(@intFromBool(spec.rc_ret_borrowed));
-        try writer.wide(spec.rc_ret_lenders);
-        try writer.wide(spec.rc_read_only_params);
-        try writer.byte(@intFromBool(spec.rc_ret_unique));
-        try writer.wide(spec.rc_ret_unique_fields);
-        try writer.word(@intCast(spec.rc_ret_conditions.len));
-        for (spec.rc_ret_conditions) |condition| try writer.word(condition);
-    }
+    try writeSpecs(&writer, specs);
 
     return try bytes.toOwnedSlice(allocator);
 }
@@ -389,7 +371,95 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
         }
     }
 
-    const specs = try arena_allocator.alloc(SpecEntry, spec_count);
+    const specs = try readSpecs(&reader, arena_allocator, spec_count, artifact_count);
+    if (reader.offset != bytes.len) return error.MalformedPack;
+
+    return .{
+        .set = .{ .arena = arena, .artifacts = artifacts, .source_files = source_files },
+        .specs = specs,
+    };
+}
+
+const object_magic = "RPKO";
+
+/// A pack whose code is one linkable object rather than procedure artifacts:
+/// the object exports a C-ABI entry for each procedure it offers
+/// (`lir.ProcIdentity.writeCAbiEntryName`), and every spec entry's
+/// `artifact` indexes `identities`, the procedures those entries name.
+pub const ObjectPack = struct {
+    arena: collections.SingleThreadArena,
+    object: []const u8,
+    identities: []const lir.ProcIdentity,
+    specs: []const SpecEntry,
+
+    pub fn deinit(self: *ObjectPack) void {
+        self.arena.deinit();
+    }
+};
+
+/// Encode an object pack. Like `write`, a pure function of its inputs.
+pub fn writeObject(
+    allocator: Allocator,
+    object: []const u8,
+    identities: []const lir.ProcIdentity,
+    specs: []const SpecEntry,
+) Allocator.Error![]u8 {
+    var bytes = std.ArrayList(u8).empty;
+    errdefer bytes.deinit(allocator);
+    var writer = Writer{ .allocator = allocator, .bytes = &bytes };
+    try writer.raw(object_magic);
+    try writer.word(format_version);
+    try writer.word(@intCast(identities.len));
+    for (identities) |identity| try writer.raw(&identity.bytes);
+    try writer.word(@intCast(specs.len));
+    try writeSpecs(&writer, specs);
+    try writer.str(object);
+    return try bytes.toOwnedSlice(allocator);
+}
+
+/// Decode an object pack. Every slice in the result is owned by its arena.
+pub fn readObject(allocator: Allocator, bytes: []const u8) ReadError!ObjectPack {
+    var arena = collections.SingleThreadArena.init(allocator);
+    errdefer arena.deinit();
+    const arena_allocator = arena.allocator();
+    var reader = Reader{ .bytes = bytes };
+    if (!std.mem.eql(u8, try reader.raw(object_magic.len), object_magic)) return error.MalformedPack;
+    if (try reader.word() != format_version) return error.UnsupportedPackVersion;
+    const identities = try arena_allocator.alloc(lir.ProcIdentity, try reader.word());
+    for (identities) |*identity| identity.* = .{ .bytes = (try reader.raw(32))[0..32].* };
+    const spec_count = try reader.word();
+    const specs = try readSpecs(&reader, arena_allocator, spec_count, @intCast(identities.len));
+    const object = try reader.strOwned(arena_allocator);
+    if (reader.offset != bytes.len) return error.MalformedPack;
+    return .{ .arena = arena, .object = object, .identities = identities, .specs = specs };
+}
+
+fn writeSpecs(writer: *Writer, specs: []const SpecEntry) Allocator.Error!void {
+    for (specs) |spec| {
+        try writer.raw(&spec.key);
+        try writer.word(spec.artifact);
+        try writer.byte(@intFromBool(spec.platform_requirement_relation != null));
+        if (spec.platform_requirement_relation) |relation| try writer.raw(&relation);
+        try writer.word(@intCast(spec.comptime_root_reads.len));
+        for (spec.comptime_root_reads) |root_read| {
+            try writer.raw(&root_read.module);
+            try writer.word(root_read.root);
+        }
+        try writer.wide(spec.rc_borrowed_params);
+        try writer.byte(@intFromBool(spec.rc_ret_borrowed));
+        try writer.wide(spec.rc_ret_lenders);
+        try writer.wide(spec.rc_read_only_params);
+        try writer.byte(@intFromBool(spec.rc_ret_unique));
+        try writer.wide(spec.rc_ret_unique_fields);
+        try writer.word(@intCast(spec.rc_ret_conditions.len));
+        for (spec.rc_ret_conditions) |condition| try writer.word(condition);
+    }
+}
+
+/// Decode `count` spec entries whose `artifact` indexes a table of
+/// `artifact_count` rows.
+fn readSpecs(reader: *Reader, arena_allocator: Allocator, count: u32, artifact_count: u32) ReadError![]SpecEntry {
+    const specs = try arena_allocator.alloc(SpecEntry, count);
     for (specs) |*spec| {
         spec.* = .{
             .key = (try reader.raw(32))[0..32].*,
@@ -425,12 +495,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
         spec.rc_ret_conditions = conditions;
         if (spec.artifact >= artifact_count) return error.MalformedPack;
     }
-    if (reader.offset != bytes.len) return error.MalformedPack;
-
-    return .{
-        .set = .{ .arena = arena, .artifacts = artifacts, .source_files = source_files },
-        .specs = specs,
-    };
+    return specs;
 }
 
 const Writer = struct {
@@ -770,4 +835,34 @@ test "pack writes program-local constants and every reference to them under cont
         packed_names[index] = try arena.allocator().dupe(u8, node.name);
     }
     try testing.expect(!std.mem.eql(u8, packed_names[0], packed_names[1]));
+}
+
+test "object packs round-trip their object, identities, and spec table" {
+    const testing = std.testing;
+    const identities = [_]lir.ProcIdentity{ lir.ProcIdentity.forTest(1), lir.ProcIdentity.forTest(2) };
+    const specs = [_]SpecEntry{.{
+        .key = @as([32]u8, @splat(4)),
+        .artifact = 1,
+        .rc_borrowed_params = 0b11,
+        .rc_ret_borrowed = false,
+        .rc_ret_lenders = 0,
+        .rc_read_only_params = 0b1,
+        .rc_ret_unique = true,
+        .rc_ret_unique_fields = 0,
+        .rc_ret_conditions = &.{0x0001_02ff},
+    }};
+    const bytes = try writeObject(testing.allocator, "\x7fELF object", &identities, &specs);
+    defer testing.allocator.free(bytes);
+    var pack = try readObject(testing.allocator, bytes);
+    defer pack.deinit();
+    try testing.expectEqualStrings("\x7fELF object", pack.object);
+    try testing.expectEqualDeep(identities[0..], pack.identities);
+    try testing.expectEqual(@as(u32, 1), pack.specs[0].artifact);
+    try testing.expectEqual(specs[0].rc_borrowed_params, pack.specs[0].rc_borrowed_params);
+    try testing.expectEqualSlices(u32, specs[0].rc_ret_conditions, pack.specs[0].rc_ret_conditions);
+    const again = try writeObject(testing.allocator, pack.object, pack.identities, pack.specs);
+    defer testing.allocator.free(again);
+    try testing.expectEqualSlices(u8, bytes, again);
+    // An artifact pack is not an object pack.
+    try testing.expectError(error.MalformedPack, readObject(testing.allocator, "RPCK"));
 }

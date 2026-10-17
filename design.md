@@ -605,6 +605,33 @@ its identity does not depend on where it sits in the file; its lines then name
 a module version the program does not have, and they are not emitted rather
 than misattributed.
 
+A URL-package module also gets an optimized object pack, filed in the same
+layout under `<target>-speed/pkg/`: its closed exports lowered under the
+optimized LIR policy and compiled by LLVM into one object, with the same spec
+table naming each entry's procedure. The object defines everything its code
+needs (procedures, constants, refcount helpers, builtins) as internal symbols
+and exports, for each entry it offers, a weak C-ABI entry
+`roc__c{hash}`, the procedure's arguments and result classified by
+`layout.abi` exactly as for a hosted call. Two such objects may export one
+entry; the link keeps one. An entry whose code makes an erased call or builds
+an erased callable is not offered, since the erased-call runtime is passed the
+program's own layout indices, and a module whose object needs the runtime at
+all gets no object pack.
+
+Only a consumer whose code is linked takes an object pack's entry
+(`CodeProvision.permitsLinkedObjects`): a `roc build --opt=dev` program,
+never compile-time evaluation or an in-memory `roc run` image, and never a
+producer shared with compile-time evaluation, which instead takes the dev
+entry of the same procedure and lets the linked consumer switch to the
+object's entry in Direct LIR. Such a procedure is `external` with
+`c_abi_entry` set: the dev backend calls its C-ABI entry like a hosted
+function and compiles a local body that forwards to it for every other use,
+and the build links the objects whose entries it took. A dev pack never
+offers an entry whose code reaches a linked entry, so a program that splices
+dev code never needs an object it did not ask for. A build whose store lacks
+a URL-package module's object pack builds it once the module is checked and
+before the program lowers, so that build already links it.
+
 ### Read-Only Type Analysis
 
 Read-only type analysis must not use permanent solver allocation as scratch.
