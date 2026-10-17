@@ -24208,7 +24208,7 @@ const BodyContext = struct {
                 },
                 .list, .box => |child| try pending.append(self.allocator, child),
                 .tuple => |items| try pending.appendSlice(self.allocator, items),
-                .record => |record| for (record.fields) |field| try pending.append(self.allocator, field.ty),
+                .record => |record| for (record.fields) |field| try pending.append(self.allocator, self.graph.fieldValueNode(field)),
                 .tag_union => |tag_union| for (tag_union.tags) |tag| try pending.appendSlice(self.allocator, tag.payloads),
                 .redirect, .leaf => unreachable,
                 .unresolved,
@@ -59932,7 +59932,7 @@ const BodyContext = struct {
                 },
                 .tuple => try pending.appendSlice(self.allocator, try self.graph.tupleItemNodes(raw_node)),
                 .record => {
-                    for ((try self.graph.recordNodes(raw_node)).fields) |field| try pending.append(self.allocator, field.ty);
+                    for ((try self.graph.recordNodes(raw_node)).fields) |field| try pending.append(self.allocator, self.graph.fieldValueNode(field));
                 },
                 .tag_union => {
                     for ((try self.graph.tagRowNodes(raw_node)).tags) |tag| try pending.appendSlice(self.allocator, tag.payloads);
