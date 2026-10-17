@@ -456,6 +456,31 @@ pub fn erasedCallingProcs(allocator: Allocator, store: *const LirStore) Allocato
     return erased;
 }
 
+/// Whether `proc`'s body holds code copied from a procedure whose identity
+/// names its template by site (`LIR.InlineScope.copies_site_code`), which the
+/// procedure's own identity therefore does not name.
+pub fn procCopiesSiteCode(allocator: Allocator, store: *const LirStore, proc: LIR.LirProcSpecId) Allocator.Error!bool {
+    const body = store.getProcSpecImmediate(proc).body orelse return false;
+    const seen = try allocator.alloc(bool, store.cfStmtCount());
+    defer allocator.free(seen);
+    @memset(seen, false);
+    var work = std.ArrayList(LIR.CFStmtId).empty;
+    defer work.deinit(allocator);
+    try work.append(allocator, body);
+    while (work.pop()) |stmt_id| {
+        if (seen[@backingInt(stmt_id)]) continue;
+        seen[@backingInt(stmt_id)] = true;
+        var scope = store.stmtInlineScope(stmt_id);
+        while (scope != LIR.InlineScopeId.none) {
+            const inline_scope = store.inlineScope(scope);
+            if (inline_scope.copies_site_code) return true;
+            scope = inline_scope.parent;
+        }
+        try BodyClone.appendSuccessors(store, &work, stmt_id, allocator);
+    }
+    return false;
+}
+
 /// The procedures `root`'s code reaches through direct calls, `root`
 /// included, as a set over `store`'s procedures. Caller owns the result.
 pub fn procCallClosure(allocator: Allocator, store: *const LirStore, root: LIR.LirProcSpecId) Allocator.Error![]bool {

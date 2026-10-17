@@ -236,6 +236,20 @@ pub const FnTemplate = struct {
     /// when Monotype finalizes the program. Dev inline analysis decides
     /// single-use inlining by this flag, which is the same in every program.
     single_source_call: bool = false,
+    /// For a function of the root app module: the template it comes from (its
+    /// own, or its nested owner's) named by module name and definition name
+    /// rather than by the module's content key and template ordinals, so an
+    /// edit elsewhere in the module leaves the procedure identities derived
+    /// from it, and those of every specialization that receives it as a
+    /// function value, unchanged. The procedure's own code is keyed by its
+    /// `LIR.LirProcSpec.code_key`. Stamped when Monotype finalizes the
+    /// program.
+    site_identity: ?names.TypeDigest = null,
+    /// `evidence_digest` with the root app module's views and method
+    /// templates named by site (`fnEvidenceSiteDigest`), when the evidence
+    /// names any; seeds procedure identity in place of `evidence_digest`.
+    /// Stamped when Monotype finalizes the program.
+    evidence_site_digest: ?EvidenceDigest = null,
     /// The procedure was lowered only for discovery (design.md "Demand-Driven
     /// Compile-Time Specialization"): a never-run stub, or a body whose
     /// requests may name such stubs. It is part of the procedure's identity,
@@ -473,7 +487,36 @@ pub fn fnEvidenceDigest(
     head: ?u32,
 ) EvidenceDigest {
     var hasher = TypeDigestHasher.init();
-    writeFnEvidence(&hasher, evidence, frames, head);
+    writeFnEvidence(&hasher, evidence, frames, head, ContentEvidenceNames{});
+    return .{ .bytes = hasher.finalResult() };
+}
+
+/// Names evidence's modules and method templates by content.
+const ContentEvidenceNames = struct {
+    fn module(_: ContentEvidenceNames, _: *const [32]u8) ?void {
+        return null;
+    }
+
+    fn template(_: ContentEvidenceNames, _: names.ProcTemplate) ?names.TypeDigest {
+        return null;
+    }
+};
+
+/// The digest of retained function evidence with the root app module's
+/// views and method templates named by site (`FnTemplate.site_identity`)
+/// rather than content: `site_names.module(bytes)` is non-null for the app
+/// module's key, and `site_names.template(template)` is a method template's
+/// site identity. Seeds a procedure's identity, so a specialization that
+/// dispatches to an app method keeps its identity across edits that leave
+/// the method's declaration alone.
+pub fn fnEvidenceSiteDigest(
+    evidence: []const check.ConstStore.ConstFnEvidence,
+    frames: []const check.ConstStore.ConstFnEvidenceFrame,
+    head: ?u32,
+    site_names: anytype,
+) EvidenceDigest {
+    var hasher = TypeDigestHasher.init();
+    writeFnEvidence(&hasher, evidence, frames, head, site_names);
     return .{ .bytes = hasher.finalResult() };
 }
 
@@ -486,7 +529,7 @@ pub fn fnEvidenceBucket(
     head: ?u32,
 ) u64 {
     var hasher = std.hash.Wyhash.init(0);
-    writeFnEvidence(&hasher, evidence, frames, head);
+    writeFnEvidence(&hasher, evidence, frames, head, ContentEvidenceNames{});
     return hasher.final();
 }
 
@@ -495,6 +538,7 @@ fn writeFnEvidence(
     evidence: []const check.ConstStore.ConstFnEvidence,
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
+    site_names: anytype,
 ) void {
     writeBytes(hasher, "roc.monotype.fn_evidence.v7");
     writeU32(hasher, @intCast(evidence.len));
@@ -503,11 +547,11 @@ fn writeFnEvidence(
         switch (entry) {
             .target => |target| {
                 writeU32(hasher, target.callable_contracts);
-                writeBytes(hasher, &target.view.bytes);
-                writeMethodTarget(hasher, target.method, target.method_callable_key);
+                writeEvidenceModule(hasher, &target.view.bytes, site_names);
+                writeMethodTarget(hasher, target.method, target.method_callable_key, site_names);
                 if (target.instantiation) |instantiation| {
                     writeU8(hasher, 1);
-                    writeBytes(hasher, &instantiation.view.bytes);
+                    writeEvidenceModule(hasher, &instantiation.view.bytes, site_names);
                     writeBytes(hasher, &instantiation.callable_key.bytes);
                 } else writeU8(hasher, 0);
                 writeU8(hasher, @backingInt(target.nested));
@@ -529,7 +573,7 @@ fn writeFnEvidence(
                         writeBytes(hasher, &content.bytes);
                     } else {
                         writeU8(hasher, 0);
-                        writeBytes(hasher, &checked_structural.view.bytes);
+                        writeEvidenceModule(hasher, &checked_structural.view.bytes, site_names);
                     }
                     writeBytes(hasher, &checked_structural.dispatcher_key.bytes);
                     writeBytes(hasher, &checked_structural.callable_key.bytes);
@@ -664,11 +708,29 @@ fn methodTargetIdentityEql(
         keyBytesEql(left_callable_key, right_callable_key);
 }
 
+fn writeEvidenceModule(hasher: anytype, bytes: *const [32]u8, site_names: anytype) void {
+    if (site_names.module(bytes)) |_| {
+        writeBytes(hasher, "app-module");
+    } else {
+        writeBytes(hasher, bytes);
+    }
+}
+
 fn writeMethodTarget(
     hasher: anytype,
     target: static_dispatch.MethodTarget,
     callable_key: names.CanonicalTypeKey,
+    site_names: anytype,
 ) void {
+    // A method of the root app module is named by its declaration.
+    switch (target.kind) {
+        .procedure => |procedure| if (site_names.template(procedure.template)) |site| {
+            writeBytes(hasher, "site-method");
+            writeBytes(hasher, &site.bytes);
+            return;
+        },
+        .local_proc, .structural => {},
+    }
     writeU32(hasher, target.module_idx);
     writeU32(hasher, @backingInt(target.def_idx));
     writeU8(hasher, @backingInt(target.kind));

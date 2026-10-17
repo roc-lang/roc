@@ -561,16 +561,18 @@ keeps program names, so only a pack write pays for the hashing.
 A `ProcIdentity` names the same code in every program only because everything
 that decides a procedure's code is digested into it: its checked source, its
 evidence, and its solved types (`postcheck/proc_identity.zig`). Those also
-decide every procedure it references, except across a platform requirement:
-which app value fills a platform's requirement is chosen by the app, not by
-the platform's source or types. So a function that references a function of
-the app from outside the app (which only a requirement can), or references a
-function that does, digests the program's platform/app relation key into its
-identity (`Lifted.Program.fnReachesPlatformRequirement`). The relation key is a
-function of the app's checked module key, which the app's own procedure identities
-already digest, so such a platform procedure is shared exactly as widely as
-the app procedures it reaches; every other platform procedure keeps one
-identity across apps.
+decide every procedure it references, except the app's: which app value
+fills a platform's requirement is chosen by the app, not by the platform's
+source or types, and an app procedure is named by site (below), not by its
+code. So a function that references a function of the app from outside the
+app (through a platform requirement or a method of an app type its evidence
+names), or references a function that does, digests what it reaches there
+into its identity (`Lifted.Program.fnSourceDigest`): each closed app function
+it reaches contributes that function's own source identity, and any other
+contributes the program's platform/app relation key, a function of the app's
+checked module key. Editing the body of a closed app function therefore
+leaves every procedure reaching it unchanged, and every other procedure keeps
+one identity across apps.
 
 Names a procedure's code carries for the procedures it was built from are
 content identities too. A fused call variant (`body_clone.cloneCallVariant`)
@@ -644,6 +646,44 @@ for such a procedure; the hit skips its Direct LIR body, the LIR passes, ARC,
 and code generation. Whether the code evaluates a compile-time root in place
 is read from Monotype's per-function summary (`SpecComptimeReads.fnReads`),
 through the procedure's `source_monotype_fn`.
+
+A function of the root app module is identified by site, not content: its
+template, or its nested owner's, is named by the module's name and the
+definition's name (`Mono.FnTemplate.site_identity`), so editing the module
+leaves its procedure identities, and the identity of every specialization
+that receives one of its functions as a value, unchanged. Such a
+procedure's own code is named by its code key (`LIR.LirProcSpec.code_key`:
+its identity with the module's content key), under which a pack offers it and
+Direct LIR looks it up. Code whose identity names it never holds a copy of
+site-identified code: an entry whose body inlined one
+(`LIR.InlineScope.copies_site_code`) is not offered by identity, and its
+calls to one are extracted as symbolic references by identity rather than as
+references into the pack. A program that takes an entry lowers and retains
+every lambda-set member the entry's signature mentions
+(`Result.retained_procs`), and a splice never follows a symbolic reference
+to a procedure the program compiles itself, so the entry calls the program's
+current code of each closure it receives. Because such code was compiled
+against an earlier body of the procedures it calls by identity, ARC pins
+every procedure with a code key to the signature its types determine (all
+parameters and the return owned, no return uniqueness). An entry whose code reaches the
+app from outside it (`Lifted.Program.appCalleesReachedBy`) is offered under
+its identity only, never under a reservation-time key, and a program that
+takes it lowers and retains every app function it reaches, so the entry
+calls that code's current version too.
+
+A package function that dispatches to a method of an app type records that
+method in its evidence. The evidence digest it is keyed by
+(`Mono.FnTemplate.evidence_site_digest`) names the method's template by site,
+like the method's own identity, so editing the app leaves the package
+specialization's identity unchanged unless the method's declaration or type
+changes.
+
+A type the root app module declares is named the same way
+(`Type.TypeDef.site`): identity digests (the equality digest that seeds keys
+and source digests, and procedure identities) name it by its declaration and
+the structure of its backing rather than by its module's content, so a
+package specialization at an app type keeps its identity across edits that
+leave the type's structure alone.
 
 ### Read-Only Type Analysis
 
@@ -733,15 +773,12 @@ provider supplies both readers the same immutable offers and splice packs.
 This is session-local provider identity, never a persistent cache-key input.
 Separate providers retain source bodies and their independent late native hits.
 
-An early cache offer carries the full-body producer's platform-requirement
-dependency summary. An independent entry is reusable across app fillings;
-a dependent entry names its exact relation and is admitted only for that
-relation. Cached functions seed the same transitive reachability computation
-as full bodies, so erasing a body cannot erase a code-identity input. Offer
-selection retains distinct relations rather than letting an incompatible
-first entry hide a compatible entry. Final procedure identity validation is
-unchanged. Old contracts use a different format and storage namespace and are
-declined before any body is skipped.
+An early cache offer is never code that reaches the app: such code calls app
+procedures whose current bodies only the program has, and Monotype skipping
+its body would hide which ones. It is offered under its procedure identity
+instead, where its body is still lowered. Final procedure identity validation
+is unchanged. Old contracts use a different format and storage namespace and
+are declined before any body is skipped.
 
 Monotype reservation may consume an offered
 closed object specialization during checking finalization under the same proof
@@ -2352,9 +2389,8 @@ the demanded roots only, whether this compilation evaluated them or restored
 their values, so a build reports the same observations with or without a
 cache and whatever an earlier command evaluated.
 
-The object cache composes with demand the way it composes with an app's
-platform requirements: an entry carries what its skipped body would have told
-the program that links it. For each specialization a program may write to
+The object cache composes with demand by having an entry carry what its
+skipped body would have told the program that links it. For each specialization a program may write to
 the object cache, Monotype records the roots its code reads, through every
 procedure it reaches. An entry whose code evaluates a root in place is
 withheld: it would compute the root whenever it runs, in a program that

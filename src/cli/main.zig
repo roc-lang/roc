@@ -8453,7 +8453,6 @@ fn compileModuleObjectPack(
         try specs.append(ctx.gpa, .{
             .key = spec_proc.key,
             .artifact = identity_index,
-            .platform_requirement_relation = spec_proc.platform_requirement_relation,
             .comptime_root_reads = reads.reads,
             .rc_borrowed_params = proc.rc_borrowed_params,
             .rc_ret_borrowed = proc.rc_ret_borrowed,
@@ -8632,7 +8631,6 @@ fn packFileBytes(
     const Candidate = struct {
         key: [32]u8,
         proc: lir.LIR.LirProcSpecId,
-        platform_requirement_relation: ?[32]u8,
         reads: lir.CheckedPipeline.SpecComptimeReads.Lookup,
         by_identity: bool,
     };
@@ -8642,7 +8640,6 @@ fn packFileBytes(
         try candidates.append(allocator, .{
             .key = spec_proc.key,
             .proc = spec_proc.proc,
-            .platform_requirement_relation = spec_proc.platform_requirement_relation,
             .reads = comptime_reads.get(spec_proc.key),
             .by_identity = false,
         });
@@ -8650,10 +8647,13 @@ fn packFileBytes(
     for (procs, 0..) |proc, index| {
         if (proc.abi != .roc or proc.hosted != null or proc.is_static_initializer) continue;
         const source_fn = proc.source_monotype_fn orelse continue;
+        // A procedure whose identity names its template by site is offered
+        // under its code key; any other is offered under its identity only
+        // when its identity names all of its code.
+        if (proc.code_key == null and try lir.PackProgram.procCopiesSiteCode(allocator, &lowered.lir_result.store, @fromBackingInt(@intCast(index)))) continue;
         try candidates.append(allocator, .{
-            .key = postcheck.Common.procIdentityCacheKey(proc.identity.bytes),
+            .key = postcheck.Common.procIdentityCacheKey(if (proc.code_key) |code| code else proc.identity.bytes),
             .proc = @fromBackingInt(@intCast(index)),
-            .platform_requirement_relation = proc.platform_requirement_relation,
             .reads = comptime_reads.fnReads(source_fn),
             .by_identity = true,
         });
@@ -8715,7 +8715,6 @@ fn packFileBytes(
         try specs.append(allocator, .{
             .key = spec_proc.key,
             .artifact = artifact,
-            .platform_requirement_relation = spec_proc.platform_requirement_relation,
             .comptime_root_reads = entry_reads.reads,
             .rc_borrowed_params = proc.rc_borrowed_params,
             .rc_ret_borrowed = proc.rc_ret_borrowed,

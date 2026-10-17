@@ -14,6 +14,26 @@ Lib := [].{
 		$value
 	}
 
+	apply_steps_on : (a -> a), a, U64 -> a
+	apply_steps_on = |step, start, count| {
+		var $value = start
+		var $remaining = count
+		while $remaining > 0 {
+			$value = step($value)
+			$remaining = $remaining - 1
+		}
+		$value
+	}
+
+	total_weight : List(a) -> U64 where [a.weight : a -> U64]
+	total_weight = |items| {
+		var $total = 0
+		for item in items {
+			$total = $total + item.weight()
+		}
+		$total
+	}
+
 	double : U64 -> U64
 	double = |n| n * 2
 

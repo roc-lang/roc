@@ -29,7 +29,6 @@ const platform_config = @import("platform_config.zig");
 const util = @import("util.zig");
 const collections = @import("collections");
 const base = @import("base");
-const TestPackFile = @import("backend").dev.PackFile;
 const bytebox = @import("bytebox");
 const builtins = @import("builtins");
 const msvc_runtime = @import("msvc_runtime");
@@ -435,6 +434,9 @@ const CustomCase = enum {
     spliced_procedure_debug_lines,
     linked_object_pack,
     proc_identity_object_cache,
+    edited_lambda_object_cache,
+    edited_nominal_object_cache,
+    edited_method_object_cache,
     native_build_artifact_round_trip,
     native_build_pack_objects,
     native_build_pack_hits,
@@ -2988,6 +2990,9 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive succeeds", .body = .{ .custom = .default_platform_build_wasm32 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive output is reproducible", .body = .{ .custom = .default_platform_wasm32_archive_reproducible } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev output is identical across thread counts and repeated builds", .timeout_ms = 600_000, .body = .{ .custom = .native_build_thread_count_reproducible } },
+    .{ .id = 0, .suite = .subcommands, .name = "object cache: editing an app module keeps package specializations that dispatch to its methods cached, calling the edited method", .timeout_ms = 600_000, .body = .{ .custom = .edited_method_object_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "object cache: editing an app module keeps package specializations at its own types cached unless the type changes", .timeout_ms = 600_000, .body = .{ .custom = .edited_nominal_object_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "object cache: editing an app lambda's body keeps the package specializations that receive it cached, calling the edited lambda", .timeout_ms = 600_000, .body = .{ .custom = .edited_lambda_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: an edited app is served higher-order specializations by their procedure identity", .timeout_ms = 600_000, .body = .{ .custom = .proc_identity_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: a dev build links a URL package's optimized object pack and behaves like the uncached build", .timeout_ms = 900_000, .body = .{ .custom = .linked_object_pack } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: spliced procedures keep the debug lines of the cold build", .timeout_ms = 600_000, .body = .{ .custom = .spliced_procedure_debug_lines } },
@@ -4874,6 +4879,9 @@ fn runCustomCase(
         .spliced_procedure_debug_lines => customSplicedProcedureDebugLines(io, allocator, &env, &timer, timeout_ms),
         .linked_object_pack => customLinkedObjectPack(io, allocator, &env, &timer, timeout_ms),
         .proc_identity_object_cache => customProcIdentityObjectCache(io, allocator, &env, &timer, timeout_ms),
+        .edited_lambda_object_cache => customEditedLambdaObjectCache(io, allocator, &env, &timer, timeout_ms),
+        .edited_nominal_object_cache => customEditedNominalObjectCache(io, allocator, &env, &timer, timeout_ms),
+        .edited_method_object_cache => customEditedMethodObjectCache(io, allocator, &env, &timer, timeout_ms),
         .native_build_artifact_round_trip => customNativeBuildArtifactRoundTrip(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_objects => customNativeBuildPackObjects(io, allocator, &env, &timer, timeout_ms),
         .issue_11673_callable_cache => customIssue11673CallableCache(io, allocator, &env, &timer, timeout_ms),
@@ -7966,6 +7974,138 @@ fn customProcIdentityObjectCache(
     return null;
 }
 
+/// One build of an edited app in an object-cache edit loop: the edit made
+/// before it, the output its program prints, and whether the build must be
+/// served a specialization by its procedure identity.
+const EditStep = struct {
+    edits: []const struct { from: []const u8, to: []const u8 } = &.{},
+    stdout: []const u8,
+    identity_hit: bool,
+};
+
+/// Build a staged copy of `app_name` (beside `Lib.roc`) once per step,
+/// editing it before each step, and check each build's output and whether
+/// the object cache served it a specialization by identity.
+fn runEditLoop(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    dir_name: []const u8,
+    app_source: []const u8,
+    app_name: []const u8,
+    steps: []const EditStep,
+) ?TestResult {
+    var app: []const u8 = undefined;
+    if (stageEditableApp(io, allocator, env, timer, .{
+        .dir_name = dir_name,
+        .platform = "test/fx-open/platform/main.roc",
+        .platform_spelling = "../../fx-open/platform/main.roc",
+        .sources = &.{ "test/cli/proc_identity_object_cache/Lib.roc", app_source },
+        .app_name = app_name,
+    }, &app)) |failure| return failure;
+    var trace_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone pack trace environment: {}", .{err}),
+    };
+    defer trace_env.env_map.deinit();
+    trace_env.env_map.put("ROC_PACK_TRACE", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable pack tracing: {}", .{err});
+    for (steps, 0..) |step, index| {
+        if (step.edits.len != 0) {
+            var source = std.Io.Dir.cwd().readFileAlloc(io, app, allocator, .limited(1024 * 1024)) catch |err|
+                return customInfraFailure(allocator, timer, "failed to read the app: {}", .{err});
+            for (step.edits) |edit| {
+                if (std.mem.find(u8, source, edit.from) == null) return customInfraFailure(allocator, timer, "edit target {s} is not in the app", .{edit.from});
+                source = std.mem.replaceOwned(u8, allocator, source, edit.from, edit.to) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to edit the app: {}", .{err});
+            }
+            std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = source }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to write the edited app: {}", .{err});
+        }
+        const exe = std.fmt.allocPrint(allocator, "{s}/{s}_{d}", .{ env.dirs.work_dir, dir_name, index }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const out_arg = outputArg(allocator, exe) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+        const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
+        const built = runRocInEnv(io, allocator, &trace_env, &.{ "build", "--opt=dev", out_arg }, app, .absolute, &.{}, null, build_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+        if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
+            return failureFromRun(allocator, timer, built, "dev build did not succeed");
+        }
+        if (step.identity_hit and !hasIdentityHit(built.stderr)) {
+            return failureFromRun(allocator, timer, built, "the build was served no specialization by its identity");
+        }
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
+            .args = &.{},
+            .stdout_exact = step.stdout,
+        })) |failure| return failure;
+    }
+    return null;
+}
+
+/// `Lib.apply_steps` receives the app's own closures. Editing one closure's
+/// body changes that closure's code and leaves its identity, and so the
+/// identity of `Lib.apply_steps` specialized at it, unchanged: the rebuild
+/// must be served that specialization from the cache and must call the
+/// edited closure.
+fn customEditedLambdaObjectCache(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    return runEditLoop(io, allocator, env, timer, timeout_ms, "edited_lambda_object_cache", "test/cli/proc_identity_object_cache/Lambda.roc", "Lambda.roc", &.{
+        .{ .stdout = "161\n8\n", .identity_hit = false },
+        .{ .edits = &.{.{ .from = "n * 3 + offset", .to = "n * 5 + offset" }}, .stdout = "937\n8\n", .identity_hit = true },
+    });
+}
+
+/// `Lib.total_weight` dispatches to the app's own `Crate.weight`. An edit
+/// elsewhere in the app, and an edit to the method's body, leave the
+/// method's identity unchanged, so the rebuild is served the specialization
+/// that dispatches to it, which calls the method's current code.
+fn customEditedMethodObjectCache(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    return runEditLoop(io, allocator, env, timer, timeout_ms, "edited_method_object_cache", "test/cli/proc_identity_object_cache/Method.roc", "Method.roc", &.{
+        .{ .stdout = "total 15\n", .identity_hit = false },
+        .{ .edits = &.{.{ .from = "\"total ", .to = "\"sum " }}, .stdout = "sum 15\n", .identity_hit = true },
+        .{ .edits = &.{.{ .from = "crate.mass * 2", .to = "crate.mass * 3" }}, .stdout = "sum 21\n", .identity_hit = true },
+    });
+}
+
+/// `Lib.apply_steps_on` is specialized at the app's own nominal type. An edit
+/// elsewhere in the app leaves the type's identity unchanged, so the rebuild
+/// is served that specialization; a change to the type's structure changes
+/// it, and the rebuild behaves as the edited source says.
+fn customEditedNominalObjectCache(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    return runEditLoop(io, allocator, env, timer, timeout_ms, "edited_nominal_object_cache", "test/cli/proc_identity_object_cache/Model.roc", "Model.roc", &.{
+        .{ .stdout = "score 63 after 5 moves\n", .identity_hit = false },
+        .{ .edits = &.{.{ .from = "Stdout.line!(\"score ", .to = "Stdout.line!(\"final score " }}, .stdout = "final score 63 after 5 moves\n", .identity_hit = true },
+        .{ .edits = &.{
+            .{ .from = "{ score : U64, moves : U64 }", .to = "{ score : U64, moves : U64, bonus : U64 }" },
+            .{ .from = "moves: board.moves + 1 }", .to = "moves: board.moves + 1, bonus: board.bonus + board.score }" },
+            .{ .from = "moves: 0 }", .to = "moves: 0, bonus: 0 }" },
+            .{ .from = "after ${done.moves.to_str()} moves", .to = "after ${done.moves.to_str()} moves, bonus ${done.bonus.to_str()}" },
+        }, .stdout = "final score 63 after 5 moves, bonus 57\n", .identity_hit = false },
+    });
+}
+
 fn hasIdentityHit(stderr: []const u8) bool {
     var lines = std.mem.splitScalar(u8, stderr, '\n');
     while (lines.next()) |line| {
@@ -8505,7 +8645,7 @@ fn customSharedEarlyObjectCache(
         .app_name = "main.roc",
     }, &app)) |failure| return failure;
 
-    var platform_offer: ?PlatformCacheOffer = null;
+    var platform_offer: ?[32]u8 = null;
     for ([_][]const u8{ "original 45 55\n", "edited 45 55\n" }, 0..) |stdout, revision| {
         if (revision == 1) {
             const edited_path = std.fs.path.join(allocator, &.{ std.fs.path.dirname(app).?, "edited.roc" }) catch |err|
@@ -8593,12 +8733,11 @@ fn customSharedEarlyObjectCache(
     return null;
 }
 
-const PlatformCacheOffer = struct {
-    key: [32]u8,
-    relation: [32]u8,
-};
-
 /// Pin the platform's dependent export, not only an independent imported loop.
+/// Its code calls the app's `main!` by identity, which names `main!` by site,
+/// so the export is offered under its procedure identity only, and editing
+/// `main!`'s body leaves that identity unchanged: every build after the first
+/// is served the export while lowering the current `main!`.
 fn verifyDependentPlatformCache(
     io: std.Io,
     allocator: Allocator,
@@ -8607,7 +8746,7 @@ fn verifyDependentPlatformCache(
     timeout_ms: u64,
     app: []const u8,
     prefix: []const u8,
-    previous: *?PlatformCacheOffer,
+    previous: *?[32]u8,
 ) ?TestResult {
     var traced = CaseEnv{
         .dirs = env.dirs,
@@ -8634,51 +8773,29 @@ fn verifyDependentPlatformCache(
     var lines = std.mem.splitScalar(u8, seed.stderr, '\n');
     while (lines.next()) |line| {
         var fields = std.mem.tokenizeScalar(u8, line, ' ');
-        if (!std.mem.eql(u8, fields.next() orelse continue, "offer")) continue;
+        const kind = fields.next() orelse continue;
         const key_text = fields.next() orelse continue;
         _ = fields.next() orelse continue; // artifact digest
         if (!std.mem.eql(u8, fields.next() orelse continue, "main_for_host!")) continue;
+        if (std.mem.eql(u8, kind, "offer")) {
+            return failureFromRun(allocator, timer, seed, "dependent platform export was offered under a specialization key");
+        }
+        if (!std.mem.eql(u8, kind, "offer-identity")) continue;
         var key: [32]u8 = undefined;
         _ = std.fmt.hexToBytes(&key, key_text) catch
-            return failureFromRun(allocator, timer, seed, "platform offer had an invalid semantic key");
+            return failureFromRun(allocator, timer, seed, "platform offer had an invalid identity key");
         offered_key = key;
     }
-    const key = offered_key orelse
-        return failureFromRun(allocator, timer, seed, "dependent platform export was not offered");
-    if (namedProcBody(seed.stderr, "main_for_host!") != true) {
-        return failureFromRun(allocator, timer, seed, "new platform relation did not construct its source body");
-    }
-
-    var cache = std.Io.Dir.cwd().openDir(io, env.dirs.roc_cache_dir, .{ .iterate = true }) catch |err|
-        return customInfraFailure(allocator, timer, "failed to open platform cache: {}", .{err});
-    defer cache.close(io);
-    var walker = cache.walk(allocator) catch |err|
-        return customInfraFailure(allocator, timer, "failed to walk platform cache: {}", .{err});
-    defer walker.deinit();
-    var relation: ?[32]u8 = null;
-    while (walker.next(io) catch |err|
-        return customInfraFailure(allocator, timer, "failed to read platform cache entry: {}", .{err})) |entry|
-    {
-        if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".rpk")) continue;
-        const bytes = cache.readFileAlloc(io, entry.path, allocator, .limited(1024 * 1024 * 1024)) catch |err|
-            return customInfraFailure(allocator, timer, "failed to read platform pack: {}", .{err});
-        defer allocator.free(bytes);
-        var pack = TestPackFile.read(allocator, bytes) catch |err|
-            return customInfraFailure(allocator, timer, "failed to decode platform pack: {}", .{err});
-        defer pack.deinit();
-        for (pack.specs) |spec| {
-            if (!std.mem.eql(u8, &spec.key, &key)) continue;
-            relation = spec.platform_requirement_relation orelse
-                return failureFromRun(allocator, timer, seed, "platform requirement summary was incorrectly independent");
-        }
-    }
-    const current: PlatformCacheOffer = .{
-        .key = key,
-        .relation = relation orelse return failureFromRun(allocator, timer, seed, "platform semantic offer was not stored"),
-    };
+    const short_key = std.fmt.bytesToHex(previous.* orelse (offered_key orelse
+        return failureFromRun(allocator, timer, seed, "dependent platform export was not offered")), .lower)[0..16].*;
+    const hit_line = std.fmt.allocPrint(allocator, "lookup identity key={s} hit", .{short_key}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform hit assertion: {}", .{err});
     if (previous.*) |old| {
-        if (std.mem.eql(u8, &old.key, &current.key) or std.mem.eql(u8, &old.relation, &current.relation)) {
-            return failureFromRun(allocator, timer, seed, "changed app implementation retained the previous platform relation");
+        if (offered_key != null and !std.mem.eql(u8, &old, &offered_key.?)) {
+            return failureFromRun(allocator, timer, seed, "editing main!'s body changed the platform export's identity");
+        }
+        if (std.mem.find(u8, seed.stderr, hit_line) == null) {
+            return failureFromRun(allocator, timer, seed, "edited app was not served the platform export");
         }
     }
     const warm = switch (captureRocRun(io, allocator, &traced, timer, timeout_ms, .{
@@ -8688,16 +8805,10 @@ fn verifyDependentPlatformCache(
         .result => |run| run,
         .failure => |failure| return failure,
     };
-    const short_key = std.fmt.bytesToHex(current.key[0..8].*, .lower);
-    const census = std.fmt.allocPrint(allocator, "CENSUS_KEY\tmain_for_host!\t{s}\t", .{short_key}) catch |err|
-        return customInfraFailure(allocator, timer, "failed to allocate platform census assertion: {}", .{err});
-    if (std.mem.find(u8, warm.stderr, census) == null or namedProcBody(warm.stderr, "main_for_host!") != false) {
-        return failureFromRun(allocator, timer, warm, "unchanged platform relation did not preserve its key and elide its source body");
+    if (std.mem.find(u8, warm.stderr, hit_line) == null) {
+        return failureFromRun(allocator, timer, warm, "unchanged app was not served the platform export");
     }
-    if (hasNamedCacheHit(warm.stderr, "main_for_host!", false) and !hasNamedCacheHit(warm.stderr, "main_for_host!", true)) {
-        return failureFromRun(allocator, timer, warm, "dependent platform export was spliced only after Monotype constructed its body");
-    }
-    previous.* = current;
+    if (previous.* == null) previous.* = offered_key;
     return null;
 }
 
@@ -8849,7 +8960,8 @@ fn customIssue11673CallableCache(
             return customInfraFailure(allocator, timer, "failed to enable callable-cache tracing: {}", .{err});
     }
     const apps = [_]struct { path: []const u8, prefix: []const u8, expect: StoreExpectations }{
-        .{ .path = "test/cli/issue_11673_callable_cache/main.roc", .prefix = "main", .expect = .{ .uncached_baseline = true, .stdout = "differs\na\n", .pack_hit_proc = "Eq.same" } },
+        // The unchanged app's own `main!` is served whole, `Eq.same` with it.
+        .{ .path = "test/cli/issue_11673_callable_cache/main.roc", .prefix = "main", .expect = .{ .uncached_baseline = true, .stdout = "differs\na\n", .pack_hit_proc = "main!" } },
         // This caller order evaluates Eq.same while checking. Its first
         // cached build consumes the sibling's object pack; the next reuses
         // the checked constant and no longer needs that procedure.
