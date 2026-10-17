@@ -13655,14 +13655,34 @@ it actually reaches. A request that lowers the callee body in the caller's own
 draft (a caller-owned lexical specialization or an eager iterator completion)
 still replays them, because that replay is the body's own relation production.
 
-Repeated dependency requests are memoized by the complete procedure family
-(template, method scope, and checked source-function key), exact evidence
-topology, and the complete open input interface. Inputs include the function
+Repeated dependency requests are memoized by the procedure family (template
+and method scope), exact evidence topology, and the complete open input
+interface. The checked source-function key through which a call site reached
+the template is not part of a summary's identity: it names how that site
+spelled the callee's type, and the request's input already carries everything
+the instantiation constrains. Inputs include the function
 request and the scheme substitution cells, with their sharing and checked-error
 slots. An input identity is captured when its dependency is consumed, after the
 preceding explicit relations. Applying defaults is never part of cache identity.
 Digests select buckets; exact input constraints and evidence are the collision
 authorities.
+
+A request's input omits the finished-type witness of every open class. The
+witness records how the requesting graph reached a class, not what the request
+constrains: a body lowered at its sealed request imports every cell of its root
+from a finished Monotype, while the expansion that reached the same callee
+inside that body's caller related live cells of identical structure. Requests
+that differ only in witnesses therefore share one input identity and one
+summary, and expansion runs on detached inputs that carry none. Relating a
+summary back leaves each request cell's own witness in place, so replay and
+fresh expansion agree. A witness that expansion itself attaches to a class is
+part of its output constraints and is replayed like any other. Keying on input
+witnesses would make every body on a call chain re-expand the transitive
+interfaces its caller's expansion already summarized, and a witness on
+structure enclosing a parametric hole would carry the hole's contents into the
+identity. The pins are the monotype capture test "interface request identity
+omits finished witnesses of open classes" and the compile test "interface
+summary replay into a body's finished request lowers like a fresh expansion".
 
 A Roc template without evidence parameters cannot dispatch on its quantified
 variables, so its interface relates a quantified variable only by unification
@@ -13808,12 +13828,17 @@ recursive entries remain graph-local. Replay must agree with fresh checked
 relation expansion, including unresolved state and relationships between roots.
 Agreement is judged up to what a producing graph chooses arbitrarily: local
 numbering, the order in which a row's members were joined, a named-instance
-group with a single member inside the interface, and whether a class that
-finished as a settled type and carries no other evidence was captured as open
-structure or as its settled leaf. Recursive-slot and forced-dynamic membership
-decide only iterator representations, so they are no evidence on a class that
-finished as a type containing no iterator interface. An unchanged summary
-stands for its input.
+group with a single member inside the interface, whether a class whose content
+is settled and carries no other evidence was captured as open structure or as
+its settled leaf, and whether an open class carries a finished-type witness.
+A witness is no evidence: replaying an unchanged summary relates nothing back,
+while a fresh expansion relates witnessed copies of its settled leaves, so
+whether a class acquired one records which history reached it (pinned by the
+monotype test "interface agreement ignores finished witnesses of open
+classes"). Recursive-slot
+and forced-dynamic membership decide only iterator representations, so they
+are no evidence on a class that settles as a type containing no iterator
+interface. An unchanged summary stands for its input.
 
 Digest discovery encodes each uncached node's scalar bytes once and retains
 ordered child offsets. Acyclic resolution and cyclic-group reduction replay
