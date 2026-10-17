@@ -10977,11 +10977,10 @@ pub const MonoLlvmCodeGen = struct {
     /// value at the length and a length bump by `count`; the bytes past
     /// `count` land in capacity slack nothing can observe.
     fn emitListAppendLeBytesUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
-        const builder, const wip = try self.builderAndWip();
+        const wip = self.wip orelse return error.CompilationFailed;
         const list_ptr = self.slot(GuardedList.at(args, 0)).ptr;
         const value = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), .i64, false);
         const count = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 2)).ptr, self.localLayout(GuardedList.at(args, 2))), self.ptrSizedIntType(), false);
-        _ = builder;
         const bytes = try self.loadPointer(list_ptr);
         const len = try self.loadUsize(try self.offsetPtr(list_ptr, self.rocListLenOffset()));
         const cap = try self.loadUsize(try self.offsetPtr(list_ptr, self.rocListCapacityOffset()));

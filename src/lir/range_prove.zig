@@ -343,6 +343,96 @@ test "range prove gives threaded Bool joins identities unused by joins in unreac
     try testing.expect(join_ids.contains(nested_join));
 }
 
+// A short-circuit condition's constant arm writes its Bool as a literal
+// when the constant comes back from compile-time evaluation, and as a tag
+// when it is lowered in place. Either form is the discriminant, so the
+// threaded jump site that wrote a literal folds to a direct jump, and the
+// arm it chose is the one control reaches.
+test "range prove folds a threaded Bool join site that wrote the parameter as a literal" {
+    const testing = std.testing;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+    const flag = try store.addLocal(.{ .layout_idx = .bool });
+    const written = try store.addLocal(.{ .layout_idx = .bool });
+    const one = try store.addLocal(.{ .layout_idx = .u64 });
+    const zero = try store.addLocal(.{ .layout_idx = .u64 });
+    var fixture_join_ids = BodyClone.JoinParamIndex.init(testing.allocator);
+    defer fixture_join_ids.deinit();
+    const bool_join = fixture_join_ids.freshJoinPoint();
+
+    // join 0(flag) = switch flag { 1 => ret one, _ => ret zero }
+    const ret_true = try store.addCFStmt(.{ .ret = .{ .value = one } }, .test_fixture);
+    const ret_false = try store.addCFStmt(.{ .ret = .{ .value = zero } }, .test_fixture);
+    const bool_body = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = flag,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = ret_true }}),
+        .default_branch = ret_false,
+    } }, .test_fixture);
+    // written = literal 1 : Bool; flag := written; jump 0
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = bool_join } }, .test_fixture);
+    const set_flag = try store.addCFStmt(.{ .set_local = .{
+        .target = flag,
+        .value = written,
+        .mode = .initialize_join_param,
+        .next = jump,
+    } }, .test_fixture);
+    const set_written = try store.addCFStmt(.{ .assign_literal = .{
+        .target = written,
+        .value = .{ .i128_literal = .{ .value = 1, .layout_idx = .bool } },
+        .next = set_flag,
+    } }, .test_fixture);
+    const set_zero = try store.addCFStmt(.{ .assign_literal = .{
+        .target = zero,
+        .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
+        .next = set_written,
+    } }, .test_fixture);
+    const set_one = try store.addCFStmt(.{ .assign_literal = .{
+        .target = one,
+        .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+        .next = set_zero,
+    } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .join = .{
+        .id = bool_join,
+        .params = try store.addLocalSpan(&.{flag}),
+        .body = bool_body,
+        .remainder = set_one,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .identity = LIR.ProcIdentity.forTest(0),
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(&.{}),
+        .body = body,
+        .ret_layout = .u64,
+    }, .none);
+
+    var scratch = collections.SingleThreadArena.init(testing.allocator);
+    defer scratch.deinit();
+    try runProc(&store, &layouts, proc, scratch.allocator());
+
+    // No switch survives, and the one jump left is the threaded site's,
+    // targeting the join whose body is the true arm.
+    var switches: usize = 0;
+    var jump_targets = std.ArrayList(LIR.JoinPointId).empty;
+    defer jump_targets.deinit(testing.allocator);
+    var join_bodies = collections.DenseMap(LIR.JoinPointId, CFStmtId).init(testing.allocator);
+    defer join_bodies.deinit();
+    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpecImmediate(proc).body.?, testing.allocator);
+    defer walk.deinit();
+    while (try walk.next()) |stmt| {
+        const cf = store.getCFStmt(stmt);
+        if (cf == .switch_stmt) switches += 1;
+        if (cf == .jump) try jump_targets.append(testing.allocator, cf.jump.target);
+        if (cf == .join) try join_bodies.put(cf.join.id, cf.join.body);
+    }
+    try testing.expectEqual(@as(usize, 0), switches);
+    try testing.expectEqual(@as(usize, 1), jump_targets.items.len);
+    const chosen = store.getCFStmt(join_bodies.get(jump_targets.items[0]).?);
+    try testing.expect(chosen == .ret);
+    try testing.expectEqual(one, chosen.ret.value);
+}
+
 /// One symbolic value. A node is either a root (its own `root`, carrying
 /// inclusive unsigned bounds in `lo`/`hi`) or a bounded affine offset from a
 /// root: control reaching the defining statement guarantees
@@ -4854,9 +4944,12 @@ const Pass = struct {
             // A non-negative literal is the same number whatever its type,
             // so a signed literal binds too: as a mask it bounds a masked
             // signed value, which the wrap rules can then carry into the
-            // unsigned world.
+            // unsigned world. A Bool is a payload-free two-variant union
+            // whose discriminant is its byte, so a Bool literal is the
+            // discriminant a constant tag would carry, and the switch on a
+            // join parameter it feeds folds the same way.
             const layout_idx = self.localLayout(target);
-            if (trackedIntMax(layout_idx) != null or isSignedInt(layout_idx)) {
+            if (trackedIntMax(layout_idx) != null or isSignedInt(layout_idx) or (layout_idx == .bool and v <= 1)) {
                 if (try self.constNode(v)) |node| {
                     try self.bind(target, .{ .node = node });
                     return;
