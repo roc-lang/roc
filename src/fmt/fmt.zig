@@ -2003,6 +2003,51 @@ const Formatter = struct {
         nominal_record: struct { parenthesize_mapper: bool },
     };
 
+    /// How an `if` writes its condition. A `then` block's `{` already marks
+    /// where the condition ends, so its condition goes without grouping
+    /// parentheses; every other `then` branch gets a parenthesized condition.
+    /// A malformed condition prints no source to delimit, so it stays as written.
+    const IfCondition = union(enum) {
+        as_written,
+        parenthesized,
+        unwrapped: AST.Expr.Idx,
+    };
+
+    fn ifCondition(fmt: *Formatter, condition: AST.Expr.Idx, then: AST.Expr.Idx) IfCondition {
+        if (fmt.ast.store.getExpr(condition) == .malformed) return .as_written;
+        if (fmt.ast.store.getExpr(then) != .block) {
+            return if (fmt.groupedInner(condition) == null) .parenthesized else .as_written;
+        }
+        var inner = fmt.groupedInner(condition) orelse return .as_written;
+        while (fmt.groupedInner(inner)) |next| inner = next;
+        if (fmt.ast.store.getExpr(inner) == .malformed) return .as_written;
+        return .{ .unwrapped = inner };
+    }
+
+    /// The expression inside grouping parentheses that hold no comments.
+    fn groupedInner(fmt: *Formatter, expr_idx: AST.Expr.Idx) ?AST.Expr.Idx {
+        const expr = fmt.ast.store.getExpr(expr_idx);
+        if (expr != .tuple) return null;
+        const items = fmt.ast.store.exprSlice(expr.tuple.items);
+        if (items.len != 1 or fmt.ast.store.getCollectionLayout(expr_idx) != .compact) return null;
+        if (fmt.regionHasInteriorComment(expr.tuple.region)) return null;
+        return items[0];
+    }
+
+    fn ifConditionLayout(
+        fmt: *Formatter,
+        sink: LayoutSink,
+        comptime child: fn (*Formatter, LayoutSink, AST.Expr.Idx) Allocator.Error!bool,
+        condition: AST.Expr.Idx,
+        then: AST.Expr.Idx,
+    ) Allocator.Error!bool {
+        return switch (fmt.ifCondition(condition, then)) {
+            .as_written => child(fmt, sink, condition),
+            .parenthesized => fmt.groupedExprChild(sink, condition),
+            .unwrapped => |inner| child(fmt, sink, inner),
+        };
+    }
+
     fn removedReturnHasLeadingComment(fmt: *Formatter, expr_idx: AST.Expr.Idx) bool {
         const expr = fmt.ast.store.getExpr(expr_idx);
         return expr == .@"return" and fmt.ast.redundant_returns.isSet(@backingInt(expr_idx)) and
@@ -2762,10 +2807,18 @@ const Formatter = struct {
                     0 => {
                         try fmt.pushAll(kw(.KwIf));
                         f.locals = .{ .conditional = .{ .base_indent = fmt.curr_indent } };
-                        const cond_region = fmt.nodeRegion(@backingInt(i.condition));
+                        const condition = fmt.ifCondition(i.condition, i.then);
+                        const cond_region = fmt.nodeRegion(@backingInt(switch (condition) {
+                            .as_written, .parenthesized => i.condition,
+                            .unwrapped => |inner| inner,
+                        }));
                         try fmt.indentedBeforeOrSpace(cond_region.start);
                         f.phase = 1;
-                        return call(exprFrame(i.condition, .{}));
+                        return call(switch (condition) {
+                            .as_written => exprFrame(i.condition, .{}),
+                            .parenthesized => parenthesizedFrame(null, i.condition, try fmt.groupedExprWillBeMultiline(i.condition)),
+                            .unwrapped => |inner| exprFrame(inner, .{}),
+                        });
                     },
                     1 => {
                         // The then branch continues the condition's line, so a block
@@ -5261,10 +5314,10 @@ const Formatter = struct {
             .lambda => |l| fmt.ast.store.getCollectionLayout(expr_idx) == .expanded or
                 try child(fmt, sink, l.body) or
                 try fmt.itemsLayout(sink, AST.Pattern.Idx, fmt.ast.store.patternSlice(l.args)),
-            .if_then_else => |i| try child(fmt, sink, i.condition) or
+            .if_then_else => |i| try fmt.ifConditionLayout(sink, child, i.condition, i.then) or
                 try child(fmt, sink, i.then) or
                 try child(fmt, sink, i.@"else"),
-            .if_without_else => |i| try child(fmt, sink, i.condition) or try child(fmt, sink, i.then),
+            .if_without_else => |i| try fmt.ifConditionLayout(sink, child, i.condition, i.then) or try child(fmt, sink, i.then),
             .arrow_call => |a| if (grouped) fmt.exprChild(sink, expr_idx) else try child(fmt, sink, a.left) or try child(fmt, sink, a.right),
             .dbg => |d| child(fmt, sink, d.expr),
             .crash => |c| child(fmt, sink, c.expr),
@@ -6484,7 +6537,7 @@ test "issue 11160: pipe method receivers preserve expression grouping" {
         .{ .input = "t=x|>(a+b).y()", .expected = "t = x |> (a + b).y()\n" },
         .{ .input = "t=x|>(-a).y()", .expected = "t = x |> (-a).y()\n" },
         .{ .input = "t=x|>(|v|v).y()", .expected = "t = x |> (|v| v).y()\n" },
-        .{ .input = "t=x|>(if a b else c).y()", .expected = "t = x |> (if a b else c).y()\n" },
+        .{ .input = "t=x|>(if a b else c).y()", .expected = "t = x |> (if (a) b else c).y()\n" },
         .{ .input = "t=x|>(dbg a).y()", .expected = "t = x |> (dbg a).y()\n" },
         .{ .input = "t=x|>(crash \"failed\").y()", .expected = "t = x |> (crash \"failed\").y()\n" },
         .{ .input = "t=x|>((a+b).y())", .expected = "t = x |> ((a + b).y())\n" },
@@ -8277,7 +8330,7 @@ test "nested expressions, patterns, types, and statements format on a small nati
         .{ .head = "x = ", .open = "1 + (", .core = "1", .close = ")" },
         .{ .head = "x = 1", .open = "", .core = "", .close = " + 1" },
         .{ .head = "x = ", .open = "|a| ", .core = "a", .close = "" },
-        .{ .head = "x = ", .open = "if a b else ", .core = "c", .close = "" },
+        .{ .head = "x = ", .open = "if (a) b else ", .core = "c", .close = "" },
         .{ .head = "x = a", .open = "", .core = "", .close = " |> f" },
         .{ .head = "x = a |> f", .open = "", .core = "", .close = "()" },
         .{ .head = "x = ", .open = "f(", .core = "a", .close = "?)" },
@@ -9594,10 +9647,53 @@ test "multiline field access pipe target keeps its parentheses" {
     try std.testing.expectEqualStrings("x = y\n\t|> (rec\n\t.func1)\n", result);
 }
 
+test "if condition is parenthesized unless the then branch is a block" {
+    const input =
+        \\abs = |n| if n < 0 -n else n
+        \\max = |a, b| if a > b a else b
+        \\rec = |c| if c { x: 1 } else { x: 2 }
+        \\kept = |n| if (n < 0) -n else n
+        \\run! = |c| if c log!("yes")
+        \\multi = |n|
+        \\    if n < 0
+        \\        -n
+        \\    else
+        \\        n
+        \\blk = |n| if (n < 0) {
+        \\    -n
+        \\} else n
+        \\nested = |n| if ((n < 0)) {
+        \\    -n
+        \\} else n
+        \\chain = |n| if n < 0 -1 else if (n == 0) {
+        \\    0
+        \\} else 1
+        \\commented = |n| if (n < 0 # why
+        \\) {
+        \\    -n
+        \\} else n
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(
+        "abs = |n| if (n < 0) -n else n\n\n" ++
+            "max = |a, b| if (a > b) a else b\n\n" ++
+            "rec = |c| if (c) { x: 1 } else { x: 2 }\n\n" ++
+            "kept = |n| if (n < 0) -n else n\n\n" ++
+            "run! = |c| if (c) log!(\"yes\")\n\n" ++
+            "multi = |n|\n\tif (n < 0)\n\t\t-n\n\telse\n\t\tn\n\n" ++
+            "blk = |n| if n < 0 {\n\t-n\n} else n\n\n" ++
+            "nested = |n| if n < 0 {\n\t-n\n} else n\n\n" ++
+            "chain = |n| if (n < 0) -1 else if n == 0 {\n\t0\n} else 1\n\n" ++
+            "commented = |n| if (\n\tn < 0 # why\n) {\n\t-n\n} else n\n",
+        result,
+    );
+}
+
 test "else block aligns with if when only the else branch has braces" {
     const input =
         "value =\n" ++
-        "\tif True 1\n" ++
+        "\tif (True) 1\n" ++
         "\telse { # comment\n" ++
         "\t\t2\n" ++
         "\t}\n";
@@ -9623,8 +9719,8 @@ test "else on its own line aligns with if when the then branch is a block" {
 test "else chain with a final block stays aligned with if" {
     const input =
         "value =\n" ++
-        "\tif True 1\n" ++
-        "\telse if False 3\n" ++
+        "\tif (True) 1\n" ++
+        "\telse if (False) 3\n" ++
         "\telse {\n" ++
         "\t\t2\n" ++
         "\t}\n";

@@ -83,7 +83,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-foo = if 1 A
+foo = if (1) A
 
 else {
 	"hello"

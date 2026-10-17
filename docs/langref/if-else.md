@@ -67,6 +67,28 @@ if foo {
 }
 ```
 
+## Branches Without Curly Braces
+
+The branches of an `if` don't have to be blocks. When a branch is a single expression, you can write it without curly braces, which lets a short `if` fit on one line:
+
+```roc
+abs = if (n < 0) -n else n
+```
+
+When the branch after the condition isn't a block, `roc fmt` puts parentheses around the condition. That's because without them, it can be hard to see where the condition ends and the branch begins. In `if n < 0 -n else n`, the `0 -n` looks like subtraction, and in `if a > b a else b`, the `b a` runs together.
+
+When the branch after the condition is a block, its `{` already marks where the condition ends, so `roc fmt` leaves the parentheses out:
+
+```roc
+abs = if n < 0 {
+    -n
+} else {
+    n
+}
+```
+
+The parentheses only affect formatting; `if n < 0 -n else n` and `if (n < 0) -n else n` mean exactly the same thing.
+
 ## `if` without `else`
 
 You can write an `if` without an `else`, but only when the body of the `if` evaluates to [`{}`](records#empty-record). For example, this is allowed:
@@ -100,7 +122,7 @@ a() or b()
 ...does exactly the same thing as:
 
 ```roc
-if a() True else b()
+if (a()) True else b()
 ```
 
 Similarly:
@@ -112,7 +134,7 @@ a() and b()
 ...does exactly the same thing as:
 
 ```roc
-if a() b() else False
+if (a()) b() else False
 ```
 
 Note that Roc does not have `&&` or `||` operators for boolean logic like some languages do. This is mostly because Roc uses `|` to define [functions](functions), and `||` means a function with no arguments. Using the keyword _or_ avoids overloading `||` to mean a function sometimes and a conditional other times.
