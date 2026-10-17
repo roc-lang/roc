@@ -5139,6 +5139,108 @@ test "default-platform RocStr view matches canonical RocStr layout" {
     }
 }
 
+test "default-platform RocStr view constants match canonical representation" {
+    const view = @import("roc_str_view");
+
+    try std.testing.expectEqual(SEAMLESS_SLICE_TAG, view.seamless_slice_tag);
+    try std.testing.expectEqual(RocStr.small_str_flag, view.small_str_flag);
+    try std.testing.expectEqual(RocStr.capacity_shift, view.capacity_shift);
+    try std.testing.expectEqual(RocList.capacity_shift, view.capacity_shift);
+    try std.testing.expectEqual(utils.REFCOUNT_STATIC_DATA, view.static_refcount);
+}
+
+const default_platform_view_dealloc = struct {
+    var released: ?*anyopaque = null;
+
+    fn record(ptr: *anyopaque, _: usize) callconv(.c) void {
+        std.debug.assert(released == null);
+        released = ptr;
+    }
+};
+
+fn defaultPlatformView(canonical: RocStr) @import("roc_str_view").RocStr {
+    return std.mem.bytesToValue(@import("roc_str_view").RocStr, std.mem.asBytes(&canonical));
+}
+
+fn expectDefaultPlatformViewAgrees(canonical: RocStr) !void {
+    const view = defaultPlatformView(canonical);
+
+    try std.testing.expectEqual(canonical.isSmallStr(), view.isSmallStr());
+    try std.testing.expectEqual(canonical.isSeamlessSlice(), view.isSeamlessSlice());
+    try std.testing.expectEqual(canonical.len(), view.len());
+    try std.testing.expectEqualStrings(canonical.asSlice(), view.asSlice());
+    if (canonical.isSmallStr()) {
+        try std.testing.expectEqual(@as(?[*]u8, null), view.allocationPtr());
+    } else {
+        try std.testing.expectEqual(canonical.getAllocationPtr(), view.allocationPtr());
+    }
+}
+
+test "default-platform RocStr view agrees with canonical RocStr" {
+    var env = TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const ops = env.getOps();
+
+    // Small strings, including the empty string and one filling every inline byte.
+    try expectDefaultPlatformViewAgrees(RocStr.empty());
+    try expectDefaultPlatformViewAgrees(RocStr.fromSliceSmall("small"));
+    const full_small: [SMALL_STR_MAX_LENGTH]u8 = @splat('a');
+    try expectDefaultPlatformViewAgrees(RocStr.fromSliceSmall(&full_small));
+
+    // A big string, then a seamless slice into a list allocation.
+    const big = RocStr.fromSlice("a string long enough to be heap allocated", ops);
+    try expectDefaultPlatformViewAgrees(big);
+    const list = RocList.fromSlice(u8, "a list long enough to back a seamless slice", false, ops);
+    const slice = RocStr.fromSubListUnsafe(list, 2, 30, .Immutable, ops);
+    try std.testing.expect(slice.isSeamlessSlice());
+    try expectDefaultPlatformViewAgrees(slice);
+
+    // A static-lifetime allocation.
+    var static_storage: [8]usize = undefined;
+    static_storage[0] = @bitCast(utils.REFCOUNT_STATIC_DATA);
+    const static_bytes: [*]u8 = @ptrCast(&static_storage[1]);
+    const static_text = "static bytes long enough to be big";
+    @memcpy(static_bytes[0..static_text.len], static_text);
+    const static_str = RocStr{
+        .bytes = static_bytes,
+        .capacity_or_alloc_ptr = RocStr.encodeCapacity(static_text.len),
+        .length = static_text.len,
+    };
+    try expectDefaultPlatformViewAgrees(static_str);
+
+    // Static data is never released, and its count is never touched.
+    default_platform_view_dealloc.released = null;
+    var static_view = defaultPlatformView(static_str);
+    static_view.decref(&default_platform_view_dealloc.record);
+    try std.testing.expectEqual(@as(?*anyopaque, null), default_platform_view_dealloc.released);
+    try std.testing.expectEqual(@as(usize, @bitCast(utils.REFCOUNT_STATIC_DATA)), static_storage[0]);
+
+    // Small strings own no allocation.
+    var small_view = defaultPlatformView(RocStr.fromSliceSmall("small"));
+    small_view.decref(&default_platform_view_dealloc.record);
+    try std.testing.expectEqual(@as(?*anyopaque, null), default_platform_view_dealloc.released);
+
+    // A shared slice drops to unique without releasing, as the canonical decref would.
+    // The slice borrows the list's single reference, so sharing it takes one more.
+    slice.incref(1, ops);
+    var slice_view = defaultPlatformView(slice);
+    slice_view.decref(&default_platform_view_dealloc.record);
+    try std.testing.expectEqual(@as(?*anyopaque, null), default_platform_view_dealloc.released);
+    try std.testing.expect(slice.isUnique());
+
+    // Releasing the last reference frees the same allocation the canonical decref frees.
+    const allocation_count = env.getAllocationCount();
+    var big_view = defaultPlatformView(big);
+    big_view.decref(&default_platform_view_dealloc.record);
+    const released = default_platform_view_dealloc.released orelse return error.TestExpectedRelease;
+    try std.testing.expect(env.allocation_map.contains(released));
+    ops.roc_dealloc(ops, released, RocStr.alignment);
+    try std.testing.expectEqual(allocation_count - 1, env.getAllocationCount());
+
+    list.decref(1, 1, false, null, &rcNone, ops);
+    try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
+}
+
 test "validated UTF-8 construction: inline copies and retained heap ownership" {
     var env = TestEnv.init(std.testing.allocator);
     defer env.deinit();
