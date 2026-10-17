@@ -632,6 +632,19 @@ dev code never needs an object it did not ask for. A build whose store lacks
 a URL-package module's object pack builds it once the module is checked and
 before the program lowers, so that build already links it.
 
+A specialization whose request mentions a function type has no
+reservation-time key: which closures it receives is decided by lambda
+solving. Its earliest hit is therefore in Direct LIR, once Lambda Mono has
+decided its `ProcIdentity` (source, solved types with their lambda sets,
+captures). A dev pack offers every procedure of the program it was written
+from under `Common.procIdentityCacheKey(identity)`, by the same rules as its
+keyed entries, and Direct LIR looks a finite-ABI procedure up by that key
+when no reservation key served it. Monotype and lifting have already run
+for such a procedure; the hit skips its Direct LIR body, the LIR passes, ARC,
+and code generation. Whether the code evaluates a compile-time root in place
+is read from Monotype's per-function summary (`SpecComptimeReads.fnReads`),
+through the procedure's `source_monotype_fn`.
+
 ### Read-Only Type Analysis
 
 Read-only type analysis must not use permanent solver allocation as scratch.

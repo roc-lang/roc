@@ -67,7 +67,7 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      side tables carry only what lowering produces.
 /// v45: layout representation fields are sized for practice, and resolved list
 ///      layouts are plain layout indices.
-pub const FORMAT_VERSION: u32 = 47;
+pub const FORMAT_VERSION: u32 = 48;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.

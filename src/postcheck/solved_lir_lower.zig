@@ -2918,6 +2918,20 @@ const Lowerer = struct {
         } else if (pack_trace_available and self.spec_cache != null and packTraceEnabled()) {
             if (source_fn.source) |template| if (template.spec_key) |key| std.debug.print("lookup direct-lir key={x} skipped comptime={} plain={} cached={}\n", .{ key.bytes[0..8], self.comptime_phase, plain_spec, cached != null });
         }
+        // Any other procedure a body lowered for is served by its identity,
+        // which names its code once Lambda Mono has decided it: its source,
+        // its solved types with their lambda sets, and its captures.
+        if (cached == null and source_fn.body == .roc and spec.abi == .finite and !spec.return_reuse.enabled() and
+            (!self.comptime_phase or self.comptime_closure_hits))
+        {
+            if (self.spec_cache) |cache| {
+                const key = Common.procIdentityCacheKey(identity.bytes);
+                if (cache.lookup(key, relation, self.spec_cache_accepts_linked)) |hit| {
+                    if (std.mem.eql(u8, &hit.identity, &identity.bytes)) cached = hit;
+                }
+                if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup identity key={x} {s}\n", .{ key[0..8], if (cached != null) "hit" else "miss" });
+            }
+        }
         if (self.procs_by_identity.get(identity)) |owner| {
             // Another specialization interned this procedure. Share its proc;
             // the owner's reach-queue entry lowers the body once, whether the
@@ -3001,6 +3015,8 @@ const Lowerer = struct {
             .abi = if (spec.abi == .erased) .erased_callable else .roc,
             .hosted = try self.hostedProcForSource(source_fn.source),
             .external = cached != null,
+            .source_monotype_fn = if (source_fn.source) |template| if (template.frozen_fn) |mono_fn| @backingInt(mono_fn) else null else null,
+            .platform_requirement_relation = dependency_relation,
             .c_abi_entry = if (cached) |hit| hit.c_abi_entry else false,
             .rc_borrowed_params = if (cached) |hit| hit.rc_borrowed_params else 0,
             .rc_ret_borrowed = if (cached) |hit| hit.rc_ret_borrowed else false,

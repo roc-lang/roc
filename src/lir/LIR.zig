@@ -1714,6 +1714,15 @@ pub const LirProcSpec = struct {
     /// body here, its `identity` names the cache entry, and its `rc_*`
     /// fields carry the ownership signature the entry was compiled with.
     external: bool = false,
+    /// The Monotype function this procedure lowers, which keys the producer's
+    /// summary of the compile-time roots its code reads
+    /// (`SpecComptimeReads.fnReads`); null for a procedure no Monotype
+    /// function names.
+    source_monotype_fn: ?u32 = null,
+    /// The platform/app relation this procedure's code depends on
+    /// (`Lifted.Program.fnPlatformRequirementRelation`); null when its code
+    /// is the same for every app filling.
+    platform_requirement_relation: ?[32]u8 = null,
     /// Set on an `external` proc whose cache entry is a linked object rather
     /// than spliced code: callers reach it through its C-ABI entry
     /// (`ProcIdentity.writeCAbiEntryName`), classified from its argument and

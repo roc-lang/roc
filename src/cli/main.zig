@@ -8626,7 +8626,39 @@ fn packFileBytes(
         if (builtin.mode == .debug) std.debug.panic("a program written to the object cache recorded no compile-time reads", .{});
         unreachable;
     };
+    // Every keyed specialization, then every procedure by its identity
+    // (`Common.procIdentityCacheKey`), which serves specializations no
+    // reservation-time key names.
+    const Candidate = struct {
+        key: [32]u8,
+        proc: lir.LIR.LirProcSpecId,
+        platform_requirement_relation: ?[32]u8,
+        reads: lir.CheckedPipeline.SpecComptimeReads.Lookup,
+        by_identity: bool,
+    };
+    var candidates = std.ArrayList(Candidate).empty;
+    defer candidates.deinit(allocator);
     for (lowered.lir_result.spec_procs.items) |spec_proc| {
+        try candidates.append(allocator, .{
+            .key = spec_proc.key,
+            .proc = spec_proc.proc,
+            .platform_requirement_relation = spec_proc.platform_requirement_relation,
+            .reads = comptime_reads.get(spec_proc.key),
+            .by_identity = false,
+        });
+    }
+    for (procs, 0..) |proc, index| {
+        if (proc.abi != .roc or proc.hosted != null or proc.is_static_initializer) continue;
+        const source_fn = proc.source_monotype_fn orelse continue;
+        try candidates.append(allocator, .{
+            .key = postcheck.Common.procIdentityCacheKey(proc.identity.bytes),
+            .proc = @fromBackingInt(@intCast(index)),
+            .platform_requirement_relation = proc.platform_requirement_relation,
+            .reads = comptime_reads.fnReads(source_fn),
+            .by_identity = true,
+        });
+    }
+    for (candidates.items) |spec_proc| {
         const proc = procs[@backingInt(spec_proc.proc)];
         const artifact = artifact_by_identity.get(proc.identity) orelse continue;
         // An entry whose code evaluates a compile-time root in place would
@@ -8634,7 +8666,7 @@ fn packFileBytes(
         // root itself, so it is not offered. Any other entry carries the
         // roots it reads, which a linking program demands (design.md
         // "Demand-Driven Compile-Time Evaluation").
-        const entry_reads = comptime_reads.get(spec_proc.key);
+        const entry_reads = spec_proc.reads;
         if (!entry_reads.offerable) {
             withheld += 1;
             continue;
@@ -8678,7 +8710,7 @@ fn packFileBytes(
         // its producer's code; only a body lowered here has a fingerprint.
         if (trace and proc.body != null) {
             const fingerprint = try procFingerprint(allocator, lowered, spec_proc.proc);
-            std.debug.print("offer {x} {x:0>16} {s}\n", .{ &spec_proc.key, fingerprint, lowered.lir_result.store.procDebugName(spec_proc.proc) orelse "" });
+            std.debug.print("{s} {x} {x:0>16} {s}\n", .{ if (spec_proc.by_identity) "offer-identity" else "offer", &spec_proc.key, fingerprint, lowered.lir_result.store.procDebugName(spec_proc.proc) orelse "" });
         }
         try specs.append(allocator, .{
             .key = spec_proc.key,

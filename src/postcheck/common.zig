@@ -422,6 +422,17 @@ pub const SpecCacheHit = struct {
     rc_ret_conditions: []const u32,
 };
 
+/// The object-cache key of a procedure served by its identity alone: a
+/// specialization whose request mentions functions, so no reservation-time
+/// key names it, is looked up once Lambda Mono has decided its identity
+/// (design.md "Object Cache Store").
+pub fn procIdentityCacheKey(identity: [32]u8) [32]u8 {
+    var hasher = base.Sha256.init(.{});
+    hasher.update("roc.object-cache.proc-identity.v1");
+    hasher.update(&identity);
+    return hasher.finalResult();
+}
+
 /// The object cache's answer for a specialization key, asked when Monotype
 /// reserves the specialization and before its body exists. The consumer that
 /// owns the cache supplies the context and the lookup.

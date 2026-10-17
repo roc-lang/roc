@@ -434,6 +434,7 @@ const CustomCase = enum {
     boxed_closure_object_cache,
     spliced_procedure_debug_lines,
     linked_object_pack,
+    proc_identity_object_cache,
     native_build_artifact_round_trip,
     native_build_pack_objects,
     native_build_pack_hits,
@@ -2987,6 +2988,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive succeeds", .body = .{ .custom = .default_platform_build_wasm32 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive output is reproducible", .body = .{ .custom = .default_platform_wasm32_archive_reproducible } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev output is identical across thread counts and repeated builds", .timeout_ms = 600_000, .body = .{ .custom = .native_build_thread_count_reproducible } },
+    .{ .id = 0, .suite = .subcommands, .name = "object cache: an edited app is served higher-order specializations by their procedure identity", .timeout_ms = 600_000, .body = .{ .custom = .proc_identity_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: a dev build links a URL package's optimized object pack and behaves like the uncached build", .timeout_ms = 900_000, .body = .{ .custom = .linked_object_pack } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: spliced procedures keep the debug lines of the cold build", .timeout_ms = 600_000, .body = .{ .custom = .spliced_procedure_debug_lines } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: exports taking and returning boxed closures are offered and served warm", .timeout_ms = 600_000, .body = .{ .custom = .boxed_closure_object_cache } },
@@ -4871,6 +4873,7 @@ fn runCustomCase(
         .boxed_closure_object_cache => customBoxedClosureObjectCache(io, allocator, &env, &timer, timeout_ms),
         .spliced_procedure_debug_lines => customSplicedProcedureDebugLines(io, allocator, &env, &timer, timeout_ms),
         .linked_object_pack => customLinkedObjectPack(io, allocator, &env, &timer, timeout_ms),
+        .proc_identity_object_cache => customProcIdentityObjectCache(io, allocator, &env, &timer, timeout_ms),
         .native_build_artifact_round_trip => customNativeBuildArtifactRoundTrip(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_objects => customNativeBuildPackObjects(io, allocator, &env, &timer, timeout_ms),
         .issue_11673_callable_cache => customIssue11673CallableCache(io, allocator, &env, &timer, timeout_ms),
@@ -7898,6 +7901,77 @@ fn customBoxedClosureObjectCache(
         })) |failure| return failure;
     }
     return null;
+}
+
+/// `Lib.apply_steps` takes a function, so no reservation-time key names its
+/// specializations. After the app module is edited, the rebuild must be
+/// served them by procedure identity from the first build's pack, since every
+/// function the requests mention is declared in the unchanged `Lib`, and the
+/// program must print what it printed before plus the edit's own line.
+fn customProcIdentityObjectCache(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var app: []const u8 = undefined;
+    if (stageEditableApp(io, allocator, env, timer, .{
+        .dir_name = "proc_identity_object_cache",
+        .platform = "test/fx-open/platform/main.roc",
+        .platform_spelling = "../../fx-open/platform/main.roc",
+        .sources = &.{ "test/cli/proc_identity_object_cache/Lib.roc", "test/cli/proc_identity_object_cache/App.roc" },
+        .app_name = "App.roc",
+    }, &app)) |failure| return failure;
+    var trace_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone pack trace environment: {}", .{err}),
+    };
+    defer trace_env.env_map.deinit();
+    trace_env.env_map.put("ROC_PACK_TRACE", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable pack tracing: {}", .{err});
+    const outputs = [_][]const u8{ "64\n7\n24\n", "64\n7\n24\nedited\n" };
+    for ([_][]const u8{ "first", "edited" }, outputs) |name, expected| {
+        if (std.mem.eql(u8, name, "edited")) {
+            const source = std.Io.Dir.cwd().readFileAlloc(io, app, allocator, .limited(1024 * 1024)) catch |err|
+                return customInfraFailure(allocator, timer, "failed to read the app: {}", .{err});
+            const edited = std.mem.replaceOwned(u8, allocator, source, "\tOk({})", "\tStdout.line!(\"edited\")\n\tOk({})") catch |err|
+                return customInfraFailure(allocator, timer, "failed to edit the app: {}", .{err});
+            std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = edited }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to write the edited app: {}", .{err});
+        }
+        const exe = std.fmt.allocPrint(allocator, "{s}/proc_identity_{s}", .{ env.dirs.work_dir, name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const out_arg = outputArg(allocator, exe) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+        const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
+        const built = runRocInEnv(io, allocator, &trace_env, &.{ "build", "--opt=dev", out_arg }, app, .absolute, &.{}, null, build_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+        if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
+            return failureFromRun(allocator, timer, built, "dev build did not succeed");
+        }
+        if (std.mem.eql(u8, name, "edited") and std.mem.find(u8, built.stderr, "lookup identity key=") == null) {
+            return failureFromRun(allocator, timer, built, "the edited build looked up no specialization by its identity");
+        }
+        if (std.mem.eql(u8, name, "edited") and !hasIdentityHit(built.stderr)) {
+            return failureFromRun(allocator, timer, built, "the edited build was served no specialization by its identity");
+        }
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
+            .args = &.{},
+            .stdout_exact = expected,
+        })) |failure| return failure;
+    }
+    return null;
+}
+
+fn hasIdentityHit(stderr: []const u8) bool {
+    var lines = std.mem.splitScalar(u8, stderr, '\n');
+    while (lines.next()) |line| {
+        if (std.mem.startsWith(u8, line, "lookup identity key=") and std.mem.endsWith(u8, line, " hit")) return true;
+    }
+    return false;
 }
 
 /// Seed `cache_root`'s package directory with the URL package of

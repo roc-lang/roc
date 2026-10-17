@@ -874,6 +874,9 @@ pub const SpecComptimeReads = struct {
 
     allocator: Allocator,
     rows: std.AutoHashMapUnmanaged([32]u8, Row) = .empty,
+    /// The same summary for every function of the program, by its id, for
+    /// procedures served by their identity rather than a key.
+    fn_rows: std.AutoHashMapUnmanaged(u32, Row) = .empty,
     reads: std.ArrayList(Common.ComptimeRootRead) = .empty,
 
     pub fn get(self: *const SpecComptimeReads, key: [32]u8) Lookup {
@@ -881,16 +884,24 @@ pub const SpecComptimeReads = struct {
         return .{ .offerable = !row.local, .reads = self.reads.items[row.start..][0..row.len] };
     }
 
+    /// The summary of the function `fn_id` names.
+    pub fn fnReads(self: *const SpecComptimeReads, fn_id: u32) Lookup {
+        const row = self.fn_rows.get(fn_id) orelse return .{ .offerable = true, .reads = &.{} };
+        return .{ .offerable = !row.local, .reads = self.reads.items[row.start..][0..row.len] };
+    }
+
     pub fn clone(self: *const SpecComptimeReads, allocator: Allocator) Allocator.Error!SpecComptimeReads {
         var result: SpecComptimeReads = .{ .allocator = allocator };
         errdefer result.deinit();
         result.rows = try self.rows.clone(allocator);
+        result.fn_rows = try self.fn_rows.clone(allocator);
         try result.reads.appendSlice(allocator, self.reads.items);
         return result;
     }
 
     pub fn deinit(self: *SpecComptimeReads) void {
         self.rows.deinit(self.allocator);
+        self.fn_rows.deinit(self.allocator);
         self.reads.deinit(self.allocator);
         self.* = .{ .allocator = self.allocator };
     }
@@ -6268,19 +6279,21 @@ const Builder = struct {
         var result: SpecComptimeReads = .{ .allocator = self.allocator };
         errdefer result.deinit();
         for (view.fns, 0..) |fn_, raw| {
-            const key = fn_.source.spec_key orelse continue;
             const item = state.fn_items.items[raw] orelse continue;
             if (!reaches_read[Dense.of(item, def_count)]) continue;
             const reads = try state.rootReads(self.allocator, view, item);
-            const entry = try result.rows.getOrPut(self.allocator, key.bytes);
-            // Specializations sharing a key are one specialization.
-            if (entry.found_existing) continue;
             const start = result.reads.items.len;
             for (reads) |read| {
                 const root = state.roots.items[read];
                 try result.reads.append(self.allocator, .{ .module = root.module.bytes, .root = @backingInt(root.root) });
             }
-            entry.value_ptr.* = .{ .start = @intCast(start), .len = @intCast(result.reads.items.len - start), .local = state.closure_local };
+            const row: SpecComptimeReads.Row = .{ .start = @intCast(start), .len = @intCast(result.reads.items.len - start), .local = state.closure_local };
+            try result.fn_rows.put(self.allocator, @intCast(raw), row);
+            const key = fn_.source.spec_key orelse continue;
+            const entry = try result.rows.getOrPut(self.allocator, key.bytes);
+            // Specializations sharing a key are one specialization.
+            if (entry.found_existing) continue;
+            entry.value_ptr.* = row;
         }
         // A key that resolved to another key's specialization reads what
         // that specialization reads.
