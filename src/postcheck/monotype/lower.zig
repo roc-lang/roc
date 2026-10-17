@@ -1,6 +1,7 @@
 //! Checked modules to Monotype IR.
 
 const std = @import("std");
+const build_options = @import("build_options");
 const TypeDigestHasher = @import("base").TypeDigestHasher;
 const check = @import("check");
 const can = @import("can");
@@ -24475,7 +24476,7 @@ const BodyContext = struct {
                 },
                 .list, .box => |child| try pending.append(self.allocator, child),
                 .tuple => |items| try pending.appendSlice(self.allocator, items),
-                .record => |record| for (record.fields) |field| try pending.append(self.allocator, field.ty),
+                .record => |record| for (record.fields) |field| try pending.append(self.allocator, self.graph.fieldValueNode(field)),
                 .tag_union => |tag_union| for (tag_union.tags) |tag| try pending.appendSlice(self.allocator, tag.payloads),
                 .redirect, .leaf => unreachable,
                 .unresolved,
@@ -60200,7 +60201,7 @@ const BodyContext = struct {
                 },
                 .tuple => try pending.appendSlice(self.allocator, try self.graph.tupleItemNodes(raw_node)),
                 .record => {
-                    for ((try self.graph.recordNodes(raw_node)).fields) |field| try pending.append(self.allocator, field.ty);
+                    for ((try self.graph.recordNodes(raw_node)).fields) |field| try pending.append(self.allocator, self.graph.fieldValueNode(field));
                 },
                 .tag_union => {
                     for ((try self.graph.tagRowNodes(raw_node)).tags) |tag| try pending.appendSlice(self.allocator, tag.payloads);
@@ -68271,9 +68272,10 @@ fn dispatchPlanIdForRuntimeExpr(view: ModuleView, expr_id: checked.CheckedExprId
     return plan_id;
 }
 
-/// Builds without libc (the playground) never read the environment and
-/// compile no trace output.
-const pack_trace_available = @import("builtin").link_libc;
+/// Builds without libc (the playground) and compilers built without
+/// developer diagnostics never read the environment and compile no trace
+/// output.
+const pack_trace_available = @import("builtin").link_libc and build_options.dev_diagnostics;
 
 /// `ROC_PACK_TRACE` is set: print every object cache lookup.
 fn packTraceEnabled() bool {

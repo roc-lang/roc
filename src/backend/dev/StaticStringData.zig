@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const builtins = @import("builtins");
 const lir = @import("lir");
 const RocTarget = @import("roc_target").RocTarget;
 
@@ -145,7 +146,8 @@ pub fn build(allocator: Allocator, store: *const lir.LirStore, target: RocTarget
         var bytes_owned = true;
         errdefer if (bytes_owned) allocator.rawFree(bytes, allocation_alignment, @returnAddress());
         @memset(bytes, 0);
-        writeSignedWord(word_size, bytes, data_offset - word_size, 0);
+        const refcount_offset: u32 = @intCast(@as(i64, data_offset) + builtins.utils.targetRefcountOffset(word_size));
+        writeSignedWord(word_size, bytes, refcount_offset, builtins.utils.REFCOUNT_STATIC_DATA);
         @memcpy(bytes[data_offset..][0..entry.bytes.len], entry.bytes);
 
         const relocations = try allocator.alloc(StaticDataRelocation, 0);

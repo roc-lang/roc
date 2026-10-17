@@ -53,7 +53,15 @@ TYPE MISMATCH - unannotated_list_interpolation_type_mismatch_issue_10109.md:3:12
 			(annotation-start code-block)
 			(indent 1)
 			(text "Str")
-			(annotation-end))))
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "To get a representation of this value for debugging, use")
+			(reflow " ")
+			(annotated code "Str.inspect")
+			(reflow "."))))
 ~~~
 # TOKENS
 ~~~zig
