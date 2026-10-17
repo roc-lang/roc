@@ -14804,7 +14804,18 @@ selected source and captures already identify the procedure being compiled.
 Passing a closed imported function beside another lambda must not change its
 procedure identity or prevent reuse of its module-pack entry. Callable sets
 nested in arguments, results, and captures remain part of identity because they
-determine runtime representations and dispatch inside the procedure. Function
+determine runtime representations and dispatch inside the procedure. An erased
+callable is the exception: it is one pointer-sized value called through the
+convention of its source function type whichever closures the program puts in
+it, so identity renders its source function type and not its members. A
+procedure that packs a function into an erased callable names that function in
+its own body. For the same reason a specialization request whose function
+types all sit inside a `Box` (every function a box holds is erased, see
+"Erased Callable Requirements") is closed, and the object cache keys it like
+any other closed request. Its entry is offered only when its code makes no
+erased call and builds no erased callable: the erased-call runtime those use
+reads the program's own layout tables, so their relocations name
+`program`-scope symbols (see "Object Symbol Names"). Function
 value type digests retain their complete callable sets, including when reached
 recursively from those nested positions.
 

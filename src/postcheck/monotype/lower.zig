@@ -7855,8 +7855,8 @@ const Builder = struct {
         var fn_template = self.fnDefForTemplate(view, template_ref, source_fn_ty, source_fn_key, lower_fn_ty);
         fn_template.evidence_digest = evidence_digest;
         // Only a closed request names a specialization the object cache can
-        // hold: a function type in its arguments or result makes the body
-        // depend on the program's lambda sets. The request's outer arrow does
+        // hold: a function type in its arguments or result outside a `Box`
+        // makes the body depend on the program's lambda sets. The request's outer arrow does
         // not: procedure identity selects its source and captures explicitly,
         // independently of the callable set its value joins in the caller.
         // A hosted template has no procedure of its own to cache: callers
@@ -8016,8 +8016,13 @@ const Builder = struct {
     /// identity, ids, and seed are already reserved. Runs immediately for
     /// direct callers and from the scheduler's wave drain for queued symbolic
     /// requests.
-    /// Whether a function type's arguments or result mention a function or
-    /// erased callable anywhere, nominal backings included.
+    /// Whether a function type's arguments or result mention a function
+    /// anywhere outside a `Box`, nominal backings included. Every function
+    /// reachable from a `Box` is an erased callable (design.md "Erased
+    /// Callable Requirements"), as is an `erased` type: one pointer-sized
+    /// value called through one calling convention whichever closure it
+    /// holds, so it does not tie a procedure's code to the program's lambda
+    /// sets.
     fn monoFnTypeMentionsFunction(self: *Builder, fn_ty: Type.TypeId) Allocator.Error!bool {
         const types = self.program.types.view();
         switch (types.get(fn_ty)) {
@@ -8029,7 +8034,8 @@ const Builder = struct {
         }
     }
 
-    /// Whether a `func` or `erased` type is reachable from `root`. Answers
+    /// Whether a `func` type is reachable from `root` without passing through
+    /// a `box`. Answers
     /// persist in `function_mentions` across requests, so a later scan stops
     /// at every type an earlier one answered instead of walking the same
     /// nested types again.
@@ -8125,8 +8131,8 @@ const Builder = struct {
 
     fn functionContent(content: Type.Content) bool {
         return switch (content) {
-            .erased, .func => true,
-            .primitive, .zst, .named, .record, .tuple, .tag_union, .list, .box => false,
+            .func => true,
+            .primitive, .zst, .erased, .named, .record, .tuple, .tag_union, .list, .box => false,
         };
     }
 
@@ -8142,7 +8148,8 @@ const Builder = struct {
         try on_path.put(ty, {});
         const start = children.items.len;
         switch (types.get(ty)) {
-            .primitive, .zst, .erased, .func => {},
+            // Everything a box holds is erased.
+            .primitive, .zst, .erased, .func, .box => {},
             .named => |named| {
                 try children.appendSlice(self.allocator, types.span(named.args));
                 if (named.backing) |backing| try children.append(self.allocator, backing.ty);
@@ -8150,7 +8157,7 @@ const Builder = struct {
             .record => |span| for (types.fieldSpan(span)) |field| try children.append(self.allocator, field.ty),
             .tuple => |span| try children.appendSlice(self.allocator, types.span(span)),
             .tag_union => |span| for (types.tagSpan(span)) |tag| try children.appendSlice(self.allocator, types.span(tag.payloads)),
-            .list, .box => |elem| try children.append(self.allocator, elem),
+            .list => |elem| try children.append(self.allocator, elem),
         }
         try frames.append(self.allocator, .{ .ty = ty, .start = start, .next = start, .end = children.items.len });
     }
