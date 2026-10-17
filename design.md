@@ -9311,9 +9311,15 @@ wrapper; such a child produces no value, so the join has nothing to relate.
   concrete-to-dynamic boundary, as every value stored at a dynamic
   representation does; `assertRowCoerceReach` pins that the pair is within the
   reach before it does.
-- SpecConstr clones and walks through the child like any wrapper, retains no
-  known-value structure across the widen, substitutes nothing through it, and
-  treats a self call under a widen as NOT a tail call.
+- SpecConstr clones and walks through the child like any wrapper, and treats
+  a self call under a widen as NOT a tail call. A widen changes no value, so
+  the child's known structure carries across it at the widen's type
+  (`widenedValue`): a tag keeps its name and a nominal its backing, each
+  rebuilt at the destination's type; a component whose type already is the
+  destination's stays as it is; and an exact runtime value at a differing type
+  becomes a `row_widen` of itself. Case-of-case distributes through a widen
+  of a `match` or `if`, reading each arm's value across it, so a builtin whose
+  body is widened into its open result still folds into its caller's match.
 - The Lambda Mono oracle relates the child to the destination by name through
   `convertValue`, as it does for a `?` return.
 

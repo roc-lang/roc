@@ -9177,7 +9177,7 @@ const Builder = struct {
 
         const graph_fn_ty = try body_ctx.importProgramType(lower_fn_ty);
 
-        const root_node = try body_ctx.relateCheckedFunctionToMono(template.checked_fn_root, graph_fn_ty);
+        const root_node = try body_ctx.relateCheckedFunctionToRequest(template.checked_fn_root, graph_fn_ty);
         const draft_codec_contract: ?DraftCodecContractContext = if (codec_contract) |contract| .{
             .anchor = contract.anchor,
             .constructor_node = try body_ctx.activeNodeFromType(
@@ -37689,6 +37689,23 @@ const BodyContext = struct {
         const request_node = try self.graph.importMonoIndependent(mono_fn_ty);
         const related = try checkedMonoRequestNode(self.graph, checked_node, request_node, .construction);
         return related;
+    }
+
+    /// `relateCheckedFunctionToMono` for a requested specialization of a
+    /// procedure template. When the template's checked result row is closed
+    /// and the request's row includes it, the two relate component-wise
+    /// without unifying the rows, and the body lowers at the template's own
+    /// row; Lambda Solved joins the rows where the call's result flows
+    /// (design.md "Row Joins").
+    fn relateCheckedFunctionToRequest(
+        self: *BodyContext,
+        checked_fn_ty: checked.CheckedTypeId,
+        mono_fn_ty: Type.TypeId,
+    ) Allocator.Error!NodeId {
+        const checked_node = try self.instNode(checked_fn_ty);
+        const request_node = try self.graph.importMonoIndependent(mono_fn_ty);
+        if (try relateClosedResultRowRequestInterface(self.graph, self.view, checked_fn_ty, checked_node, request_node)) return checked_node;
+        return try checkedMonoRequestNode(self.graph, checked_node, request_node, .construction);
     }
 
     fn lowerFieldNamesValueIter(
