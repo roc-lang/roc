@@ -734,6 +734,33 @@ test "a compile-time list of copies of one scalar is static data, not a per-read
     }.inspect);
 }
 
+// Repro for https://github.com/roc-lang/roc/issues/12294
+test "issue 12294: a restored list of boxed capturing closures is static data, not a per-read rebuild" {
+    _ = try lowerEchoApp(
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\handlers : List(Box(({} -> U64)))
+        \\handlers = {
+        \\    n = 42
+        \\    [Box.box(|{}| n)]
+        \\}
+        \\main! = |args| {
+        \\    kept = List.drop_first(handlers, List.len(args) - List.len(args))
+        \\    Echo.line!(List.len(kept).to_str())
+        \\    Ok({})
+        \\}
+    , struct {
+        fn inspect(result: *lir.Program.Result) HoistedConstantsTestError!usize {
+            // The list, the box, and the closure's capture record ride in
+            // static data; reading the constant must not rebuild them.
+            try expectLowLevelAbsent(result, .list_with_capacity);
+            try expectLowLevelAbsent(result, .list_append_unsafe);
+            try std.testing.expect(result.static_data_values.items.len > 0);
+            return 0;
+        }
+    }.inspect);
+}
+
 test "an empty compile-time list rebuilds with the capacity it was evaluated with" {
     _ = try lowerEchoApp(
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }

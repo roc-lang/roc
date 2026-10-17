@@ -11780,11 +11780,18 @@ const Builder = struct {
             const leaf: ?bool = switch (self.view.const_store.get(node)) {
                 .pending => Common.invariant("pending ConstStore node reached static data eligibility"),
                 // Static data emits an erased callable as one allocation naming
-                // its procedure through a relocation, so a capture-free function
-                // value is fully decided by the ConstStore. A capture record is
-                // not: its slots carry their own evidence, which this walk has no
-                // ConstStore node to answer for.
-                .fn_value => |fn_id| self.view.const_store.getFn(fn_id).captures.len == 0,
+                // its procedure through a relocation, with its capture record
+                // written at the capture offset, so a function value is stable
+                // when each lexical capture's stored value is. A
+                // recursive-binding capture's value is the enclosing root
+                // itself, which a closed static initializer cannot name.
+                .fn_value => |fn_id| blk: {
+                    for (self.view.const_store.getFn(fn_id).captures) |capture| switch (capture.kind) {
+                        .lexical => try items.add(capture.value),
+                        .recursive_binding => break :blk false,
+                    };
+                    break :blk null;
+                },
                 .zst,
                 .scalar,
                 .str,
