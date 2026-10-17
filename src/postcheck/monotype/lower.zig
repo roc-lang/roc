@@ -37680,23 +37680,12 @@ const BodyContext = struct {
         try relateCheckedNodeToMono(self.graph, checked_node, mono_node);
     }
 
-    fn relateCheckedFunctionToMono(
-        self: *BodyContext,
-        checked_fn_ty: checked.CheckedTypeId,
-        mono_fn_ty: Type.TypeId,
-    ) Allocator.Error!NodeId {
-        const checked_node = try self.instNode(checked_fn_ty);
-        const request_node = try self.graph.importMonoIndependent(mono_fn_ty);
-        const related = try checkedMonoRequestNode(self.graph, checked_node, request_node, .construction);
-        return related;
-    }
-
-    /// `relateCheckedFunctionToMono` for a requested specialization of a
-    /// procedure template. When the template's checked result row is closed
-    /// and the request's row includes it, the two relate component-wise
-    /// without unifying the rows, and the body lowers at the template's own
-    /// row; Lambda Solved joins the rows where the call's result flows
-    /// (design.md "Row Joins").
+    /// Relate a procedure template's checked function type to the Monotype
+    /// type a specialization requests. When the template's checked result row
+    /// is closed and the request's row includes it, the two relate
+    /// component-wise without unifying the rows, and the body lowers at the
+    /// template's own row; Lambda Solved joins the rows where the call's
+    /// result flows (design.md "Row Joins").
     fn relateCheckedFunctionToRequest(
         self: *BodyContext,
         checked_fn_ty: checked.CheckedTypeId,
