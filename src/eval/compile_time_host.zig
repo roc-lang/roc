@@ -89,6 +89,9 @@ allocations: std.AutoHashMapUnmanaged(usize, Allocation) = .empty,
 roc_ops: ?RocOps = null,
 events: std.ArrayListUnmanaged(HostEvent) = .empty,
 comptime_branch_hits: std.ArrayListUnmanaged(ComptimeBranchHit) = .empty,
+/// The hits already in `comptime_branch_hits`: a branch taken a million
+/// times at compile time is one coverage fact.
+comptime_branch_hit_set: std.AutoHashMapUnmanaged(ComptimeBranchHit, void) = .empty,
 call_regions: std.ArrayListUnmanaged(CallRegion) = .empty,
 /// Absent source frames still own an exit; they must not pop a known caller.
 source_event_frames: std.ArrayListUnmanaged(bool) = .empty,
@@ -214,10 +217,13 @@ fn handleSourceEvent(self: *CompileTimeHost, event: SourceEvents.Event) void {
     const resolver = self.source_event_resolver orelse base.invariant("source event ran without admitted semantic bindings", .{});
     switch (event.kind) {
         .branch_taken => {
-            self.comptime_branch_hits.append(self.host_arena.allocator(), .{
+            const hit: ComptimeBranchHit = .{
                 .site = resolver.site(resolver.context, &descriptor.site, event.branches),
                 .branch_index = descriptor.branch_index,
-            }) catch self.jump(.host_oom);
+            };
+            const entry = self.comptime_branch_hit_set.getOrPut(self.host_arena.allocator(), hit) catch self.jump(.host_oom);
+            if (entry.found_existing) return;
+            self.comptime_branch_hits.append(self.host_arena.allocator(), hit) catch self.jump(.host_oom);
         },
         .exhaustiveness_failed => {
             self.comptime_failed_site = resolver.site(resolver.context, &descriptor.site, event.branches);
@@ -343,6 +349,7 @@ fn applyFailureOrigin(self: *CompileTimeHost, origin_statement: ?u32) bool {
 fn clearHostState(self: *CompileTimeHost) void {
     self.events = .empty;
     self.comptime_branch_hits = .empty;
+    self.comptime_branch_hit_set = .empty;
     self.call_regions = .empty;
     self.source_event_frames = .empty;
     self.allocations = .empty;

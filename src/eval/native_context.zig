@@ -382,6 +382,36 @@ test "CTFE root index owns allocation failure paths" {
 }
 
 /// Image-construction owner. All borrowed registry pointers are scoped to native
+/// Source event resolutions remembered by descriptor address. The memo is
+/// its own allocation so a plan borrowed as a constant resolver can still
+/// remember what it resolved; a resolution that cannot be remembered for lack
+/// of memory is simply resolved again next time.
+const EventMemo = struct {
+    allocator: std.mem.Allocator,
+    sites: std.AutoHashMapUnmanaged(usize, lir.LIR.ComptimeSiteId) = .empty,
+    files: std.AutoHashMapUnmanaged(usize, u32) = .empty,
+
+    fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!*EventMemo {
+        const memo = try allocator.create(EventMemo);
+        memo.* = .{ .allocator = allocator };
+        return memo;
+    }
+
+    fn destroy(self: *EventMemo) void {
+        self.sites.deinit(self.allocator);
+        self.files.deinit(self.allocator);
+        self.allocator.destroy(self);
+    }
+
+    fn rememberSite(self: *EventMemo, site: *const Events.Site, resolved: lir.LIR.ComptimeSiteId) void {
+        self.sites.put(self.allocator, @intFromPtr(site), resolved) catch {};
+    }
+
+    fn rememberFile(self: *EventMemo, source: *const Events.Source, file: u32) void {
+        self.files.put(self.allocator, @intFromPtr(source), file) catch {};
+    }
+};
+
 /// initialization; bound artifact/data storage remains alive through image link.
 pub const BindingPlan = struct {
     allocator: std.mem.Allocator,
@@ -394,6 +424,11 @@ pub const BindingPlan = struct {
     modules: std.AutoHashMap([32]u8, lir.LIR.LoweringModuleId),
     values: std.HashMap(Context.Binding, u64, BindingHash, 80),
     event_sites: std.AutoHashMap([32]u8, lir.LIR.ComptimeSiteId),
+    /// Resolutions of source event descriptors by their address. A
+    /// descriptor is data of the compiled image, fixed for the plan's life,
+    /// and compile-time code reports the same descriptor many times (every
+    /// taken branch of a parse), so each is resolved once.
+    event_memo: *EventMemo,
     roots: RootIndex,
     owned_sets: std.ArrayList(*backend.dev.ProcArtifact.Set) = .empty,
     cached_roots: []const backend.dev.LocatedArtifact = &.{},
@@ -412,6 +447,7 @@ pub const BindingPlan = struct {
             .modules = std.AutoHashMap([32]u8, lir.LIR.LoweringModuleId).init(allocator),
             .values = std.HashMap(Context.Binding, u64, BindingHash, 80).init(allocator),
             .event_sites = std.AutoHashMap([32]u8, lir.LIR.ComptimeSiteId).init(allocator),
+            .event_memo = try EventMemo.create(allocator),
             .roots = try RootIndex.init(allocator, catalog.roots),
         };
         errdefer plan.deinit();
@@ -440,6 +476,7 @@ pub const BindingPlan = struct {
         self.owned_sets.deinit(self.allocator);
         self.values.deinit();
         self.event_sites.deinit();
+        self.event_memo.destroy();
         self.roots.deinit();
         self.modules.deinit();
         self.files.deinit();
@@ -495,12 +532,22 @@ pub const BindingPlan = struct {
     pub fn resolveEventSourceFile(raw: *const anyopaque, source: *const Events.Source) u32 {
         const self: *const BindingPlan = @ptrCast(@alignCast(raw));
         std.debug.assert(source.has_location == 1);
-        return self.files.get(.{ .checked = source.checked_module, .content = source.source_identity }) orelse
+        if (self.event_memo.files.get(@intFromPtr(source))) |file| return file;
+        const file = self.files.get(.{ .checked = source.checked_module, .content = source.source_identity }) orelse
             base.invariant("source event location has no exact declared source binding", .{});
+        self.event_memo.rememberFile(source, file);
+        return file;
     }
 
     pub fn resolveEventSite(raw: *const anyopaque, site: *const Events.Site, branches: []align(1) const Events.Region) lir.LIR.ComptimeSiteId {
         const self: *const BindingPlan = @ptrCast(@alignCast(raw));
+        if (self.event_memo.sites.get(@intFromPtr(site))) |resolved| return resolved;
+        const resolved = self.resolveEventSiteUncached(site, branches);
+        self.event_memo.rememberSite(site, resolved);
+        return resolved;
+    }
+
+    fn resolveEventSiteUncached(self: *const BindingPlan, site: *const Events.Site, branches: []align(1) const Events.Region) lir.LIR.ComptimeSiteId {
         const descriptor: Context.SiteDescriptor = .{
             .checked_module = site.checked_module,
             .checked_site = if (site.has_checked_site == 1) site.checked_site else null,
