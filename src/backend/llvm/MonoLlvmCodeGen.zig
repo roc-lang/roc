@@ -5382,6 +5382,7 @@ pub const MonoLlvmCodeGen = struct {
             .list_append_range_within_unsafe => try self.emitListAppendRangeWithinUnsafe(target, arg_locals),
             .list_append_sublist => try self.emitListAppendSublist(target, arg_locals, unique_args),
             .list_append_le_bytes => try self.emitListAppendLeBytes(target, arg_locals, unique_args),
+            .list_append_le_bytes_unsafe => try self.emitListAppendLeBytesUnsafe(target, arg_locals),
             .list_slack_unique => try self.emitListSlackUnique(target, arg_locals),
             .list_owned_unique => try self.emitListOwnedUnique(target, arg_locals, unique_args),
             .list_prepend => try self.emitListPrepend(target, arg_locals, unique_args),
@@ -10970,6 +10971,28 @@ pub const MonoLlvmCodeGen = struct {
 
     fn leaveInlineSlowArm(self: *MonoLlvmCodeGen) void {
         self.cold_depth -= 1;
+    }
+
+    /// The loop-append promotion pass has discharged every check: the list
+    /// uniquely owns an unsliced allocation with a word of spare capacity.
+    /// The append is then one unaligned little-endian store of the whole
+    /// value at the length and a length bump by `count`; the bytes past
+    /// `count` land in capacity slack nothing can observe.
+    fn emitListAppendLeBytesUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const list_ptr = self.slot(GuardedList.at(args, 0)).ptr;
+        const value = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), .i64, false);
+        const count = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 2)).ptr, self.localLayout(GuardedList.at(args, 2))), self.ptrSizedIntType(), false);
+        const bytes = try self.loadPointer(list_ptr);
+        const len = try self.loadUsize(try self.offsetPtr(list_ptr, self.rocListLenOffset()));
+        const cap = try self.loadUsize(try self.offsetPtr(list_ptr, self.rocListCapacityOffset()));
+        const dst = try self.offsetPtrValue(bytes, len);
+        _ = wip.store(.normal, value, dst, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.OutOfMemory;
+        const new_len = wip.bin(.add, len, count, "") catch return error.OutOfMemory;
+        const out_ptr = self.slot(target).ptr;
+        try self.storePointer(out_ptr, bytes);
+        try self.storeListLen(out_ptr, new_len);
+        try self.storeListCapacity(out_ptr, cap);
     }
 
     fn emitListAppendSublist(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {

@@ -2548,8 +2548,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     return try self.scalarRetReg();
                 },
-                .list_append_le_bytes => {
+                .list_append_le_bytes, .list_append_le_bytes_unsafe => {
                     // list_append_le_bytes(list, value, count) -> List
+                    // The unchecked variant takes the same builtin in place:
+                    // its list is already proven unique with the spare word.
                     if (args.len != 3) unreachable;
                     const list_loc, const value_loc, const count_loc = try self.emitValueLocals(3, args);
 
@@ -2568,7 +2570,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addMemArg(frame_ptr, value_off);
                         try builder.addMemArg(frame_ptr, count_off);
                         try builder.addImmArg(1);
-                        try builder.addImmArg(if (ll.unique_args & 1 != 0) @as(usize, 1) else 0);
+                        try builder.addImmArg(if (ll.op == .list_append_le_bytes_unsafe or ll.unique_args & 1 != 0) @as(usize, 1) else 0);
 
                         try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_append_le_bytes));
                     }
@@ -6276,6 +6278,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_append_range_within_unsafe,
                 .list_append_sublist,
                 .list_append_le_bytes,
+                .list_append_le_bytes_unsafe,
                 .list_slack_unique,
                 .list_owned_unique,
                 .list_set_in_place_unsafe,
