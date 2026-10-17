@@ -8485,6 +8485,7 @@ const Lowerer = struct {
                         return .{ .call = .{ .chain = .{ .where = task.where, .items = items, .current = bindings.next } } };
                     },
                     .guard => |guard| return .{ .call = exprTask(task.where, guard.cond, guard.guard, null, guard.next) },
+                    .literal_guard => Common.invariant("guarded literal pattern reached solved match lowering"),
                 },
                 .done => |branch_chain| {
                     if (task.arena) |arena| {
@@ -10504,6 +10505,37 @@ const Lowerer = struct {
                 if (content != .named) return null;
                 current = (content.named.backing orelse return null).ty;
             }
+        }
+
+        pub fn tagTestKind(_: MatchTreeCtx, _: Type.TypeId) match_tree.TestKind {
+            // Solved tag unions commit their variant layout before matching.
+            return .tag;
+        }
+
+        pub fn recordRest(_: MatchTreeCtx, _: Lifted.PatId, _: Type.TypeId) Common.LowerError!?SubPat {
+            // Monotype lowering already removed record-rest binders.
+            return null;
+        }
+
+        pub fn retype(_: MatchTreeCtx, _: Lifted.PatId, _: Type.TypeId) ?struct { key: u32, ty: Type.TypeId } {
+            // A solved pattern matches at the type its scrutinee is lowered at.
+            return null;
+        }
+
+        pub fn readRecordRest(_: MatchTreeCtx, _: LIR.LocalId, _: Type.TypeId, _: LIR.LocalId, _: Type.TypeId, _: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+            Common.invariant("record-rest occurrence reached solved match lowering");
+        }
+
+        pub fn readRetype(_: MatchTreeCtx, _: LIR.LocalId, _: Type.TypeId, _: LIR.LocalId, _: Type.TypeId, _: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+            Common.invariant("retyped occurrence reached solved match lowering");
+        }
+
+        pub fn tagNameTest(_: MatchTreeCtx, _: LIR.LocalId, _: Type.TypeId, _: Lifted.PatId, _: LIR.CFStmtId, _: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+            Common.invariant("tag-name test reached solved match lowering");
+        }
+
+        pub fn literalGuardTemp(_: MatchTreeCtx, _: Lifted.PatId) Common.LowerError!LIR.LocalId {
+            Common.invariant("guarded literal pattern reached solved match lowering");
         }
 
         pub fn strLitIsSetArm(_: MatchTreeCtx) bool {
