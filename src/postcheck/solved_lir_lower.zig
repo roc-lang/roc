@@ -338,6 +338,7 @@ pub fn runBorrowed(
     try lowerer.writeRuntimeSchemas();
     lowerer.result.finishExpectSites();
     lowerer.result.platform_requirement_relation = if (solved.lifted.platform_requirement_filling) |filling| filling.relation else null;
+    if (lowerer.static_initializer_ns != 0) std.debug.print("direct lir: static initializers {d} lowered in {d} ms\n", .{ lowerer.static_initializer_queue.items.len, @divTrunc(lowerer.static_initializer_ns, std.time.ns_per_ms) });
 
     return lowerer.finish();
 }
@@ -900,6 +901,8 @@ const Lowerer = struct {
     root_read_types: ?std.AutoHashMapUnmanaged(Common.CheckedRootUse, ReadStorage) = null,
     comptime_failure_slots: std.AutoHashMap(ComptimeFailureKey, LIR.StaticDataId),
     static_initializer_queue: std.ArrayList(StaticInitializerEntry),
+    /// Time spent lowering static initializers, reported under `ROC_PACK_STATS`.
+    static_initializer_ns: i128 = 0,
     packed_plans: collections.DenseMap(layout.Idx, lir_core.PackedData.Plan),
     /// Each access-path expression's `lowerExprContextTy`, so a chain of
     /// accesses walks each link once. A body worker keeps its own.
@@ -2034,7 +2037,9 @@ const Lowerer = struct {
             if (initializer_queue_index < self.static_initializer_queue.items.len) {
                 const initializer = self.static_initializer_queue.items[initializer_queue_index];
                 initializer_queue_index += 1;
+                const started = if (pack_trace_available and std.c.getenv("ROC_PACK_STATS") != null) statsNowNs() else 0;
                 try self.lowerStaticInitializer(initializer);
+                if (started != 0) self.static_initializer_ns += statsNowNs() - started;
             }
         }
     }
@@ -16060,4 +16065,11 @@ fn constructionEql(allocator: std.mem.Allocator, a: postcheck_values.Constructio
         }
     }
     return true;
+}
+
+/// Monotonic nanoseconds for the `ROC_PACK_STATS` stage reports.
+fn statsNowNs() i128 {
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(.MONOTONIC, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
 }

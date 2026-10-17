@@ -189,6 +189,8 @@ pub const Graph = struct {
 
     pub fn seal(self: *Graph) std.mem.Allocator.Error!void {
         self.requireOpen();
+        const seal_started = if (@import("builtin").os.tag != .freestanding and std.c.getenv("ROC_PACK_STATS") != null) statsNowNs() else 0;
+        defer if (seal_started != 0) std.debug.print("ctfe demand seal: nodes={d} edges={d} reads={d} {d} ms\n", .{ self.node_count, self.edges.items.len, self.reads.items.len, @divTrunc(statsNowNs() - seal_started, std.time.ns_per_ms) });
         const edge_starts = try self.allocator.alloc(u32, @as(usize, self.node_count) + 1);
         errdefer self.allocator.free(edge_starts);
         const read_starts = try self.allocator.alloc(u32, @as(usize, self.node_count) + 1);
@@ -498,4 +500,11 @@ fn exerciseDemandAllocations(allocator: std.mem.Allocator) std.mem.Allocator.Err
     defer copy.deinit();
     var summary = try copy.summarize(allocator, owner);
     defer summary.deinit(allocator);
+}
+
+/// Monotonic nanoseconds for the `ROC_PACK_STATS` stage reports.
+fn statsNowNs() i128 {
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(.MONOTONIC, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
 }

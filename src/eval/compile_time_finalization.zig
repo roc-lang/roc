@@ -1955,6 +1955,8 @@ fn finalizeLoweredProgram(
             const id = first_state.completion.request_root_ids[root.request];
             const demand_ordinal = first_state.ordinals[@backingInt(id)].?;
             if (first_state.completion.isDone(id)) finalizationInvariant("scheduled checked root executed twice");
+            const root_started = if (std.c.getenv("ROC_PACK_STATS") != null) statsNowNs() else 0;
+            defer if (root_started != 0) std.debug.print("evaluated root: module={s} root={d} {d} ms\n", .{ self.modules[root.module].module.moduleEnvConst().module_name, @backingInt(id), @divTrunc(statsNowNs() - root_started, std.time.ns_per_ms) });
             var module_index: ?u32 = @intCast(root.module);
             while (module_index) |index| : (module_index = self.owners.next_alias[index]) {
                 const entry = self.modules[index];
@@ -4764,11 +4766,17 @@ const DevProgram = struct {
 
     fn init(allocator: Allocator, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram, options: Options) FinalizeError!DevProgram {
         const static_data_started_ns = if (options.timing) |timing| timing.start() else 0;
+        const stats = std.c.getenv("ROC_PACK_STATS") != null;
+        var stage_started = if (stats) statsNowNs() else 0;
         var static_strings = try backend.StaticStringData.build(allocator, &lowered.lir_result.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
         errdefer static_strings.deinit();
+        if (stats) std.debug.print("dev program init: static strings {d} ms\n", .{@divTrunc(statsNowNs() - stage_started, std.time.ns_per_ms)});
+        stage_started = if (stats) statsNowNs() else 0;
 
         var slots = try StaticSlotEnvironment.init(allocator, modules, lowered, backend.dev.LirCodeGenMod.host_lir_codegen_target, .{});
         errdefer slots.deinit();
+        if (stats) std.debug.print("dev program init: slot environment {d} ms\n", .{@divTrunc(statsNowNs() - stage_started, std.time.ns_per_ms)});
+        stage_started = if (stats) statsNowNs() else 0;
         const failure_registry = try NativeFailure.Registry.create(allocator, &lowered.lir_result);
         errdefer failure_registry.deinit();
         const site_observations = try allocator.create(std.ArrayList(NativeFailure.Site));
@@ -4777,6 +4785,7 @@ const DevProgram = struct {
         errdefer site_observations.deinit(allocator);
         const context_catalog = try NativeContext.Catalog.init(allocator, &lowered.lir_result, failure_registry);
         errdefer context_catalog.deinit();
+        if (stats) std.debug.print("dev program init: failure registry, sites, catalog {d} ms\n", .{@divTrunc(statsNowNs() - stage_started, std.time.ns_per_ms)});
         if (options.timing) |timing| timing.finish(static_data_started_ns, .static_data);
 
         const code_generation_started_ns = if (options.timing) |timing| timing.start() else 0;
@@ -7183,4 +7192,11 @@ test "LLVM test roots run a float remainder in process" {
             try std.testing.expect(result.outcome.passed);
         }
     }
+}
+
+/// Monotonic nanoseconds for the `ROC_PACK_STATS` stage reports.
+fn statsNowNs() i128 {
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(.MONOTONIC, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
 }
