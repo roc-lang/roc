@@ -22,7 +22,7 @@ fn expectNestingLowersOnSmallStack(
     leaf: []const u8,
     close: []const u8,
     suffix: []const u8,
-) !void {
+) (std.Thread.SpawnError || harness.LowerToLirHarnessError)!void {
     const gpa = std.testing.allocator;
     var source: std.ArrayList(u8) = .empty;
     defer source.deinit(gpa);

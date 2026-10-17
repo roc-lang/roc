@@ -12,24 +12,24 @@ const TestEnv = @import("TestEnv.zig");
 const depth = 100_000;
 const stack_bytes = 4 * 1024 * 1024;
 
-fn checkOnSmallStack(source: []const u8, result: *anyerror!void) void {
+fn checkOnSmallStack(source: []const u8, result: *TestEnv.TestEnvError!void) void {
     result.* = checkNoErrors(source);
 }
 
-fn checkNoErrors(source: []const u8) anyerror!void {
+fn checkNoErrors(source: []const u8) TestEnv.TestEnvError!void {
     var env = try TestEnv.init("Test", source);
     defer env.deinit();
     try env.assertNoErrors();
 }
 
-fn expectChecksOnSmallStack(source: []const u8) !void {
-    var result: anyerror!void = {};
+fn expectChecksOnSmallStack(source: []const u8) (std.Thread.SpawnError || TestEnv.TestEnvError)!void {
+    var result: TestEnv.TestEnvError!void = {};
     const thread = try std.Thread.spawn(.{ .stack_size = stack_bytes }, checkOnSmallStack, .{ source, &result });
     thread.join();
     try result;
 }
 
-fn appendRepeated(gpa: std.mem.Allocator, source: *std.ArrayList(u8), text: []const u8) !void {
+fn appendRepeated(gpa: std.mem.Allocator, source: *std.ArrayList(u8), text: []const u8) std.mem.Allocator.Error!void {
     for (0..depth) |_| try source.appendSlice(gpa, text);
 }
 
