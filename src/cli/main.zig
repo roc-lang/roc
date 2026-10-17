@@ -6621,15 +6621,14 @@ fn discoverRunDependencies(
         _ = try renderDrainedBuildEnvReports(ctx, build_env, display_path);
         return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
-            error.FileNotFound => ctx.fail(.{ .file_not_found = .{
-                .path = roc_file_path,
-                .context = .source_file,
-            } }),
+            // Discovery has already reported each of these, a missing file
+            // included, so the drained reports above are the whole story.
             error.AccessDenied,
             error.BuiltinLowLevelAnnotationMustBeFunction,
             error.DownloadFailed,
             error.ExpectedPlatformString,
             error.FileError,
+            error.FileNotFound,
             error.Internal,
             error.InvalidDependency,
             error.InvalidNullByteInPath,
