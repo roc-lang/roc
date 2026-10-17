@@ -55,7 +55,7 @@ pub const Symbol = packed struct(u64) {
 /// the same in every program that contains the procedure and is what its
 /// symbol name is derived from, so separately compiled objects can refer to
 /// one another.
-pub const ProcIdentity = struct {
+pub const ProcIdentity = extern struct {
     bytes: [32]u8,
 
     /// Hex of the leading 128 bits, for symbol names.
@@ -193,7 +193,9 @@ pub const InlineScopeId = enum(u32) {
 
 /// A virtual source frame retained independently of physical procedures.
 pub const InlineScope = extern struct {
-    source_symbol: Symbol,
+    /// Identity of the inlined procedure, which names its debug subprogram
+    /// the same way in every program.
+    source_identity: ProcIdentity,
     source_name: StringLiteral.Idx,
     source_loc: base.SourceLoc,
     call_site: base.SourceLoc,

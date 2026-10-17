@@ -3717,7 +3717,6 @@ test "spec constr retains an exact virtual source frame for an inlined procedure
         if (!scope.call_site.hasLocation()) continue;
 
         found_source_scope = true;
-        try std.testing.expect(!scope.source_symbol.isNone());
         try std.testing.expect(scope.source_loc.hasLocation());
         try std.testing.expect(store.stmtLoc(stmt_id).hasLocation());
     }

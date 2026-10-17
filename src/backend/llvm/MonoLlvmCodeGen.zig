@@ -3799,7 +3799,10 @@ pub const MonoLlvmCodeGen = struct {
 
         const builder = self.builder orelse return error.CompilationFailed;
         const scope = self.store.inlineScope(id);
-        const linkage_name = builder.metadataStringFmt("{s}{x}", .{ lir.ProcIdentity.symbol_name_prefix, scope.source_symbol.raw() }) catch return error.OutOfMemory;
+        const linkage_name = linkage: {
+            var symbol_name: [lir.ProcIdentity.symbol_name_len]u8 = undefined;
+            break :linkage builder.metadataString(scope.source_identity.writeSymbolName(&symbol_name)) catch return error.OutOfMemory;
+        };
         const name = if (scope.source_name.isNone())
             linkage_name
         else
@@ -9023,13 +9026,11 @@ pub const MonoLlvmCodeGen = struct {
         loc: SourceLoc,
     ) Error!LlvmBuilder.Constant {
         const builder = self.builder orelse return error.CompilationFailed;
-        var allocated_name: ?[]u8 = null;
-        defer if (allocated_name) |name| self.allocator.free(name);
-        const name = if (scope.source_name.isNone()) blk: {
-            const generated = try std.fmt.allocPrint(self.allocator, "{s}{x}", .{ lir.ProcIdentity.symbol_name_prefix, scope.source_symbol.raw() });
-            allocated_name = generated;
-            break :blk generated;
-        } else self.store.getString(scope.source_name);
+        var symbol_name: [lir.ProcIdentity.symbol_name_len]u8 = undefined;
+        const name = if (scope.source_name.isNone())
+            scope.source_identity.writeSymbolName(&symbol_name)
+        else
+            self.store.getString(scope.source_name);
         const file = if (loc.file == SourceLoc.no_file or loc.file >= self.store.sourceFileCount())
             ""
         else

@@ -313,6 +313,9 @@ pub const Options = struct {
     /// compile-time evaluation, for a program whose specializations may be
     /// written to the object cache.
     spec_comptime_reads_out: ?*SpecComptimeReads = null,
+    /// Receives every object-cache key that resolved to another key's
+    /// specialization (`SpecKeyAliases`).
+    spec_key_aliases_out: ?*SpecKeyAliases = null,
     /// Turn each specialized custom literal's conversion into a literal root
     /// whose completed value the specialization reads. The consumer that
     /// asks for this evaluates every literal root the program registers.
@@ -891,6 +894,45 @@ pub const SpecComptimeReads = struct {
     }
 };
 
+/// Object-cache keys that resolved to the specialization of another key.
+///
+/// A request whose type is less specific than its own solution reuses an
+/// existing record through that record's solved type (`SpecBuilder`), so the
+/// record's procedure is the procedure of the reusing request's key too. Each
+/// alias names such a key and the key the record was reserved under. A
+/// program offers its procedures under both, so the keys a build offers are
+/// the keys of its requests, whichever of two requests reached the record
+/// first.
+pub const SpecKeyAliases = struct {
+    pub const Alias = struct {
+        alias: [32]u8,
+        target: [32]u8,
+
+        fn lessThan(_: void, left: Alias, right: Alias) bool {
+            return switch (std.mem.order(u8, &left.alias, &right.alias)) {
+                .lt => true,
+                .gt => false,
+                .eq => std.mem.order(u8, &left.target, &right.target) == .lt,
+            };
+        }
+    };
+
+    allocator: Allocator,
+    /// Sorted by alias, then target, without duplicates.
+    items: std.ArrayList(Alias) = .empty,
+
+    pub fn clone(self: *const SpecKeyAliases, allocator: Allocator) Allocator.Error!SpecKeyAliases {
+        var result: SpecKeyAliases = .{ .allocator = allocator };
+        try result.items.appendSlice(allocator, self.items.items);
+        return result;
+    }
+
+    pub fn deinit(self: *SpecKeyAliases) void {
+        self.items.deinit(self.allocator);
+        self.* = .{ .allocator = self.allocator };
+    }
+};
+
 /// A compile-time root declared before any body lowers: its entry template
 /// is reserved, so every read binds the root's real function id. With
 /// `Options.demand_driven_comptime_roots` its body waits until the program
@@ -1346,7 +1388,9 @@ pub fn run(
         try builder.completeParkedSpecJobsAsStubs();
         // Every body is lowered, so the program's demand is known.
         try builder.orderComptimeRoots();
+        try builder.collectSpecKeyAliases();
         try builder.recordSpecComptimeReads();
+        try builder.outputSpecKeyAliases();
     }
     if (options.demand_counters_out) |out| out.* = builder.demand_counters;
 
@@ -4908,6 +4952,10 @@ const Builder = struct {
     demand_driven_comptime_roots: bool,
     comptime_demand_out: ?*ComptimeDemand,
     spec_comptime_reads_out: ?*SpecComptimeReads,
+    spec_key_aliases_out: ?*SpecKeyAliases,
+    /// Every object-cache key that resolved to another key's specialization,
+    /// sorted; see `SpecKeyAliases`. Filled once every body is lowered.
+    spec_key_aliases: std.ArrayList(SpecKeyAliases.Alias) = .empty,
     /// Every declared compile-time root, in request order.
     declared_roots: std.ArrayList(DeclaredRoot) = .empty,
     /// Reserved compile-time root bodies the program has not demanded yet,
@@ -5198,6 +5246,7 @@ const Builder = struct {
             .demand_driven_comptime_roots = options.demand_driven_comptime_roots,
             .comptime_demand_out = options.comptime_demand_out,
             .spec_comptime_reads_out = options.spec_comptime_reads_out,
+            .spec_key_aliases_out = options.spec_key_aliases_out,
             .post_check_executor = options.post_check_executor,
             .timing = options.timing,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
@@ -5441,6 +5490,7 @@ const Builder = struct {
         self.deferred_roots.deinit(self.allocator);
         self.root_value_reads.deinit(self.allocator);
         self.cached_fn_reads.deinit(self.allocator);
+        self.spec_key_aliases.deinit(self.allocator);
         self.comptime_demand.deinit(self.allocator);
         self.module_index.deinit();
         self.spec_job_task_buffers.deinit(self.allocator);
@@ -6122,6 +6172,37 @@ const Builder = struct {
         if (self.comptime_demand_out) |out| out.* = output else output.deinit();
     }
 
+    /// Every key of a request a record served through its solved view, when
+    /// it differs from the key the record was reserved under. Only a request
+    /// the object cache could key has a key: one whose type mentions no
+    /// function, served by a record that has a key itself.
+    fn collectSpecKeyAliases(self: *Builder) Allocator.Error!void {
+        for (self.spec_store.solvedViewHits()) |hit| {
+            const record = self.program.specs.get(@backingInt(hit.spec));
+            const target = self.program.getFn(record.fn_id).source.spec_key orelse continue;
+            const alias = Ast.specIdentityKey(hit.identity);
+            if (std.mem.eql(u8, &alias.bytes, &target.bytes)) continue;
+            if (try self.monoFnTypeMentionsFunction(hit.identity.request_fn_ty)) continue;
+            try self.spec_key_aliases.append(self.allocator, .{ .alias = alias.bytes, .target = target.bytes });
+        }
+        const items = self.spec_key_aliases.items;
+        std.mem.sort(SpecKeyAliases.Alias, items, {}, SpecKeyAliases.Alias.lessThan);
+        var kept: usize = 0;
+        for (items) |item| {
+            if (kept != 0 and std.meta.eql(items[kept - 1], item)) continue;
+            items[kept] = item;
+            kept += 1;
+        }
+        self.spec_key_aliases.shrinkRetainingCapacity(kept);
+    }
+
+    fn outputSpecKeyAliases(self: *Builder) Allocator.Error!void {
+        const out = self.spec_key_aliases_out orelse return;
+        var result: SpecKeyAliases = .{ .allocator = self.allocator };
+        try result.items.appendSlice(self.allocator, self.spec_key_aliases.items);
+        out.* = result;
+    }
+
     /// What each object-cache specialization's code reads of compile-time
     /// evaluation (`SpecComptimeReads`). Only code that reaches a read needs a
     /// closure, so the definitions that reach one are found first by walking
@@ -6196,6 +6277,14 @@ const Builder = struct {
                 try result.reads.append(self.allocator, .{ .module = root.module.bytes, .root = @backingInt(root.root) });
             }
             entry.value_ptr.* = .{ .start = @intCast(start), .len = @intCast(result.reads.items.len - start), .local = state.closure_local };
+        }
+        // A key that resolved to another key's specialization reads what
+        // that specialization reads.
+        for (self.spec_key_aliases.items) |alias| {
+            const row = result.rows.get(alias.target) orelse continue;
+            const entry = try result.rows.getOrPut(self.allocator, alias.alias);
+            if (entry.found_existing) continue;
+            entry.value_ptr.* = row;
         }
         out.* = result;
     }
