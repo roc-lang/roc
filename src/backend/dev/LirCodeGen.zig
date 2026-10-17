@@ -21326,8 +21326,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 defer self.codegen.freeGeneral(reg);
 
                 inline for (0..RocStr.word_count) |word| {
-                    const word_offset = word * target_ptr_size;
-                    const chunk: u64 = @bitCast(bytes[word_offset..][0..target_ptr_size].*);
+                    const word_offset: i32 = word * target_ptr_size;
+                    const chunk: u64 = @bitCast(bytes[@intCast(word_offset)..][0..target_ptr_size].*);
                     try self.codegen.emitLoadImm(reg, @bitCast(chunk));
                     try self.codegen.emitStoreStack(.w64, base_offset + word_offset, reg);
                 }

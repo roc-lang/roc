@@ -7,6 +7,7 @@ const std = @import("std");
 const base = @import("base");
 const types = @import("types");
 const collections = @import("collections");
+const builtins = @import("builtins");
 
 const CIR = @import("can").CIR;
 
@@ -547,9 +548,9 @@ pub const SizeAlign = packed struct(u32) {
         .alignment = RocAlignment.fromByteUnits(@alignOf(usize)),
     };
 
-    /// List size and alignment (3 pointer-sized fields)
+    /// List size and alignment (pointer-sized fields)
     pub const list = SizeAlign{
-        .size = 3 * @sizeOf(usize),
+        .size = @sizeOf(builtins.list.RocList),
         .alignment = RocAlignment.fromByteUnits(@alignOf(usize)),
     };
 };

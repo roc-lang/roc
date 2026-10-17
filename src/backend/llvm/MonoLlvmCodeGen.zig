@@ -13378,12 +13378,12 @@ pub const MonoLlvmCodeGen = struct {
                 const word = self.targetWordSize();
                 var word_ptrs: [RocList.word_count]LlvmBuilder.Value = undefined;
                 word_ptrs[0] = out_slot;
-                for (word_ptrs[1..], 1..) |*word_ptr, index| {
-                    word_ptr.* = wip.gep(.inbounds, .i8, out_slot, &.{builder.intValue(.i32, index * word) catch return error.OutOfMemory}, "") catch return error.OutOfMemory;
+                for (word_ptrs[1..], 1..) |*word_ptr, word_index| {
+                    word_ptr.* = wip.gep(.inbounds, .i8, out_slot, &.{builder.intValue(.i32, word_index * word) catch return error.OutOfMemory}, "") catch return error.OutOfMemory;
                 }
                 var fields: [RocList.word_count]LlvmBuilder.Value = undefined;
-                for (&fields, word_ptrs, 0..) |*field, word_ptr, index| {
-                    const field_ty = if (index == 0) try self.ptrType() else self.ptrSizedIntType();
+                for (&fields, word_ptrs, 0..) |*field, word_ptr, word_index| {
+                    const field_ty = if (word_index == 0) try self.ptrType() else self.ptrSizedIntType();
                     field.* = wip.load(.normal, field_ty, word_ptr, self.targetPointerAlignment(), "") catch return error.OutOfMemory;
                 }
                 const aggregate = wip.buildAggregate(slot_ty, &fields, "") catch return error.OutOfMemory;
