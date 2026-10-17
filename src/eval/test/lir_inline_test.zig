@@ -6556,9 +6556,9 @@ fn expectRangeMapCollectUsesDirectListLoop(source: []const u8, expected_append_u
     try std.testing.expect(!try reachableIterCollectShape(allocator, &optimized.lowered, .specialized));
     try std.testing.expect(!try reachableIterCollectShape(allocator, &optimized.lowered, .generic));
     // Promotion uses the list length as its fill cursor: it reads the length
-    // on entry, after the known-length append, at the grow guard, and after
-    // reserve to establish the new fill limit.
-    try std.testing.expectEqual(@as(usize, 4), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_len_count"));
+    // on entry, at the grow guard, and after reserve to establish the new fill
+    // limit. The known-length append bumps the fill cursor and keeps the limit.
+    try std.testing.expectEqual(@as(usize, 3), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_len_count"));
     try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_get_unsafe_count"));
     try std.testing.expectEqual(@as(usize, 1), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_with_capacity_count"));
     try std.testing.expectEqual(@as(usize, 0), try reachableProcShapeFieldTotal(allocator, &optimized.lowered, "list_reserve_count"));
