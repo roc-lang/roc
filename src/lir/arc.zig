@@ -68,6 +68,9 @@ pub const InsertOptions = struct {
     /// Select consuming Box.unbox when its lender is dead. Compiled backends
     /// enable this; the value-model interpreter keeps an explicit borrow.
     consume_dead_boxes: bool = true,
+    /// The object cache an ownership variant may be linked from, under the
+    /// identity the variant would have, instead of emitted.
+    variant_cache: body_clone.VariantCache = .{},
     /// Borrowed for this invocation; null executes the same bounded waves inline.
     post_check_executor: ?*const TaskExecutor.Executor = null,
     /// Reset once on entry, then records accepted work and successful commits.
@@ -585,6 +588,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         .sigs = .empty,
         .queue = .empty,
         .sources = sources,
+        .cache = options.variant_cache,
     };
     defer {
         variants.map.deinit();
@@ -615,6 +619,10 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             spec.rc_ret_borrowed = job.sig.ret_mode == .borrowed;
             spec.rc_ret_lenders = job.sig.ret_lenders;
             if (sources[@backingInt(job.source)].body == null) continue;
+            // A static initializer is construction-only LIR that the static
+            // data materializer evaluates symbolically and no backend ever
+            // emits, so reference counts in it would never run.
+            if (spec.is_static_initializer) continue;
             owners[count] = .{
                 .inserter = inserter,
                 .source = &sources[@backingInt(job.source)],
@@ -1216,16 +1224,58 @@ const VariantTable = struct {
     /// Variants inherit only the source's ownership-neutral body and frame,
     /// never temporaries introduced by an earlier base emission.
     sources: []const SourceCache,
+    /// The object cache a variant may be linked from.
+    cache: body_clone.VariantCache,
 
     fn intern(self: *VariantTable, store: *LirStore, request: VariantRequest) ResourceError!LIR.LirProcSpecId {
         const entry = try self.map.getOrPut(request.selector());
         if (entry.found_existing) return entry.value_ptr.*;
         const callee = request.source;
         const source_spec = store.getProcSpec(callee);
+        const identity = try variantIdentity(store.allocator, self.sig_table, source_spec.identity, request.demanded);
+        // A variant the object cache offers is linked rather than emitted: a
+        // body-less procedure at the demanded signature, whose ownership
+        // facts the offer carries.
+        if (self.cache.find(identity)) |hit| {
+            if (builtin.mode == .debug) {
+                std.debug.assert(hit.rc_borrowed_params == request.demanded.borrowed_params);
+                std.debug.assert(hit.rc_ret_borrowed == (request.demanded.ret_mode == .borrowed));
+                std.debug.assert(hit.rc_ret_lenders == request.demanded.ret_lenders);
+            }
+            const served = try store.addProcSpec(.{
+                .name = store.freshSyntheticSymbol(),
+                .identity = identity,
+                .args = source_spec.args,
+                .erased_reuse_arg = source_spec.erased_reuse_arg,
+                .erased_call_args = source_spec.erased_call_args,
+                .body = null,
+                .ret_layout = source_spec.ret_layout,
+                .ret_desc = source_spec.ret_desc,
+                .runtime_ret_desc = source_spec.runtime_ret_desc,
+                .erased_arg_desc_offsets = source_spec.erased_arg_desc_offsets,
+                .erased_arg_layouts = source_spec.erased_arg_layouts,
+                .erased_arg_desc_params = source_spec.erased_arg_desc_params,
+                .erased_capture_arg = source_spec.erased_capture_arg,
+                .abi = source_spec.abi,
+                .external = true,
+                .rc_borrowed_params = hit.rc_borrowed_params,
+                .rc_ret_borrowed = hit.rc_ret_borrowed,
+                .rc_ret_lenders = hit.rc_ret_lenders,
+                .rc_read_only_params = hit.rc_read_only_params,
+                .rc_ret_unique = hit.rc_ret_unique,
+                .rc_ret_unique_fields = hit.rc_ret_unique_fields,
+                .rc_ret_conditions = try store.addU32Span(hit.rc_ret_conditions),
+                .derived_from = source_spec.derived_from orelse source_spec.identity,
+            }, store.procLoc(callee));
+            try store.copyProcDebugInfo(served, callee);
+            entry.value_ptr.* = served;
+            try self.sigs.append(store.allocator, request.demanded);
+            return served;
+        }
         if (source_spec.external) arcInvariant("ARC demanded a variant of an object-cache procedure, whose signature is fixed");
         const variant = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
-            .identity = try variantIdentity(store.allocator, self.sig_table, source_spec.identity, request.demanded),
+            .identity = identity,
             .args = source_spec.args,
             .erased_reuse_arg = source_spec.erased_reuse_arg,
             .erased_call_args = source_spec.erased_call_args,
@@ -1241,12 +1291,14 @@ const VariantTable = struct {
             .abi = source_spec.abi,
             .boxy_runtime_entry = source_spec.boxy_runtime_entry,
             .is_static_initializer = source_spec.is_static_initializer,
+            .root_materialization = source_spec.root_materialization,
             .hosted = source_spec.hosted,
             .tail_transform = source_spec.tail_transform,
             .tail_group = source_spec.tail_group,
             // The variant's body is the source's, so it has the source's shapes.
             .shapes = source_spec.shapes,
             .stack_probe = source_spec.stack_probe,
+            .derived_from = source_spec.derived_from orelse source_spec.identity,
         }, store.procLoc(callee));
         try store.copyProcDebugInfo(variant, callee);
         entry.value_ptr.* = variant;
@@ -9760,7 +9812,7 @@ test "ARC grouped raw liveness agrees with exhaustive resource queries" {
             try f.assignRefLocal(locals[index], locals[index % 3], use);
     }
     const proc = try f.addProc(&.{}, body, .i64);
-    var rc = @as([(locals.len + 1)]bool, @splat(true));
+    var rc = @as([locals.len + 1]bool, @splat(true));
     rc[locals.len] = false;
     var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
     defer solution.deinit();

@@ -4,6 +4,10 @@ const std = @import("std");
 
 /// Shared ids, inputs, and invariants for post-check stages.
 pub const Common = @import("common.zig");
+/// Independent semantic, compile-time execution, and runtime demand closure.
+pub const EvaluationDemand = @import("evaluation_demand.zig");
+/// Exact execution, callable-address and representation relations from producers.
+pub const CtfeDemand = @import("ctfe_demand.zig");
 /// Which runtime specializations compile-time evaluation must lower.
 pub const LiteralDemand = @import("literal_demand.zig");
 /// Closed source-shape IR after checking has removed dispatch syntax.
@@ -46,6 +50,8 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("record_fields.zig"));
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(@import("common.zig"));
+    std.testing.refAllDecls(@import("evaluation_demand.zig"));
+    std.testing.refAllDecls(@import("ctfe_demand.zig"));
     std.testing.refAllDecls(@import("literal_demand.zig"));
     std.testing.refAllDecls(@import("monotype/ast.zig"));
     std.testing.refAllDecls(@import("monotype/type.zig"));

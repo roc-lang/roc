@@ -4,6 +4,7 @@ const std = @import("std");
 const Common = @import("../common.zig");
 const Lifted = @import("../monotype_lifted/ast.zig");
 const Type = @import("type.zig");
+const CtfeDemand = @import("../ctfe_demand.zig");
 
 /// Identifier for an expression type entry.
 pub const ExprId = enum(u32) { _ };
@@ -29,6 +30,10 @@ pub const LayoutRequest = struct {
     ty: Type.TypeVarId,
     fn_id: ?Lifted.FnId = null,
     const_locator: ?@import("check").CheckedModule.ConstLocator = null,
+    comptime_root: ?Common.ComptimeValueRoot = null,
+    literal_materialization: ?Common.LiteralMaterializationDeclaration = null,
+    /// `Mono.LayoutRequest.unconditional`.
+    unconditional: bool = true,
 };
 
 /// Runtime schema requested for a named runtime value shape.
@@ -48,6 +53,7 @@ pub const ProgramView = struct {
     fn_tys: []const Type.TypeVarId,
     layout_requests: []const LayoutRequest,
     runtime_schema_requests: []const RuntimeSchemaRequest,
+    ctfe_demand: CtfeDemand.View,
 };
 
 /// Lambda Solved program plus the solved type store.
@@ -62,8 +68,10 @@ pub const Program = struct {
     fn_tys: std.ArrayList(Type.TypeVarId),
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
+    ctfe_demand: CtfeDemand.Graph,
 
     pub fn init(allocator: std.mem.Allocator, lifted: Lifted.Program) Program {
+        const input = lifted.view();
         return .{
             .allocator = allocator,
             .lifted = lifted,
@@ -75,10 +83,12 @@ pub const Program = struct {
             .fn_tys = .empty,
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
+            .ctfe_demand = CtfeDemand.Graph.initWithSummaryStart(allocator, @intCast(input.exprs.len + input.stmts.len + input.fns.len), @intCast(input.exprs.len + input.stmts.len)),
         };
     }
 
     pub fn deinit(self: *Program) void {
+        self.ctfe_demand.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.fn_tys.deinit(self.allocator);
@@ -101,6 +111,7 @@ pub const Program = struct {
             .fn_tys = self.fn_tys.items,
             .layout_requests = self.layout_requests.items,
             .runtime_schema_requests = self.runtime_schema_requests.items,
+            .ctfe_demand = self.ctfe_demand.view(),
         };
     }
 };

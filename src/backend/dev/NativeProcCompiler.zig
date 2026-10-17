@@ -7,6 +7,7 @@
 //! only then may the coordinator append code or destroy fragment owners.
 
 const std = @import("std");
+const collections = @import("collections");
 const base = @import("base");
 const lir = @import("lir");
 const layout = @import("layout");
@@ -77,6 +78,8 @@ pub const Retained = struct {
     contract: Emitter.FragmentContract,
     procedures: std.ArrayList(Procedure) = .empty,
     helpers: std.ArrayList(Helper) = .empty,
+    image_data: std.ArrayList(Artifact.DataItem) = .empty,
+    image_data_arena: ?std.heap.ArenaAllocator = null,
 
     /// Final image/object linking consumes carried data separately from code.
     /// The returned slice is caller-owned; its fields borrow this retained owner.
@@ -85,16 +88,38 @@ pub const Retained = struct {
         errdefer items.deinit(allocator);
         var names = std.StringHashMap(void).init(allocator);
         defer names.deinit();
-        for (self.procedures.items) |proc| try collectData(allocator, &proc.fragment, &items, &names);
-        for (self.helpers.items) |helper| try collectData(allocator, &helper.fragment, &items, &names);
+        for (self.image_data.items) |item| {
+            const entry = try names.getOrPut(item.name);
+            if (!entry.found_existing) try items.append(allocator, item);
+        }
         return items.toOwnedSlice(allocator);
     }
 
-    fn collectData(allocator: Allocator, fragment: *const Artifact.Fragment, items: *std.ArrayList(Artifact.DataItem), names: *std.StringHashMap(void)) Allocator.Error!void {
+    /// Capture receiving-image handles independently of immutable reusable
+    /// fragments. No fragment-local ordinal can escape through `dataItems`.
+    fn appendImageData(self: *Retained, comptime CG: type, codegen: *CG, fragment: *const Artifact.Fragment, starts: []const usize) Allocator.Error!void {
         for (fragment.set.artifacts) |artifact| {
             for (artifact.data) |item| {
-                const entry = try names.getOrPut(item.name);
-                if (!entry.found_existing) try items.append(allocator, item);
+                var rebound = item;
+                var copied = false;
+                for (item.relocations, 0..) |relocation, index| {
+                    const target = relocation.code_target orelse continue;
+                    std.debug.assert(target != .image_offset);
+                    if (target != .local) continue;
+                    if (self.image_data_arena == null) self.image_data_arena = std.heap.ArenaAllocator.init(self.allocator);
+                    const a = self.image_data_arena.?.allocator();
+                    if (!copied) {
+                        rebound.relocations = try a.dupe(Artifact.DataRelocation, item.relocations);
+                        copied = true;
+                    }
+                    const start = starts[target.local];
+                    const entry = fragment.set.artifacts[target.local].entry;
+                    const symbol = try codegen.internRegionCodeSymbol(start, entry);
+                    const out = &@constCast(rebound.relocations)[index];
+                    out.name = try a.dupe(u8, codegen.symbolName(symbol));
+                    out.code_target = .{ .image_offset = start + entry };
+                }
+                try self.image_data.append(self.allocator, rebound);
             }
         }
     }
@@ -105,6 +130,8 @@ pub const Retained = struct {
         for (self.helpers.items) |*helper| helper.fragment.deinit();
         self.procedures.deinit(self.allocator);
         self.helpers.deinit(self.allocator);
+        self.image_data.deinit(self.allocator);
+        if (self.image_data_arena) |*arena| arena.deinit();
         self.* = undefined;
     }
 };
@@ -116,21 +143,15 @@ fn invariant(err: (Artifact.ExtractError || Artifact.AssembleError)) Allocator.E
     };
 }
 
-fn reusable(source: Emitter.FragmentContract, target: Emitter.FragmentContract, deps: Emitter.FragmentContextDependencies, metrics: *Metrics) bool {
+fn reusable(source: Emitter.FragmentContract, target: Emitter.FragmentContract, metrics: *Metrics) bool {
     if (source.target != target.target or source.cpu_level != target.cpu_level) {
         metrics.rejected_target +|= 1;
         return false;
     }
-    // Static-data ordinals are rebound by runtime compaction. String symbols
-    // are relocatable and deliberately do not count as static-data dependencies.
-    const hook_transition = source.hooks_enabled and !target.hooks_enabled and !deps.comptime_hooks;
+    // Ordinary bodies retain symbolic code and data references in every
+    // consumer. Linking chooses their addresses, never a second body policy.
     if (source.hot_reload != target.hot_reload or
-        source.default_platform_runtime != target.default_platform_runtime or
-        (source.static_data_readonly != target.static_data_readonly and deps.static_data) or
-        (source.hooks_enabled != target.hooks_enabled and !hook_transition) or
-        deps.comptime_hooks or deps.static_data or
-        (source.dict_seed_mode != target.dict_seed_mode and deps.dict_seed) or
-        (source.initialize_boxy_runtime != target.initialize_boxy_runtime and deps.boxy_runtime_entry))
+        source.default_platform_runtime != target.default_platform_runtime)
     {
         metrics.rejected_context +|= 1;
         return false;
@@ -173,10 +194,9 @@ fn Job(comptime CG: type) type {
             defer cg.deinit();
             cg.borrowStackPlanIndexes(try laneStackPlanIndexes(worker));
             cg.generation_mode = source.generation_mode;
-            cg.dict_seed_mode = source.dict_seed_mode;
             cg.enable_hot_reload = source.enable_hot_reload;
             cg.enable_default_platform_runtime = source.enable_default_platform_runtime;
-            cg.comptime_hooks = source.comptime_hooks;
+            cg.setContextCatalog(source.context_catalog);
             cg.borrowStaticDataSymbolsFrom(source);
             self.fragment = if (self.proc) |id|
                 try Artifact.compileProcFragmentPrepared(CG, worker.allocator, &cg, id, source.store.getProcSpecs(), source.layout_store, self.data)
@@ -300,8 +320,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
     defer sequential_lane.deinit();
     // Index immutable backing once; workers capture only reached data. Execution
     // callers leave mutable static roots external, never copied placeholder values.
-    std.debug.assert(contract.static_data_readonly or options.constant_exports.len == 0);
-    var data = Artifact.PreparedData.init(allocator, destination.static_strings.exports, options.constant_exports, &.{}) catch |err| return invariant(err);
+    var data = Artifact.PreparedData.init(allocator, destination.store.getProcSpecs(), destination.static_strings.exports, options.constant_exports, &.{}) catch |err| return invariant(err);
     defer data.deinit();
     const specs = destination.store.getProcSpecs();
     var demanded = try std.DynamicBitSetUnmanaged.initEmpty(allocator, specs.len);
@@ -352,7 +371,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
             if (cached_procs.get(spec.identity)) |cached| {
                 if (cached.revision != spec.native_code_revision) {
                     metrics.rejected_revision +|= 1;
-                } else if (reusable(options.reuse_same_program.?.contract, contract, cached.fragment.context_dependencies, &metrics)) {
+                } else if (reusable(options.reuse_same_program.?.contract, contract, &metrics)) {
                     job.fragment = try cached.fragment.clone(allocator);
                     job.reused = true;
                 }
@@ -363,7 +382,9 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
             const fragment = &job.fragment.?;
             try requireHelpers(allocator, fragment, &helper_queue, &helper_seen);
             destination.boxy_runtime_used = destination.boxy_runtime_used or fragment.context_dependencies.boxy_runtime;
-            Artifact.appendPrepared(CG, allocator, destination, &fragment.set, &identities, &helper_keys) catch |err| return invariant(err);
+            const starts = Artifact.appendPreparedWithPlacement(CG, allocator, destination, &fragment.set, &identities, &helper_keys) catch |err| return invariant(err);
+            defer allocator.free(starts);
+            try retained.appendImageData(CG, destination, fragment, starts);
             const id = job.proc.?;
             const spec = specs[@backingInt(id)];
             try retained.procedures.append(allocator, .{ .id = id, .identity = spec.identity, .revision = spec.native_code_revision, .fragment = fragment.* });
@@ -378,7 +399,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
         var job = Job(CG){ .source = destination, .data = &data, .helper = key };
         defer if (job.fragment) |*fragment| fragment.deinit();
         if (cached_helpers.get(key)) |cached| {
-            if (reusable(options.reuse_same_program.?.contract, contract, cached.fragment.context_dependencies, &metrics)) {
+            if (reusable(options.reuse_same_program.?.contract, contract, &metrics)) {
                 job.fragment = try cached.fragment.clone(allocator);
                 job.reused = true;
             }
@@ -392,7 +413,9 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
             return err;
         };
         destination.boxy_runtime_used = destination.boxy_runtime_used or fragment.context_dependencies.boxy_runtime;
-        Artifact.appendPrepared(CG, allocator, destination, &fragment.set, &identities, &helper_keys) catch |err| return invariant(err);
+        const starts = Artifact.appendPreparedWithPlacement(CG, allocator, destination, &fragment.set, &identities, &helper_keys) catch |err| return invariant(err);
+        defer allocator.free(starts);
+        try retained.appendImageData(CG, destination, fragment, starts);
         try retained.helpers.append(allocator, .{ .key = key, .fragment = fragment.* });
         account(&metrics, fragment, job.reused, true);
         job.fragment = null;
@@ -558,33 +581,29 @@ test "native driver drains submission output and scratch OOM before cleanup" {
     }
 }
 
-test "native driver reuse contract is directional and dependency sensitive" {
+test "native driver reuse requires matching target and native emitter options" {
     const source = Emitter.FragmentContract{
         .target = .x64linux,
         .cpu_level = .default,
         .hot_reload = false,
         .default_platform_runtime = false,
-        .dict_seed_mode = .comptime_zero,
-        .hooks_enabled = true,
-        .initialize_boxy_runtime = false,
-        .static_data_readonly = false,
     };
-    var runtime = source;
-    runtime.hooks_enabled = false;
-    runtime.dict_seed_mode = .runtime;
+    var target = source;
     var metrics: Metrics = .{};
-    try std.testing.expect(reusable(source, runtime, .{}, &metrics));
-    try std.testing.expect(!reusable(runtime, source, .{}, &metrics));
-    try std.testing.expect(!reusable(source, runtime, .{ .comptime_hooks = true }, &metrics));
-    try std.testing.expect(!reusable(source, runtime, .{ .dict_seed = true }, &metrics));
-    try std.testing.expect(!reusable(source, source, .{ .static_data = true }, &metrics));
-    try std.testing.expect(reusable(source, runtime, .{ .boxy_runtime = true }, &metrics));
-    runtime.target = .arm64linux;
-    try std.testing.expect(!reusable(source, runtime, .{}, &metrics));
-    runtime.target = source.target;
-    runtime.cpu_level = .v1;
-    try std.testing.expect(!reusable(source, runtime, .{}, &metrics));
+    try std.testing.expect(reusable(source, target, &metrics));
+    target.hot_reload = true;
+    try std.testing.expect(!reusable(source, target, &metrics));
+    target.hot_reload = source.hot_reload;
+    target.default_platform_runtime = true;
+    try std.testing.expect(!reusable(source, target, &metrics));
+    target.default_platform_runtime = source.default_platform_runtime;
+    target.target = .arm64linux;
+    try std.testing.expect(!reusable(source, target, &metrics));
+    target.target = source.target;
+    target.cpu_level = .v1;
+    try std.testing.expect(!reusable(source, target, &metrics));
     try std.testing.expectEqual(@as(u64, 2), metrics.rejected_target);
+    try std.testing.expectEqual(@as(u64, 2), metrics.rejected_context);
     var totals = Metrics{ .tasks_submitted = std.math.maxInt(u64), .peak_inflight_fragments = 4 };
     totals.add(.{ .tasks_submitted = 1, .peak_inflight_fragments = 2 });
     try std.testing.expectEqual(std.math.maxInt(u64), totals.tasks_submitted);
@@ -703,6 +722,75 @@ test "native driver coordinator allocation failures drain and release owners" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testCoordinatorAllocationFailure, .{});
 }
 
+test "native retained data binds local self pointers through nonzero fragment placement" {
+    const a = std.testing.allocator;
+    const CG = Emitter.LirCodeGen(.x64linux);
+    var store = lir.LirStore.init(a);
+    defer store.deinit();
+    var layouts = try layout.Store.init(a, .u64);
+    defer layouts.deinit();
+    const proc = try testProc(&store, 42);
+    const spec = store.getProcSpec(proc);
+    var cg = try CG.init(a, &store, &layouts, .{}, &.{}, .default);
+    defer cg.deinit();
+    _ = try cg.appendAssembledRegion("\x90\x90\x90\x90\x90\x90\x90\x90", .entrypoint, 0, null);
+    const source = Artifact.Set{
+        .arena = collections.SingleThreadArena.init(a),
+        .artifacts = &.{.{
+            .kind = .{ .proc = spec.identity },
+            .code = "\x90\x48\x8b\x05\x00\x00\x00\x00\xc3",
+            .entry = 1,
+            .frame = .{
+                .prologue_size = 0,
+                .stack_alloc = 0,
+                .frame_size = 0,
+                .callee_saved_mask = 0,
+                .epilogue_offset = 7,
+                .uses_frame_pointer = false,
+            },
+            .refs = &.{},
+            .relocations = &.{.{ .offset = 4, .name = "self-pointer", .scope = .shared, .kind = .{ .data = .rel32 } }},
+            .data = &.{.{
+                .name = "self-pointer",
+                .bytes = "\x00\x00\x00\x00\x00\x00\x00\x00",
+                .alignment = 8,
+                .symbol_offset = 0,
+                .relocations = &.{.{ .offset = 0, .name = "original-proc", .addend = 0, .function = true, .code_target = .{ .local = 0 } }},
+            }},
+        }},
+    };
+    var fragment = Artifact.Fragment{
+        .set = try Artifact.combine(a, &.{&source}),
+        .required_helpers = &.{},
+        .context_dependencies = .{},
+    };
+    var fragment_owned = true;
+    defer if (fragment_owned) fragment.deinit();
+    var retained = Retained{ .allocator = a, .contract = cg.getFragmentContract() };
+    defer retained.deinit();
+    var identities = std.AutoHashMap(lir.ProcIdentity, ProcId).init(a);
+    defer identities.deinit();
+    try identities.put(spec.identity, proc);
+    var helpers = Artifact.HelperKeys.init(a);
+    defer helpers.deinit();
+    const starts = try Artifact.appendPreparedWithPlacement(CG, a, &cg, &fragment.set, &identities, &helpers);
+    defer a.free(starts);
+    try retained.appendImageData(CG, &cg, &fragment, starts);
+    try retained.procedures.append(a, .{ .id = proc, .identity = spec.identity, .revision = spec.native_code_revision, .fragment = fragment });
+    fragment_owned = false;
+    const items = try retained.dataItems(a);
+    defer a.free(items);
+    try std.testing.expectEqual(@as(usize, 8), starts[0]);
+    try std.testing.expectEqual(starts[0] + 1, cg.compiledProcSymbol(proc).?.code_start);
+    try std.testing.expectEqual(starts[0] + 1, items[0].relocations[0].code_target.?.image_offset);
+    try std.testing.expectEqual(@as(u32, 0), retained.procedures.items[0].fragment.set.artifacts[0].data[0].relocations[0].code_target.?.local);
+    try cg.finishImage();
+    var recaptured = try Artifact.extract(CG, a, &cg, store.getProcSpecs(), &layouts, &.{}, &.{}, items);
+    defer recaptured.deinit();
+    try std.testing.expectEqual(@as(u32, 1), recaptured.artifacts[1].entry);
+    try std.testing.expectEqual(@as(u32, 1), recaptured.artifacts[1].data[0].relocations[0].code_target.?.local);
+}
+
 test "native driver shared literal data outlives source and reused fragment owners" {
     if (comptime !Emitter.host_lir_codegen_available) return error.SkipZigTest;
     const a = std.testing.allocator;
@@ -733,6 +821,7 @@ test "native driver shared literal data outlives source and reused fragment owne
         defer strings.deinit();
         var cg = try CG.init(a, &store, &layouts, strings.view(), &.{}, .default);
         defer cg.deinit();
+        cg.setContextCatalog(Emitter.testSourceCatalog());
         var executor = TestExecutor{ .allocator = a, .lane = tasks.LaneState.init(a), .lanes = 2 };
         defer executor.lane.deinit();
         break :blk try run(CG, a, &cg, &demand, .{
@@ -744,6 +833,7 @@ test "native driver shared literal data outlives source and reused fragment owne
     defer if (cache_live) cache.deinit();
     var cg = try CG.init(a, &store, &layouts, .{}, &.{}, .default);
     defer cg.deinit();
+    cg.setContextCatalog(Emitter.testSourceCatalog());
     var metrics: Metrics = .{};
     var retained = try run(CG, a, &cg, &demand, .{
         .target = cg.getFragmentContract().target,
@@ -757,7 +847,24 @@ test "native driver shared literal data outlives source and reused fragment owne
     try std.testing.expectEqual(@as(u64, 0), metrics.tasks_submitted);
     const items = try retained.dataItems(a);
     defer a.free(items);
-    try std.testing.expectEqual(@as(usize, 1), items.len);
-    const offset = items[0].symbol_offset;
-    try std.testing.expectEqualStrings(text, items[0].bytes[offset..][0..text.len]);
+    var certificates = std.StringHashMap(void).init(a);
+    defer certificates.deinit();
+    for (retained.procedures.items) |procedure| {
+        for (procedure.fragment.set.artifacts) |artifact| {
+            try Artifact.validateSourceEventCertificates(a, artifact, @import("builtin").cpu.arch.endian());
+            for (artifact.source_events) |certificate| {
+                try certificates.put(certificate.data_name, {});
+                try std.testing.expectEqualSlices(u8, &procedure.identity.bytes, &certificate.descriptor.procedure_identity);
+            }
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 2), certificates.count());
+    try std.testing.expectEqual(1 + certificates.count(), items.len);
+    var literals: usize = 0;
+    for (items) |item| {
+        if (certificates.contains(item.name)) continue;
+        literals += 1;
+        try std.testing.expectEqualStrings(text, item.bytes[item.symbol_offset..][0..text.len]);
+    }
+    try std.testing.expectEqual(@as(usize, 1), literals);
 }

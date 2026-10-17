@@ -74,7 +74,7 @@ pub fn freezeRootIntoSlot(
         .callables = callables,
     };
     const root_symbol = try builder.graph.addNode(
-        try Program.staticDataSymbolName(builder.graph.allocator, slot),
+        try program.staticDataSymbolName(builder.graph.allocator, slot),
         builder.graph.size(slot_layout),
         builder.graph.alignment(slot_layout),
     );

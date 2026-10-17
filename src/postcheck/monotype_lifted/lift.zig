@@ -107,6 +107,8 @@ pub fn run(
         output.comptime_value_roots = Ast.ProgramList(Common.ComptimeValueRoot, "comptime_value_roots").fromArrayList(owned.comptime_value_roots.takeArrayList());
         output.lowering_modules = Ast.ProgramList(checked.ModuleId, "lowering_modules").fromArrayList(owned.lowering_modules.takeArrayList());
         output.platform_requirement_filling = owned.platform_requirement_filling;
+        output.declarations = owned.declarations;
+        owned.declarations = .empty;
         name_store = undefined;
         types = undefined;
         const_fn_evidence = undefined;
@@ -461,7 +463,7 @@ const Lifter = struct {
 
         for (self.source.defs, 0..) |def, index| {
             try self.lowerTopLevelDef(self.def_map[index] orelse
-                Common.invariant("Monotype definition was not reserved before lifting"), def);
+                Common.invariant("Monotype definition was not reserved before lifting"), def, @intCast(index));
         }
 
         for (self.source.nested_defs, 0..) |def, index| {
@@ -491,14 +493,18 @@ const Lifter = struct {
 
         // Literal roots keep their positions, which are their ids.
         for (self.source.literal_roots) |root| {
+            if (root.declaration_pending) Common.invariant("literal producer declaration was not completed before lifting");
             const raw = @backingInt(root.def);
             if (raw >= self.def_map.len) Common.invariant("Monotype literal root references a missing definition");
             const fn_id = self.def_map[raw] orelse
                 Common.invariant("Monotype literal root definition was not lifted");
+            const recipe = if (root.recipe) |value| try value.clone(self.allocator) else null;
+            errdefer if (recipe) |value| value.deinit(self.allocator);
             try self.output.addLiteralRoot(.{
                 .fn_id = fn_id,
                 .module = root.module,
                 .site = root.site,
+                .recipe = recipe,
             });
         }
 
@@ -514,6 +520,9 @@ const Lifter = struct {
                 .ty = request.ty,
                 .fn_id = fn_id,
                 .const_locator = request.const_locator,
+                .comptime_root = request.comptime_root,
+                .literal_materialization = request.literal_materialization,
+                .unconditional = request.unconditional,
             });
         }
 
@@ -528,7 +537,7 @@ const Lifter = struct {
         try finalizeProgramFunctionReferenceCaptures(self.output, self.fn_captures);
     }
 
-    fn lowerTopLevelDef(self: *Lifter, fn_id: Ast.FnId, def: Mono.Def) Allocator.Error!void {
+    fn lowerTopLevelDef(self: *Lifter, fn_id: Ast.FnId, def: Mono.Def, def_index: u32) Allocator.Error!void {
         if (self.fn_captures[@backingInt(fn_id)].items.len != 0) {
             Common.invariant("top-level Monotype definition has free locals after checked closure collection");
         }
@@ -549,6 +558,7 @@ const Lifter = struct {
             .symbol = def.symbol,
             .source = source,
             .root_identity = def.root_identity,
+            .mono_def = def_index,
             .signature = if (def.fn_id) |source_fn_id| switch (self.source.fnSignatureRelation(source_fn_id)) {
                 .independent_roots => null,
                 .exact_graph => source.?.mono_fn_ty,
@@ -727,7 +737,25 @@ const Lifter = struct {
             },
             .tag => |tag| try children.span(tag.payloads),
             .static_data_candidate => |candidate| try children.child(candidate.runtime_expr),
-            .comptime_value => |candidate| try children.child(candidate.initializer),
+            .comptime_value => |candidate| {
+                if (candidate.storage_producer) |def| {
+                    const raw = @backingInt(def);
+                    if (raw >= self.def_map.len) Common.invariant("completed storage producer was outside the definition table");
+                    const fn_id = self.def_map[raw] orelse
+                        Common.invariant("completed storage producer was not registered before its read");
+                    const initializer = try output.addExpr(.{
+                        .ty = self.source.defs[raw].ret,
+                        .data = .{ .call_proc = .{
+                            .callee = .{ .lifted = fn_id },
+                            .args = .empty(),
+                        } },
+                    });
+                    output.setExprData(expr_id, .{ .comptime_value = .{
+                        .root = candidate.root,
+                        .initializer = initializer,
+                    } });
+                } else try children.child(candidate.initializer);
+            },
             .typed_boundary => |boundary| try children.child(boundary.value),
             .row_widen => |widen| try children.child(widen.value),
             .nominal,
@@ -2484,7 +2512,7 @@ test "lift owns transferred tables across every allocation failure" {
         .initializer = initializer,
     } } });
     const stmt = try source.addStmt(.{ .expr = value });
-    const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc", .module_identity = @splat(0) });
+    const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc", .module_identity = @splat(0), .checked_module_key = null });
     const name = try source.names.internExportName("entry");
     try source.proc_debug_names.put(@fromBackingInt(@intCast(1)), name);
     source.freeze();
@@ -2534,6 +2562,52 @@ test "lift transfers compile-time descriptors without changing their domain" {
     try std.testing.expectEqual(rows, lifted.view().comptime_value_roots.ptr);
     try std.testing.expectEqual(root, lifted.getExpr(value).data.comptime_value.root);
     try std.testing.expectEqualDeep(descriptor, lifted.getComptimeValueRoot(root));
+}
+
+test "completed root witness names its storage definition rather than its original body" {
+    const allocator = std.testing.allocator;
+    var mono = Mono.Program.init(allocator);
+    var mono_owned = true;
+    defer if (mono_owned) mono.deinit();
+    const ty = try mono.types.add(.zst);
+    const body = try mono.addExpr(.{ .ty = ty, .data = .unit });
+    const storage_symbol: Common.Symbol = @fromBackingInt(@intCast(3));
+    const storage = try mono.addDef(.{
+        .symbol = storage_symbol,
+        .root_identity = .{ .bytes = @splat(1) },
+        .args = .empty(),
+        .body = .{ .roc = body },
+        .ret = ty,
+    });
+    const root = try mono.addComptimeValueRoot(.{
+        .module = .{},
+        .root = .{ .checked = @fromBackingInt(@intCast(4)) },
+        .const_locator = null,
+        .completion = .value,
+    });
+    const read = try mono.addExpr(.{ .ty = ty, .data = .{ .comptime_value = .{
+        .root = root,
+        .initializer = body,
+        .storage_producer = storage,
+    } } });
+    _ = try mono.addDef(.{
+        .symbol = @fromBackingInt(@intCast(1)),
+        .root_identity = .{ .bytes = @splat(2) },
+        .args = .empty(),
+        .body = .{ .roc = read },
+        .ret = ty,
+    });
+    mono.freeze();
+    mono_owned = false;
+    var lifted = try run(allocator, mono);
+    defer lifted.deinit();
+    const witness = lifted.getExpr(read).data.comptime_value;
+    try std.testing.expectEqual(root, witness.root);
+    try std.testing.expect(witness.storage_producer == null);
+    try std.testing.expect(witness.initializer != body);
+    const call = lifted.getExpr(witness.initializer).data.call_proc;
+    try std.testing.expectEqual(storage_symbol, lifted.getFn(call.callee.lifted).symbol);
+    try std.testing.expectEqual(@as(u32, 0), call.args.len);
 }
 
 fn initCaptureTestProgram(allocator: Allocator) Ast.Program {

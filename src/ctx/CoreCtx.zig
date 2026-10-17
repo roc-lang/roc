@@ -52,6 +52,10 @@ pub const VTable = struct {
     /// truncating it if it does.
     writeFile: *const fn (?*anyopaque, std.Io, []const u8, []const u8) WriteError!void,
 
+    /// Exclusively create a unique sibling of `path`, write and close it.
+    /// Caller owns the returned path and file. Failure removes only this
+    /// operation's file; collisions never truncate or delete another file.
+    writeTempFile: *const fn (?*anyopaque, std.Io, Allocator, []const u8, []const u8) (Allocator.Error || WriteError)![]u8 = &testingWriteTempFile,
     /// Produce a file incrementally. Implementations must consume the stream
     /// before returning; no producer or buffer pointers escape this call.
     writeFileStream: *const fn (?*anyopaque, std.Io, []const u8, FileStream) WriteError!void = &missingWriteFileStream,
@@ -197,6 +201,13 @@ pub fn readFileInto(self: Self, path: []const u8, buffer: []u8) ReadError!usize 
 /// Write `data` to `path`, creating or truncating the file.
 pub fn writeFile(self: Self, path: []const u8, data: []const u8) WriteError!void {
     return self.vtable.writeFile(self.ctx, self.std_io, path, data);
+}
+
+/// Write a closed, exclusively owned staging file beside `path`.
+/// Matches writeFile's durability: no fsync guarantee. On success the caller
+/// must rename or remove the file, then free the returned path with allocator.
+pub fn writeTempFile(self: Self, allocator: Allocator, path: []const u8, data: []const u8) (Allocator.Error || WriteError)![]u8 {
+    return self.vtable.writeTempFile(self.ctx, self.std_io, allocator, path, data);
 }
 
 /// A borrowed producer for a file's complete contents.
@@ -520,6 +531,7 @@ const os_vtable = VTable{
     .readFile = &osReadFile,
     .readFileInto = &osReadFileInto,
     .writeFile = &osWriteFile,
+    .writeTempFile = &osWriteTempFile,
     .writeFileStream = &osWriteFileStream,
     .fileExists = &osFileExists,
     .stat = &osStat,
@@ -581,6 +593,7 @@ const freestanding_vtable = VTable{
     .readFile = &freestandingReadFile,
     .readFileInto = &freestandingReadFileInto,
     .writeFile = &freestandingWriteFile,
+    .writeTempFile = &freestandingWriteTempFile,
     .fileExists = &freestandingFileExists,
     .stat = &freestandingStat,
     .listDir = &freestandingListDir,
@@ -748,6 +761,33 @@ fn osWriteFile(_: ?*anyopaque, std_io: std.Io, path: []const u8, data: []const u
     const file = try std.Io.Dir.cwd().createFile(std_io, path, .{ .permissions = private_file_permissions });
     defer file.close(std_io);
 
+    try writeFileContents(std_io, file, data);
+}
+
+fn osWriteTempFile(_: ?*anyopaque, io: std.Io, allocator: Allocator, path: []const u8, data: []const u8) (Allocator.Error || WriteError)![]u8 {
+    while (true) {
+        var nonce: [16]u8 = undefined;
+        io.random(&nonce);
+        const staging = try std.fmt.allocPrint(allocator, "{s}.{s}.tmp", .{ path, std.fmt.bytesToHex(nonce, .lower) });
+        errdefer allocator.free(staging);
+        const file = std.Io.Dir.cwd().createFile(io, staging, .{ .exclusive = true, .permissions = private_file_permissions }) catch |err| switch (err) {
+            error.PathAlreadyExists => {
+                allocator.free(staging);
+                continue;
+            },
+            else => return err,
+        };
+        // Close before removing a failed write, including on Windows.
+        errdefer std.Io.Dir.cwd().deleteFile(io, staging) catch {};
+        {
+            defer file.close(io);
+            try writeFileContents(io, file, data);
+        }
+        return staging;
+    }
+}
+
+fn writeFileContents(std_io: std.Io, file: std.Io.File, data: []const u8) WriteError!void {
     const limit = hostFileWriteRequestLimit();
     // Bound each submission to the host limit; writeStreamingAll still handles
     // partial progress below that limit. No copying or repeated truncation.
@@ -1294,6 +1334,10 @@ fn testingWriteFile(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) Wri
     @panic("writeFile should not be called in this test");
 }
 
+fn testingWriteTempFile(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const u8) (Allocator.Error || WriteError)![]u8 {
+    @panic("writeTempFile should not be called in this test");
+}
+
 fn testingFileExists(_: ?*anyopaque, _: std.Io, _: []const u8) bool {
     @panic("fileExists should not be called in this test");
 }
@@ -1409,6 +1453,10 @@ fn freestandingReadFileInto(_: ?*anyopaque, _: std.Io, _: []const u8, _: []u8) R
 }
 
 fn freestandingWriteFile(_: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) WriteError!void {
+    return error.AccessDenied;
+}
+
+fn freestandingWriteTempFile(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const u8) (Allocator.Error || WriteError)![]u8 {
     return error.AccessDenied;
 }
 
@@ -1623,6 +1671,87 @@ const BoundedWriteTestIo = struct {
         try fs.writeFile("bounded-write", self.data);
     }
 };
+
+test "OS writeTempFile retries exclusive collisions and cleans only its closed file" {
+    const Hook = struct {
+        creates: usize = 0,
+        closes: usize = 0,
+        deletes: usize = 0,
+        fail_write: bool,
+
+        fn random(context: ?*anyopaque, buffer: []u8) void {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            @memset(buffer, @intCast(self.creates));
+        }
+
+        fn create(context: ?*anyopaque, dir: std.Io.Dir, path: []const u8, options: std.Io.Dir.CreateFileOptions) std.Io.File.OpenError!std.Io.File {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            std.debug.assert(options.exclusive);
+            self.creates += 1;
+            return std.testing.io.vtable.dirCreateFile(std.testing.io.userdata, dir, path, options);
+        }
+
+        fn close(context: ?*anyopaque, files: []const std.Io.File) void {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.closes += files.len;
+            std.testing.io.vtable.fileClose(std.testing.io.userdata, files);
+        }
+
+        fn delete(context: ?*anyopaque, dir: std.Io.Dir, path: []const u8) std.Io.Dir.DeleteFileError!void {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            std.debug.assert(self.closes == 1);
+            std.debug.assert(std.mem.endsWith(u8, path, ".01010101010101010101010101010101.tmp"));
+            self.deletes += 1;
+            return std.testing.io.vtable.dirDeleteFile(std.testing.io.userdata, dir, path);
+        }
+
+        fn operate(context: ?*anyopaque, operation: std.Io.Operation) std.Io.Cancelable!std.Io.Operation.Result {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            if (self.fail_write) return .{ .file_write_streaming = error.DiskQuota };
+            return std.testing.io.vtable.operate(std.testing.io.userdata, operation);
+        }
+    };
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    for ([_]bool{ false, true }) |fail_write| {
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        const root = try tmp.dir.realPathFileAlloc(io, ".", allocator);
+        defer allocator.free(root);
+        const path = try std.fs.path.join(allocator, &.{ root, "pack.rpk" });
+        defer allocator.free(path);
+        const collision = try std.fmt.allocPrint(allocator, "{s}.00000000000000000000000000000000.tmp", .{path});
+        defer allocator.free(collision);
+        const base = os(allocator, allocator, io);
+        try base.writeFile(collision, "another writer");
+        var hook = Hook{ .fail_write = fail_write };
+        var vtable = io.vtable.*;
+        vtable.random = &Hook.random;
+        vtable.dirCreateFile = &Hook.create;
+        vtable.fileClose = &Hook.close;
+        vtable.dirDeleteFile = &Hook.delete;
+        vtable.operate = &Hook.operate;
+        const fs = os(allocator, allocator, .{ .userdata = &hook, .vtable = &vtable });
+        if (fail_write) {
+            try std.testing.expectError(error.DiskQuota, fs.writeTempFile(allocator, path, "complete"));
+            try std.testing.expectEqual(@as(usize, 1), hook.deletes);
+        } else {
+            const staging = try fs.writeTempFile(allocator, path, "complete");
+            defer allocator.free(staging);
+            const bytes = try base.readFile(staging, allocator);
+            defer allocator.free(bytes);
+            try std.testing.expectEqualStrings("complete", bytes);
+            try base.deleteFile(staging);
+            try std.testing.expectEqual(@as(usize, 0), hook.deletes);
+        }
+        try std.testing.expectEqual(@as(usize, 2), hook.creates);
+        try std.testing.expectEqual(@as(usize, 1), hook.closes);
+        try std.testing.expect(!base.fileExists(path));
+        const untouched = try base.readFile(collision, allocator);
+        defer allocator.free(untouched);
+        try std.testing.expectEqualStrings("another writer", untouched);
+    }
+}
 
 test "OS writeFile bounds large writes and preserves short-write progress" {
     if (comptime (builtin.os.tag != .linux and !builtin.os.tag.isDarwin()) or @bitSizeOf(usize) < 64) return error.SkipZigTest;

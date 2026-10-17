@@ -1,32 +1,8 @@
-//! Completed compile-time values that lower as literals or as the runtime
-//! construction they came from, instead of as static-data slots.
-//!
-//! A runtime continuation forked from a completed host program is lowered
-//! after every compile-time root has been evaluated, so a scalar root's
-//! value is known when its read is lowered. Reading it through a
-//! static-data slot instead would hide the constant from the LIR passes that
-//! reason about constants—range proving, loop versioning, overflow
-//! elision—so a table built by `List.repeat` with a compile-time length
-//! would keep every index check the prover otherwise discharges. This table
-//! holds each completed successful scalar root's literal, decoded from the
-//! host's frozen image and keyed by checked root identity exactly as the
-//! later transcoding matches slots, so the lowerer emits the literal
-//! directly and creates no slot, failure record, or guard for it.
-//!
-//! One list shape gets the same treatment: an empty list lowers to the
-//! `with_capacity` it was evaluated with, so the request survives the freeze
-//! (a frozen descriptor cannot carry capacity) and the first append goes in
-//! place. A list with elements keeps its slot however uniform its contents:
-//! lowering it to a construction would allocate at every read, while a
-//! consumer that mutates what it read already receives a fresh unique list
-//! from the runtime's copy-on-first-mutation, at the one allocation that
-//! construction would have spent anyway. Other aggregate roots keep their slots and fold in the backend;
-//! failed roots keep the guard that crashes with the original failure.
-//!
-//! A build that restores its compile-time values from a checked module's
-//! const store, rather than from a completed host program, reaches the
-//! same constructions through the restored expressions; the lowerer's
-//! static-data candidate path decides those.
+//! Typed decoding of completed values into consumer-owned materialization.
+//! Reserved empty-list capacity survives freezing as explicit export metadata;
+//! reconstructing its owned value must not change ordinary callers' code.
+//! Non-construction values retain their static storage, and failed roots retain
+//! their ordinary failure guards.
 const std = @import("std");
 const collections = @import("collections");
 const builtins = @import("builtins");
@@ -64,6 +40,19 @@ pub const Construction = union(enum) {
     },
 };
 
+/// The frozen descriptor cannot represent an owned reserved empty-list
+/// allocation. Other static values already have a correct owned return.
+pub fn requiresOwnedCapacity(construction: Construction) bool {
+    return switch (construction) {
+        .empty_list => |capacity| capacity != 0,
+        .record => |fields| for (fields) |field| {
+            if (requiresOwnedCapacity(field)) break true;
+        } else false,
+        .tag => |tag| if (tag.payload) |payload| requiresOwnedCapacity(payload.*) else false,
+        .literal, .zst, .empty_str => false,
+    };
+}
+
 /// `count` copies of one construction: the value a `List.repeat` or a
 /// constant fill loop completes to. Such a list keeps its static slot, and
 /// a read of it also names an argument-free procedure that builds the list
@@ -72,6 +61,46 @@ pub const UniformList = struct {
     element: Construction,
     count: u64,
 };
+
+/// A decoded construction owned only while its consumer emits the requested
+/// materialization wrapper. Publication names one slot explicitly.
+pub const PublishedConstruction = struct {
+    arena: std.heap.ArenaAllocator,
+    construction: ?Construction,
+
+    pub fn deinit(self: *PublishedConstruction) void {
+        self.arena.deinit();
+    }
+};
+
+/// Decode the construction of the completed value root stored in `slot` from its
+/// export, which must be the first of `exports`.
+pub fn constructionForPublishedValue(
+    allocator: Allocator,
+    program: *const Program.Result,
+    slot: LIR.StaticDataId,
+    exports: []Program.StaticDataExport,
+) Allocator.Error!PublishedConstruction {
+    const entry = program.static_data_values.items[@backingInt(slot)];
+    std.debug.assert(entry.compile_time_root != null);
+    const root = entry.compile_time_root.?;
+    std.debug.assert(root.role == .value and exports.len != 0 and exports[0].value_id == slot);
+    const frozen = Program.FrozenStaticData{ .allocator = allocator, .exports = exports };
+    return constructionForExportedValue(allocator, program, slot, exports[0], &frozen);
+}
+
+/// Decode the construction of the completed value root stored in `slot` from its export.
+pub fn constructionForExportedValue(allocator: Allocator, program: *const Program.Result, slot: LIR.StaticDataId, exported: Program.StaticDataExport, frozen: *const Program.FrozenStaticData) Allocator.Error!PublishedConstruction {
+    const entry = program.static_data_values.items[@backingInt(slot)];
+    std.debug.assert(entry.compile_time_root != null);
+    const root = entry.compile_time_root.?;
+    std.debug.assert(root.role == .value and exported.value_id == slot);
+    var result = PublishedConstruction{ .arena = std.heap.ArenaAllocator.init(allocator), .construction = null };
+    errdefer result.deinit();
+    var decoder = Decoder{ .program = program, .frozen = frozen, .arena = result.arena.allocator() };
+    result.construction = try decoder.decode(&exported, exported.bytes[exported.symbol_offset..], exported.symbol_offset, root.role.value.plan, entry.layout_idx);
+    return result;
+}
 
 /// Constructions of the completed successful roots of one host program that
 /// lower without a slot, keyed by producer identity.
@@ -97,7 +126,7 @@ pub const CompletedScalarValues = struct {
         }
 
         pub fn eql(_: Context, a: Key, b: Key) bool {
-            return std.meta.eql(a.module, b.module) and a.root.eql(b.root);
+            return a.module.eql(b.module) and a.root.eql(b.root);
         }
     };
 
@@ -495,7 +524,8 @@ pub const Decoder = struct {
     fn decodeList(self: *Decoder, data_export: ?*const Program.StaticDataExport, bytes: []const u8, offset: usize, value_layout: layout.Layout) ?Construction {
         if (value_layout.tag != .list) return null;
         if ((self.readWord(bytes, 1) orelse return null) != 0) return null;
-        var capacity: u64 = 0;
+        const encoded = self.readWord(bytes, 2) orelse return null;
+        var capacity: u64 = builtins.list.RocList.decodeCapacity(@intCast(encoded));
         if (data_export) |exported| {
             for (exported.empty_list_capacities) |item| {
                 if (item.offset == offset) capacity = item.capacity;

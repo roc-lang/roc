@@ -17,6 +17,7 @@ pub const boxy_call_plan = @import("boxy_call_plan.zig");
 comptime {
     if (@import("builtin").is_test) {
         @import("std").testing.refAllDecls(dev.PackFile);
+        @import("std").testing.refAllDecls(dev.ArtifactClosure);
     }
 }
 

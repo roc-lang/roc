@@ -17,6 +17,7 @@ const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
 const layout_mod = @import("layout");
+const Common = @import("postcheck").Common;
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -1313,18 +1314,151 @@ pub const CallVariantSpec = struct {
     extra_frame_locals: []const LocalId = &.{},
     /// The variant's return layout, which the rewritten returns produce.
     ret_layout: layout_mod.Idx,
+    /// Content of the shape the variant is specialized to, the same in every
+    /// program: the content digest of the layout a return-slot variant
+    /// stores through, or a fixed tag for a shape with no layout choice.
+    shape_digest: [32]u8,
 };
 
-/// Identity of a call variant of `source`. The variant is determined by the
-/// source procedure and the shape of the variant specification; the return
-/// layout index is program-local, so a fused variant's identity is stable
-/// only within one program until fusion output carries content identities.
-fn callVariantIdentity(source: LIR.ProcIdentity, spec: CallVariantSpec) LIR.ProcIdentity {
-    var key: [12]u8 = undefined;
-    std.mem.writeInt(u32, key[0..4], @intCast(spec.leading_args.len), .little);
-    std.mem.writeInt(u32, key[4..8], @intCast(spec.extra_frame_locals.len), .little);
-    std.mem.writeInt(u32, key[8..12], @backingInt(spec.ret_layout), .little);
+/// Identity of a call variant of `source` with `leading` leading arguments,
+/// `extra_frame_locals` extra frame locals and the shape `shape_digest`
+/// names. It is a function of the source's identity and the shape alone, so
+/// the object cache offers and serves the variant under it.
+pub fn callVariantIdentity(source: LIR.ProcIdentity, leading: u32, extra_frame_locals: u32, shape_digest: [32]u8) LIR.ProcIdentity {
+    var key: [40]u8 = undefined;
+    std.mem.writeInt(u32, key[0..4], leading, .little);
+    std.mem.writeInt(u32, key[4..8], extra_frame_locals, .little);
+    key[8..40].* = shape_digest;
     return source.derived("call-variant", &key);
+}
+
+/// The shape of a call variant, from which its identity and the signature
+/// of a served stand-in follow without cloning the source.
+pub const CallVariantShape = struct {
+    leading_layouts: [1]layout_mod.Idx,
+    leading_count: u8,
+    extra_frame_locals: u32,
+    ret_layout: layout_mod.Idx,
+    shape_digest: [32]u8,
+};
+
+/// The compile-time value slots of a program that have a materializer
+/// wrapper, by checked root. Served code materializes a root through the
+/// wrapper the linking program defines for it, so a derived procedure is
+/// linked only when every root its code materializes has one here, and the
+/// slots are then read by a retired body, which keeps their wrappers
+/// reachable (design.md "Identity Offers").
+pub const ServedRootStorage = struct {
+    values: *std.ArrayList(core.Program.StaticDataValue),
+    slots: std.AutoHashMapUnmanaged(core.Program.RootUse, std.ArrayListUnmanaged(LIR.StaticDataId)),
+    allocator: Allocator,
+
+    pub fn init(allocator: Allocator, values: *std.ArrayList(core.Program.StaticDataValue)) Allocator.Error!ServedRootStorage {
+        var self: ServedRootStorage = .{ .values = values, .slots = .empty, .allocator = allocator };
+        errdefer self.deinit();
+        for (values.items, 0..) |value, index| {
+            if (value.accessor == null) continue;
+            const root = value.compile_time_root orelse continue;
+            const checked_root = switch (root.root) {
+                .checked => |checked_root| checked_root,
+                .literal => continue,
+            };
+            const entry = try self.slots.getOrPut(allocator, .{ .module = root.module.bytes, .root = @backingInt(checked_root) });
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            try entry.value_ptr.append(allocator, @fromBackingInt(@intCast(@as(u32, @intCast(index)))));
+        }
+        return self;
+    }
+
+    pub fn deinit(self: *ServedRootStorage) void {
+        var lists = self.slots.valueIterator();
+        while (lists.next()) |list| list.deinit(self.allocator);
+        self.slots.deinit(self.allocator);
+    }
+
+    /// Whether every root `hit`'s code materializes has a wrapper here.
+    fn covers(self: *const ServedRootStorage, hit: Common.SpecCacheHit) bool {
+        const demand = hit.demand orelse return false;
+        for (demand.eager_reads) |read| {
+            if (!self.slots.contains(.{ .module = read.module, .root = read.root })) return false;
+        }
+        for (hit.checked_root_uses) |use| {
+            if (!self.slots.contains(.{ .module = use.module, .root = use.root })) return false;
+        }
+        return true;
+    }
+
+    /// Record that a retired body reads every slot of the roots `hit`'s
+    /// code materializes.
+    fn markRead(self: *ServedRootStorage, hit: Common.SpecCacheHit) void {
+        const demand = hit.demand orelse unreachable;
+        for (demand.eager_reads) |read| self.markRoot(.{ .module = read.module, .root = read.root });
+        for (hit.checked_root_uses) |use| self.markRoot(.{ .module = use.module, .root = use.root });
+    }
+
+    fn markRoot(self: *ServedRootStorage, use: core.Program.RootUse) void {
+        const list = self.slots.get(use) orelse unreachable;
+        for (list.items) |slot| self.values.items[@backingInt(slot)].retired_read = true;
+    }
+};
+
+/// The object cache a pass after Direct LIR may serve derived procedures
+/// from, under the identity the derived procedure would have.
+pub const VariantCache = struct {
+    lookup: ?Common.SpecCacheLookup = null,
+    /// The program's platform/app relation.
+    relation: ?[32]u8 = null,
+    /// The program's materializer wrappers by root.
+    storage: ?*ServedRootStorage = null,
+
+    /// The offer of the procedure with `identity`, when the program can link
+    /// it: every root its code materializes has a wrapper here. Taking the
+    /// offer marks those roots' slots as read by a retired body.
+    pub fn find(self: VariantCache, identity: LIR.ProcIdentity) ?Common.SpecCacheHit {
+        const lookup = self.lookup orelse return null;
+        const storage = self.storage orelse return null;
+        const hit = lookup.lookupIdentity(identity.bytes, self.relation) orelse return null;
+        if (builtin.mode == .debug) std.debug.assert(std.mem.eql(u8, &hit.identity, &identity.bytes));
+        if (!storage.covers(hit)) return null;
+        storage.markRead(hit);
+        return hit;
+    }
+};
+
+/// A body-less procedure standing for the call variant of `source` with
+/// `shape` that the object cache serves under `identity`: the signature the
+/// clone would have, with the ownership facts the offer carries.
+pub fn externalCallVariant(store: *LirStore, source: LIR.LirProcSpecId, shape: CallVariantShape, identity: LIR.ProcIdentity, hit: Common.SpecCacheHit) Allocator.Error!LIR.LirProcSpecId {
+    const source_spec = store.getProcSpec(source);
+    const source_args = store.getLocalSpan(source_spec.args);
+    var args = try std.ArrayList(LocalId).initCapacity(store.allocator, source_args.len + shape.leading_count);
+    defer args.deinit(store.allocator);
+    for (shape.leading_layouts[0..shape.leading_count]) |layout_idx| {
+        args.appendAssumeCapacity(try store.addLocal(.{ .layout_idx = layout_idx }));
+    }
+    for (0..source_args.len) |index| {
+        const source_arg = GuardedList.at(source_args, index);
+        args.appendAssumeCapacity(try store.addLocal(.{ .layout_idx = store.getLocal(source_arg).layout_idx }));
+    }
+    const variant = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = identity,
+        .args = try store.addLocalSpan(args.items),
+        .body = null,
+        .ret_layout = shape.ret_layout,
+        .abi = .roc,
+        .external = true,
+        .rc_borrowed_params = hit.rc_borrowed_params,
+        .rc_ret_borrowed = hit.rc_ret_borrowed,
+        .rc_ret_lenders = hit.rc_ret_lenders,
+        .rc_read_only_params = hit.rc_read_only_params,
+        .rc_ret_unique = hit.rc_ret_unique,
+        .rc_ret_unique_fields = hit.rc_ret_unique_fields,
+        .rc_ret_conditions = try store.addU32Span(hit.rc_ret_conditions),
+        .derived_from = source_spec.derived_from orelse source_spec.identity,
+    }, store.procLoc(source));
+    try store.copyProcDebugInfo(variant, source);
+    return variant;
 }
 
 /// Clone `source` into an internal variant whose returns are rewritten by
@@ -1386,13 +1520,14 @@ pub fn cloneCallVariant(
 
     const variant = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
-        .identity = callVariantIdentity(source_spec.identity, spec),
+        .identity = callVariantIdentity(source_spec.identity, @intCast(spec.leading_args.len), @intCast(spec.extra_frame_locals.len), spec.shape_digest),
         .args = try store.addLocalSpan(variant_args.items),
         .erased_reuse_arg = erased_reuse_arg,
         .frame_locals = try store.addLocalSpan(frame_locals.items[0..unique_len]),
         .body = body,
         .ret_layout = spec.ret_layout,
         .abi = .roc,
+        .derived_from = source_spec.derived_from orelse source_spec.identity,
     }, store.procLoc(source));
     try store.copyProcDebugInfo(variant, source);
 
@@ -1439,13 +1574,21 @@ pub fn CallResultFusion(comptime Spec: type) type {
         store: *LirStore,
         state: Spec.State,
         variants: std.AutoHashMap(Spec.VariantKey, LIR.LirProcSpecId),
+        cache: VariantCache,
 
         /// Rewrite every admitted procedure in the store.
         pub fn run(store: *LirStore, state: Spec.State) Allocator.Error!void {
+            return runWithCache(store, state, .{});
+        }
+
+        /// `run`, linking a variant the object cache offers under the
+        /// identity the clone would have instead of cloning it.
+        pub fn runWithCache(store: *LirStore, state: Spec.State, cache: VariantCache) Allocator.Error!void {
             var pass: Self = .{
                 .store = store,
                 .state = state,
                 .variants = std.AutoHashMap(Spec.VariantKey, LIR.LirProcSpecId).init(store.allocator),
+                .cache = cache,
             };
             defer pass.variants.deinit();
 
@@ -1513,7 +1656,13 @@ pub fn CallResultFusion(comptime Spec: type) type {
 
         fn variant(self: *Self, key: Spec.VariantKey) Allocator.Error!LIR.LirProcSpecId {
             if (self.variants.get(key)) |existing| return existing;
-            const created = try Spec.createVariant(self.state, self.store, key);
+            const shape = try Spec.variantShape(self.state, key);
+            const identity = callVariantIdentity(self.store.getProcSpec(key.source).identity, shape.leading_count, shape.extra_frame_locals, shape.shape_digest);
+            const created = if (self.cache.find(identity)) |hit|
+                try externalCallVariant(self.store, key.source, shape, identity, hit)
+            else
+                try Spec.createVariant(self.store, key, shape);
+            if (builtin.mode == .debug) std.debug.assert(std.mem.eql(u8, &self.store.getProcSpec(created).identity.bytes, &identity.bytes));
             try self.variants.put(key, created);
             return created;
         }

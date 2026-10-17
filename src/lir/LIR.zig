@@ -497,6 +497,13 @@ pub const ComptimeSiteKind = enum {
     if_,
 };
 
+/// Exact checked producer of an observed control-flow site, independent of
+/// optional exhaustiveness diagnostic indexes and consumer-local site IDs.
+pub const CheckedSiteOrigin = union(enum(u8)) {
+    checked_expr: u32,
+    checked_pattern: u32,
+};
+
 /// Metadata for one compile-time-observed control-flow site.
 pub const ComptimeSite = struct {
     kind: ComptimeSiteKind,
@@ -507,6 +514,7 @@ pub const ComptimeSite = struct {
     owner: LoweringModuleId,
     region: base.Region,
     checked_site: ?CheckedExhaustivenessSiteId = null,
+    checked_origin: ?CheckedSiteOrigin = null,
     proc: LirProcSpecId,
     branch_regions: []const base.Region = &.{},
 };
@@ -1690,6 +1698,9 @@ pub const LirProcSpec = struct {
     /// execute its exact post-layout construction. Runtime backends register
     /// and emit only ordinary procedures.
     is_static_initializer: bool = false,
+    /// Explicit consumer-owned materialization provision. This procedure is
+    /// not a persistent ordinary callee; callers reference its semantic cell.
+    root_materialization: ?@import("program.zig").RootMaterialization = null,
     /// Hosted call ABI metadata, when this proc is provided by the platform.
     hosted: ?HostedProc = null,
     /// Set when the object cache provides this proc's code: the proc has no
@@ -1745,6 +1756,14 @@ pub const LirProcSpec = struct {
     /// only the base signature and no body, so a proc with this bit set is
     /// never offered as one.
     rc_variant_demandable: bool = false,
+    /// The identity of the Direct LIR procedure this one was derived from by
+    /// a pass after Direct LIR, through any chain of ownership variants and
+    /// call variants. A derived procedure's identity is derived from the
+    /// base's, and its code reads what the base's does, so the object cache
+    /// offers and serves it with the base's facts (design.md "Identity
+    /// Offers"). Named by identity, not by procedure, so compaction can drop
+    /// the base.
+    derived_from: ?ProcIdentity = null,
 };
 
 test "Symbol size and alignment" {

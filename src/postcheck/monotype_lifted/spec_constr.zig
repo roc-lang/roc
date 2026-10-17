@@ -266,6 +266,7 @@ fn isForcedDynamicIteratorType(program: *const Ast.Program, ty: Type.TypeId) boo
 pub const ProcedureUse = struct {
     external_calls: usize = 0,
     external_call_expr: ?Ast.ExprId = null,
+    /// Exact caller used by the single-materialization proof, not phase metadata.
     external_call_owner: ?Ast.FnId = null,
     value_refs: usize = 0,
     contains_return: bool = false,
@@ -11787,7 +11788,7 @@ const Cloner = struct {
                 self.materialize_strip_depth = task.saved_strip_depth;
                 self.pass.program.setFn(task.worker_fn_id, .{
                     .symbol = task.symbol,
-                    .source = task.source_fn.source,
+                    .source = self.pass.program.getFn(task.worker_fn_id).source,
                     .signature = null,
                     .args = task.args_span,
                     .captures = task.captures_span,

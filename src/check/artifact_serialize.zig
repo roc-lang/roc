@@ -441,7 +441,7 @@ pub fn rootLayoutVersionHash(comptime Root: type, comptime version: u32) [32]u8 
 /// discriminant + the total relocatable-pointer count + the full recursive layout
 /// fingerprint, folded with FNV-1a and expanded to 32 bytes via splitmix64. Bump
 /// `version` for a semantic change the fingerprint can't see.
-fn layoutVersionHash(comptime T: type, comptime version: u32) [32]u8 {
+pub fn layoutVersionHash(comptime T: type, comptime version: u32) [32]u8 {
     @setEvalBranchQuota(20_000_000);
     comptime assertPortableSerialized(T);
     var hasher = LayoutHasher{};

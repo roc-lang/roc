@@ -265,6 +265,8 @@ fn certifyStoreWithWorkStats(
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const proc = store.getProcSpec(proc_id);
         const body = proc.body orelse continue;
+        // ARC leaves static initializers unemitted: no backend runs them.
+        if (proc.is_static_initializer) continue;
         try certifier.certifyProc(proc_id, proc, body);
     }
 }
@@ -478,6 +480,7 @@ fn certifyUniqueArgs(
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         const proc = store.getProcSpec(proc_id);
         const body = proc.body orelse continue;
+        if (proc.is_static_initializer) continue;
         const sig = sigs.get(proc_id);
 
         for (dense_locals.items) |local| local_to_dense[@backingInt(local)] = no_dense;

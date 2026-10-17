@@ -15,6 +15,7 @@ const Arc = @import("arc.zig");
 const ImmortalLocals = @import("immortal_locals.zig");
 const TailDrive = @import("tail_drive.zig");
 const ProcPasses = @import("proc_passes.zig");
+const BodyClone = @import("body_clone.zig");
 const ReturnSlot = @import("return_slot.zig");
 const StrAppend = @import("str_append.zig");
 const SingleUseInline = @import("single_use_inline.zig");
@@ -100,6 +101,8 @@ pub const RootRequestSet = struct {
     /// Restore eligible stored constants as internal readonly static values.
     include_internal_static_data: bool = false,
     test_plan_metadata: []const postcheck.Common.RootTestPlanMetadata = &.{},
+    cached_root_declarations: []const postcheck.Common.CheckedRootUse = &.{},
+    cached_literal_declarations: []const LirProgram.CachedLiteralRecipe = &.{},
     /// The requests from this position on are discovery roots; see
     /// `postcheck.Common.RootRequests.discovery_start`.
     discovery_start: ?usize = null,
@@ -127,8 +130,33 @@ pub const WorkMetrics = struct {
     lir_continuations: u32 = 0,
 };
 
+/// Diagnostic labels for cache evidence do not change the body-policy namespace.
+fn packTraceEnabled() bool {
+    if (builtin.os.tag == .freestanding) return false;
+    return std.c.getenv("ROC_PACK_TRACE") != null;
+}
+
 /// Target settings and checked module state for the checked-to-LIR pipeline.
 pub const TargetConfig = struct {
+    /// Authoritative ordinary native-dev body policy. Checking and linked
+    /// native dev output start here; root manifests and provider pointers
+    /// are separate from the code policy.
+    pub fn ordinaryDev() TargetConfig {
+        return .{
+            .inline_mode = .wrappers_and_source_single_use,
+            .spec_constr_clone_inlining = .iterator_fusion,
+            .consume_dead_boxes = true,
+            .inline_expects = .run,
+            .list_in_place_map = false,
+            .tag_reachability = false,
+            .prove_ranges = false,
+            .scalarize_joins = false,
+            .reuse_boxes = false,
+            .thread_confined_rc = false,
+            .proc_debug_names = false,
+        };
+    }
+
     work_metrics: ?*WorkMetrics = null,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     /// Bytes the consumer's erased callable values reserve at the start of
@@ -172,12 +200,9 @@ pub const TargetConfig = struct {
     proc_debug_names: bool = false,
     /// The object cache Monotype asks for closed specializations.
     spec_cache: ?postcheck.Common.SpecCacheLookup = null,
-    /// Whether Monotype and Direct LIR may serve cache entries to the compile-time
-    /// roots' closure. `prepareCheckedModulesMonotype` sets this from the
-    /// modules: a match whose exhaustiveness only the evaluation can decide
-    /// must run as the evaluator's own code, which reports the branches it
-    /// takes, and a spliced entry reports nothing.
-    comptime_closure_hits: bool = false,
+    /// Native CTFE storage demand remains relevant when another consumer needs
+    /// source bodies and therefore forbids early native body substitution.
+    root_use_cache: ?postcheck.Common.SpecCacheLookup = null,
     /// Keep every keyed specialization procedure through compaction; a pack
     /// program offers them from its manifest whether or not its export
     /// wrappers inlined their calls.
@@ -1022,6 +1047,16 @@ pub const SolvedPolicy = struct {
     spec_constr_clone_inlining: SpecConstrCloneInlining,
     keep_specialization_procs: bool,
 
+    /// Native dev and standalone checking share one explicit preparation policy.
+    /// Source-only single-use inlining is independent of the caller program.
+    pub fn dev() SolvedPolicy {
+        return .{
+            .inline_mode = .wrappers_and_source_single_use,
+            .spec_constr_clone_inlining = .iterator_fusion,
+            .keep_specialization_procs = false,
+        };
+    }
+
     pub fn fromTarget(target: TargetConfig) SolvedPolicy {
         var policy: SolvedPolicy = undefined;
         inline for (@typeInfo(SolvedPolicy).@"struct".field_names) |field_name| {
@@ -1045,7 +1080,6 @@ pub const LirPolicy = struct {
     proc_debug_names: bool,
     spec_cache: ?postcheck.Common.SpecCacheLookup,
     code_provision: CodeProvision,
-    comptime_closure_hits: bool,
     keep_specialization_procs: bool,
     promote_loop_appends: base.TestSwitch(true),
     fuse_tag_cases: bool,
@@ -1195,14 +1229,17 @@ pub fn adoptReachableCompletedComptimeValues(lowered: *LoweredProgram) Allocator
     for (lowered.frozen_static_data.?.exports) |item| {
         if (item.value_id) |id| result.static_data_values.items[@backingInt(id)].initializer = null;
     }
-    for (result.static_data_values.items) |*value| value.compile_time_root = null;
+    for (result.static_data_values.items) |*value| {
+        value.compile_time_root = null;
+        value.cached_demand = false;
+    }
 }
 
 /// The completed frozen bytes are now each compile-time value's definition, so
 /// the slot keeps no initializer and no compile-time root identity, and the
 /// program's procedures are compacted against the frozen graph's own
-/// references. Completion has already rewritten successful failure guards;
-/// remaining guard CFG belongs to failed roots and remains ordinary runtime LIR.
+/// references. Ordinary failure guards remain unchanged for every outcome;
+/// completed failure records select their success or failure edge at runtime.
 fn completeComptimeValueSlots(lowered: *LoweredProgram) Allocator.Error!void {
     const result = &lowered.lir_result;
     result.comptime_value_guards.clearRetainingCapacity();
@@ -1211,7 +1248,10 @@ fn completeComptimeValueSlots(lowered: *LoweredProgram) Allocator.Error!void {
         for (frozen.exports) |item| {
             if (item.value_id) |id| result.static_data_values.items[@backingInt(id)].initializer = null;
         }
-        for (result.static_data_values.items) |*value| value.compile_time_root = null;
+        for (result.static_data_values.items) |*value| {
+            value.compile_time_root = null;
+            value.cached_demand = false;
+        }
         try ReachableProcs.runWithFrozen(result, frozen);
     } else {
         try ReachableProcs.run(result);
@@ -1387,11 +1427,7 @@ pub fn prepareCheckedModulesMonotype(
     try verifyCheckedBoundary(modules, target);
     try requireHostedProceduresBound(modules, target);
 
-    // One checked-program proof governs both lookup stages. An early hit
-    // removes the source body, so Direct LIR cannot defer this decision until
-    // it discovers which procedures the evaluator reaches.
-    var prepared_target = target;
-    prepared_target.comptime_closure_hits = comptimeClosureHitsAllowed(modules);
+    const prepared_target = target;
 
     const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests, roots.include_provided_data_exports);
     defer allocator.free(layout_requests);
@@ -1438,12 +1474,9 @@ pub fn prepareCheckedModulesMonotype(
             checkedModules(modules),
             rootRequests(roots, layout_requests, static_data_requests),
             .{
-                .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
-                .spec_cache = if (monotypeCacheHitsAllowed(
-                    target.checked_module_state,
-                    prepared_target.comptime_closure_hits,
-                    target.code_provision,
-                )) target.spec_cache else null,
+                .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or packTraceEnabled(),
+                .spec_cache = if (target.code_provision.permitsNativeObjects()) target.spec_cache else null,
+                .root_use_cache = target.root_use_cache,
                 .post_check_executor = target.post_check_executor,
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
@@ -1481,21 +1514,6 @@ pub fn prepareCheckedModulesMonotype(
     };
 }
 
-/// Early hits erase producer bodies, so both native provision and the
-/// compile-time observation proof must authorize them before lowering.
-fn monotypeCacheHitsAllowed(state: CheckedModuleState, comptime_closure_hits: bool, provision: CodeProvision) bool {
-    return provision.permitsNativeObjects() and (state == .complete or comptime_closure_hits);
-}
-
-test "early cache requires declared native provision and the CTFE observation proof" {
-    for (std.enums.values(CodeProvision)) |provision| {
-        for ([_]bool{ false, true }) |proof| {
-            try std.testing.expectEqual(provision.permitsNativeObjects(), monotypeCacheHitsAllowed(.complete, proof, provision));
-            try std.testing.expectEqual(provision.permitsNativeObjects() and proof, monotypeCacheHitsAllowed(.checking_finalization, proof, provision));
-        }
-    }
-}
-
 test "shared producer native provision requires every consumer in the host dev domain" {
     for (std.enums.values(CodeProvision)) |host| {
         for (std.enums.values(CodeProvision)) |runtime| {
@@ -1504,51 +1522,6 @@ test "shared producer native provision requires every consumer in the host dev d
             try std.testing.expectEqual(expected, runtime.sharedDomain(host));
         }
     }
-}
-
-/// Whether every exhaustiveness site of the program resolves without the
-/// evaluator observing the branch it takes. A site reachable only at compile
-/// time is resolved by the evaluation reaching it, which a spliced
-/// object-cache entry never reports.
-fn comptimeClosureHitsAllowed(modules: CheckedModuleSet) bool {
-    if (hasCompileTimeOnlySite(&modules.root.module.exhaustiveness_sites)) return false;
-    for (modules.root.relation_modules) |relation| {
-        if (hasCompileTimeOnlySite(relation.exhaustiveness_sites)) return false;
-    }
-    for (modules.imports) |import| {
-        if (hasCompileTimeOnlySite(import.exhaustiveness_sites)) return false;
-    }
-    return true;
-}
-
-fn hasCompileTimeOnlySite(sites: *const checked.CheckedExhaustivenessSiteTable) bool {
-    for (sites.sites) |site| {
-        switch (site.policy) {
-            .compile_time_only => return true,
-            .compile_time_replaced_by_root, .runtime_reachable, .not_pending => {},
-        }
-    }
-    return false;
-}
-
-test "CTFE cache proof rejects unresolved empirical exhaustiveness only" {
-    const policies = [_]checked.ExhaustivenessResolutionPolicy{
-        .not_pending,
-        .runtime_reachable,
-        .{ .compile_time_replaced_by_root = @fromBackingInt(3) },
-        .compile_time_only,
-    };
-    var sites = [_]checked.CheckedExhaustivenessSite{.{
-        .id = @fromBackingInt(5),
-        .kind = .match,
-        .region = std.mem.zeroes(base.Region),
-        .policy = .not_pending,
-    }};
-    for (policies) |policy| {
-        sites[0].policy = policy;
-        try std.testing.expectEqual(policy == .compile_time_only, hasCompileTimeOnlySite(&.{ .sites = &sites }));
-    }
-    try std.testing.expect(!hasCompileTimeOnlySite(&.{}));
 }
 
 /// Consumes the prepared program on success and failure. No specialization
@@ -1706,7 +1679,14 @@ pub fn lowerConsumerToLir(prepared: *PreparedSolved, consumer: Consumer) LowerRe
     else
         null;
     errdefer if (frozen) |*data| data.deinit();
-    return finishLoweredOutput(prepared.allocator, consumerRootCount(prepared.*, consumer), generated.target, &generated.output, &frozen);
+    // Any consumer's specializations may be written to the object cache; a
+    // consumer before the last one reads its own copy of what each one reads
+    // of compile-time evaluation.
+    var spec_comptime_reads: ?SpecComptimeReads = if (prepared.spec_comptime_reads) |*reads| try reads.clone(prepared.allocator) else null;
+    errdefer if (spec_comptime_reads) |*reads| reads.deinit();
+    var lowered = try finishLoweredOutput(prepared.allocator, consumerRootCount(prepared.*, consumer), generated.target, &generated.output, &frozen);
+    lowered.spec_comptime_reads = spec_comptime_reads;
+    return lowered;
 }
 
 /// Lower the producer program's last consumer, and release the producer as
@@ -1781,7 +1761,6 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
     var lowered = try postcheck.SolvedLirLower.runBorrowed(allocator, target.target_usize, &prepared.program, .{
         .root_manifest = consumer.roots,
         .spec_cache = if (target.code_provision.permitsNativeObjects()) target.spec_cache else null,
-        .comptime_closure_hits = target.comptime_closure_hits,
         .inline_plan = prepared.inline_plan.view(),
         .keep_specialization_procs = target.keep_specialization_procs,
         .post_check_executor = target.post_check_executor,
@@ -1791,7 +1770,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
             .complete => .runtime,
             .checking_finalization => .comptime_zero,
         },
-        .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
+        .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or packTraceEnabled(),
         .layout_request_const_plans = target.layout_request_const_plans,
         .test_plan_metadata = prepared.test_plan_metadata,
         .parallel_metrics = parallel_metrics,
@@ -1893,8 +1872,18 @@ fn finishLoweredOutput(
     if (target.reuse_boxes) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .box_reuse);
     }
-    try ReturnSlot.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
-    try StrAppend.run(&lowered.lir_result.store);
+    // A call variant or an ownership variant the object cache offers under
+    // the identity the derived procedure would have is linked instead of
+    // derived (design.md "Identity Offers").
+    var served_storage = try BodyClone.ServedRootStorage.init(allocator, &lowered.lir_result.static_data_values);
+    defer served_storage.deinit();
+    const variant_cache: BodyClone.VariantCache = .{
+        .lookup = if (target.code_provision.permitsNativeObjects()) target.spec_cache else null,
+        .relation = lowered.lir_result.platform_requirement_relation,
+        .storage = &served_storage,
+    };
+    try ReturnSlot.runWithCache(&lowered.lir_result.store, &lowered.lir_result.layouts, variant_cache);
+    try StrAppend.runWithCache(&lowered.lir_result.store, variant_cache);
     if (target.tag_reachability) {
         try TagReachability.run(&lowered.lir_result);
     }
@@ -1939,6 +1928,7 @@ fn finishLoweredOutput(
         .thread_confined_rc = target.thread_confined_rc,
         .post_check_executor = if (target.post_check_executor) |*executor| executor else null,
         .metrics_out = arc_metrics,
+        .variant_cache = variant_cache,
     });
     if (target.timing) |timing| timing.addArcParallel(arc_metrics.?.*);
     arc_timing_scope.end();
@@ -2182,6 +2172,8 @@ fn rootRequests(
         .layout_requests = layout_requests,
         .static_data_requests = static_data_requests,
         .test_plan_metadata = roots.test_plan_metadata,
+        .cached_root_declarations = roots.cached_root_declarations,
+        .cached_literal_declarations = roots.cached_literal_declarations,
         .discovery_start = roots.discovery_start,
         .literal_demand = roots.literal_demand,
     };
@@ -2303,7 +2295,8 @@ const LirDump = if (builtin.os.tag == .freestanding) struct {
             DebugPrint.writeProc(store.allocator, store, layouts, proc_id, &buffer.writer) catch |err| switch (err) {
                 error.OutOfMemory, error.WriteFailed => return error.OutOfMemory,
             };
-            std.debug.print("=== LIR {s} (p{d}) ===\n{s}\n", .{ name orelse "<unnamed>", index, buffer.written() });
+            const spec = store.getProcSpec(proc_id);
+            std.debug.print("=== LIR {s} (p{d}) id={s} args={d} static_init={} root_mat={} external={} body={} ===\n{s}\n", .{ name orelse "<unnamed>", index, &spec.identity.symbolHex(), store.getLocalSpan(spec.args).len, spec.is_static_initializer, spec.root_materialization != null, spec.external, spec.body != null, buffer.written() });
         }
     }
 };

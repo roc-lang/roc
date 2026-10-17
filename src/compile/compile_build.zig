@@ -21,6 +21,20 @@ const lir = @import("lir");
 const unbundle = if (is_freestanding) struct {} else @import("unbundle");
 const CoreCtx = @import("ctx").CoreCtx;
 
+/// Asks a build, once its executable program is checked and before it is
+/// evaluated, whether that exact program's runtime output is cached.
+pub const RuntimeOutputProbe = struct {
+    context: *anyopaque,
+    cached: *const fn (*anyopaque, *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error!?CachedRuntimeOutput,
+};
+
+/// What a cached runtime output requires of this compilation's evaluation.
+pub const CachedRuntimeOutput = struct {
+    /// The compile-time roots the build that recorded the output demanded,
+    /// borrowed for the compilation; null when it evaluated every root.
+    demanded_roots: ?[]const lir.CheckedPipeline.ComptimeRootRead,
+};
+
 /// Runtime demand fixed before post-check finalization. Explicit plans may be
 /// declared from prepared checked modules after the frontend completes.
 pub const RuntimeLoweringConfig = struct {
@@ -226,6 +240,7 @@ pub const BuildEnv = struct {
     // Actor model coordinator (owns all mutable compilation state)
     coordinator: ?*Coordinator = null,
     runtime_lowering: ?RuntimeLoweringConfig = null,
+    runtime_output_probe: ?RuntimeOutputProbe = null,
     /// Instrumentation only; never participates in checked or object identity.
     detailed_monotype_diagnostics: bool = false,
     /// See `eval.CompileTimeFinalization.CompileTimeObjectCache`.
@@ -874,6 +889,7 @@ pub const BuildEnv = struct {
         coord.enable_hosted_transform = true;
         coord.setWatchInputTracking(self.track_watch_inputs);
         coord.runtime_lowering = self.runtime_lowering;
+        coord.runtime_output_probe = self.runtime_output_probe;
         coord.setDetailedLoweringTiming(self.detailed_lowering_timing);
         coord.compile_time_object_cache = self.compile_time_object_cache;
         if (self.detailed_monotype_diagnostics) coord.ctfe_timing.lowering.enableDetailedMonotypeBody();
@@ -887,6 +903,9 @@ pub const BuildEnv = struct {
         /// Gives the cache this build environment, whose module set decides
         /// which packs it loads, before compile-time evaluation reads it.
         bind: *const fn (*anyopaque, *BuildEnv) void,
+        /// Commit staged native offers only after all checking diagnostics and
+        /// target configuration constants have been accepted; otherwise discard.
+        finish: ?*const fn (*anyopaque, bool) void = null,
         deinit: *const fn (*anyopaque) void,
     };
 
@@ -903,6 +922,18 @@ pub const BuildEnv = struct {
         self.compile_time_object_cache_owner = owner;
     }
 
+    pub fn setRuntimeOutputProbe(self: *BuildEnv, probe: RuntimeOutputProbe) void {
+        if (self.coordinator) |coordinator| coordinator.runtime_output_probe = probe;
+        self.runtime_output_probe = probe;
+    }
+
+    /// Whether checked-program finalization found the program's runtime
+    /// output cached and so lowered no runtime program.
+    pub fn runtimeOutputCached(self: *const BuildEnv) bool {
+        const coordinator = self.coordinator orelse return false;
+        return coordinator.runtime_output_cached;
+    }
+
     pub fn setRuntimeLowering(self: *BuildEnv, config: RuntimeLoweringConfig) void {
         if (self.coordinator) |coordinator| {
             std.debug.assert(coordinator.program_session == null);
@@ -917,14 +948,6 @@ pub const BuildEnv = struct {
         if (self.runtime_lowering == null) return null;
         const coordinator = self.coordinator orelse unreachable;
         return if (coordinator.program_session) |*session| session else unreachable;
-    }
-
-    /// The compile-time evaluation program this compilation lowered and
-    /// completed, while its program session retains it.
-    pub fn compileTimeProgram(self: *BuildEnv) ?*const lir.CheckedPipeline.LoweredProgram {
-        const coordinator = self.coordinator orelse return null;
-        const session = if (coordinator.program_session) |*session| session else return null;
-        return if (session.host) |*host| host else null;
     }
 
     /// Reuse compilation workers for post-check lowering after checking finishes.
@@ -1273,6 +1296,10 @@ pub const BuildEnv = struct {
 
     pub fn finishCheckedProgram(self: *BuildEnv) CompileDiscoveredError!void {
         const coord = self.coordinator orelse unreachable;
+        var native_offers_accepted = false;
+        defer if (self.compile_time_object_cache_owner) |owner| {
+            if (owner.finish) |finish| finish(owner.context, native_offers_accepted);
+        };
         if (self.compile_time_object_cache_owner) |owner| owner.bind(owner.context, self);
         const test_modules = try self.collectProgramTestModules(self.gpa);
         defer self.gpa.free(test_modules);
@@ -1286,10 +1313,13 @@ pub const BuildEnv = struct {
 
         try self.resolvePlatformTargetConfigConstants();
 
+        const checking_accepted = !coord.hasUserErrors();
+
         try self.emitCoordinatorReports();
 
         // Deterministic emission
         try self.emitDeterministic();
+        native_offers_accepted = checking_accepted;
 
         if (comptime trace_build) {
             std.debug.print("[BUILD] compileDiscovered complete\n", .{});
@@ -3361,6 +3391,16 @@ pub const BuildEnv = struct {
     ) ?*const check.CheckedArtifact.CheckedModuleArtifact {
         const coord = self.coordinator orelse return null;
         return coord.checkedArtifactByKey(key);
+    }
+
+    /// Exact active checked provenance for a native observation binding plan.
+    /// Retired artifacts are lifetime owners, not current serving capabilities.
+    pub fn activeArtifactByIdentity(self: *const BuildEnv, identity: [32]u8) ?*const check.CheckedArtifact.CheckedModuleArtifact {
+        const coord = self.coordinator orelse return null;
+        const builtin_artifact = &coord.builtin_modules.checked_artifact;
+        if (std.mem.eql(u8, &builtin_artifact.key.bytes, &identity)) return builtin_artifact;
+        if (!coord.checked_artifact_index.contains(identity)) return null;
+        return coord.checkedArtifactByKey(.{ .bytes = identity });
     }
 
     /// Drain reports and render them to a writer. Returns error/warning counts.

@@ -270,6 +270,9 @@ proc_table_indices: collections.DenseMap(u32, u32),
 static_str_offsets: std.AutoHashMap(u32, DataAddress),
 /// Map from LIR static-data id -> undefined/defined wasm data symbol.
 static_data_symbols: std.AutoHashMap(u32, SymbolIndex),
+/// Borrowed producer declarations; only referenced rows acquire linker symbols.
+static_data_exports: []const lir.Program.StaticDataExport = &.{},
+static_data_export_rows: std.AutoHashMap(u32, u32),
 /// Owned names used by generated data segments and local data symbols.
 static_data_names: std.ArrayList([]u8),
 static_data_name_counter: u32 = 0,
@@ -376,6 +379,7 @@ pub fn init(
         .proc_table_indices = collections.DenseMap(u32, u32).init(allocator),
         .static_str_offsets = std.AutoHashMap(u32, DataAddress).init(allocator),
         .static_data_symbols = std.AutoHashMap(u32, SymbolIndex).init(allocator),
+        .static_data_export_rows = std.AutoHashMap(u32, u32).init(allocator),
         .static_data_names = .empty,
         .func_type_cache = std.StringHashMap(u32).init(allocator),
         .func_type_key_scratch = .empty,
@@ -458,6 +462,7 @@ pub fn deinit(self: *Self) void {
     self.proc_table_indices.deinit();
     self.static_str_offsets.deinit();
     self.static_data_symbols.deinit();
+    self.static_data_export_rows.deinit();
     for (self.static_data_names.items) |name| {
         self.allocator.free(name);
     }
@@ -1308,20 +1313,32 @@ fn emitDataAddressConst(self: *Self, address: DataAddress, addend: i32) Allocato
     }
 }
 
+/// Readonly references retain producer identities, not consumer-local ordinals.
+pub fn setStaticDataExports(self: *Self, exports: []const lir.Program.StaticDataExport) Allocator.Error!void {
+    std.debug.assert(self.static_data_symbols.count() == 0);
+    self.static_data_exports = exports;
+    self.static_data_export_rows.clearRetainingCapacity();
+    for (exports, 0..) |data_export, row| {
+        const id = data_export.value_id orelse continue;
+        try self.static_data_export_rows.putNoClobber(@backingInt(id), @intCast(row));
+    }
+}
+
 fn staticDataSymbol(self: *Self, id: LIR.StaticDataId) Allocator.Error!SymbolIndex {
     const raw_id: u32 = @backingInt(id);
     if (self.static_data_symbols.get(raw_id)) |symbol| return symbol;
-
-    const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, id);
+    const row = self.static_data_export_rows.get(raw_id) orelse
+        std.debug.panic("Wasm static value {d} has no producer export", .{raw_id});
+    try self.static_data_symbols.ensureUnusedCapacity(1);
+    try self.static_data_names.ensureUnusedCapacity(self.allocator, 1);
+    const symbol_name = try self.allocator.dupe(u8, self.static_data_exports[row].symbol_name);
     errdefer self.allocator.free(symbol_name);
-
     const symbol = if (self.module.findSymbolByNameAndKind(symbol_name, .data)) |existing|
         SymbolIndex.fromRaw(existing)
     else
         try self.module.addUndefinedDataSymbol(symbol_name);
-
-    try self.static_data_names.append(self.allocator, symbol_name);
-    try self.static_data_symbols.put(raw_id, symbol);
+    self.static_data_names.appendAssumeCapacity(symbol_name);
+    self.static_data_symbols.putAssumeCapacity(raw_id, symbol);
     return symbol;
 }
 
@@ -16066,6 +16083,28 @@ fn expectOneReloc(module: *const WasmModule, type_id: anytype) error{TestUnexpec
         found = entry;
     }
     return found orelse error.TestUnexpectedResult;
+}
+
+test "static-data references preserve producer symbols independently of slot ordinals" {
+    const allocator = std.testing.allocator;
+    const fake_store: *const LirStore = undefined;
+    const fake_layouts: *const LayoutStore = undefined;
+    var codegen = Self.init(allocator, fake_store, fake_layouts, &.{}, &.{}, &.{}, .default);
+    defer codegen.deinit();
+    codegen.configureRelocatableObject();
+    const exports = [_]lir.Program.StaticDataExport{.{
+        .value_id = @fromBackingInt(@intCast(41)),
+        .symbol_name = "roc__sv_declared_header",
+        .bytes = &.{ 0, 0, 0, 0 },
+        .alignment = 4,
+    }};
+    try codegen.setStaticDataExports(&exports);
+    try std.testing.expect(codegen.module.findSymbolByNameAndKind(exports[0].symbol_name, .data) == null);
+    const symbol = try codegen.staticDataSymbol(exports[0].value_id.?);
+    const declared = codegen.module.findSymbolByNameAndKind(exports[0].symbol_name, .data) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqual(declared, symbol.raw());
+    try std.testing.expect(codegen.module.findSymbolByNameAndKind("roc__d41", .data) == null);
 }
 
 test "relocatable object addresses static data relative to __memory_base" {

@@ -215,15 +215,30 @@ pub const FnTemplate = struct {
     source_fn_key: names.TypeDigest,
     mono_fn_ty: Type.TypeId,
     evidence_digest: EvidenceDigest = .{},
+    /// The dispatch evidence digested by declaration
+    /// (`fnEvidenceDeclarationDigest`), stamped at reservation for every
+    /// template specialization; a procedure's identity names its evidence by
+    /// it. Null for a template that is not a template specialization.
+    evidence_declaration: ?EvidenceDigest = null,
     /// `specIdentityKey` of the specialization this template was reserved
     /// for: the key an object-cache lookup can compute at reservation time,
     /// before the body exists. Null for functions that are not template
     /// specializations.
     spec_key: ?names.TypeDigest = null,
+    /// The `spec_key` a procedure lowered only for discovery was reserved
+    /// under. Its discovery summary is published under this key; the
+    /// procedure itself offers no object-cache entry.
+    discovery_key: ?names.TypeDigest = null,
     /// Set when the object cache served this specialization: the body is
     /// never lowered, and Direct LIR emits an external procedure that the
     /// object writer fills from the cache entry.
     cached: ?Common.SpecCacheHit = null,
+    /// Storage demand is producer data even when a non-native consumer retains
+    /// this body; native late splicing still needs the same root declarations.
+    cached_demand: ?Common.CachedCtfeDemand = null,
+    /// The checked roots the cached specialization's served code
+    /// materializes, eager reads included (`SpecCacheHit.checked_root_uses`).
+    cached_root_uses: []const Common.CheckedRootUse = &.{},
     /// Set for a closed specialization of a Builtin template whose checked
     /// provided low-level operation is on `LowLevel.procedureKeyedByLayout`'s
     /// allow list. Direct LIR identifies the plain procedure of such a
@@ -271,12 +286,22 @@ pub const HostedId = enum(u32) { _ };
 /// Identifier for a compiler-generated callable in durable specialization identities.
 pub const GeneratedId = enum(u32) { _ };
 
+/// A nested site by its owner template's declaration identity and its
+/// position among the owner's sites.
+pub const NestedSiteDeclaration = struct {
+    owner: [32]u8,
+    position: u32,
+};
+
 /// Stable callable identity used to reuse or cache a specialization.
 pub const CallableIdentity = union(enum(u8)) {
     proc_template: struct {
         module: names.CheckedModuleDigest,
         proc_base: u32,
         template: u32,
+        /// The template's declaration identity, which keys the
+        /// specialization in place of the module and the ids above.
+        declaration: [32]u8,
     },
     nested_site: struct {
         module: names.CheckedModuleDigest,
@@ -288,6 +313,10 @@ pub const CallableIdentity = union(enum(u8)) {
         /// content identity (the site id is relative to THAT module's site
         /// table, so the identity must participate in the callable identity).
         default_root_module: ?names.ModuleContentIdentity = null,
+        /// The site named by its owner's declaration identity, which keys
+        /// the specialization in place of the module and the ids above.
+        /// Null for a default-root site, which the module keys.
+        owner_declaration: ?NestedSiteDeclaration = null,
     },
     hosted: HostedId,
     generated: GeneratedId,
@@ -326,6 +355,16 @@ pub const SpecIdentity = struct {
     request_fn_ty: Type.TypeId,
 };
 
+/// A specialization identity's evidence, codec contract, and request type
+/// with every declaration named by its declaration identity rather than its
+/// module (`check.DeclarationIdentities`), so an edit elsewhere in a module
+/// leaves the key of what does not depend on it alone.
+pub const SpecKeyDeclarations = struct {
+    evidence: EvidenceDigest,
+    codec_contract: names.TypeDigest,
+    request_fn_ty: names.TypeDigest,
+};
+
 /// Content key of a specialization identity: the callable rendered by tag
 /// and content plus every digest field except the requesting method scope.
 /// The scope only decides how
@@ -337,28 +376,31 @@ pub const SpecIdentity = struct {
 /// Because the identity carries no caller provenance, neither does this key:
 /// a call site that reaches this specialization through a transparent alias
 /// computes the same key as one that names the backing type.
-pub fn specIdentityKey(identity: SpecIdentity) names.TypeDigest {
+pub fn specIdentityKey(identity: SpecIdentity, declarations: SpecKeyDeclarations) names.TypeDigest {
     var hasher = TypeDigestHasher.init();
-    hasher.update("roc.monotype.spec-key.v4");
+    hasher.update("roc.monotype.spec-key.v5");
     switch (identity.callable) {
         .proc_template => |template| {
             hasher.update("proc_template");
-            hasher.update(&template.module.bytes);
-            writeU32(&hasher, template.proc_base);
-            writeU32(&hasher, template.template);
+            hasher.update(&template.declaration);
         },
         .nested_site => |site| {
             hasher.update("nested_site");
-            hasher.update(&site.module.bytes);
-            writeU32(&hasher, site.owner_proc_base);
-            writeU32(&hasher, site.owner_template);
             hasher.update(&site.owner_fn_digest.bytes);
-            writeU32(&hasher, site.site);
-            if (site.default_root_module) |module| {
-                hasher.update("default_root");
-                hasher.update(&module.bytes);
+            if (site.owner_declaration) |declaration| {
+                hasher.update(&declaration.owner);
+                writeU32(&hasher, declaration.position);
             } else {
-                hasher.update("no_default_root");
+                hasher.update(&site.module.bytes);
+                writeU32(&hasher, site.owner_proc_base);
+                writeU32(&hasher, site.owner_template);
+                writeU32(&hasher, site.site);
+                if (site.default_root_module) |module| {
+                    hasher.update("default_root");
+                    hasher.update(&module.bytes);
+                } else {
+                    hasher.update("no_default_root");
+                }
             }
         },
         .hosted => |hosted| {
@@ -370,9 +412,9 @@ pub fn specIdentityKey(identity: SpecIdentity) names.TypeDigest {
             writeU32(&hasher, @backingInt(generated));
         },
     }
-    hasher.update(&identity.evidence_digest.bytes);
-    hasher.update(&identity.codec_contract_digest.bytes);
-    hasher.update(&identity.request_fn_ty_digest.bytes);
+    hasher.update(&declarations.evidence.bytes);
+    hasher.update(&declarations.codec_contract.bytes);
+    hasher.update(&declarations.request_fn_ty.bytes);
     return .{ .bytes = hasher.finalResult() };
 }
 
@@ -555,6 +597,103 @@ fn writeFnEvidence(
         writeU32(hasher, frame.roots_len);
     }
     writeOptionalU32(hasher, head);
+}
+
+/// `fnEvidenceDigest` with each procedure target named by its template's
+/// declaration identity, as `resolver.template(template_ref)` returns it,
+/// and generalized scopes by their position relative to the lowest one.
+/// What it cannot name without its module keeps the module.
+pub fn fnEvidenceDeclarationDigest(
+    evidence: []const check.ConstStore.ConstFnEvidence,
+    frames: []const check.ConstStore.ConstFnEvidenceFrame,
+    head: ?u32,
+    resolver: anytype,
+) EvidenceDigest {
+    var hasher = TypeDigestHasher.init();
+    writeBytes(&hasher, "roc.monotype.fn_evidence.declaration.v2");
+    writeU32(&hasher, @intCast(evidence.len));
+    for (evidence) |entry| {
+        writeU8(&hasher, @backingInt(entry));
+        switch (entry) {
+            .target => |target| {
+                writeU32(&hasher, target.callable_contracts);
+                switch (target.method.kind) {
+                    .procedure => |procedure| {
+                        writeBytes(&hasher, "procedure");
+                        writeBytes(&hasher, &resolver.template(procedure.template));
+                    },
+                    // A local procedure is named by the declaration it is
+                    // nested in and its position there; a structural target
+                    // by the type environment that derived it. Neither names
+                    // its module's key.
+                    .local_proc => |local| {
+                        writeBytes(&hasher, "local-proc");
+                        writeBytes(&hasher, &resolver.definition(target.view, target.method.def_idx));
+                        writeU32(&hasher, @backingInt(local.binder));
+                        writeU32(&hasher, @backingInt(local.expr));
+                    },
+                    .structural => |kind| {
+                        writeBytes(&hasher, "structural");
+                        writeBytes(&hasher, &resolver.typeEnvironment(target.view));
+                        writeU8(&hasher, @backingInt(kind));
+                    },
+                }
+                writeBytes(&hasher, &target.method_callable_key.bytes);
+                if (target.instantiation) |instantiation| {
+                    writeU8(&hasher, 1);
+                    writeBytes(&hasher, &instantiation.callable_key.bytes);
+                } else writeU8(&hasher, 0);
+                writeU8(&hasher, @backingInt(target.nested));
+                switch (target.nested) {
+                    .resolved => |nested| {
+                        writeU32(&hasher, nested.count);
+                        writeU32(&hasher, nested.subtree_len);
+                    },
+                    .from_callable => {},
+                }
+            },
+            .structural => |structural| {
+                writeU32(&hasher, structural.callable_contracts);
+                writeStructuralDerivation(&hasher, structural.derivation);
+                if (structural.checked) |checked_structural| {
+                    writeU8(&hasher, 1);
+                    if (checked_structural.generated_codec_content) |content| {
+                        writeU8(&hasher, 1);
+                        writeBytes(&hasher, &content.bytes);
+                    } else {
+                        writeU8(&hasher, 0);
+                        writeBytes(&hasher, &resolver.typeEnvironment(checked_structural.view));
+                    }
+                    writeBytes(&hasher, &checked_structural.dispatcher_key.bytes);
+                    writeBytes(&hasher, &checked_structural.callable_key.bytes);
+                } else writeU8(&hasher, 0);
+            },
+            .from_callable => |use| {
+                writeU32(&hasher, use.callable_contracts);
+                writeU8(&hasher, @intFromBool(use.independent_callable));
+            },
+            .from_scheme => |index| writeU32(&hasher, index),
+            .unreachable_value, .checked_error => {},
+        }
+    }
+    var lowest_scope: u32 = std.math.maxInt(u32);
+    for (frames) |frame| switch (frame.scope_id) {
+        .root => {},
+        .generalized => |scope| lowest_scope = @min(lowest_scope, scope),
+    };
+    writeU32(&hasher, @intCast(frames.len));
+    for (frames) |frame| {
+        writeU8(&hasher, @backingInt(frame.scope_id));
+        switch (frame.scope_id) {
+            .root => {},
+            .generalized => |scope| writeU32(&hasher, scope - lowest_scope),
+        }
+        writeOptionalU32(&hasher, frame.parent);
+        writeU32(&hasher, frame.roots_start);
+        writeU32(&hasher, frame.roots_len);
+    }
+    writeOptionalU32(&hasher, head);
+    return .{ .bytes = hasher.finalResult() };
 }
 
 /// Exact checked-identity equality for retained function evidence. Checked
@@ -1122,6 +1261,7 @@ pub const ComptimeSite = struct {
     owner: Common.LoweringModuleId,
     region: base.Region,
     checked_site: ?checked.CheckedExhaustivenessSiteId = null,
+    checked_origin: ?Common.CheckedSiteOrigin = null,
     branch_regions: []const base.Region = &.{},
 };
 
@@ -1143,6 +1283,9 @@ pub const Expr = struct {
 pub const ComptimeValue = struct {
     root: Common.ComptimeValueRootId,
     initializer: ExprId,
+    /// Completed storage's exact definition, consumed by Lift to produce
+    /// a proof call whose return follows specialization of that definition.
+    storage_producer: ?DefId = null,
 };
 
 /// A restored compile-time value that may lower to static data once the final
@@ -1504,6 +1647,74 @@ pub const LiteralRoot = struct {
     /// Checked module that owns the literal.
     module: checked.ModuleId,
     site: Common.LiteralRejectionSite,
+    recipe: ?LiteralRecipe = null,
+    declaration_pending: bool = false,
+};
+
+/// Exact declaration context recorded when the conversion producer is built.
+/// Evidence spans share the same durable pools as ordinary specializations.
+pub const LiteralRecipe = struct {
+    producer_key: names.TypeDigest,
+    required_native_identity: ?[32]u8 = null,
+    owner_template: names.ProcTemplate,
+    owner_context_fn_key: names.TypeDigest,
+    current_fn_key: names.TypeDigest,
+    method_scope: checked.ModuleId,
+    in_default_expr: bool = false,
+    checked_callable_ty: checked.CheckedTypeId,
+    callable_ty: Type.TypeId,
+    const_evidence: Span(check.ConstStore.ConstFnEvidence),
+    const_evidence_frames: Span(check.ConstStore.ConstFnEvidenceFrame),
+    const_evidence_frame_head: ?u32,
+    local_contexts: []const LiteralLocalContext = &.{},
+
+    pub fn clone(self: LiteralRecipe, allocator: std.mem.Allocator) std.mem.Allocator.Error!LiteralRecipe {
+        var result = self;
+        result.local_contexts = &.{};
+        const contexts = try allocator.alloc(LiteralLocalContext, self.local_contexts.len);
+        var initialized: usize = 0;
+        errdefer {
+            for (contexts[0..initialized]) |context| allocator.free(context.bindings);
+            allocator.free(contexts);
+        }
+        for (self.local_contexts, contexts) |context, *out| {
+            out.* = context;
+            out.bindings = try allocator.dupe(LiteralBinding, context.bindings);
+            initialized += 1;
+        }
+        result.local_contexts = contexts;
+        return result;
+    }
+
+    pub fn deinit(self: LiteralRecipe, allocator: std.mem.Allocator) void {
+        for (self.local_contexts) |context| allocator.free(context.bindings);
+        allocator.free(self.local_contexts);
+    }
+};
+
+/// A binder's type within a literal local context.
+pub const LiteralBinding = struct {
+    kind: u8,
+    binder: u32,
+    type_digest: names.TypeDigest,
+    ty: Type.TypeId,
+};
+
+/// A literal recipe's local declaration context: the enclosing binder and
+/// expression, its specialization keys, its bindings, and its function evidence.
+pub const LiteralLocalContext = struct {
+    module: checked.ModuleId,
+    binder: checked.PatternBinderId,
+    expr: checked.CheckedExprId,
+    context_anchor: ?checked.CheckedStatementId,
+    owner_template: names.ProcTemplate,
+    base_key: names.TypeDigest,
+    specialization_key: names.TypeDigest,
+    restored_specialization_key: ?names.TypeDigest = null,
+    bindings: []const LiteralBinding,
+    const_evidence: Span(check.ConstStore.ConstFnEvidence),
+    const_evidence_frames: Span(check.ConstStore.ConstFnEvidenceFrame),
+    const_evidence_frame_head: ?u32,
 };
 
 /// Runtime layout requested for a checked data value.
@@ -1512,6 +1723,14 @@ pub const LayoutRequest = struct {
     ty: Type.TypeId,
     def: ?DefId = null,
     const_locator: ?checked.ConstLocator = null,
+    /// A cached procedure's explicit typed storage demand, not an initializer.
+    comptime_root: ?Common.ComptimeValueRoot = null,
+    literal_materialization: ?Common.LiteralMaterializationDeclaration = null,
+    /// Whether this storage is demanded unconditionally: a cached procedure's
+    /// explicit typed storage demand, or a root's own declaration. Storage
+    /// declared for a completed root a lowered body reads is reached through
+    /// that read, so an unreachable body demands nothing.
+    unconditional: bool = true,
 };
 
 /// Runtime schema requested for a named runtime value shape.
@@ -1778,6 +1997,10 @@ pub const ProgramBuilder = struct {
     /// See `Common.PlatformRequirementFilling`; null when no module of the
     /// input has platform requirements filled by an app.
     platform_requirement_filling: ?Common.PlatformRequirementFilling = null,
+    /// The declaration identities of the input modules' templates and
+    /// nominal types (`Common.DeclarationNames`), seeded with the module
+    /// tables.
+    declarations: Common.DeclarationNames = .empty,
     /// Source file table for `SourceLoc.file` indices (module display and
     /// package-qualified names, owned by this program).
     source_files: ProgramList(base.SourceFileEntry, "source_files"),
@@ -1858,8 +2081,16 @@ pub const ProgramBuilder = struct {
         result.names = try self.names.clone(allocator);
         result.types = try self.types.cloneFrozen(allocator);
         try result.comptime_value_roots.appendSlice(allocator, self.comptime_value_roots.unsafeRawItemsForView());
-        inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "literal_roots", "layout_requests", "comptime_value_reads", "runtime_schema_requests", "static_data_values", "lowering_modules", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
+        inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "layout_requests", "comptime_value_reads", "runtime_schema_requests", "static_data_values", "lowering_modules", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
             try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
+        }
+        for (self.literal_roots.unsafeRawItemsForView()) |root| {
+            var copied = root;
+            copied.recipe = if (root.recipe) |recipe| try recipe.clone(allocator) else null;
+            result.literal_roots.append(allocator, copied) catch |err| {
+                if (copied.recipe) |recipe| recipe.deinit(allocator);
+                return err;
+            };
         }
         try result.proc_debug_names.putAll(self.proc_debug_names.view());
         for (self.string_literals.unsafeRawItemsForView()) |literal| {
@@ -1922,12 +2153,14 @@ pub const ProgramBuilder = struct {
         }
         self.comptime_sites.deinit(self.allocator);
         self.lowering_modules.deinit(self.allocator);
+        self.declarations.deinit(self.allocator);
         self.comptime_value_roots.deinit(self.allocator);
         self.static_data_values.deinit(self.allocator);
         self.runtime_schema_requests.deinit(self.allocator);
         self.comptime_value_reads.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
+        for (self.literal_roots.unsafeRawItemsForView()) |root| if (root.recipe) |recipe| recipe.deinit(self.allocator);
         self.literal_roots.deinit(self.allocator);
         self.literal_root_by_identity.deinit(self.allocator);
         self.proc_debug_names.deinit();
@@ -2178,6 +2411,7 @@ pub const ProgramBuilder = struct {
             .name = owned_name,
             .qualified_name = owned_qualified,
             .module_identity = file.module_identity,
+            .checked_module_key = file.checked_module_key,
         });
         return id;
     }
@@ -2354,6 +2588,10 @@ pub const ProgramBuilder = struct {
 
     pub fn layoutRequestCount(self: *const ProgramBuilder) usize {
         return self.layout_requests.len();
+    }
+
+    pub fn layoutRequestsView(self: *const ProgramBuilder) []const LayoutRequest {
+        return self.layout_requests.unsafeRawItemsForView();
     }
 
     pub fn addLayoutRequest(self: *ProgramBuilder, request: LayoutRequest) std.mem.Allocator.Error!void {
@@ -2599,7 +2837,7 @@ test "monotype program view exposes read-only side arrays" {
     const fn_id = try program.addFn(testFnSource(unit_ty));
     _ = try program.addSpec(.{
         .identity = .{
-            .callable = .{ .proc_template = .{ .module = .{}, .proc_base = 0, .template = 0 } },
+            .callable = .{ .proc_template = .{ .module = .{}, .proc_base = 0, .template = 0, .declaration = @splat(7) } },
             .method_scope = .{},
             .evidence_digest = fnEvidenceDigest(&.{}, &.{}, null),
             .codec_contract_digest = .{},
@@ -3017,7 +3255,7 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     const expr = try source.addExpr(.{ .ty = ty, .data = .{ .str_lit = literal } });
     const local = try source.addLocal(@fromBackingInt(@intCast(1)), ty);
     try source.setLocalName(local, "value");
-    const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc", .module_identity = @splat(0) });
+    const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc", .module_identity = @splat(0), .checked_module_key = @splat(4) });
     var owner_key = std.mem.zeroes(check.CheckedModule.ModuleId);
     owner_key.bytes[0] = 9;
     const owner = try source.addLoweringModule(owner_key);
@@ -3057,6 +3295,7 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     try std.testing.expectEqualStrings("value", copy.stringLiteralText(literal));
     try std.testing.expectEqualStrings("value", copy.localName(local));
     try std.testing.expectEqualStrings("app/App.roc", copy.view().source_files[file].qualified_name);
+    try std.testing.expectEqualDeep(@as(?[32]u8, @splat(4)), copy.view().source_files[file].checked_module_key);
     try std.testing.expectEqual(@as(usize, 1), copy.comptimeSite(site).branch_regions.len);
     try std.testing.expectEqual(owner, copy.comptimeSite(site).owner);
     try std.testing.expectEqualDeep(owner_key, copy.view().lowering_modules[@backingInt(owner)]);

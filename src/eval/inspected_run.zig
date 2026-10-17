@@ -69,6 +69,7 @@ pub const Program = struct {
     main_proc: LirProcSpecId,
     static_data: []const backend.StaticDataExport = &.{},
     static_data_value_count: usize = 0,
+    source_catalog: backend.dev.CtfeContext.Catalog = .{},
 };
 
 /// Explicit dependency for platform-hosted calls during inspected execution.
@@ -339,6 +340,90 @@ fn runInterpreter(allocator: Allocator, program: Program, execution_host: Execut
     ));
 }
 
+test "native inspected image returns through shared ordinary code and readonly headers" {
+    if (comptime !backend.host_lir_codegen_available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const text = "normal shared native inspection static header";
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try LayoutStore.init(allocator, base.target.TargetUsize.native);
+    defer layouts.deinit();
+    // The header is the program's only static data value.
+    const static_data_value_count = 1;
+    const header_value: lir.LIR.StaticDataId = @fromBackingInt(@intCast(static_data_value_count - 1));
+    const value = try store.addLocal(.{ .layout_idx = .str });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
+    const load = try store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = header_value }, .next = ret } }, .test_fixture);
+    const root = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.ProcIdentity.forTest(741), .args = .empty(), .body = load, .ret_layout = .str }, .none);
+    var header: [24]u8 = @splat(0);
+    std.mem.writeInt(u64, header[8..16], text.len << 1, .little);
+    std.mem.writeInt(u64, header[16..24], text.len, .little);
+    var backing: [16 + text.len]u8 = @splat(0);
+    @memcpy(backing[16..], text);
+    const exports = [_]backend.StaticDataExport{
+        .{ .symbol_name = "inspected_semantic_header", .symbol_identity = @splat(74), .value_id = header_value, .bytes = &header, .alignment = 8, .relocations = &.{.{ .offset = 0, .target_symbol_name = "inspected_semantic_backing", .target = .{ .data_symbol = @fromBackingInt(@intCast(1)) }, .addend = 8 }} },
+        .{ .symbol_name = "inspected_semantic_backing", .bytes = &backing, .symbol_offset = 8, .alignment = 8 },
+    };
+    const result = try run(allocator, .dev, .{
+        .store = &store,
+        .layouts = &layouts,
+        .main_proc = root,
+        .static_data = &exports,
+        .static_data_value_count = static_data_value_count,
+        .source_catalog = backend.dev.LirCodeGenMod.testSourceCatalog(),
+    }, {});
+    defer result.deinit(allocator);
+    try std.testing.expectEqualStrings(text, result.outcome.returned);
+}
+
+test "native inspected exhaustion uses common crash semantics and restores the outer observer" {
+    if (comptime !backend.host_lir_codegen_available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const Events = builtins.source_events;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try LayoutStore.init(allocator, base.target.TargetUsize.native);
+    defer layouts.deinit();
+    const identity = lir.ProcIdentity.forTest(742);
+    const sites = [_]?backend.dev.CtfeContext.SiteDescriptor{.{
+        .checked_module = @splat(74),
+        .checked_site = 7,
+        .checked_origin = .{ .checked_expr = 7 },
+        .procedure_identity = identity.bytes,
+        .kind = .match,
+        .region = .from_raw_offsets(10, 20),
+        .branch_regions = &.{.from_raw_offsets(12, 18)},
+    }};
+    const site: lir.LIR.ComptimeSiteId = @fromBackingInt(@intCast(sites.len - 1));
+    const failed = try store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{ .site = site } }, .test_fixture);
+    const root = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = identity, .args = .empty(), .body = failed, .ret_layout = .str }, .none);
+    const Recorder = struct {
+        count: u32 = 0,
+        fn record(raw: ?*anyopaque, _: *const Events.Header) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(raw.?));
+            self.count += 1;
+        }
+        fn invalid(_: ?*anyopaque, _: u32) callconv(.c) void {
+            unreachable;
+        }
+    };
+    var recorder: Recorder = .{};
+    const saved = Events.enter(.{ .context = &recorder, .on_event = Recorder.record, .on_invalid = Recorder.invalid });
+    defer Events.leave(saved);
+    const result = try run(allocator, .dev, .{
+        .store = &store,
+        .layouts = &layouts,
+        .main_proc = root,
+        .source_catalog = .{ .sites = &sites },
+    }, {});
+    defer result.deinit(allocator);
+    try std.testing.expectEqualStrings("compile-time exhaustiveness failure reached runtime code", result.outcome.crashed);
+    try std.testing.expectEqual(@as(u32, 0), recorder.count);
+    const event: Events.Descriptor = .{ .header = .{ .kind = @backingInt(Events.Kind.call_exit) } };
+    Events.roc_source_event(&event.header);
+    try std.testing.expectEqual(@as(u32, 1), recorder.count);
+}
+
 fn runDev(allocator: Allocator, program: Program) DevError!Result {
     if (comptime !backend.host_lir_codegen_available) {
         return error.DevBackendUnavailable;
@@ -355,12 +440,6 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
             else => return error.Internal,
         };
         defer static_image.deinit();
-        const addresses = static_image.lirValueAddresses(allocator, program.static_data_value_count) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => return error.Internal,
-        };
-        defer allocator.free(addresses);
-
         var codegen = try HostLirCodeGen.initWithBoxyMetadata(
             allocator,
             program.store,
@@ -372,13 +451,24 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
-        codegen.setNativeStaticData(addresses);
+        codegen.generation_mode = .shim_execution;
+        codegen.setContextCatalog(program.source_catalog);
+        try codegen.setStaticDataSymbols(program.static_data);
         var native_fns = boxy_abi.nativeFnTable();
         codegen.boxy_native_fns = &native_fns;
-        try codegen.compileAllProcSpecs(program.store.getProcSpecs());
+        var demand: std.ArrayList(LirProcSpecId) = .empty;
+        defer demand.deinit(allocator);
+        for (program.store.getProcSpecs(), 0..) |procedure, index| {
+            if (!procedure.is_static_initializer and !procedure.external) try demand.append(allocator, @fromBackingInt(@intCast(index)));
+        }
         const helpers = try backend.collectRequiredRcHelpers(allocator, program.static_data);
         defer allocator.free(helpers);
-        try codegen.compileStaticDataRcHelpers(helpers);
+        var retained = try backend.NativeProcCompiler.run(HostLirCodeGen, allocator, &codegen, demand.items, .{
+            .target = backend.dev.LirCodeGenMod.host_lir_codegen_target,
+            .constant_exports = program.static_data,
+            .static_helpers = helpers,
+        });
+        defer retained.deinit();
 
         const proc = program.store.getProcSpec(program.main_proc);
         const arg_layouts = try mainProcArgLayouts(allocator, program.store, program.main_proc);
@@ -389,12 +479,24 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
             arg_layouts,
             proc.ret_layout,
         );
+        var splice = backend.dev.HostSplice.init(allocator);
+        defer splice.deinit();
+        splice.bindStaticDataSymbols(program.static_data, &static_image) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.MissingStaticDataSymbol, error.DuplicateStaticDataSymbol => {
+                std.debug.assert(false);
+                unreachable;
+            },
+        };
+        const data = try retained.dataItems(allocator);
+        defer allocator.free(data);
+        try splice.addDataItems(data);
+        try splice.generateHostedStubs(&codegen, &native_fns);
         try codegen.finishImage();
-        var exec_mem = try ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
-            codegen.getGeneratedCode(),
-            entrypoint.offset,
-            codegen.getUnwindFunctions(),
-        );
+        var exec_mem = splice.link(&codegen, &native_fns) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.Internal,
+        };
         defer exec_mem.deinit();
         const Resolver = struct {
             codegen: *const HostLirCodeGen,
@@ -430,11 +532,14 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
 
         var crash_boundary = runtime_env.enterCrashBoundary();
         defer crash_boundary.deinit();
+        const saved_observer = builtins.source_events.enter(null);
+        defer builtins.source_events.leave(saved_observer);
         if (crash_boundary.set() != 0) return crashResult(allocator, &runtime_env, null);
 
         const entered = builtins.in_process_host.enter(runtime_env.get_ops(), null);
         defer builtins.in_process_host.leave(entered);
-        exec_mem.callRocABI(
+        exec_mem.callRocABIAt(
+            entrypoint.offset,
             @ptrCast(ret_buf.ptr),
             if (arg_buffer) |buf| @ptrCast(buf.ptr) else null,
         );
@@ -473,6 +578,7 @@ fn runWasm(allocator: Allocator, program: Program) WasmError!Result {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.Internal,
     };
+    try codegen.setStaticDataExports(program.static_data);
 
     const proc = program.store.getProcSpec(program.main_proc);
     const runtime_input: ?backend.wasm.WasmCodeGen.BoxyRuntimeInput = if (program.boxy_tables.needsRuntimeForStore(program.store)) .{

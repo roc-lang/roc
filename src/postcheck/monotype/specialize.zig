@@ -1203,6 +1203,7 @@ fn testSpecIdentityWithModuleAndEvidence(
             .module = module_digest,
             .proc_base = 0,
             .template = 1,
+            .declaration = module_digest.bytes,
         } },
         .method_scope = .{},
         .evidence_digest = Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head),

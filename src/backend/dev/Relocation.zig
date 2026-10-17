@@ -11,6 +11,14 @@ pub const DataRelocationKind = enum {
     rel32,
     page21,
     pageoff12,
+
+    /// Bytes owned by this patch, independent of its target symbol or section.
+    pub fn patchWidth(self: DataRelocationKind) u32 {
+        return switch (self) {
+            .abs64 => 8,
+            .rel32, .page21, .pageoff12 => 4,
+        };
+    }
 };
 
 /// A named relocation at a linker or process boundary. Machine-code producers

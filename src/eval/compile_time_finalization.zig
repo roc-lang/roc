@@ -34,6 +34,27 @@ const LirProgram = lir.Program;
 const BoxyBuiltinFn = backend.LirCodeGenMod.BoxyBuiltinFn;
 const BoxyNativeFnTable = backend.LirCodeGenMod.BoxyNativeFnTable;
 const NativeProcCompiler = backend.dev.NativeProcCompiler;
+const NativeFailure = @import("native_failure.zig");
+const NativeContext = @import("native_context.zig");
+
+const SiteRegistry = union(enum) {
+    lir_program: *const lir.Program.Result,
+    native: []const NativeFailure.Site,
+
+    fn count(self: SiteRegistry) usize {
+        return switch (self) {
+            .lir_program => |program| program.comptime_sites.items.len,
+            .native => |sites| sites.len,
+        };
+    }
+
+    fn get(self: SiteRegistry, id: lir.LIR.ComptimeSiteId) NativeFailure.Site {
+        return switch (self) {
+            .lir_program => |program| NativeFailure.site(program, id),
+            .native => |sites| sites[@backingInt(id)],
+        };
+    }
+};
 
 /// Borrowed compile-time `dbg` observation delivered while finalized roots are
 /// replayed in deterministic request order.
@@ -51,14 +72,27 @@ pub const EventCallback = struct {
 /// Where the compile-time evaluator splices object-cache entries from.
 pub const SpliceSource = backend.dev.SpliceSource;
 
-/// The object cache compile-time evaluation reads, the same way in every
-/// command: entries compiled for the host under the dev policy, which run
-/// expects. The evaluator's program takes a hit for a procedure it runs, under
-/// `comptime_closure_hits`, only when the entry names that procedure's own
-/// identity, and splices its cached code in place of compiling it.
+/// One ordinary native-object provider selected by the complete physical code
+/// policy before source bodies can be retired.
 pub const CompileTimeObjectCache = struct {
     spec_cache: lir.CheckedPipeline.SpecCacheLookup,
     splice_source: SpliceSource,
+    /// Select an immutable provider before the shared producer can erase bodies.
+    /// Different targets, CPUs and ordinary code policies have distinct namespaces.
+    select_policy: ?struct {
+        context: *anyopaque,
+        select: *const fn (*anyopaque, lir.CheckedPipeline.TargetConfig, lir.CheckedPipeline.CheckedModuleSet) Allocator.Error!CompileTimeObjectCache,
+    } = null,
+    /// Borrow generated fragments while both their owner and LIR are alive.
+    /// The owner stages bytes; only accepted checking may publish them.
+    /// Materializer projection needs the caller's complete prepared input,
+    /// including pending modules absent from published lowering visibility.
+    capture: ?struct {
+        context: *anyopaque,
+        /// `observed` is whether this evaluation printed a `dbg` message,
+        /// which a later compilation reusing its outcomes would not repeat.
+        retain: *const fn (*anyopaque, lir.CheckedPipeline.CheckedModuleSet, *const lir.CheckedPipeline.LoweredProgram, *const NativeProcCompiler.Retained, []const backend.dev.LocatedArtifact, bool) Allocator.Error!void,
+    } = null,
 };
 /// Runtime options for compile-time finalization.
 pub const Options = struct {
@@ -93,11 +127,19 @@ pub const Options = struct {
     slow_root_period_ns: u64 = std.time.ns_per_s,
     timing: ?*Timing = null,
     object_cache: ?CompileTimeObjectCache = null,
+    /// Ordinary native object policy, shared with the runtime provider.
+    native_cpu_level: roc_target.CpuLevel = roc_target.RocTarget.detectNative().cpuLevel(),
     /// Where a compile-time failure is reported when the source it names
     /// belongs to a checked module this finalization does not complete: a
     /// literal in a module whose checking finished in an earlier compilation,
     /// reached through a specialization this program makes.
     unfinalized_reports: ?UnfinalizedReports = null,
+    /// The compile-time roots an earlier demand-driven build of this exact
+    /// checked program demanded, for a compilation that evaluates the program
+    /// without lowering its runtime program again: it evaluates and replays
+    /// observations for exactly these roots, as that build did. Null
+    /// evaluates every requested root.
+    demanded_roots: ?[]const lir.CheckedPipeline.ComptimeRootRead = null,
 };
 
 /// The report destination of a checked module this finalization does not
@@ -127,6 +169,8 @@ const DebugEvents = struct {
     };
     allocator: Allocator,
     events: std.ArrayList(Event) = .empty,
+    /// Messages this evaluation produced, not replayed from cached modules.
+    fresh: usize = 0,
 
     fn deinit(self: *DebugEvents) void {
         for (self.events.items) |event| self.allocator.free(event.message);
@@ -134,6 +178,7 @@ const DebugEvents = struct {
     }
 
     fn append(self: *DebugEvents, module: checked.ModuleId, root: checked.CompileTimeRoot, message: []const u8) Allocator.Error!void {
+        self.fresh += 1;
         return self.appendEvent(module, root, message, true);
     }
 
@@ -175,7 +220,7 @@ const DebugEvents = struct {
             const previous = entry.module.compile_time_debug;
             for (previous.entries) |stored| try inputs.append(self.allocator, .{ .root = stored.root, .message = previous.message(stored) });
             for (self.events.items) |event| {
-                if (event.fresh and std.meta.eql(entry.module.key, event.module)) try inputs.append(self.allocator, .{ .root = event.root, .message = event.message });
+                if (event.fresh and entry.module.key.eql(event.module)) try inputs.append(self.allocator, .{ .root = event.root, .message = event.message });
             }
             std.mem.sort(checked.CompileTimeDebugStore.Input, inputs.items, {}, struct {
                 fn lessThan(_: void, a: checked.CompileTimeDebugStore.Input, b: checked.CompileTimeDebugStore.Input) bool {
@@ -223,6 +268,9 @@ const ModuleOwners = struct {
     unfinalized: ?UnfinalizedReports = null,
     /// The failures of this program's literal roots, when it has any.
     literal_failures: ?*LiteralRootFailures = null,
+    /// Declaration authority includes completed imports, not just the mutable
+    /// batch whose pending requests this evaluator is currently completing.
+    declarations: ?*const std.AutoHashMap([32]u8, checked.ImportedModuleView) = null,
 
     /// The report destinations of source owned by one lowering module.
     const ReportTargets = struct {
@@ -293,6 +341,35 @@ const ModuleOwners = struct {
     }
 };
 
+const RuntimeTargetField = std.meta.FieldEnum(lir.CheckedPipeline.TargetConfig);
+const runtime_observer_fields = [_]RuntimeTargetField{
+    .timing,
+    .work_metrics,
+    .post_check_executor,
+    .solved_lir_parallel_metrics_out,
+    .lifted_expr_count_out,
+    .completed_scalar_values,
+};
+
+/// Two 32-byte identities, compared as one 256-bit integer.
+fn sameIdentity(a: *const [32]u8, b: *const [32]u8) bool {
+    return @as(u256, @bitCast(a.*)) == @as(u256, @bitCast(b.*));
+}
+
+fn isRuntimeObserverField(comptime field: RuntimeTargetField) bool {
+    for (runtime_observer_fields) |observer| if (observer == field) return true;
+    return false;
+}
+
+/// Compare the original declaration, never the selected producer capability.
+fn sameRuntimeTarget(expected: lir.CheckedPipeline.TargetConfig, actual: lir.CheckedPipeline.TargetConfig) bool {
+    inline for (comptime std.meta.tags(RuntimeTargetField)) |field| {
+        if (comptime isRuntimeObserverField(field)) continue;
+        if (!std.meta.eql(@field(expected, @tagName(field)), @field(actual, @tagName(field)))) return false;
+    }
+    return true;
+}
+
 /// Retains the compilation's compile-time results, and the specialized
 /// program its runtime consumer continues, across checking completion.
 /// Diagnostic destinations are consumed during finalizeProgram.
@@ -303,6 +380,10 @@ pub const ProgramSession = struct {
     modules: lir.CheckedPipeline.CheckedModuleSet,
     runtime_requests: []const checked.RootRequest,
     runtime_roots: lir.CheckedPipeline.RootRequestSet,
+    /// Immutable caller declaration, including the complete provider capability.
+    /// Joint producer selection must not change what authorizes the handoff.
+    declared_runtime_target: ?lir.CheckedPipeline.TargetConfig,
+    /// Selected continuation capability; a joint producer uses its paired view.
     runtime_target: ?lir.CheckedPipeline.TargetConfig,
     /// The compile-time evaluation program, holding every completed value
     /// the runtime consumer reads. Null when this compilation evaluated
@@ -314,8 +395,13 @@ pub const ProgramSession = struct {
     /// The position of each runtime request in the specialized program's root
     /// plan.
     runtime_positions: []u32,
+    /// Every compile-time root a demand-driven compilation demanded, whether
+    /// it evaluated the root or restored its stored value; null when the
+    /// compilation evaluated every requested root.
+    demanded_roots: ?[]lir.CheckedPipeline.ComptimeRootRead = null,
 
     pub fn deinit(self: *ProgramSession) void {
+        if (self.demanded_roots) |roots| self.allocator.free(roots);
         if (self.host) |*host| host.deinit();
         if (self.runtime_prepared) |*prepared| prepared.deinit();
         self.allocator.free(self.runtime_positions);
@@ -329,26 +415,15 @@ pub const ProgramSession = struct {
         self: *ProgramSession,
         allocator: Allocator,
         roots: lir.CheckedPipeline.RootRequestSet,
-        requested_target: lir.CheckedPipeline.TargetConfig,
+        declared_target: lir.CheckedPipeline.TargetConfig,
     ) RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
-        const configured = self.runtime_target orelse finalizationInvariant("check-only session has no runtime consumer");
+        const configured = self.declared_runtime_target orelse finalizationInvariant("check-only session has no runtime consumer");
         // Whether the program's specializations go to the object cache was
         // decided with the consumer, before the shared program was lowered.
-        var target = requested_target;
-        target.spec_comptime_reads = configured.spec_comptime_reads;
-        inline for (comptime std.meta.tags(std.meta.FieldEnum(lir.CheckedPipeline.TargetConfig))) |field| {
-            if (comptime field == .timing or
-                field == .work_metrics or
-                field == .post_check_executor or
-                field == .solved_lir_parallel_metrics_out or
-                field == .lifted_expr_count_out or
-                field == .completed_scalar_values)
-            {
-                continue;
-            }
-            if (!std.meta.eql(@field(configured, @tagName(field)), @field(target, @tagName(field))))
-                finalizationInvariant("runtime policy differs from the compilation's declared consumer");
-        }
+        var requested = declared_target;
+        requested.spec_comptime_reads = configured.spec_comptime_reads;
+        if (!sameRuntimeTarget(configured, requested))
+            finalizationInvariant("runtime policy differs from the compilation's declared consumer");
         inline for (@typeInfo(lir.CheckedPipeline.RootRequestSet).@"struct".field_names, @typeInfo(lir.CheckedPipeline.RootRequestSet).@"struct".field_types) |field_name, field_type| {
             const expected = @field(self.runtime_roots, field_name);
             const actual = @field(roots, field_name);
@@ -358,6 +433,12 @@ pub const ProgramSession = struct {
                     if (!std.meta.eql(a, b)) finalizationInvariant("runtime root metadata differs from the declared consumer");
                 }
             } else if (expected != actual) finalizationInvariant("runtime request policy differs from the declared consumer");
+        }
+        // Observation sinks belong to this handoff; compilation policy and the
+        // body-elision capability belong to the selected continuation.
+        var target = self.runtime_target orelse finalizationInvariant("runtime consumer already taken");
+        inline for (runtime_observer_fields) |field| {
+            @field(target, @tagName(field)) = @field(declared_target, @tagName(field));
         }
         self.runtime_target = null;
         if (target.specialization_strategy == .boxy) {
@@ -393,7 +474,7 @@ pub const ProgramSession = struct {
         var owned = prepared;
         var owned_live = true;
         errdefer if (owned_live) owned.deinit();
-        const consumer_roots: lir.CheckedPipeline.ConsumerRoots = .{ .roots = self.runtime_positions, .literal_roots = false };
+        const consumer_roots: lir.CheckedPipeline.ConsumerRoots = .{ .roots = self.runtime_positions, .literal_roots = false, .cached_root_demands = false };
         const source = if (self.host) |*host| host else {
             // Nothing was evaluated, so the program reads no compile-time
             // value slot.
@@ -468,12 +549,13 @@ fn transcodeCompletedSlots(
             allocator.free(item.bytes);
             for (item.relocations) |relocation| if (relocation.owns_target_symbol_name) allocator.free(relocation.target_symbol_name);
             allocator.free(item.relocations);
+            allocator.free(item.empty_list_capacities);
         }
         exports.deinit(allocator);
     }
     const ComptimeRootOwner = @typeInfo(@FieldType(LirProgram.StaticDataValue, "compile_time_root")).optional.child;
     const SourceKey = struct {
-        module: checked.ModuleId,
+        module: [32]u8,
         root: lir.LIR.ComptimeProducer,
         role: std.meta.Tag(@FieldType(ComptimeRootOwner, "role")),
     };
@@ -481,7 +563,7 @@ fn transcodeCompletedSlots(
     defer source_slots.deinit();
     for (source.lir_result.static_data_values.items, 0..) |source_entry, ordinal| {
         const source_root = source_entry.compile_time_root orelse continue;
-        const entry = try source_slots.getOrPut(.{ .module = source_root.module, .root = source_root.root, .role = std.meta.activeTag(source_root.role) });
+        const entry = try source_slots.getOrPut(.{ .module = source_root.module.bytes, .root = source_root.root, .role = std.meta.activeTag(source_root.role) });
         if (entry.found_existing) finalizationInvariant("checked root has ambiguous source value slots");
         entry.value_ptr.* = ordinal;
     }
@@ -495,7 +577,7 @@ fn transcodeCompletedSlots(
     for (target.static_data_values.items, 0..) |target_entry, index| {
         const target_root = target_entry.compile_time_root orelse continue;
         const target_slot: lir.LIR.StaticDataId = @fromBackingInt(@intCast(index));
-        const ordinal = source_slots.get(.{ .module = target_root.module, .root = target_root.root, .role = std.meta.activeTag(target_root.role) }) orelse
+        const ordinal = source_slots.get(.{ .module = target_root.module.bytes, .root = target_root.root, .role = std.meta.activeTag(target_root.role) }) orelse
             finalizationInvariant("target slot has no corresponding host root");
         const source_entry = source.lir_result.static_data_values.items[ordinal];
         const source_symbol = frozenSlotSymbol(source_symbols, @fromBackingInt(@intCast(ordinal)));
@@ -532,13 +614,13 @@ fn frozenSlotSymbol(symbols: []const ?static_data_exports.StaticDataSymbolId, sl
 fn uninitializedFailedSlot(allocator: Allocator, program: *const LirProgram.Result, slot: lir.LIR.StaticDataId) Allocator.Error![]static_data_exports.StaticDataExport {
     const entry = program.static_data_values.items[@backingInt(slot)];
     const size_align = program.layouts.layoutSizeAlign(program.layouts.getLayout(entry.layout_idx));
-    const name = try LirProgram.staticDataSymbolName(allocator, slot);
+    const name = try program.staticDataSymbolName(allocator, slot);
     errdefer allocator.free(name);
     const bytes = try allocator.alloc(u8, size_align.size);
     errdefer allocator.free(bytes);
     @memset(bytes, 0);
     const exports = try allocator.alloc(static_data_exports.StaticDataExport, 1);
-    exports[0] = .{ .symbol_name = name, .value_id = slot, .bytes = bytes, .alignment = @intCast(size_align.alignment.toByteUnits()), .is_exported = false };
+    exports[0] = .{ .symbol_name = name, .symbol_identity = entry.symbol_identity, .value_id = slot, .bytes = bytes, .alignment = @intCast(size_align.alignment.toByteUnits()), .is_exported = false, .root_slot = true };
     return exports;
 }
 
@@ -573,10 +655,7 @@ fn deinitRootRequests(allocator: Allocator, roots: lir.CheckedPipeline.RootReque
 
 /// The Solved policy compile-time evaluation specializes under when no
 /// runtime program shares its specialization, as in `roc check`: dev's.
-const check_solved_policy = lir.CheckedPipeline.SolvedPolicy.fromTarget(.{
-    .inline_mode = .wrappers,
-    .spec_constr_clone_inlining = .iterator_fusion,
-});
+const check_solved_policy = lir.CheckedPipeline.SolvedPolicy.dev();
 
 /// The target compile-time evaluation lowers under. Its Solved policy is
 /// that of the program being built, so evaluation runs inside that program's
@@ -585,29 +664,14 @@ const check_solved_policy = lir.CheckedPipeline.SolvedPolicy.fromTarget(.{
 /// other setting is fixed: evaluation runs on the host, runs expects, and
 /// hoists every literal conversion.
 fn compileTimeTarget(options: Options, solved_policy: lir.CheckedPipeline.SolvedPolicy) lir.CheckedPipeline.TargetConfig {
-    var target: lir.CheckedPipeline.TargetConfig = .{
-        .target_usize = base.target.TargetUsize.native,
-        .specialization_strategy = .lss,
-        .checked_module_state = .checking_finalization,
-        .comptime_value_reads = true,
-        .literal_roots = true,
-        .inline_expects = .run,
-        // The rewrites that only speed up the produced program stay off,
-        // as in dev builds: compile-time code runs once.
-        .fuse_tag_cases = false,
-        .scalarize_joins = false,
-        .reuse_boxes = false,
-        // Specialization records procedure names for every consumer of the
-        // program; a runtime consumer's diagnostics read them.
-        .proc_debug_names = true,
-        .spec_cache = if (options.object_cache) |cache| cache.spec_cache else null,
-        .code_provision = if (!compilerHostMustUseInterpreterForCtfe() and backend.host_lir_codegen_available and options.object_cache != null)
-            .host_dev_objects
-        else
-            .source_bodies,
-        .post_check_executor = options.post_check_executor,
-        .timing = if (options.timing) |timing| &timing.lowering else null,
-    };
+    var target = lir.CheckedPipeline.TargetConfig.ordinaryDev();
+    target.checked_module_state = .checking_finalization;
+    target.comptime_value_reads = true;
+    target.literal_roots = true;
+    target.spec_cache = if (options.object_cache) |cache| cache.spec_cache else null;
+    target.code_provision = if (!compilerHostMustUseInterpreterForCtfe() and backend.host_lir_codegen_available and options.object_cache != null) .host_dev_objects else .source_bodies;
+    target.post_check_executor = options.post_check_executor;
+    target.timing = if (options.timing) |timing| &timing.lowering else null;
     solved_policy.applyTo(&target);
     return target;
 }
@@ -624,6 +688,502 @@ fn sharedProducerProvision(
     const runtime_provider = consumer.spec_cache orelse return .source_bodies;
     if (!host_provider.sameProvider(runtime_provider)) return .source_bodies;
     return host.code_provision.sharedDomain(consumer.code_provision);
+}
+
+/// Select the evaluator's provider without changing the runtime's declared
+/// physical capability or its object compiler's splice source.
+fn useOrdinaryProvider(
+    host: *lir.CheckedPipeline.TargetConfig,
+    provider: lir.CheckedPipeline.SpecCacheLookup,
+) void {
+    host.spec_cache = provider;
+    host.root_use_cache = provider;
+}
+
+test "ordinary native consumers select the same complete provider without role views" {
+    const Lookup = lir.CheckedPipeline.SpecCacheLookup;
+    const Result = @typeInfo(@typeInfo(@FieldType(Lookup, "find")).pointer.child).@"fn".return_type.?;
+    const Callbacks = struct {
+        fn find(_: *anyopaque, _: [32]u8, _: ?[32]u8) Result {
+            return null;
+        }
+    };
+    var contexts = [_]u8{ 0, 0 };
+    const selected: Lookup = .{ .context = &contexts[0], .find = Callbacks.find };
+    const other: Lookup = .{ .context = &contexts[1], .find = Callbacks.find };
+    var host: lir.CheckedPipeline.TargetConfig = .{
+        .spec_cache = other,
+        .code_provision = .host_dev_objects,
+    };
+    var runtime: lir.CheckedPipeline.TargetConfig = .{
+        .spec_cache = selected,
+        .code_provision = .host_dev_objects,
+        .specialization_strategy = .lss,
+    };
+    useOrdinaryProvider(&host, selected);
+    try std.testing.expect(host.spec_cache.?.sameProvider(selected));
+    try std.testing.expect(runtime.spec_cache.?.sameProvider(selected));
+    try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.host_dev_objects, sharedProducerProvision(host, runtime));
+    runtime.spec_cache = other;
+    runtime.root_use_cache = other;
+    // A different physical provider may still use LSS and native objects.
+    // Selecting the host's cache must not replace either runtime lookup.
+    useOrdinaryProvider(&host, selected);
+    try std.testing.expect(runtime.spec_cache.?.sameProvider(other));
+    try std.testing.expect(runtime.root_use_cache.?.sameProvider(other));
+    try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.source_bodies, sharedProducerProvision(host, runtime));
+    runtime.specialization_strategy = .boxy;
+    useOrdinaryProvider(&host, selected);
+    try std.testing.expect(runtime.spec_cache.?.sameProvider(other));
+    runtime.specialization_strategy = .lss;
+    runtime.code_provision = .source_bodies;
+    useOrdinaryProvider(&host, selected);
+    try std.testing.expect(runtime.spec_cache.?.sameProvider(other));
+    try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.source_bodies, sharedProducerProvision(host, runtime));
+}
+
+test "CTFE serial executor evaluates a source callback root after its completed predecessor" {
+    try testSerialExecutorSource(
+        \\main = || value
+        \\value : U64
+        \\value = invoke(|| seed)
+        \\invoke = |callback| callback()
+        \\seed : U64
+        \\seed = 7
+    , null);
+}
+
+test "CTFE serial executor preserves reserved capacity through an ordinary root-reading helper" {
+    try testSerialExecutorSource(
+        \\main = || capacity
+        \\capacity : U64
+        \\capacity = helper()
+        \\helper = || reserved.capacity()
+        \\reserved : List(U8)
+        \\reserved = List.with_capacity(16)
+    , 16);
+}
+
+test "CTFE serial executor retains a local literal conversion producer" {
+    try testSerialExecutorSource(
+        \\Test := [].{
+        \\    value : U64
+        \\    value = Test.helper()
+        \\
+        \\    helper = || {
+        \\        Local := [Local(U64)].{
+        \\            from_numeral : Numeral -> Try(Local, [InvalidNumeral(Str)])
+        \\            from_numeral = |_| Ok(Local(3.U64))
+        \\        }
+        \\        literal : Local
+        \\        literal = 42
+        \\        match literal {
+        \\            Local(n) => n
+        \\        }
+        \\    }
+        \\}
+        \\
+        \\main = || Test.value
+        \\
+        \\expect Test.value == 3.U64
+    , 3);
+}
+
+test "CTFE serial executor retains a specialized local literal conversion producer" {
+    try testSerialExecutorSource(
+        \\main = || value
+        \\value : U64
+        \\value = helper(0.U64)
+        \\
+        \\helper : a -> U64
+        \\helper = |_unused| {
+        \\    Local(t) := [Local(U64)].{
+        \\        from_numeral : Numeral -> Try(Local(t), [InvalidNumeral(Str)])
+        \\        from_numeral = |_| Ok(Local(3.U64))
+        \\    }
+        \\    literal : Local(a)
+        \\    literal = 42
+        \\    match literal {
+        \\        Local(n) => n
+        \\    }
+        \\}
+    , 3);
+}
+
+test "CTFE serial executor evaluates a specialized custom interpolation as a literal root" {
+    try testSerialExecutorSource(
+        \\Wrapped := [Wrapped(Str)].{
+        \\    from_interpolation : List(Str) -> Try((List(Str) -> Wrapped), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Wrapped.Wrapped(assemble(values)))
+        \\}
+        \\
+        \\describe = |x| "value=${x}"
+        \\
+        \\greeting : Wrapped
+        \\greeting = describe("x")
+        \\
+        \\size : U64
+        \\size = match greeting {
+        \\    Wrapped(text) => text.count_utf8_bytes()
+        \\}
+        \\
+        \\main = || size
+    , 7);
+}
+
+test "literal type-only projection consumes producer representation without bodies" {
+    const allocator = std.testing.allocator;
+    const helpers = @import("inspected.zig");
+    var builtin_modules = try @import("BuiltinModules.zig").BuiltinModules.init(allocator);
+    defer builtin_modules.deinit();
+    const source =
+        \\main = || Test.value
+        \\Test := [].{
+        \\    value : U64
+        \\    value = Test.helper(0.U64)
+        \\    helper : a -> U64
+        \\    helper = |_unused| {
+        \\        Local(t) := [Local(U64)].{
+        \\            from_numeral : Numeral -> Try(Local(t), [InvalidNumeral(Str)])
+        \\            from_numeral = |_| Ok(Local(3.U64))
+        \\        }
+        \\        literal : Local(a)
+        \\        literal = 42
+        \\        match literal { Local(n) => n }
+        \\    }
+        \\}
+        \\expect Test.value == 3.U64
+    ;
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = .{
+        .env = builtin_modules.builtin_module.env,
+        .indices = builtin_modules.builtin_indices,
+        .artifact = &builtin_modules.checked_artifact,
+    } });
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+    const source_modules = [_]check.TypedCIR.Modules.SourceModule{
+        .{ .precompiled = resources.module_env },
+        .{ .precompiled = @constCast(builtin_modules.builtin_module.env) },
+    };
+    var typed_modules = try check.TypedCIR.Modules.init(allocator, &source_modules);
+    defer typed_modules.deinit();
+    const builtin_view = checked.importedView(&builtin_modules.checked_artifact);
+    const imports = [_]checked.PublishImportArtifact{.{
+        .module_idx = 1,
+        .key = builtin_modules.checked_artifact.key,
+        .view = builtin_view,
+    }};
+    var pending = try checked.publishFromTypedModule(allocator, &typed_modules, 0, .{
+        .module_env_storage = .{ .checked_source = resources.module_env },
+        .imports = &imports,
+        .available_artifacts = &.{builtin_view},
+        .hoisted_roots = resources.checker.selectedHoistedRoots(),
+        .promoted_local_procedures = resources.checker.promotedLocalProcedures(),
+        .compile_time_finalizer = finalizer(),
+        .evaluation_phase = .post_frontend,
+        .problem_store = &resources.checker.problems,
+    });
+    defer pending.deinitRetainingModuleEnv(allocator);
+    const modules: lir.CheckedPipeline.CheckedModuleSet = .{
+        .root = checked.loweringView(&pending),
+        .imports = &.{builtin_view},
+    };
+    var target = lir.CheckedPipeline.TargetConfig.ordinaryDev();
+    target.checked_module_state = .checking_finalization;
+    target.comptime_value_reads = true;
+    target.literal_roots = true;
+    target.keep_specialization_procs = true;
+    var cold = try lir.CheckedPipeline.lowerCheckedModulesToLir(allocator, modules, .{
+        .requests = pending.root_requests.compile_time_requests,
+    }, target);
+    defer cold.deinit();
+    var maybe_recipe: ?LirProgram.CachedLiteralRecipe = null;
+    for (cold.lir_result.spec_procs.items) |spec| {
+        const demand = spec.demand orelse continue;
+        for (demand.literal_reads) |read| {
+            if (sameIdentity(&read.recipe.module, &pending.key.bytes)) {
+                maybe_recipe = read.recipe;
+                break;
+            }
+        }
+        if (maybe_recipe != null) break;
+    }
+    const recipe = maybe_recipe orelse return error.TestUnexpectedResult;
+    var expected: ?LirProgram.RootMaterialization = null;
+    for (0..cold.lir_result.store.proc_specs.len()) |index| {
+        const proc = cold.lir_result.store.getProcSpec(@fromBackingInt(@intCast(index)));
+        const provision = proc.root_materialization orelse continue;
+        if (provision.producer == .literal and provision.producer.literal.checked_expr == recipe.checked_expr) {
+            expected = provision;
+            break;
+        }
+    }
+    try std.testing.expect(expected != null);
+    var projection_target = target;
+    projection_target.layout_request_const_plans = false;
+    const prepared = try lir.CheckedPipeline.prepareMonotypeToSolved(try lir.CheckedPipeline.prepareCheckedModulesMonotype(allocator, modules, .{
+        .cached_literal_declarations = &.{recipe},
+    }, projection_target));
+    var projected = try lir.CheckedPipeline.lowerPreparedSolvedToLir(prepared);
+    defer projected.deinit();
+    try std.testing.expectEqual(@as(usize, 0), projected.lir_result.store.proc_specs.len());
+    try std.testing.expectEqual(@as(usize, 1), projected.lir_result.requested_layouts.items.len);
+    const provision = projected.lir_result.requested_layouts.items[0];
+    try std.testing.expectEqualDeep(expected.?, provision.materialization.?);
+    try std.testing.expectEqualSlices(u8, &expected.?.layout_digest, &try projected.lir_result.layouts.contentDigest(provision.layout_idx));
+    try std.testing.expect(provision.initializer == null);
+}
+
+fn testSerialExecutorSource(source: []const u8, expected_scalar: ?u64) (@import("BuiltinModules.zig").BuiltinModules.InitError || @import("inspected.zig").Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
+    const allocator = std.testing.allocator;
+    const helpers = @import("inspected.zig");
+    var builtin_modules = try @import("BuiltinModules.zig").BuiltinModules.init(allocator);
+    defer builtin_modules.deinit();
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = .{
+        .env = builtin_modules.builtin_module.env,
+        .indices = builtin_modules.builtin_indices,
+        .artifact = &builtin_modules.checked_artifact,
+    } });
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+    const source_modules = [_]check.TypedCIR.Modules.SourceModule{
+        .{ .precompiled = resources.module_env },
+        .{ .precompiled = @constCast(builtin_modules.builtin_module.env) },
+    };
+    var typed_modules = try check.TypedCIR.Modules.init(allocator, &source_modules);
+    defer typed_modules.deinit();
+    const builtin_view = checked.importedView(&builtin_modules.checked_artifact);
+    const imports = [_]checked.PublishImportArtifact{.{
+        .module_idx = 1,
+        .key = builtin_modules.checked_artifact.key,
+        .view = builtin_view,
+    }};
+    // Publish from the actual checked producer in the same deferred mode the
+    // CLI uses. No completed payload is reset and no AST is reconstructed.
+    var pending = try checked.publishFromTypedModule(allocator, &typed_modules, 0, .{
+        .module_env_storage = .{ .checked_source = resources.module_env },
+        .imports = &imports,
+        .available_artifacts = &.{builtin_view},
+        .hoisted_roots = resources.checker.selectedHoistedRoots(),
+        .promoted_local_procedures = resources.checker.promotedLocalProcedures(),
+        .compile_time_finalizer = finalizer(),
+        .evaluation_phase = .post_frontend,
+        .problem_store = &resources.checker.problems,
+    });
+    // ParsedResources retains the single source-env owner; this second
+    // publication owns only its independently published checked metadata.
+    defer pending.deinitRetainingModuleEnv(allocator);
+    try std.testing.expect(pending.root_requests.compile_time_requests.len >= 1);
+    const modules: lir.CheckedPipeline.CheckedModuleSet = .{
+        .root = checked.loweringView(&pending),
+        .imports = &.{builtin_view},
+    };
+    var session = try finalizeProgram(allocator, &.{.{ .module = &pending, .problem_store = &resources.checker.problems }}, modules, .{}, .{}, null, .{});
+    defer session.deinit();
+    try std.testing.expect(session.host != null);
+    const result = &session.host.?.lir_result;
+    var reads: usize = 0;
+    var scalar_values: usize = 0;
+    for (result.const_roots.items) |root| {
+        try std.testing.expect(root.demand.complete);
+        reads += root.demand.reads.len;
+        try std.testing.expect(pending.compile_time_roots.root(root.request.compile_time_root.?).payload != .pending);
+        if (expected_scalar) |expected| {
+            const payload = pending.compile_time_roots.root(root.request.compile_time_root.?).payload;
+            if (payload == .const_node) {
+                const value = pending.const_store.get(payload.const_node);
+                if (value == .scalar and value.scalar == .u64) {
+                    try std.testing.expectEqual(expected, value.scalar.u64);
+                    scalar_values += 1;
+                }
+            }
+        }
+    }
+    try std.testing.expect(reads != 0);
+    if (expected_scalar != null) try std.testing.expect(scalar_values != 0);
+    try pending.const_store.verifyComplete();
+}
+
+test "warm runtime continuation transports completed callable capture storage without evaluation requests" {
+    try testWarmRuntimeStorage(
+        \\make_renderer : Str -> (Str -> Str)
+        \\make_renderer = |prefix| |suffix| "${prefix}${suffix}"
+        \\fixed : Str -> Str
+        \\fixed = make_renderer("a completed callable capture:")
+        \\nested = { values: [fixed] }
+        \\main : Bool -> Bool
+        \\main = |value| if value fixed("value") == "a completed callable capture:value" else List.map(nested.values, |function| function("value")) == ["a completed callable capture:value"]
+    , false, false);
+}
+
+test "warm runtime continuation freezes completed storage with no evaluation or literal roots" {
+    try testWarmRuntimeStorage(
+        \\stored : List(Bool)
+        \\stored = [Bool.True, Bool.False]
+        \\main : Bool -> List(Bool)
+        \\main = |_| stored
+    , true, false);
+}
+
+test "independent pack continuation freezes completed storage with no evaluation or literal roots" {
+    try testWarmRuntimeStorage(
+        \\Test := [].{
+        \\    stored : List(Bool)
+        \\    stored = [Bool.True, Bool.False]
+        \\    main : Bool -> List(Bool)
+        \\    main = |_| Test.stored
+        \\}
+        \\main = Test.main
+    , true, true);
+}
+
+fn testWarmRuntimeStorage(source: []const u8, no_literal_roots: bool, pack_consumer: bool) (@import("BuiltinModules.zig").BuiltinModules.InitError || @import("inspected.zig").Error || RuntimeMaterializationError || error{ TestUnexpectedResult, TestExpectedEqual })!void {
+    const allocator = std.testing.allocator;
+    const helpers = @import("inspected.zig");
+    var builtin_modules = try @import("BuiltinModules.zig").BuiltinModules.init(allocator);
+    defer builtin_modules.deinit();
+    var resources = try helpers.parseProgram(allocator, .module, source, &.{}, .{ .pre_published_builtin = .{
+        .env = builtin_modules.builtin_module.env,
+        .indices = builtin_modules.builtin_indices,
+        .artifact = &builtin_modules.checked_artifact,
+    } });
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+    // Publication above completed the actual source producer. The second
+    // session borrows that exact metadata; no finalized payload is reset.
+    const artifact = &resources.checked_artifact;
+    try artifact.const_store.verifyComplete();
+    const payloads = try allocator.dupe(checked.CompileTimeRoot, artifact.compile_time_roots.roots);
+    defer allocator.free(payloads);
+    const modules: lir.CheckedPipeline.CheckedModuleSet = .{
+        .root = checked.loweringView(artifact),
+        .imports = &.{checked.importedView(&builtin_modules.checked_artifact)},
+    };
+    const pack_roots = if (pack_consumer) try lir.PackProgram.closedExportRoots(allocator, artifact) else null;
+    defer if (pack_roots) |requests| allocator.free(requests);
+    const roots: lir.CheckedPipeline.RootRequestSet = .{
+        .requests = pack_roots orelse artifact.root_requests.runtime_requests,
+        .include_internal_static_data = pack_consumer,
+    };
+    try std.testing.expect(roots.requests.len != 0);
+    if (pack_consumer) {
+        try std.testing.expectEqual(@as(usize, 1), roots.requests.len);
+        try std.testing.expectEqual(.exported, roots.requests[0].exposure);
+    }
+    for (roots.requests) |request| try std.testing.expect(request.abi != .compile_time);
+    var target = lir.CheckedPipeline.TargetConfig.ordinaryDev();
+    target.keep_specialization_procs = pack_consumer;
+    var session = try finalizeProgram(allocator, &.{}, modules, roots, roots, target, .{});
+    defer session.deinit();
+    try std.testing.expectEqual(true, session.host != null);
+    try std.testing.expectEqual(@as(usize, 0), session.host.?.lir_result.const_roots.items.len);
+    if (no_literal_roots) try std.testing.expectEqual(@as(usize, 0), session.host.?.lir_result.literal_roots.items.len);
+    var completed_slots: usize = 0;
+    for (session.host.?.lir_result.static_data_values.items) |entry| {
+        const root = entry.compile_time_root orelse continue;
+        if (root.root == .checked and root.completion == .value and root.role == .value) completed_slots += 1;
+    }
+    try std.testing.expectEqual(true, completed_slots != 0);
+    var runtime = try session.takeRuntime(allocator, roots, target);
+    defer runtime.deinit();
+    try std.testing.expectEqual(true, runtime.frozen_static_data != null);
+    var transported_values: usize = 0;
+    for (runtime.frozen_static_data.?.exports) |item| {
+        const slot = item.value_id orelse continue;
+        const entry = runtime.lir_result.static_data_values.items[@backingInt(slot)];
+        // Adoption retires the checking identities: these bytes are now the
+        // slot's ordinary runtime definition, with no evaluator initializer.
+        try std.testing.expectEqual(true, entry.compile_time_root == null);
+        try std.testing.expectEqual(true, entry.initializer == null);
+        transported_values += 1;
+    }
+    try std.testing.expectEqual(true, transported_values != 0);
+    try std.testing.expectEqualDeep(payloads, artifact.compile_time_roots.roots);
+}
+
+test "runtime handoff validates the original declaration and continues the selected provider" {
+    const allocator = std.testing.allocator;
+    const helpers = @import("inspected.zig");
+    var builtin_modules = try @import("BuiltinModules.zig").BuiltinModules.init(allocator);
+    defer builtin_modules.deinit();
+    var resources = try helpers.parseProgram(allocator, .module,
+        \\main : Bool -> Bool
+        \\main = |value| value
+    , &.{}, .{ .pre_published_builtin = .{
+        .env = builtin_modules.builtin_module.env,
+        .indices = builtin_modules.builtin_indices,
+        .artifact = &builtin_modules.checked_artifact,
+    } });
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+    const imports = [_]checked.ImportedModuleView{checked.importedView(&builtin_modules.checked_artifact)};
+    const modules: lir.CheckedPipeline.CheckedModuleSet = .{
+        .root = checked.loweringView(&resources.checked_artifact),
+        .imports = &imports,
+    };
+    const roots: lir.CheckedPipeline.RootRequestSet = .{ .requests = resources.checked_artifact.root_requests.requests };
+    try std.testing.expect(roots.requests.len != 0);
+    const Lookup = lir.CheckedPipeline.SpecCacheLookup;
+    const LookupResult = @typeInfo(@typeInfo(@FieldType(Lookup, "find")).pointer.child).@"fn".return_type.?;
+    const ColdCache = struct {
+        fn find(_: *anyopaque, _: [32]u8, _: ?[32]u8) LookupResult {
+            return null;
+        }
+        fn otherFind(context: *anyopaque, _: [32]u8, _: ?[32]u8) LookupResult {
+            const calls: *u8 = @ptrCast(context);
+            calls.* += 1;
+            return null;
+        }
+        fn splice(_: *anyopaque, _: lir.LIR.ProcIdentity) ?backend.dev.LocatedArtifact {
+            return null;
+        }
+    };
+    var contexts = [_]u8{ 0, 0, 0 };
+    const complete: Lookup = .{ .context = &contexts[0], .find = ColdCache.find };
+    const intersection: Lookup = .{ .context = &contexts[1], .find = ColdCache.find };
+    const canonical_provider: Lookup = .{ .context = &contexts[2], .find = ColdCache.find };
+    const declaration: lir.CheckedPipeline.TargetConfig = .{
+        .code_provision = .host_dev_objects,
+        .spec_cache = complete,
+    };
+    const options: Options = .{ .object_cache = .{
+        .spec_cache = canonical_provider,
+        .splice_source = .{ .context = &contexts[2], .find = ColdCache.splice },
+    } };
+    // With no producer, selection grants no authority to narrow the full view.
+    // With a nonempty producer, both continuations use the paired cold view.
+    for ([_]bool{ false, true }) |has_producer| {
+        const requested_roots: lir.CheckedPipeline.RootRequestSet = if (has_producer) roots else .{};
+        var session = try finalizeProgram(allocator, &.{}, modules, requested_roots, requested_roots, declaration, options);
+        defer session.deinit();
+        try std.testing.expect(session.declared_runtime_target.?.spec_cache.?.sameProvider(complete));
+        try std.testing.expect(session.runtime_target.?.spec_cache.?.sameProvider(if (has_producer) canonical_provider else complete));
+        try std.testing.expectEqual(has_producer, session.runtime_prepared != null);
+        // An empty declaration has no runtime work to materialize.
+        if (!has_producer) continue;
+        var runtime = try session.takeRuntime(allocator, requested_roots, declaration);
+        defer runtime.deinit();
+        try std.testing.expect(runtime.lir_result.store.proc_specs.len() != 0);
+        try std.testing.expect(session.runtime_target == null);
+        try std.testing.expect(session.runtime_prepared == null);
+    }
+    // These are the exact predicate used by the invariant, not stand-in
+    // invalid programs passed into stages that never inspect their fields.
+    try std.testing.expect(sameRuntimeTarget(declaration, declaration));
+    var wrong = declaration;
+    wrong.spec_cache = intersection;
+    try std.testing.expect(!sameRuntimeTarget(declaration, wrong));
+    wrong.spec_cache = canonical_provider;
+    try std.testing.expect(!sameRuntimeTarget(declaration, wrong));
+    wrong.spec_cache = null;
+    try std.testing.expect(!sameRuntimeTarget(declaration, wrong));
+    wrong.spec_cache = .{ .context = complete.context, .find = ColdCache.otherFind };
+    try std.testing.expect(!sameRuntimeTarget(declaration, wrong));
+    wrong = declaration;
+    wrong.code_provision = .source_bodies;
+    try std.testing.expect(!sameRuntimeTarget(declaration, wrong));
+    wrong = declaration;
+    wrong.specialization_strategy = .boxy;
+    try std.testing.expect(!sameRuntimeTarget(declaration, wrong));
+    wrong = declaration;
+    wrong.consume_dead_boxes = !declaration.consume_dead_boxes;
+    try std.testing.expect(!sameRuntimeTarget(declaration, wrong));
 }
 
 test "shared producer requires the exact non-null provider capability" {
@@ -693,14 +1253,12 @@ test "declared consumers choose shared producer provision before discovery" {
 /// Complete checked values in the caller's dependency order, using the
 /// released frontend workers.
 ///
-/// Compile-time evaluation specializes the modules' compile-time roots
-/// together with `program_roots`, the runtime roots the checked program
-/// itself declares, and evaluates the compile-time roots and every literal
-/// root that specialization registers, under `compileTimeTarget`. Neither the
-/// roots nor the policy depend on the command, so every command that checks
-/// a program performs the same evaluation. A runtime consumer
-/// (`runtime_roots`, which must be among `program_roots`) continues the
-/// specialized program afterwards and reads the completed values.
+/// Compile-time evaluation discovers obligations under the same declared
+/// `program_roots` in every command. Check-only data-only subtree proofs can
+/// withhold a runtime root from executable preparation, never from obligation
+/// discovery. All other roots explicitly request the existing exact
+/// type/callable solution. A declared runtime consumer continues the same
+/// broad producer and reads the completed values afterwards.
 pub fn finalizeProgram(
     allocator: Allocator,
     modules: []const ProgramModule,
@@ -710,19 +1268,29 @@ pub fn finalizeProgram(
     runtime_target: ?lir.CheckedPipeline.TargetConfig,
     options: Options,
 ) FinalizeError!ProgramSession {
+    // Runtime lookup and its object compiler retain one physical provider.
+    // Host cache selection cannot change the declaration for a foreign target.
+    const session_runtime_target = runtime_target;
     const total_started_ns = if (options.timing) |timing| timing.start() else 0;
     defer if (options.timing) |timing| timing.finish(total_started_ns, .total);
     var debug_events = DebugEvents{ .allocator = allocator };
     defer debug_events.deinit();
+    var given_demand = StoredRootSet{};
+    defer given_demand.deinit(allocator);
+    if (options.demanded_roots) |roots| {
+        for (roots) |root| try given_demand.keys.put(allocator, .{ .module = root.module, .root = @fromBackingInt(root.root) }, {});
+    }
     var requests = std.ArrayList(checked.RootRequest).empty;
     defer requests.deinit(allocator);
     var source_modules = std.ArrayList(checked.ModuleId).empty;
     defer source_modules.deinit(allocator);
     for (modules) |entry| {
         for (entry.module.root_requests.compile_time_requests) |request| {
+            const root = compileTimeRootForRequest(entry.module, request);
             // A reopened artifact's roots that an earlier compilation
             // evaluated are read from its store like any other module's.
-            if (entry.module.compile_time_roots.root(compileTimeRootForRequest(entry.module, request)).payload != .pending) continue;
+            if (entry.module.compile_time_roots.root(root).payload != .pending) continue;
+            if (options.demanded_roots != null and !given_demand.contains(.{ .module = entry.module.key.bytes, .root = root })) continue;
             try requests.append(allocator, request);
             try source_modules.append(allocator, entry.module.key);
         }
@@ -823,12 +1391,31 @@ pub fn finalizeProgram(
         // An LSS runtime consumer continues this specialization, so it is
         // made under the runtime's Solved policy.
         const solved_policy = if (lss_runtime) lir.CheckedPipeline.SolvedPolicy.fromTarget(runtime_target.?) else check_solved_policy;
-        var host_target = compileTimeTarget(options, solved_policy);
+        var policy_options = options;
+        // The runtime's ordinary body policy governs both consumers. Root
+        // materialization, worker accounting and source observation bindings
+        // do not select a second procedure-code policy.
+        var host_target = if (lss_runtime) runtime_target.? else compileTimeTarget(options, solved_policy);
+        host_target.target_usize = base.target.TargetUsize.native;
+        host_target.checked_module_state = .checking_finalization;
+        host_target.comptime_value_reads = true;
+        host_target.literal_roots = true;
+        host_target.post_check_executor = options.post_check_executor;
+        host_target.timing = if (options.timing) |timing| &timing.lowering else null;
+        host_target.spec_cache = null;
+        host_target.root_use_cache = null;
+        host_target.code_provision = if (!compilerHostMustUseInterpreterForCtfe() and backend.host_lir_codegen_available and options.object_cache != null) .host_dev_objects else .source_bodies;
+        if (options.object_cache) |cache| {
+            if (cache.select_policy) |selector| policy_options.object_cache = try selector.select(selector.context, host_target, lowering_modules);
+        }
+        if (policy_options.object_cache) |cache| {
+            useOrdinaryProvider(&host_target, cache.spec_cache);
+        }
         host_target.demand_driven_comptime_roots = demand_driven;
-        var host_lir_policy = lir.CheckedPipeline.LirPolicy.fromTarget(host_target);
+        const host_lir_policy = lir.CheckedPipeline.LirPolicy.fromTarget(host_target);
         // All readers of this producer are declared before any cache hit can
         // erase a source body. CTFE still owns its native late-splice policy.
-        host_target.code_provision = sharedProducerProvision(host_target, runtime_target);
+        host_target.code_provision = sharedProducerProvision(host_target, session_runtime_target);
         // Counting work observes the evaluation without shaping it. A program
         // whose specializations go into the object cache needs what each one
         // reads of compile-time evaluation: the runtime consumer's, when it
@@ -858,9 +1445,13 @@ pub fn finalizeProgram(
         var prepared = try lir.CheckedPipeline.prepareMonotypeToSolved(monotype);
         var prepared_owned = true;
         errdefer if (prepared_owned) prepared.deinit();
-        host_lir_policy.comptime_closure_hits = prepared.target.comptime_closure_hits;
 
-        if (compile_time_root_count != 0 or prepared.literalRootCount() != 0) {
+        // Completed checked values are storage producers even when this
+        // compilation has no evaluation roots. Their declared initializer
+        // closure must be frozen before the runtime consumer starts.
+        if (compile_time_root_count != 0 or prepared.literalRootCount() != 0 or
+            (shares_solved and prepared.comptimeValueReads().len != 0))
+        {
             // The compile-time roots are published first, so compile-time
             // evaluation's own share of the root plan is the positions before
             // the program roots; its literal roots join it.
@@ -870,7 +1461,8 @@ pub fn finalizeProgram(
             // A runtime consumer continuing this Solved program reads its
             // compile-time values out of this program's frozen data, so the
             // roots the program records reads of materialize their completed
-            // values here.
+            // values here. Already-completed checked roots arrive through
+            // producer storage declarations, not this evaluation manifest.
             const completed_values = if (shares_solved)
                 try collectCompletedValueRequests(allocator, modules, &published, &prepared)
             else
@@ -898,7 +1490,7 @@ pub fn finalizeProgram(
             };
             if (host.?.lir_result.root_procs.items.len != compile_time_root_count)
                 finalizationInvariant("compile-time consumer lowering changed the requested root count");
-            var evaluation_options = options;
+            var evaluation_options = policy_options;
             evaluation_options.debug_events = &debug_events;
             try evaluateLoweredRoots(allocator, modules, &published, lowering_modules, &host.?, compile_time_root_count, evaluation_options);
         } else {
@@ -929,7 +1521,14 @@ pub fn finalizeProgram(
     // Observations replay in sorted order once every root has evaluated:
     // those stored for the roots this program demands, and this
     // compilation's own.
-    const replay_filter: ?*const StoredRootSet = if (demand_driven) &stored_demand else null;
+    const replay_filter: ?*const StoredRootSet = if (demand_driven)
+        &stored_demand
+    else if (options.demanded_roots != null)
+        &given_demand
+    else
+        null;
+    const demanded_roots = if (demand_driven) try demandedRootList(allocator, modules, &published, &stored_demand) else null;
+    errdefer if (demanded_roots) |roots| allocator.free(roots);
     try debug_events.appendCached(options.cached_debug_modules, replay_filter);
     for (modules) |entry| try debug_events.appendStored(entry.module, replay_filter);
     try debug_events.persist(modules);
@@ -942,11 +1541,47 @@ pub fn finalizeProgram(
         .modules = .{ .root = retained_root, .imports = owned_imports },
         .runtime_requests = owned_runtime_roots.requests,
         .runtime_roots = owned_runtime_roots,
-        .runtime_target = runtime_target,
+        .declared_runtime_target = runtime_target,
+        .runtime_target = session_runtime_target,
         .host = host,
         .runtime_prepared = runtime_prepared,
         .runtime_positions = runtime_positions,
+        .demanded_roots = demanded_roots,
     };
+}
+
+/// Every root a demand-driven program demanded: those it evaluated and those
+/// whose stored values it restored.
+fn demandedRootList(
+    allocator: Allocator,
+    modules: []const ProgramModule,
+    published: *const PublishedRequests,
+    stored: *const StoredRootSet,
+) Allocator.Error![]lir.CheckedPipeline.ComptimeRootRead {
+    var roots = std.ArrayList(lir.CheckedPipeline.ComptimeRootRead).empty;
+    errdefer roots.deinit(allocator);
+    var seen = StoredRootSet{};
+    defer seen.deinit(allocator);
+    for (modules, published.by_module) |entry, requests| {
+        for (requests) |request| {
+            const key: StoredRootSet.Key = .{ .module = entry.module.key.bytes, .root = compileTimeRootForRequest(entry.module, request) };
+            if ((try seen.keys.getOrPut(allocator, key)).found_existing) continue;
+            try roots.append(allocator, .{ .module = key.module, .root = @backingInt(key.root) });
+        }
+    }
+    var stored_keys = stored.keys.keyIterator();
+    while (stored_keys.next()) |key| {
+        if ((try seen.keys.getOrPut(allocator, key.*)).found_existing) continue;
+        try roots.append(allocator, .{ .module = key.module, .root = @backingInt(key.root) });
+    }
+    std.mem.sort(lir.CheckedPipeline.ComptimeRootRead, roots.items, {}, struct {
+        fn lessThan(_: void, a: lir.CheckedPipeline.ComptimeRootRead, b: lir.CheckedPipeline.ComptimeRootRead) bool {
+            const order = std.mem.order(u8, &a.module, &b.module);
+            if (order != .eq) return order == .lt;
+            return a.root < b.root;
+        }
+    }.lessThan);
+    return roots.toOwnedSlice(allocator);
 }
 
 /// Whether this compilation evaluates only the compile-time roots its program
@@ -1202,7 +1837,7 @@ fn evaluateLoweredRootsWithObservations(
     if (comptime compilerHostMustUseInterpreterForCtfe()) {
         const interpreted = try InterpreterProgram.init(allocator, lowering_modules, host, options);
         defer interpreted.deinit();
-        try finalizeLoweredProgram(allocator, modules, published, host, compile_time_root_count, interpreted, options, report_observations);
+        try finalizeLoweredProgram(allocator, modules, published, lowering_modules, host, compile_time_root_count, interpreted, options, report_observations);
         host.frozen_static_data = try interpreted.slots.freezeCompleted();
         return;
     }
@@ -1210,8 +1845,14 @@ fn evaluateLoweredRootsWithObservations(
     var native = try DevProgram.init(allocator, lowering_modules, host, options);
     defer native.deinit();
     native.codegen.static_strings = native.static_strings.view();
-    try finalizeLoweredProgram(allocator, modules, published, host, compile_time_root_count, &native, options, report_observations);
+    try finalizeLoweredProgram(allocator, modules, published, lowering_modules, host, compile_time_root_count, &native, options, report_observations);
     host.frozen_static_data = try native.freezeCompleted();
+    if (options.object_cache) |cache| {
+        if (cache.capture) |capture| {
+            const observed = if (options.debug_events) |events| events.fresh != 0 else true;
+            if (native.artifacts) |*artifacts| try capture.retain(capture.context, lowering_modules, host, artifacts, native.cached_roots, observed);
+        }
+    }
 }
 
 /// The compile-time consumer's materialization requests.
@@ -1231,7 +1872,7 @@ fn collectCompletedValueRequests(
     const reads = prepared.comptimeValueReads();
     if (reads.len == 0) return &.{};
     const ValueRoot = @FieldType(lir.CheckedPipeline.CompletedValueRequest, "value");
-    const ReadKey = struct { module: checked.ModuleId, root: checked.ComptimeRootId };
+    const ReadKey = struct { module: [32]u8, root: checked.ComptimeRootId };
     var read_roots = std.AutoHashMap(ReadKey, ValueRoot).init(allocator);
     defer read_roots.deinit();
     try read_roots.ensureTotalCapacity(@intCast(reads.len));
@@ -1240,7 +1881,7 @@ fn collectCompletedValueRequests(
             .checked => |id| id,
             .literal => finalizationInvariant("producer recorded a read of a literal root as checked module demand"),
         };
-        read_roots.putAssumeCapacity(.{ .module = read.module, .root = root }, read);
+        read_roots.putAssumeCapacity(.{ .module = read.module.bytes, .root = root }, read);
     }
     var owned = std.ArrayList(lir.CheckedPipeline.CompletedValueRequest).empty;
     errdefer owned.deinit(allocator);
@@ -1249,27 +1890,25 @@ fn collectCompletedValueRequests(
         for (requests) |request| {
             defer position += 1;
             const root = compileTimeRootForRequest(entry.module, request);
-            const read = read_roots.get(.{ .module = entry.module.key, .root = root }) orelse continue;
+            const read = read_roots.get(.{ .module = entry.module.key.bytes, .root = root }) orelse continue;
             try owned.append(allocator, .{ .root = position, .value = read });
         }
     }
     return try owned.toOwnedSlice(allocator);
 }
 
-/// A slot read demands its declared producer before observing its storage.
-const SlotDemand = CompileTimeHost.SlotDemand;
-
 fn finalizeLoweredProgram(
     allocator: Allocator,
     modules: []const ProgramModule,
     published: *const PublishedRequests,
+    checked_modules: lir.CheckedPipeline.CheckedModuleSet,
     lowered: *lir.CheckedPipeline.LoweredProgram,
     root_count: usize,
     program: anytype,
     options: Options,
     comptime report_observations: bool,
 ) FinalizeError!void {
-    const Driver = struct {
+    const SerialExecutor = struct {
         const Self = @This();
         const State = struct {
             completion: RootCompletionState,
@@ -1289,28 +1928,35 @@ fn finalizeLoweredProgram(
         options: Options,
         states: []State,
         roots: []Root,
-        active: []bool,
         slot_roots: []?usize,
-        /// Literal roots follow the checked roots in demand order.
-        literal_active: []bool,
+        slot_ready: []bool,
         literal_done: []bool,
+        node_ordinals: []const usize,
 
-        fn ensure(context: *anyopaque, slot: lir.LIR.StaticDataId) (FinalizeError || error{CompileTimeDependencyCycle})!void {
-            const self: *Self = @ptrCast(@alignCast(context));
-            const ordinal = self.slot_roots[@backingInt(slot)] orelse return;
-            try self.evaluate(ordinal);
+        pub fn execute(self: *Self, node: u32) FinalizeError!void {
+            return self.executeRoot(self.node_ordinals[node]);
         }
 
-        fn evaluate(self: *Self, ordinal: usize) (FinalizeError || error{CompileTimeDependencyCycle})!void {
-            if (ordinal >= self.roots.len) return self.evaluateLiteral(ordinal - self.roots.len);
+        pub fn failCycle(self: *Self, node: u32, origin: lir.LIR.ComptimeFailureOrigin) FinalizeError!void {
+            return self.failRootCycle(self.node_ordinals[node], origin);
+        }
+
+        fn executeRoot(self: *Self, ordinal: usize) FinalizeError!void {
+            if (ordinal >= self.roots.len) {
+                const index = ordinal - self.roots.len;
+                if (self.literal_done[index]) finalizationInvariant("scheduled literal root executed twice");
+                try evalLiteralRoot(self.allocator, self.owners, self.options, self.lowered, self.lowered.lir_result.literal_roots.items[index], self.program);
+                self.literal_done[index] = true;
+                self.markSlotsReady(ordinal);
+                return;
+            }
             const root = self.roots[ordinal];
             const first_state = &self.states[root.module];
             const id = first_state.completion.request_root_ids[root.request];
             const demand_ordinal = first_state.ordinals[@backingInt(id)].?;
-            if (first_state.completion.isDone(id)) return;
-            if (self.active[demand_ordinal]) return error.CompileTimeDependencyCycle;
-            self.active[demand_ordinal] = true;
-            defer self.active[demand_ordinal] = false;
+            if (first_state.completion.isDone(id)) finalizationInvariant("scheduled checked root executed twice");
+            const root_started = if (std.c.getenv("ROC_PACK_STATS") != null) statsNowNs() else 0;
+            defer if (root_started != 0) std.debug.print("evaluated root: module={s} root={d} {d} ms\n", .{ self.modules[root.module].module.moduleEnvConst().module_name, @backingInt(id), @divTrunc(statsNowNs() - root_started, std.time.ns_per_ms) });
             var module_index: ?u32 = @intCast(root.module);
             while (module_index) |index| : (module_index = self.owners.next_alias[index]) {
                 const entry = self.modules[index];
@@ -1332,22 +1978,82 @@ fn finalizeLoweredProgram(
                 _ = try evalProgramRoots(self.allocator, entry.module, requests[request_index..][0..1], state.completion.request_root_ids[request_index..][0..1], &state.completion, entry.problem_store, &state.coverage, self.owners, evaluation_options, self.lowered, self.lowered.lir_result.const_roots.items[demand_ordinal..][0..1], self.program);
                 if (!state.completion.isDone(id)) finalizationInvariant("demanded compile-time producer did not complete");
             }
+            self.markSlotsReady(demand_ordinal);
         }
 
-        fn evaluateLiteral(self: *Self, index: usize) (FinalizeError || error{CompileTimeDependencyCycle})!void {
-            if (self.literal_done[index]) return;
-            if (self.literal_active[index]) return error.CompileTimeDependencyCycle;
-            self.literal_active[index] = true;
-            defer self.literal_active[index] = false;
-            try evalLiteralRoot(self.allocator, self.owners, self.options, self.lowered, self.lowered.lir_result.literal_roots.items[index], self.program);
-            self.literal_done[index] = true;
+        fn markSlotsReady(self: *Self, ordinal: usize) void {
+            // Publication's reverse links are layout/map authority, not a
+            // source of dependency facts.
+            const publication = if (@TypeOf(program) == *DevProgram) &self.program.slots.publication else &self.program.slotEnvironment().publication;
+            const owner, const producer = if (ordinal < self.roots.len) blk: {
+                const plan = self.lowered.lir_result.const_roots.items[ordinal];
+                break :blk .{ plan.owner, lir.LIR.ComptimeProducer{ .checked = plan.request.compile_time_root.? } };
+            } else blk: {
+                const plan = self.lowered.lir_result.literal_roots.items[ordinal - self.roots.len];
+                break :blk .{ plan.site.owner, lir.LIR.ComptimeProducer{ .literal = plan.id } };
+            };
+            var next = publication.first(owner, producer);
+            while (next) |slot| {
+                self.slot_ready[@backingInt(slot)] = true;
+                next = publication.next[@backingInt(slot)];
+            }
+        }
+
+        fn failRootCycle(self: *Self, ordinal: usize, origin: lir.LIR.ComptimeFailureOrigin) FinalizeError!void {
+            const message = "cyclic compile-time value dependency";
+            const slots = if (@TypeOf(program) == *DevProgram) &self.program.slots else self.program.slotEnvironment();
+            const resolver: backend.StaticDataImageFunctionResolver = if (@TypeOf(program) == *DevProgram)
+                .{ .context = self.program, .resolve = DevProgram.resolveFrozenFunction }
+            else
+                .{ .resolve = InterpreterProgram.resolveFunction };
+            if (ordinal >= self.roots.len) {
+                const index = ordinal - self.roots.len;
+                const plan = self.lowered.lir_result.literal_roots.items[index];
+                const failure: LiteralRootFailure = .{ .message = message, .stmt = null, .region = origin.region, .loc = origin.loc };
+                try self.owners.literal_failures.?.record(self.allocator, plan.id, .crash, failure);
+                slots.publishFailureOrigin(self.lowered, plan.site.owner, .{ .literal = plan.id }, origin);
+                try slots.publishFailure(self.lowered, plan.site.owner, .{ .literal = plan.id }, .{ .message = message, .kind = .crash }, resolver);
+                self.literal_done[index] = true;
+            } else {
+                const root = self.roots[ordinal];
+                const id = self.states[root.module].completion.request_root_ids[root.request];
+                const plan = self.lowered.lir_result.const_roots.items[ordinal];
+                var alias: ?u32 = @intCast(root.module);
+                while (alias) |index| : (alias = self.owners.next_alias[index]) {
+                    const entry = self.modules[index];
+                    const state = &self.states[index];
+                    const declaration = entry.module.compile_time_roots.root(id);
+                    const payload = try crashedRootPayload(entry.problem_store, entry.module, declaration, message, .crash);
+                    try rememberGuardedRootFailure(entry.module, id, payload, message, .crash, origin, &self.lowered.lir_result.store);
+                    if (!declaration.guarded) if (entry.problem_store) |store| {
+                        const region = devRootSourceRegion(entry.module, declaration);
+                        _ = try store.appendProblem(.{ .comptime_crash = .{
+                            .message = try store.putExtraString(message),
+                            .region = region,
+                            .origin = null,
+                        } });
+                    };
+                    entry.module.compile_time_roots.fillPayload(id, payload);
+                    finishConstRoot(entry.module, declaration, payload, null);
+                    state.completion.markDone(id);
+                }
+                slots.publishFailureOrigin(self.lowered, plan.owner, .{ .checked = id }, origin);
+                try slots.publishFailure(self.lowered, plan.owner, .{ .checked = id }, .{ .message = message, .kind = .crash }, resolver);
+            }
+            self.markSlotsReady(ordinal);
         }
     };
     var owners = try ModuleOwners.init(allocator, &lowered.lir_result, modules);
-    owners.report_sites = report_observations;
     defer owners.deinit(allocator);
+    var declarations = std.AutoHashMap([32]u8, checked.ImportedModuleView).init(allocator);
+    defer declarations.deinit();
+    try declarations.put(checked_modules.root.module.key.bytes, checked.importedView(checked_modules.root.module));
+    for (checked_modules.imports) |view| try declarations.put(view.key.bytes, view);
+    for (checked_modules.root.relation_modules) |view| try declarations.put(view.key.bytes, view);
+    owners.declarations = &declarations;
+    owners.report_sites = report_observations;
     owners.unfinalized = options.unfinalized_reports;
-    const states = try allocator.alloc(Driver.State, modules.len);
+    const states = try allocator.alloc(SerialExecutor.State, modules.len);
     var initialized: usize = 0;
     defer {
         for (states[0..initialized]) |*state| {
@@ -1357,11 +2063,8 @@ fn finalizeLoweredProgram(
         }
         allocator.free(states);
     }
-    const roots = try allocator.alloc(Driver.Root, root_count);
+    const roots = try allocator.alloc(SerialExecutor.Root, root_count);
     defer allocator.free(roots);
-    const active = try allocator.alloc(bool, root_count);
-    defer allocator.free(active);
-    @memset(active, false);
     const slot_roots = try allocator.alloc(?usize, lowered.lir_result.static_data_values.items.len);
     defer allocator.free(slot_roots);
     @memset(slot_roots, null);
@@ -1369,9 +2072,6 @@ fn finalizeLoweredProgram(
     for (literal_roots, 0..) |plan, index| {
         if (@backingInt(plan.id) != index) finalizationInvariant("lowered program published a literal root away from its id");
     }
-    const literal_active = try allocator.alloc(bool, literal_roots.len);
-    defer allocator.free(literal_active);
-    @memset(literal_active, false);
     const literal_done = try allocator.alloc(bool, literal_roots.len);
     defer allocator.free(literal_done);
     @memset(literal_done, false);
@@ -1406,7 +2106,7 @@ fn finalizeLoweredProgram(
             }
             // Shared identity permits repeated requests, never conflicting
             // execution or representation evidence for the same root.
-            if (!std.meta.eql(plan, const_roots[existing])) {
+            if (!std.meta.eql(plan.request, const_roots[existing].request) or plan.proc != const_roots[existing].proc or plan.ret_layout != const_roots[existing].ret_layout or plan.plan != const_roots[existing].plan) {
                 finalizationInvariant("lowered program published conflicting plans for one compile-time root");
             }
         } else {
@@ -1443,25 +2143,61 @@ fn finalizeLoweredProgram(
         }
     }
     for (lowered.lir_result.static_data_values.items, slot_roots) |slot, owner| {
-        if (slot.compile_time_root != null and owner == null) finalizationInvariant("compile-time slot has no declared producer");
+        if (slot.compile_time_root) |root| {
+            if (root.completion == .pending and owner == null) finalizationInvariant("compile-time slot has no declared producer");
+        }
     }
-    var driver: Driver = .{ .allocator = allocator, .modules = modules, .published = published, .owners = &owners, .lowered = lowered, .program = program, .options = options, .states = states, .roots = roots, .active = active, .slot_roots = slot_roots, .literal_active = literal_active, .literal_done = literal_done };
-    program.slot_demand = .{ .context = &driver, .ensure = Driver.ensure };
-    defer program.slot_demand = null;
-    for (0..root_count) |ordinal| {
-        driver.evaluate(ordinal) catch |err| switch (err) {
-            error.CompileTimeDependencyCycle => finalizationInvariant("slot demand cycle escaped its execution host"),
-            else => |operational| return operational,
-        };
+    const slot_ready = try allocator.alloc(bool, slot_roots.len);
+    defer allocator.free(slot_ready);
+    for (slot_ready, slot_roots) |*ready, producer| ready.* = producer == null;
+    var nodes = std.ArrayList(lir.CtfeSchedule.Node).empty;
+    defer nodes.deinit(allocator);
+    var ordinals = std.ArrayList(usize).empty;
+    defer ordinals.deinit(allocator);
+    for (const_roots[0..root_count], 0..) |plan, ordinal| {
+        const root = roots[ordinal];
+        const entry = modules[root.module];
+        const id = states[root.module].completion.request_root_ids[root.request];
+        if (states[root.module].ordinals[@backingInt(id)].? != ordinal) continue;
+        const declaration = entry.module.compile_time_roots.root(id);
+        try nodes.append(allocator, .{
+            .key = lir.CtfeSchedule.Key.init(entry.module.key.bytes, .{ .checked = id }),
+            .guarded = declaration.guarded,
+            .region = devRootSourceRegion(entry.module, declaration),
+            .loc = plan.demand.origin_loc,
+            .demand = plan.demand,
+        });
+        try ordinals.append(allocator, ordinal);
     }
-    // A literal root that only runtime code reads is evaluated here, after
-    // every checked root, for its diagnostics and its completed value.
-    for (0..literal_roots.len) |index| {
-        driver.evaluateLiteral(index) catch |err| switch (err) {
-            error.CompileTimeDependencyCycle => finalizationInvariant("slot demand cycle escaped its execution host"),
-            else => |operational| return operational,
-        };
+    for (literal_roots, 0..) |plan, index| {
+        try nodes.append(allocator, .{
+            .key = lir.CtfeSchedule.Key.init(plan.module.bytes, .{ .literal = plan.id }),
+            .guarded = false,
+            .region = plan.demand.origin_region orelse finalizationInvariant("literal root omitted its producer source cause"),
+            .loc = plan.demand.origin_loc,
+            .demand = plan.demand,
+        });
+        try ordinals.append(allocator, root_count + index);
     }
+    var schedule = lir.CtfeSchedule.Schedule.build(allocator, nodes.items, &.{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.MissingDemandProof => finalizationInvariant("CTFE schedule received incomplete producer demand"),
+        error.MissingRootProducer => finalizationInvariant("CTFE schedule read has no declared producer or completed value"),
+        error.DuplicateRootProducer => finalizationInvariant("CTFE schedule received duplicate qualified producers"),
+    };
+    defer schedule.deinit();
+    var executor: SerialExecutor = .{ .allocator = allocator, .modules = modules, .published = published, .owners = &owners, .lowered = lowered, .program = program, .options = options, .states = states, .roots = roots, .slot_roots = slot_roots, .slot_ready = slot_ready, .literal_done = literal_done, .node_ordinals = ordinals.items };
+    if (@TypeOf(program) == *DevProgram) {
+        program.static_slot_ready = slot_ready;
+    } else {
+        program.interpreter.static_data_ready = slot_ready;
+    }
+    defer if (@TypeOf(program) == *DevProgram) {
+        program.static_slot_ready = &.{};
+    } else {
+        program.interpreter.static_data_ready = &.{};
+    };
+    try schedule.run(&executor, FinalizeError);
     for (literal_failures.records, literal_failures.embedded, literal_roots) |maybe_record, embedded, plan| {
         const entry = maybe_record orelse continue;
         if (embedded) continue;
@@ -1679,7 +2415,7 @@ const ComptimeCoverage = struct {
         self.entries.deinit(self.allocator);
     }
 
-    fn record(self: *ComptimeCoverage, site: lir.LIR.ComptimeSite, branch_index: u32) Allocator.Error!void {
+    fn record(self: *ComptimeCoverage, site: NativeFailure.Site, branch_index: u32) Allocator.Error!void {
         if (site.kind != .match and site.kind != .if_) return;
         if (site.branch_regions.len == 0) return;
         if (branch_index >= site.branch_regions.len) {
@@ -1690,7 +2426,7 @@ const ComptimeCoverage = struct {
         entry.hits[branch_index] = true;
     }
 
-    fn entryFor(self: *ComptimeCoverage, site: lir.LIR.ComptimeSite) Allocator.Error!*Entry {
+    fn entryFor(self: *ComptimeCoverage, site: NativeFailure.Site) Allocator.Error!*Entry {
         for (self.entries.items) |*entry| {
             if (entry.kind == site.kind and regionsEqual(entry.region, site.region)) {
                 if (entry.branch_regions.len != site.branch_regions.len) {
@@ -2216,7 +2952,22 @@ fn evalInterpreterProgramRoots(
     if (const_roots.len != requests.len) {
         finalizationInvariant("LIR lowering returned a different number of compile-time roots than requested");
     }
-    for (const_roots, 0..) |root, i| {
+    var order = try ScheduledRootOrder.build(allocator, module, const_roots, root_ids);
+    defer order.deinit();
+    for (order.cycles.items) |cyclic| {
+        const root = const_roots[cyclic.node];
+        const root_id = root_ids[cyclic.node];
+        try ScheduledRootOrder.failRoot(problem_store, module, &writer, state, &lowered.lir_result.store, root, root_id, cyclic.origin, &had_problem);
+        if (options.publish_shared_slots) {
+            program.slotEnvironment().publishFailureOrigin(lowered, root.owner, .{ .checked = root_id }, cyclic.origin);
+            try program.slotEnvironment().publishFailure(lowered, root.owner, .{ .checked = root_id }, .{ .message = ScheduledRootOrder.cycle_message, .kind = .crash }, .{ .resolve = InterpreterProgram.resolveFunction });
+            program.refreshCallableMetadata();
+        }
+    }
+    // Each root's value is published before the next root runs, so a root
+    // that reads it observes the published value.
+    for (order.order.items) |i| {
+        const root = const_roots[i];
         if (!std.meta.eql(root.request, requests[i])) {
             finalizationInvariant("LIR lowering changed compile-time root request order");
         }
@@ -2263,7 +3014,7 @@ fn evalInterpreterProgramRoots(
             }
 
             const eval_result = try evalCompileTimeRoot(interpreter, problem_store, owners, root.owner, module, compile_time_root, &lowered.lir_result, root.proc, root.ret_layout, &program.demand_error);
-            try recordComptimeSiteHits(problem_store, coverage, owners, root.owner, compile_time_root, &lowered.lir_result, interpreter.getComptimeBranchHits(), root.proc);
+            try recordComptimeSiteHits(problem_store, coverage, owners, root.owner, compile_time_root, &lowered.lir_result, .{ .lir_program = &lowered.lir_result }, interpreter.getComptimeBranchHits(), root.proc);
             switch (eval_result) {
                 .value => |value| {
                     defer interpreter.dropValue(value.value, root.ret_layout);
@@ -2279,11 +3030,16 @@ fn evalInterpreterProgramRoots(
             }
         };
 
+        const failure_kind = RootFailure.of(&lowered.lir_result, interpreter.getFailedCrashStmt());
+        if (!succeeded) {
+            const origin: lir.LIR.ComptimeFailureOrigin = .{ .loc = interpreter.getFailedSourceLoc(), .region = interpreter.getFailedCheckedRegion() };
+            try rememberGuardedRootFailure(module, root_id, payload, failed_message.?, failure_kind, origin, &lowered.lir_result.store);
+        }
         if (!succeeded and options.publish_shared_slots) {
             const message = failed_message orelse finalizationInvariant("failed interpreter root omitted its explicit failure message");
             const origin: lir.LIR.ComptimeFailureOrigin = .{ .loc = interpreter.getFailedSourceLoc(), .region = interpreter.getFailedCheckedRegion() };
             program.slotEnvironment().publishFailureOrigin(lowered, root.owner, .{ .checked = root_id }, origin);
-            try program.slotEnvironment().publishFailure(lowered, root.owner, .{ .checked = root_id }, .{ .message = message, .kind = RootFailure.ofPayload(module, payload) }, .{ .resolve = InterpreterProgram.resolveFunction });
+            try program.slotEnvironment().publishFailure(lowered, root.owner, .{ .checked = root_id }, .{ .message = message, .kind = failure_kind }, .{ .resolve = InterpreterProgram.resolveFunction });
             program.refreshCallableMetadata();
         }
 
@@ -2334,6 +3090,7 @@ const LiteralRootFailures = struct {
         message_start: usize,
         message_len: usize,
         stmt: ?lir.LIR.CFStmtId,
+        observation: ?NativeFailure.Observation,
         region: ?base.Region,
         loc: ?base.SourceLoc,
 
@@ -2341,6 +3098,7 @@ const LiteralRootFailures = struct {
             return .{
                 .message = messages[self.message_start..][0..self.message_len],
                 .stmt = self.stmt,
+                .observation = self.observation,
                 .region = self.region,
                 .loc = self.loc,
             };
@@ -2387,6 +3145,7 @@ const LiteralRootFailures = struct {
                     .message_start = start,
                     .message_len = failure.message.len,
                     .stmt = failure.stmt,
+                    .observation = failure.observation,
                     .region = failure.region,
                     .loc = failure.loc,
                 } };
@@ -2487,6 +3246,22 @@ const GuardProducerSlot = struct {
     root: lir.LIR.ComptimeProducer,
 };
 
+fn observedGuardProducer(lir_result: *const lir.Program.Result, failed_stmt: ?lir.LIR.CFStmtId, observation: ?NativeFailure.Observation) ?GuardProducerSlot {
+    if (observation) |observed| {
+        const producer = observed.guard_producer orelse return null;
+        return .{ .module = producer.module, .root = producer.root };
+    }
+    return guardProducerSlot(lir_result, failed_stmt);
+}
+
+fn observedCheckedError(lir_result: *const lir.Program.Result, failed_stmt: ?lir.LIR.CFStmtId, observation: ?NativeFailure.Observation) bool {
+    return if (observation) |observed| observed.checked_error else failedAtCheckedError(lir_result, failed_stmt);
+}
+
+fn observedLiteralRejection(lir_result: *const lir.Program.Result, failed_stmt: ?lir.LIR.CFStmtId, observation: ?NativeFailure.Observation) ?lir.LIR.LiteralRejectionSite {
+    return if (observation) |observed| observed.literal_rejection else failedLiteralRejection(lir_result, failed_stmt);
+}
+
 /// The producer whose value guard `failed_stmt` is the failure path of.
 fn guardProducerSlot(lir_result: *const lir.Program.Result, failed_stmt: ?lir.LIR.CFStmtId) ?GuardProducerSlot {
     const stmt = failed_stmt orelse return null;
@@ -2507,6 +3282,10 @@ fn checkedProducerReportedFailure(
     module: checked.ModuleId,
     root_id: checked.ComptimeRootId,
 ) bool {
+    if (owners.declarations) |declarations| {
+        const owner = declarations.get(module.bytes) orelse finalizationInvariant("value guard producer has no checked declaration");
+        return !owner.compile_time_roots.root(root_id).guarded;
+    }
     for (owners.modules) |owner| {
         if (!artifactMatches(module, owner.module.key)) continue;
         return !owner.module.compile_time_roots.root(root_id).guarded;
@@ -2536,15 +3315,16 @@ fn reportEmbeddedFailure(
     owners: *const ModuleOwners,
     lir_result: *const lir.Program.Result,
     failed_stmt: ?lir.LIR.CFStmtId,
+    observation: ?NativeFailure.Observation,
     message: []const u8,
     failed_region: ?base.Region,
     failed_loc: ?base.SourceLoc,
 ) FinalizeError!EmbeddedReport {
     // Code checking rejected owns its diagnostic; reaching it discards the
     // root's result without reporting the problem a second time.
-    if (failedAtCheckedError(lir_result, failed_stmt)) return .reported_elsewhere;
+    if (observedCheckedError(lir_result, failed_stmt, observation)) return .reported_elsewhere;
     const Embedded = struct { kind: ?lir.LIR.LiteralRejectionKind, message: []const u8, region: ?base.Region, loc: ?base.SourceLoc };
-    const embedded: Embedded = if (guardProducerSlot(lir_result, failed_stmt)) |producer| switch (producer.root) {
+    const embedded: Embedded = if (observedGuardProducer(lir_result, failed_stmt, observation)) |producer| switch (producer.root) {
         .checked => |producer_root| {
             if (checkedProducerReportedFailure(owners, producer.module, producer_root)) return .reported_elsewhere;
             return .none;
@@ -2563,7 +3343,7 @@ fn reportEmbeddedFailure(
                 .loc = failure.loc,
             };
         },
-    } else if (failedLiteralRejection(lir_result, failed_stmt)) |site|
+    } else if (observedLiteralRejection(lir_result, failed_stmt, observation)) |site|
         .{ .kind = site.kind, .message = message, .region = failed_region, .loc = failed_loc }
     else
         return .none;
@@ -2594,6 +3374,7 @@ const LiteralRootFailure = struct {
     message: []const u8,
     /// The statement the evaluation stopped at, when it stopped at a crash.
     stmt: ?lir.LIR.CFStmtId,
+    observation: ?NativeFailure.Observation = null,
     region: ?base.Region,
     loc: ?base.SourceLoc,
 };
@@ -2680,7 +3461,11 @@ fn evalDevLiteralRoot(
     var host = CompileTimeHost.init(host_allocator);
     defer host.deinit();
     host.failure_origins = native.slots.failure_origins;
-    host.slot_demand = native.slot_demand;
+    host.slot_failure_origins = native.slots.slot_failure_origins;
+    host.static_slot_addresses = native.slots.addresses;
+    host.site_observations = native.site_observations.items;
+    host.static_slot_ready = native.static_slot_ready;
+    host.source_event_resolver = native.sourceEventResolver();
     host.timing_io = if (options.timing) |timing| timing.std_io else null;
 
     const boxy_tables = Interpreter.BoxyTables.fromResult(&lowered.lir_result);
@@ -2707,7 +3492,7 @@ fn evalDevLiteralRoot(
     const producer: lir.LIR.ComptimeProducer = .{ .literal = plan.id };
     const failure: ?LiteralRootFailure = switch (host.termination) {
         .returned => null,
-        .crashed => .{ .message = host.crashMessage() orelse "Roc crashed", .stmt = host.failed_stmt, .region = host.failed_region, .loc = host.failed_loc },
+        .crashed => .{ .message = host.crashMessage() orelse "Roc crashed", .stmt = host.failed_stmt, .observation = host.failed_observation, .region = host.failed_region, .loc = host.failed_loc },
         .comptime_exhaustiveness => .{ .message = "compile-time exhaustiveness failure", .stmt = null, .region = host.failed_region, .loc = host.failed_loc },
         .host_error => return host.operational_error orelse finalizationInvariant("native host error omitted its operational cause"),
         .host_oom => return error.OutOfMemory,
@@ -2738,10 +3523,10 @@ fn recordLiteralRootFailure(
 ) Allocator.Error!void {
     const failures = owners.literal_failures orelse
         finalizationInvariant("a literal root failed in a finalization that records no literal root failures");
-    const cause: LiteralRootFailures.Cause = if (guardProducerSlot(&lowered.lir_result, failure.stmt)) |producer| switch (producer.root) {
+    const cause: LiteralRootFailures.Cause = if (observedGuardProducer(&lowered.lir_result, failure.stmt, failure.observation)) |producer| switch (producer.root) {
         .literal => |read| .{ .literal = read },
         .checked => |producer_root| if (checkedProducerReportedFailure(owners, producer.module, producer_root)) .checked else .crash,
-    } else if (failedLiteralRejection(&lowered.lir_result, failure.stmt)) |site|
+    } else if (observedLiteralRejection(&lowered.lir_result, failure.stmt, failure.observation)) |site|
         .{ .rejection = site.kind }
     else
         .crash;
@@ -2758,7 +3543,7 @@ fn reportLiteralRootFailure(
     failure: LiteralRootFailure,
 ) FinalizeError!void {
     if (!owners.report_sites) return;
-    if (failedLiteralRejection(&lowered.lir_result, failure.stmt)) |site| {
+    if (observedLiteralRejection(&lowered.lir_result, failure.stmt, failure.observation)) |site| {
         return reportLiteralRejection(owners, site, failure.message);
     }
     var targets = try owners.reportTargets(plan.site.owner);
@@ -2916,6 +3701,103 @@ const DevRootJob = struct {
         self.host.deinit();
         allocator.free(self.ret_buf);
         self.label.deinit(allocator);
+    }
+};
+
+/// The order a batch's roots run in, from `lir.CtfeSchedule`: every root
+/// after the roots whose slots it reads, so a read observes a published
+/// value, and the roots on a dependency cycle set aside, to fail before any
+/// root runs. The checker's request order only separates roots whose
+/// definitions reference each other eagerly; a read inside a lambda the
+/// root's evaluation applies is a dependency its sealed demand facts record.
+const ScheduledRootOrder = struct {
+    allocator: Allocator,
+    order: std.ArrayList(u32) = .empty,
+    cycles: std.ArrayList(CyclicRoot) = .empty,
+
+    const CyclicRoot = struct { node: u32, origin: lir.LIR.ComptimeFailureOrigin };
+    const cycle_message = "cyclic compile-time value dependency";
+
+    fn deinit(self: *ScheduledRootOrder) void {
+        self.order.deinit(self.allocator);
+        self.cycles.deinit(self.allocator);
+    }
+
+    pub fn execute(self: *ScheduledRootOrder, node: u32) FinalizeError!void {
+        try self.order.append(self.allocator, node);
+    }
+
+    pub fn failCycle(self: *ScheduledRootOrder, node: u32, origin: lir.LIR.ComptimeFailureOrigin) FinalizeError!void {
+        try self.cycles.append(self.allocator, .{ .node = node, .origin = origin });
+    }
+
+    /// Schedule one module's batch of requested roots by their demand facts.
+    fn build(allocator: Allocator, module: *const checked.CheckedModuleArtifact, const_roots: []const LirProgram.ConstRootPlan, root_ids: []const checked.ComptimeRootId) FinalizeError!ScheduledRootOrder {
+        const nodes = try allocator.alloc(lir.CtfeSchedule.Node, const_roots.len);
+        defer allocator.free(nodes);
+        for (const_roots, root_ids, nodes) |plan, root_id, *node| {
+            const declaration = module.compile_time_roots.root(root_id);
+            node.* = .{
+                .key = lir.CtfeSchedule.Key.init(module.key.bytes, .{ .checked = root_id }),
+                .guarded = declaration.guarded,
+                .region = devRootSourceRegion(module, declaration),
+                .loc = plan.demand.origin_loc,
+                .demand = plan.demand,
+            };
+        }
+        // A read of a root outside the batch (a literal root, or a root the
+        // checker's request order placed in another batch) is beyond this
+        // schedule, which orders only the roots the batch evaluates.
+        var terminal = std.ArrayList(lir.CtfeSchedule.Key).empty;
+        defer terminal.deinit(allocator);
+        for (const_roots) |plan| {
+            for (plan.demand.reads) |read| {
+                const key = lir.CtfeSchedule.Key.init(read.module.bytes, read.producer);
+                var in_batch = false;
+                for (nodes) |node| if (std.meta.eql(node.key, key)) {
+                    in_batch = true;
+                };
+                if (!in_batch) try terminal.append(allocator, key);
+            }
+        }
+        var schedule = lir.CtfeSchedule.Schedule.build(allocator, nodes, terminal.items) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.MissingDemandProof => finalizationInvariant("compile-time root batch received incomplete producer demand"),
+            error.MissingRootProducer => finalizationInvariant("compile-time root batch read has no declared producer or completed value"),
+            error.DuplicateRootProducer => finalizationInvariant("compile-time root batch received duplicate qualified producers"),
+        };
+        defer schedule.deinit();
+        var order: ScheduledRootOrder = .{ .allocator = allocator };
+        errdefer order.deinit();
+        try schedule.run(&order, FinalizeError);
+        return order;
+    }
+
+    /// Record the failure of a root on a dependency cycle: its payload, its
+    /// problem when it is not guarded, and its published failure.
+    fn failRoot(
+        problem_store: ?*check.problem.Store,
+        module: *checked.CheckedModuleArtifact,
+        writer: *ConstStoreWriter.Writer,
+        state: *RootCompletionState,
+        store: *const lir.LirStore,
+        root: LirProgram.ConstRootPlan,
+        root_id: checked.ComptimeRootId,
+        origin: lir.LIR.ComptimeFailureOrigin,
+        had_problem: *bool,
+    ) FinalizeError!void {
+        const declaration = module.compile_time_roots.root(root_id);
+        const payload = try crashedRootPayload(problem_store, module, declaration, cycle_message, .crash);
+        try rememberGuardedRootFailure(module, root_id, payload, cycle_message, .crash, origin, store);
+        if (!declaration.guarded) if (problem_store) |problems| {
+            _ = try problems.appendProblem(.{ .comptime_crash = .{
+                .message = try problems.putExtraString(cycle_message),
+                .region = devRootSourceRegion(module, declaration),
+                .origin = null,
+            } });
+            had_problem.* = true;
+        };
+        try completeRoot(module, writer, state, root, root_id, declaration, payload);
     }
 };
 
@@ -3096,7 +3978,6 @@ const InterpreterProgram = struct {
     allocator: Allocator,
     slots: StaticSlotEnvironment,
     shared_slots: ?*StaticSlotEnvironment = null,
-    slot_demand: ?SlotDemand = null,
     demand_error: ?FinalizeError = null,
     host: CompilerHost,
     /// Literal backings owned by the root program and borrowed by its forks,
@@ -3119,7 +4000,6 @@ const InterpreterProgram = struct {
         self.timing_io = null;
         self.suspended_ns = 0;
         self.shared_slots = null;
-        self.slot_demand = null;
         self.demand_error = null;
         self.callable_owner = .unbound;
         self.shared_callable_owner = null;
@@ -3162,7 +4042,6 @@ const InterpreterProgram = struct {
             .slots = undefined,
             .shared_slots = self.slotEnvironment(),
             .shared_callable_owner = self.shared_callable_owner orelse self,
-            .slot_demand = self.slot_demand,
             .host = CompilerHost.init(allocator),
             .static_strings = undefined,
             .interpreter = undefined,
@@ -3173,30 +4052,9 @@ const InterpreterProgram = struct {
         child.host.bindInterpreter(&child.interpreter);
         child.interpreter.dict_seed_mode = .comptime_zero;
         child.interpreter.failure_origins = child.slotEnvironment().failure_origins;
-        child.interpreter.static_data_demand = .{ .context = child, .ensure = ensureStaticData };
+        child.interpreter.static_data_ready = self.interpreter.static_data_ready;
         child.refreshCallableMetadata();
         return child;
-    }
-
-    fn ensureStaticData(raw: *anyopaque, slot: lir.LIR.StaticDataId) Interpreter.Error!void {
-        const self: *InterpreterProgram = @ptrCast(@alignCast(raw));
-        if (self.slot_demand) |demand| {
-            const started = if (self.timing_io) |io| nowNs(io) else 0;
-            const result = demand.ensure(demand.context, slot);
-            if (self.timing_io) |io| self.suspended_ns += @intCast(@max(0, nowNs(io) - started));
-            result catch |err| switch (err) {
-                error.CompileTimeDependencyCycle => return self.interpreter.failStaticDataDemand("cyclic compile-time value dependency"),
-                else => |operational| {
-                    // Preserve the actual operational cause outside the
-                    // interpreter's language-error channel while unwinding.
-                    self.demand_error = operational;
-                    return error.RuntimeError;
-                },
-            };
-            // Nested evaluation can install frozen callable images. Write their
-            // callable headers before the suspended consumer reads the slot.
-            self.refreshCallableMetadata();
-        }
     }
 
     const resolveFunction = interpreter_static_data.resolveFunction;
@@ -3307,6 +4165,79 @@ const PublicationSlots = struct {
     }
 };
 
+test "completed-success imported failure storage freezes a canonical empty string" {
+    const allocator = std.testing.allocator;
+    var lowered = lir.CheckedPipeline.LoweredProgram{
+        .lir_result = try LirProgram.Result.init(allocator, base.target.TargetUsize.native),
+        .main_proc = null,
+        .target_usize = base.target.TargetUsize.native,
+        .runtime_value_schemas = lir.CheckedPipeline.RuntimeValueSchemaStore.init(allocator),
+    };
+    defer lowered.deinit();
+    const module = checked.ModuleId{ .bytes = @as([32]u8, @splat(59)) };
+    try lowered.lir_result.lowering_modules.append(allocator, module);
+    const fields = try lowered.lir_result.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = .u8 },
+        .{ .index = 1, .layout = .str },
+    });
+    const structure = lowered.lir_result.layouts.getLayout(fields).getStruct().idx;
+    const message_offset = lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(structure, 1);
+    const slot: lir.LIR.StaticDataId = @fromBackingInt(@intCast(lowered.lir_result.static_data_values.items.len));
+    try lowered.lir_result.static_data_values.append(allocator, .{
+        .initializer = null,
+        .layout_idx = fields,
+        .compile_time_root = .{
+            .module = module,
+            .root = .{ .checked = @fromBackingInt(@intCast(4)) },
+            .const_locator = null,
+            .completion = .value,
+            .role = .{ .failure_message = .{
+                .failed_field = 0,
+                .message_field = 1,
+                .failed_offset = lowered.lir_result.layouts.getStructFieldOffsetByOriginalIndex(structure, 0),
+                .message_offset = message_offset,
+            } },
+        },
+    });
+    const size_align = lowered.lir_result.layouts.layoutSizeAlign(lowered.lir_result.layouts.getLayout(fields));
+    const initial = try allocator.alloc(static_data_exports.StaticDataExport, 1);
+    initial[0] = .{
+        .symbol_name = try LirProgram.staticDataSymbolName(allocator, slot),
+        .value_id = slot,
+        .bytes = try allocator.alloc(u8, size_align.size),
+        .alignment = @intCast(size_align.alignment.toByteUnits()),
+        .is_exported = false,
+        .root_slot = true,
+    };
+    @memset(@constCast(initial[0].bytes), 0);
+    const image = try backend.StaticDataImage.init(allocator, initial);
+    const addresses = try image.lirValueAddresses(allocator, 1);
+    const origins = try allocator.alloc(?lir.LIR.ComptimeFailureOrigin, 1);
+    @memset(origins, null);
+    var slots = StaticSlotEnvironment{
+        .allocator = allocator,
+        .materialized = initial,
+        .image = image,
+        .addresses = addresses,
+        .publication = try PublicationSlots.init(allocator, &lowered.lir_result),
+        .export_positions = try StaticSlotEnvironment.exportPositions(allocator, initial, 1),
+        .failure_origins = &.{},
+        .slot_failure_origins = origins,
+    };
+    defer slots.deinit();
+    try slots.restoreCompletedSuccesses(&lowered);
+    var frozen = try slots.freezeCompleted();
+    defer frozen.deinit();
+    const message = frozen.exports[0].bytes[message_offset..][0..@sizeOf(builtins.str.RocStr)];
+    try std.testing.expect(message[message.len - 1] & builtins.str.RocStr.small_str_flag != 0);
+    const slot_symbol = for (frozen.exports, 0..) |item, index| {
+        if (item.value_id) |value_id| if (value_id == slot) break index;
+    } else return error.TestUnexpectedResult;
+    const transcoded = try FrozenRootTranscode.transcodeFailure(allocator, &lowered.lir_result, lowered.lir_result.static_data_values.items[@backingInt(slot)], frozen.exports, @fromBackingInt(@intCast(slot_symbol)), &lowered.lir_result, slot);
+    defer static_data_exports.deinitStaticData(allocator, transcoded);
+    try std.testing.expectEqualSlices(u8, frozen.exports[0].bytes, transcoded[0].bytes);
+}
+
 test "publication slots preserve module identity and every root representation" {
     try testPublicationSlots(std.testing.allocator);
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testPublicationSlots, .{});
@@ -3359,6 +4290,86 @@ fn testPublicationSlots(allocator: Allocator) (Allocator.Error || error{TestExpe
     try std.testing.expectEqual(@as(?slot, null), publication.first(first_module, .{ .checked = @fromBackingInt(@intCast(8)) }));
 }
 
+/// Stable semantic function-pointer headers owned for the entire consumer.
+/// Their addresses outlive every executable image and frozen ordinary closure.
+pub const MaterializationHeaders = struct {
+    allocator: Allocator,
+    cells: []usize,
+    bound_revisions: []?u64,
+    procs: []lir.LIR.LirProcSpecId,
+    declarations: []LirProgram.RootMaterialization,
+    by_identity: std.AutoHashMapUnmanaged(lir.ProcIdentity, u32) = .empty,
+
+    pub fn init(allocator: Allocator, store: *const lir.LirStore) Allocator.Error!MaterializationHeaders {
+        var count: usize = 0;
+        for (store.getProcSpecs()) |proc| count += @intFromBool(proc.root_materialization != null);
+        const cells = try allocator.alloc(usize, count);
+        errdefer allocator.free(cells);
+        @memset(cells, 0);
+        const bound_revisions = try allocator.alloc(?u64, count);
+        errdefer allocator.free(bound_revisions);
+        @memset(bound_revisions, null);
+        const procs = try allocator.alloc(lir.LIR.LirProcSpecId, count);
+        errdefer allocator.free(procs);
+        const declarations = try allocator.alloc(LirProgram.RootMaterialization, count);
+        errdefer allocator.free(declarations);
+        var headers = MaterializationHeaders{ .allocator = allocator, .cells = cells, .bound_revisions = bound_revisions, .procs = procs, .declarations = declarations };
+        errdefer headers.by_identity.deinit(allocator);
+        try headers.by_identity.ensureTotalCapacity(allocator, @intCast(count));
+        var next_header: u32 = 0;
+        for (store.getProcSpecs(), 0..) |proc, proc_index| {
+            const declaration = proc.root_materialization orelse continue;
+            if (!sameIdentity(&proc.identity.bytes, &declaration.wrapper_identity) or
+                proc.args.len != 0 or proc.abi != .roc or proc.hosted != null)
+                finalizationInvariant("materialization producer did not declare its owned zero-argument Roc ABI");
+            const entry = headers.by_identity.getOrPutAssumeCapacity(proc.identity);
+            if (entry.found_existing) finalizationInvariant("duplicate semantic root materialization provision");
+            entry.value_ptr.* = next_header;
+            declarations[next_header] = declaration;
+            procs[next_header] = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
+            next_header += 1;
+        }
+        return headers;
+    }
+
+    fn index(self: *const MaterializationHeaders, declaration: LirProgram.RootMaterialization) u32 {
+        const id = self.by_identity.get(.{ .bytes = declaration.wrapper_identity }) orelse
+            finalizationInvariant("ordinary code requires an undeclared materialization header");
+        if (!std.meta.eql(self.declarations[id], declaration))
+            finalizationInvariant("ordinary code requires a different typed materialization provision");
+        return id;
+    }
+
+    /// Bind ordinary code's address cells to this consumer's stable headers.
+    pub fn bind(self: *MaterializationHeaders, codegen: *const backend.HostLirCodeGen, splice: *backend.dev.HostSplice) Allocator.Error!void {
+        for (codegen.bindingDataCells()) |binding| {
+            const declaration = binding.root_materialization orelse continue;
+            const id = self.index(declaration);
+            try splice.bindExternalDataAddress(binding.target_name, @intFromPtr(&self.cells[id]));
+        }
+    }
+
+    /// Publish linked implementations before any ordinary callable executes.
+    pub fn initialize(self: *MaterializationHeaders, codegen: *const backend.HostLirCodeGen, executable: *const backend.ExecutableMemory) void {
+        for (codegen.bindingDataCells()) |binding| {
+            const declaration = binding.root_materialization orelse continue;
+            const id = self.index(declaration);
+            const implementation = codegen.compiledProcSymbol(self.procs[id]) orelse
+                finalizationInvariant("consumer omitted its declared materialization implementation");
+            self.cells[id] = @intFromPtr(executable.codePtr() + implementation.code_start);
+            self.bound_revisions[id] = codegen.store.getProcSpec(self.procs[id]).native_code_revision;
+        }
+    }
+
+    pub fn deinit(self: *MaterializationHeaders) void {
+        self.by_identity.deinit(self.allocator);
+        self.allocator.free(self.declarations);
+        self.allocator.free(self.procs);
+        self.allocator.free(self.cells);
+        self.allocator.free(self.bound_revisions);
+    }
+};
+
 /// Shared immutable-slot publication owner for native and interpreter sessions.
 const StaticSlotEnvironment = struct {
     allocator: Allocator,
@@ -3371,6 +4382,8 @@ const StaticSlotEnvironment = struct {
     publication: PublicationSlots,
     export_positions: []?usize,
     failure_origins: []?lir.LIR.ComptimeFailureOrigin,
+    slot_failure_origins: []?lir.LIR.ComptimeFailureOrigin,
+    materializers: ?MaterializationHeaders = null,
 
     fn init(allocator: Allocator, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram, target: roc_target.RocTarget, image_options: backend.StaticDataImage.Options) FinalizeError!StaticSlotEnvironment {
         const materialized_static_data = static_data_exports.buildStaticData(
@@ -3417,8 +4430,102 @@ const StaticSlotEnvironment = struct {
         const export_positions = try exportPositions(allocator, materialized_static_data, native_static_data.len);
         errdefer allocator.free(export_positions);
         const failure_origins = try allocator.alloc(?lir.LIR.ComptimeFailureOrigin, lowered.lir_result.store.getCFStmts().len);
+        errdefer allocator.free(failure_origins);
         @memset(failure_origins, null);
-        return .{ .allocator = allocator, .materialized = materialized_static_data, .image = static_data_image, .addresses = native_static_data, .image_options = image_options, .publication = publication, .export_positions = export_positions, .failure_origins = failure_origins };
+        const slot_failure_origins = try allocator.alloc(?lir.LIR.ComptimeFailureOrigin, native_static_data.len);
+        errdefer allocator.free(slot_failure_origins);
+        @memset(slot_failure_origins, null);
+        var materializers = try MaterializationHeaders.init(allocator, &lowered.lir_result.store);
+        errdefer materializers.deinit();
+        var environment = StaticSlotEnvironment{ .allocator = allocator, .materialized = materialized_static_data, .image = static_data_image, .addresses = native_static_data, .image_options = image_options, .publication = publication, .export_positions = export_positions, .failure_origins = failure_origins, .slot_failure_origins = slot_failure_origins };
+        environment.materializers = materializers;
+        errdefer {
+            for (environment.completed_roots.items) |*root| root.deinit(allocator);
+            environment.completed_roots.deinit(allocator);
+        }
+        try environment.restoreCompletedSuccesses(lowered);
+        try environment.restoreCompletedFailures(modules, lowered);
+        return environment;
+    }
+
+    fn bindMaterializerHeaders(self: *StaticSlotEnvironment, codegen: *const backend.HostLirCodeGen, splice: *backend.dev.HostSplice) Allocator.Error!void {
+        const headers = &(self.materializers orelse finalizationInvariant("consumer has no materialization header declarations"));
+        try headers.bind(codegen, splice);
+    }
+
+    fn initializeMaterializerTargets(self: *StaticSlotEnvironment, codegen: *const backend.HostLirCodeGen, executable: *const backend.ExecutableMemory) void {
+        const headers = &(self.materializers orelse finalizationInvariant("consumer has no materialization header declarations"));
+        headers.initialize(codegen, executable);
+    }
+
+    fn restoreCompletedSuccesses(self: *StaticSlotEnvironment, lowered: *lir.CheckedPipeline.LoweredProgram) FinalizeError!void {
+        for (lowered.lir_result.static_data_values.items) |entry| {
+            const root = entry.compile_time_root orelse continue;
+            if (root.role != .failure_message or root.completion != .value) continue;
+            // Zero bytes are a placeholder, not RocStr's empty representation.
+            const module_id = lowered.lir_result.loweringModuleId(root.module).?;
+            try self.publishFailure(lowered, module_id, root.root, null, .{ .resolve = InterpreterProgram.resolveFunction });
+        }
+        const frozen = LirProgram.FrozenStaticData{ .allocator = self.allocator, .exports = self.materialized };
+        for (lowered.lir_result.static_data_values.items, 0..) |entry, index| {
+            const root = entry.compile_time_root orelse continue;
+            if (root.role != .value or root.completion != .value) continue;
+            const position = self.export_positions[index] orelse finalizationInvariant("completed materialization omitted its value export");
+            try lir.ComptimeRootAccessors.rebuildExportedSlot(self.allocator, &lowered.lir_result, @fromBackingInt(@intCast(index)), self.materialized[position], &frozen);
+        }
+    }
+
+    fn restoreCompletedFailures(self: *StaticSlotEnvironment, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram) FinalizeError!void {
+        var owners = std.AutoHashMap([32]u8, checked.ImportedModuleView).init(self.allocator);
+        defer owners.deinit();
+        try owners.put(modules.root.module.key.bytes, checked.importedView(modules.root.module));
+        for (modules.imports) |view| try owners.put(view.key.bytes, view);
+        for (modules.root.relation_modules) |view| try owners.put(view.key.bytes, view);
+        var files = std.AutoHashMap([32]u8, u32).init(self.allocator);
+        defer files.deinit();
+        for (0..lowered.lir_result.store.sourceFileCount()) |index| {
+            const file: u32 = @intCast(index);
+            const key = lowered.lir_result.store.sourceFileCheckedModule(file) orelse continue;
+            try files.put(key, file);
+        }
+        // Failure storage is root-owned and unique, even across value layouts.
+        for (lowered.lir_result.static_data_values.items) |entry| {
+            const root = entry.compile_time_root orelse continue;
+            if (root.role != .failure_message or root.completion != .failure) continue;
+            const failure = root.completion.failure;
+            const owner = owners.get(root.module.bytes) orelse finalizationInvariant("completed root has no checked owner");
+            const node = owner.const_store.get(failure.message);
+            const message = switch (node) {
+                .crash => |blob| owner.const_store.blobBytes(blob),
+                .checked_error => |blob| owner.const_store.blobBytes(blob),
+                .pending,
+                .zst,
+                .scalar,
+                .str,
+                .list,
+                .box,
+                .tuple,
+                .record,
+                .tag,
+                .nominal,
+                .fn_value,
+                => finalizationInvariant("completed root failure has no archived message"),
+            };
+            const module_id = lowered.lir_result.loweringModuleId(root.module).?;
+            const origin: lir.LIR.ComptimeFailureOrigin = .{
+                .region = failure.region,
+                .loc = if (failure.location) |loc| .{
+                    .file = files.get(loc.module.bytes) orelse finalizationInvariant("completed failure source has no current file"),
+                    .line = loc.line,
+                    .column = loc.column,
+                } else null,
+            };
+            self.publishFailureOrigin(lowered, module_id, root.root, origin);
+            try self.publishFailure(lowered, module_id, root.root, .{
+                .message = message,
+                .kind = if (node == .checked_error) .checked_error else .crash,
+            }, .{ .resolve = InterpreterProgram.resolveFunction });
+        }
     }
 
     fn exportPositions(allocator: Allocator, exports: []const static_data_exports.StaticDataExport, count: usize) Allocator.Error![]?usize {
@@ -3461,7 +4568,7 @@ const StaticSlotEnvironment = struct {
             }
             const exports = try NativeRootExport.freezeRootIntoSlot(self.allocator, &lowered.lir_result, slot, plan, value, callables, destination_layout);
             try self.installExports(lowered, slot, exports, functions);
-            try lir.ComptimeValueGuards.completeSuccessfulSlot(&lowered.lir_result, slot);
+            try lir.ComptimeRootAccessors.rebuildPublishedSlot(self.allocator, &lowered.lir_result, slot, exports);
         }
     }
 
@@ -3496,6 +4603,7 @@ const StaticSlotEnvironment = struct {
         var next = self.publication.first(module, producer);
         while (next) |slot| {
             next = self.publication.next[@backingInt(slot)];
+            self.slot_failure_origins[@backingInt(slot)] = origin;
             var guard_index = lowered.lir_result.static_data_values.items[@backingInt(slot)].first_comptime_guard;
             while (guard_index) |index| {
                 const guard = lowered.lir_result.comptime_value_guards.items[index];
@@ -3537,13 +4645,13 @@ const StaticSlotEnvironment = struct {
                 }
                 allocator.free(exports);
             };
-            const name = try LirProgram.staticDataSymbolName(allocator, slot);
+            const name = try lowered.lir_result.staticDataSymbolName(allocator, slot);
             const bytes = allocator.alloc(u8, size_align.size) catch |err| {
                 allocator.free(name);
                 return err;
             };
             @memset(bytes, 0);
-            exports[0] = .{ .symbol_name = name, .value_id = slot, .bytes = bytes, .alignment = @intCast(size_align.alignment.toByteUnits()), .is_exported = false };
+            exports[0] = .{ .symbol_name = name, .symbol_identity = entry.symbol_identity, .value_id = slot, .bytes = bytes, .alignment = @intCast(size_align.alignment.toByteUnits()), .is_exported = false, .root_slot = true };
             count = 1;
             bytes[metadata.failed_offset] = @backingInt(if (failure) |failed| failed.kind.recordKind() else lir.Program.ComptimeFailureKind.none);
             if (large) {
@@ -3579,6 +4687,7 @@ const StaticSlotEnvironment = struct {
                 self.allocator.free(item.bytes);
                 for (item.relocations) |relocation| if (relocation.owns_target_symbol_name) self.allocator.free(relocation.target_symbol_name);
                 self.allocator.free(item.relocations);
+                self.allocator.free(item.empty_list_capacities);
             }
             all.deinit(self.allocator);
         }
@@ -3605,6 +4714,7 @@ const StaticSlotEnvironment = struct {
             self.allocator.free(old.bytes);
             for (old.relocations) |relocation| if (relocation.owns_target_symbol_name) self.allocator.free(relocation.target_symbol_name);
             self.allocator.free(old.relocations);
+            self.allocator.free(old.empty_list_capacities);
             all.items[index] = cloned[0];
             all.appendSliceAssumeCapacity(cloned[1..]);
         }
@@ -3612,9 +4722,11 @@ const StaticSlotEnvironment = struct {
     }
 
     fn deinit(self: *StaticSlotEnvironment) void {
+        if (self.materializers) |*headers| headers.deinit();
         for (self.completed_roots.items) |*root| root.deinit(self.allocator);
         self.completed_roots.deinit(self.allocator);
         self.allocator.free(self.failure_origins);
+        self.allocator.free(self.slot_failure_origins);
         self.publication.deinit(self.allocator);
         self.allocator.free(self.export_positions);
         self.allocator.free(self.addresses);
@@ -3625,7 +4737,7 @@ const StaticSlotEnvironment = struct {
 };
 
 const DevProgram = struct {
-    slot_demand: ?SlotDemand = null,
+    static_slot_ready: []const bool = &.{},
     allocator: Allocator,
     static_strings: backend.StaticStringData.Table,
     slots: StaticSlotEnvironment,
@@ -3636,14 +4748,44 @@ const DevProgram = struct {
     executable: backend.ExecutableMemory,
     entry_offsets: collections.DenseMap(lir.LIR.LirProcSpecId, usize),
     artifacts: ?NativeProcCompiler.Retained,
+    failure_registry: ?*NativeFailure.Registry = null,
+    site_observations: *std.ArrayList(NativeFailure.Site),
+    binding_plan: *NativeContext.BindingPlan,
+    context_catalog: ?*NativeContext.Catalog = null,
+    cached_roots: []const backend.dev.LocatedArtifact = &.{},
+    materializer_images: std.ArrayList(backend.ExecutableMemory) = .empty,
+
+    fn sourceEventResolver(self: *const DevProgram) CompileTimeHost.SourceEventResolver {
+        return .{
+            .context = self.binding_plan,
+            .source_file = NativeContext.BindingPlan.resolveEventSourceFile,
+            .site = NativeContext.BindingPlan.resolveEventSite,
+            .failure = NativeContext.BindingPlan.resolveEventFailure,
+        };
+    }
 
     fn init(allocator: Allocator, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram, options: Options) FinalizeError!DevProgram {
         const static_data_started_ns = if (options.timing) |timing| timing.start() else 0;
+        const stats = std.c.getenv("ROC_PACK_STATS") != null;
+        var stage_started = if (stats) statsNowNs() else 0;
         var static_strings = try backend.StaticStringData.build(allocator, &lowered.lir_result.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
         errdefer static_strings.deinit();
+        if (stats) std.debug.print("dev program init: static strings {d} ms\n", .{@divTrunc(statsNowNs() - stage_started, std.time.ns_per_ms)});
+        stage_started = if (stats) statsNowNs() else 0;
 
         var slots = try StaticSlotEnvironment.init(allocator, modules, lowered, backend.dev.LirCodeGenMod.host_lir_codegen_target, .{});
         errdefer slots.deinit();
+        if (stats) std.debug.print("dev program init: slot environment {d} ms\n", .{@divTrunc(statsNowNs() - stage_started, std.time.ns_per_ms)});
+        stage_started = if (stats) statsNowNs() else 0;
+        const failure_registry = try NativeFailure.Registry.create(allocator, &lowered.lir_result);
+        errdefer failure_registry.deinit();
+        const site_observations = try allocator.create(std.ArrayList(NativeFailure.Site));
+        errdefer allocator.destroy(site_observations);
+        site_observations.* = std.ArrayList(NativeFailure.Site).fromOwnedSlice(try NativeFailure.captureSites(allocator, &lowered.lir_result));
+        errdefer site_observations.deinit(allocator);
+        const context_catalog = try NativeContext.Catalog.init(allocator, &lowered.lir_result, failure_registry);
+        errdefer context_catalog.deinit();
+        if (stats) std.debug.print("dev program init: failure registry, sites, catalog {d} ms\n", .{@divTrunc(statsNowNs() - stage_started, std.time.ns_per_ms)});
         if (options.timing) |timing| timing.finish(static_data_started_ns, .static_data);
 
         const code_generation_started_ns = if (options.timing) |timing| timing.start() else 0;
@@ -3657,21 +4799,15 @@ const DevProgram = struct {
             lowered.lir_result.boxy_erased_arg_desc_offsets.items,
             lowered.lir_result.boxy_erased_arg_desc_params.items,
             lowered.lir_result.boxy_worker_procs.items,
-            roc_target.host_cpu.level(),
+            options.native_cpu_level,
         );
         errdefer codegen.deinit();
-        codegen.dict_seed_mode = .comptime_zero;
-        codegen.setNativeStaticData(slots.addresses);
         try codegen.setStaticDataSymbols(slots.materialized);
-        const hooks = backend.dev.LirCodeGenMod.ComptimeHooks{
-            .branch_taken = CompileTimeHost.rocComptimeBranchTaken,
-            .exhaustiveness_failed = CompileTimeHost.rocComptimeExhaustivenessFailed,
-            .failure_region = CompileTimeHost.rocComptimeFailureRegion,
-            .ensure_static_value = CompileTimeHost.rocComptimeEnsureStaticValue,
-            .call_enter = CompileTimeHost.rocComptimeCallEnter,
-            .call_exit = CompileTimeHost.rocComptimeCallExit,
-        };
-        codegen.setComptimeHooks(hooks);
+        codegen.setContextCatalog(context_catalog.view);
+        const binding_plan = try allocator.create(NativeContext.BindingPlan);
+        errdefer allocator.destroy(binding_plan);
+        binding_plan.* = try NativeContext.BindingPlan.init(allocator, &lowered.lir_result, context_catalog, failure_registry, site_observations);
+        errdefer binding_plan.deinit();
         var native_fns = boxyNativeFnTable();
         codegen.boxy_native_fns = &native_fns;
         const const_root_count = lowered.lir_result.const_roots.items.len;
@@ -3683,13 +4819,17 @@ const DevProgram = struct {
         defer allocator.free(evaluation_demand);
         var splice = backend.dev.HostSplice.init(allocator);
         errdefer splice.deinit();
-        splice.setComptimeHooks(hooks);
         splice.bindStaticDataSymbols(slots.materialized, &slots.image) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.MissingStaticDataSymbol => finalizationInvariant("CTFE slot image omitted a declared static data symbol"),
             error.DuplicateStaticDataSymbol => finalizationInvariant("CTFE slot image contains conflicting static data symbols"),
         };
-        if (options.object_cache) |cache| try splice.spliceExternal(&codegen, evaluation_demand, cache.splice_source);
+        if (options.object_cache) |cache| try splice.spliceExternalBound(&codegen, evaluation_demand, cache.splice_source, .{
+            .context = binding_plan,
+            .prepare = NativeContext.BindingPlan.prepare,
+        });
+        const cached_roots = try allocator.dupe(backend.dev.LocatedArtifact, binding_plan.cached_roots);
+        errdefer allocator.free(cached_roots);
         const static_rc_helpers = try static_data_exports.collectRequiredRcHelpers(allocator, slots.materialized);
         defer allocator.free(static_rc_helpers);
         var artifacts = try compileProcedures(allocator, &codegen, evaluation_demand, static_rc_helpers, options);
@@ -3717,6 +4857,7 @@ const DevProgram = struct {
             try entry_offsets.put(root.proc, entrypoint.offset);
         }
         codegen.boxy_native_fns = null;
+        try slots.bindMaterializerHeaders(&codegen, &splice);
         try splice.generateHostedStubs(&codegen, &native_fns);
         try codegen.finishImage();
         var executable = splice.link(&codegen, &native_fns) catch |err| switch (err) {
@@ -3726,6 +4867,7 @@ const DevProgram = struct {
             error.InvalidRelocation => spliceInvariant(&splice, "spliced object-cache code carries a relocation the compile-time evaluator cannot patch"),
         };
         errdefer executable.deinit();
+        slots.initializeMaterializerTargets(&codegen, &executable);
 
         const StaticFunctionResolver = struct {
             codegen: *const backend.HostLirCodeGen,
@@ -3770,6 +4912,11 @@ const DevProgram = struct {
             .executable = executable,
             .entry_offsets = entry_offsets,
             .artifacts = artifacts,
+            .failure_registry = failure_registry,
+            .site_observations = site_observations,
+            .binding_plan = binding_plan,
+            .context_catalog = context_catalog,
+            .cached_roots = cached_roots,
         };
     }
 
@@ -3814,6 +4961,75 @@ const DevProgram = struct {
     }
     fn publishRootWithRuntime(self: *DevProgram, lowered: *lir.CheckedPipeline.LoweredProgram, module: lir.LIR.LoweringModuleId, producer: lir.LIR.ComptimeProducer, shape: LirProgram.RootShape, value: @import("value.zig").Value, runtime: ?*const @import("boxy_runtime.zig").BoxyRuntime) FinalizeError!void {
         try self.slots.publishRoot(lowered, module, producer, shape, value, .{ .context = self, .resolve = resolveCallable, .runtime = runtime }, .{ .context = self, .resolve = resolveFrozenFunction });
+        var next = self.slots.publication.first(module, producer);
+        while (next) |slot| {
+            const index = @backingInt(slot);
+            next = self.slots.publication.next[index];
+            const accessor = lowered.lir_result.static_data_values.items[index].accessor orelse continue;
+            const proc = lowered.lir_result.store.getProcSpec(accessor);
+            const declaration = proc.root_materialization orelse finalizationInvariant("published accessor has no materialization declaration");
+            const headers = &(self.slots.materializers orelse finalizationInvariant("published accessor has no stable materialization header"));
+            const id = headers.index(declaration);
+            // No executable has demanded an unbound provision. A completed
+            // runtime consumer will bind its own current implementation.
+            const bound_revision = headers.bound_revisions[id] orelse continue;
+            if (bound_revision == proc.native_code_revision) continue;
+            try self.replaceMaterializer(lowered, accessor, id);
+        }
+    }
+
+    fn replaceMaterializer(self: *DevProgram, lowered: *lir.CheckedPipeline.LoweredProgram, proc: lir.LIR.LirProcSpecId, header_index: u32) FinalizeError!void {
+        var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(
+            self.allocator,
+            &lowered.lir_result.store,
+            &lowered.lir_result.layouts,
+            self.static_strings.view(),
+            lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+            lowered.lir_result.boxy_erased_arg_desc_params.items,
+            lowered.lir_result.boxy_worker_procs.items,
+            self.codegen.cpu_level,
+        );
+        defer codegen.deinit();
+        codegen.generation_mode = self.codegen.generation_mode;
+        codegen.enable_hot_reload = self.codegen.enable_hot_reload;
+        codegen.enable_default_platform_runtime = self.codegen.enable_default_platform_runtime;
+        codegen.setContextCatalog(self.context_catalog.?.view);
+        codegen.borrowStaticDataSymbolsFrom(&self.codegen);
+        var artifacts = try NativeProcCompiler.run(backend.HostLirCodeGen, self.allocator, &codegen, &.{proc}, .{
+            .target = backend.dev.LirCodeGenMod.host_lir_codegen_target,
+        });
+        defer artifacts.deinit();
+        for (artifacts.procedures.items) |procedure| {
+            for (procedure.fragment.set.artifacts) |artifact| {
+                for (artifact.source_events) |certificate| try self.binding_plan.bindSourceEvent(certificate);
+            }
+        }
+        var splice = backend.dev.HostSplice.init(self.allocator);
+        defer splice.deinit();
+        splice.bindStaticDataSymbols(self.slots.materialized, &self.slots.image) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => finalizationInvariant("replacement materializer has invalid static header bindings"),
+        };
+        const data = try artifacts.dataItems(self.allocator);
+        defer self.allocator.free(data);
+        try splice.addDataItems(data);
+        try self.slots.bindMaterializerHeaders(&codegen, &splice);
+        var functions = boxyNativeFnTable();
+        try splice.generateHostedStubs(&codegen, &functions);
+        try codegen.finishImage();
+        var executable = splice.link(&codegen, &functions) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.MappingFailed => return error.MmapFailed,
+            error.UnresolvedSymbol => spliceInvariant(&splice, "materializer replacement omitted a declared symbol"),
+            error.InvalidRelocation => spliceInvariant(&splice, "materializer replacement carries an invalid relocation"),
+        };
+        errdefer executable.deinit();
+        const implementation = codegen.compiledProcSymbol(proc) orelse finalizationInvariant("replacement materializer omitted its implementation");
+        const address = @intFromPtr(executable.codePtr() + implementation.code_start);
+        try self.materializer_images.append(self.allocator, executable);
+        const headers = &(self.slots.materializers orelse finalizationInvariant("replacement materializer omitted its stable header"));
+        headers.cells[header_index] = address;
+        headers.bound_revisions[header_index] = lowered.lir_result.store.getProcSpec(proc).native_code_revision;
     }
     fn publishFailure(self: *DevProgram, lowered: *const lir.CheckedPipeline.LoweredProgram, module: lir.LIR.LoweringModuleId, producer: lir.LIR.ComptimeProducer, failure: ?SlotFailure) FinalizeError!void {
         try self.slots.publishFailure(lowered, module, producer, failure, .{ .context = self, .resolve = resolveFrozenFunction });
@@ -3823,11 +5039,20 @@ const DevProgram = struct {
     }
 
     fn deinit(self: *DevProgram) void {
+        for (self.materializer_images.items) |*image| image.deinit();
+        self.materializer_images.deinit(self.allocator);
+        self.allocator.free(self.cached_roots);
+        self.binding_plan.deinit();
+        self.allocator.destroy(self.binding_plan);
+        self.site_observations.deinit(self.allocator);
+        self.allocator.destroy(self.site_observations);
         self.entry_offsets.deinit();
         self.executable.deinit();
         self.splice.deinit();
         self.codegen.deinit();
         if (self.artifacts) |*artifacts| artifacts.deinit();
+        if (self.context_catalog) |catalog| catalog.deinit();
+        if (self.failure_registry) |registry| registry.deinit();
         self.slots.deinit();
         self.static_strings.deinit();
         self.* = undefined;
@@ -3910,7 +5135,11 @@ fn evalDevProgramRoots(
                 .label = label,
             };
             jobs[i].host.failure_origins = native.slots.failure_origins;
-            jobs[i].host.slot_demand = native.slot_demand;
+            jobs[i].host.slot_failure_origins = native.slots.slot_failure_origins;
+            jobs[i].host.static_slot_addresses = native.slots.addresses;
+            jobs[i].host.site_observations = native.site_observations.items;
+            jobs[i].host.static_slot_ready = native.static_slot_ready;
+            jobs[i].host.source_event_resolver = native.sourceEventResolver();
             jobs[i].host.timing_io = if (options.timing) |timing| timing.std_io else null;
             jobs_len += 1;
         }
@@ -3931,72 +5160,6 @@ fn evalDevProgramRoots(
     defer if (selected_runtime != null) {
         _ = boxy_abi.swapActiveRuntime(previous_runtime);
     };
-
-    const execution_started_ns = if (options.timing) |timing| timing.start() else 0;
-    var progress = DevProgressReporter.init(options, jobs[0..jobs_len]);
-    defer progress.deinit();
-    try progress.start();
-    var run_context = DevRunContext{
-        .executable = &native.executable,
-        .jobs = jobs[0..jobs_len],
-        .std_io = options.std_io,
-        .progress_reporter = if (progress.thread == null) null else &progress,
-        .boxy_global_installed = boxy_global_installed,
-    };
-    const max_threads = if (boxy_global_installed)
-        1
-    else if (options.max_threads == 0)
-        0
-    else
-        @max(options.max_threads, 1);
-    if (native.slot_demand != null or max_threads == 1) {
-        // Demands nest on this thread; each invocation owns its host and return storage.
-        for (0..jobs_len) |index| devRootWorker(host_allocator, &run_context, index);
-    } else if (options.post_check_executor) |executor| {
-        // The coordinator's persistent lanes run the batch, so no threads are
-        // spawned per batch.
-        const RootTask = struct {
-            context: *DevRunContext,
-            host_allocator: Allocator,
-            index: usize,
-            fn run(ptr: *anyopaque, _: base.post_check_task_executor.Worker) ?*anyopaque {
-                const self: *@This() = @ptrCast(@alignCast(ptr));
-                devRootWorker(self.host_allocator, self.context, self.index);
-                return null;
-            }
-        };
-        const root_tasks = try allocator.alloc(RootTask, jobs_len);
-        defer allocator.free(root_tasks);
-        const tasks = try allocator.alloc(base.post_check_task_executor.Task, jobs_len);
-        defer allocator.free(tasks);
-        const completions = try allocator.alloc(base.post_check_task_executor.Completion, jobs_len);
-        defer allocator.free(completions);
-        for (root_tasks, tasks, 0..) |*root_task, *task, index| {
-            root_task.* = .{ .context = &run_context, .host_allocator = host_allocator, .index = index };
-            task.* = .{ .id = index, .context = root_task, .run = RootTask.run };
-        }
-        try executor.run(tasks, completions);
-    } else {
-        try base.parallel.process(
-            DevRunContext,
-            &run_context,
-            devRootWorker,
-            host_allocator,
-            jobs_len,
-            .{
-                .max_threads = max_threads,
-                .use_per_thread_arenas = false,
-            },
-        );
-    }
-    progress.finish();
-    if (options.timing) |timing| {
-        var suspended_ns: u64 = 0;
-        for (jobs) |job| suspended_ns += job.host.suspended_ns;
-        timing.finishExecution(execution_started_ns, suspended_ns);
-    }
-
-    if (run_context.had_oom.load(.acquire)) return error.OutOfMemory;
 
     const DevResolver = struct {
         codegen: *const backend.HostLirCodeGen,
@@ -4028,7 +5191,6 @@ fn evalDevProgramRoots(
         .executable = &native.executable,
     };
 
-    const store_results_started_ns = if (options.timing) |timing| timing.start() else 0;
     var writer = ConstStoreWriter.Writer.init(allocator, module, &lowered.lir_result);
     defer writer.deinit();
     writer.setErasedCallableResolver(.{
@@ -4036,8 +5198,39 @@ fn evalDevProgramRoots(
         .resolve = DevResolver.resolve,
     });
 
+    var order = try ScheduledRootOrder.build(allocator, module, const_roots, root_ids);
+    defer order.deinit();
     var had_problem = false;
-    for (jobs[0..jobs_len]) |*job| {
+    for (order.cycles.items) |cyclic| {
+        const job = &jobs[cyclic.node];
+        try ScheduledRootOrder.failRoot(problem_store, module, &writer, state, &lowered.lir_result.store, job.root, job.root_id, cyclic.origin, &had_problem);
+        if (options.publish_shared_slots) {
+            native.slots.publishFailureOrigin(lowered, job.root.owner, .{ .checked = job.root_id }, cyclic.origin);
+            try native.publishFailure(lowered, job.root.owner, .{ .checked = job.root_id }, .{ .message = ScheduledRootOrder.cycle_message, .kind = .crash });
+        }
+    }
+
+    var progress = DevProgressReporter.init(options, jobs[0..jobs_len]);
+    defer progress.deinit();
+    try progress.start();
+    var run_context = DevRunContext{
+        .executable = &native.executable,
+        .jobs = jobs[0..jobs_len],
+        .std_io = options.std_io,
+        .progress_reporter = if (progress.thread == null) null else &progress,
+        .boxy_global_installed = boxy_global_installed,
+    };
+    // Root execution is serial even when compilation uses worker lanes, and
+    // each root's value is published before the next root runs, so a root
+    // that reads it observes the published value.
+    for (order.order.items) |index| {
+        const execution_started_ns = if (options.timing) |timing| timing.start() else 0;
+        devRootWorker(host_allocator, &run_context, index);
+        if (options.timing) |timing| timing.finishExecution(execution_started_ns, jobs[index].host.suspended_ns);
+        if (run_context.had_oom.load(.acquire)) return error.OutOfMemory;
+
+        const store_results_started_ns = if (options.timing) |timing| timing.start() else 0;
+        const job = &jobs[index];
         const payload: checked.CompileTimeRootPayload = switch (job.result) {
             .pending => finalizationInvariant("dev backend compile-time root was not evaluated"),
             .host_oom => return error.OutOfMemory,
@@ -4049,6 +5242,7 @@ fn evalDevProgramRoots(
                 module,
                 job.compile_time_root,
                 &lowered.lir_result,
+                .{ .native = native.site_observations.items },
                 job.root.proc,
                 job.host.comptime_failed_site orelse finalizationInvariant("dev backend CTFE exhaustiveness failure had no site"),
                 job.root.request,
@@ -4063,6 +5257,7 @@ fn evalDevProgramRoots(
                 job.host.failed_region,
                 job.host.failed_loc,
                 job.host.failed_stmt,
+                job.host.failed_observation,
                 owners,
                 &lowered.lir_result,
                 &had_problem,
@@ -4077,19 +5272,22 @@ fn evalDevProgramRoots(
             .pending, .host_oom, .host_error => unreachable,
         };
         const failure_origin: lir.LIR.ComptimeFailureOrigin = .{ .loc = job.host.failed_loc, .region = job.host.failed_region };
+        const failure_kind: RootFailure = if (observedCheckedError(&lowered.lir_result, job.host.failed_stmt, job.host.failed_observation)) .checked_error else .crash;
+        if (failure_message) |message| try rememberGuardedRootFailure(module, job.root_id, payload, message, failure_kind, failure_origin, &lowered.lir_result.store);
         if (options.publish_shared_slots and failure_message == null) try native.publishRoot(lowered, job.root.owner, .{ .checked = job.root_id }, job.root.shape(), .{ .ptr = job.ret_buf.ptr });
         if (options.publish_shared_slots and failure_message != null) native.slots.publishFailureOrigin(lowered, job.root.owner, .{ .checked = job.root_id }, failure_origin);
-        if (options.publish_shared_slots) try native.publishFailure(lowered, job.root.owner, .{ .checked = job.root_id }, if (failure_message) |message| .{ .message = message, .kind = RootFailure.ofPayload(module, payload) } else null);
+        if (options.publish_shared_slots) try native.publishFailure(lowered, job.root.owner, .{ .checked = job.root_id }, if (failure_message) |message| .{ .message = message, .kind = failure_kind } else null);
 
-        try recordComptimeSiteHits(problem_store, coverage, owners, job.root.owner, job.compile_time_root, &lowered.lir_result, job.host.comptime_branch_hits.items, job.root.proc);
+        try recordComptimeSiteHits(problem_store, coverage, owners, job.root.owner, job.compile_time_root, &lowered.lir_result, .{ .native = native.site_observations.items }, job.host.comptime_branch_hits.items, job.root.proc);
 
         if (try reportDevHostEvents(allocator, options, problem_store, module, job.compile_time_root, &lowered.lir_result.store, job.host.events.items)) {
             had_problem = true;
         }
 
         try completeRoot(module, &writer, state, job.root, job.root_id, job.compile_time_root, payload);
+        if (options.timing) |timing| timing.finish(store_results_started_ns, .store_results);
     }
-    if (options.timing) |timing| timing.finish(store_results_started_ns, .store_results);
+    progress.finish();
 
     return had_problem;
 }
@@ -4225,6 +5423,7 @@ fn devComptimeExhaustivenessRootPayload(
     module: *checked.CheckedModuleArtifact,
     root: checked.CompileTimeRoot,
     lir_result: *const lir.Program.Result,
+    sites: SiteRegistry,
     root_proc: lir.LIR.LirProcSpecId,
     site_id: lir.LIR.ComptimeSiteId,
     request: checked.RootRequest,
@@ -4237,7 +5436,7 @@ fn devComptimeExhaustivenessRootPayload(
     _ = problem_store orelse {
         finalizationInvariant("compile-time root reached an empirical exhaustiveness failure without a checking problem store");
     };
-    try appendCompileTimeExhaustivenessProblem(owners, root_owner, root, lir_result, root_proc, site_id);
+    try appendCompileTimeExhaustivenessProblem(owners, root_owner, root, lir_result, sites, root_proc, site_id);
     had_problem.* = true;
     return try failedRootPayload(module, root, "compile-time exhaustiveness failure", .crash);
 }
@@ -4251,20 +5450,22 @@ fn devCrashedRootPayload(
     failed_region: ?base.Region,
     failed_loc: ?base.SourceLoc,
     failed_stmt: ?lir.LIR.CFStmtId,
+    observation: ?NativeFailure.Observation,
     owners: *const ModuleOwners,
     lir_result: *const lir.Program.Result,
     had_problem: *bool,
 ) FinalizeError!checked.CompileTimeRootPayload {
     const lir_store = &lir_result.store;
-    switch (try reportEmbeddedFailure(problem_store, module, devRootSourceRegion(module, root), owners, lir_result, failed_stmt, message, failed_region, failed_loc)) {
+    const failure_kind: RootFailure = if (observedCheckedError(lir_result, failed_stmt, observation)) .checked_error else .crash;
+    switch (try reportEmbeddedFailure(problem_store, module, devRootSourceRegion(module, root), owners, lir_result, failed_stmt, observation, message, failed_region, failed_loc)) {
         .reported => {
             had_problem.* = true;
-            return try crashedRootPayload(problem_store, module, root, message, RootFailure.of(lir_result, failed_stmt));
+            return try crashedRootPayload(problem_store, module, root, message, failure_kind);
         },
-        .reported_elsewhere => return try crashedRootPayload(problem_store, module, root, message, RootFailure.of(lir_result, failed_stmt)),
+        .reported_elsewhere => return try crashedRootPayload(problem_store, module, root, message, failure_kind),
         .none => {},
     }
-    if (root.guarded) return try crashedRootPayload(problem_store, module, root, message, RootFailure.of(lir_result, failed_stmt));
+    if (root.guarded) return try crashedRootPayload(problem_store, module, root, message, failure_kind);
     if (request.kind == .compile_time_constant and problem_store == null) {
         return try unreportedFailedRootPayload(module, root, message, .crash);
     }
@@ -4285,7 +5486,7 @@ fn devCrashedRootPayload(
         .origin = try comptimeFailureOrigin(store, site),
     } });
     had_problem.* = true;
-    return try crashedRootPayload(problem_store, module, root, message, RootFailure.of(lir_result, failed_stmt));
+    return try crashedRootPayload(problem_store, module, root, message, failure_kind);
 }
 
 fn reportDevHostEvents(
@@ -4438,6 +5639,29 @@ fn appendCrashConst(
     } });
 }
 
+/// Guarded runtime policy must not discard CTFE failure storage or provenance.
+fn rememberGuardedRootFailure(
+    module: *checked.CheckedModuleArtifact,
+    id: checked.ComptimeRootId,
+    payload: checked.CompileTimeRootPayload,
+    message: []const u8,
+    failure: RootFailure,
+    origin: lir.LIR.ComptimeFailureOrigin,
+    store: *const lir.LirStore,
+) Allocator.Error!void {
+    if (payload != .runtime) return;
+    const node = try appendFailureConst(module, message, failure);
+    module.compile_time_roots.roots[@backingInt(id)].failure = .{
+        .message = node,
+        .region = origin.region,
+        .location = if (origin.loc) |loc| .{
+            .module = .{ .bytes = store.sourceFileCheckedModule(loc.file) orelse finalizationInvariant("guarded failure source has no checked module") },
+            .line = loc.line,
+            .column = loc.column,
+        } else null,
+    };
+}
+
 fn appendCheckedErrorConst(
     module: *checked.CheckedModuleArtifact,
     message: []const u8,
@@ -4538,6 +5762,7 @@ fn recordComptimeSiteHits(
     root_owner: lir.LIR.LoweringModuleId,
     compile_time_root: checked.CompileTimeRoot,
     lir_result: *const lir.Program.Result,
+    sites: SiteRegistry,
     hits: anytype,
     root_proc: lir.LIR.LirProcSpecId,
 ) Allocator.Error!void {
@@ -4546,7 +5771,7 @@ fn recordComptimeSiteHits(
     // diagnostic-collecting evaluation already accounted for.
     _ = maybe_problem_store orelse return;
     for (hits) |hit| {
-        const site = lir_result.comptime_sites.items[@backingInt(hit.site)];
+        const site = sites.get(hit.site);
         if (owners.report_sites and comptimeSiteEmpiricalKind(site.kind) != null) {
             if (site.checked_site) |checked_site| {
                 var alias = owners.position(site.owner);
@@ -4561,7 +5786,9 @@ fn recordComptimeSiteHits(
                 }
             }
         }
-        if (site.owner == root_owner and reportsUnusedBranches(compile_time_root.kind) and site.proc == root_proc) {
+        if (site.owner == root_owner and reportsUnusedBranches(compile_time_root.kind) and
+            sameIdentity(&site.procedure_identity.bytes, &lir_result.store.getProcSpec(root_proc).identity.bytes))
+        {
             try coverage.record(site, hit.branch_index);
         }
     }
@@ -4598,7 +5825,7 @@ fn reportCompileTimeExhaustiveness(
     const site_id = interpreter.getComptimeFailedSite() orelse {
         finalizationInvariant("compile-time root reported empirical exhaustiveness failure without a site");
     };
-    try appendCompileTimeExhaustivenessProblem(owners, root_owner, root, lir_result, root_proc, site_id);
+    try appendCompileTimeExhaustivenessProblem(owners, root_owner, root, lir_result, .{ .lir_program = lir_result }, root_proc, site_id);
     return try failedRootPayload(module, root, "compile-time exhaustiveness failure", .crash);
 }
 
@@ -4607,11 +5834,12 @@ fn appendCompileTimeExhaustivenessProblem(
     root_owner: lir.LIR.LoweringModuleId,
     root: checked.CompileTimeRoot,
     lir_result: *const lir.Program.Result,
+    sites: SiteRegistry,
     root_proc: lir.LIR.LirProcSpecId,
     site_id: lir.LIR.ComptimeSiteId,
 ) Allocator.Error!void {
     if (!owners.report_sites) return;
-    const site = lir_result.comptime_sites.items[@backingInt(site_id)];
+    const site = sites.get(site_id);
     _ = comptimeSiteEmpiricalKind(site.kind) orelse switch (site.kind) {
         .if_ => finalizationInvariant("if expression reached empirical exhaustiveness failure"),
         .match, .destructure => finalizationInvariant("compile-time root had no empirical exhaustiveness kind"),
@@ -4621,7 +5849,7 @@ fn appendCompileTimeExhaustivenessProblem(
     };
     var alias: ?u32 = owners.position(site.owner) orelse
         finalizationInvariant("empirical exhaustiveness failure named a checked module this finalization does not complete");
-    discardUnreachedRootComptimeSites(owners, lir_result, root_proc, site.owner, checked_site, site_id);
+    discardUnreachedRootComptimeSites(owners, lir_result, sites, root_proc, site.owner, checked_site, site_id);
     while (alias) |index| : (alias = owners.next_alias[index]) {
         const owner = owners.modules[index];
         const problem_store = owner.problem_store orelse {
@@ -4648,13 +5876,15 @@ fn appendCompileTimeExhaustivenessProblem(
 fn discardUnreachedRootComptimeSites(
     owners: *const ModuleOwners,
     lir_result: *const lir.Program.Result,
+    sites: SiteRegistry,
     root_proc: lir.LIR.LirProcSpecId,
     failed_owner: lir.LIR.LoweringModuleId,
     failed_checked_site: checked.CheckedExhaustivenessSiteId,
     failed_site_id: lir.LIR.ComptimeSiteId,
 ) void {
-    for (lir_result.comptime_sites.items, 0..) |root_site, raw_site_id| {
-        if (root_site.proc != root_proc) continue;
+    for (0..sites.count()) |raw_site_id| {
+        const root_site = sites.get(@fromBackingInt(@intCast(raw_site_id)));
+        if (!sameIdentity(&root_site.procedure_identity.bytes, &lir_result.store.getProcSpec(root_proc).identity.bytes)) continue;
         if (raw_site_id == @backingInt(failed_site_id)) continue;
         if (comptimeSiteEmpiricalKind(root_site.kind) == null) continue;
         const checked_site = root_site.checked_site orelse continue;
@@ -4739,6 +5969,7 @@ fn reportCompileTimeCrash(
         owners,
         lir_result,
         interpreter.getFailedCrashStmt(),
+        null,
         message,
         interpreter.getFailedCheckedRegion(),
         interpreter.getFailedSourceLoc(),
@@ -4817,17 +6048,6 @@ const RootFailure = enum {
 
     fn of(lir_result: *const lir.Program.Result, failed_stmt: ?lir.LIR.CFStmtId) RootFailure {
         return if (failedAtCheckedError(lir_result, failed_stmt)) .checked_error else .crash;
-    }
-
-    /// The failure a failed root's stored payload records.
-    fn ofPayload(module: *const checked.CheckedModuleArtifact, payload: checked.CompileTimeRootPayload) RootFailure {
-        return switch (payload) {
-            .const_node => |node| switch (module.const_store.get(node)) {
-                .checked_error => .checked_error,
-                .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .tag, .nominal, .fn_value => .crash,
-            },
-            .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => .crash,
-        };
     }
 
     fn recordKind(self: RootFailure) lir.Program.ComptimeFailureKind {
@@ -4916,6 +6136,7 @@ fn comptimeFailureSiteFromLoc(
             .name = lir_store.sourceFileName(loc.file),
             .qualified_name = lir_store.sourceFileQualifiedName(loc.file),
             .module_identity = lir_store.sourceFileModuleIdentity(loc.file),
+            .checked_module_key = lir_store.sourceFileCheckedModule(loc.file),
         } else null)
     else
         null;
@@ -5276,15 +6497,6 @@ test "CTFE native emission uses worker callbacks and retains reusable code witho
         defer strings.deinit();
         var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(allocator, &program.store, &program.layouts, strings.view(), &.{}, &.{}, &.{}, roc_target.host_cpu.level());
         defer codegen.deinit();
-        codegen.dict_seed_mode = .comptime_zero;
-        codegen.setComptimeHooks(.{
-            .branch_taken = CompileTimeHost.rocComptimeBranchTaken,
-            .exhaustiveness_failed = CompileTimeHost.rocComptimeExhaustivenessFailed,
-            .failure_region = CompileTimeHost.rocComptimeFailureRegion,
-            .ensure_static_value = CompileTimeHost.rocComptimeEnsureStaticValue,
-            .call_enter = CompileTimeHost.rocComptimeCallEnter,
-            .call_exit = CompileTimeHost.rocComptimeCallExit,
-        });
         var artifacts = try DevProgram.compileProcedures(allocator, &codegen, &.{proc}, &.{}, .{ .post_check_executor = executor.executor(), .timing = &timing });
         errdefer artifacts.deinit();
         try std.testing.expect(executor.callbacks > 0);
@@ -5392,15 +6604,15 @@ test "shared interpreter slots publish dependent strings and distinguish empty f
     }
 }
 
-test "shared interpreter slots suspend consumers while a producer evaluates once" {
+test "shared interpreter slots read serially published producers without reevaluation" {
     for ([_]?[]const u8{ null, "", "nested producer failure" }) |failure| try testInterpreterSlot(failure, true, false);
 }
 
-test "shared interpreter slots report an active demand cycle as a normal crash" {
+test "shared interpreter slots read prepublished cycle failure as a normal crash" {
     try testInterpreterSlot("cyclic compile-time value dependency", true, true);
 }
 
-fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) (FinalizeError || Interpreter.Error || error{ TestExpectedEqual, TestUnexpectedResult, TestExpectedError, TestUnexpectedError, DuplicateStaticDataSymbol, InvalidStaticDataAlignment, InvalidStaticDataRelocation, MissingStaticDataSymbol, UnresolvedStaticFunction })!void {
+fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) (FinalizeError || Interpreter.Error || error{ TestExpectedEqual, TestUnexpectedResult, TestExpectedError, TestUnexpectedError, DuplicateStaticDataSymbol, InvalidStaticDataAlignment, InvalidStaticDataRelocation, MissingStaticDataSymbol, UnresolvedStaticFunction, InvalidRelocation, MappingFailed })!void {
     const allocator = std.testing.allocator;
     var lowered = lir.CheckedPipeline.LoweredProgram{
         .lir_result = try LirProgram.Result.init(allocator, .native),
@@ -5479,6 +6691,8 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     const consumer_body = try result.store.addCFStmt(.{ .assign_literal = .{ .target = input_int, .value = .{ .i64_literal = .{ .value = 12000, .layout_idx = .u64 } }, .next = int_addend_stmt } }, .test_fixture);
     const consumer_proc = try result.store.addProcSpec(.{ .name = .fromRaw(1), .identity = lir.LIR.ProcIdentity.forTest(2), .args = .empty(), .frame_locals = try result.store.addLocalSpan(&.{ consumer_local, live_int, live_float, expected_int, expected_float, equal_int, equal_float, input_int, addend_int, input_float, addend_float }), .body = consumer_body, .ret_layout = .str }, .none);
     try lir.ComptimeValueGuards.insert(allocator, result, null);
+    const ordinary_proc = result.store.getProcSpec(consumer_proc);
+    const ordinary_read = result.store.getCFStmt(consumer_load);
 
     const failure_size = result.layouts.layoutSize(result.layouts.getLayout(failure_layout));
     const zeros = try allocator.alloc(u8, failure_size);
@@ -5489,20 +6703,21 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
     const value_name = try LirProgram.staticDataSymbolName(allocator, value_slot);
     defer allocator.free(value_name);
     const materialized = try static_data_exports.cloneStaticData(allocator, &.{
-        .{ .symbol_name = failure_name, .value_id = failure_slot, .bytes = zeros, .alignment = @alignOf(usize) },
-        .{ .symbol_name = value_name, .value_id = value_slot, .bytes = zeros[0..@sizeOf(builtins.str.RocStr)], .alignment = @alignOf(usize) },
+        .{ .symbol_name = failure_name, .value_id = failure_slot, .bytes = zeros, .alignment = @alignOf(usize), .root_slot = true },
+        .{ .symbol_name = value_name, .value_id = value_slot, .bytes = zeros[0..@sizeOf(builtins.str.RocStr)], .alignment = @alignOf(usize), .root_slot = true },
     });
     var image = try backend.StaticDataImage.init(allocator, materialized);
     const addresses = try image.lirValueAddresses(allocator, 2);
     const owner = try allocator.create(InterpreterProgram);
     owner.allocator = allocator;
     owner.shared_slots = null;
-    owner.slot_demand = null;
     owner.timing_io = null;
     owner.suspended_ns = 0;
     const failure_origins = try allocator.alloc(?lir.LIR.ComptimeFailureOrigin, result.store.getCFStmts().len);
     @memset(failure_origins, null);
-    owner.slots = .{ .allocator = allocator, .materialized = materialized, .image = image, .addresses = addresses, .publication = try PublicationSlots.init(allocator, result), .export_positions = try StaticSlotEnvironment.exportPositions(allocator, materialized, addresses.len), .failure_origins = failure_origins };
+    const slot_failure_origins = try allocator.alloc(?lir.LIR.ComptimeFailureOrigin, addresses.len);
+    @memset(slot_failure_origins, null);
+    owner.slots = .{ .allocator = allocator, .materialized = materialized, .image = image, .addresses = addresses, .publication = try PublicationSlots.init(allocator, result), .export_positions = try StaticSlotEnvironment.exportPositions(allocator, materialized, addresses.len), .failure_origins = failure_origins, .slot_failure_origins = slot_failure_origins };
     owner.host = CompilerHost.init(allocator);
     owner.shared_callable_owner = null;
     owner.callable_images = 0;
@@ -5522,14 +6737,11 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
             root_id: checked.ComptimeRootId,
             value_plan: LirProgram.ConstPlanId,
             failure: ?[]const u8,
-            cycle: bool,
             evaluations: usize = 0,
 
-            fn ensure(raw: *anyopaque, _: lir.LIR.StaticDataId) (FinalizeError || error{CompileTimeDependencyCycle})!void {
-                const self: *@This() = @ptrCast(@alignCast(raw));
+            fn publish(self: *@This()) FinalizeError!void {
                 if (self.evaluations != 0) return;
                 self.evaluations += 1;
-                if (self.cycle) return error.CompileTimeDependencyCycle;
                 const child = try self.owner.fork(self.lowered);
                 defer child.deinit();
                 if (self.failure) |message| {
@@ -5551,8 +6763,8 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
                 }
             }
         };
-        var demand = Demand{ .owner = owner, .lowered = &lowered, .proc = source_proc, .module_id = module_id, .root_id = root_id, .value_plan = value_plan, .failure = failure_message, .cycle = cycle };
-        owner.slot_demand = .{ .context = &demand, .ensure = Demand.ensure };
+        var demand = Demand{ .owner = owner, .lowered = &lowered, .proc = source_proc, .module_id = module_id, .root_id = root_id, .value_plan = value_plan, .failure = failure_message };
+        try demand.publish();
         const consumer = try owner.fork(&lowered);
         defer consumer.deinit();
         for (0..@as(usize, if (cycle) 1 else 2)) |_| {
@@ -5571,8 +6783,10 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
             }
         }
         try std.testing.expectEqual(@as(usize, 1), demand.evaluations);
+        try std.testing.expectEqualDeep(ordinary_proc, result.store.getProcSpec(consumer_proc));
+        try std.testing.expectEqualDeep(ordinary_read, result.store.getCFStmt(consumer_load));
         if (failure_message == null and comptime backend.host_lir_codegen_available)
-            try testNativeSlotDemand(&lowered, &owner.slots, source_proc, consumer_proc, text, module_id, root_id, value_plan);
+            try testNativeCompletedSlots(&lowered, &owner.slots, source_proc, consumer_proc, text, module_id, root_id, value_plan);
         return;
     }
     if (failure_message) |message| {
@@ -5597,30 +6811,44 @@ fn testInterpreterSlot(failure_message: ?[]const u8, nested: bool, cycle: bool) 
         const bytes: [*]const u8 = @ptrFromInt(addresses[0]);
         try std.testing.expectEqual(@as(u8, 0), bytes[failed_offset]);
     }
+    try std.testing.expectEqualDeep(ordinary_proc, result.store.getProcSpec(consumer_proc));
+    try std.testing.expectEqualDeep(ordinary_read, result.store.getCFStmt(consumer_load));
 }
 
-fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *StaticSlotEnvironment, producer: lir.LIR.LirProcSpecId, consumer: lir.LIR.LirProcSpecId, text: []const u8, module_id: lir.LIR.LoweringModuleId, root_id: checked.ComptimeRootId, value_plan: LirProgram.ConstPlanId) (FinalizeError || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+fn testNativeCompletedSlots(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *StaticSlotEnvironment, producer: lir.LIR.LirProcSpecId, consumer: lir.LIR.LirProcSpecId, text: []const u8, module_id: lir.LIR.LoweringModuleId, root_id: checked.ComptimeRootId, value_plan: LirProgram.ConstPlanId) (FinalizeError || error{ TestExpectedEqual, TestUnexpectedResult, DuplicateStaticDataSymbol, MissingStaticDataSymbol, InvalidRelocation, MappingFailed })!void {
     if (comptime !backend.host_lir_codegen_available) return;
     const allocator = std.testing.allocator;
     var strings = try backend.StaticStringData.build(allocator, &lowered.lir_result.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
     defer strings.deinit();
     var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, strings.view(), &.{}, &.{}, &.{}, roc_target.host_cpu.level());
     defer codegen.deinit();
-    codegen.setNativeStaticData(slots.addresses);
-    codegen.setComptimeHooks(.{
-        .branch_taken = CompileTimeHost.rocComptimeBranchTaken,
-        .exhaustiveness_failed = CompileTimeHost.rocComptimeExhaustivenessFailed,
-        .failure_region = CompileTimeHost.rocComptimeFailureRegion,
-        .ensure_static_value = CompileTimeHost.rocComptimeEnsureStaticValue,
-        .call_enter = CompileTimeHost.rocComptimeCallEnter,
-        .call_exit = CompileTimeHost.rocComptimeCallExit,
-    });
+    try codegen.setStaticDataSymbols(slots.materialized);
+    const registry = try NativeFailure.Registry.create(allocator, &lowered.lir_result);
+    defer registry.deinit();
+    const catalog = try NativeContext.Catalog.init(allocator, &lowered.lir_result, registry);
+    defer catalog.deinit();
+    codegen.setContextCatalog(catalog.view);
+    var sites = std.ArrayList(NativeFailure.Site).fromOwnedSlice(try NativeFailure.captureSites(allocator, &lowered.lir_result));
+    defer sites.deinit(allocator);
+    var bindings = try NativeContext.BindingPlan.init(allocator, &lowered.lir_result, catalog, registry, &sites);
+    defer bindings.deinit();
     try codegen.compileAllProcSpecs(lowered.lir_result.store.getProcSpecs());
     const source_entry = try codegen.generateEntrypointWrapper("native_slot_source", producer, &.{}, .str);
     const consumer_entry = try codegen.generateEntrypointWrapper("native_slot_consumer", consumer, &.{}, .str);
+    var splice = backend.dev.HostSplice.init(allocator);
+    defer splice.deinit();
+    try splice.bindStaticDataSymbols(slots.materialized, &slots.image);
+    var functions = boxyNativeFnTable();
+    try splice.generateHostedStubs(&codegen, &functions);
     try codegen.finishImage();
-    var executable = try backend.ExecutableMemory.initWithEntryOffset(codegen.getGeneratedCode(), 0);
+    var executable = splice.link(&codegen, &functions) catch |err| switch (err) {
+        error.UnresolvedSymbol => return error.Unexpected,
+        else => |operational| return operational,
+    };
     defer executable.deinit();
+    const ordinary_code = try allocator.dupe(u8, codegen.getGeneratedCode());
+    defer allocator.free(ordinary_code);
+    const ordinary_consumer = lowered.lir_result.store.getProcSpec(consumer);
     const Demand = struct {
         executable: *backend.ExecutableMemory,
         lowered: *lir.CheckedPipeline.LoweredProgram,
@@ -5632,8 +6860,7 @@ fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *St
         value_plan: LirProgram.ConstPlanId,
         evaluations: usize = 0,
 
-        fn ensure(raw: *anyopaque, _: lir.LIR.StaticDataId) SlotDemand.Error!void {
-            const self: *@This() = @ptrCast(@alignCast(raw));
+        fn publish(self: *@This()) FinalizeError!void {
             if (self.evaluations != 0) return;
             self.evaluations += 1;
             var child = CompileTimeHost.init(std.testing.allocator);
@@ -5652,9 +6879,22 @@ fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *St
         }
     };
     var demand = Demand{ .executable = &executable, .lowered = lowered, .slots = slots, .source_offset = source_entry.offset, .producer = producer, .module_id = module_id, .root_id = root_id, .value_plan = value_plan };
+    try demand.publish();
+    try std.testing.expectEqualSlices(u8, ordinary_code, codegen.getGeneratedCode());
+    try std.testing.expectEqualDeep(ordinary_consumer, lowered.lir_result.store.getProcSpec(consumer));
     var host = CompileTimeHost.init(allocator);
     defer host.deinit();
-    host.slot_demand = .{ .context = &demand, .ensure = Demand.ensure };
+    host.static_slot_addresses = slots.addresses;
+    const ready = try allocator.alloc(bool, slots.addresses.len);
+    defer allocator.free(ready);
+    @memset(ready, true);
+    host.static_slot_ready = ready;
+    host.source_event_resolver = .{
+        .context = &bindings,
+        .source_file = NativeContext.BindingPlan.resolveEventSourceFile,
+        .site = NativeContext.BindingPlan.resolveEventSite,
+        .failure = NativeContext.BindingPlan.resolveEventFailure,
+    };
     for (0..2) |_| {
         host.resetForRun();
         var bytes: [@sizeOf(builtins.str.RocStr)]u8 align(16) = @splat(0);
@@ -5952,4 +7192,11 @@ test "LLVM test roots run a float remainder in process" {
             try std.testing.expect(result.outcome.passed);
         }
     }
+}
+
+/// Monotonic nanoseconds for the `ROC_PACK_STATS` stage reports.
+fn statsNowNs() i128 {
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(.MONOTONIC, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
 }

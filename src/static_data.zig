@@ -129,6 +129,45 @@ const SymbolicValue = struct {
     relocations: std.ArrayList(SymbolicRelocation),
 };
 
+test "stored reserved empty-list constructor preserves target capacity and symbolic backing" {
+    const allocator = std.testing.allocator;
+    const TargetUsize = @import("base").target.TargetUsize;
+    for ([_]TargetUsize{ .u32, .u64 }) |width| {
+        for ([_]layout.Idx{ .u8, .str, .zst }) |element| {
+            var lowered = lir.CheckedPipeline.LoweredProgram{
+                .lir_result = try lir.Program.Result.init(allocator, width),
+                .main_proc = null,
+                .target_usize = width,
+                .runtime_value_schemas = lir.CheckedPipeline.RuntimeValueSchemaStore.init(allocator),
+            };
+            defer lowered.deinit();
+            const list_layout = try lowered.lir_result.layouts.insertList(element);
+            const capacity_local = try lowered.lir_result.store.addLocal(.{ .layout_idx = .u64 });
+            const arguments = try lowered.lir_result.store.addLocalSpan(&.{capacity_local});
+            var machine = try StaticInitializerMachine.init(allocator, &lowered, width);
+            defer machine.deinit();
+            const requested = try machine.newValue(.u64);
+            std.mem.writeInt(u64, requested.bytes[0..8], 17, .little);
+            const value = try machine.evalLowLevel(&.{requested}, .list_with_capacity, arguments, list_layout);
+            const word = width.size();
+            const length = if (width == .u32) std.mem.readInt(u32, value.bytes[word..][0..4], .little) else std.mem.readInt(u64, value.bytes[word..][0..8], .little);
+            const capacity = if (width == .u32) std.mem.readInt(u32, value.bytes[2 * word ..][0..4], .little) else std.mem.readInt(u64, value.bytes[2 * word ..][0..8], .little);
+            try std.testing.expectEqual(@as(u64, 0), length);
+            try std.testing.expectEqual(builtins.list.RocList.encodeCapacityForWidth(17), capacity);
+            if (element == .zst) {
+                try std.testing.expectEqual(@as(usize, 0), value.relocations.items.len);
+            } else {
+                try std.testing.expectEqual(@as(usize, 1), value.relocations.items.len);
+                try std.testing.expectEqual(@as(u32, 0), value.relocations.items[0].offset);
+                try std.testing.expectEqual(@as(usize, 1), machine.allocations.items.len);
+                const allocation = machine.allocations.items[0];
+                try std.testing.expectEqual(@as(usize, lowered.lir_result.layouts.layoutSize(lowered.lir_result.layouts.getLayout(element))) * 17, allocation.payload.bytes.len);
+                if (element == .str) try std.testing.expectEqual(@as(?usize, 0), allocation.list_element_count);
+            }
+        }
+    }
+}
+
 const SymbolicAllocation = struct {
     payload: SymbolicValue,
     alignment: u32,
@@ -146,6 +185,12 @@ const StaticInitializerMachine = struct {
     static_active: []bool,
     frozen_roots: []?StaticDataSymbolId,
     string_backings: std.AutoHashMapUnmanaged(@import("base").StringLiteral.Idx, SymbolicAllocationId),
+    /// The locals of the initializer being evaluated, indexed by local id
+    /// over the whole store; `written` lists the ones it assigned, which are
+    /// cleared when it returns, so each initializer starts from an empty frame
+    /// without touching the whole table.
+    locals: []?*SymbolicValue,
+    written: std.ArrayList(lir.LIR.LocalId),
 
     fn init(
         child_allocator: Allocator,
@@ -162,6 +207,8 @@ const StaticInitializerMachine = struct {
         @memset(static_active, false);
         const frozen_roots = try arena_allocator.alloc(?StaticDataSymbolId, static_count);
         @memset(frozen_roots, null);
+        const locals = try arena_allocator.alloc(?*SymbolicValue, lowered.lir_result.store.localCount());
+        @memset(locals, null);
         if (lowered.frozen_static_data) |frozen| {
             for (frozen.exports, 0..) |item, index| {
                 if (item.value_id) |id| {
@@ -181,6 +228,8 @@ const StaticInitializerMachine = struct {
             .static_active = static_active,
             .frozen_roots = frozen_roots,
             .string_backings = .empty,
+            .locals = locals,
+            .written = .empty,
         };
     }
 
@@ -252,11 +301,18 @@ const StaticInitializerMachine = struct {
     }
 
     fn setLocal(
-        locals: []?*SymbolicValue,
+        self: *StaticInitializerMachine,
         id: lir.LIR.LocalId,
         value: *SymbolicValue,
-    ) void {
-        locals[@backingInt(id)] = value;
+    ) Allocator.Error!void {
+        if (self.locals[@backingInt(id)] == null) try self.written.append(self.allocator(), id);
+        self.locals[@backingInt(id)] = value;
+    }
+
+    /// Clear the frame of the initializer that just returned.
+    fn clearLocals(self: *StaticInitializerMachine) void {
+        for (self.written.items) |id| self.locals[@backingInt(id)] = null;
+        self.written.clearRetainingCapacity();
     }
 
     /// A static value, evaluating first every static value its initializer
@@ -300,7 +356,9 @@ const StaticInitializerMachine = struct {
             return root;
         }
         if (self.static_active[raw]) staticDataInvariant("static initializer data dependency graph contained a cycle");
-        if (self.lowered.lir_result.static_data_values.items[raw].compile_time_root != null) {
+        if (self.lowered.lir_result.static_data_values.items[raw].compile_time_root != null and
+            self.lowered.lir_result.static_data_values.items[raw].initializer == null)
+        {
             staticDataInvariant("compile-time value slot requires its completed evaluation payload");
         }
         return null;
@@ -409,8 +467,9 @@ const StaticInitializerMachine = struct {
         if (!proc.args.isEmpty()) staticDataInvariant("static initializer procedure had runtime arguments");
         if (proc.hosted != null) staticDataInvariant("static initializer procedure was hosted");
         const body = proc.body orelse staticDataInvariant("static initializer procedure had no body");
-        const locals = try self.allocator().alloc(?*SymbolicValue, self.store().localCount());
-        @memset(locals, null);
+        if (self.written.items.len != 0) staticDataInvariant("static initializer evaluation started inside another initializer's frame");
+        defer self.clearLocals();
+        const locals = self.locals;
 
         var current = body;
         while (true) {
@@ -418,37 +477,37 @@ const StaticInitializerMachine = struct {
                 .assign_ref => |assign| {
                     const target_layout = self.store().getLocal(assign.target).layout_idx;
                     const value = try self.evalRef(locals, assign.op, target_layout);
-                    setLocal(locals, assign.target, value);
+                    try self.setLocal(assign.target, value);
                     current = assign.next;
                 },
                 .assign_literal => |assign| {
                     const target_layout = self.store().getLocal(assign.target).layout_idx;
-                    setLocal(locals, assign.target, try self.evalLiteral(assign.value, target_layout));
+                    try self.setLocal(assign.target, try self.evalLiteral(assign.value, target_layout));
                     current = assign.next;
                 },
                 .assign_packed_erased_fn => |assign| {
                     const target_layout = self.store().getLocal(assign.target).layout_idx;
-                    setLocal(locals, assign.target, try self.evalPackedErasedFn(locals, assign, target_layout));
+                    try self.setLocal(assign.target, try self.evalPackedErasedFn(locals, assign, target_layout));
                     current = assign.next;
                 },
                 .assign_low_level => |assign| {
                     const target_layout = self.store().getLocal(assign.target).layout_idx;
-                    setLocal(locals, assign.target, try self.evalLowLevel(locals, assign.op, assign.args, target_layout));
+                    try self.setLocal(assign.target, try self.evalLowLevel(locals, assign.op, assign.args, target_layout));
                     current = assign.next;
                 },
                 .assign_list => |assign| {
                     const target_layout = self.store().getLocal(assign.target).layout_idx;
-                    setLocal(locals, assign.target, try self.evalList(locals, assign.elems, target_layout));
+                    try self.setLocal(assign.target, try self.evalList(locals, assign.elems, target_layout));
                     current = assign.next;
                 },
                 .assign_struct => |assign| {
                     const target_layout = self.store().getLocal(assign.target).layout_idx;
-                    setLocal(locals, assign.target, try self.evalStruct(locals, assign.fields, target_layout));
+                    try self.setLocal(assign.target, try self.evalStruct(locals, assign.fields, target_layout));
                     current = assign.next;
                 },
                 .assign_tag => |assign| {
                     const target_layout = self.store().getLocal(assign.target).layout_idx;
-                    setLocal(locals, assign.target, try self.evalTag(
+                    try self.setLocal(assign.target, try self.evalTag(
                         locals,
                         assign.variant_index,
                         assign.discriminant,
@@ -460,7 +519,7 @@ const StaticInitializerMachine = struct {
                 .set_local => |assign| {
                     const source = local(locals, assign.value);
                     const target_layout = self.store().getLocal(assign.target).layout_idx;
-                    setLocal(locals, assign.target, try self.cloneValueAs(source, target_layout));
+                    try self.setLocal(assign.target, try self.cloneValueAs(source, target_layout));
                     current = assign.next;
                 },
                 inline .incref, .decref, .decref_if_initialized, .free => |arc| current = arc.next,
@@ -931,6 +990,32 @@ const StaticInitializerMachine = struct {
         target_layout: layout.Idx,
     ) MaterializationError!*SymbolicValue {
         const args = self.store().getLocalSpan(args_span);
+        if (op == .list_with_capacity) {
+            // ConstStore explicitly preserves reserved capacity on empty
+            // lists. Restoring it is an allocation constructor, not execution
+            // of a computed runtime operation.
+            if (args.len != 1) staticDataInvariant("static initializer list_with_capacity arity differed from one");
+            const requested = local(locals, GuardedList.at(args, 0));
+            if (requested.layout_idx != .u64) staticDataInvariant("stored empty-list capacity was not U64");
+            const capacity = std.mem.readInt(u64, requested.bytes[0..8], .little);
+            const max_word: u64 = if (self.word_size == 4) std.math.maxInt(u32) else std.math.maxInt(u64);
+            if (capacity > max_word >> 1) return error.OutOfMemory;
+            const result = try self.newValue(target_layout);
+            self.writeTargetWord(result.bytes, self.word_size * 2, builtins.list.RocList.encodeCapacityForWidth(capacity));
+            const abi = self.layouts().builtinListAbi(target_layout);
+            if (capacity == 0 or abi.elem_size == 0) return result;
+            const count = std.math.cast(usize, capacity) orelse return error.OutOfMemory;
+            const bytes = std.math.mul(usize, abi.elem_size, count) catch return error.OutOfMemory;
+            const allocation = try self.addAllocation(
+                abi.elem_layout_idx orelse staticDataInvariant("reserved list had no element layout"),
+                bytes,
+                abi.elem_alignment,
+                abi.contains_refcounted,
+                if (abi.contains_refcounted) 0 else null,
+            );
+            try result.relocations.append(self.allocator(), .{ .offset = 0, .target = .{ .allocation = allocation.id } });
+            return result;
+        }
         if (op != .box_box) {
             staticDataInvariant("non-construction low-level operation reached static initializer materialization");
         }
@@ -1509,11 +1594,11 @@ const StaticDataBuilder = struct {
         for (0..self.lowered.lir_result.static_data_values.items.len) |index| {
             if (self.initializer_machine.frozen_roots[index] != null) continue;
             const static_data_id: lir.LIR.StaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-            const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, static_data_id);
+            const symbol_name = try self.lowered.lir_result.staticDataSymbolName(self.allocator, static_data_id);
             errdefer self.allocator.free(symbol_name);
 
             const entry = self.lowered.lir_result.static_data_values.items[index];
-            if (entry.compile_time_root != null and self.prepare_compile_time_slots) {
+            if (entry.compile_time_root != null and self.prepare_compile_time_slots and entry.initializer == null) {
                 const value_layout = entry.layout_idx;
                 const size_align = self.lowered.lir_result.layouts.layoutSizeAlign(self.layoutValue(value_layout));
                 const bytes = try self.allocator.alloc(u8, size_align.size);
@@ -1522,10 +1607,12 @@ const StaticDataBuilder = struct {
                 try self.nodes.append(self.allocator, .{
                     .symbol_name = symbol_name,
                     .value_id = static_data_id,
+                    .symbol_identity = entry.symbol_identity,
                     .bytes = bytes,
                     .alignment = @intCast(size_align.alignment.toByteUnits()),
                     .is_global = true,
                     .is_exported = false,
+                    .root_slot = true,
                 });
                 continue;
             }
@@ -1538,10 +1625,12 @@ const StaticDataBuilder = struct {
             try self.nodes.append(self.allocator, .{
                 .symbol_name = symbol_name,
                 .value_id = static_data_id,
+                .symbol_identity = entry.symbol_identity,
                 .bytes = materialized.bytes,
                 .alignment = materialized.alignment,
                 .is_global = true,
                 .is_exported = false,
+                .root_slot = entry.compile_time_root != null,
                 .relocations = materialized.relocations,
             });
         }

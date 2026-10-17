@@ -2276,6 +2276,61 @@ pub fn build(b: *std.Build) void {
     run_check_source_bidi_step.dependOn(&b.addRunArtifact(source_bidi_tests).step);
     run_check_source_bidi_step.dependOn(&run_source_bidi.step);
 
+    // Source tracing is compiler-owned, not a required platform host service.
+    const source_events_tests = b.addTest(.{
+        .name = "source-events-tests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/source_events.zig"),
+            .target = hostToolTarget(b, .debug),
+            .optimize = .Debug,
+        }),
+    });
+    b.step("test-source-events", "Test the standalone source-event ABI and observer")
+        .dependOn(&b.addRunArtifact(source_events_tests).step);
+    const compile_time_host_static_tests = b.addTest(.{
+        .name = "compile-time-host-static-tests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/eval/compile_time_host.zig"),
+            .target = hostToolTarget(b, .debug),
+            .optimize = .Debug,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "base", .module = roc_modules.base },
+                .{ .name = "builtins", .module = roc_modules.builtins },
+                .{ .name = "lir", .module = roc_modules.lir },
+                .{ .name = "check", .module = roc_modules.check },
+                .{ .name = "sljmp", .module = roc_modules.sljmp },
+            },
+        }),
+        .filters = &.{"ready static storage returns published addresses"},
+    });
+    configureBackend(compile_time_host_static_tests, b.graph.host);
+    b.step("test-compile-time-host-static", "Test native reads of scheduler-published compile-time storage")
+        .dependOn(&b.addRunArtifact(compile_time_host_static_tests).step);
+    const compile_time_host_source_tests = b.addTest(.{
+        .name = "compile-time-host-source-event-tests",
+        .root_module = compile_time_host_static_tests.root_module,
+        .filters = &.{
+            "source event adapter",
+            "cached guard failure uses current slot publication origin and producer",
+            "native expect consumes both live and bound pending failure context",
+        },
+    });
+    configureBackend(compile_time_host_source_tests, b.graph.host);
+    b.step("test-compile-time-host-source-events", "Test semantic source event observation and crash-boundary restoration")
+        .dependOn(&b.addRunArtifact(compile_time_host_source_tests).step);
+    const source_events_object = buildSourceEventRuntimeObject(b, target, "roc_source_events");
+    const install_source_events = b.addInstallFileWithDir(
+        sourceEventRuntimeArtifact(b, source_events_object, target),
+        .lib,
+        b.fmt("roc_source_events{s}", .{target.result.ofmt.fileExt(target.result.cpu.arch)}),
+    );
+    b.step("build-source-events", "Build the compiler-owned source-event runtime object")
+        .dependOn(&install_source_events.step);
+    testSourceEventRuntimeObject(b);
+    testSourceEventRawLinuxLink(b);
+    const source_event_runtime_objects = buildSourceEventRuntimeObjects(b, roc_modules.roc_target);
+
     const minici_exe = b.addExecutable(.{
         .name = "minici",
         .root_module = b.createModule(.{
@@ -2475,6 +2530,7 @@ pub fn build(b: *std.Build) void {
 
     const main_exe_result = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, dependency_source, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, llvm_codegen_module, flag_enable_tracy, test_filters, true, valgrind_support) orelse return;
     const roc_exe = main_exe_result.exe;
+    roc_exe.root_module.addImport("source_event_runtime_objects", source_event_runtime_objects);
     roc_exe.root_module.addImport("compiler_version", compiler_version_module);
     const fixture_roc = executableRuntimePath(b, roc_exe, strip_macho_exports_tool);
     const fixture_options = b.addOptions();
@@ -4286,6 +4342,7 @@ pub fn build(b: *std.Build) void {
         cli_test.root_module.addImport("compiler_version", compiler_version_module);
         cli_test.root_module.addOptions("cli_test_helpers", cli_test_helpers);
         linkWatchPlatformLibs(cli_test, target);
+        cli_test.root_module.addImport("source_event_runtime_objects", source_event_runtime_objects);
 
         test_suites.register(.{
             .step_suffix = "cli-main",
@@ -5244,6 +5301,355 @@ fn buildBoxyRuntimeObject(
 fn wasmObjectArtifact(b: *std.Build, obj: *Step.Compile) std.Build.LazyPath {
     const zcu_name = b.fmt("{s}_zcu.o", .{std.fs.path.stem(obj.out_filename)});
     return obj.getEmittedBinDirectory().path(b, zcu_name);
+}
+
+/// Tracing has one implementation policy, regardless of the compiler's own
+/// optimization mode. No platform archive or compiler-rt carrier owns it.
+fn buildSourceEventRuntimeObject(b: *std.Build, target: ResolvedTarget, name: []const u8) *Step.Compile {
+    const object = b.addObject(.{
+        .name = name,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/source_events.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .pic = true,
+            .link_libc = false,
+            .stack_check = false,
+        }),
+    });
+    object.bundle_compiler_rt = false;
+    configureBackend(object, target);
+    return object;
+}
+
+fn sourceEventRuntimeArtifact(b: *std.Build, object: *Step.Compile, target: ResolvedTarget) std.Build.LazyPath {
+    return if (target.result.cpu.arch == .wasm32)
+        wasmObjectArtifact(b, object)
+    else
+        object.getEmittedBin();
+}
+
+/// Exercise registration across the actual object boundary: a module-local
+/// test alone cannot detect an optimizer removing externally installed tracing.
+fn testSourceEventRuntimeObject(b: *std.Build) void {
+    const files = b.addWriteFiles();
+    const source = files.add("source_events_object_test.zig",
+        \\//! External caller of the standalone ReleaseFast source tracing object.
+        \\const std = @import("std");
+        \\const events = @import("source_events");
+        \\extern fn roc_source_event(*const events.Header) callconv(.c) void;
+        \\extern fn roc_source_event_observer_enter(?*const events.Observer, *events.Saved) callconv(.c) void;
+        \\extern fn roc_source_event_observer_leave(*const events.Saved) callconv(.c) void;
+        \\const Recorder = struct {
+        \\    count: usize = 0,
+        \\    invalid_count: usize = 0,
+        \\    line: u32 = 0,
+        \\    identity: u8 = 0,
+        \\    kind: u32 = 0,
+        \\    invalid_tag: u32 = 0,
+        \\    fn observer(self: *Recorder) events.Observer {
+        \\        return .{ .context = self, .on_event = record, .on_invalid = invalid };
+        \\    }
+        \\    fn record(context: ?*anyopaque, header: *const events.Header) callconv(.c) void {
+        \\        const self: *Recorder = @ptrCast(@alignCast(context.?));
+        \\        const event = events.decodeValidated(header);
+        \\        self.count += 1;
+        \\        self.line = event.descriptor.source.line;
+        \\        self.identity = event.descriptor.source.source_identity[0];
+        \\        self.kind = @backingInt(event.kind);
+        \\    }
+        \\    fn invalid(context: ?*anyopaque, invalid_tag: u32) callconv(.c) void {
+        \\        const self: *Recorder = @ptrCast(@alignCast(context.?));
+        \\        self.invalid_count += 1;
+        \\        self.invalid_tag = invalid_tag;
+        \\    }
+        \\};
+        \\test "source events linked ReleaseFast object preserves registration callbacks and nesting" {
+        \\    var outer: Recorder = .{};
+        \\    var inner: Recorder = .{};
+        \\    const outer_observer = outer.observer();
+        \\    const inner_observer = inner.observer();
+        \\    const descriptor: events.Descriptor = .{
+        \\        .header = .{ .kind = @backingInt(events.Kind.call_enter) },
+        \\        .source = .{ .source_identity = @splat(23), .has_location = 1, .line = 13, .column = 7 },
+        \\    };
+        \\    roc_source_event(&descriptor.header);
+        \\    roc_source_event(@ptrFromInt(@alignOf(events.Header)));
+        \\    var saved: events.Saved = undefined;
+        \\    roc_source_event_observer_enter(&outer_observer, &saved);
+        \\    var restored = false;
+        \\    defer if (!restored) roc_source_event_observer_leave(&saved);
+        \\    try std.testing.expectEqual(@as(u32, 0), saved.active);
+        \\    try std.testing.expect(saved.on_event == null and saved.on_invalid == null);
+        \\    roc_source_event(&descriptor.header);
+        \\    var nested: events.Saved = undefined;
+        \\    roc_source_event_observer_enter(&inner_observer, &nested);
+        \\    try std.testing.expectEqual(@as(u32, 1), nested.active);
+        \\    roc_source_event(&descriptor.header);
+        \\    var disabled: events.Saved = undefined;
+        \\    roc_source_event_observer_enter(null, &disabled);
+        \\    roc_source_event(&descriptor.header);
+        \\    roc_source_event(@ptrFromInt(@alignOf(events.Header)));
+        \\    roc_source_event_observer_leave(&disabled);
+        \\    roc_source_event(&descriptor.header);
+        \\    const malformed: events.Header = .{ .version = 99, .kind = 0, .byte_size = 0 };
+        \\    roc_source_event(&malformed);
+        \\    roc_source_event_observer_leave(&nested);
+        \\    roc_source_event(&descriptor.header);
+        \\    try std.testing.expectEqual(@as(usize, 2), outer.count);
+        \\    try std.testing.expectEqual(@as(usize, 2), inner.count);
+        \\    try std.testing.expectEqual(@as(u32, 13), outer.line);
+        \\    try std.testing.expectEqual(@as(u8, 23), outer.identity);
+        \\    try std.testing.expectEqual(@backingInt(events.Kind.call_enter), outer.kind);
+        \\    try std.testing.expectEqual(@as(usize, 1), inner.invalid_count);
+        \\    try std.testing.expectEqual(@backingInt(events.InvalidTag.UnsupportedVersion), inner.invalid_tag);
+        \\    roc_source_event_observer_leave(&saved);
+        \\    restored = true;
+        \\    roc_source_event(&descriptor.header);
+        \\    roc_source_event(&malformed);
+        \\    roc_source_event(@ptrFromInt(@alignOf(events.Header)));
+        \\    try std.testing.expectEqual(@as(usize, 2), outer.count);
+        \\    try std.testing.expectEqual(@as(usize, 1), inner.invalid_count);
+        \\}
+        \\test "source events linked ReleaseFast object registration belongs to its thread" {
+        \\    var owner: Recorder = .{};
+        \\    var worker: Recorder = .{};
+        \\    const observer = owner.observer();
+        \\    var saved: events.Saved = undefined;
+        \\    roc_source_event_observer_enter(&observer, &saved);
+        \\    defer roc_source_event_observer_leave(&saved);
+        \\    const Worker = struct {
+        \\        fn run(recorder: *Recorder) void {
+        \\            const descriptor: events.Descriptor = .{ .header = .{ .kind = @backingInt(events.Kind.call_exit) } };
+        \\            roc_source_event(&descriptor.header);
+        \\            const local = recorder.observer();
+        \\            var previous: events.Saved = undefined;
+        \\            roc_source_event_observer_enter(&local, &previous);
+        \\            roc_source_event(&descriptor.header);
+        \\            roc_source_event_observer_leave(&previous);
+        \\            roc_source_event(&descriptor.header);
+        \\        }
+        \\    };
+        \\    const thread = try std.Thread.spawn(.{}, Worker.run, .{&worker});
+        \\    thread.join();
+        \\    try std.testing.expectEqual(@as(usize, 0), owner.count);
+        \\    try std.testing.expectEqual(@as(usize, 1), worker.count);
+        \\}
+        \\
+    );
+    const contract = b.createModule(.{
+        .root_source_file = b.path("src/builtins/source_events.zig"),
+    });
+    const host = hostToolTarget(b, .fast);
+    const tests = b.addTest(.{
+        .name = "source-events-object-tests",
+        .root_module = b.createModule(.{
+            .root_source_file = source,
+            .target = host,
+            .optimize = .ReleaseFast,
+            .link_libc = true,
+            .imports = &.{.{ .name = "source_events", .module = contract }},
+        }),
+    });
+    const object = buildSourceEventRuntimeObject(b, host, "roc_source_events_link_test");
+    tests.root_module.addObject(object);
+    configureBackend(tests, b.graph.host);
+    b.step("test-source-events-object", "Exercise observer registration in the linked ReleaseFast tracing object")
+        .dependOn(&b.addRunArtifact(tests).step);
+}
+
+/// Match the CLI's static Linux object-input contract without a libc CRT,
+/// observer registration, Zig startup, or TLS setup. These executables can also
+/// be run on Linux: the deliberately unreadable event pointer must be ignored.
+fn testSourceEventRawLinuxLink(b: *std.Build) void {
+    const files = b.addWriteFiles();
+    const source = files.add("source_events_raw_start.zig",
+        \\//! Raw kernel-entry fixture: no native TLS or RocOps initialization.
+        \\const builtin = @import("builtin");
+        \\pub const panic = @import("std").debug.no_panic;
+        \\comptime { @export(&start, .{ .name = "_start" }); }
+        \\fn start() callconv(.naked) noreturn {
+        \\    switch (builtin.cpu.arch) {
+        \\        .x86_64 => asm volatile (
+        \\            \\andq $-16, %%rsp
+        \\            \\movl $4, %%edi
+        \\            \\call roc_source_event
+        \\            \\movl $60, %%eax
+        \\            \\xorl %%edi, %%edi
+        \\            \\syscall
+        \\        ),
+        \\        .aarch64 => asm volatile (
+        \\            \\mov x0, #4
+        \\            \\bl roc_source_event
+        \\            \\mov x8, #93
+        \\            \\mov x0, #0
+        \\            \\svc #0
+        \\        ),
+        \\        else => @compileError("raw source event fixture needs x64 or arm64 Linux"),
+        \\    }
+        \\}
+        \\
+    );
+    const check = b.step("test-source-events-raw-link", "Cross-link raw Linux source tracing callers using ld.lld (no TLS initialization)");
+    for ([_]roc_target.RocTarget{ .x64glibc, .x64musl, .arm64glibc, .arm64musl }) |roc_linux_target| {
+        const baseline = roc_linux_target.baselineCpuTarget().?;
+        const target = b.resolveTargetQuery(baseline.llvmTargetQuery());
+        const caller = b.addObject(.{
+            .name = b.fmt("source_events_raw_start_{s}", .{roc_linux_target.toName()}),
+            .root_module = b.createModule(.{
+                .root_source_file = source,
+                .target = target,
+                .optimize = .ReleaseFast,
+                .link_libc = false,
+                .stack_check = false,
+            }),
+        });
+        caller.bundle_compiler_rt = false;
+        configureBackend(caller, target);
+        const runtime = buildSourceEventRuntimeObject(b, target, b.fmt("source_events_raw_runtime_{s}", .{roc_linux_target.toName()}));
+        const link = b.addSystemCommand(&.{ "ld.lld", "-nostdlib", "-static", "--gc-sections", "--build-id", "-o" });
+        const executable = link.addOutputFileArg(b.fmt("source-events-raw-{s}", .{roc_linux_target.toName()}));
+        link.addFileArg(caller.getEmittedBin());
+        link.addFileArg(runtime.getEmittedBin());
+        const install = b.addInstallFileWithDir(executable, .bin, b.fmt("source-events-raw-{s}", .{roc_linux_target.toName()}));
+        check.dependOn(&install.step);
+    }
+}
+
+/// CPU twins can share a baseline tracing carrier; Linux spelling aliases have
+/// the same ABI. These are declared equivalences, not missing-asset fallbacks.
+fn sourceEventRuntimeTarget(target: roc_target.RocTarget) roc_target.RocTarget {
+    return switch (target.defaultCpuTarget()) {
+        .x64linux => .x64glibc,
+        .arm64linux => .arm64glibc,
+        .x64mac,
+        .x64win,
+        .x64mingw,
+        .x64freebsd,
+        .x64openbsd,
+        .x64netbsd,
+        .x64musl,
+        .x64glibc,
+        .x64elf,
+        .x64v1mac,
+        .x64v1win,
+        .x64v1mingw,
+        .x64v1freebsd,
+        .x64v1openbsd,
+        .x64v1netbsd,
+        .x64v1musl,
+        .x64v1glibc,
+        .x64v1linux,
+        .x64v1elf,
+        .arm64mac,
+        .arm64win,
+        .arm64mingw,
+        .arm64musl,
+        .arm64glibc,
+        .arm64v1win,
+        .arm64v1mingw,
+        .arm64v1linux,
+        .arm64v1musl,
+        .arm64v1glibc,
+        .arm32linux,
+        .arm32musl,
+        .wasm32,
+        .wasm32v1,
+        => target.defaultCpuTarget(),
+    };
+}
+
+/// A distributed compiler carries all supported source-event objects, even
+/// when built on a different host. Generated imports avoid source-tree binaries
+/// and force every enum member to have an explicit, immutable asset.
+fn buildSourceEventRuntimeObjects(b: *std.Build, target_module: *std.Build.Module) *std.Build.Module {
+    const files = b.addWriteFiles();
+    const build_objects = b.step("build-source-event-runtime-objects", "Build source tracing carriers for every supported target");
+    const digest_tool = b.addExecutable(.{
+        .name = "source_event_runtime_digests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/build/embedded_digests.zig"),
+            .target = hostToolTarget(b, .fast),
+            .optimize = .ReleaseFast,
+        }),
+    });
+    configureBackend(digest_tool, b.graph.host);
+    const digests = b.addRunArtifact(digest_tool);
+    const digest_source = digests.addOutputFileArg("source_event_runtime_digests.zig");
+    const digest_module = b.createModule(.{ .root_source_file = digest_source });
+    var source = std.ArrayList(u8).empty;
+    defer source.deinit(b.allocator);
+    source.appendSlice(b.allocator,
+        \\//! Compiler-owned tracing carriers; every supported ABI is embedded.
+        \\const std = @import("std");
+        \\const RocTarget = @import("roc_target").RocTarget;
+        \\const digests = @import("source_event_runtime_digests");
+        \\pub const SourceEventRuntimeObjects = struct {
+        \\    pub const Asset = struct { bytes: []const u8, digest: [32]u8 };
+        \\    pub fn forTarget(target: RocTarget) []const u8 {
+        \\        return assetForTarget(target).bytes;
+        \\    }
+        \\    pub fn assetForTarget(target: RocTarget) Asset {
+        \\        return switch (target) {
+        \\
+    ) catch @panic("OOM");
+    inline for (@typeInfo(roc_target.RocTarget).@"enum".field_names, @typeInfo(roc_target.RocTarget).@"enum".field_values) |field_name, field_value| {
+        const target: roc_target.RocTarget = @fromBackingInt(@intCast(field_value));
+        const canonical = sourceEventRuntimeTarget(target);
+        const filename = b.fmt("roc_source_events_{s}.o", .{canonical.toName()});
+        if (canonical == target) {
+            const baseline = canonical.baselineCpuTarget() orelse canonical;
+            const resolved = b.resolveTargetQuery(baseline.llvmTargetQuery());
+            const object = buildSourceEventRuntimeObject(b, resolved, b.fmt("roc_source_events_{s}", .{canonical.toName()}));
+            const artifact = sourceEventRuntimeArtifact(b, object, resolved);
+            _ = files.addCopyFile(artifact, filename);
+            digests.addArg(canonical.toName());
+            digests.addFileArg(artifact);
+            const install = b.addInstallFileWithDir(artifact, .lib, b.pathJoin(&.{ "source-events", filename }));
+            build_objects.dependOn(&install.step);
+        }
+        source.appendSlice(b.allocator, b.fmt(
+            "            .{s} => .{{ .bytes = @embedFile(\"{s}\"), .digest = digests.{s} }},\n",
+            .{ field_name, filename, canonical.toName() },
+        )) catch @panic("OOM");
+    }
+    source.appendSlice(b.allocator,
+        \\        };
+        \\    }
+        \\};
+        \\test "source event runtime objects cover every supported target with exact digests" {
+        \\    for (std.enums.values(RocTarget)) |target| {
+        \\        const asset = SourceEventRuntimeObjects.assetForTarget(target);
+        \\        try std.testing.expect(asset.bytes.len != 0);
+        \\        var actual: [32]u8 = undefined;
+        \\        std.crypto.hash.sha2.Sha256.hash(asset.bytes, &actual, .{});
+        \\        try std.testing.expectEqualSlices(u8, &actual, &asset.digest);
+        \\        const twin = target.baselineCpuTarget() orelse target;
+        \\        const baseline = SourceEventRuntimeObjects.assetForTarget(twin);
+        \\        try std.testing.expectEqualSlices(u8, asset.bytes, baseline.bytes);
+        \\    }
+        \\}
+        \\
+    ) catch @panic("OOM");
+    const generated = files.add("source_event_runtime_objects.zig", source.items);
+    const module = b.createModule(.{ .root_source_file = generated });
+    module.addImport("roc_target", target_module);
+    module.addImport("source_event_runtime_digests", digest_module);
+    const tests = b.addTest(.{
+        .name = "source-event-runtime-objects-tests",
+        .root_module = b.createModule(.{
+            .root_source_file = generated,
+            .target = hostToolTarget(b, .fast),
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "roc_target", .module = target_module },
+                .{ .name = "source_event_runtime_digests", .module = digest_module },
+            },
+        }),
+    });
+    b.step("test-source-event-runtime-objects", "Validate embedded tracing carriers and their content digests")
+        .dependOn(&b.addRunArtifact(tests).step);
+    return module;
 }
 
 /// The run shim uses builtin function addresses directly. It must not link the

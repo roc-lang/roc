@@ -7,6 +7,8 @@ const layout = @import("layout");
 const lir_core = @import("lir_core");
 
 const checked = check.CheckedModule;
+const names = check.CheckedNames;
+const MonoType = @import("monotype/type.zig");
 const LIR = lir_core.LIR;
 const LiteralDemand = @import("literal_demand.zig");
 
@@ -73,11 +75,58 @@ pub const CheckedModules = struct {
 /// the same `lowering_modules` table and the same ids into it.
 pub const LoweringModuleId = LIR.LoweringModuleId;
 
+/// The declaration identities (`check.DeclarationIdentities`) of the
+/// templates and nominal types of a lowering's modules, copied into the
+/// program so that a procedure's identity can name its source by declaration
+/// once the module views are gone (design.md "Identity Offers"). A template
+/// or nominal the table lacks is named by its module's key instead, which
+/// only costs reuse.
+pub const DeclarationNames = struct {
+    pub const TemplateKey = struct { artifact: [32]u8, template: u32 };
+    pub const NominalKey = struct { module_identity: [32]u8, source_decl: u32 };
+
+    templates: std.AutoHashMapUnmanaged(TemplateKey, [32]u8) = .empty,
+    nominals: std.AutoHashMapUnmanaged(NominalKey, [32]u8) = .empty,
+
+    pub const empty: DeclarationNames = .{};
+
+    pub fn deinit(self: *DeclarationNames, allocator: std.mem.Allocator) void {
+        self.templates.deinit(allocator);
+        self.nominals.deinit(allocator);
+        self.* = .empty;
+    }
+
+    /// The declaration identity of a checked procedure template.
+    pub fn template(self: *const DeclarationNames, ref: names.ProcTemplate) ?[32]u8 {
+        return self.templates.get(.{ .artifact = ref.artifact.bytes, .template = @backingInt(ref.template) });
+    }
+
+    /// The declaration identity of the nominal `source_decl` declares in the
+    /// module with identity hash `module_identity`.
+    pub fn nominal(self: *const DeclarationNames, module_identity: [32]u8, source_decl: u32) ?[32]u8 {
+        return self.nominals.get(.{ .module_identity = module_identity, .source_decl = source_decl });
+    }
+
+    /// The table as the resolver Monotype's type digests take.
+    pub fn nominalDeclarations(self: *const DeclarationNames) MonoType.NominalDeclarations {
+        return .{ .context = self, .nominal_fn = resolveNominal };
+    }
+
+    fn resolveNominal(context: *const anyopaque, module_identity: []const u8, source_decl: u32) ?[32]u8 {
+        const self: *const DeclarationNames = @ptrCast(@alignCast(context));
+        if (module_identity.len != 32) return null;
+        return self.nominal(module_identity[0..32].*, source_decl);
+    }
+};
+
 /// How the program's app fills its platform's requirements: the app module
-/// whose values fill them, and the relation key naming that filling. Which
-/// app procedure a platform requirement resolves to is not determined by the
-/// platform's source or types, so a procedure whose code reaches one digests
-/// the relation into its identity (`Lifted.Program.fnSourceDigest`).
+/// whose values fill them, and the filling key naming which app declarations
+/// fill them (`CheckedArtifact.PlatformAppFillingKey`). Which app procedure a
+/// platform requirement resolves to is not determined by the platform's
+/// source or types, so a procedure whose code reaches one digests the
+/// filling key into its identity (`Lifted.Program.fnSourceDigest`), and an
+/// object-cache offer of such a procedure serves only a program with the same
+/// filling key.
 pub const PlatformRequirementFilling = struct {
     app_module: [32]u8,
     relation: [32]u8,
@@ -112,6 +161,18 @@ pub const RootRequests = struct {
     /// Which specializations can register a literal root; present exactly
     /// when `discovery_start` is.
     literal_demand: ?*const LiteralDemand.LiteralDemand = null,
+    /// Type-only declaration projection for cache admission, never source bodies.
+    cached_root_declarations: []const CheckedRootUse = &.{},
+    /// Literal recipes whose noncallable storage is projected without bodies.
+    cached_literal_declarations: []const lir_core.Program.CachedLiteralRecipe = &.{},
+};
+
+/// Producer-recorded literal identity carried with its result layout request.
+pub const LiteralMaterializationDeclaration = struct {
+    module: [32]u8,
+    checked_expr: u32,
+    kind: LiteralRejectionKind,
+    conversion_identity: [32]u8,
 };
 
 /// Checked const data that must produce a runtime layout and callable entries.
@@ -131,6 +192,7 @@ pub const ComptimeValueRoot = struct {
     module: checked.ModuleId,
     root: ComptimeProducer,
     const_locator: ?checked.ConstLocator,
+    completion: @import("lir_core").Program.ComptimeRootCompletion = .pending,
 };
 
 /// Producer-owned storage requirements; only target lowering applies string ABI size.
@@ -306,20 +368,14 @@ pub fn hasherWriteOp(primitive: checked.CheckedPrimitive) LIR.LowLevel {
     };
 }
 
-/// Panic in debug builds for a violated post-check invariant.
+/// Panic in builds with runtime safety for a violated post-check invariant.
 pub fn invariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) {
-        base.invariant("postcheck invariant violated: {s}", .{message});
-    }
-    unreachable;
+    base.invariant("postcheck invariant violated: {s}", .{message});
 }
 
 /// `invariant` with runtime context formatted into the panic message.
 pub fn invariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
-    if (@import("builtin").mode == .debug) {
-        base.invariant("postcheck invariant violated: " ++ fmt, args);
-    }
-    unreachable;
+    base.invariant("postcheck invariant violated: " ++ fmt, args);
 }
 
 /// Stop the build with a compiler-bug message in every build mode.
@@ -389,6 +445,14 @@ test "test metadata uses explicit union request positions across equal root orde
     try std.testing.expectEqual(@as(u32, 7), testPlanMetadataForRoot(roots, root, 3).?.module_index);
 }
 
+/// Compile-time demand facts a cached specialization carries (`lir_core`),
+/// named here for the stages that must not import LIR.
+pub const CachedCtfeDemand = lir_core.Program.CachedCtfeDemand;
+pub const CachedLiteralRecipe = lir_core.Program.CachedLiteralRecipe;
+pub const CachedLiteralLocalContext = lir_core.Program.CachedLiteralLocalContext;
+/// The checked site an emitted statement originates from.
+pub const CheckedSiteOrigin = lir_core.LIR.CheckedSiteOrigin;
+
 /// A checked compile-time root, named by its module's identity bytes.
 pub const ComptimeRootRead = extern struct {
     module: [32]u8,
@@ -399,8 +463,19 @@ pub const ComptimeRootRead = extern struct {
 /// content identity of its compiled procedure and the ownership signature
 /// and uniqueness facts ARC solved for it, which the program that links the
 /// entry adopts as fixed.
+pub const CheckedRootUse = struct {
+    module: [32]u8,
+    root: u32,
+};
+
+/// A cached specialization's identity, demand facts, and the refcount facts
+/// callers rely on in place of its body.
 pub const SpecCacheHit = struct {
     identity: [32]u8,
+    demand: ?lir_core.Program.CachedCtfeDemand = null,
+    /// Complete serving-closure demand, borrowed from the immutable provider.
+    /// Consumers declare these checked roots before retiring a source body.
+    checked_root_uses: []const CheckedRootUse = &.{},
     /// Producer-owned demand summary: the compile-time roots the procedure's
     /// code reads, through every procedure it reaches. A program that takes
     /// the hit demands them as if it had lowered the body (design.md
@@ -425,6 +500,18 @@ pub const SpecCacheHit = struct {
 pub const SpecCacheLookup = struct {
     context: *anyopaque,
     find: *const fn (context: *anyopaque, key: [32]u8, current_relation: ?[32]u8) ?SpecCacheHit,
+    /// Whether the provider holds a settled discovery outcome for the
+    /// specialization (`lir.Program.DiscoverySummary`).
+    find_discovery: ?*const fn (context: *anyopaque, key: [32]u8, current_relation: ?[32]u8) bool = null,
+    /// The provider's offer of the procedure with this identity, asked by
+    /// Direct LIR once it has assigned the identity to a procedure it is
+    /// about to lower (design.md "Identity Offers").
+    find_identity: ?*const fn (context: *anyopaque, identity: [32]u8, current_relation: ?[32]u8) ?SpecCacheHit = null,
+
+    pub fn discoverySettled(self: SpecCacheLookup, key: [32]u8, current_relation: ?[32]u8) bool {
+        const find = self.find_discovery orelse return false;
+        return find(self.context, key, current_relation);
+    }
 
     /// Session capability identity, not a persistent cache key. Equal providers
     /// expose the same immutable offer and artifact collection to both readers.
@@ -432,7 +519,30 @@ pub const SpecCacheLookup = struct {
         return self.context == other.context and self.find == other.find;
     }
 
+    /// The offer of the procedure with `identity`, if the provider holds one
+    /// whose code reads no literal roots: an identity offer declares storage
+    /// from the reads of the body it replaces, which names checked roots only.
+    pub fn lookupIdentity(self: SpecCacheLookup, identity: [32]u8, current_relation: ?[32]u8) ?SpecCacheHit {
+        const find = self.find_identity orelse return null;
+        const hit = find(self.context, identity, current_relation) orelse return null;
+        const demand = hit.demand orelse return null;
+        if (!demand.permitsRetirement() or demand.literal_reads.len != 0) return null;
+        return hit;
+    }
+
     pub fn lookup(self: SpecCacheLookup, key: [32]u8, current_relation: ?[32]u8) ?SpecCacheHit {
-        return self.find(self.context, key, current_relation);
+        const hit = self.find(self.context, key, current_relation) orelse return null;
+        const demand = hit.demand orelse return null;
+        if (!demand.permitsRetirement()) return null;
+        // Machine relocations to current literal headers do not imply that
+        // the executable producer itself is present. Its exact object is an
+        // additional semantic dependency supplied by the same provider.
+        for (demand.literal_reads) |read| {
+            const producer = self.find(self.context, read.recipe.producer_key, current_relation) orelse return null;
+            if (!std.mem.eql(u8, &producer.identity, &read.recipe.object_identity)) return null;
+            const producer_demand = producer.demand orelse return null;
+            if (!producer_demand.permitsRetirement()) return null;
+        }
+        return hit;
     }
 };

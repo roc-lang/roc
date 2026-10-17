@@ -523,6 +523,8 @@ reads that distinction, or anything else, back out of the spelling:
 | `roc__d{N}_{k}` | the `k`th further node (from 1) of owner `N`'s value | program |
 | `roc__b{N}` | the compile-time evaluator's cell holding the address of slot `N`'s value | program |
 | `roc__h{hash}` | a datum named by content: a string literal's backing, or a constant an object-cache pack carries | shared |
+| `roc__sv{hash}` | a static value by its producer certificate (`StaticDataValue.symbol_identity`): a checked constant's value or a compile-time root's slot | shared |
+| `roc__sv{hash}__address` | the cell holding the address of that value's storage in this program (see below) | shared |
 | `roc__p{hash}` | a procedure, by its `ProcIdentity` | shared |
 
 An owner is whoever freezes a value, and its number keeps names unique by
@@ -558,6 +560,20 @@ does not carry. The pack encoder renames every carried program-numbered datum
 `roc__h` content name and records the references to it as `shared`; capture
 keeps program names, so only a pack write pays for the hashing.
 
+Code reaches a static value through its address cell, never by the value's
+name, so what a captured artifact carries decides who defines the value when
+the code is linked into another program. A cell to a compile-time root's
+storage (`StaticDataExport.root_slot`) binds to storage the linking program
+declares from the code's demand facts (`SpecCacheHit.checked_root_uses`), and
+the program names that storage with the same certificate because the facts
+name the root's module and an offer whose modules the program does not contain
+is not offered. A cell to any other value carries the frozen value with the
+code (`ProcArtifact.PreparedData.cell_targets`): the program that links the
+code need not lower any body that holds the constant, and after an edit it
+often lowers none, so nothing but the artifact itself can be relied on to
+define it. The carried value is program-numbered data like any other constant
+a pack carries, so it takes its `roc__h` content name in the pack.
+
 A `ProcIdentity` names the same code in every program only because everything
 that decides a procedure's code is digested into it: its checked source, its
 evidence, and its solved types (`postcheck/proc_identity.zig`). Those also
@@ -566,10 +582,20 @@ which app value fills a platform's requirement is chosen by the app, not by
 the platform's source or types. So a function that references a function of
 the app from outside the app (which only a requirement can), or references a
 function that does, digests the program's platform/app relation key into its
-identity (`Lifted.Program.fnReachesPlatformRequirement`). The relation key is a
-function of the app's checked module key, which the app's own procedure identities
-already digest, so such a platform procedure is shared exactly as widely as
-the app procedures it reaches; every other platform procedure keeps one
+identity (`Lifted.Program.fnReachesPlatformRequirement`). What it digests is
+the pairing's filling key (`CheckedArtifact.PlatformAppFillingKey`): the
+declaration identity of the app value filling each platform requirement, in
+declaration order, under the platform's requirement context. The relation key
+(`PlatformAppRelationKey`), which names the exact app module the pairing was
+made for, stays the cache identity of the paired platform's checked output,
+whose binding rows carry that app's own indices; but nothing that names
+generated code digests it. The paired platform's code-generation key, its
+declaration identities and the object-cache offers of requirement-reaching
+procedures digest the filling key instead, so an edit of the app that leaves
+the filling declarations' identities unchanged (a comment, a change to a
+declaration the filling values do not reach) leaves every platform procedure
+identity unchanged, and such a platform procedure is shared exactly as widely
+as the app declarations it reaches; every other platform procedure keeps one
 identity across apps.
 
 ### Read-Only Type Analysis
@@ -654,11 +680,18 @@ consumers require the shared body; it is lowered once, while CTFE may still
 splice native code in its own LIR consumer. A target-specific native provision
 does not authorize host-native CTFE body elision.
 
-Matching native domains are not proof that cached object packs are available. Shared elision
-also requires the same non-null lookup capability (context and callback), whose
-provider supplies both readers the same immutable offers and splice packs.
-This is session-local provider identity, never a persistent cache-key input.
-Separate providers retain source bodies and their independent late native hits.
+Matching native domains are not proof that cached object packs are available.
+Shared elision also requires the same non-null lookup capability (context and
+callback), whose provider supplies both readers the same immutable offers and
+splice packs. This is session-local provider identity, never a persistent
+cache-key input. Separate providers retain source bodies and their independent
+late native hits.
+
+The runtime handoff validates the original declared target and roots, including
+the complete provider capability and policy. Joint producer selection narrows
+only the internal continuation to its paired intersection; it cannot redefine
+the caller's declaration. Without a producer, the complete runtime view remains
+selected. Handoff observation sinks do not change that capability.
 
 An early cache offer carries the full-body producer's platform-requirement
 dependency summary. An independent entry is reusable across app fillings;
@@ -686,6 +719,199 @@ root scheduling, literal rejection, debug observations, and cached-data
 relocations retain their existing contracts. A cache-hit counter alone is not
 the performance assertion: a warm test must also demonstrate skipped Monotype
 body work and preserve cold/warm diagnostics.
+
+Native CTFE publication borrows the evaluator's retained fragments before its
+LIR and fragment owners are destroyed. Encoding stages owned bytes; publication
+is deferred until the coordinator has accepted the complete checking result,
+including late evaluation diagnostics and target configuration constants. An
+abandoned or rejected compilation discards its staged offers.
+
+Demanded CTFE code is an additive offer set, never a complete module pack.
+Content-identified partial files do not occupy the immutable complete-pack key:
+otherwise a check could prevent a later build from publishing procedures that
+checking never demanded. Identical subsets deduplicate, and loading remains
+scoped to the visible modules rather than scanning other cache namespaces.
+Offers are filed under their producer-stamped checked template owner, not the
+app that happened to demand them. Builtin instantiations retain the explicitly
+declared requester's placement. The artifacts the offers serve are filed
+apart, by content: every artifact has a content address
+(`ArtifactClosure.contentAddresses`), the digest of what determines its placed
+bytes—its own rendering, with carried data rendered by structure rather than
+by the name a set gave it, and debug lines left out as
+`derivedPhysicalNamespace` leaves them out—joined with the addresses of the
+artifacts its edges reach; a recursive group is digested as a group, its
+members partitioned by refinement over their in-group edges, so a group drawn
+from two programs' graphs gives every member one address. A build writes one
+pack of artifacts, holding those of its serving closures that no loaded pack
+carries, into the store's `artifacts` directory under the pack's content
+digest, and one pack of offers per owner under the owner's placement, whose
+rows are references naming each offer's root by address. Offers stay scoped
+to the visible modules; artifacts are universal within the store's compiler,
+target and policy namespace, since an address names one artifact wherever it
+is carried. An edit therefore adds to the store only the artifacts it compiled
+anew, and the artifacts a program is served are the same bytes however many
+revisions and owners offer them.
+
+Native providers are immutable physical capabilities selected before producer
+lowering. Checking and native dev output use one authoritative ordinary body
+policy. Ordinary procedures are the same objects for evaluation and linked
+output at the same target, CPU, backend and complete body policy; root entry
+wrappers have their own ABI. A different physical capability legitimately owns
+different objects. Identity names explicit policy decisions, never struct padding,
+root requests, timing state or session pointers. LLVM retains source bodies.
+
+Fragment admission preserves the emitter's explicit source-event contract.
+Static-slot and source/site ordinals are producer-local data, not persistent
+identities. Ordinary code carries producer-owned checked/source and failure/site
+certificates with explicit field encodings and relocations. A complete semantic
+binding plan is admitted before body elision; executable construction binds
+consumer-local IDs in owned bytes. Common source-event callbacks preserve
+diagnostics and observations without reconstructing erased LIR statements,
+inventing procedures or privately instrumenting a second procedure variant.
+Missing provenance declines the serving closure, not unrelated offers beside it.
+Observed control-flow sites carry their qualified checked expression or pattern
+identity from Monotype into the source-event certificate. Optional diagnostic
+site indexes do not establish that authority: `if` sites and sites without a
+pending exhaustiveness report still require exact producer identities. The
+certificate validates the declared kind, region and branch span directly against
+that checked producer, without searching source bodies. This authority is pack
+metadata and does not change the common runtime descriptor ABI.
+
+Every result and failure header is allocated before evaluation. Serial SCC
+scheduling terminalizes all cyclic root components before running any root and
+requires every eager predecessor to be complete. Ordinary static reads never
+request evaluation or embed a producer process's address: semantic address-cell
+relocations bind the current consumer's stable headers. Publication changes only
+header data and its owned backing graph. Failure guards remain ordinary code
+across success, failure and completed-image continuation, preserving procedure
+identity, revisions and object bytes.
+
+A store pack is a memory image (`PackFile.Serialized`, a serialization root
+under "Cache Admission Versioning") read the way a checked module is read: the
+file is mapped, its header's entry-version hash is compared, and its columns
+are the live tables, fixed-width rows whose cross-references are row indices
+and whose byte strings are ranges into one blob, relocated by one base per
+column. Nothing is decoded or validated to reach an artifact: code, data,
+names and descriptors are the mapped bytes, read where they lie. The writer is
+this compiler, so the shape of what it wrote is a compiler invariant, asserted
+in debug builds at write time and trusted afterwards; a read's only
+release-mode checks are the header's hash and the bounds of each column and
+row range, which admitting any cache entry costs. Offer metadata whose shape
+nests (storage-demand facts, literal recipes) travels as opaque field-wise
+blobs decoded only for the offers a lookup admits. A pack's rows are the artifacts it
+carries followed by its references, the addresses of artifacts other packs
+carry; the artifact rows give each artifact's edges (set-local references,
+symbolic references the writer resolved to a definition in the pack, and the
+code targets of its data) as rows of either kind. A lookup that selects one
+of a pack's offers walks the closure of that offer's root by address, from
+row to row within a pack and on into the pack carrying each referenced
+address (`LoadedPacks.carriers`: the first registered pack carrying it), and
+admits it into the one set admitted from the store (`LoadedPacks.store_set`),
+which holds each address once and grows by the artifacts a closure adds; a
+key's candidate packs are tried in load order and left alone once an offer
+serves the lookup. The set names its definitions by address
+(`ProcArtifact.Set.addresses`): a store artifact's physical provision is its
+address, so a program that splices it through two offers places it once. The
+set carries the closure's edges, so indexing computes the components, serving
+demand, and admission of the artifacts the set gained over those edges alone,
+with the artifacts indexed earlier taking part only as settled callees: an
+artifact's serving facts depend on its closure, and nothing an admitted
+artifact reaches arrives later. A closure that reaches an address no loaded
+pack carries, or an artifact whose reference resolves to nothing in its pack,
+is not admitted, as whole-pack admission would also decline it. The packs
+that contribute to the set record the literal read behind each materializer
+their code calls; a materializer's identity fixes the literal's declaration,
+so the first read recorded for it stands for every pack's, and an offer of an
+artifact the set already held is indexed when it arrives. Packs written
+from one body (`PackFile.Body`) share its encoding, and within a body the
+bytes of a data item are stored once per name: every artifact lists the items
+it carries, and many carry the same frozen constant, so their rows share one
+range of the data column. The
+producer supplies its checked module capability directly; an unpublished app
+artifact is not a reason to delay loading until after specialization. Exact
+checked-root layout/role certificates come from a type-only projection through
+ordinary lowering rules, never from reversing cached layouts into types or
+preparing source procedures. Unsupported callable-bearing, specialized-literal,
+unrooted, mismatched, or ambiguous storage declines the complete serving offer.
+
+Cached offers carry explicit checked-root demand before body retirement.
+Typed declarations survive to LIR as retained storage demand, independently of
+erased read statements. That unconditional demand belongs to the declarations
+a cached body or a root makes (`LayoutRequest.unconditional`); the storage
+Monotype declares for a completed root a lowered body reads is reached through
+the read itself, so a body nothing reaches demands no materializer, and a
+build compiles the materializers its reachable code and its served closures
+read rather than one per completed root the program mentions. A root owns one
+failure-message slot across its value representations. Pending declarations demand their producer; completed values
+materialize from the owning ConstStore, and guarded failures retain archived
+message/classification plus semantic source provenance. The checked-cache
+schema fingerprint includes that pointer-free failure record. Bound guards use
+current slot publication origins and the full checked declaration authority,
+not only the batch of modules whose pending roots are being evaluated.
+Completed successes initialize the typed no-failure record, including canonical
+empty Str, before freezing; zero placeholders are not completed values. Reserved
+empty-list capacity is explicit ConstStore/native-export data, preserved through
+symbolic construction and target transcoding without reading process addresses.
+Erased-read storage demand belongs to CTFE consumers, not unrelated runtime
+continuations; runtime ownership adoption releases those retention marks.
+Direct LIR substitutes a cached object for a specialization only when
+Monotype declared that specialization's storage demand, so an object
+published after Monotype ran (by the same build's evaluation) never replaces a
+body whose reads were not declared. A consumer that links a retired body
+declares the slot and materializer of every checked root the body reads
+eagerly, and keeps them through completed-value adoption, because the linked
+code calls those materializers.
+
+The persistent encoding canonicalizes context immediates, not diagnostic
+provenance. CTFE partials omit optional codegen debug-line entries whose file
+ordinals belong to the old program: executable CTFE diagnostics consume complete
+bound hook descriptors instead, and unwind/frame records remain carried.
+Complete runtime packs retain their debug-line contract unchanged.
+
+Admission propagates invalid node facts over the artifact dependency graph once.
+Checked-root demand is shared by recursive components and propagated over their
+condensed dependency graph once, rather than rediscovered at every lookup.
+Producer context requirements use the same recursive components and flow only
+from callees to callers. Missing producer facts and unresolved dependencies make
+only their serving closures incomplete; they are never evidence of neutrality.
+Context completeness is distinct from preservation of compile-time observations.
+Binding batches demanded roots by source set and clones only their union closure.
+Immutable callback catalogs export metadata only when emission requests it;
+ordinary native statements retain their existing ID prefix without a duplicated
+full failure record. Producer statement lookup covers the current LIR domain,
+including appended materializers; the reserved consumer failure-ID prefix never
+bounds producer provenance. These boundaries prevent cache hits from replacing
+specialization work with unrelated pack copying or large descriptor tables.
+
+Logical function identity is distinct from a compiled variant. Admission retains
+each independently valid physical serving closure, including recursive groups;
+adding an incompatible sibling never rewrites an existing caller's edges or hides
+its compatible helpers. Source-local symbolic references resolve only when their
+namespace proves one exact definition. Machine references and frozen callable
+relocations then name physical artifact indices through selection, binding,
+placement, and recapture. Native-image offsets are session handles, never pack
+data. Frozen data containing a callable includes its physical source graph
+identity in its content name (the sequence of the graph's definitions, each by
+kind and machine code), so equal logical names and local ordinals in two
+packs cannot merge different callable values.
+
+Every declared consumer selects an eligible physical serving closure before
+source-body elision. Equal physical capabilities share the exact ordinary
+objects; different targets or policies retain their own providers. Callable and
+ARC metadata, semantic source-event certificates and complete producer-qualified
+root demand are required together. The original runtime declaration remains
+immutable. Literal demand must carry its exact specialization recipe, not a
+program-local ordinal or evidence recovered from an erased body.
+
+Expect emission is an ordinary body-policy decision, not an execution-phase
+classification. Emitted source events retain mandatory semantic certificates
+through inlining, cloning and persistence. Literal-conversion entry wrappers
+retain the declared literal's source scope so generated rejection branches remain
+bindable without caller substitution. Admission validates actual descriptor
+references and checked source authority, not summaries of whether a producer was
+runtime-only, CTFE-only, shared, omitted or observation-free. Source/failure,
+checked exhaustiveness, static-root demand and physical callable targets remain
+independent explicit contracts. Incompatible older pack layouts are cache misses.
 
 ## Checking Effects And Const Roots
 
@@ -1500,9 +1726,17 @@ function-valued computation remains an ordinary compile-time callable root.
 A shared post-check program represents a selected root read as an explicit
 `comptime_value` expression. Its identity is the checked module id, compile-time
 root id, and optional const locator (callable roots have no const locator). Its
-initializer is an explicit zero-argument proof call to the one declared root
-function, whose return owns the concrete Monotype representation and lambda
-sets. Lambda solving unifies reads with that return without letting a read
+initializer for a pending root is an explicit zero-argument proof call to the
+one declared root function, whose return owns the concrete Monotype
+representation and lambda sets. For an already-completed root, the restored
+`ConstStore` value is the producer: storage and every read name that exact
+restoration definition. Lift emits a proof call to that definition, so its
+specialized return remains authoritative even when specialization replaces the
+definition's body. Sharing the original body expression is insufficient:
+reads are opaque to specialization while storage bodies are rewritten.
+The checked computation
+cannot independently authorize callable membership for a stored closure.
+Lambda solving unifies reads with their producer without letting a read
 change it. Each use of an imported constant is checked at its own copy of the
 constant's type, and a copy may lift an anonymous record or tag union into a
 nominal the declaring module never names, so a read's type can differ from its
@@ -1514,7 +1748,7 @@ callable slot has no evidence to take and is not unified at all. All reads of
 one root at one lifted Monotype type share one solved type. The type a root is
 evaluated, stored, and cached at is therefore a function of its declaring
 module alone; no consumer's use reaches a checked module's stored root type or
-its cache entry. The proof call is not an
+its cache entry. The representation witness is not an
 expression to execute at the read. Lifting and lambda solving preserve that witness. Value
 folding must treat the read as opaque. LIR interns storage slots only after
 exact concrete representation equality and committed layout equality, and
@@ -1522,6 +1756,19 @@ records the checked root identity beside each slot. Evaluation initializes the
 slots in checked dependency order; runtime static-data materialization consumes
 the completed root payloads. Neither consumer executes the initializer at a
 slot read or reconstructs a callable identity from its layout.
+
+The lambda-solving traversal publishes execution-demand relations independently
+of executable bodies. Expression and statement evaluation, actual callable
+applications, function-address captures, and representation witnesses are
+distinct relations. Only evaluation and application relations contribute eager
+root reads; the root initializer's proof call is a representation relation.
+Late applications consume the final solved callable members, including erased
+members, rather than inferring a target from a function type. Shared expression
+nodes retain their owner relations even when solving memoizes their types.
+Each read retains its qualified root and source cause. A retired cached body
+without a published demand summary is explicitly incomplete, never proof of
+an empty dependency set. This boundary prevents function recursion and address
+construction from becoming false eager value dependencies.
 
 A provided static export requested during shared preparation aliases that same
 declared slot. Its const locator's checked owner identifies the root, and the
@@ -1577,8 +1824,12 @@ mode cannot change that mode at the continuation boundary.
 Shared value slots are declared by the compile-time `RootRequest` manifest,
 not by root type eligibility alone. Eligible procedure aliases and roots with
 unbound platform requirements can be intentionally absent from that manifest.
-The initial reservation pass records exactly its module/root identities and
-reserved root functions; lowering uses that declaration table to select slot reads.
+Before worker tasks, declaration preparation records every module's complete
+checker-selected manifest as immutable typed producer requests. Declaration
+membership is independent of evaluation demand, completion, and consumer phase.
+A real read requests the exact producer specialization through the ordinary
+deferred request/seal coordinator path; declaration alone never lowers a body.
+Root initializers construct their own value rather than reading their own slot.
 Unrequested callable bindings retain their ordinary checked body computation.
 
 Completed-value materialization requests are the intersection of that manifest
@@ -1618,46 +1869,40 @@ separate internal `failed: U8` (zero means success, one means failure) and
 `message: Str` fields. Empty crash messages remain
 failures. After CFG transformations, ARC, and immortal-local certification, a
 final LIR pass guards each value read with ordinary record loads, a branch, and
-a crash. The pass records the exact guard entry and successful continuation;
-completed successful root outcomes remove guards through that metadata. No
-subsequent CFG pass may invalidate these identities. Guard locals borrow the
+a crash. A slot whose root the checker had already completed with a value when
+the program was lowered has a success record by construction and no outcome
+left to observe, so its reads stay unguarded; every other value read is
+guarded. The pass records guard identities for failure provenance binding;
+publication never rewrites these ordinary procedure bodies. No subsequent CFG
+pass may invalidate these identities. Guard locals borrow the
 immutable evaluation image, including its immortal string backing, and introduce
 no ownership transfers. The pass extends each affected procedure's sorted frame
 local inventory and recomputes its stack-probe requirement. Backends consume
 only these explicit ordinary LIR operations.
 
-A runtime program continued from the shared producer program after the
-compile-time consumer completed, rather than reusing that consumer's own
-program, receives the completed values in two forms. Its lowering carries the host's completed
-successful scalar roots, decoded from the host's frozen image and keyed by
-checked root identity as transcoding matches slots, and emits each such read
-as the scalar literal rather than a slot read, so range proving, loop
-versioning, and overflow elision see the constant they would have seen from
-a literal in source; a table built by `List.repeat` with a compile-time
-length keeps no index check the prover can discharge, and no slot, failure
-record, or guard exists for the root. The decoded value is a construction
-tree, and a root whose every leaf is a scalar, the empty string, or an
-empty list lowers as that tree rather than as bytes, because static data
-is the wrong home for it: records,
-tuples, and tag payloads of such parts rebuild field by field, so an
-empty `Dict` or `Set`, which is a record of empty lists, never reaches the
-image either. An empty list lowers to the `with_capacity` it was evaluated
-with: a frozen descriptor's capacity word is its length, so the freezer
-keeps each empty list's evaluated capacity on the root's export, keyed by
-its byte offset within the image, and the runtime rebuilds the request so
-the first append goes in place. A list with items keeps its slot however
-uniform its contents, so the constructions are the scalars, the empty
-string, the empty list, and records, tuples and tags of those. A list of
-copies of one construction—what `List.repeat` and a constant fill loop
-complete to—additionally names, on each read, the argument-free procedure
-that builds the same list fresh (`assign_literal.fresh_alternative`), and
-ARC chooses one form per read (see "Fresh forms of static lists" under ARC
-Borrow Inference): a read whose value only ever gets read keeps the static
-datum and allocates nothing, while a read whose value an in-place operation
-would otherwise copy on first write is born fresh, so the write is proven
-unique and the copy never happens. Neither form is visible after ARC. A non-empty
-list with spare capacity freezes to its items alone; only the capacity of
-an empty list survives. Identical nodes of one frozen image are one symbol:
+Ordinary reads of selected compile-time values always call the same declared
+materialization provision, before or after evaluation. Completion never inserts
+literal or allocation constructors into an ordinary caller. A materializer is an
+explicit consumer-owned producer with a qualified root, exact conversion and
+representation identities, target layout and owned zero-argument Roc ABI.
+Persistent callers reference its semantic pointer header through normal external
+data bindings, not a fixed physical wrapper artifact. The header is preallocated,
+and executable images and frozen closures retain its stable address.
+
+Most values need only the ordinary guarded header read. Reserved empty-list
+capacity is different: the freezer records it explicitly because a zero-length
+frozen descriptor does not describe the owned reservation. Decoded constructions
+containing that reservation rebuild inside the materializer, including supported
+record and tag components, so the first append retains the intended allocation.
+This value-representation rule is identical in every consumer. Successful
+publication decodes only its named slot; native replacement wrapper images remain
+owned for the consumer lifetime and update the pointer header before dependent
+execution. Linked output supplies a normal relocation to its current wrapper.
+No ordinary specialization offer or ordinary physical callee edge may name a
+materializer implementation. A non-empty list with spare capacity freezes to its
+items alone; only the capacity of an empty list survives.
+
+Identical nodes of one frozen image are one symbol:
 two evaluations of the same constant expression, such as two `List.repeat`
 calls with the same arguments, freeze to separate allocations with the same
 contents, and both the evaluation's image and the runtime program's
@@ -1740,10 +1985,13 @@ SpecConstr preserve meaning, so the policy changes how evaluation's code is
 built, never what it computes. Every command also gives evaluation the same
 object cache (`CompileTimeObjectCache`): the host's dev-policy packs, whose
 procedures run expects. The evaluator's program takes a hit for a procedure
-it runs (under `comptime_closure_hits`) only when the entry names that
-procedure's own identity, and splices its cached code in place of compiling
-it; a cache entry is the procedure its key names, so the cache too changes
-only what evaluation compiles. `roc check` and `roc build` therefore
+it runs only when the entry names that procedure's own identity, and splices
+its cached code in place of compiling it; a cache entry is the procedure its
+key names, so the cache too changes only what evaluation compiles. Spliced
+code reports the branches it takes and the failures it meets through the same
+source events compiled code reports, bound from its certificates, so a match
+whose exhaustiveness only the evaluation can decide is resolved the same way
+whichever of the two runs it. `roc check` and `roc build` therefore
 compute the same value for every root both evaluate: a build cannot report an
 error in the program that checking did not, checking reports the errors of
 roots no build demands, and `--opt` never moves a computation between compile
@@ -1800,10 +2048,10 @@ consumer still owns its complete, uncompacted LIR representation tables. The
 resulting frozen graph participates in the consumer's one reachability pass:
 its explicit function relocations retain exactly the callable procedures that
 the completed values contain, and those procedures join the ordinary runtime
-roots supplied to ARC. Guard insertion runs after that pass and reads each
-read value's outcome from the failure record in the compacted frozen graph: a
-read of a successful value is never guarded, and a read of a failed value keeps
-its ordinary runtime failure path. Worker preparation may create slots that
+roots supplied to ARC. Guard insertion runs after that pass and is independent
+of the outcome of a value that was pending when the program was lowered: the
+ordinary guard reads the completed failure record to select the successful
+read or its failure path. Worker preparation may create slots that
 lowering never reads, so no step may assume a slot present at transcoding
 survives reachability. A root that stops at a checked root's value guard is a propagated
 failure: it records the failure it read and is not reported again, because the
@@ -1825,7 +2073,17 @@ the one emitted to the backend.
 Monotype lowering records the evaluated roots whose completed values the
 program reads, once per root. A root-slot read is that stage's own explicit
 statement of the demand, so later stages consume the record instead of
-rediscovering it. When consumers split, the compile-time consumer's manifest
+rediscovering it. Already-completed checked roots carry their completion
+authority on those reads. Their exact producer return types declare stored-value
+initializers, including the required capture storage closure, before consumer
+generation. The host freezes that declared storage without evaluating the
+checked roots again; its frozen image therefore owns every value the runtime
+continuation can demand, not only values evaluated in the current CTFE slice.
+This storage-only consumer is required even when no evaluation root remains.
+An independently emitted module pack declares its closed exports and internal
+static storage as a runtime consumer of its own finalization session. Lower-only
+pack preparation does not supply completed frozen storage to object emission.
+When consumers split, the compile-time consumer's manifest
 names exactly the roots in that record that this compilation evaluates, each
 under the checked identity the evaluation records it with, and the root
 declares the one slot its value is recorded into; that declaration keeps the
@@ -1940,28 +2198,6 @@ the program roots offered, the discovery roots kept, the analysis's
 templates, source and reaching templates, and custom literal types, and the discovery bodies,
 parked, unparked, and upgraded requests, and never-run stubs.
 
-#### Compile-Time Object Packs
-
-A runtime build fills the object cache with packs of runtime-policy code;
-compile-time evaluation reads them. A command that only checks fills it too:
-once checking completes with no error, the CLI compiles the compile-time
-evaluation program's LIR again for the object cache (no compile-time hooks,
-ordinary relocatable code) and stores its keyed closed specializations as
-one pack, under the same withholding rules as a runtime pack: an entry whose
-closure reads a compile-time value slot, names another program-local symbol,
-or still converts a literal is not offered. The pack is filed beside the root
-module's packs in a separate compile-time store (`<target>-comptime`) under a
-key derived from the root module's code-generation key, which no runtime pack
-uses, so it never stands in for, removes, or completes a runtime pack, and an
-edited root files a new pack beside the old one. Every compile-time
-evaluation provider loads the compile-time store after the runtime store, so
-an entry both offer is served by the runtime pack. The provider a dev build
-for the host shares with its runtime program does not load it: that program
-must be served runtime-policy code only. Evaluation serves a compile-time
-pack's entries exactly as it serves runtime packs' (see "Early Compile-Time
-Object Reuse"), so a later check whose roots must be evaluated again splices
-the code instead of lowering and compiling it.
-
 Native compile-time instruction generation consumes an explicit, read-only LIR
 demand closure seeded by compile-time root procedures and materialized callable
 relocations. Runtime-only procedures are in that program only when the runtime
@@ -1982,16 +2218,16 @@ native procedure code ownership boundary, not a separate monolithic implementati
 The compilation session retains owned relocatable native procedure code after
 compile-time evaluation, never its JIT image. Reuse requires the same producer LIR
 domain, target/emission policy compatibility, and the procedure's recorded native
-code revision. Guard completion invalidates every recorded owner of a changed
-statement; accessor replacement advances its owner's revision once. These
+code revision. Ordinary guard publication never changes code revisions;
+consumer-owned materializer reconstruction advances only that wrapper's revision. These
 revisions survive compaction but are not cross-program identities. An independent
 target lowering cannot reuse code merely because its procedure identity matches.
-Actual hook, static-binding, dictionary-seed, and entry-initialization dependencies
-further restrict reuse across execution policies. Rejected native procedure code is emitted
+Actual target, body policy, static bindings and complete source-event certificates
+govern reuse, not execution-phase classifications. Rejected native procedure code is emitted
 from the consumer's explicit LIR; no body hashing or reconstruction proves reuse.
 
-Native procedure code contains no process-local callback or slot addresses. Compile-time hooks
-use reserved symbolic names. Mutable root bindings use producer-declared pointer
+Native procedure code contains no process-local callback or slot addresses.
+Common source events use the normal runtime ABI. Mutable root bindings use producer-declared pointer
 cells with external relocations; JIT image linking supplies the original slot
 address without copying its mutable storage. Immutable carried data is captured
 only from referenced export closure using one prepared catalog. Native procedure code ownership
@@ -2018,6 +2254,18 @@ layout. Callable template correspondence carries the frozen Monotype function
 identity plus the producer's callable-worker identity. Erased-callable plans
 carry the exact emitted drop-helper identity. Consumers may not derive these
 identities from names, code shape, or capture layouts.
+
+Literal slot symbols consume the producer's declared conversion identity even
+when the consumer emits no literal evaluation procedures. Identity cannot depend
+on another consumer's procedure manifest.
+
+Completed callable storage and its runtime read may commit different finite
+or erased carriers. Transcoding consumes the source's declared discriminant
+or procedure relocation, matches the exact producer member and captures,
+and emits the target plan's carrier. Carrier ABI alone is not callable meaning;
+the frozen function, worker, solved function type and capture-member identity
+remain the correspondence authority. Erased targets retain their explicit
+procedure, capture offset and drop-helper relocations.
 
 Object emission, native compile-time execution, and interpreter compile-time
 execution consume the same target-layout static-data materializer. In-process
@@ -2237,11 +2485,15 @@ checked program and the command, never from cache state. Discovery roots
 ("Demand-Driven Compile-Time Specialization") exist only without an LSS
 runtime consumer, so a demand-driven compilation never has them.
 
-Monotype declares every requested compile-time root up front: it reserves the
-root's entry template, so a read anywhere, including in a parallel worker's
-body draft, binds the root's real function id from the declaration table. A
-declared root's queued body is parked instead of entering the specialization
-queue. Demand is reachability over committed definitions: a definition
+Monotype declares every requested compile-time root this program may fill a
+slot for up front: it reserves the root's entry template, so a read anywhere,
+including in a parallel worker's body draft, binds the root's real function id
+from the declaration table. A root whose value an earlier compilation stored
+and a root no compilation evaluated are not declared; their reads stand for
+the value as described below, so a program that nothing finalizes against
+(an evaluation harness lowering finalized modules) never holds a slot it
+could not fill. A declared root's queued body is parked instead of entering
+the specialization queue. Demand is reachability over committed definitions: a definition
 references the definitions its body names and reads the roots its body reads,
 whether through a slot or as an expression standing for the root's value,
 and a slot read's initializer is representation evidence, not a call, so the
@@ -2312,6 +2564,15 @@ holds a diagnostic that a later compilation's evaluation could contradict.
 A build reports the compile-time failures of the roots it evaluates. A
 failure in a root no build demands is reported by `roc check`, which
 evaluates every root, including those a cache entry left unevaluated.
+
+A build may link the runtime output an earlier build recorded for the same
+checked program and build policy instead of lowering its runtime program
+again. The record carries the roots that build demanded, and the build
+evaluates and replays observations for exactly those roots, so linking a
+recorded output evaluates and observes what lowering the program would have.
+A root that no compilation evaluated, in a module this compilation does not
+finalize, has no slot to read; a program that reads it evaluates its body in
+place, as a pack program does.
 
 ## Builtins Build Their Own Tag Unions
 
@@ -4116,7 +4377,8 @@ bytes.
 
 A serialization root is a `Serialized` type whose bytes are admitted from outside
 the running compiler: `ModuleEnv.Serialized`, the checked module's `Serialized`
-layout, and `PlatformPairing.Serialized`. Each root declares a `root_contract`
+layout, `PlatformPairing.Serialized`, and the object cache's pack image
+`PackFile.Serialized`. Each root declares a `root_contract`
 (`collections.serde_validation.RootContract`) naming its owner type and every
 owner field it deliberately does not persist, every serialized field with no
 owner field, and every rename. A root's layout fingerprint
@@ -4127,9 +4389,11 @@ root that could silently drop it. There is no way to fingerprint an unregistered
 type, and an unfingerprinted type is admitted by no cache entry.
 
 `compile/cache_versioning.zig` is the only place fingerprints are composed. Each
-cache entry kind (checked module, platform pairing, canonicalized module) has one
-entry-version hash folding the kind's domain tag, its envelope and record format
-versions, and the fingerprint of every root its bodies hold. Entry headers carry
+cache entry kind (checked module, platform pairing, canonicalized module, native
+pack) has one entry-version hash folding the kind's domain tag, its envelope and
+record format versions, and the fingerprint of every root its bodies hold. The
+native pack's hash also names the store directory its packs live in, so a
+compiler never lists another layout's packs. Entry headers carry
 that hash, and admission compares it and nothing else, so a fingerprint not folded
 there guards no entry. The builtin blob's trailer is the single fingerprint of
 the checked module's `Serialized` layout, compared directly.
@@ -5281,6 +5545,16 @@ temporary dependency edges while sorting, but it must discard those edges before
 the checked module is finalized. The durable checked module data stores only the
 roots, the sorted request stream, stored `ConstStore` payloads, and sparse
 lookup indexes.
+
+The request order separates only roots whose definitions reference each other
+eagerly; a root whose evaluation applies a lambda that reads another root
+depends on it just as much, and only the root's sealed demand facts (Direct
+LIR's `CtfeDemandFacts`) record that. Finalization therefore never runs a
+batch of same-module roots in request order: it schedules each batch with
+`lir.CtfeSchedule` from those facts, publishes every root's value before the
+next root runs, and fails every root on a dependency cycle before any root
+runs, exactly as the whole-program schedule does. A read of a root outside the
+batch is beyond that schedule: the batch orders only the roots it evaluates.
 
 Canonicalization outputs the initial exact strict-demand edges between top-level
 definitions. Literal conversions remain leaves in that initial relation because
@@ -13147,6 +13421,10 @@ imported body is no account of that module's branches.
 Content-identical modules in different packages may share a checked identity
 while retaining separate checked modules and diagnostic stores. Repeated root
 plans for that identity must agree in all execution and representation data.
+Checked-root identity is exactly the checked module's artifact identity bytes
+and its module-local root id. Artifact component hashes are retained provenance,
+not equality or hashing inputs; a bytes-only cached reference and a fully
+decomposed artifact key name the same root.
 Finalization completes each checked module's own constant store and coverage,
 writes shared slots and debug observations once per identity, and applies
 checked-site observations to every checked module with that site's declared
@@ -14762,9 +15040,10 @@ reach one specialization through differently annotated call sites disagree—one
 key naming two procedure identities.
 
 A procedure identity hashes its source specialization, ABI choices, and solved
-argument, result, and capture types; the one exception is the plain procedure
-of a layout-keyed Builtin template, which hashes layouts instead (see "Layout-Keyed
-Builtin Procedures"). It excludes the outer function's callable
+argument, result, and capture types. Two plain procedures are exceptions: that
+of a layout-keyed Builtin template hashes layouts instead (see "Layout-Keyed
+Builtin Procedures"), and that of a template with an object-cache key hashes
+the key (below). It excludes the outer function's callable
 set: that set describes the contexts where the function value flows, while the
 selected source and captures already identify the procedure being compiled.
 Passing a closed imported function beside another lambda must not change its
@@ -14773,6 +15052,128 @@ nested in arguments, results, and captures remain part of identity because they
 determine runtime representations and dispatch inside the procedure. Function
 value type digests retain their complete callable sets, including when reached
 recursively from those nested positions.
+
+`specIdentityKey` names a specialization by declaration, not by module. The
+checker publishes `DeclarationIdentities` for every module: each top-level
+definition's identity is a Merkle hash of its own source text and position, the
+module's header and non-definition statements, its checking context, and the
+identities of every declaration it references, combined over strongly connected
+groups. Templates, constants, and roots take their definition's identity plus
+their ordinal within it; nominals take the module's type identity (every type
+declaration and the imported type identities) plus their ordinal. The key uses
+a template's identity where the module key and template id would otherwise go,
+procedure targets in dispatch evidence by their template's identity, and
+nominals in the request type by their declaration identity
+(`Type.Store.declarationDigestCached`, which takes the identities as an
+explicit `NominalDeclarations` argument: they are program data, never stored on
+a `TypeDef`). A pairing lowers its platform's bodies against one app, so its
+code-generation key, which digests the pairing's filling key, joins every
+template identity it lowers. A definition whose references cannot all be named
+by declaration carries its artifact key, which only costs reuse.
+
+Every function template, not only a keyed one, carries its evidence digested
+by declaration (`FnTemplate.evidence_declaration`,
+`fnEvidenceDeclarationDigest`), and a procedure's identity digests that form
+(`Lifted.Program.fnSourceDigest`): a procedure target by its template's
+identity, a local procedure target by the identity of the definition it is
+nested in and its position there, and a structural target or a checked
+structural edge by the identity of the type environment that derived it.
+Compile-time root storage initializers and static-data request thunks are
+named by the root's or the constant's declaration identity and its Monotype
+type. None of these digests a module key, so a lambda of the app, the
+specializations of imported functions whose callable sets hold it, and the
+restored values of the app's roots keep their identities across an edit that
+leaves their declarations alone.
+
+An edit to one definition therefore leaves the keys of everything that does not
+reach it unchanged, and the store keeps every revision's packs beside each
+other under the module's placement. The plain procedure of a keyed template
+takes its procedure identity from that key and the lowering choices it does not
+cover (iterator fusion, platform-requirement relation), so a cached caller's
+references to it resolve in every revision that leaves its declarations alone.
+Demand facts still name module-scoped roots and expressions, so an offer whose
+facts name a module the program does not contain is not offered: those ids
+mean nothing in any other revision, and a current module's key covers its
+imports' keys. A consumer that links a served closure declares storage and an
+accessor for every checked root that closure materializes
+(`SpecCacheHit.checked_root_uses`), not only for the hit's own eager reads: a
+lambda body inside the closure reads roots no eager read of the keyed caller
+reaches, and in another revision nothing else in the program need declare
+them.
+
+#### Identity Offers
+
+A specialization key exists only for a request whose type mentions no function:
+with a function in the request, the body depends on the program's lambda sets,
+which Monotype does not know at reservation. Such a procedure still has a
+`ProcIdentity` once Direct LIR assigns it, after lambda solving, and that
+identity names the same code in every program. So every procedure lowered from
+a template whose artifact carries a callable contract (finite ABI, no erased
+return reuse, not hosted, not a literal producer) is offered a second way: under
+its identity (`lir.Program.IdentityOffer`, `PackFile.SpecEntry.by_identity`),
+with the same serving facts a keyed offer carries (demand, compile-time root
+reads recorded per Monotype function in `SpecComptimeReads.fn_rows`, platform
+relation, refcount signature) and under the same conditions (no ownership
+variants demandable, not inlined at calls, no tail group, serving closure
+eligible, compile-time roots read but never evaluated in place). An identity
+offer of a procedure whose code reads literal roots is not made: an identity
+hit declares storage from the reads of the body it replaces, which name checked
+roots only.
+
+The consumer asks at the identity point: `finalizeFnProc`, after
+`procIdentity`, for a procedure with a body to lower that no keyed hit retired,
+under the same compile-time closure gate as the keyed Direct LIR lookup
+(`SpecCacheLookup.lookupIdentity`, `LoadedPacks.findIdentity`, which admits the
+closure of the store packs offering that identity and serves an offer only for
+the relation it depends on). A hit becomes the same `external` stub a keyed hit
+becomes: the body and everything reached only through it are not lowered, ARC
+takes the offer's signature as fixed, and the object compiler and the
+compile-time evaluator splice the offer's closure by identity. The storage an
+identity hit needs is declared from this program: Monotype lowered the body, so
+every checked root the served closure materializes is read by some body of the
+program, either through a storage request Monotype declared (a retired body's
+reads) or through a read expression, whose solved type is the root's
+representation (`declareIdentityHitReads`). A program that restores a
+completed root's value in place reads it through no expression and requested
+no storage for it, so served code compiled while that root was pending, which
+reaches the root's storage, is not linked into such a program: the offer serves
+only when every root it materializes has storage the program can declare
+(`identityHitStorageDeclarable`), and the body lowers otherwise. Identity hits
+cannot replace Monotype, closure lifting,
+SpecConstr or lambda solving for the procedures they serve, because the identity
+is computed from their output; they remove Direct LIR body lowering, the LIR
+passes, ARC emission, static data and codegen for the served closures.
+
+A procedure a pass after Direct LIR derives from a template procedure is
+offered and served by identity too. An ARC ownership variant's identity is its
+base's with the demanded signature's content (`arc-variant`); a ReturnSlot or
+StrAppend clone's is its base's with the shape the clone is specialized to
+(`call-variant`: leading argument count, extra frame locals, and the content
+digest of the layout a return-slot clone stores through, or a fixed tag for
+the string accumulator). Both are functions of the base's identity and of
+content alone, so they name the same code in every program. Every derived
+procedure records the identity of the Direct LIR procedure it derives from
+through any chain of derivations (`LirProcSpec.derived_from`), and the writer
+offers it with that base's facts (demand, compile-time root reads, platform
+relation) and its own refcount signature, under the base's owner, whenever the
+base has an identity offer whose demand permits retirement and whose code
+evaluates no root in place; the base's own `rc_variant_demandable` withholding
+does not apply, since a variant is the demanded signature. A base compaction
+dropped keeps its identity offer without a procedure while a kept procedure
+derives from it, so the variants of a base nothing calls directly are still
+offered.
+
+The passes ask before deriving: ReturnSlot and StrAppend compute the clone's
+shape and identity without cloning, and ARC's variant table computes the
+variant identity before emitting (`body_clone.VariantCache`). A hit becomes an
+`external` stub at the signature the clone or variant would have, with the
+offer's refcount facts, and the base's body is not cloned or re-emitted for
+it. The storage such a hit needs is already declared: the served code
+materializes the roots the base's code does, through the wrappers this program
+defines for them, so the pass links the offer only when every root it names
+has a slot with a materializer wrapper here (`ServedRootStorage`), and marks
+those slots as read by a retired body so reachability keeps their wrappers
+when the base itself becomes unreachable.
 
 A compiler-generated body retains its own source key. A field-names iterator
 step, a structural parser or encoder runtime, and a
@@ -18132,11 +18533,16 @@ lifetime and is not the shared-memory IPC transport.
 
 Recursive layout commitment interns unrolled copies of recursive nodes
 before selecting boxed slots. Once a recursive component has exact structural
-keys, its nodes also record their one-step encodings with settled child digests.
+keys, its nodes also record their one-step encodings with settled child digests,
+and the store keeps the one-step shape of every member of the settled group.
 An acyclic node with that same encoding inherits the recursive node's key and
-representation. Thus an unrolled record and its recursive counterpart commit
-the same field storage; graph sharing cannot make one inline and the other
-boxed. Procedure reuse by solved type identity consumes this consistent layout
+representation. A cyclic component that refers into a settled group (a copy of
+a recursive type unrolled through one of its own recursive references) is
+paired coinductively against the group's member shapes and inherits the
+group's keys when every member pairs. Thus an unrolled record and its recursive
+counterpart commit the same field storage, and two spellings of one recursive
+type commit the same layout whether they meet in one graph or in separate
+commits; graph sharing cannot make one inline and the other boxed. Procedure reuse by solved type identity consumes this consistent layout
 commitment.
 
 Layout selection is the first stage that chooses runtime encodings:
@@ -19792,7 +20198,13 @@ identity and its local by position in the procedure's frame. Under
 LIR fingerprint with program numbering canonicalized, by the key a pack
 serves it by, and the CLI suite checks that each offered key has one
 fingerprint across a build, an edited warm build, and the edited source's
-cold build.
+cold build. Under `ROC_IDENTITY_TRACE`, every procedure identity prints with
+the digests it is made of (the lifted function's source digest and its
+template, evidence and type components, the identity renderer's argument,
+result and capture digests, the declaration units of each checked module, and
+every named type, callable set member or field default the renderer could not
+name by declaration), so two builds' traces show which component an edit
+moved.
 
 ### Outcome-Conditioned Argument Restitution
 
@@ -22152,33 +22564,59 @@ complete identity and requires one exact target member. These identities are
 positions in one Solved program, which is why every LSS runtime consumer
 continues evaluation's Solved program rather than preparing its own.
 
-Shared compile-time execution completes slots on demand. Each declared
-value and failure slot carries its producer's exact checked module and root ID.
-Before reading a static slot, the compile-time interpreter or native hook asks
-the session to ensure that producer has completed. Ordinary materialized slots
-are already ready. A pending producer runs synchronously with independent host,
-return storage, and execution state; the result is stored before the suspended
-read resumes. Completed producers never run again. Re-entering an active
-producer reports an actual cyclic compile-time value dependency through the
-ordinary compile-time crash path. No execution is probed, abandoned, or retried.
+Shared compile-time execution follows the producer-authored eager demand graph.
+Invoked callable bodies contribute eager reads; capturing their addresses does
+not eagerly evaluate latent bodies. Recursive callable components share demand
+summaries. The graph has a node for every expression, statement and function
+of the lifted program, but only function nodes are ever summarized
+(`ctfe_demand.Graph.initWithSummaryStart`), so sealing materializes the
+transitive reads of a component only when a function belongs to it; a
+component of expressions keeps its own reads and its dependency components,
+and a function's materialization walks those once, stopping at the
+materialized summary of every function it reaches. The root graph is
+condensed into SCCs and evaluated serially in
+dependency order. Every cyclic root component is terminalized before any root
+runs, so cycle diagnostics cannot depend on execution order. Every predecessor
+must be complete before evaluation in every optimization mode. Ordinary reads
+consume preallocated stable headers; neither interpreter nor native code asks
+the session to ensure or reenter a producer.
 
 Writing completed slot values uses session-local reverse links indexed by the
 existing lowering-module and producer IDs. Every representation-specific slot belongs
 to its producer's list; a consumer's optional materialization slot is not a
-complete inventory. Demand and completed slot writes share that association.
-Guard insertion records each slot's guards and their procedure owners, so successful
-completion touches only the affected guards and invalidates each owner's native
-code. Frozen exports retain a direct slot-to-export index. None of these
-execution indexes is serialized in `CheckedModule`. Interpreter forks share the session's append-only frozen-callable registry; resuming after
-nested demand refreshes the borrowed slice, without rescanning completed images.
+complete inventory. Schedule planning and completed slot writes share that
+association. Publication copies value or failure data into the existing header
+without changing its address, ordinary guard CFG, procedure identity or native
+code revision. Frozen exports retain a direct slot-to-export index. None of
+these execution indexes is serialized in `CheckedModule`. Interpreter forks
+share the session's append-only frozen-callable registry.
 
-All declared roots are still requested for diagnostics. Session execution is
-serial and nested demands execute on the same thread; lowering and specialization
-retain their independent parallelism. This preserves the executed dependency
-path for conditional and erased calls without approximating it by every latent
-closure body. Runtime consumers have no demand hook and receive only completed
-slot images. Operational failures unwind through the host boundary and retain
-their original error identity instead of becoming language crashes.
+All declared roots are requested for diagnostics. Root execution is serial;
+lowering and specialization retain their independent parallelism. Cached bodies
+must carry complete qualified demand and exact literal producer recipes before
+retirement; missing compiler producer facts are invariant failures, whereas
+unsupported external cache records decline admission. Runtime consumers receive
+only completed slot images. Operational failures unwind through the host
+boundary and retain their original error identity instead of becoming language
+crashes.
+
+Cold discovery and cached replay prepare specialized literal producers through
+one fresh lexical-context factory. Recorded callable types, evidence, and local
+declaration identities define that context; helper locals do not. The context
+is type-only: a conversion is a method, and methods never capture (see "Methods
+Never Capture"), so a producer reads no value of its enclosing function. Its
+whole body, including the conversion's dispatch, is evaluation demand.
+
+The exact source/specialization key and target/policy namespace select immutable
+producer metadata. Type-only literal projection consumes that producer's recorded
+result representation directly; it neither rechecks source types nor reconstructs
+the conversion's lexical context. Noncallable declarations travel as layout
+requests through Lift and Solve, and ordinary LIR type/layout commitment emits
+their materialization certificate without preparing a procedure. This is storage
+work needed by cached code, not a second cache-validation compiler. Callable
+results require lambda-set and capture ABI authority absent from portable
+`ConstType.func` and remain unsupported until that authority is produced.
+Projection and executable accessors share one wrapper-identity rule.
 
 
 ## LirImage And Hosted Functions

@@ -51,6 +51,11 @@ pub fn run(store: *LirStore) ResourceError!void {
     try body_clone.CallResultFusion(Spec).run(store, {});
 }
 
+/// `run`, linking variants the object cache offers instead of cloning them.
+pub fn runWithCache(store: *LirStore, cache: body_clone.VariantCache) ResourceError!void {
+    try body_clone.CallResultFusion(Spec).runWithCache(store, {}, cache);
+}
+
 /// The consumer this pass fuses: a `str_concat` whose right operand is the
 /// call result.
 const Spec = struct {
@@ -92,14 +97,23 @@ const Spec = struct {
         };
     }
 
-    pub fn createVariant(_: State, store: *LirStore, key: VariantKey) ResourceError!LIR.LirProcSpecId {
+    /// The variant takes the accumulator string ahead of the source's
+    /// arguments and returns the appended string; the shape has no layout
+    /// choice, so a fixed tag names it.
+    pub fn variantShape(_: State, _: VariantKey) ResourceError!body_clone.CallVariantShape {
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.Blake3.hash("roc.call-variant.str-append", &digest, .{});
+        return .{ .leading_layouts = .{.str}, .leading_count = 1, .extra_frame_locals = 0, .ret_layout = .str, .shape_digest = digest };
+    }
+
+    pub fn createVariant(store: *LirStore, key: VariantKey, variant_shape: body_clone.CallVariantShape) ResourceError!LIR.LirProcSpecId {
         const accumulator = try store.addLocal(.{ .layout_idx = .str });
         return try body_clone.cloneCallVariant(
             AppendRewriter,
             store,
             key.source,
             .{ .accumulator = accumulator },
-            .{ .leading_args = &.{accumulator}, .ret_layout = .str },
+            .{ .leading_args = &.{accumulator}, .ret_layout = .str, .shape_digest = variant_shape.shape_digest },
         );
     }
 };

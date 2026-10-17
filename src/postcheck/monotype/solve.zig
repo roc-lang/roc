@@ -33,6 +33,29 @@ const Ident = base.Ident;
 pub const EntryRoot = struct {
     module: checked.ModuleId,
     root: checked.ComptimeRootId,
+
+    pub fn eql(a: EntryRoot, b: EntryRoot) bool {
+        return a.module.eql(b.module) and a.root == b.root;
+    }
+
+    pub const Context = struct {
+        pub fn hash(_: Context, key: EntryRoot) u64 {
+            var hasher = std.hash.Wyhash.init(0);
+            hasher.update(&key.module.bytes);
+            const root = @backingInt(key.root);
+            hasher.update(std.mem.asBytes(&root));
+            return hasher.final();
+        }
+
+        pub fn eql(_: Context, a: EntryRoot, b: EntryRoot) bool {
+            return a.eql(b);
+        }
+    };
+
+    /// Artifact decomposition is provenance, not part of checked-root identity.
+    pub fn Map(comptime Value: type) type {
+        return std.HashMap(EntryRoot, Value, Context, std.hash_map.default_max_load_percentage);
+    }
 };
 
 /// Identity of a node in a specialization's instantiation graph.

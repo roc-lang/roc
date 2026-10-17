@@ -1,5 +1,5 @@
 //! Links object-cache entries spliced into the compile-time evaluator's
-//! image. Compile-time hooks remain symbolic until executable linking;
+//! image. Source events use the same normal runtime service as applications;
 //! a spliced entry was compiled as object
 //! code and reaches everything by name: the host's runtime symbols, the
 //! builtins, the boxy runtime, compiler-rt and the C memory routines, hosted
@@ -15,6 +15,7 @@
 //! reference resolves to something inside the mapping.
 
 const std = @import("std");
+const base = @import("base");
 const builtin = @import("builtin");
 const builtins = @import("builtins");
 const lir = @import("lir");
@@ -25,6 +26,7 @@ const StaticDataImage = @import("StaticDataImage.zig").StaticDataImage;
 const relocation_mod = @import("Relocation.zig");
 const ExecutableMemory = @import("ExecutableMemory.zig").ExecutableMemory;
 const SpliceSource = @import("ObjectFileCompiler.zig").SpliceSource;
+const LocatedArtifact = @import("ObjectFileCompiler.zig").LocatedArtifact;
 const spliceExternalProcs = @import("ObjectFileCompiler.zig").spliceExternalProcs;
 
 const Allocator = std.mem.Allocator;
@@ -54,6 +56,9 @@ pub const HostSplice = struct {
     data_names: std.StringHashMap(u32),
     /// Each data item's offset in the mapping once `link` has laid it out.
     data_offsets: std.StringHashMap(usize),
+    /// Each data item's symbol offset in the mapping, which references to
+    /// its name resolve to, once `link` has laid it out.
+    data_symbol_offsets: std.StringHashMap(usize),
     /// Hosted functions spliced code calls, by name, with the stub's code
     /// offset.
     hosted_stubs: std.StringHashMap(usize),
@@ -61,24 +66,23 @@ pub const HostSplice = struct {
     spliced_procs: usize = 0,
     /// The name of the last relocation `link` could not bind.
     unresolved: ?[]const u8 = null,
-    /// Process-local bindings, never carried by reusable code or artifacts.
-    comptime_hooks: ?LirCodeGenMod.ComptimeHooks = null,
     /// Owned names for borrowed process data; mutable slots must not be copied.
     static_data_bindings: std.StringHashMapUnmanaged(usize) = .empty,
+    generated_cells: std.ArrayList(*GeneratedCell) = .empty,
+
+    const GeneratedCell = struct {
+        bytes: [8]u8 = @splat(0),
+        relocations: [1]ProcArtifact.DataRelocation,
+    };
 
     pub fn init(allocator: Allocator) HostSplice {
         return .{
             .allocator = allocator,
             .data_names = std.StringHashMap(u32).init(allocator),
             .data_offsets = std.StringHashMap(usize).init(allocator),
+            .data_symbol_offsets = std.StringHashMap(usize).init(allocator),
             .hosted_stubs = std.StringHashMap(usize).init(allocator),
         };
-    }
-
-    /// The callbacks must remain callable for the linked executable's lifetime.
-    /// Runtime object generation leaves these bindings unset.
-    pub fn setComptimeHooks(self: *HostSplice, hooks: ?LirCodeGenMod.ComptimeHooks) void {
-        self.comptime_hooks = hooks;
     }
 
     /// Copy explicit symbol bindings, not data. The image allocation must outlive
@@ -98,13 +102,28 @@ pub const HostSplice = struct {
         }
     }
 
+    /// A producer-declared semantic header may live outside the code image;
+    /// only the current consumer owns and updates its storage.
+    pub fn bindExternalDataAddress(self: *HostSplice, name: []const u8, address: usize) Allocator.Error!void {
+        if (self.static_data_bindings.get(name)) |existing| {
+            if (existing != address) base.invariant("semantic data provision changed its stable address", .{});
+            return;
+        }
+        const owned = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned);
+        try self.static_data_bindings.putNoClobber(self.allocator, owned, address);
+    }
+
     pub fn deinit(self: *HostSplice) void {
         self.data.deinit(self.allocator);
         self.data_names.deinit();
         self.data_offsets.deinit();
+        self.data_symbol_offsets.deinit();
         var bindings = self.static_data_bindings.keyIterator();
         while (bindings.next()) |name| self.allocator.free(name.*);
         self.static_data_bindings.deinit(self.allocator);
+        for (self.generated_cells.items) |cell| self.allocator.destroy(cell);
+        self.generated_cells.deinit(self.allocator);
         var stubs = self.hosted_stubs.keyIterator();
         while (stubs.next()) |name| self.allocator.free(name.*);
         self.hosted_stubs.deinit();
@@ -115,15 +134,48 @@ pub const HostSplice = struct {
     /// into the open code generator, before the program's own procedures
     /// compile.
     pub fn spliceExternal(self: *HostSplice, codegen: *HostLirCodeGen, demand: []const lir.LIR.LirProcSpecId, source: SpliceSource) Allocator.Error!void {
+        return self.spliceExternalBound(codegen, demand, source, null);
+    }
+
+    pub const ContextBinder = struct {
+        context: *anyopaque,
+        /// One atomic batch: allocate and bind all selected serving closures
+        /// before the object splice can expose any of their bytes.
+        prepare: *const fn (*anyopaque, []const LocatedArtifact) Allocator.Error![]const LocatedArtifact,
+    };
+
+    pub fn spliceExternalBound(self: *HostSplice, codegen: *HostLirCodeGen, demand: []const lir.LIR.LirProcSpecId, source: SpliceSource, context_binder: ?ContextBinder) Allocator.Error!void {
         var external = std.ArrayList(lir.LIR.LirProcSpecId).empty;
         defer external.deinit(self.allocator);
         for (demand) |proc_id| {
             if (codegen.store.getProcSpecImmediate(proc_id).external) try external.append(self.allocator, proc_id);
         }
         if (external.items.len == 0) return;
+        const BoundSource = struct {
+            artifacts: std.AutoHashMap(lir.ProcIdentity, LocatedArtifact),
+
+            fn find(context: *anyopaque, identity: lir.ProcIdentity) ?LocatedArtifact {
+                const bound_source: *@This() = @ptrCast(@alignCast(context));
+                return bound_source.artifacts.get(identity);
+            }
+        };
+        var bound = BoundSource{ .artifacts = std.AutoHashMap(lir.ProcIdentity, LocatedArtifact).init(self.allocator) };
+        defer bound.artifacts.deinit();
+        var selected_source = source;
+        if (context_binder) |binder| {
+            const located = try self.allocator.alloc(LocatedArtifact, external.items.len);
+            defer self.allocator.free(located);
+            for (external.items, located) |id, *artifact| {
+                artifact.* = source.find(source.context, codegen.store.getProcSpec(id).identity) orelse unreachable;
+            }
+            const prepared = try binder.prepare(binder.context, located);
+            std.debug.assert(prepared.len == located.len);
+            for (external.items, prepared) |id, artifact| try bound.artifacts.put(codegen.store.getProcSpec(id).identity, artifact);
+            selected_source = .{ .context = &bound, .find = BoundSource.find };
+        }
         var carried = std.ArrayList(ProcArtifact.DataItem).empty;
         defer carried.deinit(self.allocator);
-        try spliceExternalProcs(HostLirCodeGen, self.allocator, codegen, codegen.store.getProcSpecs(), external.items, source, &carried);
+        try spliceExternalProcs(HostLirCodeGen, self.allocator, codegen, codegen.store.getProcSpecs(), external.items, selected_source, &carried);
         try self.addDataItems(carried.items);
         self.spliced_procs += external.items.len;
     }
@@ -147,7 +199,24 @@ pub const HostSplice = struct {
     /// evaluator's own code names one where it takes a hosted function as a
     /// value. Runs after every procedure is compiled and before the image
     /// is finished.
+    fn addGeneratedData(self: *HostSplice, codegen: *const HostLirCodeGen) Allocator.Error!void {
+        for (codegen.sourceEventData()) |item| {
+            try self.addDataItems(&.{.{ .name = item.name, .bytes = item.bytes, .alignment = 4, .symbol_offset = 0, .relocations = &.{} }});
+        }
+        for (codegen.bindingDataCells()) |binding| {
+            if (self.data_names.contains(binding.name)) continue;
+            const cell = try self.allocator.create(GeneratedCell);
+            cell.* = .{ .relocations = .{.{ .offset = 0, .name = binding.target_name, .addend = 0, .function = false, .external = true }} };
+            {
+                errdefer self.allocator.destroy(cell);
+                try self.generated_cells.append(self.allocator, cell);
+            }
+            try self.addDataItems(&.{.{ .name = binding.name, .bytes = &cell.bytes, .alignment = 8, .symbol_offset = 0, .relocations = &cell.relocations }});
+        }
+    }
+
     pub fn generateHostedStubs(self: *HostSplice, codegen: *HostLirCodeGen, boxy_native_fns: *const BoxyNativeFnTable) Allocator.Error!void {
+        try self.addGeneratedData(codegen);
         var code_symbols = std.StringHashMap(usize).init(self.allocator);
         defer {
             var keys = code_symbols.keyIterator();
@@ -168,7 +237,6 @@ pub const HostSplice = struct {
                 },
                 .local_data, .jmp_to_return, .retired => continue,
             };
-            if (ComptimeHook.fromName(name) != null) continue;
             if (compilerFunction(name, boxy_native_fns) != null or code_symbols.contains(name) or self.data_names.contains(name) or self.hosted_stubs.contains(name)) continue;
             if (!containsName(needed.items, name)) try needed.append(self.allocator, name);
         }
@@ -178,7 +246,6 @@ pub const HostSplice = struct {
             // process slots reached through symbolic pointer cells.
             if (!relocation.function) continue;
             const name = relocation.name;
-            if (ComptimeHook.fromName(name) != null) continue;
             if (compilerFunction(name, boxy_native_fns) != null or code_symbols.contains(name) or self.data_names.contains(name) or self.hosted_stubs.contains(name)) continue;
             if (!containsName(needed.items, name)) try needed.append(self.allocator, name);
         };
@@ -194,6 +261,7 @@ pub const HostSplice = struct {
     /// of the compiler it calls a stub, define the carried data, and patch
     /// every relocation.
     pub fn link(self: *HostSplice, codegen: *HostLirCodeGen, boxy_native_fns: *const BoxyNativeFnTable) LinkError!ExecutableMemory {
+        try self.addGeneratedData(codegen);
         const code = codegen.getGeneratedCode();
         const names = codegen.getSymbolNames();
 
@@ -254,6 +322,7 @@ pub const HostSplice = struct {
         for (self.data.items) |item| {
             total = std.mem.alignForward(usize, total, @max(item.alignment, 1));
             try self.data_offsets.put(item.name, total);
+            try self.data_symbol_offsets.put(item.name, total + item.symbol_offset);
             total += @max(item.bytes.len, 1);
         }
 
@@ -305,33 +374,6 @@ fn containsName(names: []const []const u8, name: []const u8) bool {
 
 const Binding = enum { compiler_function, image, process_data, unresolved };
 
-/// These private ABI names cannot be supplied by a platform or an artifact.
-const ComptimeHook = enum {
-    ensure_static_value,
-    branch_taken,
-    exhaustiveness_failed,
-    failure_region,
-    call_enter,
-    call_exit,
-
-    fn fromName(name: []const u8) ?ComptimeHook {
-        return std.StaticStringMap(ComptimeHook).initComptime(.{
-            .{ "roc__comptime_ensure_static_value", .ensure_static_value },
-            .{ "roc__comptime_branch_taken", .branch_taken },
-            .{ "roc__comptime_exhaustiveness_failed", .exhaustiveness_failed },
-            .{ "roc__comptime_failure_region", .failure_region },
-            .{ "roc__comptime_call_enter", .call_enter },
-            .{ "roc__comptime_call_exit", .call_exit },
-        }).get(name);
-    }
-
-    fn address(self: ComptimeHook, hooks: LirCodeGenMod.ComptimeHooks) usize {
-        return switch (self) {
-            inline .ensure_static_value, .branch_taken, .exhaustiveness_failed, .failure_region, .call_enter, .call_exit => |hook| @intFromPtr(@field(hooks, @tagName(hook))),
-        };
-    }
-};
-
 /// Resolves relocation names against the compiler and the image.
 const Binder = struct {
     splice: *HostSplice,
@@ -345,11 +387,6 @@ const Binder = struct {
     /// Bind `name` before the image exists, registering a stub for a
     /// function of the compiler.
     fn classify(self: *Binder, name: []const u8) Allocator.Error!Binding {
-        if (ComptimeHook.fromName(name)) |hook| {
-            const hooks = self.splice.comptime_hooks orelse return .unresolved;
-            try self.stub_targets.put(self.allocator, hook.address(hooks), {});
-            return .compiler_function;
-        }
         if (compilerFunction(name, self.boxy_native_fns)) |target| {
             try self.stub_targets.put(self.allocator, target, {});
             return .compiler_function;
@@ -359,21 +396,13 @@ const Binder = struct {
     }
 
     fn address(self: *const Binder, name: []const u8) ?usize {
-        if (ComptimeHook.fromName(name)) |hook| {
-            const hooks = self.splice.comptime_hooks orelse return null;
-            const index = self.stub_targets.getIndex(hook.address(hooks)) orelse return null;
-            return self.image_base + self.stubs_start + index * stub_size;
-        }
         if (compilerFunction(name, self.boxy_native_fns)) |target| {
             const index = self.stub_targets.getIndex(target) orelse return null;
             return self.image_base + self.stubs_start + index * stub_size;
         }
         if (self.splice.hosted_stubs.get(name)) |offset| return self.image_base + offset;
         if (self.code_symbols.get(name)) |offset| return self.image_base + offset;
-        if (self.splice.data_offsets.get(name)) |offset| {
-            const index = self.splice.data_names.get(name) orelse unreachable;
-            return self.image_base + offset + self.splice.data.items[index].symbol_offset;
-        }
+        if (self.splice.data_symbol_offsets.get(name)) |offset| return self.image_base + offset;
         return null;
     }
 
@@ -383,15 +412,12 @@ const Binder = struct {
     }
 
     fn classifyData(self: *Binder, name: []const u8) Allocator.Error!Binding {
-        // Private hooks cannot be supplied as data by a caller, either.
-        if (ComptimeHook.fromName(name) == null and self.splice.static_data_bindings.contains(name)) return .process_data;
+        if (self.splice.static_data_bindings.contains(name)) return .process_data;
         return self.classify(name);
     }
 
     fn dataAddress(self: *const Binder, name: []const u8) ?usize {
-        if (ComptimeHook.fromName(name) == null) {
-            if (self.splice.static_data_bindings.get(name)) |address_value| return address_value;
-        }
+        if (self.splice.static_data_bindings.get(name)) |address_value| return address_value;
         return self.address(name);
     }
 
@@ -404,10 +430,14 @@ const Binder = struct {
 /// The compiler's own function `name` binds to: a builtin, a runtime symbol
 /// of the in-process host, a boxy runtime function, or a compiler-rt or C
 /// routine. The dict seed is the compile-time evaluator's fixed zero, as it
-/// is in the evaluator's own code.
+/// is in the evaluator's own code: a dict built at compile time records that
+/// it hashes with the zero seed, so the executable that freezes it reads it
+/// with that seed too, while the same object code calls the runtime's seed
+/// when the runtime links it.
 fn compilerFunction(name: []const u8, boxy_native_fns: *const BoxyNativeFnTable) ?usize {
+    if (std.mem.eql(u8, name, builtins.source_events.symbol_name)) return builtins.source_events.address();
     if (BuiltinFn.fromSymbolName(name)) |builtin_fn| {
-        if (builtin_fn == .dict_pseudo_seed) return @intFromPtr(&comptimeDictSeed);
+        if (builtin_fn == .dict_pseudo_seed) return @intFromPtr(&compileTimeDictSeed);
         return builtin_fn.wrapperAddress();
     }
     if (builtins.in_process_host.Symbol.fromName(name)) |symbol| return symbol.address();
@@ -415,19 +445,130 @@ fn compilerFunction(name: []const u8, boxy_native_fns: *const BoxyNativeFnTable)
     return builtins.native_runtime_libcalls.resolve(name);
 }
 
-fn comptimeDictSeed() callconv(.c) u64 {
-    return 0;
+test "physical region symbols preserve duplicate proc helper and thunk offsets" {
+    if (comptime !LirCodeGenMod.host_lir_codegen_available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try @import("layout").Store.init(allocator, @import("base").target.TargetUsize.native);
+    defer layouts.deinit();
+    var cg = try HostLirCodeGen.init(allocator, &store, &layouts, .{}, &.{}, .default);
+    defer cg.deinit();
+    const identity = lir.ProcIdentity.forTest(912);
+    var starts: [6]usize = undefined;
+    for (&starts, 0..) |*start, i| {
+        const kind: HostLirCodeGen.CodeRegionKind = switch (i / 2) {
+            0 => .{ .spliced_proc = identity },
+            1 => .spliced_helper,
+            2 => .{ .spliced_boxy_thunk = identity },
+            else => unreachable,
+        };
+        start.* = try cg.appendAssembledRegion(&.{ 0, 0, 0, 0 }, kind, 1, null);
+        if (i / 2 == 1) cg.code_regions.items[cg.code_regions.items.len - 1].artifact_helper_name = "duplicate_helper";
+    }
+    try cg.bindAssembledProc(identity, starts[1] + 1);
+    try cg.registerSplicedHelper("duplicate_helper", starts[3] + 1);
+    var symbols = std.StringHashMap(usize).init(allocator);
+    defer {
+        var names = symbols.keyIterator();
+        while (names.next()) |name| allocator.free(name.*);
+        symbols.deinit();
+    }
+    try collectCodeSymbols(allocator, &cg, &symbols);
+    for (starts, 0..) |start, i| {
+        const id = cg.codeRegions()[i].physical_symbol orelse unreachable;
+        try std.testing.expectEqual(id, try cg.internRegionCodeSymbol(start, 1));
+        try std.testing.expectEqual(@import("SymbolTable.zig").Scope.program, cg.symbolScope(id));
+        try std.testing.expectEqual(start + 1, symbols.get(cg.symbolName(id)).?);
+    }
+    const logical = try identity.symbolName(allocator);
+    defer allocator.free(logical);
+    try std.testing.expectEqual(starts[1] + 1, symbols.get(logical).?);
+    try std.testing.expectEqual(starts[3] + 1, symbols.get("duplicate_helper").?);
+    try std.testing.expectEqual(@as(usize, 8), symbols.count());
 }
 
-/// Every procedure and refcount helper of the image by the name object code
-/// gives it: the program's own, and the spliced ones.
-fn collectCodeSymbols(allocator: Allocator, codegen: *const HostLirCodeGen, out: *std.StringHashMap(usize)) Allocator.Error!void {
+test "selected procedure logical symbols and recapture preserve nonzero entry" {
+    if (comptime !LirCodeGenMod.host_lir_codegen_available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try @import("layout").Store.init(allocator, @import("base").target.TargetUsize.native);
+    defer layouts.deinit();
+    const identity = lir.ProcIdentity.forTest(913);
+    const message = try store.insertString("unused body");
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = identity,
+        .args = .empty(),
+        .body = try store.addCFStmt(.{ .crash = .{ .msg = .{ .literal = message } } }, .test_fixture),
+        .ret_layout = .zst,
+    }, .none);
+    var cg = try HostLirCodeGen.init(allocator, &store, &layouts, .{}, &.{}, .default);
+    defer cg.deinit();
+    _ = try cg.appendAssembledRegion("\x00\x00\x00\x00\x00\x00\x00\x00", .entrypoint, 0, null);
+    const start = try cg.appendAssembledRegion("\x00\x00\x00\x00\x00\x00\x00\x00", .{ .proc = proc }, 4, .{
+        .prologue_size = 0,
+        .stack_alloc = 0,
+        .frame_size = 0,
+        .callee_saved_mask = 0,
+        .epilogue_offset = 0,
+        .uses_frame_pointer = false,
+    });
+    try std.testing.expectEqual(start + 4, cg.compiledProcSymbol(proc).?.code_start);
+    try std.testing.expectEqual(start, cg.codeRegions()[1].start);
+    var symbols = std.StringHashMap(usize).init(allocator);
+    defer {
+        var names = symbols.keyIterator();
+        while (names.next()) |name| allocator.free(name.*);
+        symbols.deinit();
+    }
+    try collectCodeSymbols(allocator, &cg, &symbols);
+    const logical = try identity.symbolName(allocator);
+    defer allocator.free(logical);
+    try std.testing.expectEqual(start + 4, symbols.get(logical).?);
+    const physical = cg.codeRegions()[1].physical_symbol.?;
+    try std.testing.expectEqual(start + 4, symbols.get(cg.symbolName(physical)).?);
+    try cg.finishImage();
+    var recaptured = try ProcArtifact.extract(HostLirCodeGen, allocator, &cg, store.getProcSpecs(), &layouts, &.{}, &.{}, &.{});
+    defer recaptured.deinit();
+    try std.testing.expectEqual(@as(u32, 4), recaptured.artifacts[1].entry);
+}
+
+/// Physical declarations preserve every callable variant. Logical declarations
+/// are aliases of consumer-selected providers, never dependency discovery.
+fn collectCodeSymbols(allocator: Allocator, codegen: *HostLirCodeGen, out: *std.StringHashMap(usize)) Allocator.Error!void {
     for (codegen.codeRegions()) |region| {
+        switch (region.kind) {
+            .proc, .spliced_proc, .rc_helper, .spliced_helper, .boxy_thunk, .spliced_boxy_thunk => {
+                const id = try codegen.internRegionCodeSymbol(region.start, region.entry);
+                const name = try allocator.dupe(u8, codegen.symbolName(id));
+                errdefer allocator.free(name);
+                const gop = try out.getOrPut(name);
+                if (gop.found_existing) allocator.free(name);
+                gop.value_ptr.* = region.start + region.entry;
+            },
+            .entrypoint, .message_pool_run, .branch_island, .hosted_stub => continue,
+        }
         const name: []u8 = switch (region.kind) {
-            .proc => |proc_id| try codegen.store.getProcSpecImmediate(proc_id).identity.symbolName(allocator),
-            .spliced_proc => |identity| try identity.symbolName(allocator),
-            .rc_helper => |key| try LirCodeGenMod.compiledRcHelperSymbolName(allocator, codegen.layout_store, key),
-            .spliced_helper => try allocator.dupe(u8, codegen.splicedHelperName(region.start + region.entry) orelse continue),
+            .proc => |proc_id| blk: {
+                const selected = codegen.compiledProcSymbol(proc_id) orelse continue;
+                if (selected.code_start != region.start + region.entry) continue;
+                break :blk try codegen.store.getProcSpecImmediate(proc_id).identity.symbolName(allocator);
+            },
+            .spliced_proc => |identity| blk: {
+                if (codegen.spliced_proc_starts.get(identity) != region.start + region.entry) continue;
+                break :blk try identity.symbolName(allocator);
+            },
+            .rc_helper => |key| blk: {
+                if (codegen.compiledRcHelperOffset(key) != region.start + region.entry) continue;
+                break :blk try LirCodeGenMod.compiledRcHelperSymbolName(allocator, codegen.layout_store, key);
+            },
+            .spliced_helper => blk: {
+                const name = region.artifact_helper_name orelse continue;
+                if (codegen.spliced_helper_offsets.get(name) != region.start + region.entry) continue;
+                break :blk try allocator.dupe(u8, name);
+            },
             .boxy_thunk, .spliced_boxy_thunk, .entrypoint, .message_pool_run, .branch_island, .hosted_stub => continue,
         };
         errdefer allocator.free(name);
@@ -454,12 +595,18 @@ fn writeStub(stub: *[stub_size]u8, target: usize) void {
     } else unreachable;
 }
 
-test "compiler functions resolve and the dict seed is the evaluator's zero" {
+/// The compile-time evaluator's dict seed (`DictSeedMode.comptime_zero`).
+fn compileTimeDictSeed() callconv(.c) u64 {
+    return 0;
+}
+
+test "compiler functions resolve the same normal builtin runtime symbols" {
     var table: BoxyNativeFnTable = undefined;
     @memset(&table, 0);
     try std.testing.expect(compilerFunction("roc_alloc", &table) != null);
     try std.testing.expect(compilerFunction(BuiltinFn.crash_str.symbolName(), &table) != null);
-    try std.testing.expectEqual(@intFromPtr(&comptimeDictSeed), compilerFunction(BuiltinFn.dict_pseudo_seed.symbolName(), &table).?);
+    try std.testing.expectEqual(@intFromPtr(&compileTimeDictSeed), compilerFunction(BuiltinFn.dict_pseudo_seed.symbolName(), &table).?);
+    try std.testing.expectEqual(@as(u64, 0), compileTimeDictSeed());
     try std.testing.expect(compilerFunction("memcpy", &table) != null);
     try std.testing.expect(compilerFunction("roc__p00", &table) == null);
 }
@@ -479,26 +626,7 @@ test "a stub jumps to its target" {
     try std.testing.expectEqual(@as(u64, 42), stub());
 }
 
-test "comptime hook bindings are explicit for every private ABI symbol" {
-    const Hooks = struct {
-        var exited: bool = false;
-        fn ensure(_: u32) callconv(.c) void {}
-        fn branch(_: u32, _: u32) callconv(.c) void {}
-        fn exhaustive(_: u32) callconv(.c) void {}
-        fn region(_: u32, _: u32, _: u32, _: u32, _: u32, _: u32) callconv(.c) void {}
-        fn enter(_: u32, _: u32, _: u32, _: u32, _: u32) callconv(.c) void {}
-        fn exit() callconv(.c) void {
-            exited = true;
-        }
-    };
-    const hooks: LirCodeGenMod.ComptimeHooks = .{
-        .ensure_static_value = &Hooks.ensure,
-        .branch_taken = &Hooks.branch,
-        .exhaustiveness_failed = &Hooks.exhaustive,
-        .failure_region = &Hooks.region,
-        .call_enter = &Hooks.enter,
-        .call_exit = &Hooks.exit,
-    };
+test "common source service binds normally and unavailable symbols remain unresolved" {
     const allocator = std.testing.allocator;
     var splice = HostSplice.init(allocator);
     defer splice.deinit();
@@ -517,52 +645,97 @@ test "comptime hook bindings are explicit for every private ABI symbol" {
         .image_base = 4096,
         .stubs_start = 32,
     };
-    inline for (@typeInfo(ComptimeHook).@"enum".field_names) |field_name| {
-        const name = "roc__comptime_" ++ field_name;
-        // Even an image definition cannot mask a missing private binding.
-        try symbols.put(name, 8);
-        try std.testing.expectEqual(Binding.unresolved, try binder.classify(name));
-        try std.testing.expectEqual(null, binder.address(name));
-        try std.testing.expectEqual(@as(usize, 0), targets.count());
-    }
-    splice.setComptimeHooks(hooks);
-    inline for (@typeInfo(ComptimeHook).@"enum".field_names) |field_name| {
-        const name = "roc__comptime_" ++ field_name;
-        const target = @intFromPtr(@field(hooks, field_name));
-        try std.testing.expectEqual(Binding.compiler_function, try binder.classify(name));
-        const index = targets.getIndex(target).?;
-        try std.testing.expectEqual(@as(?usize, 4096 + 32 + index * stub_size), binder.address(name));
-    }
-    try std.testing.expectEqual(null, ComptimeHook.fromName("roc__comptime_call_exit_extra"));
-    try std.testing.expectEqual(null, ComptimeHook.fromName("roc__comptime_unknown"));
-    try std.testing.expectEqual(Binding.unresolved, try binder.classify("roc__comptime_unknown"));
+    try std.testing.expectEqual(Binding.unresolved, try binder.classify("unavailable_native_service"));
+    try std.testing.expectEqual(null, binder.address("unavailable_native_service"));
+    try std.testing.expectEqual(@as(usize, 0), targets.count());
+    try std.testing.expectEqual(Binding.compiler_function, try binder.classify(builtins.source_events.symbol_name));
+    const index = targets.getIndex(builtins.source_events.address()).?;
+    try std.testing.expectEqual(@as(?usize, 4096 + 32 + index * stub_size), binder.address(builtins.source_events.symbol_name));
     // Ordinary compiler symbols retain precedence over image definitions.
     try symbols.put("memcpy", 8);
     try std.testing.expectEqual(Binding.compiler_function, try binder.classify("memcpy"));
     try symbols.put("roc__pexample", 8);
     try std.testing.expectEqual(Binding.image, try binder.classify("roc__pexample"));
     try std.testing.expectEqual(@as(?usize, 4104), binder.address("roc__pexample"));
+}
 
-    if (builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .aarch64) {
-        var executable = try ExecutableMemory.initWritable(targets.count() * stub_size, stub_size, 0);
-        defer executable.deinit();
-        binder.image_base = @intFromPtr(executable.memory.ptr);
-        binder.stubs_start = 0;
-        for (targets.keys(), 0..) |target, index| {
-            writeStub(executable.memory[index * stub_size ..][0..stub_size], target);
+test "nonfragment ordinary code links shared static cells and common source events to current storage" {
+    if (comptime !LirCodeGenMod.host_lir_codegen_available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try @import("layout").Store.init(allocator, @import("base").target.TargetUsize.native);
+    defer layouts.deinit();
+    const identity = lir.ProcIdentity.forTest(812);
+    var exports = [_]StaticDataExport{.{ .symbol_name = "shared_current_root", .value_id = undefined, .bytes = &(@as([8]u8, @splat(0))), .alignment = 8 }};
+    for (&exports, 0..) |*data_export, index| data_export.value_id = @fromBackingInt(@intCast(index));
+    const sites = [_]?@import("CtfeContext.zig").SiteDescriptor{.{
+        .checked_module = @splat(81),
+        .checked_site = 82,
+        .checked_origin = .{ .checked_expr = 82 },
+        .procedure_identity = identity.bytes,
+        .kind = .if_,
+        .region = .from_raw_offsets(10, 20),
+        .branch_regions = &.{.from_raw_offsets(12, 18)},
+    }};
+    const site: lir.LIR.ComptimeSiteId = @fromBackingInt(@intCast(sites.len - 1));
+    const value = try store.addLocal(.{ .layout_idx = .i64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
+    const load = try store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = exports[0].value_id.? }, .next = ret } }, .test_fixture);
+    const branch = try store.addCFStmt(.{ .comptime_branch_taken = .{ .site = site, .branch_index = 0, .next = load } }, .test_fixture);
+    const proc = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = identity, .args = .empty(), .body = branch, .ret_layout = .i64 }, .none);
+    var slots = try StaticDataImage.init(allocator, &exports);
+    defer slots.deinit();
+    const address = slots.symbolAddress("shared_current_root").?;
+    const header: *i64 = @ptrFromInt(address);
+    header.* = 42;
+    var codegen = try HostLirCodeGen.init(allocator, &store, &layouts, .{}, &.{}, .default);
+    defer codegen.deinit();
+    try codegen.setStaticDataSymbols(&exports);
+    codegen.setContextCatalog(.{ .sites = &sites });
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    const wrapper = try codegen.generateEntrypointWrapper("shared_root_wrapper", proc, &.{}, .i64);
+    var splice = HostSplice.init(allocator);
+    defer splice.deinit();
+    try splice.bindStaticDataSymbols(&exports, &slots);
+    var table: BoxyNativeFnTable = undefined;
+    @memset(&table, 0);
+    try splice.generateHostedStubs(&codegen, &table);
+    try codegen.finishImage();
+    var executable = try splice.link(&codegen, &table);
+    defer executable.deinit();
+    try std.testing.expectEqual(@as(usize, 1), splice.generated_cells.items.len);
+    try std.testing.expect(splice.data_names.contains(codegen.sourceEventData()[0].name));
+    const Recorder = struct {
+        count: u32 = 0,
+        identity: [32]u8,
+        fn event(context: ?*anyopaque, event_header: *const builtins.source_events.Header) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            const observed = builtins.source_events.validate(event_header) catch unreachable;
+            std.debug.assert(observed.kind == .branch_taken);
+            std.debug.assert(std.mem.eql(u8, &self.identity, &observed.descriptor.procedure_identity));
+            std.debug.assert(observed.descriptor.site.checked_site == 82);
+            self.count += 1;
         }
-        try executable.finishWrite();
-        const exit: @TypeOf(hooks.call_exit) = @ptrFromInt(binder.address("roc__comptime_call_exit").?);
-        Hooks.exited = false;
-        exit();
-        try std.testing.expect(Hooks.exited);
-    }
-    splice.setComptimeHooks(null);
-    inline for (@typeInfo(ComptimeHook).@"enum".field_names) |field_name| {
-        const name = "roc__comptime_" ++ field_name;
-        try std.testing.expectEqual(Binding.unresolved, try binder.classify(name));
-        try std.testing.expectEqual(null, binder.address(name));
-    }
+        fn invalid(_: ?*anyopaque, _: u32) callconv(.c) void {
+            unreachable;
+        }
+    };
+    var recorder = Recorder{ .identity = identity.bytes };
+    const saved = builtins.source_events.enter(.{ .context = &recorder, .on_event = Recorder.event, .on_invalid = Recorder.invalid });
+    defer builtins.source_events.leave(saved);
+    var host = builtins.utils.TestEnv.init(allocator);
+    defer host.deinit();
+    const saved_host = builtins.in_process_host.enter(host.getOps(), null);
+    defer builtins.in_process_host.leave(saved_host);
+    var output: i64 = 0;
+    executable.callRocABIAt(wrapper.offset, @ptrCast(&output), null);
+    try std.testing.expectEqual(@as(i64, 42), output);
+    header.* = 99;
+    executable.callRocABIAt(wrapper.offset, @ptrCast(&output), null);
+    try std.testing.expectEqual(@as(i64, 99), output);
+    try std.testing.expectEqual(@as(u32, 2), recorder.count);
+    try std.testing.expectEqual(@as(u64, 0), std.mem.readInt(u64, &splice.generated_cells.items[0].bytes, .little));
 }
 
 test "static bindings link pointer cells without copying mutable slots" {

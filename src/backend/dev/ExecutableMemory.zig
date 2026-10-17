@@ -261,6 +261,10 @@ pub const ExecutableMemory = struct {
     /// Allocate writable memory that the caller will fill and relocate before
     /// marking it executable.
     pub fn initWritable(total_size: usize, code_size: usize, entry_offset: usize) (Allocator.Error || error{ EmptyCode, MmapFailed, VirtualAllocFailed, UnsupportedPlatform })!Self {
+        // A program that places nothing, neither code nor data, maps nothing.
+        if (total_size == 0 and code_size == 0) {
+            return Self{ .memory = &.{}, .code_size = 0, .entry_offset = entry_offset };
+        }
         if (total_size == 0 or code_size == 0) {
             return error.EmptyCode;
         }
@@ -278,13 +282,14 @@ pub const ExecutableMemory = struct {
 
     /// Mark a writable allocation returned by `initWritable` executable.
     pub fn finishWrite(self: *Self) error{ MprotectFailed, VirtualProtectFailed, UnsupportedPlatform }!void {
+        if (self.memory.len == 0) return;
         try protectExecutable(self.memory);
     }
 
     /// Free the executable memory
     pub fn deinit(self: *Self) void {
         self.windows_unwind.deinit();
-        freeMemory(self.memory);
+        if (self.memory.len != 0) freeMemory(self.memory);
         self.memory = &.{};
         self.code_size = 0;
     }

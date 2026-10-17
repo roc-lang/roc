@@ -244,6 +244,7 @@ const LowerMonotypeOptions = struct {
     diagnostics: ?*MonoLower.Diagnostics = null,
     post_check_executor: ?base.post_check_task_executor.Executor = null,
     root_selection: enum { all, test_expects } = .all,
+    inline_expects: MonoLower.InlineExpectMode = .run,
 };
 
 fn lowerMonotypeModuleWithOptions(
@@ -293,6 +294,7 @@ fn lowerMonotypeModuleWithOptions(
             .specialization_counters = options.specialization_counters,
             .diagnostics = options.diagnostics,
             .post_check_executor = options.post_check_executor,
+            .inline_expects = options.inline_expects,
         },
     );
     errdefer mono.deinit();
@@ -9106,6 +9108,93 @@ test "literal conversion ownership includes nested codec evidence" {
         }
         try std.testing.expectEqual(@as(usize, 1), dependent_conversions);
     }
+}
+
+test "omitted block expects are absent from Monotype and LIR" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : U64 -> U64
+        \\main = |value| {
+        \\    expect value > 0
+        \\    value
+        \\}
+    ;
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{ .inline_expects = .omit });
+    defer lowered.deinit(allocator);
+    const program = lowered.mono.view();
+    for (program.exprs) |expr| try std.testing.expect(expr.data != .expect);
+    for (program.stmts) |stmt| try std.testing.expect(stmt != .expect);
+    var emitted = try lowerModuleWithOptions(allocator, source, .none, .{ .inline_expects = .omit });
+    defer emitted.deinit(allocator);
+    const store = &emitted.lowered.lir_result.store;
+    for (store.getCFStmts()) |stmt| try std.testing.expect(stmt != .expect);
+}
+
+test "literal conversion root rejection retains its declared source location" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Label := [Label(Str)].{
+        \\    from_quote : Str -> Try(Label, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| if str.is_empty() Err(BadQuotedBytes("empty")) else Ok(Label(str))
+        \\}
+        \\
+        \\label : Label
+        \\label = "hi"
+        \\
+        \\make_label = |ignored| "specialized"
+        \\
+        \\specialized : Label
+        \\specialized = make_label({})
+        \\
+        \\main = (label, specialized)
+    ;
+    var resources = try helpers.parseProgram(
+        allocator,
+        .module,
+        source,
+        &.{},
+        .{ .pre_published_builtin = try sharedPrePublishedBuiltin() },
+    );
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+    const imported = [_]check.CheckedArtifact.ImportedModuleView{
+        check.CheckedArtifact.importedView(resources.borrowed_builtin_artifact.?),
+    };
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        allocator,
+        .{
+            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .imports = &imported,
+        },
+        .{ .requests = resources.checked_artifact.root_requests.compile_time_requests },
+        .{
+            .target_usize = base.target.TargetUsize.native,
+            .checked_module_state = .checking_finalization,
+        },
+    );
+    defer lowered.deinit();
+    const store = &lowered.lir_result.store;
+    var rejections: usize = 0;
+    var direct = false;
+    var specialized = false;
+    for (store.getCFStmts(), 0..) |stmt, index| {
+        if (stmt != .crash or stmt.crash.literal_rejection == null) continue;
+        rejections += 1;
+        const id: lir.LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+        const loc = store.stmtLoc(id);
+        const region = store.stmtRegion(id);
+        try std.testing.expect(loc.hasLocation());
+        const literal = source[region.start.offset..region.end.offset];
+        if (std.mem.eql(u8, literal, "\"hi\"")) {
+            direct = true;
+        } else {
+            try std.testing.expectEqualStrings("\"specialized\"", literal);
+            specialized = true;
+        }
+        try std.testing.expectEqualSlices(u8, &resources.checked_artifact.key.bytes, &store.sourceFileCheckedModule(loc.file).?);
+    }
+    try std.testing.expect(rejections != 0);
+    try std.testing.expect(direct);
+    try std.testing.expect(specialized);
 }
 
 test "custom literal field default gets an ordinary conversion root" {

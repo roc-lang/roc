@@ -248,7 +248,11 @@ const RelocationContext = struct {
             }
         }
 
-        return self.resolveDataSymbol(name);
+        if (self.resolveDataSymbol(name)) |address| return address;
+        // The relocation pass reports only that a name was missing; keep the
+        // name for the crash message.
+        rememberUnresolvedSymbol(name);
+        return null;
     }
 
     fn resolveDataSymbol(self: *const RelocationContext, name: []const u8) ?usize {
@@ -371,10 +375,14 @@ var last_unresolved_symbol_buffer: [128]u8 = undefined;
 var last_unresolved_symbol: ?[]const u8 = null;
 
 fn unresolvedSymbol(name: []const u8) error{UnresolvedSymbol} {
+    rememberUnresolvedSymbol(name);
+    return error.UnresolvedSymbol;
+}
+
+fn rememberUnresolvedSymbol(name: []const u8) void {
     const len = @min(name.len, last_unresolved_symbol_buffer.len);
     @memcpy(last_unresolved_symbol_buffer[0..len], name[0..len]);
     last_unresolved_symbol = last_unresolved_symbol_buffer[0..len];
-    return error.UnresolvedSymbol;
 }
 
 fn createDevProgram(
@@ -568,12 +576,18 @@ fn resolveShimFunction(name: []const u8) ?usize {
     return resolveBoxyShimFunction(name);
 }
 
+/// `roc_source_event` for a process in which no observer can be registered.
+fn unobservedSourceEvent(_: *const builtins.source_events.Header) callconv(.c) void {}
+
 /// The host's runtime symbols, which this shim links against directly.
 fn resolveRuntimeSymbol(name: []const u8) ?usize {
     const extern_host = builtins.host_abi.extern_host;
     // Expect failures pass through the shim so the default run can fold
     // them into its exit status.
     if (std.mem.eql(u8, name, shim_symbols.roc_expect_failed)) return @intFromPtr(&shim_host_abi.recordExpectFailed);
+    // Ordinary code reports source events to an optional observer. This
+    // shim exports no way to register one, so every event has no observer.
+    if (std.mem.eql(u8, name, builtins.source_events.symbol_name)) return @intFromPtr(&unobservedSourceEvent);
     inline for (shim_symbols.runtime_set) |runtime_name| {
         if (std.mem.eql(u8, name, runtime_name)) return @intFromPtr(@field(extern_host, runtime_name));
     }

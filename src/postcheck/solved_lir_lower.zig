@@ -35,6 +35,59 @@ const CheckedArithmetic = lir_core.CheckedArithmetic;
 const const_store = check.ConstStore;
 const GuardedList = collections.GuardedList;
 const Allocator = std.mem.Allocator;
+
+fn checkedSpecOwner(template: Mono.FnTemplate) ?check.CheckedModule.ModuleId {
+    const owner = switch (template.fn_def) {
+        .local_template, .imported_template, .checked_generated => |owner| owner,
+        .local_hosted, .imported_hosted => |hosted| hosted.template,
+        .parser_runtime => |runtime| runtime.owner,
+        .encoder_for_runtime => |runtime| runtime.owner,
+        .nested => |nested| if (nested.default_root == null) nested.owner else return null,
+    };
+    return .{ .bytes = check.CheckedNames.procTemplateModuleDigest(owner).bytes };
+}
+
+test "cached specialization publication uses explicit checked template ownership" {
+    const owner: check.CheckedNames.ProcTemplate = .{
+        .artifact = .{ .bytes = @as([32]u8, @splat(19)) },
+        .proc_base = @fromBackingInt(@intCast(2)),
+        .template = @fromBackingInt(@intCast(3)),
+    };
+    var source: Mono.FnTemplate = .{
+        .fn_def = .{ .local_template = owner },
+        .source_fn_ty = @fromBackingInt(@intCast(4)),
+        .source_fn_key = .{},
+        .mono_fn_ty = @fromBackingInt(@intCast(5)),
+    };
+    try std.testing.expectEqualDeep(@as(?check.CheckedModule.ModuleId, .{ .bytes = owner.artifact.bytes }), checkedSpecOwner(source));
+    source.fn_def = .{ .imported_template = owner };
+    try std.testing.expectEqualDeep(@as(?check.CheckedModule.ModuleId, .{ .bytes = owner.artifact.bytes }), checkedSpecOwner(source));
+    source.fn_def = .{ .nested = .{ .owner = owner, .site = @fromBackingInt(@intCast(6)), .context_fn_key = .{}, .default_root = .{ .bytes = @as([32]u8, @splat(23)) } } };
+    try std.testing.expect(checkedSpecOwner(source) == null);
+}
+
+test "literal producer exports a concrete callable declaration before lambda solving" {
+    const allocator = std.testing.allocator;
+    var names_ = check.CheckedNames.NameStore.init(allocator);
+    defer names_.deinit();
+    var types = MonoType.Store.init(allocator);
+    defer types.deinit();
+    const number = try types.add(.{ .primitive = .u64 });
+    const capture = try types.add(.{ .tuple = try types.addSpan(&.{number}) });
+    const result_callable = try types.add(.{ .func = .{ .args = .empty(), .ret = capture } });
+    const conversion = try types.add(.{ .func = .{ .args = try types.addSpan(&.{number}), .ret = result_callable } });
+    const recipe = try @import("literal_recipe.zig").representation(allocator, types.view(), &names_, conversion);
+    defer recipe.deinit(allocator);
+    try std.testing.expect(try recipe.valid(std.testing.allocator));
+    var materialized = try recipe.materialize(allocator);
+    defer materialized.deinit();
+    const callable = materialized.store.type_store.get(recipe.root).func;
+    try std.testing.expectEqual(@as(u32, 1), callable.args.len);
+    const result = materialized.store.type_store.get(callable.ret).func;
+    try std.testing.expectEqual(@as(u32, 0), result.args.len);
+    try std.testing.expectEqual(@as(u32, 1), materialized.store.type_store.get(result.ret).tuple.len);
+}
+
 const PatternRefutability = can.PatternRefutability;
 
 /// Runtime field order for a named record field.
@@ -155,6 +208,9 @@ pub const RootManifest = struct {
     /// Whether this consumer materializes the producer's layout and
     /// static-data requests.
     layout_requests: bool = true,
+    /// Instrumented native cache code alone needs erased-read declarations.
+    /// Runtime source/symbol consumers discover their own live storage reads.
+    cached_root_demands: bool = true,
     /// Whether this consumer emits the producer's runtime value schemas.
     runtime_schema_requests: bool = true,
     /// Whether this consumer lowers the producer's literal roots. Only a
@@ -166,11 +222,6 @@ pub const RootManifest = struct {
 pub const Options = struct {
     /// The object cache asked for closed specializations.
     spec_cache: ?Common.SpecCacheLookup = null,
-    /// Whether the cache may also serve specializations the compile-time
-    /// roots reach. The evaluator splices those entries into its own image,
-    /// which is only faithful when no compile-time-only exhaustiveness site
-    /// waits for the evaluation to reach it (`CheckedPipeline` decides).
-    comptime_closure_hits: bool = false,
     inline_plan: SolvedInline.Plan = .{},
     /// Lower every keyed specialization's procedure body, even one whose every
     /// call was inlined, so a pack program can offer it.
@@ -261,16 +312,20 @@ pub fn runBorrowed(
     defer allocator.free(source_digests);
     const layout_keyed_source_digests = try allocator.alloc(?proc_identity.Identity, solved.lifted.fnCount());
     defer allocator.free(layout_keyed_source_digests);
-    for (source_digests, layout_keyed_source_digests, 0..) |*digest, *layout_keyed, index| {
+    const spec_keyed_source_digests = try allocator.alloc(?proc_identity.Identity, solved.lifted.fnCount());
+    defer allocator.free(spec_keyed_source_digests);
+    for (source_digests, layout_keyed_source_digests, spec_keyed_source_digests, 0..) |*digest, *layout_keyed, *spec_keyed, index| {
         const fn_id: Lifted.FnId = @fromBackingInt(@as(u32, @intCast(index)));
         digest.* = try solved.lifted.fnSourceDigest(fn_id);
         layout_keyed.* = solved.lifted.fnLayoutKeyedSourceDigest(fn_id);
+        spec_keyed.* = try solved.lifted.fnSpecKeyedSourceDigest(fn_id);
     }
 
     var lowerer = try Lowerer.init(allocator, target_usize, solved, options);
     errdefer lowerer.deinit();
     lowerer.source_digests = source_digests;
     lowerer.layout_keyed_source_digests = layout_keyed_source_digests;
+    lowerer.spec_keyed_source_digests = spec_keyed_source_digests;
 
     try lowerer.result.store.setSourceFiles(solved.lifted.sourceFiles());
     try lowerer.result.setLoweringModules(solved.lifted.loweringModules());
@@ -282,6 +337,8 @@ pub fn runBorrowed(
     lowerer.keepLoweredSpecProcs();
     try lowerer.writeRuntimeSchemas();
     lowerer.result.finishExpectSites();
+    lowerer.result.platform_requirement_relation = if (solved.lifted.platform_requirement_filling) |filling| filling.relation else null;
+    if (lowerer.static_initializer_ns != 0) std.debug.print("direct lir: static initializers {d} lowered in {d} ms\n", .{ lowerer.static_initializer_queue.items.len, @divTrunc(lowerer.static_initializer_ns, std.time.ns_per_ms) });
 
     return lowerer.finish();
 }
@@ -506,6 +563,7 @@ const LayoutRequest = struct {
     ty: Type.TypeId,
     initializer: ?Type.FnId,
     const_locator: ?check.CheckedModule.ConstLocator,
+    literal_materialization: ?Common.LiteralMaterializationDeclaration = null,
 };
 
 const StaticInitializerRequest = struct {
@@ -514,7 +572,7 @@ const StaticInitializerRequest = struct {
 };
 
 const ComptimeValueRequest = struct {
-    module: check.CheckedModule.ModuleId,
+    module: [32]u8,
     root: LIR.ComptimeProducer,
     ty: Type.TypeId,
     layout_idx: layout.Idx,
@@ -526,8 +584,15 @@ const ComptimeValueRequest = struct {
 /// distinct types, so neither is what decides whether two demands are the
 /// same demand. The structural digest selects the candidate and exact
 /// representation equivalence confirms it.
+/// A checked root as one of the program's read expressions reads it, at the
+/// read's solved type.
+const ReadStorage = struct {
+    root: Common.ComptimeValueRoot,
+    ty: SolvedType.TypeVarId,
+};
+
 const ComptimeRootKey = struct {
-    module: check.CheckedModule.ModuleId,
+    module: [32]u8,
     root: LIR.ComptimeProducer,
     ty: check.CanonicalNames.TypeDigest,
 };
@@ -723,6 +788,9 @@ const Lowerer = struct {
     /// `Lifted.Program.fnLayoutKeyedSourceDigest` per lifted function,
     /// borrowed for the whole lowering; see `layoutKeyedIdentity`.
     layout_keyed_source_digests: []const ?proc_identity.Identity = &.{},
+    /// `Lifted.Program.fnSpecKeyedSourceDigest` per lifted function,
+    /// borrowed for the whole lowering; see `procIdentity`.
+    spec_keyed_source_digests: []const ?proc_identity.Identity = &.{},
     /// Content digests of committed layouts, for layout-keyed procedure
     /// identities. Rebuilt whenever the layout store interns another
     /// recursive graph, since a new graph key can rename an existing layout.
@@ -765,13 +833,11 @@ const Lowerer = struct {
     completed_scalar_values: ?*const ComptimeScalarValues.CompletedScalarValues,
     proc_debug_names: bool,
     spec_cache: ?Common.SpecCacheLookup,
-    comptime_closure_hits: bool,
     /// This consumer's explicit share of the producer's roots and requests.
     root_manifest: ?RootManifest,
-    /// True while the closure of the compile-time roots is being lowered.
-    /// Those procedures run in the compile-time evaluator, which takes
-    /// object-cache entries only under `comptime_closure_hits`; procedures
-    /// first reached afterwards may always be served.
+    /// True while the closure of the compile-time roots is being lowered:
+    /// those procedures run in the compile-time evaluator, which splices the
+    /// object-cache entries it takes into its own image.
     comptime_phase: bool,
     /// Drain positions, kept across calls so a second drain resumes.
     fn_queue_index: usize,
@@ -816,12 +882,27 @@ const Lowerer = struct {
     /// The fresh-form procedure of each static list of copies, by slot.
     uniform_constructors: collections.DenseMap(LIR.StaticDataId, LIR.LirProcSpecId),
     comptime_value_map: std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId),
+    /// Each literal materializer this program's code calls, by wrapper
+    /// identity, with the read that first called it. Its recipe is recorded
+    /// once lowering has settled every procedure (`recordLiteralMaterializerReads`).
+    literal_materializers: std.AutoArrayHashMapUnmanaged([32]u8, LiteralMaterializerUse) = .empty,
     /// Whether a root-slot read at one type takes its root's slot value
     /// as stored, per (root type, read type) pair.
     comptime_read_shares_root: std.AutoHashMapUnmanaged(ComptimeReadTypes, bool) = .empty,
     /// The one slot holding each evaluated root's completed value.
     comptime_root_slots: std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot),
+    /// The solved storage request Monotype declared for each checked root a
+    /// retired body reads, by position in `solved.layout_requests`.
+    retired_read_requests: std.AutoHashMapUnmanaged(Common.CheckedRootUse, u32) = .empty,
+    /// Each checked root some body of the program reads, with the read's
+    /// root and type, built on the first identity hit: an identity-served
+    /// body's storage is declared from the reads of the body it replaces,
+    /// which Monotype lowered.
+    root_read_types: ?std.AutoHashMapUnmanaged(Common.CheckedRootUse, ReadStorage) = null,
+    comptime_failure_slots: std.AutoHashMap(ComptimeFailureKey, LIR.StaticDataId),
     static_initializer_queue: std.ArrayList(StaticInitializerEntry),
+    /// Time spent lowering static initializers, reported under `ROC_PACK_STATS`.
+    static_initializer_ns: i128 = 0,
     packed_plans: collections.DenseMap(layout.Idx, lir_core.PackedData.Plan),
     /// Each access-path expression's `lowerExprContextTy`, so a chain of
     /// accesses walks each link once. A body worker keeps its own.
@@ -1065,7 +1146,6 @@ const Lowerer = struct {
             .completed_scalar_values = options.completed_scalar_values,
             .proc_debug_names = options.proc_debug_names,
             .spec_cache = options.spec_cache,
-            .comptime_closure_hits = options.comptime_closure_hits,
             .root_manifest = options.root_manifest,
             .comptime_phase = true,
             .fn_queue_index = 0,
@@ -1099,6 +1179,7 @@ const Lowerer = struct {
             .uniform_constructors = collections.DenseMap(LIR.StaticDataId, LIR.LirProcSpecId).init(allocator),
             .comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(allocator),
             .comptime_root_slots = std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot).init(allocator),
+            .comptime_failure_slots = std.AutoHashMap(ComptimeFailureKey, LIR.StaticDataId).init(allocator),
             .static_initializer_queue = .empty,
             .packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(allocator),
             .expr_context_tys = collections.DenseMap(Lifted.ExprId, Type.TypeId).init(allocator),
@@ -1231,8 +1312,12 @@ const Lowerer = struct {
         self.static_initializer_map.deinit();
         self.uniform_constructors.deinit();
         self.comptime_value_map.deinit();
+        self.literal_materializers.deinit(self.allocator);
         self.comptime_read_shares_root.deinit(self.allocator);
         self.comptime_root_slots.deinit();
+        self.retired_read_requests.deinit(self.allocator);
+        if (self.root_read_types) |*types| types.deinit(self.allocator);
+        self.comptime_failure_slots.deinit();
         self.layout_owner_types.deinit();
         self.deinitNamedLayoutIndex();
         self.representation_shapes.deinit();
@@ -1282,7 +1367,10 @@ const Lowerer = struct {
         var kept: usize = 0;
         for (self.result.spec_procs.items) |spec_proc| {
             const proc = self.result.store.getProcSpec(spec_proc.proc);
-            if (proc.body == null and proc.hosted == null and !proc.external) continue;
+            if (proc.body == null and proc.hosted == null and !proc.external) {
+                if (spec_proc.demand) |demand| demand.deinit(self.allocator);
+                continue;
+            }
             self.result.spec_procs.items[kept] = spec_proc;
             kept += 1;
         }
@@ -1315,6 +1403,9 @@ const Lowerer = struct {
         self.comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(self.allocator);
         self.comptime_read_shares_root = .empty;
         self.comptime_root_slots = std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot).init(self.allocator);
+        self.retired_read_requests = .empty;
+        self.root_read_types = null;
+        self.comptime_failure_slots = std.AutoHashMap(ComptimeFailureKey, LIR.StaticDataId).init(self.allocator);
         self.comptime_site_map = &.{};
         self.loop_stack = .empty;
         self.join_stack = .empty;
@@ -1339,6 +1430,30 @@ const Lowerer = struct {
 
     fn lower(self: *Lowerer) Common.LowerError!void {
         try self.indexSourceFns();
+        // Typed producer declarations survive body elision independently of
+        // expression reachability. The usual slot owner creates both roles.
+        // Storage a read expression declared is demanded by that read alone.
+        for (self.solved.layout_requests.items) |request| {
+            const root = request.comptime_root orelse continue;
+            if (self.root_manifest) |manifest| if (!manifest.cached_root_demands) continue;
+            const ty = try self.lowerType(request.ty);
+            const slot = try self.comptimeValueSlot(root, ty, try self.layoutOfType(ty));
+            if (request.unconditional) self.result.static_data_values.items[@backingInt(slot)].cached_demand = true;
+            // A type-only cached provision can reserve this slot before the
+            // completed checked producer declares its storage. Completion is
+            // that producer's authority for both the value and its guard.
+            if (root.completion != .pending) {
+                const value = &self.result.static_data_values.items[@backingInt(slot)].compile_time_root.?;
+                value.completion = root.completion;
+                self.result.static_data_values.items[@backingInt(value.role.value.failure_slot)].compile_time_root.?.completion = root.completion;
+            }
+            if (request.fn_id) |fn_id| {
+                const own_fn = try self.ensureOwnFnSpec(fn_id, .finite);
+                const initializer = try self.markReachableFn(own_fn);
+                self.result.store.getProcSpecPtr(initializer).is_static_initializer = true;
+                self.result.static_data_values.items[@backingInt(slot)].initializer = initializer;
+            }
+        }
 
         const produced_roots = self.solved.lifted.rootsView();
         if (if (self.root_manifest) |manifest| manifest.roots else null) |selected| {
@@ -1377,10 +1492,25 @@ const Lowerer = struct {
                 });
             }
         }
+        // Cached body retirement preserves typed root provisions even though
+        // the ordinary caller's statements are no longer present.
+        for (self.solved.layout_requests.items) |request| {
+            const root = request.comptime_root orelse continue;
+            if (self.root_manifest) |manifest| if (!manifest.cached_root_demands) continue;
+            const ty = try self.lowerType(request.ty);
+            const root_layout = try self.layoutOfType(ty);
+            const slot = try self.comptimeValueSlot(root, ty, root_layout);
+            _ = try self.comptimeRootAccessor(.{
+                .loc = .none,
+                .region = .zero(),
+                .inline_scope = .none,
+                .outer = .none,
+                .mode = .derived,
+            }, slot, root, ty, root_layout);
+        }
         // The compile-time roots' closure lowers first, so that a procedure
         // the evaluator runs is known as such when the object cache is
-        // asked for it: the evaluator takes hits only under its own rules
-        // (`comptime_closure_hits`), a runtime-only procedure takes any.
+        // asked for it.
         for (self.roots.items) |root| {
             if (!rootRunsAtCompileTime(root.request)) continue;
             _ = try self.markReachableFn(root.fn_id);
@@ -1395,6 +1525,53 @@ const Lowerer = struct {
 
         if (self.lowersLayoutRequests()) try self.lowerLayoutRequests();
         if (self.lowersRuntimeSchemaRequests()) try self.lowerRuntimeSchemaRequests();
+        if (self.lowersLiteralRoots()) try self.summarizeDiscoveryOutcomes();
+        try self.recordLiteralMaterializerReads();
+    }
+
+    const LiteralMaterializerUse = struct {
+        root: Common.LiteralRootId,
+        cause: LirProgram.CtfeDemandCause,
+    };
+
+    /// Record the literal read behind every literal materializer this
+    /// program's code calls, so whatever serves that code declares the
+    /// literal even where no keyed demand reached the read. A literal root
+    /// with no earlier producer recipe has no read a consumer can replay.
+    fn recordLiteralMaterializerReads(self: *Lowerer) Common.LowerError!void {
+        try self.result.literal_materializer_reads.ensureTotalCapacity(self.allocator, self.literal_materializers.count());
+        for (self.literal_materializers.keys(), self.literal_materializers.values()) |wrapper, use| {
+            if (self.solved.lifted.literalRootsView()[@backingInt(use.root)].recipe == null) continue;
+            const recipe = try self.cachedLiteralRecipe(use.root);
+            self.result.literal_materializer_reads.putAssumeCapacity(wrapper, .{ .recipe = recipe, .cause = use.cause });
+        }
+    }
+
+    /// Each keyed specialization lowered here whose demand closure is
+    /// complete publishes its discovery outcome. The closure reaches every
+    /// body it requested: discovery bodies through their solved edges, and
+    /// object-cache bodies through their published demand. Its literal roots
+    /// are evaluated with this program; the outcome is published only when
+    /// every one of them converted without an error or a message.
+    fn summarizeDiscoveryOutcomes(self: *Lowerer) Common.LowerError!void {
+        for (0..self.solved.lifted.fnCount()) |index| {
+            const fn_id: Lifted.FnId = @fromBackingInt(@intCast(index));
+            const source_fn = self.solved.lifted.getFn(fn_id);
+            const template = source_fn.source orelse continue;
+            if (source_fn.body != .roc or source_fn.spec_constr_pattern != null) continue;
+            // A body lowered here for evaluation or for the runtime registered
+            // the same literal roots a discovery body of its key would, and
+            // this program evaluated them, so it settles that key too.
+            const key = (if (template.discovery) template.discovery_key else template.spec_key) orelse continue;
+            var summary = try self.demandSummary(fn_id);
+            defer summary.deinit(self.allocator);
+            if (!summary.complete) continue;
+            try self.result.discovery_summaries.append(self.allocator, .{
+                .key = key.bytes,
+                .owner = checkedSpecOwner(template),
+                .platform_requirement_relation = self.solved.lifted.fnPlatformRequirementRelation(fn_id),
+            });
+        }
     }
 
     /// Whether this consumer materializes the producer's layout and
@@ -1419,11 +1596,13 @@ const Lowerer = struct {
     fn lowerLayoutRequests(self: *Lowerer) Common.LowerError!void {
         try self.layout_requests.ensureTotalCapacity(self.allocator, self.solved.layout_requests.items.len);
         for (self.solved.layout_requests.items) |request| {
+            if (request.comptime_root != null) continue;
             try self.layout_requests.append(self.allocator, .{
                 .checked_type = request.checked_type,
                 .ty = try self.lowerType(request.ty),
                 .initializer = if (request.fn_id) |fn_id| try self.ensureOwnFnSpec(fn_id, .finite) else null,
                 .const_locator = request.const_locator,
+                .literal_materialization = request.literal_materialization,
             });
         }
     }
@@ -1858,7 +2037,9 @@ const Lowerer = struct {
             if (initializer_queue_index < self.static_initializer_queue.items.len) {
                 const initializer = self.static_initializer_queue.items[initializer_queue_index];
                 initializer_queue_index += 1;
+                const started = if (pack_trace_available and std.c.getenv("ROC_PACK_STATS") != null) statsNowNs() else 0;
                 try self.lowerStaticInitializer(initializer);
+                if (started != 0) self.static_initializer_ns += statsNowNs() - started;
             }
         }
     }
@@ -2862,15 +3043,13 @@ const Lowerer = struct {
         const plain_spec = spec.abi == .finite and source_fn.spec_constr_pattern == null and self.captureSpan(spec.captures).len == 0 and !spec.return_reuse.enabled();
         const relation = if (self.solved.lifted.platform_requirement_filling) |filling| filling.relation else null;
         const dependency_relation = self.solved.lifted.fnPlatformRequirementRelation(spec.source);
+        const literal_producer = if (source_fn.source == null) self.literalProducer(spec.source) else null;
         var cached: ?Common.SpecCacheHit = null;
         // Monotype completed a cached template's record without a body. That
         // record is the cached procedure only for its own lifted function:
         // a SpecConstr clone or a second lowering of the same template has a
         // body and lowers normally.
         if (source_fn.body == .hosted) if (source_fn.source) |template| if (template.cached) |hit| {
-            if (self.comptime_phase and !self.comptime_closure_hits) {
-                Common.invariant("early object cache hit reached CTFE without the checked-program eligibility proof");
-            }
             if (plain_spec) {
                 if (!std.mem.eql(u8, &hit.identity, &identity.bytes)) {
                     Common.invariant("object cache entry identity disagrees with the identity lowered for its specialization key");
@@ -2887,20 +3066,64 @@ const Lowerer = struct {
                 entry.forwards_to = try self.ensureOwnFnSpec(spec.source, .finite);
             }
         };
-        if (cached == null and plain_spec and (!self.comptime_phase or self.comptime_closure_hits)) {
+        if (cached == null and plain_spec) {
             if (self.spec_cache) |cache| {
                 if (source_fn.source) |template| {
-                    if (template.spec_key) |key| {
+                    // Substituting compiled code for a lowered body needs the
+                    // storage demand Monotype declared for this
+                    // specialization; without that declaration the body
+                    // lowers from source.
+                    if (template.spec_key) |key| if (template.cached_demand != null) {
                         if (cache.lookup(key.bytes, relation)) |hit| {
                             if (std.mem.eql(u8, &hit.identity, &identity.bytes)) cached = hit;
                             if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} {s}\n", .{ key.bytes[0..8], if (cached != null) "hit" else "identity-mismatch" });
                         } else if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} miss\n", .{key.bytes[0..8]});
+                    };
+                } else if (literal_producer) |root| {
+                    const recipe = root.recipe orelse Common.invariant("literal native producer has no declaration recipe");
+                    if (cache.lookup(recipe.producer_key.bytes, relation)) |hit| {
+                        if (std.mem.eql(u8, &hit.identity, &identity.bytes)) cached = hit;
                     }
                 }
             }
         } else if (pack_trace_available and self.spec_cache != null and packTraceEnabled()) {
             if (source_fn.source) |template| if (template.spec_key) |key| std.debug.print("lookup direct-lir key={x} skipped comptime={} plain={} cached={}\n", .{ key.bytes[0..8], self.comptime_phase, plain_spec, cached != null });
         }
+        // A procedure with a body to lower may instead link the code a pack
+        // offers under the identity just assigned (design.md "Identity
+        // Offers"). The offer's facts replace the body's reads and ARC
+        // signature the way a keyed hit's do.
+        // A template specialization or a generated helper with a content
+        // identity; a literal producer is served by its recipe's key.
+        const identity_contract = (source_fn.source != null or source_fn.root_identity != null) and spec.abi == .finite and
+            !spec.return_reuse.enabled() and literal_producer == null and (try self.hostedProcForSource(source_fn.source)) == null;
+        var identity_hit = false;
+        if (cached == null and identity_contract and source_fn.body == .roc) {
+            if (self.spec_cache) |cache| {
+                var storage_declarable = true;
+                if (cache.lookupIdentity(identity.bytes, relation)) |hit| {
+                    if (!std.mem.eql(u8, &hit.identity, &identity.bytes)) Common.invariant("identity offer named a different procedure identity");
+                    storage_declarable = try self.identityHitStorageDeclarable(hit);
+                    if (storage_declarable) {
+                        cached = hit;
+                        identity_hit = true;
+                    }
+                }
+                if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup identity {s} {s}\n", .{ &identity.symbolHex(), if (identity_hit) "hit" else if (!storage_declarable) "storage-miss" else "miss" });
+            }
+        }
+        if (pack_trace_available and std.c.getenv("ROC_IDENTITY_TRACE") != null) {
+            const trace_loc: base.SourceLoc = switch (source_fn.body) {
+                .roc => |body_id| self.solved.lifted.exprLoc(body_id),
+                .hosted => base.SourceLoc.none,
+            };
+            std.debug.print("proc-identity {s} fn={d} loc={d}:{d}:{d} abi={s} captures={d}\n", .{ &identity.symbolHex(), @backingInt(spec.source), trace_loc.file, trace_loc.line, trace_loc.column, @tagName(spec.abi), self.captureSpan(spec.captures).len });
+        }
+        if (plain_spec) if (literal_producer) |root| if (root.recipe) |recipe| if (recipe.required_native_identity) |required| {
+            if (!std.mem.eql(u8, &required, &identity.bytes)) Common.invariant("declared literal producer's prepared object identity differed from its recipe");
+            const hit = cached orelse Common.invariant("retired literal-bearing consumer has no declared native producer object");
+            if (!std.mem.eql(u8, &hit.identity, &required)) Common.invariant("literal producer lookup returned a different object");
+        };
         if (self.procs_by_identity.get(identity)) |owner| {
             // Another specialization interned this procedure. Share its proc;
             // the owner's reach-queue entry lowers the body once, whether the
@@ -2913,9 +3136,12 @@ const Lowerer = struct {
                 try self.result.spec_procs.append(self.allocator, .{
                     .key = key.bytes,
                     .proc = existing,
+                    .owner = checkedSpecOwner(template),
                     .platform_requirement_relation = dependency_relation,
+                    .demand = try self.cachedDemand(spec.source),
                 });
             };
+            if (plain_spec) if (literal_producer) |root| try self.appendLiteralProducerSpec(root, spec.source, existing, dependency_relation);
             entry.proc = existing;
             entry.proc_owner = owner;
             self.fn_entries.items[index] = entry;
@@ -3000,6 +3226,22 @@ const Lowerer = struct {
             }
         }
         try self.procs_by_identity.putNoClobber(identity, fn_id);
+        if (cached) |hit| {
+            if (identity_hit) try self.declareIdentityHitReads(hit) else try self.declareRetiredBodyReads(hit);
+        }
+        // A body lowered here and a body served from a pack are both offered
+        // by identity, the latter with its producer's code.
+        if (identity_contract and (source_fn.body == .roc or cached != null)) {
+            try self.result.identity_offers.append(self.allocator, .{
+                .proc = proc,
+                .identity = identity,
+                .owner = if (source_fn.source) |template| checkedSpecOwner(template) else null,
+                .platform_requirement_relation = dependency_relation,
+                .demand = try self.cachedDemand(spec.source),
+                .mono_fn = if (source_fn.source) |template| (if (template.frozen_fn) |frozen| @backingInt(frozen) else null) else null,
+                .mono_def = source_fn.mono_def,
+            });
+        }
         if (source_fn.source) |template| {
             if (template.spec_key) |key| {
                 // A program that keeps its keyed specializations lowers each
@@ -3010,16 +3252,44 @@ const Lowerer = struct {
                     try self.result.spec_procs.append(self.allocator, .{
                         .key = key.bytes,
                         .proc = proc,
+                        .owner = checkedSpecOwner(template),
                         .platform_requirement_relation = dependency_relation,
+                        .demand = try self.cachedDemand(spec.source),
                     });
                     if (kept) try self.kept_spec_fns.append(self.allocator, fn_id);
                 }
             }
         }
+        if (plain_spec) if (literal_producer) |root| try self.appendLiteralProducerSpec(root, spec.source, proc, dependency_relation);
         entry.proc = proc;
         entry.proc_owner = fn_id;
         self.fn_entries.items[index] = entry;
         return proc;
+    }
+
+    /// This is the earlier producer table, not a search of a cached body.
+    fn literalProducer(self: *const Lowerer, source: Lifted.FnId) ?Lifted.LiteralRoot {
+        for (self.solved.lifted.literalRootsView()) |root| {
+            if (root.fn_id == source) return root;
+        }
+        return null;
+    }
+
+    fn appendLiteralProducerSpec(
+        self: *Lowerer,
+        root: Lifted.LiteralRoot,
+        source: Lifted.FnId,
+        proc: LIR.LirProcSpecId,
+        relation: ?[32]u8,
+    ) Common.LowerError!void {
+        const recipe = root.recipe orelse Common.invariant("literal native publication has no declaration recipe");
+        try self.result.spec_procs.append(self.allocator, .{
+            .key = recipe.producer_key.bytes,
+            .proc = proc,
+            .owner = root.module,
+            .platform_requirement_relation = relation,
+            .demand = try self.cachedDemand(source),
+        });
     }
 
     fn appendErasedArgumentLayouts(self: *Lowerer, args: []const LIR.LocalId) Common.LowerError!LIR.BoxySpan {
@@ -4373,6 +4643,7 @@ const Lowerer = struct {
             .destructure => .destructure,
             .if_ => .if_,
         }, source.owner, source.region, source.checked_site, proc, source.branch_regions);
+        self.result.comptime_sites.items[@backingInt(lowered)].checked_origin = source.checked_origin;
         self.comptime_site_map[index] = lowered;
         return lowered;
     }
@@ -4423,7 +4694,165 @@ const Lowerer = struct {
         return @backingInt(a) < @backingInt(b);
     }
 
+    fn demandSummary(self: *const Lowerer, source: Lifted.FnId) Allocator.Error!@import("ctfe_demand.zig").Graph.Summary {
+        const offset = self.solved.lifted.exprsView().len + self.solved.lifted.stmtsView().len;
+        return self.solved.ctfe_demand.summarize(self.allocator, @fromBackingInt(@intCast(offset + @backingInt(source))));
+    }
+
+    fn rootDemand(self: *const Lowerer, source: Lifted.FnId) Allocator.Error!LirProgram.CtfeDemandFacts {
+        var summary = try self.demandSummary(source);
+        defer summary.deinit(self.allocator);
+        const reads = try self.allocator.alloc(LirProgram.CtfeDemandRead, summary.reads.len);
+        errdefer self.allocator.free(reads);
+        for (summary.reads, reads) |index, *out| {
+            const read = self.solved.ctfe_demand.reads.items[index];
+            out.* = .{ .module = read.root.module, .producer = read.root.root, .region = read.region, .loc = read.loc, .completed = read.root.completion != .pending };
+        }
+        return .{
+            .reads = reads,
+            .complete = summary.complete,
+            .origin_region = switch (self.solved.lifted.getFn(source).body) {
+                .roc => |body| self.solved.lifted.exprRegion(body),
+                .hosted => null,
+            },
+            .origin_loc = switch (self.solved.lifted.getFn(source).body) {
+                .roc => |body| self.solved.lifted.exprLoc(body),
+                .hosted => null,
+            },
+        };
+    }
+
+    /// The recipe a later consumer replays to declare literal root `id`:
+    /// its earlier producer declaration and native producer object.
+    fn cachedLiteralRecipe(self: *Lowerer, id: Common.LiteralRootId) Common.LowerError!LirProgram.CachedLiteralRecipe {
+        const root = self.solved.lifted.literalRootsView()[@backingInt(id)];
+        const declaration = root.recipe orelse Common.invariant("literal demand has no earlier producer declaration recipe");
+        const producer_fn = try self.ensureOwnFnSpec(root.fn_id, .finite);
+        const producer_entry = self.fn_entries.items[@backingInt(producer_fn)];
+        const object_identity = try self.procIdentity(producer_entry.spec, producer_entry);
+        const export_ = @import("literal_recipe.zig");
+        const callable = try export_.representation(self.allocator, self.solved.lifted.types.view(), &self.solved.lifted.names, declaration.callable_ty);
+        errdefer callable.deinit(self.allocator);
+        const result = try export_.representation(self.allocator, self.solved.lifted.types.view(), &self.solved.lifted.names, self.solved.lifted.getFn(root.fn_id).ret);
+        errdefer result.deinit(self.allocator);
+        const evidence = try self.allocator.dupe(const_store.ConstFnEvidence, self.solved.lifted.const_fn_evidence.unsafeRawItemsForView()[declaration.const_evidence.start..][0..declaration.const_evidence.len]);
+        errdefer self.allocator.free(evidence);
+        const frames = try self.allocator.dupe(const_store.ConstFnEvidenceFrame, self.solved.lifted.const_fn_evidence_frames.unsafeRawItemsForView()[declaration.const_evidence_frames.start..][0..declaration.const_evidence_frames.len]);
+        errdefer self.allocator.free(frames);
+        const local_contexts = try self.cachedLiteralLocalContexts(declaration);
+        return .{
+            .module = root.module.bytes,
+            .checked_expr = root.site.checked_expr,
+            .kind = root.site.kind,
+            .producer_key = declaration.producer_key.bytes,
+            .object_identity = object_identity.bytes,
+            .owner_template = declaration.owner_template,
+            .owner_context_fn_key = declaration.owner_context_fn_key,
+            .current_fn_key = declaration.current_fn_key,
+            .method_scope = declaration.method_scope.bytes,
+            .in_default_expr = declaration.in_default_expr,
+            .checked_callable_ty = declaration.checked_callable_ty,
+            .callable = callable,
+            .result = result,
+            .evidence = evidence,
+            .evidence_frames = frames,
+            .evidence_frame_head = declaration.const_evidence_frame_head,
+            .local_contexts = local_contexts,
+        };
+    }
+
+    fn cachedDemand(self: *Lowerer, source: Lifted.FnId) Common.LowerError!LirProgram.CachedCtfeDemand {
+        var summary = try self.demandSummary(source);
+        defer summary.deinit(self.allocator);
+        var reads = std.ArrayList(LirProgram.CachedCtfeRead).empty;
+        errdefer reads.deinit(self.allocator);
+        var literal_reads = std.ArrayList(LirProgram.CachedLiteralRead).empty;
+        errdefer {
+            for (literal_reads.items) |read| read.recipe.deinit(self.allocator);
+            literal_reads.deinit(self.allocator);
+        }
+        var complete = summary.complete;
+        for (summary.reads) |index| {
+            const read = self.solved.ctfe_demand.reads.items[index];
+            const cause_module = if (read.loc.hasLocation())
+                self.solved.lifted.sourceFiles()[read.loc.file].checked_module_key
+            else
+                null;
+            if (read.loc.hasLocation() and cause_module == null) complete = false;
+            const cause: LirProgram.CtfeDemandCause = .{ .module = cause_module, .region = read.region, .line = read.loc.line, .column = read.loc.column };
+            const root_id = switch (read.root.root) {
+                .checked => |id| @backingInt(id),
+                .literal => |id| {
+                    const recipe = try self.cachedLiteralRecipe(id);
+                    errdefer recipe.deinit(self.allocator);
+                    try literal_reads.append(self.allocator, .{ .recipe = recipe, .cause = cause });
+                    continue;
+                },
+            };
+            try reads.append(self.allocator, .{
+                .module = read.root.module.bytes,
+                .root = root_id,
+                .cause = cause,
+            });
+        }
+        const owned_reads = try reads.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(owned_reads);
+        const owned_literals = try literal_reads.toOwnedSlice(self.allocator);
+        errdefer {
+            for (owned_literals) |read| read.recipe.deinit(self.allocator);
+            self.allocator.free(owned_literals);
+        }
+        return .{ .complete = complete, .eager_reads = owned_reads, .literal_reads = owned_literals };
+    }
+
+    fn cachedLiteralLocalContexts(self: *const Lowerer, declaration: Mono.LiteralRecipe) Allocator.Error![]const LirProgram.CachedLiteralLocalContext {
+        const contexts = try self.allocator.alloc(LirProgram.CachedLiteralLocalContext, declaration.local_contexts.len);
+        var initialized: usize = 0;
+        errdefer {
+            for (contexts[0..initialized]) |context| context.deinit(self.allocator);
+            self.allocator.free(contexts);
+        }
+        for (declaration.local_contexts, contexts) |source, *out| {
+            const bindings = try self.allocator.alloc(LirProgram.CachedLiteralBinding, source.bindings.len);
+            var initialized_bindings: usize = 0;
+            errdefer {
+                for (bindings[0..initialized_bindings]) |binding| binding.deinit(self.allocator);
+                self.allocator.free(bindings);
+            }
+            for (source.bindings, bindings) |binding, *target| {
+                target.* = .{
+                    .kind = binding.kind,
+                    .binder = binding.binder,
+                    .type_digest = binding.type_digest,
+                    .ty = try @import("literal_recipe.zig").representation(self.allocator, self.solved.lifted.types.view(), &self.solved.lifted.names, binding.ty),
+                };
+                initialized_bindings += 1;
+            }
+            const evidence = try self.allocator.dupe(const_store.ConstFnEvidence, self.solved.lifted.const_fn_evidence.unsafeRawItemsForView()[source.const_evidence.start..][0..source.const_evidence.len]);
+            errdefer self.allocator.free(evidence);
+            const frames = try self.allocator.dupe(const_store.ConstFnEvidenceFrame, self.solved.lifted.const_fn_evidence_frames.unsafeRawItemsForView()[source.const_evidence_frames.start..][0..source.const_evidence_frames.len]);
+            out.* = .{
+                .module = source.module.bytes,
+                .binder = @backingInt(source.binder),
+                .expr = @backingInt(source.expr),
+                .context_anchor = if (source.context_anchor) |anchor| @backingInt(anchor) else null,
+                .owner_template = source.owner_template,
+                .base_key = source.base_key,
+                .specialization_key = source.specialization_key,
+                .restored_specialization_key = source.restored_specialization_key,
+                .bindings = bindings,
+                .evidence = evidence,
+                .evidence_frames = frames,
+                .evidence_frame_head = source.const_evidence_frame_head,
+            };
+            initialized += 1;
+        }
+        return contexts;
+    }
+
     fn bindRoots(self: *Lowerer) Common.LowerError!void {
+        try self.result.const_roots.ensureUnusedCapacity(self.allocator, self.roots.items.len);
+        try self.result.literal_roots.ensureUnusedCapacity(self.allocator, self.literal_roots.items.len);
         var completed_values = std.AutoHashMap(u32, Common.ComptimeValueRoot).init(self.allocator);
         defer completed_values.deinit();
         if (self.root_manifest) |manifest| {
@@ -4455,6 +4884,7 @@ const Lowerer = struct {
                         try self.comptimeValueSlot(value_root, entry.ret, ret_layout)
                     else
                         null,
+                    .demand = try self.rootDemand(self.fn_specs.items[@backingInt(root.fn_id)].source),
                 });
             }
         }
@@ -4473,6 +4903,7 @@ const Lowerer = struct {
                 .ret_layout = ret_layout,
                 .plan = try self.constPlanOfType(entry.ret),
                 .value_slot = try self.comptimeValueSlot(.{ .module = root.module, .root = .{ .literal = id }, .const_locator = null }, entry.ret, ret_layout),
+                .demand = try self.rootDemand(self.fn_specs.items[@backingInt(root.fn_id)].source),
             });
         }
 
@@ -4482,11 +4913,28 @@ const Lowerer = struct {
                 self.result.store.getProcSpecPtr(proc).is_static_initializer = true;
                 break :blk proc;
             } else null;
+            const layout_idx = try self.layoutOfType(request.ty);
+            const materialization: ?LirProgram.RootMaterialization = if (request.literal_materialization) |declaration| blk: {
+                const representation = try self.types.contentDigest(&self.solved.lifted.names, request.ty, .{ .context = self, .identity = callableTargetIdentity });
+                const layout_digest = try self.result.layouts.contentDigest(layout_idx);
+                const producer: @FieldType(LirProgram.RootMaterialization, "producer") = .{ .literal = .{
+                    .checked_expr = declaration.checked_expr,
+                    .kind = declaration.kind,
+                    .conversion_identity = declaration.conversion_identity,
+                } };
+                break :blk .{
+                    .module = declaration.module,
+                    .producer = producer,
+                    .representation_digest = representation.bytes,
+                    .layout_digest = layout_digest,
+                    .wrapper_identity = LirProgram.rootMaterializationIdentity(declaration.module, producer, representation.bytes, layout_digest).bytes,
+                };
+            } else null;
             try self.result.requested_layouts.append(self.allocator, .{
                 .ty = try self.types.typeDigest(&self.solved.lifted.names, request.ty),
                 .checked_type = request.checked_type,
                 .const_locator = request.const_locator,
-                .layout_idx = try self.layoutOfType(request.ty),
+                .layout_idx = layout_idx,
                 .plan = if (initializer != null)
                     try self.layoutOnlyConstPlan()
                 else if (self.layout_request_const_plans)
@@ -4494,6 +4942,7 @@ const Lowerer = struct {
                 else
                     try self.layoutOnlyConstPlan(),
                 .initializer = initializer,
+                .materialization = materialization,
             });
         }
     }
@@ -5154,6 +5603,12 @@ const Lowerer = struct {
             if (self.layout_keyed_source_digests[@backingInt(spec.source)]) |source_digest| {
                 return try self.layoutKeyedIdentity(source_digest, entry.args, entry.ret);
             }
+            if (self.spec_keyed_source_digests[@backingInt(spec.source)]) |source_digest| {
+                var hasher = base.TypeDigestHasher.init();
+                hasher.update("roc.proc.spec-keyed.v1");
+                hasher.update(&source_digest);
+                return .{ .bytes = hasher.finalResult() };
+            }
         }
         return try self.specIdentity(spec);
     }
@@ -5207,6 +5662,7 @@ const Lowerer = struct {
             .fn_tys = self.solved.fn_tys.items,
             .source_digests = self.source_digests,
             .fn_by_symbol = &self.source_symbols,
+            .declarations = &self.solved.lifted.declarations,
             .memo = &self.identity_memo,
         };
         const return_reuse: []const u8 = switch (spec.return_reuse) {
@@ -5259,6 +5715,7 @@ const Lowerer = struct {
         try self.result.static_data_values.append(self.allocator, .{
             .initializer = proc,
             .layout_idx = layout_idx,
+            .symbol_identity = try self.staticValueIdentity(candidate, ty, layout_idx),
         });
         try self.static_initializer_queue.append(self.allocator, .{
             .expr = candidate.runtime_expr,
@@ -5460,7 +5917,7 @@ const Lowerer = struct {
         layout_idx: layout.Idx,
     ) Common.LowerError!LIR.StaticDataId {
         const request = ComptimeValueRequest{
-            .module = value_root.module,
+            .module = value_root.module.bytes,
             .root = value_root.root,
             .ty = ty,
             .layout_idx = layout_idx,
@@ -5468,7 +5925,7 @@ const Lowerer = struct {
         if (self.comptime_value_map.get(request)) |existing| return existing;
         if (self.worker_callback) self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared compile-time value");
         const key = ComptimeRootKey{
-            .module = value_root.module,
+            .module = value_root.module.bytes,
             .root = value_root.root,
             .ty = try self.types.typeDigest(&self.solved.lifted.names, ty),
         };
@@ -5495,10 +5952,12 @@ const Lowerer = struct {
         try self.result.static_data_values.append(self.allocator, .{
             .initializer = null,
             .layout_idx = layout_idx,
+            .symbol_identity = try self.comptimeValueIdentity(value_root, layout_idx, ty),
             .compile_time_root = .{
                 .module = value_root.module,
                 .root = value_root.root,
                 .const_locator = value_root.const_locator,
+                .completion = value_root.completion,
                 .role = .{ .value = .{ .failure_slot = failure_slot, .plan = try self.constPlanOfType(ty) } },
             },
         });
@@ -5507,7 +5966,67 @@ const Lowerer = struct {
         return id;
     }
 
+    fn identityWord(hasher: *base.TypeDigestHasher, value: u32) void {
+        var bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, &bytes, value, .little);
+        hasher.update(&bytes);
+    }
+
+    fn staticValueIdentity(self: *Lowerer, candidate: Mono.StaticDataCandidate, ty: Type.TypeId, layout_idx: layout.Idx) Allocator.Error![32]u8 {
+        const declaration = self.solved.lifted.view().static_data_values[@backingInt(candidate.static_data)];
+        const locator = declaration.const_locator;
+        var hasher = base.TypeDigestHasher.init();
+        hasher.update("roc.static-value.checked-constant.v1");
+        hasher.update(&locator.artifact.bytes);
+        hasher.update(&locator.source_scheme.bytes);
+        identityWord(&hasher, @backingInt(locator.template));
+        switch (locator.owner) {
+            .top_level_binding => |owner| {
+                hasher.update("binding");
+                identityWord(&hasher, owner.module_idx);
+                identityWord(&hasher, @backingInt(owner.pattern));
+            },
+            .hoisted_expr => |owner| {
+                hasher.update("hoisted");
+                identityWord(&hasher, owner.module_idx);
+                identityWord(&hasher, @backingInt(owner.expr));
+            },
+        }
+        hasher.update(&(try self.types.typeDigest(&self.solved.lifted.names, ty)).bytes);
+        hasher.update(&try self.layoutDigest(layout_idx));
+        return hasher.finalResult();
+    }
+
+    fn comptimeValueIdentity(self: *Lowerer, root: Common.ComptimeValueRoot, layout_idx: layout.Idx, value_type: ?Type.TypeId) Allocator.Error![32]u8 {
+        var hasher = base.TypeDigestHasher.init();
+        hasher.update("roc.static-value.ctfe.v1");
+        hasher.update(&root.module.bytes);
+        switch (root.root) {
+            .checked => |id| {
+                hasher.update("checked");
+                identityWord(&hasher, @backingInt(id));
+            },
+            .literal => |id| {
+                hasher.update("literal");
+                const declaration = self.solved.lifted.literalRootsView()[@backingInt(id)];
+                const producer = self.solved.lifted.getFn(declaration.fn_id);
+                const identity = producer.root_identity orelse Common.invariant("literal slot has no producer conversion identity");
+                hasher.update(&identity.bytes);
+            },
+        }
+        hasher.update(&try self.layoutDigest(layout_idx));
+        if (value_type) |ty| {
+            hasher.update("value");
+            hasher.update(&(try self.types.typeDigest(&self.solved.lifted.names, ty)).bytes);
+        } else hasher.update("failure");
+        return hasher.finalResult();
+    }
+
+    const ComptimeFailureKey = struct { module: [32]u8, root: Common.ComptimeProducer };
+
     fn createComptimeFailureMessageSlot(self: *Lowerer, root: Common.ComptimeValueRoot) Common.LowerError!LIR.StaticDataId {
+        const key = ComptimeFailureKey{ .module = root.module.bytes, .root = root.root };
+        if (self.comptime_failure_slots.get(key)) |slot| return slot;
         const layout_idx = try self.result.layouts.putStructFields(&.{
             .{ .index = 0, .layout = .u8 },
             .{ .index = 1, .layout = .str },
@@ -5518,10 +6037,12 @@ const Lowerer = struct {
         try self.result.static_data_values.append(self.allocator, .{
             .initializer = null,
             .layout_idx = layout_idx,
+            .symbol_identity = try self.comptimeValueIdentity(root, layout_idx, null),
             .compile_time_root = .{
                 .module = root.module,
                 .root = root.root,
                 .const_locator = null,
+                .completion = root.completion,
                 .role = .{ .failure_message = .{
                     .failed_field = 0,
                     .message_field = 1,
@@ -5530,6 +6051,7 @@ const Lowerer = struct {
                 } },
             },
         });
+        try self.comptime_failure_slots.put(key, id);
         return id;
     }
 
@@ -5594,19 +6116,12 @@ const Lowerer = struct {
             return try self.lowerRootSlotReadInto(where, value_local, value, ty, store_value);
         }
         const proc_id = self.current_proc orelse Common.invariant("compile-time value lowering ran without a current procedure");
-        const is_static_initializer = self.result.store.getProcSpecImmediate(proc_id).is_static_initializer;
-        const runtime_values = if (is_static_initializer) null else self.completed_scalar_values;
-        if (runtime_values) |values| {
-            if (values.constructionFor(root.module, root.root, layout_idx)) |construction| {
-                if (try self.lowerConstructionInto(where, target, construction, next)) |built| return built;
-            }
-        }
+        const is_static_initializer = self.result.store.getProcSpec(proc_id).is_static_initializer;
         const id = try self.comptimeValueSlot(root, ty, layout_idx);
-        // A program lowered before its roots are evaluated reads each root
-        // through an accessor, so the slot has one guarded read however many
-        // places read it, and the evaluation's slot demand is raised from one
-        // place. A program lowered after evaluation reads its slots directly.
-        if (!is_static_initializer and self.completed_scalar_values == null) {
+        // Ordinary code always calls the same declared materialization
+        // provision. Root completion shapes only that consumer-owned wrapper,
+        // never the ordinary caller's body or physical object identity.
+        if (!is_static_initializer) {
             const accessor = try self.comptimeRootAccessor(where, id, root, ty, layout_idx);
             return try self.result.store.addCFStmt(.{ .assign_call = .{
                 .target = target,
@@ -5615,15 +6130,9 @@ const Lowerer = struct {
                 .next = next,
             } }, where.source());
         }
-        // A list of copies keeps its slot and also names its fresh form.
-        const fresh_alternative = if (runtime_values) |values| blk: {
-            const uniform = values.uniformListFor(root.module, root.root) orelse break :blk null;
-            break :blk try self.uniformListConstructor(where, id, uniform, layout_idx);
-        } else null;
         return try self.result.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
             .value = .{ .static_data = id },
-            .fresh_alternative = fresh_alternative,
             .next = next,
         } }, where.source());
     }
@@ -5669,7 +6178,7 @@ const Lowerer = struct {
         new_locals: *std.ArrayList(LIR.LocalId),
 
         pub fn addLocal(self: UniformConstructorEmitContext, layout_idx: layout.Idx) Common.LowerError!LIR.LocalId {
-            const local = try self.lowerer.addLocalForLayout(layout_idx);
+            const local = try self.lowerer.addDetachedLocalForLayout(layout_idx);
             try self.new_locals.append(self.lowerer.allocator, local);
             return local;
         }
@@ -5689,12 +6198,134 @@ const Lowerer = struct {
         return .{ .bytes = hasher.finalResult() };
     }
 
+    /// A retired body this program links calls the materializer of every
+    /// checked root its served code materializes: the roots it reads eagerly
+    /// and the roots the rest of its closure reads, such as the body of a
+    /// lambda it applies, which no eager read of its own reaches. Declare each
+    /// one's slot and accessor from the storage request Monotype declared
+    /// when it retired the body, and keep them through completed-value
+    /// adoption.
+    fn declareRetiredBodyReads(self: *Lowerer, hit: Common.SpecCacheHit) Common.LowerError!void {
+        const demand = hit.demand orelse Common.invariant("retired body was linked without its demand facts");
+        if (demand.eager_reads.len == 0 and hit.checked_root_uses.len == 0) return;
+        if (self.retired_read_requests.count() == 0) try self.indexRetiredReadRequests();
+        for (demand.eager_reads) |read| try self.declareRetiredRead(.{ .module = read.module, .root = read.root });
+        for (hit.checked_root_uses) |use| try self.declareRetiredRead(use);
+    }
+
+    /// Declare the slot and accessor of one checked root a retired body's
+    /// served code materializes.
+    fn declareRetiredRead(self: *Lowerer, use: Common.CheckedRootUse) Common.LowerError!void {
+        const index = self.retired_read_requests.get(use) orelse
+            Common.invariant("retired body reads a checked root that has no declared storage request");
+        const request = self.solved.layout_requests.items[index];
+        const root = request.comptime_root orelse unreachable;
+        try self.declareRetiredStorage(root, try self.lowerType(request.ty));
+    }
+
+    /// Declare the slot and accessor of checked root `root` at `ty`, which a
+    /// retired body's served code materializes.
+    fn declareRetiredStorage(self: *Lowerer, root: Common.ComptimeValueRoot, ty: Type.TypeId) Common.LowerError!void {
+        const root_layout = try self.layoutOfType(ty);
+        const slot = try self.comptimeValueSlot(root, ty, root_layout);
+        self.result.static_data_values.items[@backingInt(slot)].retired_read = true;
+        _ = try self.comptimeRootAccessor(.{
+            .loc = .none,
+            .region = .zero(),
+            .inline_scope = .none,
+            .outer = .none,
+            .mode = .derived,
+        }, slot, root, ty, root_layout);
+    }
+
+    /// A body served by identity (design.md "Identity Offers") is one
+    /// Monotype lowered, so every checked root its served code materializes
+    /// is read by some body of this program: by a body with a storage
+    /// request Monotype declared, or by a read expression, whose type is the
+    /// root's representation. Declare each one's slot and accessor from
+    /// whichever the program has.
+    fn declareIdentityHitReads(self: *Lowerer, hit: Common.SpecCacheHit) Common.LowerError!void {
+        const demand = hit.demand orelse Common.invariant("identity-served body was linked without its demand facts");
+        if (demand.eager_reads.len == 0 and hit.checked_root_uses.len == 0) return;
+        if (self.retired_read_requests.count() == 0) try self.indexRetiredReadRequests();
+        for (demand.eager_reads) |read| try self.declareIdentityRead(.{ .module = read.module, .root = read.root });
+        for (hit.checked_root_uses) |use| try self.declareIdentityRead(use);
+    }
+
+    /// Whether this program can declare storage for every checked root an
+    /// identity offer's served code materializes (`declareIdentityHitReads`).
+    /// A program that restores a completed root's value in place reads it
+    /// through no expression and requested no storage for it, so served code
+    /// compiled while the root was pending, which reaches the root's storage,
+    /// is not linked into it; the body lowers instead.
+    fn identityHitStorageDeclarable(self: *Lowerer, hit: Common.SpecCacheHit) Allocator.Error!bool {
+        const demand = hit.demand orelse return false;
+        if (demand.eager_reads.len == 0 and hit.checked_root_uses.len == 0) return true;
+        if (self.retired_read_requests.count() == 0) try self.indexRetiredReadRequests();
+        const types = try self.rootReadTypes();
+        for (demand.eager_reads) |read| {
+            const use = Common.CheckedRootUse{ .module = read.module, .root = read.root };
+            if (!self.retired_read_requests.contains(use) and !types.contains(use)) return false;
+        }
+        for (hit.checked_root_uses) |use| {
+            if (!self.retired_read_requests.contains(use) and !types.contains(use)) return false;
+        }
+        return true;
+    }
+
+    fn declareIdentityRead(self: *Lowerer, use: Common.CheckedRootUse) Common.LowerError!void {
+        if (self.retired_read_requests.contains(use)) return self.declareRetiredRead(use);
+        const types = try self.rootReadTypes();
+        const storage = types.get(use) orelse
+            Common.invariant("identity-served body materializes a checked root that no body of the program reads");
+        try self.declareRetiredStorage(storage.root, try self.lowerType(storage.ty));
+    }
+
+    /// The storage requests Monotype declared for checked roots, by root.
+    fn indexRetiredReadRequests(self: *Lowerer) Allocator.Error!void {
+        for (self.solved.layout_requests.items, 0..) |request, index| {
+            const root = request.comptime_root orelse continue;
+            const checked_root = switch (root.root) {
+                .checked => |checked_root| checked_root,
+                .literal => continue,
+            };
+            const use = Common.CheckedRootUse{ .module = root.module.bytes, .root = @backingInt(checked_root) };
+            const entry = try self.retired_read_requests.getOrPut(self.allocator, use);
+            if (!entry.found_existing) entry.value_ptr.* = @intCast(index);
+        }
+    }
+
+    /// The checked roots the program's read expressions read, each with the
+    /// first read's root and type. Reads attached to a function node are a
+    /// cached body's, whose storage Monotype requested.
+    fn rootReadTypes(self: *Lowerer) Allocator.Error!*const std.AutoHashMapUnmanaged(Common.CheckedRootUse, ReadStorage) {
+        if (self.root_read_types == null) {
+            var types: std.AutoHashMapUnmanaged(Common.CheckedRootUse, ReadStorage) = .empty;
+            errdefer types.deinit(self.allocator);
+            const expr_count = self.solved.lifted.exprsView().len;
+            for (self.solved.ctfe_demand.reads.items) |read| {
+                const checked_root = switch (read.root.root) {
+                    .checked => |checked_root| checked_root,
+                    .literal => continue,
+                };
+                const node = @backingInt(read.node);
+                if (node >= expr_count) continue;
+                const use = Common.CheckedRootUse{ .module = read.root.module.bytes, .root = @backingInt(checked_root) };
+                const entry = try types.getOrPut(self.allocator, use);
+                if (!entry.found_existing) entry.value_ptr.* = .{ .root = read.root, .ty = self.solved.expr_tys.items[node] };
+            }
+            self.root_read_types = types;
+        }
+        return &self.root_read_types.?;
+    }
+
     /// The procedure that reads compile-time value slot `id`, which holds
     /// `root` at `ty`, created on its first use.
     fn comptimeRootAccessor(self: *Lowerer, where: LowerSite, id: LIR.StaticDataId, root: Common.ComptimeValueRoot, ty: Type.TypeId, layout_idx: layout.Idx) Common.LowerError!LIR.LirProcSpecId {
         if (self.result.static_data_values.items[@backingInt(id)].accessor) |accessor| return accessor;
         const store = &self.result.store;
-        const value = try self.addLocalForLayout(layout_idx);
+        // These locals belong only to the materializer's own frame.
+        const value = try self.addDetachedLocalForLayout(layout_idx);
         // The accessor is its own procedure: it carries the location of the
         // read that requested it, outside that read's inline scopes.
         const origin = LIR.StmtOrigin{
@@ -5710,9 +6341,45 @@ const Lowerer = struct {
             .next = ret,
         } }, origin);
         const frame_locals = try store.addLocalSpan(&[_]LIR.LocalId{value});
+        const representation = try self.types.contentDigest(&self.solved.lifted.names, ty, .{ .context = self, .identity = callableTargetIdentity });
+        const producer: @FieldType(LirProgram.RootMaterialization, "producer") = switch (root.root) {
+            .checked => |checked_root| .{ .checked = @backingInt(checked_root) },
+            .literal => |literal| blk: {
+                const declaration = self.solved.lifted.literalRootsView()[@backingInt(literal)];
+                const source = self.solved.lifted.getFn(declaration.fn_id);
+                const conversion = source.root_identity orelse Common.invariant("literal materializer has no producer conversion identity");
+                break :blk .{ .literal = .{
+                    .checked_expr = declaration.site.checked_expr,
+                    .kind = declaration.site.kind,
+                    .conversion_identity = conversion.bytes,
+                } };
+            },
+        };
+        const layout_digest = try self.result.layouts.contentDigest(layout_idx);
+        const identity = LirProgram.rootMaterializationIdentity(root.module.bytes, producer, representation.bytes, layout_digest);
+        switch (root.root) {
+            .checked => {},
+            .literal => |literal| {
+                const entry = try self.literal_materializers.getOrPut(self.allocator, identity.bytes);
+                if (!entry.found_existing) entry.value_ptr.* = .{ .root = literal, .cause = .{
+                    .module = if (where.loc.hasLocation()) self.solved.lifted.sourceFiles()[where.loc.file].checked_module_key else null,
+                    .region = where.region,
+                    .line = where.loc.line,
+                    .column = where.loc.column,
+                } };
+            },
+        }
+        const materialization: LirProgram.RootMaterialization = .{
+            .module = root.module.bytes,
+            .producer = producer,
+            .representation_digest = representation.bytes,
+            .layout_digest = layout_digest,
+            .wrapper_identity = identity.bytes,
+        };
         const accessor = try store.addProcSpec(.{
             .name = lirSymbol(self.symbols.fresh()),
-            .identity = try self.comptimeRootAccessorIdentity(root, ty, layout_idx),
+            .identity = identity,
+            .root_materialization = materialization,
             .args = LIR.LocalSpan.empty(),
             .frame_locals = frame_locals,
             .body = read,
@@ -5721,30 +6388,25 @@ const Lowerer = struct {
         }, where.loc);
         if (store.procNeedsStackProbe(&self.result.layouts, store.getProcSpec(accessor))) store.getProcSpecPtr(accessor).stack_probe = .required;
         self.result.static_data_values.items[@backingInt(id)].accessor = accessor;
+        if (self.completed_scalar_values) |values| {
+            if (values.constructionFor(root.module, root.root, layout_idx)) |construction| {
+                if (!postcheck_values.requiresOwnedCapacity(construction)) return accessor;
+                var new_locals: std.ArrayList(LIR.LocalId) = .empty;
+                defer new_locals.deinit(self.allocator);
+                try new_locals.append(self.allocator, value);
+                const context = UniformConstructorEmitContext{ .lowerer = self, .new_locals = &new_locals };
+                const body = try postcheck_values.emit(context, store, &self.result.layouts, origin, value, construction, ret) orelse
+                    Common.invariant("decoded root construction has no explicit LIR materialization");
+                const locals = try store.addLocalSpan(new_locals.items);
+                const proc = store.getProcSpecPtr(accessor);
+                proc.body = body;
+                proc.shapes = proc.shapes.merged(store.shapes);
+                proc.frame_locals = locals;
+                if (store.procNeedsStackProbe(&self.result.layouts, proc.*)) proc.stack_probe = .required;
+                self.result.static_data_values.items[@backingInt(id)].accessor_rebuilt = true;
+            }
+        }
         return accessor;
-    }
-
-    /// An accessor is emitted and carried in object-cache packs like any
-    /// procedure, and a spliced procedure takes the place of the program's
-    /// own procedure with its identity, so the identity names what the
-    /// accessor returns in every program: the root's module by content key,
-    /// the root within that module, and the representation the slot commits,
-    /// by a digest no program's numbering enters.
-    fn comptimeRootAccessorIdentity(self: *Lowerer, root: Common.ComptimeValueRoot, ty: Type.TypeId, layout_idx: layout.Idx) std.mem.Allocator.Error!LIR.ProcIdentity {
-        const representation = try self.types.contentDigest(&self.solved.lifted.names, ty, .{ .context = self, .identity = callableTargetIdentity });
-        var hasher = base.TypeDigestHasher.init();
-        hasher.update("roc.proc.comptime-root-accessor.v2");
-        hasher.update(&root.module.bytes);
-        // A literal root's id is program-local; the literal's checked
-        // expression names it within its module.
-        const tag: u8, const index: u32 = switch (root.root) {
-            .checked => |checked_root| .{ 0, @backingInt(checked_root) },
-            .literal => |literal| .{ 1, self.literal_roots.items[@backingInt(literal)].site.checked_expr },
-        };
-        hasher.update(&[_]u8{ tag, @truncate(index), @truncate(index >> 8), @truncate(index >> 16), @truncate(index >> 24) });
-        hasher.update(&representation.bytes);
-        hasher.update(&try self.result.layouts.contentDigest(layout_idx));
-        return .{ .bytes = hasher.finalResult() };
     }
 
     /// The content identity of the specialization a callable variant targets.
@@ -11864,12 +12526,19 @@ const Lowerer = struct {
     }
 
     fn addLocalForLayout(self: *Lowerer, layout_idx: layout.Idx) Common.LowerError!LIR.LocalId {
+        const local = try self.addDetachedLocalForLayout(layout_idx);
+        try self.noteLocal(local);
+        return local;
+    }
+
+    /// Generated procedures own their frame inventory, but every local still
+    /// needs an aligned provenance entry in the shared LIR local table.
+    fn addDetachedLocalForLayout(self: *Lowerer, layout_idx: layout.Idx) Common.LowerError!LIR.LocalId {
         const local = try self.result.store.addLocal(.{ .layout_idx = layout_idx });
         if (@backingInt(local) != self.erasedOwnerStateCount()) {
             Common.invariant("erased-owner provenance table diverged from the LIR local table");
         }
         try self.erased_owner_states.append(self.allocator, .pending);
-        try self.noteLocal(local);
         return local;
     }
 
@@ -14863,7 +15532,7 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
         errdefer allocator.free(name);
         const qualified_name = try allocator.dupe(u8, "Fixture");
         errdefer allocator.free(qualified_name);
-        try lifted.source_files.append(allocator, .{ .name = name, .qualified_name = qualified_name, .module_identity = @splat(0) });
+        try lifted.source_files.append(allocator, .{ .name = name, .qualified_name = qualified_name, .module_identity = @splat(0), .checked_module_key = null });
     }
     // Derive real function and expression types so the lowered reads carry
     // solved types rather than synthesized ones.
@@ -15538,4 +16207,11 @@ fn constructionEql(allocator: std.mem.Allocator, a: postcheck_values.Constructio
         }
     }
     return true;
+}
+
+/// Monotonic nanoseconds for the `ROC_PACK_STATS` stage reports.
+fn statsNowNs() i128 {
+    var ts: std.c.timespec = undefined;
+    _ = std.c.clock_gettime(.MONOTONIC, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
 }

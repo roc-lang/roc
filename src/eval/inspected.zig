@@ -363,6 +363,7 @@ pub const LirImageProgram = struct {
     shm: SharedMemoryAllocator,
     image_header: *LirImage.Header,
     view: LirImage.ProgramView,
+    source_catalog: *InspectionSourceCatalog,
 
     /// First explicit LIR root for eval helpers. The root set was selected by
     /// checked-artifact publication and lowering; runtime evaluators must not
@@ -378,6 +379,7 @@ pub const LirImageProgram = struct {
     }
 
     pub fn deinit(self: *LirImageProgram, allocator: Allocator) void {
+        self.source_catalog.deinit();
         self.view.deinit();
         self.shm.deinit(allocator);
     }
@@ -408,6 +410,107 @@ pub const BoolRootModule = struct {
     roots: []const BoolRoot,
     expect_site_count: usize = 0,
     static_data: RuntimeStaticData = .{},
+    source_catalog: backend.dev.CtfeContext.Catalog = .{},
+};
+
+/// Checked inspection lowering retires its producer after copying LIR into the
+/// image. Retain only its explicit semantic records, not another body store.
+pub const InspectionSourceCatalog = struct {
+    const Context = backend.dev.CtfeContext;
+    const Attributes = struct {
+        checked_error: bool,
+        literal_rejection: ?Context.LiteralDescriptor,
+        guard_root: ?Context.RootDescriptor,
+    };
+    allocator: Allocator,
+    arena: std.heap.ArenaAllocator,
+    sources: []const ?Context.SourceDescriptor,
+    failure_indices: []const ?u32,
+    failures: []const Attributes,
+    sites: []const ?Context.SiteDescriptor,
+    roots: []const ?Context.RootDescriptor,
+
+    fn init(allocator: Allocator, result: *const lir.Program.Result) Allocator.Error!*InspectionSourceCatalog {
+        const Native = @import("native_context.zig");
+        const registry = try Native.FailureRegistry.create(allocator, result);
+        defer registry.deinit();
+        const producer = try Native.Catalog.init(allocator, result, registry);
+        defer producer.deinit();
+        const owned = try allocator.create(InspectionSourceCatalog);
+        errdefer allocator.destroy(owned);
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        errdefer arena.deinit();
+        const a = arena.allocator();
+        const count = result.store.getCFStmts().len;
+        const sources = try a.alloc(?Context.SourceDescriptor, count);
+        const failure_indices = try a.alloc(?u32, count);
+        var failures: std.ArrayList(Attributes) = .empty;
+        var indices = std.AutoHashMap(Attributes, u32).init(allocator);
+        defer indices.deinit();
+        for (sources, failure_indices, 0..) |*source_row, *failure_index, index| {
+            source_row.* = producer.view.source(@intCast(index));
+            const failure_descriptor = producer.view.failure(@intCast(index)) orelse {
+                failure_index.* = null;
+                continue;
+            };
+            const attributes: Attributes = .{
+                .checked_error = failure_descriptor.checked_error,
+                .literal_rejection = failure_descriptor.literal_rejection,
+                .guard_root = failure_descriptor.guard_root,
+            };
+            const entry = try indices.getOrPut(attributes);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = @intCast(failures.items.len);
+                try failures.append(a, attributes);
+            }
+            failure_index.* = entry.value_ptr.*;
+        }
+        const sites = try a.alloc(?Context.SiteDescriptor, result.comptime_sites.items.len);
+        for (sites, 0..) |*site_row, index| {
+            site_row.* = producer.view.site(@intCast(index));
+            if (site_row.*) |*descriptor| descriptor.branch_regions = try a.dupe(base.Region, descriptor.branch_regions);
+        }
+        const owned_failures = try failures.toOwnedSlice(a);
+        const owned_roots = try a.dupe(?Context.RootDescriptor, producer.roots);
+        owned.* = .{
+            .allocator = allocator,
+            .arena = arena,
+            .sources = sources,
+            .failure_indices = failure_indices,
+            .failures = owned_failures,
+            .sites = sites,
+            .roots = owned_roots,
+        };
+        return owned;
+    }
+
+    pub fn view(self: *const InspectionSourceCatalog) Context.Catalog {
+        return .{ .provider = .{ .context = self, .source = source, .failure = failure, .site = site, .root = root } };
+    }
+
+    fn source(raw: *const anyopaque, index: u32) ?Context.SourceDescriptor {
+        const self: *const InspectionSourceCatalog = @ptrCast(@alignCast(raw));
+        return if (index < self.sources.len) self.sources[index] else null;
+    }
+    fn failure(raw: *const anyopaque, index: u32) ?Context.FailureDescriptor {
+        const self: *const InspectionSourceCatalog = @ptrCast(@alignCast(raw));
+        if (index >= self.failure_indices.len) return null;
+        const attributes = self.failures[self.failure_indices[index] orelse return null];
+        return .{ .source = source(raw, index) orelse return null, .checked_error = attributes.checked_error, .literal_rejection = attributes.literal_rejection, .guard_root = attributes.guard_root };
+    }
+    fn site(raw: *const anyopaque, index: u32) ?Context.SiteDescriptor {
+        const self: *const InspectionSourceCatalog = @ptrCast(@alignCast(raw));
+        return if (index < self.sites.len) self.sites[index] else null;
+    }
+    fn root(raw: *const anyopaque, index: u32) ?Context.RootDescriptor {
+        const self: *const InspectionSourceCatalog = @ptrCast(@alignCast(raw));
+        return if (index < self.roots.len) self.roots[index] else null;
+    }
+    pub fn deinit(self: *InspectionSourceCatalog) void {
+        const allocator = self.allocator;
+        self.arena.deinit();
+        allocator.destroy(self);
+    }
 };
 
 /// Timings for JIT-compiling and running boolean test roots with the dev backend.
@@ -1712,10 +1815,16 @@ fn lowerCheckedRootWithViews(
     shm.updateHeader();
 
     const view = try LirImage.viewMappedImage(image_header, shm.base_ptr, shm.getUsedSize(), lowered.target_usize);
+    errdefer {
+        var failed_view = view;
+        failed_view.deinit();
+    }
+    const source_catalog = try InspectionSourceCatalog.init(allocator, &lowered.lir_result);
     return .{
         .shm = shm,
         .image_header = image_header,
         .view = view,
+        .source_catalog = source_catalog,
     };
 }
 
@@ -2325,6 +2434,57 @@ fn boxyNativeFnTable() BoxyNativeFnTable {
     return boxy_abi.nativeFnTable();
 }
 
+test "native inspected boolean roots share normal call objects and current header storage" {
+    if (comptime !backend.host_lir_codegen_available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try LayoutStore.init(allocator, base.target.TargetUsize.native);
+    defer layouts.deinit();
+    // The header is the module's only static data value.
+    const static_data_value_count = 1;
+    const header_value: lir.LIR.StaticDataId = @fromBackingInt(@intCast(static_data_value_count - 1));
+    const value = try store.addLocal(.{ .layout_idx = .bool });
+    const leaf_return = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
+    const load = try store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = header_value }, .next = leaf_return } }, .test_fixture);
+    const leaf = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.ProcIdentity.forTest(751), .args = .empty(), .body = load, .ret_layout = .bool }, .none);
+    const result = try store.addLocal(.{ .layout_idx = .bool });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const call = try store.addCFStmt(.{ .assign_call = .{ .target = result, .proc = leaf, .args = .empty(), .next = ret } }, .test_fixture);
+    const root = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.ProcIdentity.forTest(752), .args = .empty(), .body = call, .ret_layout = .bool }, .none);
+    const exports = [_]backend.StaticDataExport{.{ .symbol_name = "inspected_bool_header", .symbol_identity = @splat(75), .value_id = header_value, .bytes = &.{1}, .alignment = 1 }};
+    var batch = try devEvalBoolRootModule(allocator, .{
+        .store = &store,
+        .layouts = &layouts,
+        .tables = .{},
+        .roots = &.{.{ .symbol_name = "inspected_bool_main", .proc = root, .arg_layouts = &.{}, .ret_layout = .bool }},
+        .static_data = .{ .exports = &exports, .value_count = static_data_value_count },
+        .source_catalog = backend.dev.LirCodeGenMod.testSourceCatalog(),
+    }, null, 1);
+    defer batch.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), batch.results.len);
+    try std.testing.expect(batch.results[0].outcome.passed);
+}
+
+test "native inspected source catalog preserves producer failure records after body retirement" {
+    const allocator = std.testing.allocator;
+    var statement: lir.LIR.CFStmtId = undefined;
+    const owned = blk: {
+        var result = try lir.Program.Result.init(allocator, base.target.TargetUsize.native);
+        defer result.deinit();
+        const message = try result.store.insertString("producer checked failure");
+        statement = try result.store.addCFStmt(.{ .crash = .{ .msg = .{ .literal = message }, .checked_error = true } }, .test_fixture);
+        break :blk try InspectionSourceCatalog.init(allocator, &result);
+    };
+    defer owned.deinit();
+    const source = owned.view().source(@backingInt(statement)).?;
+    const failure = owned.view().failure(@backingInt(statement)).?;
+    try std.testing.expect(!source.has_location);
+    try std.testing.expect(failure.checked_error);
+    try std.testing.expectEqualDeep(source, failure.source);
+    try std.testing.expect(owned.view().source(@backingInt(statement) + 1) == null);
+}
+
 /// Execute an explicit root module and its completed immutable value graph.
 pub fn devEvalBoolRootModule(allocator: Allocator, module: BoolRootModule, timing: ?*DevBoolRootTiming, max_workers: ?usize) Error!BoolRootEvalBatch {
     return devEvalSharedBoolRootModules(allocator, &.{module}, timing, max_workers);
@@ -2372,12 +2532,9 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
             else => zeroArgRootInvariant("invalid frozen data graph for dev test roots"),
         };
         defer static_image.deinit();
-        const static_addresses = static_image.lirValueAddresses(allocator, module.static_data.value_count) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            else => zeroArgRootInvariant("dev test graph omitted an explicit static value slot"),
-        };
-        defer allocator.free(static_addresses);
-
+        var materializers = try CompileTimeFinalization.MaterializationHeaders.init(allocator, store);
+        // Headers must outlive the executable and every call using its closures.
+        defer materializers.deinit();
         const codegen_setup_started_ns = if (timing) |timings| timings.start() else 0;
         var codegen = try HostLirCodeGen.initWithBoxyMetadata(
             allocator,
@@ -2390,7 +2547,9 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
-        codegen.setNativeStaticData(static_addresses);
+        codegen.generation_mode = .shim_execution;
+        codegen.setContextCatalog(module.source_catalog);
+        try codegen.setStaticDataSymbols(module.static_data.exports);
         // Worker threads read this table through the codegen'd code while the
         // parallel run below is still in flight, so it must stay alive until
         // this function returns.
@@ -2399,10 +2558,19 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
         if (timing) |timings| timings.finish(codegen_setup_started_ns, .codegen_setup);
 
         const procedure_codegen_started_ns = if (timing) |timings| timings.start() else 0;
-        try codegen.compileAllProcSpecs(store.getProcSpecs());
+        var demand: std.ArrayList(LirProcSpecId) = .empty;
+        defer demand.deinit(allocator);
+        for (store.getProcSpecs(), 0..) |procedure, index| {
+            if (!procedure.is_static_initializer and !procedure.external) try demand.append(allocator, @fromBackingInt(@intCast(index)));
+        }
         const static_rc_helpers = try backend.collectRequiredRcHelpers(allocator, module.static_data.exports);
         defer allocator.free(static_rc_helpers);
-        try codegen.compileStaticDataRcHelpers(static_rc_helpers);
+        var retained = try backend.NativeProcCompiler.run(HostLirCodeGen, allocator, &codegen, demand.items, .{
+            .target = backend.dev.LirCodeGenMod.host_lir_codegen_target,
+            .constant_exports = module.static_data.exports,
+            .static_helpers = static_rc_helpers,
+        });
+        defer retained.deinit();
         if (timing) |timings| timings.finish(procedure_codegen_started_ns, .procedure_codegen);
 
         const entry_offsets = try allocator.alloc(usize, roots.len);
@@ -2421,18 +2589,30 @@ pub fn devEvalSharedBoolRootModules(allocator: Allocator, modules: []const BoolR
         if (timing) |timings| timings.finish(entrypoint_codegen_started_ns, .entrypoint_codegen);
 
         const executable_memory_started_ns = if (timing) |timings| timings.start() else 0;
+        var splice = backend.dev.HostSplice.init(allocator);
+        defer splice.deinit();
+        splice.bindStaticDataSymbols(module.static_data.exports, &static_image) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.MissingStaticDataSymbol => zeroArgRootInvariant("dev test root image omitted a declared static data symbol"),
+            error.DuplicateStaticDataSymbol => zeroArgRootInvariant("dev test root image contains conflicting static data symbols"),
+        };
+        const data = try retained.dataItems(allocator);
+        defer allocator.free(data);
+        try splice.addDataItems(data);
+        try splice.generateHostedStubs(&codegen, &native_fns);
         try codegen.finishImage();
-        var executable = try ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
-            codegen.getGeneratedCode(),
-            0,
-            codegen.getUnwindFunctions(),
-        );
+        try materializers.bind(&codegen, &splice);
+        var executable = splice.link(&codegen, &native_fns) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => zeroArgRootInvariant("invalid normal native image for dev test roots"),
+        };
         if (timing) |timings| timings.finish(executable_memory_started_ns, .executable_memory);
         defer {
             const executable_deinit_started_ns = if (timing) |timings| timings.start() else 0;
             executable.deinit();
             if (timing) |timings| timings.finish(executable_deinit_started_ns, .executable_memory);
         }
+        materializers.initialize(&codegen, &executable);
 
         const Resolver = struct {
             codegen: *const HostLirCodeGen,
@@ -2539,6 +2719,8 @@ fn callBoolRoot(
     _ = builtins.in_process_host.takeCheckedErrorReached();
     var crash_boundary = runtime_env.enterCrashBoundary();
     defer crash_boundary.deinit();
+    const saved_source_observer = if (target == .dev) builtins.source_events.enter(null) else null;
+    defer if (saved_source_observer) |saved| builtins.source_events.leave(saved);
     const entered = builtins.in_process_host.enter(runtime_env.get_ops(), RuntimeHostEnv.rocExpectObserved);
     defer builtins.in_process_host.leave(entered);
     if (crash_boundary.set() == 0) {
@@ -2832,6 +3014,8 @@ fn validateSharedBoolRootModules(modules: []const BoolRootModule) Error!void {
         if (module.store != program.store or module.layouts != program.layouts or
             !std.meta.eql(module.tables, program.tables) or !std.meta.eql(module.static_data, program.static_data))
             return error.Internal;
+        if (!std.meta.eql(module.source_catalog, program.source_catalog))
+            return error.Internal;
     }
 }
 
@@ -3027,6 +3211,7 @@ fn legacyInspectedRun(allocator: Allocator, comptime backend_kind: InspectedRun.
         .main_proc = lowered.mainProc(),
         .static_data = lowered.view.static_data,
         .static_data_value_count = lowered.view.static_data_value_count,
+        .source_catalog = lowered.source_catalog.view(),
     }, switch (backend_kind) {
         .interpreter => .reject,
         .dev, .wasm, .llvm => {},

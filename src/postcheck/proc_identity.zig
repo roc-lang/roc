@@ -99,6 +99,9 @@ pub const Renderer = struct {
     /// checked source, indexed by `Lifted.FnId`.
     source_digests: []const ?Identity,
     fn_by_symbol: *const std.AutoHashMap(Common.Symbol, Lifted.FnId),
+    /// The program's declaration names: a nominal type is rendered by its
+    /// declaration identity when the program names it.
+    declarations: *const Common.DeclarationNames,
     memo: *Memo,
 
     /// Identity of the specialization of `source` at `solved_fn_ty` with the
@@ -132,7 +135,15 @@ pub const Renderer = struct {
         writeBytes(&hasher, "captures");
         writeU32(&hasher, @intCast(captures.len));
         for (captures) |capture| hasher.update(&try self.typeDigest(capture.ty));
-        return hasher.finalResult();
+        const identity = hasher.finalResult();
+        if (identityTraceEnabled()) {
+            std.debug.print("spec-identity {s} fn={d} source={s} abi={s} reuse={s} args=", .{ std.fmt.bytesToHex(identity[0..8], .lower), @backingInt(source), std.fmt.bytesToHex(self.sourceDigest(source)[0..8], .lower), capture_abi, return_reuse });
+            for (args) |arg| std.debug.print("{s},", .{std.fmt.bytesToHex((try self.typeDigest(arg))[0..8], .lower)});
+            std.debug.print(" ret={s} captures=", .{std.fmt.bytesToHex((try self.typeDigest(signature.ret))[0..8], .lower)});
+            for (captures) |capture| std.debug.print("{s},", .{std.fmt.bytesToHex((try self.typeDigest(capture.ty))[0..8], .lower)});
+            std.debug.print("\n", .{});
+        }
+        return identity;
     }
 
     fn sourceDigest(self: *const Renderer, fn_id: Lifted.FnId) Identity {
@@ -279,6 +290,7 @@ const Engine = struct {
         for (member_slice) |member| {
             const fn_id = renderer.fn_by_symbol.get(member.lambda) orelse
                 Common.invariant("lambda-set member referenced a lifted function with no identity");
+            if (identityTraceEnabled()) std.debug.print("identity-member fn={d} source={s}\n", .{ @backingInt(fn_id), std.fmt.bytesToHex(renderer.sourceDigest(fn_id)[0..8], .lower) });
             try self.putBytes(&renderer.sourceDigest(fn_id));
             const captures = renderer.types.captureSpan(member.captures);
             try self.putU32(@intCast(captures.len));
@@ -303,6 +315,7 @@ const Engine = struct {
             .zst => try self.putBytes("zst"),
             .erased => |erased| {
                 try self.putBytes("erased");
+                if (identityTraceEnabled()) std.debug.print("identity-erased source_fn_ty={s}\n", .{std.fmt.bytesToHex(erased.source_fn_ty.bytes[0..8], .lower)});
                 try self.putBytes(&erased.source_fn_ty.bytes);
                 try self.putMembers(erased.members);
             },
@@ -332,6 +345,7 @@ const Engine = struct {
                     try self.putBytes(renderer.names.recordFieldLabelText(field.name));
                     var default_hasher = TypeDigestHasher.init();
                     MonoType.writeFieldDefaultDigest(renderer.names, &default_hasher, field.default);
+                    if (identityTraceEnabled() and field.default != null) std.debug.print("identity-field-default field={s} module={s}\n", .{ renderer.names.recordFieldLabelText(field.name), std.fmt.bytesToHex(renderer.names.moduleIdentityBytes(field.default.?.module)[0..8], .lower) });
                     try self.putBytes(&default_hasher.finalResult());
                     if (field.value_ty) |value_ty| {
                         try self.putBytes("field-optional-value");
@@ -353,13 +367,26 @@ const Engine = struct {
             },
             .named => |named| {
                 try self.putBytes("named");
-                try self.putBytes(&named.named_type.module.bytes);
-                try self.putBytes(renderer.names.moduleIdentityBytes(named.def.module));
-                if (named.def.source_decl) |decl| {
-                    try self.putBytes("source-decl");
-                    try self.putU32(decl);
+                const module_identity = renderer.names.moduleIdentityBytes(named.def.module);
+                const declaration = if (named.def.source_decl) |decl|
+                    (if (module_identity.len == 32) renderer.declarations.nominal(module_identity[0..32].*, decl) else null)
+                else
+                    null;
+                if (declaration) |identity| {
+                    // Named by declaration, like a specialization key names
+                    // it, so an edit elsewhere in its module leaves it alone.
+                    try self.putBytes("declaration");
+                    try self.putBytes(&identity);
                 } else {
-                    try self.putBytes("no-source-decl");
+                    if (identityTraceEnabled()) std.debug.print("identity-named-undeclared name={s} module={s}\n", .{ renderer.names.typeNameText(named.def.type_name), std.fmt.bytesToHex(module_identity[0..@min(8, module_identity.len)], .lower) });
+                    try self.putBytes(&named.named_type.module.bytes);
+                    try self.putBytes(module_identity);
+                    if (named.def.source_decl) |decl| {
+                        try self.putBytes("source-decl");
+                        try self.putU32(decl);
+                    } else {
+                        try self.putBytes("no-source-decl");
+                    }
                 }
                 try self.putBytes(renderer.names.typeNameText(named.def.type_name));
                 try self.putBytes(@tagName(named.kind));
@@ -731,6 +758,7 @@ test "procedure identity excludes outer callable sets but retains nested callabl
         .source_digests = &.{ @splat(1), @splat(2) },
         .fn_by_symbol = &fn_by_symbol,
         .memo = &memo,
+        .declarations = &Common.DeclarationNames.empty,
     };
     const identity = try renderer.specIdentity(first_fn, alone, &.{}, "finite", "none");
     try std.testing.expectEqual(identity, try renderer.specIdentity(first_fn, beside_lambda, &.{}, "finite", "none"));
@@ -752,4 +780,8 @@ test "procedure identity excludes outer callable sets but retains nested callabl
     try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(second_fn, alone, &.{}, "finite", "none")));
     try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(first_fn, alone, &.{}, "erased", "none")));
     try std.testing.expect(!std.mem.eql(u8, &identity, &try renderer.specIdentity(first_fn, alone, &.{}, "finite", "reuse")));
+}
+
+fn identityTraceEnabled() bool {
+    return @import("builtin").os.tag != .freestanding and std.c.getenv("ROC_IDENTITY_TRACE") != null;
 }

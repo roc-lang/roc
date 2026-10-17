@@ -21,6 +21,7 @@ pub const watch_inputs = @import("watch_inputs.zig");
 // Actor model components
 pub const messages = @import("messages.zig");
 pub const canonicalized_cache_entry = @import("canonicalized_cache_entry.zig");
+pub const cache_versioning = @import("cache_versioning.zig");
 pub const channel = @import("channel.zig");
 pub const coordinator = @import("coordinator.zig");
 pub const app_header = @import("app_header.zig");

@@ -47,6 +47,9 @@ pub const host_lir_codegen_available = LirCodeGenMod.host_lir_codegen_available;
 pub const ObjectFileCompiler = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").ObjectFileCompiler;
 /// Per-region machine-code artifacts and their reassembly.
 pub const ProcArtifact = @import("ProcArtifact.zig");
+pub const CtfeContext = @import("CtfeContext.zig");
+/// Closed serving subsets for pack encoding and context binding.
+pub const ArtifactClosure = @import("ArtifactClosure.zig");
 /// Shared native procedure task driver and same-program retained artifacts.
 pub const NativeProcCompiler = @import("NativeProcCompiler.zig");
 /// An artifact located in a loaded pack.

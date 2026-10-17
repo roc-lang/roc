@@ -115,7 +115,8 @@ pub fn Graph(comptime AllocationKey: type) type {
             if (self.allocations.get(key)) |existing| return .{ .dest = existing, .fresh = false };
             const header_size: usize = (if (contains_refcounted) @as(usize, 2) else 1) * self.word();
             const payload_offset = std.mem.alignForward(usize, header_size, alignment_);
-            const symbol = try self.addChildNode(payload_offset + byte_count, @intCast(@max(alignment_, self.word())));
+            const allocation_size = std.math.add(usize, payload_offset, byte_count) catch return error.OutOfMemory;
+            const symbol = try self.addChildNode(allocation_size, @intCast(@max(alignment_, self.word())));
             const dest = Destination{ .symbol = symbol, .offset = payload_offset };
             // A zero RC header is the runtime's immutable/static allocation marker.
             if (contains_refcounted) self.writeWord(.{ .symbol = symbol, .offset = payload_offset - 2 * self.word() }, element_count orelse 0);
@@ -174,10 +175,12 @@ pub fn Graph(comptime AllocationKey: type) type {
                 dest.* = .{
                     .symbol_name = name,
                     .value_id = if (index == 0) self.slot else null,
+                    .symbol_identity = if (index == 0) self.program.static_data_values.items[@backingInt(self.slot)].symbol_identity else null,
                     .bytes = owned_bytes,
                     .alignment = source.alignment,
                     .is_global = false,
                     .is_exported = false,
+                    .root_slot = true,
                     .relocations = relocations,
                     .empty_list_capacities = capacities,
                 };
