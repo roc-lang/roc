@@ -978,7 +978,7 @@ pub const Store = struct {
     /// Whether two descriptors agree on every flag an instantiated copy
     /// carries over.
     fn sameCopiedFlags(a: types.DescriptorFlags, b: types.DescriptorFlags) bool {
-        return @as(u8, @bitCast(a.copied())) == @as(u8, @bitCast(b.copied()));
+        return @as(u16, @bitCast(a.copied())) == @as(u16, @bitCast(b.copied()));
     }
 
     pub fn groundEpoch(self: *const Self) u64 {
@@ -1096,6 +1096,16 @@ pub const Store = struct {
         try self.setDesc(resolved.desc_idx, desc);
     }
 
+    /// Mark a tag row a host-boundary annotation wrote (design.md "Row
+    /// Joins"). The mark travels with the row's equivalence class and its
+    /// copies.
+    pub fn markHostFixedRow(self: *Self, target_var: Var) Allocator.Error!void {
+        const resolved = try self.resolveWriteTarget(target_var);
+        var desc = resolved.desc;
+        desc.flags.host_fixed_row = true;
+        try self.setDesc(resolved.desc_idx, desc);
+    }
+
     /// Bound an annotated definition's implicitly opened row (design.md
     /// "Polarity"). The bound travels with the row's equivalence class.
     pub fn markBoundedRowExt(self: *Self, target_var: Var) Allocator.Error!void {
@@ -1105,8 +1115,9 @@ pub const Store = struct {
         try self.setDesc(resolved.desc_idx, desc);
     }
 
-    /// End the bound on a row every use shares: a weak value binding's row is
-    /// bounded only while its own right-hand side is checked.
+    /// End the bound on a row: a platform-required definition's rows are
+    /// released where the platform relates them, and a bound an enclosing
+    /// release cleared is applied again for the owners that still hold it.
     pub fn clearBoundedRowExt(self: *Self, target_var: Var) Allocator.Error!void {
         const resolved = try self.resolveWriteTarget(target_var);
         var desc = resolved.desc;
@@ -1880,6 +1891,7 @@ pub const Store = struct {
         merged_desc.flags.annotation_tag_ext = merged_desc.content == .flex and
             (a_data.desc.flags.annotation_tag_ext or b_data.desc.flags.annotation_tag_ext);
         merged_desc.flags.bounded_row_ext = a_data.desc.flags.bounded_row_ext or b_data.desc.flags.bounded_row_ext;
+        merged_desc.flags.host_fixed_row = a_data.desc.flags.host_fixed_row or b_data.desc.flags.host_fixed_row;
         const merged_is_empty_tag_union = merged_desc.content == .structure and
             merged_desc.content.structure == .empty_tag_union;
         if (merged_is_empty_tag_union) {
@@ -3479,14 +3491,17 @@ test "Store multiple instances CompactWriter roundtrip" {
     };
     defer writer.deinit(gpa);
 
+    try writer.padToAlignment(gpa, @alignOf(Store.Serialized));
     const offset1 = writer.total_bytes; // Store1 starts at current position
     const serialized1 = try writer.appendAlloc(gpa, Store.Serialized);
     try serialized1.serialize(&store1, gpa, &writer);
 
+    try writer.padToAlignment(gpa, @alignOf(Store.Serialized));
     const offset2 = writer.total_bytes; // Store2 starts at current position
     const serialized2 = try writer.appendAlloc(gpa, Store.Serialized);
     try serialized2.serialize(&store2, gpa, &writer);
 
+    try writer.padToAlignment(gpa, @alignOf(Store.Serialized));
     const offset3 = writer.total_bytes; // Store3 starts at current position
     const serialized3 = try writer.appendAlloc(gpa, Store.Serialized);
     try serialized3.serialize(&store3, gpa, &writer);

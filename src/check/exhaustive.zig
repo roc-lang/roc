@@ -4884,7 +4884,11 @@ test "nominal views record rows preserve mode policies and graph-linear sharing"
 }
 
 test "nominal views record rows clean up every graph allocation failure" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, inhabitedRecordRowsCase, .{@as(usize, 2)});
+    // The graph's retained buffers grow in place when the heap's layout allows
+    // it, so the failure check runs over an allocator that refuses in-place
+    // growth; otherwise the allocation count would depend on that layout.
+    var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), inhabitedRecordRowsCase, .{@as(usize, 2)});
 }
 
 fn recordTailBlockersCase(analysis_allocator: Allocator, depth: usize) (Allocator.Error || Ident.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {

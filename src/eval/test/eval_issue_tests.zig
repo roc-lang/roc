@@ -4204,11 +4204,11 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "(Nope, Nope)" },
     },
     .{
-        // A `?` whose closed error row the enclosing annotated result rejects
-        // is a checked error that crashes when reached. The function keeps its
-        // body's result type, so a caller that widens the error row still
-        // specializes it, and the rejected return never flows a value.
-        .name = "rejected try suffix on a nominal payload function crashes at runtime",
+        // A `?` on a closed error row read out of a nominal payload contributes
+        // that row's tags to the annotated result without closing it (design.md
+        // "Row Subsumption"), so the result also holds `NotAFunction` and the
+        // `?` return's error row joins it (design.md "Row Joins").
+        .name = "try suffix on a closed error row from a nominal payload widens into the result",
         .source_kind = .module,
         .source =
         \\Holder := [H({} -> Try(I64, [WrongArity, TypeMismatch]))].{
@@ -4224,10 +4224,11 @@ pub const tests = [_]TestCase{
         \\
         \\main = Holder.run(H(|_| Err(WrongArity))) == Err(WrongArity)
         ,
-        .expected = .{ .problem_and_crash = {} },
+        .expected = .{ .inspect_str = "True" },
     },
     .{
-        .name = "rejected try suffix on a function parameter crashes at runtime",
+        // The same `?` on a closed error row read out of a function parameter.
+        .name = "try suffix on a closed error row from a function parameter widens into the result",
         .source_kind = .module,
         .source =
         \\run : ({} -> Try(I64, [WrongArity, TypeMismatch])) -> Try(I64, _)
@@ -4238,7 +4239,7 @@ pub const tests = [_]TestCase{
         \\
         \\main = run(|_| Err(WrongArity)) == Err(WrongArity)
         ,
-        .expected = .{ .problem_and_crash = {} },
+        .expected = .{ .inspect_str = "True" },
     },
     .{
         // repro for https://github.com/roc-lang/roc/issues/11769
@@ -4834,10 +4835,11 @@ pub const tests = [_]TestCase{
     },
     .{
         // https://github.com/roc-lang/roc/issues/12095
-        // `f`'s body returns its closed parameter, which closes the result row,
-        // so its own recursive call cannot be used at a wider union. The use is
-        // reported and retired; reaching it at runtime crashes.
-        .name = "issue 12095: recursive call result used at a wider tag union than the body leaves open",
+        // `f`'s body returns its closed parameter through a widening copy, so
+        // the result row stays open (design.md "Row Subsumption") and its own
+        // recursive call may be used at a wider union; the parameter's row
+        // joins the result's at the return (design.md "Row Joins").
+        .name = "issue 12095: recursive call result used at a wider tag union than the body forwards",
         .source_kind = .module,
         .source =
         \\f : [A, C] -> [A, C]
@@ -4848,7 +4850,7 @@ pub const tests = [_]TestCase{
         \\
         \\main = f(C)
         ,
-        .expected = .problem_and_crash,
+        .expected = .{ .inspect_str = "C" },
     },
     .{
         // https://github.com/roc-lang/roc/issues/12095

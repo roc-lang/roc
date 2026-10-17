@@ -1509,12 +1509,14 @@ nominal the declaring module never names, so a read's type can differ from its
 root's by such lifts. A lifted pair, and every pair containing one, unifies its
 components without joining the two types: the callable slots beneath are
 shared, every type with no lift beneath it is joined as usual, and the root's
-return stays the type its own module declared. A read whose type holds no
-callable slot has no evidence to take and is not unified at all. All reads of
-one root at one lifted Monotype type share one solved type. The type a root is
-evaluated, stored, and cached at is therefore a function of its declaring
-module alone; no consumer's use reaches a checked module's stored root type or
-its cache entry. The proof call is not an
+return stays the type its own module declared. Every read is unified with its
+root, a callable-free read included: a read at a wider tag row joins the
+root's row (Row Joins), so the root's slot in that program is laid out at the
+joined row and the read takes the slot value as it is. All reads of one root
+at one lifted Monotype type share one solved type. The checked type a root is
+stored and cached at is a function of its declaring module alone; the program
+that reads it lays its slot out at the program's solved type, and evaluation
+fills the slot at that layout. The proof call is not an
 expression to execute at the read. Lifting and lambda solving preserve that witness. Value
 folding must treat the read as opaque. LIR interns storage slots only after
 exact concrete representation equality and committed layout equality, and
@@ -4641,9 +4643,9 @@ listed above, `...` and `crash` stubs (with their dedicated hint), and a
 rejected binding used at two types (a list, a function value called at two
 types, a local, and a top-level binding used from two functions), each with
 exactly one error; an unannotated weak value used at two types is an ordinary
-mismatch. Using a top-level value at two wider tag unions is not two types:
-the value keeps its one type, and each use widens it (Value Rows: Local
-Values Share, Top-Level Values Widen At Each Use).
+mismatch. Using an unannotated top-level value at two wider tag unions is not
+two types either: its uses share one row and widen it together (Value Rows:
+Uses Share One Row).
 `test/echo/value_annotation_not_polymorphic.roc` runs a program past its
 unreached rejected bindings until it reaches one and crashes there, and
 `test/echo/issue_12016_stored_branch_lambdas.roc` runs the stored lambdas.
@@ -5159,7 +5161,10 @@ knowledge.
 Checking errors are dependency-local for hoistability. A malformed expression,
 unresolved static-dispatch call, type error, or other checker-owned diagnostic
 poisons the expression that owns the error and any expression that explicitly
-depends on it. It does not poison sibling definitions, unrelated top-level
+depends on it. A selected root whose expression reaches code checking replaced
+with its error (a dispatch rejected after selection, whose argument may read
+runtime locals) is therefore pruned and evaluates at runtime, in source
+order, where it reaches the error. It does not poison sibling definitions, unrelated top-level
 values, unrelated imported modules, or the checked program as a whole. A checked
 CheckedModule data that carries diagnostics is still a valid input to every independent
 compile-time-evaluation decision whose expression/dependency region is
@@ -8786,7 +8791,7 @@ rules:
 | --- | --- | --- |
 | A FUNCTION signature | A quantified flex in the generalized scheme, instantiated fresh at every call | Each caller may use the result at a wider union, independently of every other caller |
 | A LOCAL VALUE binding | ONE weak flex shared by every use in the enclosing body | Uses may widen the shared row, and what accumulates is what every use sees |
-| A TOP-LEVEL VALUE binding | None after the definition: the row is closed at the definition, at exactly the tags the definition produces | Each use may use the value at a wider union, independently of every other use, through a widening conversion (Value Rows: Local Values Share, Top-Level Values Widen At Each Use) |
+| A TOP-LEVEL VALUE binding | ONE weak flex shared by every use in the module, bounded by the annotation, closed when the module finishes checking | Nothing: the row lists exactly the annotation's tags at every use, and a use needing another tag is a mismatch at the use (Value Rows: Uses Share One Row) |
 | A HOST-BOUNDARY annotation (a hosted lambda, a `provides` def, a platform `requires` type) | None: the row is generated exactly as written (`AnnotationGenCtx.opening = .as_written`) | Nothing |
 
 A value binding generalizes only when its right-hand side does (Value
@@ -8860,25 +8865,22 @@ for every caller, which is precisely what identical signatures already
 promise. The body is bounded by the audit, never by which value a particular
 return path constructed.
 
-The extension is an ordinary flex during the body check, so a closed value
-still CLOSES the row there: a definition returning a value from a closed
-source (an input-position parameter, a nominal field, a hosted result)
-has a closed row in its own type. Each direct call of such a definition widens its own
-copy of the result instead (Row Subsumption), so two identically annotated
-definitions behave the same for a caller that calls them; a definition used
-as a function value keeps its own result row.
+The extension is an ordinary flex during the body check. A value from a
+closed source (an input-position parameter, a nominal field, a hosted result)
+that flows into the definition's result does not bind it: the value relates to
+the result through a copy of its type with each closed row re-opened, and
+crosses into the result through a row coercion (Row Subsumption). The
+definition's own result row is therefore the annotation's open row whatever
+its body forwards, and two identically annotated definitions have one type.
 `test/fx-open/issue_9963_hosted_try_question_mark.roc` carries both halves of
 that witness in one platform module. `Fallible.via_match!` and
 `Fallible.via_question!` are annotated `{} => Try(Str, [HostErr(Str)])`
 identically. The first reconstructs the hosted error with a `match`, so the
 `Err(HostErr(msg))` construction mints its own open row, the annotation's flex
 is never bound, and the function's row stays open. The second forwards the
-hosted error with `?`; the host's row is closed, so unifying it into the
-annotation's extension would bind that extension to `[]` and close the row.
-With the hosted widening exception removed, that forwarding closes the
-definition's own result row, and a call of `Fallible.via_question!` widens its
-result at the call (Row Subsumption). The match-reconstructing case keeps its
-open row.
+hosted error with `?`; the host's row is closed, and the `?` contributes its
+tags to the composed result without relating the closed tail to it (Try
+Return-Row Composition), so this function's row stays open too.
 
 An anonymous `..` in a positive position of an opening annotation means
 exactly what absence means there and is generated the same way (a recorded
@@ -8912,10 +8914,10 @@ The two VALUE rows treat an inferred value (`x = Boom`) and an annotated one
 alike: the value's body is bounded by the audit, and writing `..` on a value
 is rejected (Value Bindings Generalize By Expression), because a value cannot
 quantify a row. A local value's shared row behaves like any inferred local
-row and is sealed by Monotype's row defaults. A top-level value's row closes
-at its definition, and its uses widen; Value Rows: Local Values Share,
-Top-Level Values Widen At Each Use states that rule and why each alternative
-was rejected.
+row and is sealed by Monotype's row defaults. A top-level value's row is
+shared by its module's uses and closes when the module finishes checking;
+Value Rows: Uses Share One Row states that rule and why each alternative was
+rejected.
 
 An ALIAS carries its implicit row variables as hidden ordinary rigid
 parameters. `MyResult(a) : Try(a, [MyError])` has an additional internal
@@ -9067,21 +9069,19 @@ cannot derive from a callable, so every independent callable of such a target
 carries its own checked callable contract.
 An implementation whose checked scheme result row is CLOSED (its body returns a
 closed-source value: a top-level constant, an input-position parameter, a
-nominal field) still serves a widened use: the Result-Row Widening Adapter
-at the template boundary specializes that implementation at its own declared
-row and re-tags the result at the requested row, generalizing the hosted
-`Try` adapter. Per-use opening applies only at the output positions that
-adapter can re-tag: the signature's direct result row, and the ERROR row of
-a `Try` result. A `Try`'s ok row is not adaptable—the adapter asserts the ok type
-is unchanged—so it is not opened either. A tag union in any OTHER output
-position (inside a `List`, a
-record field, a tuple, a tag payload, a non-`Try` nominal) keeps its row
-as written, exactly as a negative position does, so a body use that tries
-to widen it is an ordinary type mismatch reported at the body use. Keeping
-the set of positions a use may WIDEN equal to the set lowering can ADAPT is
-the rule this axis holds; it is held BY HAND, by a syntactic walk that must
-grow whenever the coercion generator does (see "Declaration Position and Adapter Reach"
-below). (Decided 2026-09-03 as the converse—open
+nominal field) still serves a widened use: Monotype relates the request to
+the template component-wise without unifying the two result rows, so the
+implementation is specialized at its own declared row, and the two rows are
+one join set where the call's result flows (Row Joins), so the value needs no
+conversion. Per-use opening applies only at the output positions a join
+reaches: the signature's direct result row, and the ERROR row of a `Try`
+result. A `Try`'s ok row is not opened. A tag union in any OTHER output
+position (inside a `List`, a record field, a tuple, a tag payload, a
+non-`Try` nominal) keeps its row as written, exactly as a negative position
+does, so a body use that tries to widen it is an ordinary type mismatch
+reported at the body use. Keeping the set of positions a use may WIDEN within
+the row coercion's reach is the rule this axis holds; it is held BY HAND, by
+a syntactic walk (see "Declaration Position and Adapter Reach" below). (Decided 2026-09-03 as the converse—open
 everywhere, reject a closed implementation at the enclosing-scheme
 instantiation—and reversed 2026-09-14: that instantiation
 (`instantiateTypeScheme`) is itself what closes the markers with
@@ -9154,8 +9154,8 @@ worklist and joins all formal occurrences. It treats nominal bodies as opaque
 and recognizes builtin `Try` only through its compiler-owned source identity.
 Function-return and nominal-argument reach transitions live beside the shared
 position solver and are used by both frontend walks and instantiation.
-The reachable set remains exactly the existing result-row adapter contract;
-this does not extend the adapter to nested functions, payloads, or `Try` ok rows.
+The reachable set is the per-use opening contract for `where` results; it does
+not extend to nested functions, payloads, or `Try` ok rows.
 
 The HOST-BOUNDARY row above covers two opt-out sites, both genuine
 non-producers: host-boundary annotations (hosted lambdas and `provides` defs,
@@ -9201,43 +9201,54 @@ while a definition that FORWARDS a value out of a closed source—an
 input-position parameter, a nominal field, a hosted result—binds that
 extension to `[]`. The bodies differ; the signatures do not.
 
-The body still closes the row, so such a definition's own type, which it is
-specialized at, has the closed row its body produces. The coercion happens at each
-call. A direct call whose callee names an annotated function whose body closed
-a result row its annotation implicitly opens
-(`Check.defClosedAnnotatedResultRow`; imported through
-`ModuleEnv.ClosedResultBinding`) relates its callee to a copy of the
-function's instantiated type in which each such closed row the row coercion
-reaches in the result is re-opened (`Check.widenedFunctionResultUseVar`). Only
-the result's spine down to a re-opened row is copied: a forwarder's argument
-and result rows can be one class, and its argument row stays closed, so a call
-at a tag the argument does not list is still rejected. Checking records the
-callee with the function's own type and result (`ModuleEnv.RowCoercedCallee`),
-and checked-body construction makes the call at that type and widens its result
-with a `row_coerce` (Row Coercion Primitive, below). A call inside the
-function's own definition relates to the type the body is still producing and
-is not widened.
+The coercion happens where the closed value meets the definition's result. A
+value expression that flows into an annotated function's result—the lambda's
+body, a branch of an `if` or `match` in result position, the value of a
+`return`—and whose type reaches a closed tag union that is not a host-boundary
+row (the reach is fixed below) relates to the result through a copy of its type in which each such closed row
+is re-opened (`Check.widenedClosedRowsCopy`), with every open row and every
+position outside the reach shared with the value. The expression keeps its own
+type. Checking records it with the copy (`ModuleEnv.RowCoercedResult`), and
+checked-body construction keeps the expression's own node and adds a
+`row_coerce` of it at the copy's type, which is the node the expression's
+parent refers to (Row Coercion Primitive, below); every consumer keyed by the
+source node—dispatch plans, exhaustiveness sites, value references—still finds
+the expression's own kind. The copy only re-opens rows the value's own type
+closes, so a relation
+that rejects the copy rejects the value's own type too, and the rejection is
+reported through that type. A copy whose rows settle closed with exactly the
+value's own tags is the value itself, and its record is dropped
+(`Check.settleUnwidenedResults`); a row whose tail is quantified with the
+function's result may widen in a specialization, so its record stays.
 
-A definition used as a function value rather than called directly keeps its
-own result row: widening it would need an adapter closure around the function,
-which is not built. An author who wants a genuinely closed output row would
-write the closure explicitly, in the shape of `[MyErr, ..[]]`; that spelling
-does not exist and is not designed.
+A forwarder's argument and result rows can be one class. The copy separates
+only the result, so the argument row stays closed, and a call at a tag the
+argument does not list is still rejected. The function's result is its
+annotated result, open, so every use of the function—a direct call, a method
+call, an imported call, the function as a value—has the type a constructing
+definition would have, and no use site does anything. An author who wants a
+genuinely closed output row would write the closure explicitly, in the shape
+of `[MyErr, ..[]]`; that spelling does not exist and is not designed.
 
-The host-specific checker rewrite has been removed (Hosted Try Question
-Widening Removed). A hosted declaration is a host-boundary annotation whose
-rows are generated as written, so a direct hosted call is never widened: Roc
-wrappers reconstruct hosted errors when composing direct calls with wider
-error rows, and the direct hosted forwarding rejection in
-`src/compile/test/hosted_error_diagnostic_test.zig` pins that. The Result-Row
-Widening Adapter remains for admitted generic dispatch requests, including
-those selecting hosted implementations, and for non-hosted closed
-implementations (`test/cli/WidenClosedImpl.roc` and its siblings).
+A `?` whose error row is closed contributes that row's tags to the composed
+result and relates no tail (Try Return-Row Composition): a closed row has no
+residual, and equating it with the result would close the result's row. The
+`?` return's error row joins the result's row exactly as a `row_coerce`'s rows
+join (Row Joins).
 
-A top-level value's uses, in its own module and in every importer, widen
-through the same coercion applied to a value rather than to a call result
-(Value Rows: Local Values Share, Top-Level Values Widen At Each Use).
-`test/cli/ForwardedClosedRowSubsumption.roc` runs a forwarding and a
+A hosted declaration is a host-boundary annotation whose rows are generated
+as written, and the host was compiled against exactly those rows, so they are
+the one kind of row that never widens: a value carrying one relates to the
+result without a copy, and a result that needs a wider row is a type mismatch
+whose report shows how to rebuild the value tag by tag (Row Joins, "The host
+boundary"). Hosted Try Question Widening Removed records what the earlier
+host-specific rewrite was and why this is not it. A non-hosted implementation
+with a closed result row selected by generic dispatch is widened by the same
+join (`test/cli/WidenClosedImpl.roc` and its siblings).
+
+A read of a top-level value is never widened this way: its rows are the
+value's own, shared by every use in its module (Value Rows: Uses Share One
+Row). `test/cli/ForwardedClosedRowSubsumption.roc` runs a forwarding and a
 constructing definition with one signature, each called at a wider union.
 
 #### Row Coercion Primitive
@@ -9246,13 +9257,19 @@ The lowering half of row widening is a checker-stamped expression,
 `row_coerce { value }` in checked bodies (`CheckedExprData.row_coerce`), whose
 own type is the wider row a value is used at and whose child keeps its own
 closed row. No CIR form lowers to it; checked-body construction stamps it for
-the two checker records that ask for it: a use of a top-level value
-(`ModuleEnv.RowCoercedUse`; Value Rows: Local Values Share, Top-Level Values
-Widen At Each Use) and a call whose function's body closed an annotated open
-result row (`ModuleEnv.RowCoercedCallee`; Row Subsumption).
+the one checker record that asks for it: a value with a closed row flowing
+into an annotated function's result (`ModuleEnv.RowCoercedResult`; Row
+Subsumption). A read of a top-level value is never one (Value Rows: Uses
+Share One Row).
 
-The coercion has a fixed REACH, which contains every position the Result-Row
-Widening Adapter re-tags (the direct result row and a `Try`'s error row).
+The node converts nothing. It marks a place where the child's rows and the
+node's rows flow together, and every lowering makes them ONE row there (Row
+Joins, below), so the child already has its destination's representation and
+is lowered straight into it. The node is the value-only sibling of the `?`
+return boundary (Try Return-Row Composition): the same join, without the
+control transfer.
+
+The coercion has a fixed REACH, the set of positions the checker widens.
 Starting from the coerced value's own row, it reaches:
 
 1. the row at the root;
@@ -9260,189 +9277,248 @@ Starting from the coerced value's own row, it reaches:
 3. every row reached by stepping through the backing of a named type that has
    one (`Try` and user nominals alike) at a reached position.
 
-At a reached row the SUPERSET rule holds: every tag the source row carries is
-listed in the destination row with payloads of the same arity; the empty
-source row is uninhabited and satisfies it trivially. A row at any other
-position (a record field, a tuple item, a list item, a box payload, a
-function argument or result, or an argument of a named type without a backing
-such as `List`) is outside the reach and must be identical on both sides. The
-producer guarantees both rules. Every stage below checks them and raises an
-invariant on a violation; none recovers from one. A `row_coerce` whose child
-diverges diverges, and is lowered by the divergent paths like any other
-wrapper; such a child produces no value, so the checks skip it (Lambda Solved
-by the child's node kind in `relateReturnedExpr`, `.boxy` by the child's
-stored divergence without inline expects).
-
-The primitive is the value-only sibling of the `?` return boundary (Try
-Return-Row Composition): the same relation and the same lowering, without the
-control transfer.
+At a reached row the destination lists every tag the source row carries, with
+payloads of the same arity; the empty source row is uninhabited and satisfies
+that trivially. A row at any other position (a record field, a tuple item, a
+list item, a box payload, a function argument or result, or an argument of a
+named type without a backing such as `List`) is outside the reach and is
+identical on both sides. The checker guarantees both. A `row_coerce` whose
+child diverges diverges, and is lowered by the divergent paths like any other
+wrapper; such a child produces no value, so the join has nothing to relate.
 
 - Monotype lowers it as `row_widen { value }` (`Ast.RowWiden`). The child is
   lowered at its OWN checked type, exactly as a `try_suffix` return's value
   is, and the widen node sits at the demanded cell. `row_widen` carries no
   target field: `Return.target` exists only because a return's own type is not
-  the function result, whereas the widen's own type IS its destination. It is
-  not a `typed_boundary`: Lambda Solved UNIFIES a typed boundary's two slots,
-  which is exactly what a coercion must not do.
-- Monotype relates the demanded cell to the widen node's own type and lowers
+  the function result, whereas the widen's own type IS its destination.
+  Monotype relates the demanded cell to the widen node's own type and lowers
   the child with no expected cell, exactly as it handles a `?` return, so
   generated-private choices at the destination stay linked to the widen node
-  and the child's own row stays its own.
-- Lambda Solved infers the child with no expected type and then relates it to
-  the destination through the directed return relation (`relateReturn`, in
-  its `row_widen` mode): same-named tags' payloads flow, the two row roots are
-  never linked, the empty source row contributes nothing, and a source tag
-  absent from its destination or of a different arity is an invariant
-  violation. `shapeContent` steps through the backing of EVERY named type
-  that has one, user nominals included, not only `Try`; that is reach item 3,
-  and it is how an `Err` row widens inside a `Try` as it does at a `?`
-  return. Any other pair is unified, and in `row_widen` mode the relation
-  first walks that pair structurally and raises an invariant if it still
-  holds two different rows, because unifying them would merge the narrower
-  row into the wider one across the whole specialization. The `?` return
-  path uses the same relation in its `try_return` mode, which is unchanged
-  and performs no such walk.
-- Direct LIR lowering consumes the two solved types through the ordinary typed
-  assignment (`lowerTypedBoundaryInto`): a value-encoding-equivalent pair
-  copies, a nominal pair is unwrapped to its runtime backing, and a tag-union
-  pair re-tags—one switch on the source discriminant, each variant assigned
-  by name into the destination with its payloads moved through the same
-  boundary, so a nested row inside a payload re-tags too. Before it does,
-  the `row_widen` arm asserts the reach and the superset rule on the two
-  solved types: a tag-union pair (after unwrapping named backings) has every
-  source tag in the destination with equal arity, and any other pair is
-  value-encoding equivalent. The LIR is
-  ownership-neutral: it is the `tag_payload_struct` reads and `assign_tag`
-  statements a `?` return already emits, and ARC inserts the reference-count
-  operations. Backends see nothing new.
-- `.boxy` lowers the checked node directly: the child into a fresh local at
-  its own representation, then the representation boundary into the target
-  (`lowerRowCoerceInto`, the shape of its explicit return), which matches tag
-  variants by name and unwraps nominals through descriptors. The target's
-  representation is its caller's: `lowerExprInto` supplies the node's own,
-  and `lowerExprExpectedInto`, `lowerExprExpectedTypeRefInto` and
-  `lowerExprIntoRep` supply theirs, so a target stored at a generalized or
-  boxed representation gets the one boundary straight into that storage. The
-  target's descriptor is set from the child's representation exactly as
-  `lowerExprIntoRep` sets it. Before lowering, `lowerRowCoerceInto` checks the
-  reach and the superset rule on the pair of the child's and the node's own
-  representations (`assertRowCoerceReach`), because the shared boundary
-  re-tags records and other aggregates structurally and accepts a pure
-  narrowing; the coercion admits neither. Into an open destination row the
-  boundary is the concrete-to-dynamic tag adapter
-  (`assignConcreteTagVariantToDynamic`), which handles an adapted payload as
-  `lowerDynamicTagInto` handles a constructed one: the outer descriptor is
-  built from the payload's own descriptor, and a payload whose tag-payload
-  storage differs from its worker layout (a nested open row) is adapted into
-  a worker value and then moved into that storage.
-- SpecConstr is OPAQUE to it in this first form: it clones and walks through
-  the child like any wrapper, but retains no known-value structure across the
-  widen (the child's structure indexes the child's row, and re-anchoring it
-  would wrap its materialization in a `typed_boundary`), substitutes nothing
-  through it, treats a self call under a widen as NOT a tail call, because the
-  value is re-tagged after the call returns, and does not count a widen as
-  structurally work-free, since it emits a discriminant switch and, for a
-  boxed destination, an allocation. Case-of-case fusion through a widen is
-  future work, not a correctness requirement.
-- The Lambda Mono oracle re-tags by name through `convertValue`, as it does
-  for a `?` return.
+  and the child's own row stays its own until Lambda Solved joins them.
+- Lambda Solved infers the child with no expected type and then unifies it
+  with the destination (`relateReturnedExpr`, the relation a `return` and a
+  `?` return use): the two rows become one row holding both rows' tags, and
+  same-named tags' payloads unify.
+- Direct LIR lowering (`rowWidenStep`) lowers the child straight into the
+  destination local. In debug builds it first asserts that the two solved
+  types are value-encoding equivalent; a difference is a compiler bug, because
+  Lambda Solved joined them.
+- `.boxy` lowers the checked node into the target when the child's and the
+  node's representations are one plan representation, which they are whenever
+  both types are ground: the planner put them in one join set
+  (`beginRowCoerce`). When they differ, the node's type holds an open row, the
+  destination is dynamic storage, and the child crosses Boxy's ordinary
+  concrete-to-dynamic boundary, as every value stored at a dynamic
+  representation does; `assertRowCoerceReach` pins that the pair is within the
+  reach before it does.
+- SpecConstr clones and walks through the child like any wrapper, and treats
+  a self call under a widen as NOT a tail call. A widen changes no value, so
+  the child's known structure carries across it at the widen's type
+  (`widenedValue`): a tag keeps its name and a nominal its backing, each
+  rebuilt at the destination's type; a component whose type already is the
+  destination's stays as it is; and an exact runtime value at a differing type
+  becomes a `row_widen` of itself. Case-of-case distributes through a widen
+  of a `match` or `if`, reading each arm's value across it, so a builtin whose
+  body is widened into its open result still folds into its caller's match.
+- The Lambda Mono oracle relates the child to the destination by name through
+  `convertValue`, as it does for a `?` return.
 
-Because no checker emits the node, the pipeline is exercised by tests that
-stamp one onto a checked body after checking and before lowering it
-(`src/eval/test/lir_inline_test.zig`, "row coercion"), under both
-specialization strategies with leak checking, with source rows of two or more
-variants so the discriminant switch rather than the single-variant short cut
-is what runs. They cover refcounted `Str` and `List` payloads, a row directly
-in a tag payload, a generic payload, coercions at a let binding and a call
-argument, and children that diverge statically and at runtime. The rejected
-sides of the reach and superset rules are invariant panics, so they are not
-exercised in-process; `solve.zig` pins the accepted side of the Lambda Solved
-relation. Those tests are temporary scaffolding until the first producer
-lands; `src/postcheck/structural_test.zig` pins the node's shape at every
-stage. This section adds no Rewrite Inventory entry: the primitive mutates no
-solved type graph.
+`src/eval/test/lir_inline_test.zig` ("row coercion") stamps the node onto a
+checked body after checking and before lowering it, under both specialization
+strategies with leak checking, with source rows of two or more variants, over
+refcounted `Str` and `List` payloads, a row directly in a tag payload, a
+generic payload, coercions at a let binding and a call argument, and children
+that diverge statically and at runtime. `src/postcheck/structural_test.zig`
+pins the node's shape at every stage. This section adds no Rewrite Inventory
+entry: the primitive mutates no solved type graph.
 
-### Value Rows: Local Values Share, Top-Level Values Widen At Each Use
+### Row Joins
+
+A row join makes two structural tag rows one row. Wherever a value whose type
+holds row `A` flows into a position whose type holds row `B`—a closed value
+into an annotated function's open result, a `return` or a `?` into its
+function's result—the compiler does
+not convert the value. After type checking it gives `A` and `B` the same set
+of tags, and so the same discriminant numbering and the same representation,
+and the value is correct at its destination as it is. It is the row analogue
+of a lambda set: a function slot's representation is the set of every lambda
+that flows into it, and a joined row is the set of every tag that flows into
+it. Nominal tag unions are unaffected; their rows are declared.
+
+The join is what makes Row Subsumption free. The checker admits a closed-row
+value in an open result position by relating it through a widened copy, and
+the two rows it keeps apart there are exactly the rows that join. A
+conversion would cost a discriminant switch at every crossing and would need
+a site for every spelling of a use; a join costs nothing at runtime and knows
+nothing about use sites, so a direct call, a method call, an imported call
+and the function as a value all read the one joined row. No stage of the
+compiler inserts a tag-union conversion.
+
+**Where joins come from.** Every place a value's rows flow into another's:
+a `row_coerce` and its child; a lambda's body and its function's result; a
+`return`'s value and its function's result; a `?` return's error row and the
+function's `Try` result. These are edges between types, not between rows:
+each edge is descended structurally, so rows at matching positions (a
+`Try`'s error argument, a tag payload, a record field) join too. Lambda
+Solved has every edge as a unification; `.boxy` reads the same edges from the
+checked bodies.
+
+**`.lss`.** Lambda Solved is whole-program unification over monomorphic code,
+and a join is a unification. `relateReturnedExpr` unifies a returned or
+widened value's type with its destination, and tag-union unification merges
+the two tag sets: shared tags unify their payloads, tags on one side only are
+kept, and two rows with no tag in common still join, because a procedure
+shared by two specializations whose rows differ only in tag names relates each
+caller's row to one result and both callers then carry the union. The empty
+row is uninhabited and takes its peer's row. Monotype specializes a closed-row
+template at its own declared row and relates a wider request to it
+component-wise without unifying the two result rows
+(`relateClosedResultRowRequestInterface`); the rows then join in Lambda
+Solved where the call's result flows. The LIR builder lowers a `row_widen` as
+its child into the destination and asserts the two solved types are
+value-encoding equivalent, and a tag-union boundary asserts both sides list
+the same tags: no LIR re-tags a value. A top-level value's compile-time root
+and its reads are one type: Lambda Solved unifies every `comptime_value` read
+with the root's return (`unifyComptimeValueRead`), and since a read is at the
+value's own row (Value Rows: Uses Share One Row) the relation only ties the
+read to the root's slot.
+
+A join follows a value, so Lambda Solved must hold one node per OCCURRENCE of
+a row-bearing type, not one per type. Its lazy Monotype leaves share clones
+to save work: a callable-free type used to be one node wherever it occurred,
+and within one expanded type every occurrence of one sub-type was one node.
+Both ties are kept only for types that cannot change under unification
+(`Solver.isCloneInvariant`: no callable slot, no tag row) and, within a
+clone context, for rows that lie on a cycle, whose back-references the tie
+exists for. A callable-free type holding a tag row and reaching no cycle is
+POSITIONAL (`Solver.LeafSharing`): each occurrence is its own leaf, in no
+context. Otherwise two unrelated unions that both receive a value of one
+narrower type would be joined through it by type identity rather than by
+flow, and one tag label standing in both with two payload types would then
+be unified.
+
+**`.boxy`.** Boxy plans a representation per checked type identity, and its
+planner computes the joins before planning any type (`computeRowJoins`, in
+`analyzeProgram`). It seeds a union-find over `CheckedTypeIdentity` from
+every module's checked bodies—each `row_coerce`, each lambda body with its
+function's result, each `return` with its function's result—and descends every
+pair structurally (`appendRowJoinComponents`: shared tags' payloads, nominal
+arguments, record fields, tuple items, function arguments and results). A join
+set's GROUND members—types with no type variable and no open row anywhere—
+share one representation: the least identity is elected the set's representative
+(`chooseRowJoinRepresentatives`, so the choice depends on the program alone),
+`beginCheckedType` plans every other ground member as the representative's
+representation, and a representative tag row's representation lists every
+member's tags (`planJoinedTagUnionRep`). Identities join through their
+aliases, since an alias names its backing's representation. Checked types are
+shared by structure, so a join set collects every flow of a type rather than
+one value's flows; one tag label at two incompatible payload types is two
+variants of the joined row (see below), so the descent joins only compatible
+payloads and every set is one shape. `rowJoinSetCompatible` checks that each
+elected set agrees in shape before it gets a representative. An open row keeps Boxy's dynamic
+representation and connects the ground types on either side of it; a value
+crossing into it crosses Boxy's ordinary concrete-to-dynamic boundary, as every
+value stored at a dynamic representation does. A `where` result opened per use
+is such an open row, so a dispatch edge needs no seed of its own.
+
+**One label, two payload types.** A join unites rows that may name one tag
+at two payload types: a value of `[Shared]` forwarded into both
+`[Shared, Conflict({ a : U64 })]` and `[Shared, Conflict({ b : Str })]`
+puts both `Conflict`s in one row. The merge (`Solver.mergeTags`) pairs two
+same-label tags only when their payloads could unify without a structural
+conflict (`Solver.typesCompatible`, which asks ahead of time exactly what
+`unifyRoots` would raise an invariant on: a different kind of type, a
+different primitive, records with different fields, a different arity);
+otherwise both stay, as two variants of one label. That is sound because a
+label names one variant within any static type: a constructor or pattern is
+written at one static type, which lists the label once, and its own payload
+types pick the variant (`Solver.tagPayloadsSpanFor`,
+`Lowerer.tagIndexForPayloads`); a value carries the variant it was built with
+and flows only to positions whose static type lists that variant, so no
+reader ever sees the other one. A `match` is exhaustive once every LABEL of
+its scrutinee's row has an arm (`tagVariantCount`), since the other variant
+of a repeated label cannot reach it. Variants of one label are ordered by the
+digests of their payload types when the row is lowered
+(`Lowerer.orderRepeatedLabels`), so two rows holding the same variants are one
+Lambda Mono type. `.boxy` applies the same rule over checked types: two
+same-label tags of joined rows are one variant only when their payloads are
+structurally compatible (`checkedTypesStructurallyCompatible`, the planner's
+counterpart of `typesCompatible`), and only then are their payloads joined;
+the joined representation lists the other as a second variant, ordered after
+the first by its payload's identity; and the lowerer selects a constructor's,
+pattern's or restored constant's variant by its own checked payload types
+(`tagVariantForArgs`).
+
+**The host boundary.** A host is compiled before the Roc program against the
+rows its declarations wrote, so a host row cannot join a wider one. Every tag
+row a host-boundary annotation (a hosted declaration or a `provides`
+definition) writes is marked (`DescriptorFlags.host_fixed_row`, set by
+`Check.markHostFixedRows` as the annotation is generated, carried by
+instantiation and kept by unification), and the checker never widens a marked
+row: `widenedRowCopy` shares it, and `?` composition relates it whole, so a
+result wider than the host's row is a type mismatch. The report says the row
+is fixed by the host, names the host function, and shows how to rebuild the
+value tag by tag (`.map_err(|StdoutErr(e)| StdoutErr(e))`). A `where`
+requirement whose result reaches a tag row is opened per use and may be used
+at a wider union, which a hosted implementation cannot serve, so dispatch
+resolution rejects a hosted implementation for such a requirement ("Hosted
+Function In Where Clause", `hosted_where_requirement`) rather than relating
+the two rows. These are the only rows that do not join, and every one of them
+is a type error the checker decides.
+
+### Value Rows: Uses Share One Row
 
 A value binding (one that does not generalize; Value Bindings Generalize By
-Expression) has exactly one type and is evaluated once. What differs between
-local and top-level values is how its uses relate to an implicitly open tag
-row in that type: `e = Boom`, `e : [Boom]`, `cfg = { mode: Fast }`.
+Expression) has exactly one type and is evaluated once. Its tag rows follow
+one rule whether the value is local or top-level:
 
-- A LOCAL value's open row is one weak flex shared by every use in the
-  enclosing body. Uses that need wider unions widen the shared row, and the
-  union that accumulates is the value's one type. Two uses that need
-  different CLOSED unions (`pastel : [Purple, Mauve] -> Str` and
-  `vibrant : [Purple, Orange] -> Str` both applied to `color = Purple`) are a
-  type mismatch, exactly as Roc RFC 0010 specifies for this program.
-- A TOP-LEVEL value's type is its annotation when it has one, and otherwise
-  the type its right-hand side produces, with every still-open row closed at
-  the definition: `e = Boom` is `[Boom]`, `e = if c A else B` is `[A, B]`.
-  The value is evaluated once, at that type, at compile time. EVERY use,
-  including uses in the defining module, may use it at a wider union: the use
-  relates to its own copy of the value's type, in which each widenable row
-  has a fresh extension, and records that it is a widening of the
-  definition's value. Lowering reads the one evaluated value and converts it
-  to the use's union (`row_widen`). Because the value is a compile-time
-  constant, each widened copy is itself a compile-time constant, produced
-  once per (value, target type) by a pure generated conversion.
+- An UNANNOTATED value's open row is one weak flex shared by every use in the
+  enclosing scope. Uses that need wider unions widen the shared row, and the
+  union that accumulates is the value's one type: `e = Boom` read where
+  `[Boom, Zed, ..]` is accepted and matched against `Aa` is `[Aa, Boom, Zed]`.
+  Two uses that need different CLOSED unions (`pastel : [Purple, Mauve] -> Str`
+  and `vibrant : [Purple, Orange] -> Str` both applied to `color = Purple`)
+  are a type mismatch at the second use, exactly as Roc RFC 0010 specifies;
+  the fix is a tag written at each use or an annotation on the value.
+- An ANNOTATED value's rows are the annotation's, closed as written, and no
+  use widens them: `e : [Boom]` is `[Boom]` at every use, and a use that
+  needs `[A, Boom]` is a type mismatch at the use. The annotation is how an
+  author pins a value's row.
+- When a module finishes checking, every still-open tag row anywhere in a
+  top-level value's type closes (`Check.closeTopLevelValueRows`, beside the
+  annotation-minted rows `Check.closeWeakValueImplicitOpenExts` closes).
+  Nothing outside the module can widen the row, so the closed type is the one
+  importers read, exactly (`e_lookup_external` relates the use to the imported
+  value's type with no copy), and the one the value is evaluated at. A row
+  whose tail a scheme quantified, or that carries a constraint the empty row
+  does not discharge, is left alone.
 
-The conversion is the coercion Roc RFC 0011 ("Union Refinement") describes:
-unpack each tag and repack it in the wider union, the transformation a user
-would otherwise write by hand as a `match` that rebuilds each tag. When the
-source and target unions have the same runtime representation, the
-conversion is the identity and emits nothing. It is the value form of the
-coercion Row Subsumption describes for call results, and its first
-instance, the Result-Row Widening Adapter, re-tags the same way.
+A use of a top-level value is therefore never a widening of the value: no
+`row_coerce` node and no `ModuleEnv` record exist for value uses. Where a
+value with a closed row flows into an annotated function's RESULT, Row
+Subsumption applies as to any other value: the result relates to a widening
+copy, the function's result is wider, and the value's own row is untouched.
 
-Widening never makes a value polymorphic. Only tag rows widen; a value whose
-type has any other weak variable (`empty = []`) still has that variable
-decided once, by the module's uses, and the value is still computed once.
-Converting a value is not re-evaluating it, so nothing in its definition
-(`dbg`, `expect`, `crash`, or work) runs once per use or once per type.
+#### Why uses share rather than widen copies
 
-#### Why top-level uses widen
+The alternative is a widening copy per use: each use relates to its own copy
+of the value's type with a fresh extension, so the value's type never depends
+on how its module uses it and an importer can widen it freely. That rule made
+every use a conversion site. Under Row Joins a use's row and the value's row
+become one row, and one value has one representation, so two uses whose rows
+disagree on a shared tag's payload (`[Shared, Conflict({ a : U64 })]` and
+`[Shared, Conflict({ b : Str })]` for one `shared_value : [Shared]`) have no
+representation at all. Sharing decides that program in the checker, as a type
+mismatch at the second use, which is where every other disagreement between
+two uses of one value is already decided.
 
-Without widening, a top-level value's row must be shared by its module's uses
-and closed when the module finishes checking. That rule has four defects, and
-widening at each use removes all of them:
-
-- The value's type depends on how its own module happens to use it. Adding or
-  deleting an unrelated use inside the module changes the type every importer
-  sees, and with it whether importers type-check.
-- The value's type depends on checking order. A consumer that inspects the
-  row before a later use widens it (a match checked for exhaustiveness, a
-  dispatch resolution) observes a different type from one that inspects it
-  afterwards.
-- An importer can never widen the value. It sees whatever the defining module
-  accumulated, so a constant its module never uses is exported as a single-tag
-  union, which is almost never what an importer can use.
-- The module and its importers disagree about one value's type: the module
-  sees an open shared row while it is checked, importers a closed one.
-
-With widening, a top-level value's type is fixed by its definition alone, the
-same in its module and in every importer, independent of use order; each use
-widens independently; and the value is still computed exactly once.
-
-Uses in the defining module widen too, rather than sharing a row as local
-uses do. If they shared a row, the value's type would again depend on how its
-own module uses it, and importers would see that accumulated type instead of
-the type the definition produces.
-
-#### Why local values share
-
-Every use of a local value is in one body, visible to the checker at once, and
-the value's type never reaches another module: it leaves the body only
-through the function's own result or a capture, whose types the function
-decides. A shared row therefore has none of the top-level defects, and uses
-that widen it keep tag constants useful (`e = Boom` is never stuck as
-`[Boom]`). The one program sharing rejects that widening would accept is two
-uses needing different closed unions; RFC 0010 judges that rare and accepts
-the type error, whose fix is to write the tag at each use. Sharing needs no
-conversion, so a local value never pays a runtime conversion, including for
-rows inside a `List`. A definition moved from a body to the top level keeps
-type-checking; one moved the other way can stop type-checking only in that
-two-closed-uses case.
+Sharing also keeps a value's representation a function of its own module: the
+row importers read is the row the module closed, which is what compile-time
+evaluation and its cache already assume (a root's type is fixed by its
+declaring module). The costs the copy-per-use rule was chosen to avoid are
+accepted: a value's type depends on how its own module uses it, and an
+importer cannot widen an imported value. An importer that needs a wider union
+rebuilds the tag or asks for the annotation it needs.
 
 #### Rejected alternatives
 
@@ -9454,8 +9530,12 @@ two-closed-uses case.
   finalization program evaluates more than once; and a use inside a stored
   closure's runtime body recomputes the value on every call. Roc RFC 0010
   rejects generalizing values precisely because a value's computation must
-  not multiply with its uses. Converting one value gives every use the type it
-  needs with none of these costs.
+  not multiply with its uses.
+- A widening copy per use with a conversion at each read (the rule this one
+  replaces), or with the value materialized once per read layout at compile
+  time. The first converts at runtime; the second needs the frozen-image
+  freezer to re-encode a constant into another union layout and still has no
+  answer for a value that is not a compile-time constant.
 - Closing an unannotated value's row at its definition and giving uses no way
   to widen it. `e = Boom` would be `[Boom]` everywhere, and single-tag unions
   are almost useless, so tags would be unusable as constants without
@@ -9463,87 +9543,42 @@ two-closed-uses case.
 - Requiring an annotation on a value other modules can import. Roc never
   requires an annotation on any declaration other than a platform-host
   boundary.
-- Widening local values at each use as well. Sharing already serves every
-  local use but the accepted two-closed-uses case, without a conversion.
-
-#### Widenable positions
-
-The set of positions a use may widen stays equal to the set lowering can
-convert, by construction (Result-Row Widening Adapter states the same
-invariant for call results). That set is the reach of the row coercion (Row
-Coercion Primitive, above): the value's root row, every row that is a tag
-payload of a reached row, and every row behind the backing of a named type
-that has one, such as a `Try`'s error row. Converting a reached row re-tags
-it; no container is rebuilt. A row in a record field, a tuple item, a `List`
-or `Box` item, a function argument or result, or an argument of a named type
-without a backing is outside the reach: every use of the value shares it, and
-a use that needs it at another type is a type mismatch. Roc RFC 0011 likewise
-refines only the levels of a union a re-tag reaches.
-
-Checking implements this at each use of a checked top-level value, in its
-own module (`e_lookup_local`) and in an importer (`e_lookup_external`, for an
-imported value that is not a binding scheme). `Check.computeCoercionReach`
-marks the positions of the value's type the coercion reaches, and
-`Check.widenedValueUseVar` builds the use's copy: every reached tag union, its
-tags' payloads copied through the reach, under a fresh open extension, and
-every other variable shared with the value. A reached alias is copied as its
-widened backing. When the copy differs from the value's type, the use relates
-to the copy and checking records it (`ModuleEnv.RowCoercedUse`: the use and
-the value's own type); checked-body construction lowers each recorded use as a
-`row_coerce` whose child is the lookup at the value's own type, and the
-resolved value reference follows the coercion to that child. A use whose
-value's type has no reached tag union, such as a callable value, relates to
-the value's type itself. Because no use relates to the value's own rows,
-every still-open row the coercion reaches in a top-level value's type closes
-when the module finishes checking, whether or not the value is annotated
-(`Check.closeTopLevelValueRows`, beside the annotation-minted rows
-`Check.closeWeakValueImplicitOpenExts` closes), without any use observing it;
-the closed type is the one the value is evaluated at, so the value stays a
-compile-time root. A value's row can still gain tags after a use copied it (a
-generated codec's validation adds its error tags during finalize), so each
-re-opened row is recorded with the row it copies, and once constraints settle
-`Check.propagateValueRowsToWidenedUses` adds every such tag to the copy; a use
-whose type does not admit it is a type mismatch at the use, and the use is
-retired as a runtime error like any other rejected use, so no erroneous type
-crosses the checked boundary. A tag that a generated codec produces on behalf
-of the value's own annotated definition, which the annotation does not list,
-is not one the value can have: the late audit reports and retires the
-definition (Derived Parser Required-Field Error Composition), so every use
-whose copy lacks the tag is a use of a rejected declaration, retired without
-a report of its own. A row with no
-tags, which asserts that no value has it, is never re-opened.
 
 ### Hosted Try Question Widening Removed
 
-The checker no longer has a special widening rule for `?` on direct hosted
-calls. A hosted result keeps its declared closed error row, and `?` relates
-that row to the enclosing return through ordinary return-row composition and
-unification. Matching rows can still relate; a wider incompatible row is a
-type error. Forwarding into an implicitly open annotation closes that
-definition's own result row, just as forwarding any other closed value does,
-and a call of the definition widens its result (Row Subsumption).
+The checker has no host-specific widening rule for `?` on direct hosted
+calls. The rule that was removed was a use-site redirect with subset and
+payload probes: it inspected the solved graph and then rewrote it, which is
+why it needed a `RedirectRule`. What exists instead is not host-specific and
+rewrites nothing. A `?` whose error row is closed contributes its tags to the
+composed result and relates no tail (Try Return-Row Composition), and a value
+with a closed row flowing into an annotated result relates through a copy with
+that row re-opened (Row Subsumption); both are relations the checker chooses
+before unifying, and both lower as row joins (Row Joins). A hosted result's
+rows are host-fixed and are the exception to both: they relate whole, and a
+wider result is a type mismatch. Hosted error provenance remains purely
+diagnostic and does not affect acceptance.
 
-This removes the use-site redirect and its subset/payload probes. There is no
-`RedirectRule` for hosted question widening. Hosted error provenance remains
-purely diagnostic and does not affect acceptance.
+Hosted lowering has no host-specific widening graph relation, no
+expected-result request rewrite, and no adapter: a hosted extern is emitted at
+its declared type and nothing re-tags its result. A `where` requirement whose
+result reaches a tag row is opened per use and may be used at a wider union,
+which a hosted implementation cannot serve, so dispatch resolution rejects the
+selection ("Hosted Function In Where Clause") rather than relating the two
+rows, and no hosted extern is ever requested at a widened row. The declared
+host ABI checks remain independently in force.
 
-Hosted lowering has no host-specific widening graph relation or expected-result
-request rewrite. The general Result-Row Widening Adapter remains for generic
-dispatch, including requests that select hosted implementations. Such requests
-are admitted by the ordinary where-method use rules; the adapter calls an inner
-hosted specialization at its declared ABI. The declared host ABI checks remain
-independently in force. Rejecting only widened hosted selections in the checker
-would require carrying individual body-use row requirements through generic
-constraints and imports; the bounded where requirement alone does not record
-those widened uses.
-
-Roc wrappers that combine hosted errors with a wider return row must explicitly
-match and reconstruct each error variant (or wrap the error in a new tag).
-Forwarding `Err(err)` does not reconstruct the inner error union. The accepted
-side is pinned by explicit reconstruction in the host diagnostic tests,
-`FallibleChannels.roc`, `FallibleAlias.roc`, issue #11286 on both specialization
-strategies, and the wasm32 host ABI fixture. The rejected side is pinned by
-`host error diagnostic rejects implicit widening through a direct hosted question`.
+A Roc wrapper that combines a hosted error with a wider return row rebuilds
+the error: `line! = |s| Host.stdout_line!(s)`, `line! = Host.stdout_line!`,
+and a `?` on either in a function with a wider error row are type mismatches
+whose report names the host function, says the host fixed its row, and shows
+the rebuild (`.map_err(|StdoutErr(e)| StdoutErr(e))`).
+`src/compile/test/hosted_error_diagnostic_test.zig` pins those reports,
+together with a `?` whose error payload disagrees with the enclosing result
+still reporting a mismatch that names the host function, and
+`src/compile/test/issue_11286_test.zig` pins the rejected `where` selection.
+Explicit reconstruction is accepted: `FallibleChannels.roc`,
+`FallibleAlias.roc`, and the wasm32 host ABI fixture.
 
 ### Hosted Error Diagnostics
 
@@ -9593,6 +9628,13 @@ Any tags exposed in a residual source by the payload relations contribute by
 the same rule before its terminal extension is related. A tagless nested
 contribution is the zero-head instance of this same operation.
 
+A contribution whose error row is CLOSED is included by its heads alone,
+through the same fresh spine, and relates no tail: a closed row has no
+residual dependency, and relating its terminal `[]` to the result's residual
+would close the result (Row Subsumption). The body's own result follows the
+same rule. A host-boundary row is the exception: it never widens, so it is
+related whole, and a result wider than it is a mismatch (Row Joins).
+
 A source already identical to the destination's residual tail is included
 without equating it to the whole destination row. Independent contributions
 otherwise retain ordinary full-row equality. This preserves
@@ -9613,7 +9655,8 @@ it without an additional constraint kind or per-type-variable metadata.
 The body's own result is one more contribution, and it is INCLUDED in the
 composed result rather than equal to it: its success type is equal, its error
 row contributes through a fresh spine with unchanged payload variables when
-nested and ordinary row unification otherwise, and a tagless error row becomes the composed row's residual extension. Equating the rows
+nested or closed and ordinary row unification otherwise, and a tagless open
+error row becomes the composed row's residual extension. Equating the rows
 instead writes every composed tag back into whatever produced the body's
 value. When that value is a tail call, that is the callee's own error row—for
 a callback parameter, the caller's callback—and a caller whose callback fails
@@ -9754,33 +9797,23 @@ with owned string payloads; an imported polymorphic callable pins shared-tail
 instantiation across checked modules. The evaluator corpus covers the execution backends,
 and `lir_inline_test.zig` executes both lowering strategies with leak checking.
 
-### Result-Row Widening Adapter
+### Closed Result Rows At Template Boundaries
 
-A procedure template whose checked result row is CLOSED may be requested at
-a row that INCLUDES it—the same tags with usable payloads, plus others.
-The request is related component-wise WITHOUT unifying the two rows, the
-template is specialized at its own declared row, and a generated
-`.checked_generated` adapter at the requested row calls that specialization
-and re-tags its result. This also supports hosted implementations selected by
-generic dispatch: the adapter keeps the inner hosted call at its declared ABI.
-This lowering facility does not itself make a source-level widening typecheck
-and does not widen a direct hosted call based on its expected result.
+A procedure template whose checked result row is CLOSED may be requested at a
+row that INCLUDES it—the same tags with usable payloads, plus others. Monotype
+relates the request to the template component-wise WITHOUT unifying the two
+rows (`relateClosedResultRowRequestInterface`), so the template is specialized
+once, at its own declared row, and the request keeps its extra labels. Nothing
+adapts the result: the two rows are one join set where the call's result
+flows, and Lambda Solved joins them (Row Joins). Only two positions relate
+this way, the template's DIRECT result row and the ERROR row of a `Try`
+result; a `Try`'s ok row and every nested row relate exactly.
 
-Only two positions are adapted: the template's DIRECT result row, and the
-ERROR row of a `Try` result. A `Try`'s ok row is not adapted—the adapter
-asserts the ok type is unchanged—and neither is a row nested inside a
-`List`, a record field, a tuple, a tag payload, or a non-`Try` nominal,
-because re-tagging cannot reach into those positions without the general
-row-subsumption coercion this design intends and does not yet implement (see
-Row Subsumption).
-
-The set of positions a use may WIDEN is therefore kept equal to the set
-lowering can ADAPT, and it is kept equal by construction rather than by a
-second rule that could drift: polarity's per-use opening is withheld at
-generation time from every position outside that set, so a use that tries to
-widen an unadaptable position is an ordinary type mismatch at the use itself,
-carrying the use's own region, rather than a lowering failure with no
-diagnostic channel.
+The set of positions a use may WIDEN is kept within the row coercion's reach
+by construction rather than by a second rule that could drift: polarity's
+per-use opening is withheld at generation time from every position outside
+it, so a use that tries to widen another position is an ordinary type
+mismatch at the use itself, carrying the use's own region.
 
 That withholding is by POSITION, not by declaration. A type declaration
 defers every extensionless tag union it writes, at any depth, because the
@@ -9791,28 +9824,6 @@ ERROR argument of a `Try` standing in the signature's direct result—stays
 deferred; a marker reached under any other constructor is closed as written.
 So `Statuses : List([Ok(Str), Err(Str)])` named as a where-method's result
 contributes a closed row, exactly as the same type written inline there does.
-
-Because the relation deliberately declines to unify the two rows, it must
-fail CLOSED: a request that is related this way and then does NOT reach an
-adapter would leave a callee producing one tag layout and a caller reading
-another, which is a wrong value rather than a crash. Every site that declines
-to unify therefore requires that an adapter is reachable for that request;
-where it is not, the site relates exactly instead and the ordinary
-`unifyTagRows` invariant reports the widening. A dispatch target that is not a
-procedure template—a lambda-bound local procedure, a structural registry
-result—has no template reservation and so can never reach an adapter.
-
-The relation's answer is also the ONLY answer. It is recorded on the
-specialization request it declined to unify, and template completion mints the
-adapter exactly when that record says so, rather than asking a second time
-whether the declared row is closed. The two questions are not the same
-question: the relation asks it of the live request graph, where an extension
-that is still unresolved means the row is OPEN and the ordinary relation may
-simply unify it, while a recorded checked type gives every implicitly open
-annotated result row a flexible tail that defaults to the empty tag union.
-Deriving the answer a second time from the recorded type therefore reports
-"closed" for rows the relation had already unified, minting an adapter over a
-second, narrow specialization of a template that needed neither.
 
 Since a payload's representation is taken from the REQUEST rather than from
 the declared type, a polymorphic implementation's rigid payloads are correct
@@ -10228,8 +10239,8 @@ polymorphic. A top-level value is computed once, at one type, so once the
 module solves, each open row in its data whose tail carries only these
 constraints is grounded to the empty row by unifying the tail with it
 (`Check.closeValueRowTailsCarryingDerivations`), as every row of a top-level
-value closes at its definition (Value Rows: Local Values Share, Top-Level
-Values Widen At Each Use). A function's tail is left open: it
+value closes when its module finishes checking (Value Rows: Uses Share One
+Row). A function's tail is left open: it
 generalizes, and each instantiation supplies its row. Displayed in an output position, such a tail is implicit openness
 like an unconstrained one.
 
@@ -12543,14 +12554,27 @@ of a stored function value is therefore not an edge along which descriptor
 leaves propagate into the using worker; the use's type describes the worker's
 signature, and its stored captures describe the rest.
 
+Child representations restored from a stored value carry the stored root's
+checked type as their source type, not the checked type at their own
+position. Planning therefore reads a stored child's representation, never its
+source type, as its type: a worker slot that holds such a child in a presence
+slot builds that slot around the child's representation, a dictionary for a
+stored representation takes its method owner from the stored type, and a
+static dictionary's method is called at the dictionary's own representation.
+A stored record's field labels and a stored tag union's tag labels are the
+ConstStore module's, which need not own the root's checked type, so each such
+child records the module its labels are named in (`RepChild.label_module`).
+
 A stored function value restored inside a stored aggregate (a static function)
-is restored at its stored representation. That concrete representation alone
-supplies its worker's hidden descriptor arguments: the construction site's
-scheme substitution names the constructing frame's variables, which no longer
-exist, and the stored representation fixes them. Its hidden dictionary
-arguments use the checked evidence and scheme substitution of its construction
-site, the nested callable its worker runs, exactly as that site instantiated
-the worker.
+is restored at its stored representation. The construction site's checked
+evidence and scheme substitution name the constructing frame's variables,
+which no longer exist, so the stored value fixes each variable of the worker:
+first its stored signature, then the stored type of each capture for a
+variable the signature does not name, then, for a variable only the body's
+dispatches fix, the construction site's binding with the constructing frame's
+variables replaced by their stored captures. Its hidden descriptor and
+dictionary arguments are those of the types this substitution names; its
+dictionaries are the static dictionaries of those types.
 
 Entry wrapper procedure templates name an `EntryWrapperTable` entry. Boxy
 planning and lowering use the wrapper's checked `body_expr` as the worker body
@@ -17121,7 +17145,13 @@ representation. A compound parameter's descriptor is its worker representation
 described under the call's bindings. Evidence-only descriptors (worker scheme
 variables absent from the signature) take the checked call-site substitution
 wherever it names their variable. Hidden descriptors are materialized before
-argument adaptation, and the adaptation is lowered with those bindings active.
+argument adaptation, and the adaptation is lowered with those bindings active. Two
+of a call's compound hidden descriptors can each read the other (a list of a
+recursive nominal, and the nominal itself); one that reaches itself through
+the locals it reads is materialized from the descriptors before it alone,
+which breaks the cycle there. Every other descriptor keeps reading whatever
+local describes it, since a box's descriptor is the one its allocation was
+made with.
 
 An erased callable's hidden-descriptor captures come only from the use's
 planned hidden descriptor arguments. Each capture initializer is materialized
@@ -17135,7 +17165,14 @@ two distinct representations is direct only when neither side takes hidden
 descriptor parameters. Otherwise an adapter makes both sides agree on the
 erased-call descriptor keys, for arguments and function-typed results alike.
 A generated codec callable whose enclosing frame does not receive one of its
-descriptor captures materializes that capture from its representation.
+descriptor captures materializes that capture from its representation. A
+callee whose type variables appear only inside function types (a parser
+combinator's `input`) takes no descriptor for them, so the call boundary
+substitutes nothing for them; an adapter capture naming such a variable, which
+neither the source value's descriptor environment nor the building frame
+describes, is materialized from the other side's representation at the same
+position in the two function types. A row's extension has no such position:
+it stands for the other row's variants it does not list.
 
 An erased procedure's argument descriptor parameters are keyed by their
 pre-order position under the argument, but a caller's view of the argument can
@@ -17143,10 +17180,16 @@ be more generic than the callee's. A dictionary slot is called through the
 consumer's declared requirement, for example a bare `val`. So every argument
 descriptor that an earlier parameter's descriptor holds is read from that
 parent rather than from its own key: a nested descriptor read for aggregate,
-list and box positions, and a tag payload read
+list and box positions, a tag payload read
 (`ErasedArgDescRead.tag_payload`) for a variant payload such as a presence
-slot's `Present` value. Only a descriptor no earlier parameter holds is read
-from its call-site key.
+slot's `Present` value, and an extension read (`ErasedArgDescRead.tag_ext`)
+for an open tag row's extension. Only a descriptor no earlier parameter holds
+is read from its call-site key. When two earlier parameters hold it, the nearer one is
+read: the one the other holds, or the other's backing (a nominal's record,
+whose fields the nominal's descriptor also lists). Otherwise the
+representation occurs at two places in the argument (a field type inside a
+nested record and in its parent), and within one value a representation has
+one descriptor, so the first parameter holding it is read.
 
 An evidence-only descriptor collected inside an evidence dispatcher's
 representation, such as a presence slot of a record dispatcher, takes the
@@ -17158,6 +17201,23 @@ descriptors and argument descriptors from the inspected descriptor's own
 representation itself maps to the descriptor being built. Descriptor template
 capture sets include both spans, so every local an inspect span names is
 supplied to the materialization.
+
+A runtime adapter's target descriptor is computed from the source's only
+where the source fills a variable of the target. A source with no dynamic
+part fills none, so a target that names no type variable is described by its
+static descriptor, which keeps a recursive type's adapter from unrolling its
+recursion. A local whose representation has dynamic contents but no planned
+descriptor of its own (an alias of a `Dict`) is described by its storage's
+planned descriptor when the frame holds it or it is static; only otherwise
+does the value that fills the local bring its descriptor.
+
+A local that several producers fill (the result of each branch of an `if` or
+`match`) is described the same way on every path. A concrete record, tuple, or
+tag union constructed into a target that has no descriptor of its own is
+therefore described by its static descriptor, never by a descriptor local
+only that branch writes. Likewise a descriptor slot that the body fills later
+is not read by the templates initialized at procedure entry. A pattern that
+checking rejected binds nothing, so planning gives it no representation.
 
 A runtime adapter rewrites bytes through descriptors, and descriptors do not
 describe a callable's erased-call convention. A value holding a callable in its
@@ -17184,11 +17244,20 @@ hidden descriptor for a presence slot, matched against a call whose field is
 required, takes the presence slot over the call's payload representation, not
 the payload's own descriptor; the worker then reads the payload's descriptor
 through the slot's `Present` payload as usual.
+A worker position that is a nominal with a backing, matched against a call
+that holds the structure the backing names (a method declared to return
+`Try(ok, err)` called where its requirement names the tag union
+`[Ok(ok), Err(err)]`), takes each nominal argument's descriptor from the
+call's representation at that argument's formal's position in the backing.
 
 A generalized callable used at its own definition (an argument lambda, for one)
 is instantiated there: its use carries a checked site substitution, so its
 hidden dictionary arguments are materialized at that instantiation like any
-other use's, rather than treated as the definition's own types.
+other use's, rather than treated as the definition's own types. A site
+substitution that binds a scheme variable to itself (a use written inside the
+scope that quantifies the variable, such as a closure that mentions its
+enclosing function's constrained variable) names that variable exactly, so
+its dictionary is the calling worker's own.
 
 A recursive direct call reaches its callee before the callee's emission settles
 whether it returns a runtime result descriptor. A fully concrete result never
@@ -19411,7 +19480,14 @@ procedures that returned early would have converted it: by the conversion
 recorded on that call, then by the one recorded on the first call of the
 chain, which is the one skipped on the way out to this caller. Skipping the
 conversions in between is sound because each only changes how the same value
-is represented. The caller's own result descriptor applies last, as it would
+is represented. The erased-call runtime converts what a callee it
+invoked returns to the layout and result descriptor of the site that called
+it; when that callee leaves a call pending instead, the runtime records this
+boundary conversion on the pending call too, and applies it after the call's
+own conversion and before the chain's first. A value that comes back from a
+later call in the chain is stored as the first call's statement stores it
+(its site layout and result descriptor) before the chain's first conversion
+applies, since the in-between conversions it skipped end at that site. The caller's own result descriptor applies last, as it would
 have to the value its callee returned.
 
 Backends follow these marks and nothing else: a deferred call becomes a call
@@ -22746,9 +22822,9 @@ transformation. The compiler never emits a hosted extern at any other type: not
 at a caller's widened error row, not at a narrowed one, and not at a
 producer-selected representation that differs from the declared one. A use site
 of a direct hosted call that needs a wider error row must explicitly reconstruct
-the error in Roc. Generic dispatch uses the general Result-Row Widening Adapter
-when its checked request requires a wider result; the inner extern still uses
-the declared type. Representation conversions for generic hosted variable slots
+the error in Roc. Generic dispatch never selects a hosted implementation for a
+`where` requirement whose result reaches a tag row (Row Joins), so no request
+can ask a hosted extern for a wider result. Representation conversions for generic hosted variable slots
 follow the separate rules below.
 
 Every type reachable from a hosted or provided signature must have closed

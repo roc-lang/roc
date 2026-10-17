@@ -2717,16 +2717,13 @@ const ClosedResultRow = struct {
     /// The checked row itself: the function result's own row, or the error
     /// argument row of a `Builtin.Try` result.
     row: checked.CheckedTypeId,
-    /// Whether the row sits inside a `Builtin.Try` result, so the adapter
-    /// unwraps and re-wraps through the checker-recorded capability.
+    /// Whether the row sits inside a `Builtin.Try` result.
     behind_try: bool,
 };
 
 /// Whether a checked tag row is closed for result-row widening. This is
-/// `CheckedTypePayload.variableSealsToRowDefault`, the same rule the checker's
-/// `checkedResultRowIsClosed` uses to decide whether to record the `Try`
-/// capability, so the two cannot drift. A rigid tail is parametric—the
-/// caller supplies the row—and is therefore not closed.
+/// `CheckedTypePayload.variableSealsToRowDefault`. A rigid tail is
+/// parametric—the caller supplies the row—and is therefore not closed.
 fn checkedResultRowIsClosed(view: ModuleView, root: checked.CheckedTypeId) bool {
     var current = root;
     var remaining = view.types.payloadCount();
@@ -2745,10 +2742,8 @@ fn checkedResultRowIsClosed(view: ModuleView, root: checked.CheckedTypeId) bool 
 }
 
 /// The template's checked result row when it is closed, so a request at a
-/// row that includes it is served by a generated widening adapter (design.md
-/// "Result-Row Widening Adapter"). Mirrors the checker's
-/// `checkedRootHasClosedResultRow`, which gates recording the `Try`
-/// capability this adapter consumes.
+/// row that includes it is specialized at the template's own row and joined
+/// with the request's row by Lambda Solved (design.md "Row Joins").
 fn closedResultRowOrNull(view: ModuleView, checked_fn_root: checked.CheckedTypeId) ?ClosedResultRow {
     const function = switch (resolvedPayload(view, checked_fn_root).payload) {
         .function => |function| function,
@@ -2772,34 +2767,15 @@ fn closedResultRowOrNull(view: ModuleView, checked_fn_root: checked.CheckedTypeI
     }
 }
 
-/// Number of explicit labels a closed checked row lists. The declared-row
-/// guard in `resultRowWideningAdapterOrNull` compares this against the lowered
-/// declared row.
-fn checkedClosedRowLabelCount(view: ModuleView, root: checked.CheckedTypeId) usize {
-    var count: usize = 0;
-    var current = root;
-    var remaining = view.types.payloadCount();
-    while (remaining > 0) : (remaining -= 1) {
-        switch (checkedPayload(view, current)) {
-            .alias => |alias| current = alias.backing,
-            .tag_union => |tag_union| {
-                count += tag_union.tags.len;
-                current = tag_union.ext;
-            },
-            .empty_tag_union, .flex, .rigid => return count,
-            .pending, .err, .record, .tuple, .nominal, .function, .empty_record => Common.invariant("closed result row chain left its row"),
-        }
+/// Whether two tag spans list the same labels in the same order, each at
+/// the same payload arity.
+fn sameTagLabels(left: []const InstTag, right: []const InstTag) bool {
+    if (left.len != right.len) return false;
+    for (left, right) |left_tag, right_tag| {
+        if (left_tag.name != right_tag.name or left_tag.payloads.len != right_tag.payloads.len) return false;
     }
-    Common.invariant("checked result row extension chain was cyclic");
+    return true;
 }
-
-const HostedTryAdapterCapability = struct {
-    def: Type.TypeDef,
-    ok_tag: names.TagNameId,
-    err_tag: names.TagNameId,
-    ok_type_arg_index: usize,
-    err_type_arg_index: usize,
-};
 
 fn graphTagByName(
     tags: []const InstTag,
@@ -2828,10 +2804,8 @@ const ResultRowWidening = struct {
     widened: RequestNodePair,
 };
 
-/// Type-argument index of `Builtin.Try`'s error row. `closedResultRowOrNull`
-/// names `args[1]` as the closed row and the checker's
-/// `hostedTryAdapterCapabilityForCheckedRoot` records the same index, so this
-/// relation and the adapter open one and the same cell.
+/// Type-argument index of `Builtin.Try`'s error row, the cell
+/// `closedResultRowOrNull` names as the closed row.
 const try_error_type_arg_index: usize = 1;
 
 /// Whether a node is directly function-shaped.
@@ -2872,15 +2846,12 @@ fn requestRowIncludesClosedRow(
     return true;
 }
 
-/// Recognize the one result cell the adapter can re-tag. `declared_row` is the
-/// checker's own answer for this template, so the cell opened here is exactly
-/// the cell `resultRowWideningAdapterSourceType` builds a narrowed source type
-/// for: a `Try` result's error argument, or the function's own result row. The
-/// adapter-reachable set is exactly those two. Every other component—a
-/// `Try`'s `Ok` argument (`hostedTryReturnInjectionExpr` rejects an `Ok` type
-/// change outright), an alias's type arguments, a nested row—relates exactly,
-/// so a widening there meets the ordinary closed-row rejection instead of
-/// silently passing a request no adapter will serve.
+/// Recognize the one result cell a request may widen past the template's
+/// closed row: a `Try` result's error argument, or the function's own result
+/// row, the positions polarity opens per use (design.md "Polarity").
+/// `declared_row` is the checker's own answer for this template. Every other
+/// component—a `Try`'s `Ok` argument, an alias's type arguments, a nested
+/// row—relates exactly.
 fn resultRowWideningOrNull(
     graph: *InstGraph,
     declared_row: ClosedResultRow,
@@ -2955,9 +2926,7 @@ fn relateIncludedRowPayloads(
 }
 
 /// Recognize a request whose result row includes the template's closed
-/// checked row (design.md "Result-Row Widening Adapter"). Nothing is related
-/// here, so a site that cannot reach an adapter can ask the question and then
-/// decline without having already taken the rows apart.
+/// checked row (design.md "Row Joins"). Nothing is related here.
 fn resultRowWideningRequestOrNull(
     graph: *InstGraph,
     declared_row: ClosedResultRow,
@@ -2979,8 +2948,7 @@ fn resultRowWideningRequestOrNull(
 
 /// Relate a recognized result-row widening. Arguments and every non-row
 /// component stay exact graph relations; only the request's extra result
-/// labels stay outside the template's row, so the request survives to template
-/// completion where the widening adapter is generated.
+/// labels stay outside the template's row.
 fn applyResultRowWidening(
     graph: *InstGraph,
     widening: ResultRowWidening,
@@ -2998,58 +2966,22 @@ fn applyResultRowWidening(
     try relateIncludedRowPayloads(graph, widening.widened.public, widening.widened.request);
 }
 
-/// Whether the site asking for a result-row widening relation can reach the
-/// generated adapter that serves it.
-///
-/// design.md "Result-Row Widening Adapter": because the relation deliberately
-/// declines to unify the two rows, it must fail CLOSED. A request related this
-/// way that then does NOT reach an adapter leaves a callee producing one tag
-/// layout and a caller reading another—a wrong value rather than a crash. A
-/// site that cannot reach `completeTemplateReservation` therefore states
-/// `.no_adapter` and relates exactly instead, so the widening meets the
-/// ordinary `unifyTagRows` rejection.
-const AdapterReachability = enum {
-    /// The request is served by a procedure template specialization, whose
-    /// completion mints the adapter for a recorded widening.
-    adapter_reachable,
-    /// No `completeTemplateReservation` runs for this request: a `.local_proc`
-    /// dispatch target has no `checked_fn_root` and no template reservation, and
-    /// a caller-owned specialization lowers its body inline at the declared
-    /// interface.
-    no_adapter,
-};
-
-/// Whether a resolved dispatch target's callee can reach a widening adapter.
-/// Only a procedure template is specialized through
-/// `completeTemplateReservation`; a lambda-bound local procedure has no
-/// `checked_fn_root` and no template reservation, and a structural registry
-/// result has no callable body at all, so neither can ever be served by one.
-fn dispatchTargetAdapterReachability(target: static_dispatch.MethodTarget) AdapterReachability {
-    return switch (target.kind) {
-        .procedure => .adapter_reachable,
-        .local_proc, .structural => .no_adapter,
-    };
-}
-
 /// `relateFunctionRequestInterface` for a template whose checked result row
 /// may be closed: when the request's result row includes it, the two relate
-/// component-wise without unifying the rows. Returns whether the relation
-/// declined to unify, which is exactly the answer template completion consumes.
+/// component-wise without unifying the rows, so the template is specialized
+/// at its own row and the request keeps its extra labels. Lambda Solved joins
+/// the two rows where the call's result flows (design.md "Row Joins").
+/// Returns whether the relation declined to unify.
 fn relateClosedResultRowRequestInterface(
     graph: *InstGraph,
     view: ModuleView,
     checked_fn_ty: checked.CheckedTypeId,
     public_fn: NodeId,
     request_fn: NodeId,
-    reachability: AdapterReachability,
 ) Allocator.Error!bool {
     const declared_row = closedResultRowOrNull(view, checked_fn_ty) orelse return false;
     const widening = (try resultRowWideningRequestOrNull(graph, declared_row, public_fn, request_fn)) orelse
         return false;
-    switch (reachability) {
-        .adapter_reachable => {},
-        .no_adapter => return false,
-    }
     try applyResultRowWidening(graph, widening, public_fn, request_fn);
     return true;
 }
@@ -4024,11 +3956,6 @@ const LoweredTemplate = struct {
     evidence: []const SpecEvidence = &.{},
     /// Exact durable topology for the complete lexical evidence chain.
     topology: ?StoredConstFnEvidence = null,
-    /// The request relation's answer recorded by the first requesting edge. A
-    /// specialization is either a widening adapter or a definition at its own
-    /// requested row, never both, so a later edge that reuses this identity
-    /// with the other answer is a disagreement about the callee's tag layout.
-    widened_result_row: bool = false,
 };
 
 const TemplateReservation = struct {
@@ -4104,11 +4031,6 @@ const PendingSpecJob = struct {
     subst: ?SealedSubstitution,
     signature_relation: Ast.SignatureRelation,
     codec_contract: ?SealedCodecContractContext,
-    /// The request relation's own answer for this specialization: whether it
-    /// declined to unify the template's closed checked result row with the
-    /// requested one. Completion mints a widening adapter exactly when this is
-    /// set (design.md "Result-Row Widening Adapter").
-    widened_result_row: bool,
     /// Why the body is lowered. The coordinator restates it when it hands the
     /// job to a lane, since an upgrade may arrive while the job is queued.
     demand: Demand = .evaluation,
@@ -5997,33 +5919,6 @@ const Builder = struct {
         return self.activeNameStore().internTagLabel(view.names.tagLabelText(id));
     }
 
-    fn hostedTryAdapterCapability(
-        self: *Builder,
-        view: ModuleView,
-        checked_capability: ?checked.HostedTryAdapterCapability,
-    ) Allocator.Error!?HostedTryAdapterCapability {
-        const capability = checked_capability orelse return null;
-        // `try_error_type_arg_index` names the cell the widening relation opens
-        // and the cell the adapter re-tags; `err_type_arg_index` is the same
-        // index carried from the checker. Cross-check them once, here, so the
-        // two cannot drift into opening one cell and re-tagging another.
-        if (capability.err_type_arg_index != try_error_type_arg_index) {
-            Common.compilerBug("checker-recorded Try error type-argument index disagreed with the widening relation's");
-        }
-        return .{
-            .def = try self.typeDef(
-                view,
-                capability.nominal.module,
-                capability.type_name,
-                capability.nominal.source_decl,
-            ),
-            .ok_tag = try self.tagName(view, capability.ok_tag),
-            .err_tag = try self.tagName(view, capability.err_tag),
-            .ok_type_arg_index = capability.ok_type_arg_index,
-            .err_type_arg_index = capability.err_type_arg_index,
-        };
-    }
-
     fn typeDef(
         self: *Builder,
         view: ModuleView,
@@ -7337,13 +7232,6 @@ const Builder = struct {
             defer timing_scope.end();
             break :blk (try self.materializeRootProcedureEvidence(fn_template, evidence_ref)).vector;
         } else &.{};
-        // A root is requested at the template's own declared type, which no
-        // relation ever widened—checked, not assumed.
-        try self.requireRequestDidNotWidenResultRow(
-            template_ref,
-            fn_ty,
-            "root template request widened the template's closed checked result row",
-        );
         return try self.lowerTemplateWithMono(
             template_ref,
             view,
@@ -7358,7 +7246,6 @@ const Builder = struct {
             null,
             .queued,
             null,
-            false,
             self.root_demand,
         );
     }
@@ -7655,7 +7542,6 @@ const Builder = struct {
         retained_topology: ?EvidenceChain,
         body_scheduling: TemplateBodyScheduling,
         codec_contract: ?SealedCodecContractContext,
-        widened_result_row: bool,
         demand: Demand,
     ) Allocator.Error!Ast.DefId {
         var lookup_timing_scope = ProcedureTimingScope.begin(self.timing, .lookup_reservation);
@@ -7695,13 +7581,6 @@ const Builder = struct {
                 Common.invariant("Monotype specialization index found a local template missing from lowering state");
             if (!try specEvidenceVectorEql(self.allocator, existing.evidence, spec_evidence)) {
                 Common.invariant("Monotype specialization hit disagreed on dispatch evidence");
-            }
-            // Two edges that reuse one specialization identity must agree about
-            // whether it is a widening adapter. A disagreement would define the
-            // callee at one row and call it at another, so it stops the build in
-            // every mode (design.md "Result-Row Widening Adapter").
-            if (existing.widened_result_row != widened_result_row) {
-                Common.compilerBug("Monotype specialization cache hit disagreed on its result-row widening");
             }
             if (stored_source_topology) |requested| {
                 const existing_topology = existing.topology orelse
@@ -7744,7 +7623,6 @@ const Builder = struct {
                                 job.fn_template,
                                 job.template_ref,
                                 self.moduleForId(job.method_scope),
-                                job.source_fn_ty,
                                 job.source_fn_key,
                                 job.fn_ty,
                                 job.evidence,
@@ -7752,7 +7630,6 @@ const Builder = struct {
                                 null,
                                 job.signature_relation,
                                 job.codec_contract,
-                                job.widened_result_row,
                             );
                             return existing.def;
                         },
@@ -7836,7 +7713,6 @@ const Builder = struct {
                 .spec = spec,
                 .evidence = spec_evidence,
                 .topology = stored_source_topology,
-                .widened_result_row = widened_result_row,
             });
             break :blk .{
                 .reservation = .{
@@ -7869,7 +7745,6 @@ const Builder = struct {
                     .subst = subst,
                     .signature_relation = signature_relation,
                     .codec_contract = codec_contract,
-                    .widened_result_row = widened_result_row,
                     .demand = demand,
                 };
                 if (self.parking_root_job) {
@@ -7910,7 +7785,6 @@ const Builder = struct {
             fn_template,
             template_ref,
             method_scope,
-            source_fn_ty,
             source_fn_key,
             lower_fn_ty,
             spec_evidence,
@@ -7918,7 +7792,6 @@ const Builder = struct {
             retained_topology,
             signature_relation,
             codec_contract,
-            widened_result_row,
         );
         return reservation.def;
     }
@@ -8066,256 +7939,12 @@ const Builder = struct {
         try frames.append(self.allocator, .{ .ty = ty, .start = start, .next = start, .end = children.items.len });
     }
 
-    /// Everything a result-row widening adapter needs beyond the reservation
-    /// itself: the declared interface the template is specialized at, and the
-    /// `Try` capability when the adapted row sits inside a `Try` result.
-    const ResultRowWideningAdapter = struct {
-        declared_source_fn_ty: checked.CheckedTypeId,
-        declared_source_fn_key: names.TypeDigest,
-        source_fn_ty: Type.TypeId,
-        capability: ?HostedTryAdapterCapability,
-    };
-
-    /// Plan the adapter for a specialization whose request relation DECLINED to
-    /// unify the template's closed checked row with the requested one
-    /// (design.md "Result-Row Widening Adapter"). `widened_result_row` is that
-    /// relation's own answer, carried here from the specialization request; it
-    /// is the single source of truth for whether an adapter is owed. Re-deriving
-    /// the answer from the checked root instead would let the relation and the
-    /// completion disagree—the relation declining with no adapter minted is a
-    /// silent miscompile, and an adapter minted where the relation unified is a
-    /// spurious narrow specialization behind a pointless re-tag.
-    ///
-    /// Everything below the gate is the adapter's construction, and every step
-    /// of it must succeed: a recorded widening that cannot be built stops the
-    /// build rather than falling back to a definition at the wrong row.
-    ///
-    /// The declared labels are read from `lowerType` of the checked root. That
-    /// is sound only because `closedResultRowOrNull` refused every row whose
-    /// tail is a rigid or an unsealed flex: `lowerCheckedTypeVariable` seals a
-    /// rigid to the empty tag union, which would otherwise pass a parametric
-    /// row off as a closed one. A rigid *payload* is harmless—every narrowed
-    /// payload is taken from the request, never from the declared type—and
-    /// `requireLoweredDeclaredRowLabels` checks the lowered label set against
-    /// the checker's recorded row so a collapse cannot go unnoticed.
-    fn resultRowWideningAdapterOrNull(
-        self: *Builder,
-        view: ModuleView,
-        template: checked.CheckedProcedureTemplate,
-        requested_fn_ty: Type.TypeId,
-        widened_result_row: bool,
-    ) Allocator.Error!?ResultRowWideningAdapter {
-        if (!widened_result_row) return null;
-        const declared_row = closedResultRowOrNull(view, template.checked_fn_root) orelse
-            Common.compilerBug("result-row widening relation declined for a template with no closed checked result row");
-        // Everything below is coordinator-program work: `requested_fn_ty` is a
-        // program id, `sameMonoType` compares through `program.types`, and the
-        // interned narrowed source type is handed to a program-domain
-        // completion. A specialization workspace is a separate type domain
-        // whose ids cross only through an explicit relocation, so lowering the
-        // declared type there and comparing it here would read two unrelated
-        // stores with one set of ids. This pre-step runs for every
-        // specialization of every closed-result-row template, including ones
-        // an immediate caller completes from inside a shard, so it pins the
-        // destination rather than trusting the caller's.
-        const coordinator_types = ProgramTypeDestination.begin(self);
-        defer coordinator_types.end();
-        const declared_source_fn_ty = template.checked_fn_root;
-        const declared_mono_fn_ty = try self.lowerType(view, declared_source_fn_ty);
-        if (try self.sameMonoType(declared_mono_fn_ty, requested_fn_ty)) {
-            Common.compilerBug("result-row widening relation declined for a request at the declared type");
-        }
-        const capability = try self.hostedTryAdapterCapability(view, template.hosted_try_adapter);
-        const try_capability: ?HostedTryAdapterCapability = if (declared_row.behind_try)
-            capability orelse Common.compilerBug("closed Try result row had no checker-recorded Try capability")
-        else
-            null;
-        try self.requireLoweredDeclaredRowLabels(view, declared_row, try_capability, declared_mono_fn_ty);
-        const source_fn_ty = (try self.resultRowWideningAdapterSourceType(
-            try_capability,
-            declared_mono_fn_ty,
-            requested_fn_ty,
-        )) orelse Common.compilerBug("result-row widening relation declined for a request lowering cannot adapt");
-        // The narrowed source carries exactly the declared labels, so the
-        // recursive specialization below is a fixpoint of this pre-step and
-        // cannot widen again.
-        if (try self.resultRowWideningAdapterSourceType(
-            try_capability,
-            declared_mono_fn_ty,
-            source_fn_ty,
-        )) |_| {
-            Common.compilerBug("result-row widening adapter source type widened the declared row again");
-        }
-        return .{
-            .declared_source_fn_ty = declared_source_fn_ty,
-            .declared_source_fn_key = view.types.rootKey(declared_source_fn_ty),
-            .source_fn_ty = source_fn_ty,
-            .capability = try_capability,
-        };
-    }
-
-    /// Guard for the label source above: the lowered declared type must list
-    /// exactly the labels the checker recorded for this row. A row tail that
-    /// `lowerCheckedTypeVariable` sealed away shows up here as a disagreement.
-    fn requireLoweredDeclaredRowLabels(
-        self: *Builder,
-        view: ModuleView,
-        declared_row: ClosedResultRow,
-        capability: ?HostedTryAdapterCapability,
-        declared_mono_fn_ty: Type.TypeId,
-    ) Allocator.Error!void {
-        const declared_fn = self.functionShape(declared_mono_fn_ty, "declared template root type was not a function");
-        const row_ty = if (capability) |try_capability|
-            ((try self.hostedTryInfoOrNull(try_capability, declared_fn.ret)) orelse
-                Common.compilerBug("closed Try result row did not lower to its checker-recorded Try nominal")).err_ty
-        else
-            declared_fn.ret;
-        const lowered_tags = self.bareTagUnionTagsOrNull(row_ty) orelse
-            Common.compilerBug("closed result row did not lower to a tag union");
-        if (lowered_tags.len != checkedClosedRowLabelCount(view, declared_row.row)) {
-            Common.compilerBug("lowered declared result row disagreed with the checker's recorded labels");
-        }
-    }
-
-    /// Check a route that states `widened_result_row = false` with no relation
-    /// behind the claim.
-    ///
-    /// `completeTemplateReservation` mints the adapter from the request
-    /// relation's own recorded answer, but three routes reach it without ever
-    /// running that relation and lower the body directly at the requested type
-    /// (`lowerTemplate`'s root, `lowerFnTemplateCallTarget`, and
-    /// `lowerRestoredConstFnTemplate`). Each states that its request is the
-    /// binding's own declared type; if one were ever wrong the template would
-    /// be defined at the wide row, which is exactly the miscompile the adapter
-    /// exists to prevent. So the claim is checked against the types here
-    /// instead of being taken on faith: if the adapter pre-step would have
-    /// found a narrowed source type for this request, stop the build.
-    fn requireRequestDidNotWidenResultRow(
-        self: *Builder,
-        template_ref: names.ProcTemplate,
-        requested_fn_ty: Type.TypeId,
-        comptime message: []const u8,
-    ) Allocator.Error!void {
-        const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
-        const template = view.templates.get(template_ref.template);
-        // Only a closed checked result row can be widened at all, and this
-        // filter is a checked-type walk while everything below it lowers a
-        // type; keep it first.
-        const declared_row = closedResultRowOrNull(view, template.checked_fn_root) orelse return;
-        // Same destination pin, and for the same reason, as the pre-step this
-        // mirrors: `requested_fn_ty` is a program id.
-        const coordinator_types = ProgramTypeDestination.begin(self);
-        defer coordinator_types.end();
-        const declared_mono_fn_ty = try self.lowerType(view, template.checked_fn_root);
-        const try_capability: ?HostedTryAdapterCapability = if (declared_row.behind_try)
-            (try self.hostedTryAdapterCapability(view, template.hosted_try_adapter)) orelse
-                Common.compilerBug("closed Try result row had no checker-recorded Try capability")
-        else
-            null;
-        // The same guard the pre-step applies before reading declared labels
-        // out of the lowered type, and for the same reason: a row
-        // `lowerCheckedTypeVariable` sealed to the empty tag union lists fewer
-        // labels than the checker recorded, which would make an ordinary
-        // request look wider than the declared row and report a lowering
-        // collapse as a widening that never happened.
-        try self.requireLoweredDeclaredRowLabels(view, declared_row, try_capability, declared_mono_fn_ty);
-        if (try self.resultRowWideningAdapterSourceType(
-            try_capability,
-            declared_mono_fn_ty,
-            requested_fn_ty,
-        )) |_| {
-            Common.compilerBug(message);
-        }
-    }
-
-    /// Specialize the template at its declared row and define the reserved
-    /// specialization as a generated adapter that calls it and re-tags the
-    /// result into the requested row.
-    fn completeResultRowWideningAdapter(
-        self: *Builder,
-        reservation: TemplateReservation,
-        fn_template: Ast.FnTemplate,
-        template_ref: names.ProcTemplate,
-        method_scope: ModuleView,
-        adapter: ResultRowWideningAdapter,
-        source_fn_ty: checked.CheckedTypeId,
-        source_fn_key: names.TypeDigest,
-        lower_fn_ty: Type.TypeId,
-        spec_evidence: []const SpecEvidence,
-        signature_relation: Ast.SignatureRelation,
-        codec_contract: ?SealedCodecContractContext,
-    ) Allocator.Error!void {
-        var completion_timing_scope = ProcedureTimingScope.begin(self.timing, .completion);
-        defer completion_timing_scope.end();
-
-        // The generated body is built from program ids throughout—the
-        // reserved definition, its locals, and the re-tagging match all live
-        // in the coordinator program—while the shape helpers it uses read
-        // the active store. `resultRowWideningAdapterOrNull` pins its own
-        // destination, but this step also requests the declared-row
-        // specialization, so it cannot simply pin over an active shard.
-        // Reaching here from one is a bug, and one whose only symptom would be
-        // a wrong tag discriminant, so it stops the build in every mode.
-        if (self.hasPrivateTypeDestination()) {
-            Common.compilerBug("result-row widening adapter completed with a private type destination");
-        }
-        const fn_data = self.programFunctionShape(lower_fn_ty, "result-row widening adapter root type was not a function");
-        const args = try self.typedLocalsForArgs(self.program.types.span(fn_data.args));
-        const source_def = try self.lowerTemplateWithMono(
-            template_ref,
-            method_scope,
-            adapter.declared_source_fn_ty,
-            adapter.declared_source_fn_key,
-            adapter.source_fn_ty,
-            spec_evidence,
-            null,
-            signature_relation,
-            .count,
-            null,
-            null,
-            .immediate,
-            codec_contract,
-            // The adapter's own source is requested at the DECLARED row, the
-            // fixpoint `resultRowWideningAdapterOrNull` asserts.
-            false,
-            self.specDemand(reservation.fn_id),
-        );
-        const adapter_template = Ast.FnTemplate{
-            .fn_def = .{ .checked_generated = template_ref },
-            .source_fn_ty = source_fn_ty,
-            .source_fn_key = source_fn_key,
-            .mono_fn_ty = lower_fn_ty,
-            .evidence_digest = fn_template.evidence_digest,
-            .const_evidence = fn_template.const_evidence,
-            .const_evidence_frames = fn_template.const_evidence_frames,
-            .const_evidence_frame_head = fn_template.const_evidence_frame_head,
-        };
-        const body = try self.resultRowWideningAdapterBody(
-            adapter.capability,
-            args,
-            self.defFnId(source_def),
-            adapter.source_fn_ty,
-            lower_fn_ty,
-        );
-        self.program.setDef(reservation.def, .{
-            .symbol = reservation.symbol,
-            .fn_def = adapter_template,
-            .fn_id = reservation.fn_id,
-            .args = args,
-            .body = .{ .roc = body },
-            .ret = fn_data.ret,
-        });
-        self.program.setFnSource(reservation.fn_id, adapter_template);
-        try self.markTemplateReady(reservation.fn_id, lower_fn_ty);
-    }
-
     fn completeTemplateReservation(
         self: *Builder,
         reservation: TemplateReservation,
         fn_template: Ast.FnTemplate,
         template_ref: names.ProcTemplate,
         method_scope: ModuleView,
-        source_fn_ty: checked.CheckedTypeId,
         source_fn_key: names.TypeDigest,
         lower_fn_ty: Type.TypeId,
         spec_evidence: []const SpecEvidence,
@@ -8323,7 +7952,6 @@ const Builder = struct {
         retained_topology: ?EvidenceChain,
         signature_relation: Ast.SignatureRelation,
         codec_contract: ?SealedCodecContractContext,
-        widened_result_row: bool,
     ) Allocator.Error!void {
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
@@ -8345,34 +7973,6 @@ const Builder = struct {
             });
             self.program.setFnSource(reservation.fn_id, fn_template);
             try self.markTemplateReady(reservation.fn_id, lower_fn_ty);
-            return;
-        }
-
-        // A template whose checked result row is closed may be requested at
-        // a row that includes it (design.md "Result-Row Widening Adapter").
-        // Such a request is served by specializing the template at its
-        // declared row and generating an adapter at the requested row that
-        // calls it and re-tags the result. The inner hosted specialization,
-        // when selected by generic dispatch, retains its declared ABI.
-        if (try self.resultRowWideningAdapterOrNull(
-            view,
-            template,
-            lower_fn_ty,
-            widened_result_row,
-        )) |adapter| {
-            try self.completeResultRowWideningAdapter(
-                reservation,
-                fn_template,
-                template_ref,
-                method_scope,
-                adapter,
-                source_fn_ty,
-                source_fn_key,
-                lower_fn_ty,
-                spec_evidence,
-                signature_relation,
-                codec_contract,
-            );
             return;
         }
 
@@ -8856,23 +8456,9 @@ const Builder = struct {
     /// Whether a queued specialization completes on the coordinator instead
     /// of in a body shard. A hosted template reaches the host directly, a
     /// template the object cache holds keeps its declared shape with no body,
-    /// and a result-row widening adapter is a generated call plus a re-tag
-    /// whose declared-row specialization is requested from the coordinator
-    /// (design.md "Result-Row Widening Adapter"). None of the three has a
-    /// graph/draft pair for a worker lane to hand back.
-    fn specJobCompletesOnCoordinator(
-        self: *Builder,
-        view: ModuleView,
-        template: checked.CheckedProcedureTemplate,
-        job: PendingSpecJob,
-    ) Allocator.Error!bool {
-        if (job.fn_template.cached != null or template.target == .hosted) return true;
-        return (try self.resultRowWideningAdapterOrNull(
-            view,
-            template,
-            job.fn_ty,
-            job.widened_result_row,
-        )) != null;
+    /// Neither has a graph/draft pair for a worker lane to hand back.
+    fn specJobCompletesOnCoordinator(template: checked.CheckedProcedureTemplate, job: PendingSpecJob) bool {
+        return job.fn_template.cached != null or template.target == .hosted;
     }
 
     /// Execute queued specialization bodies in dispatch order until the wave
@@ -8932,7 +8518,7 @@ const Builder = struct {
                 }
                 const view = self.moduleForDigest(names.procTemplateModuleDigest(job.template_ref));
                 const template = view.templates.get(job.template_ref.template);
-                if (self.spec_store.recordStatus(job.spec) == .ready or try self.specJobCompletesOnCoordinator(view, template, job)) {
+                if (self.spec_store.recordStatus(job.spec) == .ready or specJobCompletesOnCoordinator(template, job)) {
                     // Coordinator-only entries still wait their exact acceptance
                     // turn, but need not wait for any later worker task.
                     _ = self.pending_spec_jobs.pop();
@@ -9223,18 +8809,14 @@ const Builder = struct {
         const view = self.moduleForDigest(names.procTemplateModuleDigest(job.template_ref));
         const template = view.templates.get(job.template_ref.template);
         // Hosted completion has no Roc graph/draft pair to transfer, and
-        // neither does an object-cache completion or a result-row widening
-        // adapter: the adapter is a generated call plus a re-tag, with the
-        // declared-row specialization requested from the coordinator. All
-        // three keep coordinator ownership while ordinary bodies establish
-        // the shard handoff.
-        if (try self.specJobCompletesOnCoordinator(view, template, job)) {
+        // neither does an object-cache completion. Both keep coordinator
+        // ownership while ordinary bodies establish the shard handoff.
+        if (specJobCompletesOnCoordinator(template, job)) {
             try self.completeTemplateReservation(
                 job.reservation,
                 job.fn_template,
                 job.template_ref,
                 self.moduleForId(job.method_scope),
-                job.source_fn_ty,
                 job.source_fn_key,
                 job.fn_ty,
                 job.evidence,
@@ -9242,7 +8824,6 @@ const Builder = struct {
                 null,
                 job.signature_relation,
                 job.codec_contract,
-                job.widened_result_row,
             );
             self.acceptSpecDispatch(job.dispatch_index);
             return;
@@ -9619,7 +9200,7 @@ const Builder = struct {
 
         const graph_fn_ty = try body_ctx.importProgramType(lower_fn_ty);
 
-        const root_node = try body_ctx.relateCheckedFunctionToMono(template.checked_fn_root, graph_fn_ty);
+        const root_node = try body_ctx.relateCheckedFunctionToRequest(template.checked_fn_root, graph_fn_ty);
         const draft_codec_contract: ?DraftCodecContractContext = if (codec_contract) |contract| .{
             .anchor = contract.anchor,
             .constructor_node = try body_ctx.activeNodeFromType(
@@ -10097,23 +9678,14 @@ const Builder = struct {
         const root_node = try body_ctx.instNode(template.checked_fn_root);
         // A request whose result row includes this template's closed checked
         // row keeps its extra labels: the rows are related component-wise and
-        // the adapter is generated when the specialization completes
-        // (design.md "Result-Row Widening Adapter"). This also serves hosted
-        // implementations selected by an admitted generic dispatch request.
-        //
-        // A caller-owned (local-context-dependent) specialization has no such
-        // completion: it lowers its body inline at `root_node` below and
-        // registers the def at the declared interface, so no adapter would
-        // ever be generated and the caller would call the narrow body through
-        // its wide request. Declining here leaves the ordinary relation—and
-        // its loud rejection of a widened closed row—in charge.
+        // left distinct, and Lambda Solved joins them where the call's result
+        // flows (design.md "Row Joins").
         const closed_row_widened = try relateClosedResultRowRequestInterface(
             source_ctx.graph,
             view,
             template.checked_fn_root,
             root_node,
             request_fn_node,
-            if (local_context_dependent) .no_adapter else .adapter_reachable,
         );
         if (closed_row_widened) {
             // Every component was related above; joining the two function
@@ -10134,14 +9706,7 @@ const Builder = struct {
                 try source_ctx.graph.unify(root_node, request_fn_node);
             }
         }
-        // This is the one relation whose answer becomes the specialization's
-        // own: completion mints the widening adapter exactly when this record
-        // says the relation declined to unify the two rows, instead of deriving
-        // a second answer from the checked root (design.md "Result-Row Widening
-        // Adapter").
-        const widened_result_row = closed_row_widened;
-        source_ctx.draft.template_specs.items[spec_index].widened_result_row = widened_result_row;
-        if (!widened_result_row and
+        if (!closed_row_widened and
             !local_context_dependent and
             signature_relation != .independent_roots and
             template.target != .hosted)
@@ -12101,13 +11666,6 @@ const Builder = struct {
         // (the check would be guaranteed to fire), and a generated step lambda
         // stores merely the template it was generated inside (whose arity need
         // not even match). Neither states the claim this checks.
-        if (fn_template.fn_def != .checked_generated) {
-            try self.requireRequestDidNotWidenResultRow(
-                template_ref,
-                fn_template.mono_fn_ty,
-                "function-template call target widened the template's closed checked result row",
-            );
-        }
         const def = try self.lowerTemplateWithMono(
             template_ref,
             method_scope,
@@ -12122,7 +11680,6 @@ const Builder = struct {
             null,
             .queued,
             null,
-            false,
             self.root_demand,
         );
         return .{ .local = self.defFnId(def) };
@@ -12212,13 +11769,6 @@ const Builder = struct {
                 // type, so the claim is checked rather than stated—`.checked_generated`
                 // excluded for the reason given at the
                 // call-target site above.
-                if (fn_template.fn_def != .checked_generated) {
-                    try self.requireRequestDidNotWidenResultRow(
-                        template_ref,
-                        fn_template.mono_fn_ty,
-                        "restored constant function request widened the template's closed checked result row",
-                    );
-                }
                 const def = try self.lowerTemplateWithMono(
                     template_ref,
                     fn_view,
@@ -12233,7 +11783,6 @@ const Builder = struct {
                     retained,
                     .immediate,
                     null,
-                    false,
                     // A restored constant function is the value an
                     // evaluation produced; it keeps evaluation demand.
                     .evaluation,
@@ -13798,7 +13347,6 @@ const Builder = struct {
                 null,
                 body_scheduling,
                 codec_contract,
-                spec.widened_result_row,
                 demand,
             );
             break :blk .{ .local = self.defFnId(def) };
@@ -14334,7 +13882,6 @@ const Builder = struct {
                 } else null,
                 .requires_local = spec.requires_local,
                 .local_context_dependent = spec.local_context_dependent,
-                .widened_result_row = spec.widened_result_row,
                 .lexical_owner = spec.lexical_owner,
                 .fn_id = spec.fn_id,
                 .def_id = spec.def_id,
@@ -15477,13 +15024,6 @@ const Builder = struct {
         return try self.program.addPat(.{ .ty = ty, .data = .{ .bind = local } });
     }
 
-    const HostedTryInfo = struct {
-        ok_ty: Type.TypeId,
-        err_ty: Type.TypeId,
-        ok_tag: Type.Tag,
-        err_tag: Type.Tag,
-    };
-
     /// Reserved labels for the optional-slot encoding; see design.md "Field
     /// Kinds". Sorting fixes Missing at index 0 and Present at index 1.
     const optional_slot_missing_tag = "#Missing";
@@ -15497,445 +15037,6 @@ const Builder = struct {
         missing_tag: Type.Tag,
         present_tag: Type.Tag,
     };
-
-    /// The direct tag row of a Monotype: transparent alias layers are crossed,
-    /// but a nominal (`Builtin.Try` included) is not a bare row, so its
-    /// backing's labels are never mistaken for the result row.
-    fn bareTagUnionTagsOrNull(self: *Builder, ty: Type.TypeId) ?Type.StoreSpanBorrow(Type.Tag, "tags") {
-        var current = ty;
-        while (true) {
-            switch (self.activeTypeStore().get(current)) {
-                .tag_union => |tags| return self.activeTypeStore().tagSpan(tags),
-                .named => |named| {
-                    if (named.kind != .alias) return null;
-                    const backing = named.backing orelse return null;
-                    current = backing.ty;
-                },
-                .primitive, .record, .tuple, .list, .box, .func, .erased, .zst => return null,
-            }
-        }
-    }
-
-    /// Return the exact source type the template is specialized at when a
-    /// request widens its declared result-row label set. The source keeps every
-    /// requested representation choice (arguments, `Ok` payload, and row
-    /// payloads) but contains only the declared labels, so the generated Roc
-    /// adapter performs one explicit row injection and no representation
-    /// conversion. With a capability the adapted row is the result `Try`'s
-    /// error argument—the hosted instance, where the declared row is the
-    /// host ABI; without one it is the function's own result row.
-    fn resultRowWideningAdapterSourceType(
-        self: *Builder,
-        capability: ?HostedTryAdapterCapability,
-        declared_fn_ty: Type.TypeId,
-        requested_fn_ty: Type.TypeId,
-    ) Allocator.Error!?Type.TypeId {
-        if (try self.sameMonoType(declared_fn_ty, requested_fn_ty)) return null;
-        const declared = self.functionShape(declared_fn_ty, "result-row adapter declared type was not a function");
-        const requested = self.functionShape(requested_fn_ty, "result-row adapter requested type was not a function");
-        if (try self.sameMonoType(declared.ret, requested.ret)) return null;
-
-        const requested_try: ?HostedTryInfo = if (capability) |try_capability|
-            (try self.hostedTryInfoOrNull(try_capability, requested.ret)) orelse return null
-        else
-            null;
-        const declared_row_ty = if (capability) |try_capability|
-            ((try self.hostedTryInfoOrNull(try_capability, declared.ret)) orelse return null).err_ty
-        else
-            declared.ret;
-        const requested_row_ty = if (requested_try) |info| info.err_ty else requested.ret;
-
-        if (declared.args.len != requested.args.len) {
-            Common.invariant("result-row widening request changed arity from the declared type");
-        }
-
-        const declared_tags = self.bareTagUnionTagsOrNull(declared_row_ty) orelse return null;
-        const requested_tags = self.bareTagUnionTagsOrNull(requested_row_ty) orelse return null;
-        if (requested_tags.len < declared_tags.len) {
-            Common.invariant("result-row widening request removed a declared label");
-        }
-        const narrowed_tags = try self.allocator.alloc(Type.Tag, declared_tags.len);
-        defer self.allocator.free(narrowed_tags);
-        for (0..declared_tags.len) |index| {
-            const declared_tag = GuardedList.at(declared_tags, index);
-            const requested_tag = self.tagByNameOrNull(requested_row_ty, declared_tag.name) orelse
-                Common.invariant("result-row widening request removed a declared label");
-            const declared_payloads = self.program.types.span(declared_tag.payloads);
-            const requested_payloads = self.program.types.span(requested_tag.payloads);
-            if (declared_payloads.len != requested_payloads.len) {
-                Common.invariant("result-row widening request changed a declared payload arity");
-            }
-            narrowed_tags[index] = requested_tag;
-        }
-        if (requested_tags.len == declared_tags.len) return null;
-
-        const transaction = self.program.types.beginTransaction();
-        errdefer transaction.abort(&self.program.types);
-        const speculative_row_ty = try self.program.types.add(.{
-            .tag_union = try self.program.types.addTagVariants(&self.program.names, narrowed_tags),
-        });
-        var transaction_result = try self.program.types.commitTransaction(
-            &self.program.names,
-            transaction,
-            speculative_row_ty,
-        );
-        defer transaction_result.deinit();
-        const narrowed_row_ty = transaction_result.root;
-        const narrowed_ret_ty = if (capability) |try_capability|
-            try self.hostedTryTypeLike(try_capability, requested.ret, requested_try.?.ok_ty, narrowed_row_ty)
-        else
-            narrowed_row_ty;
-        return try self.program.types.internFuncFromSpan(&self.program.names, requested.args, narrowed_ret_ty);
-    }
-
-    /// Body of a generated result-row widening adapter: call the template at
-    /// its declared row and re-tag the result into the requested row. With a
-    /// capability the re-tag unwraps and re-wraps the result `Try`; without one
-    /// the function's own result row is injected directly.
-    fn resultRowWideningAdapterBody(
-        self: *Builder,
-        capability: ?HostedTryAdapterCapability,
-        args: Ast.Span(Ast.TypedLocal),
-        source_fn: Ast.FnId,
-        source_fn_ty: Type.TypeId,
-        target_fn_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        const source = self.functionShape(source_fn_ty, "result-row adapter source type was not a function");
-        const target = self.functionShape(target_fn_ty, "result-row adapter target type was not a function");
-        const source_args = self.program.types.span(source.args);
-        const target_args = self.program.types.span(target.args);
-        const adapter_args = self.program.typedLocalSpan(args);
-        if (source_args.len != target_args.len or source_args.len != GuardedList.borrowLen(adapter_args)) {
-            Common.invariant("result-row widening adapter arity differed from its function types");
-        }
-
-        const call_args = try self.allocator.alloc(Ast.ExprId, GuardedList.borrowLen(adapter_args));
-        defer self.allocator.free(call_args);
-        for (0..GuardedList.borrowLen(adapter_args)) |index| {
-            const arg = GuardedList.at(adapter_args, index);
-            const source_arg_ty = GuardedList.at(source_args, index);
-            const target_arg_ty = GuardedList.at(target_args, index);
-            if (!try self.sameMonoType(arg.ty, source_arg_ty) or !try self.sameMonoType(arg.ty, target_arg_ty)) {
-                Common.invariant("result-row widening adapter argument type differed from source or target function type");
-            }
-            call_args[index] = try self.localExpr(arg.local, arg.ty);
-        }
-
-        const source_call = try self.program.addExpr(.{
-            .ty = source.ret,
-            .data = .{ .call_proc = .{
-                .callee = Ast.localProcCallee(source_fn),
-                .args = try self.program.addExprSpan(call_args),
-            } },
-        });
-        if (capability) |try_capability| {
-            return try self.hostedTryReturnInjectionExpr(try_capability, source_call, source.ret, target.ret);
-        }
-        if (!try self.errorRowIsIncludedIn(source.ret, target.ret)) {
-            Common.invariant("result-row adapter source row was not included in target row");
-        }
-        return try self.tagRowInjectionExpr(source_call, source.ret, target.ret);
-    }
-
-    fn hostedTryReturnInjectionExpr(
-        self: *Builder,
-        capability: HostedTryAdapterCapability,
-        source_expr: Ast.ExprId,
-        source_try_ty: Type.TypeId,
-        target_try_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        if (try self.sameMonoType(source_try_ty, target_try_ty)) return source_expr;
-
-        const source_info = try self.hostedTryInfo(capability, source_try_ty);
-        const target_info = try self.hostedTryInfo(capability, target_try_ty);
-        if (!try self.sameMonoType(source_info.ok_ty, target_info.ok_ty)) {
-            Common.invariant("Try adapter changed Ok type");
-        }
-        if (!try self.errorRowIsIncludedIn(source_info.err_ty, target_info.err_ty)) {
-            Common.invariant("Try adapter error row was not included in target row");
-        }
-
-        const ok_local = try self.program.addLocal(self.symbols.fresh(), source_info.ok_ty);
-        const ok_payload_pat = try self.bindPat(ok_local, source_info.ok_ty);
-        const ok_pat = try self.program.addPat(.{ .ty = source_try_ty, .data = .{ .tag = .{
-            .name = source_info.ok_tag.name,
-            .payloads = try self.program.addPatSpan(&[_]Ast.PatId{ok_payload_pat}),
-        } } });
-        const ok_value = try self.localExpr(ok_local, source_info.ok_ty);
-        const ok_body = try self.hostedTryOkExpr(capability, target_try_ty, ok_value);
-
-        const err_local = try self.program.addLocal(self.symbols.fresh(), source_info.err_ty);
-        const err_payload_pat = try self.bindPat(err_local, source_info.err_ty);
-        const err_pat = try self.program.addPat(.{ .ty = source_try_ty, .data = .{ .tag = .{
-            .name = source_info.err_tag.name,
-            .payloads = try self.program.addPatSpan(&[_]Ast.PatId{err_payload_pat}),
-        } } });
-        const err_value = try self.localExpr(err_local, source_info.err_ty);
-        const injected_err = try self.tagRowInjectionExpr(err_value, source_info.err_ty, target_info.err_ty);
-        const err_body = try self.hostedTryErrExpr(capability, target_try_ty, injected_err);
-
-        const branches = [_]Ast.Branch{
-            .{ .pat = ok_pat, .body = ok_body },
-            .{ .pat = err_pat, .body = err_body },
-        };
-        return try self.program.addExpr(.{ .ty = target_try_ty, .data = .{ .match_ = .{
-            .scrutinee = source_expr,
-            .branches = try self.program.addBranchSpan(&branches),
-        } } });
-    }
-
-    /// Re-tag a value of a closed tag row into a row that includes it. Used
-    /// for a `Try` result's error row and for a direct result row alike.
-    fn tagRowInjectionExpr(
-        self: *Builder,
-        source_expr: Ast.ExprId,
-        source_err_ty: Type.TypeId,
-        target_err_ty: Type.TypeId,
-    ) Allocator.Error!Ast.ExprId {
-        if (try self.sameMonoType(source_err_ty, target_err_ty)) return source_expr;
-
-        const source_tags = self.tagUnionTags(source_err_ty);
-        if (source_tags.len == 0) {
-            return try self.program.addExpr(.{ .ty = target_err_ty, .data = .{ .match_ = .{
-                .scrutinee = source_expr,
-                .branches = Ast.Span(Ast.Branch).empty(),
-            } } });
-        }
-
-        const branches = try self.allocator.alloc(Ast.Branch, source_tags.len);
-        defer self.allocator.free(branches);
-        for (0..source_tags.len) |index| {
-            const source_tag = GuardedList.at(source_tags, index);
-            const source_payload_tys = self.program.types.span(source_tag.payloads);
-            const target_tag = self.tagByName(target_err_ty, source_tag.name);
-            const target_payload_tys = self.program.types.span(target_tag.payloads);
-            if (source_payload_tys.len != target_payload_tys.len) {
-                Common.invariant("Try adapter error tag payload arity differed in target row");
-            }
-
-            const payload_pats = try self.allocator.alloc(Ast.PatId, source_payload_tys.len);
-            defer self.allocator.free(payload_pats);
-            const payload_exprs = try self.allocator.alloc(Ast.ExprId, source_payload_tys.len);
-            defer self.allocator.free(payload_exprs);
-            for (0..source_payload_tys.len) |payload_index| {
-                const source_payload_ty = GuardedList.at(source_payload_tys, payload_index);
-                const target_payload_ty = GuardedList.at(target_payload_tys, payload_index);
-                if (!try self.sameMonoType(source_payload_ty, target_payload_ty)) {
-                    Common.invariant("Try adapter error tag payload type differed in target row");
-                }
-                const local = try self.program.addLocal(self.symbols.fresh(), source_payload_ty);
-                payload_pats[payload_index] = try self.bindPat(local, source_payload_ty);
-                payload_exprs[payload_index] = try self.localExpr(local, source_payload_ty);
-            }
-
-            const pat = try self.program.addPat(.{ .ty = source_err_ty, .data = .{ .tag = .{
-                .name = source_tag.name,
-                .payloads = try self.program.addPatSpan(payload_pats),
-            } } });
-            const body = try self.tagValueExpr(target_err_ty, target_tag, payload_exprs);
-            branches[index] = .{ .pat = pat, .body = body };
-        }
-
-        return try self.program.addExpr(.{ .ty = target_err_ty, .data = .{ .match_ = .{
-            .scrutinee = source_expr,
-            .branches = try self.program.addBranchSpan(branches),
-        } } });
-    }
-
-    fn hostedTryOkExpr(self: *Builder, capability: HostedTryAdapterCapability, try_ty: Type.TypeId, value_expr: Ast.ExprId) Allocator.Error!Ast.ExprId {
-        const info = try self.hostedTryInfo(capability, try_ty);
-        return try self.tagValueExpr(try_ty, info.ok_tag, &[_]Ast.ExprId{value_expr});
-    }
-
-    fn hostedTryErrExpr(self: *Builder, capability: HostedTryAdapterCapability, try_ty: Type.TypeId, err_expr: Ast.ExprId) Allocator.Error!Ast.ExprId {
-        const info = try self.hostedTryInfo(capability, try_ty);
-        return try self.tagValueExpr(try_ty, info.err_tag, &[_]Ast.ExprId{err_expr});
-    }
-
-    fn tagValueExpr(
-        self: *Builder,
-        ty: Type.TypeId,
-        tag: Type.Tag,
-        payloads: []const Ast.ExprId,
-    ) Allocator.Error!Ast.ExprId {
-        const backing_ty = self.nominalExprBackingType(ty) orelse ty;
-        const tag_expr = try self.program.addExpr(.{
-            .ty = backing_ty,
-            .data = .{ .tag = .{
-                .name = tag.name,
-                .payloads = try self.program.addExprSpan(payloads),
-            } },
-        });
-        if (self.nominalExprBackingType(ty) != null) {
-            return try self.program.addExpr(.{ .ty = ty, .data = .{ .nominal = tag_expr } });
-        }
-        return tag_expr;
-    }
-
-    fn hostedTryInfo(self: *Builder, capability: HostedTryAdapterCapability, try_ty: Type.TypeId) Allocator.Error!HostedTryInfo {
-        return (try self.hostedTryInfoOrNull(capability, try_ty)) orelse
-            Common.invariant("hosted Try capability did not match its Monotype result");
-    }
-
-    /// The hosted `Try` nominal a Monotype names, crossing transparent alias
-    /// layers on the way. The checked side already crosses them—`closedResultRowOrNull`
-    /// resolves the result payload through aliases—so
-    /// a template declared `Res : Try(Str, [NotFound])` carries a capability
-    /// and a recorded row widening. Its lowered return is a `.alias` named node
-    /// whose backing is the `Try` nominal, so matching only the outermost def
-    /// would decline a widening the checker already committed to.
-    ///
-    /// Reads `self.program.types` rather than `activeTypeStore()`: the adapter
-    /// pre-step pins the program store as the destination deliberately.
-    fn hostedTryNamedOrNull(
-        self: *Builder,
-        capability: HostedTryAdapterCapability,
-        try_ty: Type.TypeId,
-    ) ?Type.NamedContent {
-        var current = try_ty;
-        // Bounded like the graph-side walk above, and for the same reason: a
-        // backing cycle through two or more types hangs the compiler, which no
-        // `unreachable` would report in a release build.
-        var remaining = self.program.types.typeCount();
-        while (remaining > 0) : (remaining -= 1) {
-            const named = switch (self.program.types.get(current)) {
-                .named => |named| named,
-                .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => return null,
-            };
-            if (sameTypeDef(named.def, capability.def)) return named;
-            if (named.kind != .alias) return null;
-            const backing = named.backing orelse return null;
-            current = backing.ty;
-        }
-        Common.compilerBug("transparent alias backing chain was cyclic");
-    }
-
-    fn hostedTryInfoOrNull(self: *Builder, capability: HostedTryAdapterCapability, try_ty: Type.TypeId) Allocator.Error!?HostedTryInfo {
-        const named = self.hostedTryNamedOrNull(capability, try_ty) orelse return null;
-        if (capability.ok_type_arg_index >= self.program.types.span(named.args).len or
-            capability.err_type_arg_index >= self.program.types.span(named.args).len)
-        {
-            Common.invariant("hosted Try capability referenced a missing Monotype type argument");
-        }
-        const backing_ty = named.backing orelse Common.invariant("hosted Try nominal had no backing");
-        const ok_tag = self.tagByNameOrNull(backing_ty.ty, capability.ok_tag) orelse
-            Common.invariant("hosted Try backing omitted its capability-recorded Ok tag");
-        const err_tag = self.tagByNameOrNull(backing_ty.ty, capability.err_tag) orelse
-            Common.invariant("hosted Try backing omitted its capability-recorded Err tag");
-        const ok_payloads = self.program.types.span(ok_tag.payloads);
-        const err_payloads = self.program.types.span(err_tag.payloads);
-        if (ok_payloads.len != 1 or err_payloads.len != 1) {
-            Common.invariant("hosted Try capability tags did not have one payload each");
-        }
-        const args = self.program.types.span(named.args);
-        const ok_ty = GuardedList.at(args, capability.ok_type_arg_index);
-        const err_ty = GuardedList.at(args, capability.err_type_arg_index);
-        if (!try self.sameMonoType(ok_ty, GuardedList.at(ok_payloads, 0)) or
-            !try self.sameMonoType(err_ty, GuardedList.at(err_payloads, 0)))
-        {
-            Common.invariant("hosted Try capability payload mapping disagreed with its nominal arguments");
-        }
-        return .{
-            .ok_ty = ok_ty,
-            .err_ty = err_ty,
-            .ok_tag = ok_tag,
-            .err_tag = err_tag,
-        };
-    }
-
-    fn hostedTryTypeLike(
-        self: *Builder,
-        capability: HostedTryAdapterCapability,
-        template_try_ty: Type.TypeId,
-        ok_ty: Type.TypeId,
-        err_ty: Type.TypeId,
-    ) Allocator.Error!Type.TypeId {
-        // Crosses alias layers like `hostedTryInfoOrNull`, so an alias-wrapped
-        // template `Try` is recognized here too. The rebuilt type is the bare
-        // `Try` nominal: this is the adapter's narrowed source row, which is a
-        // different row from the one any crossed alias declares.
-        const template = self.hostedTryNamedOrNull(capability, template_try_ty) orelse
-            Common.invariant("hosted Try capability did not match the adapter template nominal");
-        const template_backing = template.backing orelse
-            Common.invariant("Try template type had no backing");
-        const template_tags = switch (self.shapeContent(template_backing.ty)) {
-            .tag_union => |span| self.program.types.tagSpan(span),
-            .primitive, .named, .record, .tuple, .list, .box, .func, .erased, .zst => Common.invariant("Try template backing type was not a tag union"),
-        };
-        const transaction = self.program.types.beginTransaction();
-        errdefer transaction.abort(&self.program.types);
-        const tags = try self.allocator.alloc(Type.Tag, template_tags.len);
-        defer self.allocator.free(tags);
-        var found_ok = false;
-        var found_err = false;
-        for (0..template_tags.len) |index| {
-            const tag = GuardedList.at(template_tags, index);
-            const payload_ty = if (tag.name == capability.ok_tag) blk: {
-                found_ok = true;
-                break :blk ok_ty;
-            } else if (tag.name == capability.err_tag) blk: {
-                found_err = true;
-                break :blk err_ty;
-            } else Common.invariant("hosted Try backing contained a tag absent from its capability");
-            tags[index] = .{
-                .name = tag.name,
-                .checked_name = tag.checked_name,
-                .payloads = try self.program.types.addSpan(&.{payload_ty}),
-            };
-        }
-        if (!found_ok or !found_err) {
-            Common.invariant("Try backing type did not contain Ok and Err tags");
-        }
-        const backing_ty = try self.program.types.add(.{
-            .tag_union = try self.program.types.addTagVariants(&self.program.names, tags),
-        });
-        const template_args = self.program.types.span(template.args);
-        if (capability.ok_type_arg_index >= template_args.len or capability.err_type_arg_index >= template_args.len) {
-            Common.invariant("hosted Try capability referenced a missing template type argument");
-        }
-        const args = try GuardedList.dupe(self.allocator, Type.TypeId, template_args);
-        defer self.allocator.free(args);
-        args[capability.ok_type_arg_index] = ok_ty;
-        args[capability.err_type_arg_index] = err_ty;
-        const speculative = try self.program.types.add(.{ .named = .{
-            .named_type = template.named_type,
-            .def = template.def,
-            .kind = template.kind,
-            .builtin_owner = template.builtin_owner,
-            .args = try self.program.types.addSpan(args),
-            .backing = .{
-                .ty = backing_ty,
-                .use = template_backing.use,
-                .authority = template_backing.authority,
-            },
-            .declared_order = template.declared_order,
-        } });
-        var result = try self.program.types.commitTransaction(
-            &self.program.names,
-            transaction,
-            speculative,
-        );
-        defer result.deinit();
-        return result.root;
-    }
-
-    fn errorRowIsIncludedIn(self: *Builder, source_err_ty: Type.TypeId, target_err_ty: Type.TypeId) Allocator.Error!bool {
-        if (try self.sameMonoType(source_err_ty, target_err_ty)) return true;
-        const source_tags = self.tagUnionTags(source_err_ty);
-        for (0..source_tags.len) |index| {
-            const source_tag = GuardedList.at(source_tags, index);
-            const target_tag = self.tagByNameOrNull(target_err_ty, source_tag.name) orelse return false;
-            const source_payloads = self.program.types.span(source_tag.payloads);
-            const target_payloads = self.program.types.span(target_tag.payloads);
-            if (source_payloads.len != target_payloads.len) return false;
-            for (0..source_payloads.len) |payload_index| {
-                const source_payload = GuardedList.at(source_payloads, payload_index);
-                const target_payload = GuardedList.at(target_payloads, payload_index);
-                if (!try self.sameMonoType(source_payload, target_payload)) return false;
-            }
-        }
-        return true;
-    }
 
     fn tagByName(self: *Builder, ty: Type.TypeId, name: names.TagNameId) Type.Tag {
         return self.tagByNameOrNull(ty, name) orelse Common.invariant("tag operation referenced tag absent from Monotype type");
@@ -15965,17 +15066,6 @@ const Builder = struct {
             } else null,
             .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst => null,
         };
-    }
-
-    /// Whether two Monotypes describe the same type. This is the structural
-    /// `typeEql` relation rather than a stored-identity digest comparison:
-    /// checking may present one unified type both alias-wrapped and unwrapped
-    /// (a nominal's type argument can keep an alias name that the backing
-    /// row's payload resolved away), and a digest keeps aliases opaque, so
-    /// digest equality would report such equal types as different.
-    fn sameMonoType(self: *Builder, a: Type.TypeId, b: Type.TypeId) Allocator.Error!bool {
-        if (a == b) return true;
-        return try self.program.types.typeEql(&self.program.names, a, b);
     }
 };
 
@@ -17209,11 +16299,6 @@ const DraftTemplateSpec = struct {
     demand_frame_floor: RuntimeDemandGuardFrameStack = .{},
     requires_local: bool = false,
     local_context_dependent: bool = false,
-    /// Whether this request's relation declined to unify the template's closed
-    /// checked result row with the requested one. Recorded by the relation
-    /// and consumed by `completeTemplateReservation`, which mints the widening
-    /// adapter exactly when it is set (design.md "Result-Row Widening Adapter").
-    widened_result_row: bool = false,
     lexical_owner: ?DraftOwner = null,
     lexical: ?DraftCodecLexicalContext = null,
     lexical_context_key: ?names.TypeDigest = null,
@@ -17250,8 +16335,6 @@ const SealedTemplateSpec = struct {
     codec_contract: ?SealedCodecContractContext,
     requires_local: bool,
     local_context_dependent: bool,
-    /// The request relation's recorded answer, carried to completion.
-    widened_result_row: bool,
     lexical_owner: ?DraftOwner,
     fn_id: DraftFnId,
     def_id: ?DraftDefId,
@@ -27458,9 +26541,6 @@ const BodyContext = struct {
             template.checked_fn_root,
             root_node,
             roots[0],
-            // A `.local_proc` target returned above, so this request is always
-            // served by a procedure template specialization.
-            .adapter_reachable,
         )) {
             if (template.target == .hosted) {
                 try relateFunctionRequestInterface(self.graph, root_node, roots[0]);
@@ -28008,6 +27088,11 @@ const BodyContext = struct {
         ops_start: usize,
         next: usize,
         results_start: usize,
+        /// The checked tags when the checked row is closed and every one of
+        /// its tags is in the produced closed row: the
+        /// children relate the checked tags' payloads, and the witness is
+        /// the checked row (`includedRowPayloadOps`).
+        included_tags: ?[]const InstTag = null,
     };
 
     /// Relate a checked node to the value actually produced, returning the
@@ -28056,7 +27141,14 @@ const BodyContext = struct {
             }
 
             _ = frames.pop();
-            const witness = if (failed) null else try self.buildProducedValueWitness(frame, results.items[frame.results_start..]);
+            const witness = if (failed)
+                null
+            else if (frame.included_tags) |checked_tags|
+                try self.buildIncludedRowWitness(frame.checked_node, checked_tags, results.items[frame.results_start..])
+            else if (self.childWitnessesAreChecked(ops.items[frame.ops_start..], results.items[frame.results_start..]))
+                frame.checked_node
+            else
+                try self.buildProducedValueWitness(frame, results.items[frame.results_start..]);
             ops.shrinkRetainingCapacity(frame.ops_start);
             results.shrinkRetainingCapacity(frame.results_start);
             const checked_root = self.graph.rootNode(frame.checked_node);
@@ -28115,6 +27207,7 @@ const BodyContext = struct {
         if (try self.producedPairCompletesRequest(checked_root, produced_root, completions)) return produced_node;
 
         const ops_start = ops.items.len;
+        var included_tags: ?[]const InstTag = null;
         const matched: bool = matched: {
             const checked_content = (try self.graph.content(checked_root));
             const produced_content = (try self.graph.content(produced_root));
@@ -28174,7 +27267,10 @@ const BodyContext = struct {
                 },
                 .tag_union => |checked_row| switch (produced_content) {
                     .tag_union => |produced_row| {
-                        if (checked_row.tags.len != produced_row.tags.len) break :matched false;
+                        if (!sameTagLabels(checked_row.tags, produced_row.tags)) {
+                            included_tags = try self.includedRowPayloadOps(checked_root, produced_root, ops);
+                            break :matched included_tags != null;
+                        }
                         if (!(try self.rowExtsAreValueCompatible(checked_row.ext, produced_row.ext, .tag_union))) break :matched false;
                         for (checked_row.tags, produced_row.tags) |checked_tag, produced_tag| {
                             try ops.append(gpa, .{ .tag = .{
@@ -28207,9 +27303,86 @@ const BodyContext = struct {
             .ops_start = ops_start,
             .next = ops_start,
             .results_start = results.items.len,
+            .included_tags = included_tags,
         });
         pushed = true;
         return null;
+    }
+
+    /// A closed checked row whose every tag is in a closed produced row
+    /// relates tag by tag, whatever order the two rows list their tags in:
+    /// each checked tag's payloads to the produced tag of its label. The value was produced at the produced row,
+    /// and Lambda Solved joins the read with its producer (design.md "Row
+    /// Joins"), so the checked row is not unified with the wider one here.
+    /// Returns the checked tags after appending their payload pairs, or null
+    /// when the rows are not in that relation.
+    fn includedRowPayloadOps(
+        self: *BodyContext,
+        checked_root: NodeId,
+        produced_root: NodeId,
+        ops: *std.ArrayListUnmanaged(ProducedValueOp),
+    ) Allocator.Error!?[]const InstTag {
+        if (!(try self.graph.tagRowIsClosed(checked_root)) or !(try self.graph.tagRowIsClosed(produced_root))) return null;
+        const checked_row = (try self.graph.tagRowNodesOrNull(checked_root)) orelse return null;
+        const produced_row = (try self.graph.tagRowNodesOrNull(produced_root)) orelse return null;
+        if (checked_row.tags.len > produced_row.tags.len) return null;
+        for (checked_row.tags) |checked_tag| {
+            const produced_tag = graphTagByName(produced_row.tags, checked_tag.name) orelse return null;
+            if (checked_tag.payloads.len != produced_tag.payloads.len) return null;
+        }
+        for (checked_row.tags) |checked_tag| {
+            const produced_tag = graphTagByName(produced_row.tags, checked_tag.name).?;
+            for (checked_tag.payloads, produced_tag.payloads) |checked_payload, produced_payload| {
+                try ops.append(self.allocator, .{ .child = .{ .checked = checked_payload, .produced = produced_payload } });
+            }
+        }
+        return try self.graph.arena().dupe(InstTag, checked_row.tags);
+    }
+
+    /// Whether a matched container's children all relate to their checked
+    /// side while some differs from its produced side. The produced
+    /// container rebuilt around them would pair the produced row's tags or a
+    /// named type's produced arguments with checked children (an included
+    /// row below, `includedRowPayloadOps`), so the witness is the checked
+    /// container, whose children these are.
+    fn childWitnessesAreChecked(self: *BodyContext, frame_ops: []const ProducedValueOp, children: []const NodeId) bool {
+        var index: usize = 0;
+        var differs = false;
+        for (frame_ops) |op| switch (op) {
+            .child => |child| {
+                if (!self.graph.sameClass(children[index], child.checked)) return false;
+                differs = differs or !self.graph.sameClass(children[index], child.produced);
+                index += 1;
+            },
+            .field_name, .tag => {},
+        };
+        return differs;
+    }
+
+    /// An included row's witness (`includedRowPayloadOps`): the checked row,
+    /// with each payload at its witness; the checked node itself when no
+    /// payload's witness differs.
+    fn buildIncludedRowWitness(self: *BodyContext, checked_node: NodeId, checked_tags: []const InstTag, children: []const NodeId) Allocator.Error!NodeId {
+        const tags = try self.graph.arena().alloc(InstTag, checked_tags.len);
+        var changed = false;
+        var offset: usize = 0;
+        for (checked_tags, tags) |checked_tag, *out| {
+            const payloads = try self.graph.arena().dupe(NodeId, children[offset..][0..checked_tag.payloads.len]);
+            offset += checked_tag.payloads.len;
+            for (payloads, checked_tag.payloads) |payload, checked_payload| {
+                changed = changed or !self.graph.sameClass(payload, checked_payload);
+            }
+            out.* = .{
+                .name = checked_tag.name,
+                .checked_name = checked_tag.checked_name,
+                .payloads = payloads,
+            };
+        }
+        if (!changed) return checked_node;
+        return try self.graph.newNode(.{ .tag_union = .{
+            .tags = tags,
+            .ext = try self.graph.newNode(.empty_tag_union),
+        } });
     }
 
     /// A pair whose containers do not match relates through their shared
@@ -38618,15 +37791,21 @@ const BodyContext = struct {
         try relateCheckedNodeToMono(self.graph, checked_node, mono_node);
     }
 
-    fn relateCheckedFunctionToMono(
+    /// Relate a procedure template's checked function type to the Monotype
+    /// type a specialization requests. When the template's checked result row
+    /// is closed and the request's row includes it, the two relate
+    /// component-wise without unifying the rows, and the body lowers at the
+    /// template's own row; Lambda Solved joins the rows where the call's
+    /// result flows (design.md "Row Joins").
+    fn relateCheckedFunctionToRequest(
         self: *BodyContext,
         checked_fn_ty: checked.CheckedTypeId,
         mono_fn_ty: Type.TypeId,
     ) Allocator.Error!NodeId {
         const checked_node = try self.instNode(checked_fn_ty);
         const request_node = try self.graph.importMonoIndependent(mono_fn_ty);
-        const related = try checkedMonoRequestNode(self.graph, checked_node, request_node, .construction);
-        return related;
+        if (try relateClosedResultRowRequestInterface(self.graph, self.view, checked_fn_ty, checked_node, request_node)) return checked_node;
+        return try checkedMonoRequestNode(self.graph, checked_node, request_node, .construction);
     }
 
     fn lowerFieldNamesValueIter(
@@ -43639,7 +42818,6 @@ const BodyContext = struct {
         source_fn_ty: checked.CheckedTypeId,
         plan_ctx: *BodyContext,
         plan_fn_ty: checked.CheckedTypeId,
-        reachability: AdapterReachability,
     ) Allocator.Error!NodeId {
         const function = self.checkedFunctionType(source_fn_ty);
         const plan_function = plan_ctx.checkedFunctionType(plan_fn_ty);
@@ -43649,16 +42827,15 @@ const BodyContext = struct {
         const fn_node = try self.instNode(source_fn_ty);
         const plan_node = try plan_ctx.instNode(plan_fn_ty);
         // A plan whose result row includes the implementation's closed
-        // published row relates component-wise without unifying the rows; the
-        // widening adapter is generated at template completion (design.md
-        // "Result-Row Widening Adapter").
+        // published row relates component-wise without unifying the rows;
+        // Lambda Solved joins them where the call's result flows (design.md
+        // "Row Joins").
         if (!try relateClosedResultRowRequestInterface(
             self.graph,
             self.view,
             source_fn_ty,
             fn_node,
             plan_node,
-            reachability,
         )) {
             try relateFunctionRequestInterface(self.graph, fn_node, plan_node);
         }
@@ -52280,7 +51457,6 @@ const BodyContext = struct {
         const constraint_node = try scheme_ctx.instNode(param.callable_ty);
         const root_view = if (target.instantiation) |instantiation| instantiation.view else target.view;
         const root_fn_ty = if (target.instantiation) |instantiation| instantiation.callable_ty else target.target.callable_ty;
-        const reachability = dispatchTargetAdapterReachability(target.target);
         const owner = switch (target.target.kind) {
             .procedure => |procedure| procedure.template,
             .local_proc => |local| self.localMethodOwnerTemplate(.{
@@ -52319,9 +51495,10 @@ const BodyContext = struct {
         // constraint.
         const evidence = StoredConstFnEvidence.empty();
         const address: InterfaceReplayAddress = .{
-            .kind = switch (reachability) {
-                .adapter_reachable => .method_contract,
-                .no_adapter => .local_method_contract,
+            .kind = switch (target.target.kind) {
+                .procedure => .method_contract,
+                .local_proc => .local_method_contract,
+                .structural => unreachable,
             },
             .family = DraftTemplateFamilyAddress.init(owner, self.method_scope.key, root_view.types.rootKey(root_fn_ty)),
             .evidence_digest = @splat(0),
@@ -52351,7 +51528,7 @@ const BodyContext = struct {
             .checked_error => .checked_error,
         };
         const target_node = try self.instantiateEvidenceTargetSignature(target, address.family, detached_subst);
-        try self.relateEvidenceTargetRootToRequest(root_view, root_fn_ty, target_node, detached, reachability);
+        try self.relateEvidenceTargetRootToRequest(root_view, root_fn_ty, target_node, detached);
         if (use_summaries) {
             const constraints = try InterfaceConstraints.capture(self.graph, scratch.allocator(), &.{detached});
             const summary: InterfaceSummary = if (try constraints.identityEql(self.graph, request))
@@ -53123,9 +52300,9 @@ const BodyContext = struct {
 
     /// `relateFunctionRequestInterface` for a resolved dispatch target. When
     /// the implementation publishes a closed result row and the request's row
-    /// includes it, the two relate component-wise without unifying the rows,
-    /// so the request survives to template completion where the widening
-    /// adapter is generated (design.md "Result-Row Widening Adapter").
+    /// includes it, the two relate component-wise without unifying the rows;
+    /// Lambda Solved joins them where the call's result flows (design.md "Row
+    /// Joins").
     fn relateDispatchTargetRequestInterface(
         self: *BodyContext,
         lookup: MethodLookup,
@@ -53138,7 +52315,6 @@ const BodyContext = struct {
             lookup.target.callable_ty,
             target_node,
             request_node,
-            dispatchTargetAdapterReachability(lookup.target),
         )) return;
         try relateFunctionRequestInterface(self.graph, target_node, request_node);
     }
@@ -53155,7 +52331,6 @@ const BodyContext = struct {
             lookup.target.callable_ty,
             plan_ctx,
             plan_callable_ty,
-            dispatchTargetAdapterReachability(lookup.target),
         );
         if (lookup.instantiation) |instantiation| {
             var edge_ctx = try BodyContext.initWithMethodScope(self.allocator, self.builder, instantiation.view, self.method_scope, self.owner_template, self.graph, self.draft);
@@ -53558,7 +52733,6 @@ const BodyContext = struct {
         root_fn_ty: checked.CheckedTypeId,
         root_node: NodeId,
         request_fn_node: NodeId,
-        reachability: AdapterReachability,
     ) Allocator.Error!void {
         if (try relateClosedResultRowRequestInterface(
             self.graph,
@@ -53566,7 +52740,6 @@ const BodyContext = struct {
             root_fn_ty,
             root_node,
             request_fn_node,
-            reachability,
         )) return;
         if (try self.graph.containsGeneratedPrivate(request_fn_node)) {
             try relateGeneratedPrivateRequestInterface(self.graph, root_node, request_fn_node);
@@ -53654,7 +52827,7 @@ const BodyContext = struct {
                 var target_ctx = try self.substitutedMethodTargetContext(lookup);
                 defer target_ctx.deinit();
                 const target_root_node = try target_ctx.instNode(template.checked_fn_root);
-                try self.relateEvidenceTargetRootToRequest(lookup.view, template.checked_fn_root, target_root_node, request_fn_node, dispatchTargetAdapterReachability(lookup.target));
+                try self.relateEvidenceTargetRootToRequest(lookup.view, template.checked_fn_root, target_root_node, request_fn_node);
                 const edge = try self.deriveTargetEdge(&target_ctx, schema, evidence_source);
                 break :blk try self.builder.lowerDraftTemplateFromContext(
                     self,
@@ -53673,7 +52846,7 @@ const BodyContext = struct {
                 var target_ctx = try self.substitutedMethodTargetContext(lookup);
                 defer target_ctx.deinit();
                 const target_root_node = try target_ctx.instNode(source_fn_ty);
-                try self.relateEvidenceTargetRootToRequest(lookup.view, source_fn_ty, target_root_node, request_fn_node, dispatchTargetAdapterReachability(lookup.target));
+                try self.relateEvidenceTargetRootToRequest(lookup.view, source_fn_ty, target_root_node, request_fn_node);
                 const edge = try self.deriveTargetEdge(&target_ctx, schema, evidence_source);
                 break :blk .{ .local = try self.lowerDraftLocalProcAtNode(
                     .{
@@ -66072,7 +65245,6 @@ test "queued specialization skips a body claimed immediately before dispatch" {
                 .subst = null,
                 .signature_relation = .independent_roots,
                 .codec_contract = null,
-                .widened_result_row = false,
             };
         }
     }.make;
@@ -68522,254 +67694,6 @@ const NestedSiteAddress = struct {
     }
 };
 
-test "hosted Try adapter narrows requested private representations by declared labels" {
-    const allocator = std.testing.allocator;
-    var program = Ast.Program.init(allocator);
-    defer program.deinit();
-
-    var builder: Builder = undefined;
-    builder.allocator = allocator;
-    builder.program = &program;
-    builder.active_body_draft = null;
-
-    const module_identity = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xA7))));
-    const opaque_def = Type.TypeDef{
-        .module = module_identity,
-        .type_name = try program.names.internTypeName("HostedPrivate"),
-    };
-    const try_def = Type.TypeDef{
-        .module = module_identity,
-        .type_name = try program.names.internTypeName("Try"),
-    };
-    const opaque_named = Type.NamedType{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) };
-    const try_named = Type.NamedType{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) };
-    const i64_ty = try program.types.add(.{ .primitive = .i64 });
-    const str_ty = try program.types.add(.{ .primitive = .str });
-    const public_opaque = try program.types.add(.{ .named = .{
-        .named_type = opaque_named,
-        .def = opaque_def,
-        .kind = .@"opaque",
-        .args = .empty(),
-        .backing = .{ .ty = i64_ty, .use = .runtime_layout_only, .authority = .checked_public },
-    } });
-    const private_opaque = try program.types.add(.{ .named = .{
-        .named_type = opaque_named,
-        .def = opaque_def,
-        .kind = .@"opaque",
-        .args = .empty(),
-        .backing = .{ .ty = i64_ty, .use = .runtime_layout_only, .authority = .generated_private },
-    } });
-    const public_box = try program.types.add(.{ .box = public_opaque });
-    const private_box = try program.types.add(.{ .box = private_opaque });
-
-    const host_err = try program.names.internTagLabel("HostErr");
-    const caller_err = try program.names.internTagLabel("CallerErr");
-    const declared_err = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{.{
-        .name = host_err,
-        .checked_name = host_err,
-        .payloads = try program.types.addSpan(&.{public_opaque}),
-    }}) });
-    const requested_err = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{
-        .{
-            .name = host_err,
-            .checked_name = host_err,
-            .payloads = try program.types.addSpan(&.{private_opaque}),
-        },
-        .{
-            .name = caller_err,
-            .checked_name = caller_err,
-            .payloads = try program.types.addSpan(&.{str_ty}),
-        },
-    }) });
-
-    const ok_name = try program.names.internTagLabel("Ok");
-    const err_name = try program.names.internTagLabel("Err");
-    const capability = HostedTryAdapterCapability{
-        .def = try_def,
-        .ok_tag = ok_name,
-        .err_tag = err_name,
-        .ok_type_arg_index = 0,
-        .err_type_arg_index = 1,
-    };
-    const template_backing = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{
-        .{
-            .name = ok_name,
-            .checked_name = ok_name,
-            .payloads = try program.types.addSpan(&.{public_box}),
-        },
-        .{
-            .name = err_name,
-            .checked_name = err_name,
-            .payloads = try program.types.addSpan(&.{declared_err}),
-        },
-    }) });
-    const try_template = try program.types.add(.{ .named = .{
-        .named_type = try_named,
-        .def = try_def,
-        .kind = .nominal,
-        .args = try program.types.addSpan(&.{ public_box, declared_err }),
-        .backing = .{ .ty = template_backing, .use = .inspectable },
-    } });
-    const declared_try = try builder.hostedTryTypeLike(capability, try_template, public_box, declared_err);
-    const requested_try = try builder.hostedTryTypeLike(capability, try_template, private_box, requested_err);
-    const declared_fn = try builder.closedFunctionType(&.{public_box}, declared_try);
-    const requested_fn = try builder.closedFunctionType(&.{private_box}, requested_try);
-
-    const source_fn = (try builder.resultRowWideningAdapterSourceType(capability, declared_fn, requested_fn)) orelse
-        return error.TestExpectedEqual;
-    const source = builder.functionShape(source_fn, "test source was not a function");
-    const source_args = program.types.span(source.args);
-    try std.testing.expectEqual(@as(usize, 1), source_args.len);
-    try std.testing.expect(try builder.sameMonoType(GuardedList.at(source_args, 0), private_box));
-    const source_try = try builder.hostedTryInfo(capability, source.ret);
-    try std.testing.expect(try builder.sameMonoType(source_try.ok_ty, private_box));
-    const source_err_tags = builder.tagUnionTags(source_try.err_ty);
-    try std.testing.expectEqual(@as(usize, 1), source_err_tags.len);
-    const source_host_err = GuardedList.at(source_err_tags, 0);
-    try std.testing.expectEqual(host_err, source_host_err.name);
-    const source_payloads = program.types.span(source_host_err.payloads);
-    try std.testing.expectEqual(@as(usize, 1), source_payloads.len);
-    try std.testing.expect(try builder.sameMonoType(GuardedList.at(source_payloads, 0), private_opaque));
-    try std.testing.expect(try builder.errorRowIsIncludedIn(source_try.err_ty, requested_err));
-
-    const impostor_def = Type.TypeDef{
-        .module = module_identity,
-        .type_name = try program.names.internTypeName("UserResult"),
-    };
-    var impostor_declared_content = program.types.get(declared_try).named;
-    impostor_declared_content.def = impostor_def;
-    const impostor_declared = try program.types.add(.{ .named = impostor_declared_content });
-    var impostor_requested_content = program.types.get(requested_try).named;
-    impostor_requested_content.def = impostor_def;
-    const impostor_requested = try program.types.add(.{ .named = impostor_requested_content });
-    const impostor_declared_fn = try builder.closedFunctionType(&.{public_box}, impostor_declared);
-    const impostor_requested_fn = try builder.closedFunctionType(&.{private_box}, impostor_requested);
-    try std.testing.expectEqual(
-        @as(?Type.TypeId, null),
-        try builder.resultRowWideningAdapterSourceType(capability, impostor_declared_fn, impostor_requested_fn),
-    );
-}
-
-test "hosted Try info accepts alias-wrapped nominal arguments over unwrapped backing payloads" {
-    // Regression test: checking may present one unified type both
-    // alias-wrapped and unwrapped—a hosted declaration like basic-cli's
-    // `cmd_exec_output! : Cmd => Try(CmdOutputSuccess, [NonZeroExitCode(CmdOutputFailure), ..])`
-    // lowered with the `Try` nominal's error argument still naming the
-    // `CmdOutputFailure` alias while the backing row's payload had resolved
-    // it to its record. Recognizing the capability mapping must use type
-    // equality (alias-transparent), not stored-identity digests, or lowering
-    // dies with "hosted Try capability payload mapping disagreed with its
-    // nominal arguments".
-    const allocator = std.testing.allocator;
-    var program = Ast.Program.init(allocator);
-    defer program.deinit();
-
-    var builder: Builder = undefined;
-    builder.allocator = allocator;
-    builder.program = &program;
-    builder.active_body_draft = null;
-
-    const module_identity = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xB2))));
-    const try_def = Type.TypeDef{
-        .module = module_identity,
-        .type_name = try program.names.internTypeName("Try"),
-    };
-    const failure_alias_def = Type.TypeDef{
-        .module = module_identity,
-        .type_name = try program.names.internTypeName("HostFailure"),
-    };
-    const try_named = Type.NamedType{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) };
-    const failure_named = Type.NamedType{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) };
-
-    const i64_ty = try program.types.add(.{ .primitive = .i64 });
-    const str_ty = try program.types.add(.{ .primitive = .str });
-
-    const failure_record = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &.{.{
-        .name = try program.names.internRecordFieldLabel("exit_code"),
-        .ty = i64_ty,
-        .default = null,
-    }}) });
-    const failure_alias = try program.types.add(.{ .named = .{
-        .named_type = failure_named,
-        .def = failure_alias_def,
-        .kind = .alias,
-        .args = .empty(),
-        .backing = .{ .ty = failure_record, .use = .inspectable },
-    } });
-
-    const host_err = try program.names.internTagLabel("HostErr");
-    const caller_err = try program.names.internTagLabel("CallerErr");
-    const err_row_with_alias = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{.{
-        .name = host_err,
-        .checked_name = host_err,
-        .payloads = try program.types.addSpan(&.{failure_alias}),
-    }}) });
-    const err_row_bare = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{.{
-        .name = host_err,
-        .checked_name = host_err,
-        .payloads = try program.types.addSpan(&.{failure_record}),
-    }}) });
-
-    const ok_name = try program.names.internTagLabel("Ok");
-    const err_name = try program.names.internTagLabel("Err");
-    const capability = HostedTryAdapterCapability{
-        .def = try_def,
-        .ok_tag = ok_name,
-        .err_tag = err_name,
-        .ok_type_arg_index = 0,
-        .err_type_arg_index = 1,
-    };
-    const declared_backing = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{
-        .{
-            .name = ok_name,
-            .checked_name = ok_name,
-            .payloads = try program.types.addSpan(&.{str_ty}),
-        },
-        .{
-            .name = err_name,
-            .checked_name = err_name,
-            .payloads = try program.types.addSpan(&.{err_row_bare}),
-        },
-    }) });
-    const declared_try = try program.types.add(.{ .named = .{
-        .named_type = try_named,
-        .def = try_def,
-        .kind = .nominal,
-        .args = try program.types.addSpan(&.{ str_ty, err_row_with_alias }),
-        .backing = .{ .ty = declared_backing, .use = .inspectable },
-    } });
-
-    try std.testing.expect(try builder.sameMonoType(failure_alias, failure_record));
-    const declared_info = (try builder.hostedTryInfoOrNull(capability, declared_try)) orelse
-        return error.TestExpectedEqual;
-    try std.testing.expect(try builder.sameMonoType(declared_info.err_ty, err_row_bare));
-
-    // A request that widens the declared error row must still produce an
-    // adapter source type from the alias-carrying declared type.
-    const requested_err = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{
-        .{
-            .name = host_err,
-            .checked_name = host_err,
-            .payloads = try program.types.addSpan(&.{failure_record}),
-        },
-        .{
-            .name = caller_err,
-            .checked_name = caller_err,
-            .payloads = try program.types.addSpan(&.{str_ty}),
-        },
-    }) });
-    const requested_try = try builder.hostedTryTypeLike(capability, declared_try, str_ty, requested_err);
-    const declared_fn = try builder.closedFunctionType(&.{i64_ty}, declared_try);
-    const requested_fn = try builder.closedFunctionType(&.{i64_ty}, requested_try);
-    const source_fn = (try builder.resultRowWideningAdapterSourceType(capability, declared_fn, requested_fn)) orelse
-        return error.TestExpectedEqual;
-    const source = builder.functionShape(source_fn, "test source was not a function");
-    const source_try = try builder.hostedTryInfo(capability, source.ret);
-    const source_err_tags = builder.tagUnionTags(source_try.err_ty);
-    try std.testing.expectEqual(@as(usize, 1), source_err_tags.len);
-    try std.testing.expectEqual(host_err, GuardedList.at(source_err_tags, 0).name);
-}
-
 test "hosted extern boundary admits only the declared host ABI type" {
     const allocator = std.testing.allocator;
     var program = Ast.Program.init(allocator);
@@ -68793,14 +67717,6 @@ test "hosted extern boundary admits only the declared host ABI type" {
     const err_name = try program.names.internTagLabel("Err");
     const host_err = try program.names.internTagLabel("HostErr");
     const exit_err = try program.names.internTagLabel("Exit");
-    const capability = HostedTryAdapterCapability{
-        .def = try_def,
-        .ok_tag = ok_name,
-        .err_tag = err_name,
-        .ok_type_arg_index = 0,
-        .err_type_arg_index = 1,
-    };
-
     const declared_err = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{.{
         .name = host_err,
         .checked_name = host_err,
@@ -68819,28 +67735,26 @@ test "hosted extern boundary admits only the declared host ABI type" {
         },
     }) });
 
-    const template_backing = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{
-        .{
-            .name = ok_name,
-            .checked_name = ok_name,
-            .payloads = try program.types.addSpan(&.{str_ty}),
-        },
-        .{
-            .name = err_name,
-            .checked_name = err_name,
-            .payloads = try program.types.addSpan(&.{declared_err}),
-        },
-    }) });
-    const try_template = try program.types.add(.{ .named = .{
-        .named_type = try_named,
-        .def = try_def,
-        .kind = .nominal,
-        .args = try program.types.addSpan(&.{ str_ty, declared_err }),
-        .backing = .{ .ty = template_backing, .use = .inspectable },
-    } });
+    // `Try(Str, err)` as the host boundary declares it: the nominal over its
+    // inspectable `[Ok(Str), Err(err)]` backing.
+    const TryType = struct {
+        fn build(p: *Ast.Program, named: Type.NamedType, def: Type.TypeDef, ok: names.TagNameId, err: names.TagNameId, ok_ty: Type.TypeId, err_ty: Type.TypeId) Allocator.Error!Type.TypeId {
+            const backing = try p.types.add(.{ .tag_union = try p.types.addTagVariants(&p.names, &.{
+                .{ .name = ok, .checked_name = ok, .payloads = try p.types.addSpan(&.{ok_ty}) },
+                .{ .name = err, .checked_name = err, .payloads = try p.types.addSpan(&.{err_ty}) },
+            }) });
+            return try p.types.add(.{ .named = .{
+                .named_type = named,
+                .def = def,
+                .kind = .nominal,
+                .args = try p.types.addSpan(&.{ ok_ty, err_ty }),
+                .backing = .{ .ty = backing, .use = .inspectable },
+            } });
+        }
+    };
 
-    const declared_try = try builder.hostedTryTypeLike(capability, try_template, str_ty, declared_err);
-    const widened_try = try builder.hostedTryTypeLike(capability, try_template, str_ty, widened_err);
+    const declared_try = try TryType.build(&program, try_named, try_def, ok_name, err_name, str_ty, declared_err);
+    const widened_try = try TryType.build(&program, try_named, try_def, ok_name, err_name, str_ty, widened_err);
     const declared_fn = try builder.closedFunctionType(&.{str_ty}, declared_try);
 
     // An extern emitted at a separately built copy of the declared type is the
@@ -68854,7 +67768,7 @@ test "hosted extern boundary admits only the declared host ABI type" {
     try std.testing.expect(!try builder.hostedExternMatchesDeclaredAbi(declared_fn, widened_fn, .exact));
 
     const empty_err = try program.types.add(.{ .tag_union = try program.types.addTagVariants(&program.names, &.{}) });
-    const narrowed_try = try builder.hostedTryTypeLike(capability, try_template, str_ty, empty_err);
+    const narrowed_try = try TryType.build(&program, try_named, try_def, ok_name, err_name, str_ty, empty_err);
     const narrowed_fn = try builder.closedFunctionType(&.{str_ty}, narrowed_try);
     try std.testing.expect(!try builder.hostedExternMatchesDeclaredAbi(declared_fn, narrowed_fn, .exact));
 

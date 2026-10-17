@@ -184,6 +184,12 @@ const Solver = struct {
     /// reachable from it. The forced-dynamic scan materializes exactly these
     /// leaves so the named nodes it must mark exist in the solved store.
     contains_forced_dynamic: []bool,
+    /// Per lifted Monotype: whether a structural tag union is reachable from
+    /// it. Rows join where values flow (design.md "Row Joins"), so a clone of
+    /// such a type is mutable state of the uses it was made for, and every use
+    /// materializes its own; sharing one clone would join every row of that
+    /// Monotype across the program by type identity rather than by flow.
+    contains_tag_row: []bool,
     /// Finalization's clone of each lifted Monotype, shared by every
     /// untouched leaf of it.
     shared_clones: collections.DenseMap(MonoType.TypeId, Type.TypeVarId),
@@ -198,6 +204,16 @@ const Solver = struct {
     /// Per clone context, parallel to `leaf_contexts`: what its expansions
     /// have registered so far.
     leaf_context_shapes: std.ArrayList(LeafContextShape),
+    /// One map per lazily expanded named type that holds a tag row, from the
+    /// Monotype of each positional component it created to that component's
+    /// var. A named type's arguments are the types its backing was
+    /// instantiated at, so a backing position of an argument's Monotype is
+    /// that argument: a row joined through the backing is the argument's row
+    /// too (design.md "Row Joins").
+    arg_scopes: std.ArrayList(collections.DenseMap(MonoType.TypeId, Type.TypeVarId)),
+    /// The argument scope a leaf created under a scoped expansion reads its
+    /// positional components from.
+    leaf_arg_scopes: collections.DenseMap(Type.TypeVarId, u32),
     /// Per lifted Monotype: whether a cycle is reachable from it.
     reaches_cycle: []bool,
     /// Pools for the short-lived maps the solver creates per work item (clone
@@ -352,6 +368,7 @@ const Solver = struct {
         const masks = try computeReachabilityMasks(allocator, lifted.types);
         errdefer allocator.free(masks.contains_callable);
         errdefer allocator.free(masks.contains_forced_dynamic);
+        errdefer allocator.free(masks.contains_tag_row);
         errdefer allocator.free(masks.reaches_cycle);
 
         return .{
@@ -374,10 +391,13 @@ const Solver = struct {
             .active_private_evidence_relations = UnifyPairSet.init(allocator),
             .contains_callable = masks.contains_callable,
             .contains_forced_dynamic = masks.contains_forced_dynamic,
+            .contains_tag_row = masks.contains_tag_row,
             .shared_clones = collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(allocator),
             .leaf_origins = collections.DenseMap(Type.TypeVarId, MonoType.TypeId).init(allocator),
             .leaf_contexts = .empty,
             .leaf_context_shapes = .empty,
+            .arg_scopes = .empty,
+            .leaf_arg_scopes = collections.DenseMap(Type.TypeVarId, u32).init(allocator),
             .reaches_cycle = masks.reaches_cycle,
             .solved_set_pool = collections.DenseMapPool(Type.TypeVarId, void).init(allocator),
             .solved_position_pool = collections.DenseMapPool(Type.TypeVarId, u32).init(allocator),
@@ -421,9 +441,13 @@ const Solver = struct {
         for (self.leaf_contexts.items) |*ctx| ctx.deinit();
         self.leaf_contexts.deinit(self.allocator);
         self.leaf_context_shapes.deinit(self.allocator);
+        for (self.arg_scopes.items) |*scope| scope.deinit();
+        self.arg_scopes.deinit(self.allocator);
+        self.leaf_arg_scopes.deinit();
         self.allocator.free(self.reaches_cycle);
         self.shared_clones.deinit();
         self.leaf_origins.deinit();
+        self.allocator.free(self.contains_tag_row);
         self.allocator.free(self.contains_forced_dynamic);
         self.allocator.free(self.contains_callable);
         self.comptime_read_tys.deinit(self.allocator);
@@ -983,7 +1007,7 @@ const Solver = struct {
                 const stmt = self.lifted.stmts[@backingInt(stmt_id)];
                 if (frame.cursor != 0) {
                     if (stmt == .let_) try self.bindPattern(stmt.let_.pat, self.inferredExpr(stmt.let_.value));
-                    if (stmt == .return_) try self.relateReturnedExpr(stmt.return_.value, try self.returnTargetTy(stmt.return_.target), .try_return);
+                    if (stmt == .return_) try self.relateReturnedExpr(stmt.return_.value, try self.returnTargetTy(stmt.return_.target));
                     return null;
                 }
                 frame.cursor = 1;
@@ -1051,12 +1075,13 @@ const Solver = struct {
                 if (cursor == 0) return .{ .expr = .{ .id = boundary.value } };
                 try self.unify(expected, self.inferredExpr(boundary.value));
             },
-            // A row coercion is a return boundary without control flow: the
-            // value's row and the wider destination row stay distinct, and
-            // only matching payloads flow (design.md "Row Coercion Primitive").
+            // A row join is a return boundary without control flow: the
+            // value's rows and the destination's rows become one row each,
+            // so the value already has the destination's representation
+            // (design.md "Row Joins").
             .row_widen => |widen| {
                 if (cursor == 0) return .{ .expr = .{ .id = widen.value } };
-                try self.relateReturnedExpr(widen.value, expected, .row_widen);
+                try self.relateReturnedExpr(widen.value, expected);
             },
             .list => |items| {
                 const children = self.lifted.exprSpan(items);
@@ -1085,7 +1110,7 @@ const Solver = struct {
                 }
             },
             .tag => |tag| {
-                const tys = try self.tagPayloadsSpan(expected, tag.name);
+                const tys = try self.tagPayloadsSpanFor(expected, tag.name, expr.ty);
                 const children = self.lifted.exprSpan(tag.payloads);
                 if (tys.count() != children.len) Common.invariant("tag expression payload arity differs from its checked type");
                 if (cursor < children.len) return .{ .expr = .{ .id = children[cursor], .expected = self.program.types.spanItem(tys, cursor) } };
@@ -1304,7 +1329,7 @@ const Solver = struct {
             },
             .return_ => |ret| {
                 if (cursor == 0) return .{ .expr = .{ .id = ret.value } };
-                try self.relateReturnedExpr(ret.value, try self.returnTargetTy(ret.target), .try_return);
+                try self.relateReturnedExpr(ret.value, try self.returnTargetTy(ret.target));
             },
             .dbg, .expect => |child| {
                 if (cursor == 0) return .{ .expr = .{ .id = child } };
@@ -1325,146 +1350,17 @@ const Solver = struct {
     /// Terminal expressions retain their checked type for structural consumers,
     /// but produce no value that can flow into a return destination. That
     /// includes a block SpecConstr terminated: its final `unreachable` follows
-    /// a statement that never completes.
-    fn relateReturnedExpr(self: *Solver, value: Lifted.ExprId, target: Type.TypeVarId, mode: ReturnRelationMode) Allocator.Error!void {
+    /// a statement that never completes. Every other returned value is
+    /// unified with its destination: a tag row the value carries and the row
+    /// it flows into become one row holding both rows' tags, so the value
+    /// already has the destination's representation and nothing converts it
+    /// (design.md "Row Joins").
+    fn relateReturnedExpr(self: *Solver, value: Lifted.ExprId, target: Type.TypeVarId) Allocator.Error!void {
         const data = self.lifted.exprs[@backingInt(value)].data;
         const tag = std.meta.activeTag(data);
         if (tag == .crash or tag == .checked_error or tag == .comptime_exhaustiveness_failed or tag == .@"unreachable") return;
         if (tag == .block and self.lifted.exprs[@backingInt(data.block.final_expr)].data == .@"unreachable") return;
-        try self.relateReturn(self.inferredExpr(value), target, mode);
-    }
-
-    /// Which boundary a directed return relation serves.
-    const ReturnRelationMode = enum {
-        /// An explicit or `?` return into the enclosing function result.
-        try_return,
-        /// A checked row coercion (design.md "Row Coercion Primitive"). Its
-        /// reach is the root row, rows that are tag payloads of a reached
-        /// row, and rows behind a named type's backing; any other pair must
-        /// already hold identical rows.
-        row_widen,
-    };
-
-    /// A checked return boundary carries a value from its source row into
-    /// the enclosing result row. Relate payload flow without identifying the
-    /// rows: a shared callee must retain its own result on every return path.
-    fn relateReturn(self: *Solver, source: Type.TypeVarId, target: Type.TypeVarId, mode: ReturnRelationMode) Allocator.Error!void {
-        var work = std.ArrayList(UnifyPair).empty;
-        defer work.deinit(self.allocator);
-        var visited = UnifyPairSet.init(self.allocator);
-        defer visited.deinit();
-        // These pairs are directed, unlike ordinary unification pairs.
-        try work.append(self.allocator, .{ .first = source, .second = target });
-        while (work.pop()) |pair| {
-            const src = self.program.types.rootCompressed(pair.first);
-            const dst = self.program.types.rootCompressed(pair.second);
-            if (src == dst) continue;
-            const entry = try visited.getOrPut(.{ .first = src, .second = dst });
-            if (entry.found_existing) continue;
-            const source_content = try self.shapeContent(src);
-            if (source_content != .tag_union) {
-                // Outside the coercion's reach the two sides must already
-                // agree on every row: unifying differing rows would merge the
-                // narrower one into the wider one for the whole specialization.
-                if (mode == .row_widen) try self.assertNoDifferingRows(src, dst);
-                try self.unify(src, dst);
-                continue;
-            }
-            // The empty row is uninhabited, including when the destination
-            // payload is a primitive rather than another row.
-            if (source_content.tag_union.count() == 0) continue;
-            const target_content = try self.shapeContent(dst);
-            if (target_content != .tag_union) Common.invariant("return tag row had a non-row destination");
-            const target_index = try self.tagRowIndex(target_content.tag_union);
-            for (0..source_content.tag_union.count()) |source_index| {
-                const source_tag = self.program.types.tagItem(source_content.tag_union, source_index);
-                const target_position = target_index.get(source_tag.name) orelse
-                    Common.invariant("return source tag was absent from its destination row");
-                const target_payloads = self.program.types.tagItem(target_content.tag_union, target_position).payloads;
-                if (source_tag.payloads.count() != target_payloads.count()) Common.invariant("return tag payload arity differed");
-                for (0..source_tag.payloads.count()) |payload_index| {
-                    try work.append(self.allocator, .{
-                        .first = self.program.types.spanItem(source_tag.payloads, payload_index),
-                        .second = self.program.types.spanItem(target_payloads, payload_index),
-                    });
-                }
-            }
-        }
-    }
-
-    /// Walk a pair outside a row coercion's reach and require every tag row
-    /// the two sides hold at the same position to list the same tags with the
-    /// same arities (design.md "Row Coercion Primitive"). Unresolved variables
-    /// and lambda sets carry no row and are left to unification.
-    fn assertNoDifferingRows(self: *Solver, source: Type.TypeVarId, target: Type.TypeVarId) Allocator.Error!void {
-        var work = std.ArrayList(UnifyPair).empty;
-        defer work.deinit(self.allocator);
-        var visited = std.AutoHashMap(UnifyPair, void).init(self.allocator);
-        defer visited.deinit();
-        try work.append(self.allocator, .{ .first = source, .second = target });
-        while (work.pop()) |pair| {
-            const src = self.program.types.rootCompressed(pair.first);
-            const dst = self.program.types.rootCompressed(pair.second);
-            if (src == dst) continue;
-            const entry = try visited.getOrPut(.{ .first = src, .second = dst });
-            if (entry.found_existing) continue;
-            const source_content = try self.resolvedContentAt(src);
-            const target_content = try self.resolvedContentAt(dst);
-            if (std.meta.activeTag(source_content) != std.meta.activeTag(target_content)) continue;
-            switch (source_content) {
-                .tag_union => |source_tags| {
-                    const target_tags = target_content.tag_union;
-                    if (source_tags.count() != target_tags.count()) {
-                        Common.invariant("row coercion reached differing tag rows outside tag payloads and named backings");
-                    }
-                    const target_index = try self.tagRowIndex(target_tags);
-                    for (0..source_tags.count()) |source_index| {
-                        const source_tag = self.program.types.tagItem(source_tags, source_index);
-                        const target_position = target_index.get(source_tag.name) orelse
-                            Common.invariant("row coercion reached differing tag rows outside tag payloads and named backings");
-                        const target_payloads = self.program.types.tagItem(target_tags, target_position).payloads;
-                        if (source_tag.payloads.count() != target_payloads.count()) {
-                            Common.invariant("row coercion reached differing tag payload arities outside tag payloads and named backings");
-                        }
-                        for (0..source_tag.payloads.count()) |payload_index| {
-                            try work.append(self.allocator, .{
-                                .first = self.program.types.spanItem(source_tag.payloads, payload_index),
-                                .second = self.program.types.spanItem(target_payloads, payload_index),
-                            });
-                        }
-                    }
-                },
-                .record => |source_fields| {
-                    const target_fields = target_content.record;
-                    if (source_fields.count() != target_fields.count()) continue;
-                    for (0..source_fields.count()) |index| {
-                        try work.append(self.allocator, .{
-                            .first = self.program.types.fieldItem(source_fields, index).ty,
-                            .second = self.program.types.fieldItem(target_fields, index).ty,
-                        });
-                    }
-                },
-                .tuple => |source_items| try self.appendSpanPairs(&work, source_items, target_content.tuple),
-                .list => |source_elem| try work.append(self.allocator, .{ .first = source_elem, .second = target_content.list }),
-                .box => |source_elem| try work.append(self.allocator, .{ .first = source_elem, .second = target_content.box }),
-                .func => |source_fn| {
-                    try self.appendSpanPairs(&work, source_fn.args, target_content.func.args);
-                    try work.append(self.allocator, .{ .first = source_fn.ret, .second = target_content.func.ret });
-                },
-                .named => |source_named| try self.appendSpanPairs(&work, source_named.args, target_content.named.args),
-                .link, .unbound, .forall, .primitive, .lambda_set, .erased, .zst, .mono => {},
-            }
-        }
-    }
-
-    fn appendSpanPairs(self: *Solver, work: *std.ArrayList(UnifyPair), source: Type.Span, target: Type.Span) Allocator.Error!void {
-        if (source.count() != target.count()) return;
-        for (0..source.count()) |index| {
-            try work.append(self.allocator, .{
-                .first = self.program.types.spanItem(source, index),
-                .second = self.program.types.spanItem(target, index),
-            });
-        }
+        try self.unify(self.inferredExpr(value), target);
     }
 
     /// Only unchanged fields flow from the base. Replacement fields may have
@@ -1577,7 +1473,7 @@ const Solver = struct {
             },
             .list => children.elem_ty = try self.listElem(pat_ty),
             .tag => |tag| {
-                children.component_tys = try self.tagPayloadsSpan(pat_ty, tag.name);
+                children.component_tys = try self.tagPayloadsSpanFor(pat_ty, tag.name, pat.ty);
                 if (children.component_tys.count() != self.lifted.patSpan(tag.payloads).len) Common.invariant("tag pattern payload arity differs from its checked type");
             },
             .nominal => |backing| {
@@ -1887,36 +1783,78 @@ const Solver = struct {
     /// to their existing vars, so a recursive Monotype materializes as the
     /// same cyclic graph an eager clone produced.
     fn expandMonoRoot(self: *Solver, root: Type.TypeVarId, leaf: MonoLeaf) Allocator.Error!Type.Content {
+        const sharing = self.leafSharing(leaf.id);
         const ctx: u32 = if (leaf.ctx != Type.no_leaf_context) leaf.ctx else blk: {
-            if (self.isCallableFree(leaf.id)) break :blk try self.sharedLeafContext();
+            if (sharing == .shared) break :blk try self.sharedLeafContext();
             break :blk try self.newLeafContext();
         };
         // Expanding or joining a registered leaf retires it from its
         // context's unexpanded leaves.
         self.retireContextLeaf(leaf);
-        if (self.leaf_contexts.items[ctx].get(leaf.id)) |existing| {
-            const existing_root = self.program.types.rootCompressed(existing);
-            if (existing_root != root) {
-                self.program.types.set(root, .{ .link = existing_root });
-                return try self.resolvedContentAt(existing_root);
+        if (sharing != .positional) {
+            if (self.leaf_contexts.items[ctx].get(leaf.id)) |existing| {
+                const existing_root = self.program.types.rootCompressed(existing);
+                if (existing_root != root) {
+                    self.program.types.set(root, .{ .link = existing_root });
+                    return try self.resolvedContentAt(existing_root);
+                }
+            } else {
+                try self.leaf_contexts.items[ctx].put(leaf.id, root);
             }
-        } else {
-            try self.leaf_contexts.items[ctx].put(leaf.id, root);
         }
         var cloner = TypeCloner.init(self);
         cloner.lazy_ctx = ctx;
         defer cloner.deinit();
-        const content = try cloner.lowerContent(self.lifted.types.get(leaf.id));
+        const mono_content = self.lifted.types.get(leaf.id);
+        cloner.arg_scope = if (mono_content == .named and self.contains_tag_row[@backingInt(leaf.id)])
+            .{ .id = try self.newArgScope(), .registers = true }
+        else if (self.leaf_arg_scopes.get(root)) |scope|
+            .{ .id = scope, .registers = false }
+        else
+            null;
+        const content = try cloner.lowerContent(mono_content);
         self.program.types.set(root, content);
         self.registerNamedBacking(content);
         return content;
     }
 
     /// Whether clones of this Monotype carry no callable slot and no
-    /// forced-dynamic iterator, so every clone of it solves identically.
+    /// forced-dynamic iterator.
     fn isCallableFree(self: *const Solver, ty: MonoType.TypeId) bool {
         const raw_id = @backingInt(ty);
         return !self.contains_callable[raw_id] and !self.contains_forced_dynamic[raw_id];
+    }
+
+    /// Whether every clone of this Monotype solves identically: it is
+    /// callable-free and holds no tag row, so unification never changes it
+    /// and one shared clone serves every use.
+    fn isCloneInvariant(self: *const Solver, ty: MonoType.TypeId) bool {
+        return self.isCallableFree(ty) and !self.contains_tag_row[@backingInt(ty)];
+    }
+
+    /// How the lazy leaves of one Monotype relate to each other.
+    const LeafSharing = enum {
+        /// Clone-invariant: one clone, in the shared context, serves every
+        /// occurrence in the program.
+        shared,
+        /// Callable-free, holding a tag row, and reaching no cycle: each
+        /// occurrence is its own clone, in no context, and its own expansion
+        /// opens a context of its own. Rows join where values flow (design.md
+        /// "Row Joins"), and two occurrences of one Monotype are two positions
+        /// whose values flow to different places; tying them would join every
+        /// row either reaches. No cycle can lead back to the occurrence, so
+        /// nothing needs the tie.
+        positional,
+        /// Callable-bearing, or a row that lies on a cycle: occurrences within
+        /// one clone context are one clone, which ties a recursive type's
+        /// back-references to the var they recur into.
+        context,
+    };
+
+    fn leafSharing(self: *const Solver, ty: MonoType.TypeId) LeafSharing {
+        if (self.isCloneInvariant(ty)) return .shared;
+        if (self.isCallableFree(ty) and !self.reaches_cycle[@backingInt(ty)]) return .positional;
+        return .context;
     }
 
     /// Give a build lists from the pool, or empty ones.
@@ -1945,6 +1883,12 @@ const Solver = struct {
         if (self.shared_leaf_context) |shared| return shared;
         const index = try self.newLeafContext();
         self.shared_leaf_context = index;
+        return index;
+    }
+
+    fn newArgScope(self: *Solver) Allocator.Error!u32 {
+        const index: u32 = @intCast(self.arg_scopes.items.len);
+        try self.arg_scopes.append(self.allocator, collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(self.allocator));
         return index;
     }
 
@@ -2100,12 +2044,149 @@ const Solver = struct {
         Common.invariant("low-level record result was missing a required field");
     }
 
-    fn tagPayloadsSpan(self: *Solver, ty: Type.TypeVarId, name: Type.names.TagNameId) Allocator.Error!Type.Span {
+    /// The payloads of the tag `name` in the row of `ty`, as the static type
+    /// `mono_ty` sees it. A joined row may hold the label at several payload
+    /// types (`mergeTags`); the static type lists it once, and the variant
+    /// whose payloads its own payload types can unify with is the one it
+    /// constructs and matches.
+    fn tagPayloadsSpanFor(self: *Solver, ty: Type.TypeVarId, name: Type.names.TagNameId, mono_ty: MonoType.TypeId) Allocator.Error!Type.Span {
         const content = try self.shapeContent(ty);
         if (std.meta.activeTag(content) != .tag_union) Common.invariant("tag operation had a non-tag-union checked type");
-        const index = (try self.tagRowIndex(content.tag_union)).get(name) orelse
-            Common.invariant("tag was absent from checked tag-union type");
-        return self.program.types.tagItem(content.tag_union, index).payloads;
+        const entries = (try self.tagRowIndex(content.tag_union)).entriesOf(name);
+        if (entries.len == 0) Common.invariant("tag was absent from checked tag-union type");
+        if (entries.len == 1) return self.program.types.tagItem(content.tag_union, entries[0].position).payloads;
+        const static_payloads = self.monoTagPayloads(mono_ty, name);
+        var selected: ?Type.Span = null;
+        for (entries) |entry| {
+            const payloads = self.program.types.tagItem(content.tag_union, entry.position).payloads;
+            if (payloads.count() != static_payloads.len) continue;
+            var compatible = true;
+            for (0..static_payloads.len) |index| {
+                const fresh = try self.lowerTypeFresh(static_payloads[index]);
+                if (!try self.typesCompatible(self.program.types.spanItem(payloads, index), fresh)) {
+                    compatible = false;
+                    break;
+                }
+            }
+            if (!compatible) continue;
+            if (selected != null) Common.invariant("two variants of one label both fit a tag's static payloads");
+            selected = payloads;
+        }
+        return selected orelse Common.invariant("no variant of a repeated label fit a tag's static payloads");
+    }
+
+    /// The payload types the static Monotype `mono_ty` gives the tag `name`,
+    /// through named backings.
+    fn monoTagPayloads(self: *Solver, mono_ty: MonoType.TypeId, name: Type.names.TagNameId) []const MonoType.TypeId {
+        var current = mono_ty;
+        var remaining = self.lifted.types.types.len;
+        while (remaining > 0) : (remaining -= 1) {
+            switch (self.lifted.types.get(current)) {
+                .tag_union => |tags| {
+                    const span = self.lifted.types.tagSpan(tags);
+                    for (span) |tag| {
+                        if (tag.name == name) return self.lifted.types.span(tag.payloads);
+                    }
+                    Common.invariant("tag was absent from its static Monotype row");
+                },
+                .named => |named| current = (named.backing orelse Common.invariant("tag operation's static type named no backing row")).ty,
+                .primitive, .record, .tuple, .list, .box, .func, .erased, .zst => Common.invariant("tag operation's static type was not a tag union"),
+            }
+        }
+        Common.invariant("tag operation's static type chained named backings without end");
+    }
+
+    /// Whether two payload spans could unify without a structural conflict:
+    /// the same count, and `typesCompatible` pairwise.
+    fn payloadsCompatible(self: *Solver, lhs: Type.Span, rhs: Type.Span) Allocator.Error!bool {
+        if (lhs.count() != rhs.count()) return false;
+        for (0..lhs.count()) |index| {
+            if (!try self.typesCompatible(self.program.types.spanItem(lhs, index), self.program.types.spanItem(rhs, index))) return false;
+        }
+        return true;
+    }
+
+    /// Whether unifying `a` with `b` would reach no structural conflict: the
+    /// checks `unifyRoots` raises an invariant on, asked ahead of time so that
+    /// two same-label tags whose payloads differ in shape become two variants
+    /// of one joined row (`mergeTags`) rather than a failed relation. Anything
+    /// unification can relate—unbound variables, callable slots, rows, named
+    /// types with their own relations—is compatible. Materializing lazy
+    /// leaves along the way is the ordinary expansion a relation performs.
+    fn typesCompatible(self: *Solver, a: Type.TypeVarId, b: Type.TypeVarId) Allocator.Error!bool {
+        var work = std.ArrayList(UnifyPair).empty;
+        defer work.deinit(self.allocator);
+        var visited = UnifyPairSet.init(self.allocator);
+        defer visited.deinit();
+        try work.append(self.allocator, .{ .first = a, .second = b });
+        while (work.pop()) |pair| {
+            const left = self.program.types.rootCompressed(pair.first);
+            const right = self.program.types.rootCompressed(pair.second);
+            if (left == right) continue;
+            if ((try visited.getOrPut(UnifyPair.init(left, right))).found_existing) continue;
+            const left_content = try self.resolvedContentAt(left);
+            const right_content = try self.resolvedContentAt(right);
+            const left_tag = std.meta.activeTag(left_content);
+            const right_tag = std.meta.activeTag(right_content);
+            if (left_tag == .unbound or left_tag == .forall or right_tag == .unbound or right_tag == .forall) continue;
+            // A named type and a bare structure are a lifted pair, which
+            // unification relates through the named type's backing.
+            if (left_tag == .named and right_tag != .named) {
+                if (left_content.named.backing) |backing| try work.append(self.allocator, .{ .first = backing.ty, .second = right });
+                continue;
+            }
+            if (right_tag == .named and left_tag != .named) {
+                if (right_content.named.backing) |backing| try work.append(self.allocator, .{ .first = left, .second = backing.ty });
+                continue;
+            }
+            if (left_tag != right_tag) return false;
+            switch (left_content) {
+                .link, .mono, .unbound, .forall => unreachable,
+                .primitive => |prim| if (prim != right_content.primitive) return false,
+                .zst, .lambda_set, .erased, .tag_union => {},
+                .list => |elem| try work.append(self.allocator, .{ .first = elem, .second = right_content.list }),
+                .box => |elem| try work.append(self.allocator, .{ .first = elem, .second = right_content.box }),
+                .tuple => |items| {
+                    const right_items = right_content.tuple;
+                    if (items.count() != right_items.count()) return false;
+                    for (0..items.count()) |index| {
+                        try work.append(self.allocator, .{ .first = self.program.types.spanItem(items, index), .second = self.program.types.spanItem(right_items, index) });
+                    }
+                },
+                .record => |fields| {
+                    const right_fields = right_content.record;
+                    if (fields.count() != right_fields.count()) return false;
+                    for (0..fields.count()) |index| {
+                        const field = self.program.types.fieldItem(fields, index);
+                        const right_field = self.program.types.fieldItem(right_fields, index);
+                        if (field.name != right_field.name) return false;
+                        if ((field.value_ty == null) != (right_field.value_ty == null)) return false;
+                        try work.append(self.allocator, .{ .first = field.ty, .second = right_field.ty });
+                        if (field.value_ty) |value_ty| try work.append(self.allocator, .{ .first = value_ty, .second = right_field.value_ty.? });
+                    }
+                },
+                .func => |func| {
+                    const right_func = right_content.func;
+                    if (func.args.count() != right_func.args.count()) return false;
+                    for (0..func.args.count()) |index| {
+                        try work.append(self.allocator, .{ .first = self.program.types.spanItem(func.args, index), .second = self.program.types.spanItem(right_func.args, index) });
+                    }
+                    try work.append(self.allocator, .{ .first = func.ret, .second = right_func.ret });
+                },
+                .named => |named| {
+                    const right_named = right_content.named;
+                    // Named types with different declarations have relations
+                    // of their own (iterator views, opaque views); only a pair
+                    // of one declaration is examined further.
+                    if (!std.meta.eql(named.def, right_named.def) or named.kind != right_named.kind or named.builtin_owner != right_named.builtin_owner) continue;
+                    if (named.args.count() != right_named.args.count()) return false;
+                    for (0..named.args.count()) |index| {
+                        try work.append(self.allocator, .{ .first = self.program.types.spanItem(named.args, index), .second = self.program.types.spanItem(right_named.args, index) });
+                    }
+                },
+            }
+        }
+        return true;
     }
 
     fn namedBacking(self: *Solver, ty: Type.TypeVarId) Allocator.Error!?Type.TypeVarId {
@@ -2297,9 +2378,13 @@ const Solver = struct {
         if (self.program.types.get(self.program.types.rootCompressed(read_ty)) == .unbound) {
             try self.unify(read_ty, try self.lowerTypeFresh(read_mono));
         }
-        // Monotype sealed both types, so a read with no callable slot has no
-        // Lambda Solved evidence to take from its root.
-        if (self.isCallableFree(read_mono)) return;
+        // Monotype sealed a type with no callable slot and no tag row, so a
+        // read of one has no Lambda Solved evidence to take from its root. A
+        // read whose type holds a tag row is unified with the root: the two
+        // rows are one row (design.md "Row Joins"), so a read at a wider row
+        // widens the root's type in this program, and the root's slot is laid
+        // out at that joined type.
+        if (self.isCloneInvariant(read_mono)) return;
         const root_ty = self.inferredExpr(initializer);
         const initializer_expr = self.lifted.exprs[@backingInt(initializer)];
         if (initializer_expr.data != .call_proc) return self.unify(read_ty, root_ty);
@@ -2470,7 +2555,9 @@ const Solver = struct {
     /// Monotype reaches a cycle. A cyclic Monotype keeps the ordinary
     /// relation, which joins the class's distinct cells at the positions the
     /// clone ties back together; so does an uninhabited one, whose class
-    /// selection differs. Callable-free leaves already share one clone.
+    /// selection differs. A clone-invariant leaf already shares one clone,
+    /// and a positional leaf (`LeafSharing.positional`) materializes through
+    /// the ordinary relation, which joins its rows where its value flows.
     fn linkUntouchedLeafToInstance(
         self: *Solver,
         leaf_root: Type.TypeVarId,
@@ -2609,14 +2696,15 @@ const Solver = struct {
             .tag_union => |left_tags| {
                 if (right != .tag_union) Common.invariant("tag-union type failed Lambda Solved unification");
                 const right_tags = right.tag_union;
-                // Both sides were lowered from one closed Monotype, so an
-                // empty row meets only another empty row. It never yields to
-                // a populated peer: that would silently retype a slot an
-                // earlier stage got wrong.
-                if (left_tags.count() == 0 or right_tags.count() == 0) {
-                    if (left_tags.count() != right_tags.count()) {
-                        Common.invariant("empty tag row failed Lambda Solved unification");
-                    }
+                // Two rows that flow together become one row holding both
+                // rows' tags (design.md "Row Joins"). The empty row is
+                // uninhabited, so it contributes no tag and takes the
+                // populated peer's row.
+                if (left_tags.count() == 0) {
+                    self.program.types.set(a, .{ .link = b });
+                    return;
+                }
+                if (right_tags.count() == 0) {
                     self.program.types.set(b, .{ .link = a });
                     return;
                 }
@@ -3325,12 +3413,12 @@ const Solver = struct {
 
     /// Merge two tag unions, collecting the shared tags' payload spans for the
     /// caller to unify once the merged span has been recorded.
-    /// Positions of a stored tag row's tags by name; the first position wins
-    /// for a repeated name.
-    /// Positions of a stored row's labels by name, sorted by name for binary
-    /// search; the first position wins for a repeated name. A row is short
-    /// and its label ids are spread over the whole name table, so a sorted
-    /// slice holds it more compactly than a direct-indexed map.
+    /// Positions of a stored row's labels by name, sorted by name then by
+    /// position for binary search. A tag row may repeat a label (design.md
+    /// "Row Joins": one label at two payload types is two variants), so a
+    /// name's entries form a range; a record row never repeats a label. A row
+    /// is short and its label ids are spread over the whole name table, so a
+    /// sorted slice holds it more compactly than a direct-indexed map.
     fn RowNameIndex(comptime Name: type) type {
         return struct {
             const Self = @This();
@@ -3339,7 +3427,20 @@ const Solver = struct {
             len: u32,
             entries: std.ArrayList(Entry) = .empty,
 
+            /// The first position of `name`, if the row holds it.
             fn get(self: *const Self, name: Name) ?usize {
+                const range = self.rangeOf(name);
+                if (range.start == range.end) return null;
+                return self.entries.items[range.start].position;
+            }
+
+            /// The entries of `name`, in row order.
+            fn entriesOf(self: *const Self, name: Name) []const Entry {
+                const range = self.rangeOf(name);
+                return self.entries.items[range.start..range.end];
+            }
+
+            fn rangeOf(self: *const Self, name: Name) struct { start: usize, end: usize } {
                 const key = @backingInt(name);
                 var low: usize = 0;
                 var high: usize = self.entries.items.len;
@@ -3348,8 +3449,9 @@ const Solver = struct {
                     const mid_key = @backingInt(self.entries.items[mid].name);
                     if (mid_key < key) low = mid + 1 else high = mid;
                 }
-                if (low < self.entries.items.len and self.entries.items[low].name == name) return self.entries.items[low].position;
-                return null;
+                var end = low;
+                while (end < self.entries.items.len and self.entries.items[end].name == name) end += 1;
+                return .{ .start = low, .end = end };
             }
 
             fn lessThan(_: void, lhs: Entry, rhs: Entry) bool {
@@ -3365,13 +3467,6 @@ const Solver = struct {
                 try self.entries.ensureTotalCapacity(allocator, len);
                 for (0..len) |position| self.entries.appendAssumeCapacity(.{ .name = labels.at(position), .position = @intCast(position) });
                 std.sort.pdq(Entry, self.entries.items, {}, lessThan);
-                var kept: usize = 0;
-                for (self.entries.items) |entry| {
-                    if (kept != 0 and self.entries.items[kept - 1].name == entry.name) continue;
-                    self.entries.items[kept] = entry;
-                    kept += 1;
-                }
-                self.entries.shrinkRetainingCapacity(kept);
             }
 
             fn deinit(self: *Self, allocator: Allocator) void {
@@ -3415,6 +3510,14 @@ const Solver = struct {
         return gop.value_ptr;
     }
 
+    /// Merge two tag rows into one holding both rows' tags (design.md "Row
+    /// Joins"). A left tag pairs with a right tag of the same label whose
+    /// payloads it can unify with (`payloadsCompatible`), and the pair's
+    /// payloads are returned for the caller to unify; a tag with no such
+    /// partner stays its own variant, so one label can stand twice in the
+    /// merged row, at two payload types. Each static type that reaches the
+    /// row lists the label once, and selects its variant by payload
+    /// (`tagPayloadsSpanFor`), so no reader observes the other variant.
     fn mergeTags(
         self: *Solver,
         lhs: Type.Span,
@@ -3422,45 +3525,51 @@ const Solver = struct {
         payload_pairs: *std.ArrayList(DeferredSpanPair),
     ) Allocator.Error!Type.Span {
         const right_index = try self.tagRowIndex(rhs);
-        var shared_count: usize = 0;
-        var every_left_in_right = true;
+        const right_paired = try self.allocator.alloc(bool, rhs.count());
+        defer self.allocator.free(right_paired);
+        @memset(right_paired, false);
+        var left_unpaired: usize = 0;
         for (0..lhs.count()) |left_index| {
             const left_tag = self.program.types.tagItem(lhs, left_index);
-            if (right_index.get(left_tag.name)) |right_position| {
-                try payload_pairs.append(self.allocator, .{
-                    .lhs = left_tag.payloads,
-                    .rhs = self.program.types.tagItem(rhs, right_position).payloads,
-                });
-                shared_count += 1;
-            } else {
-                every_left_in_right = false;
-            }
+            const paired = for (right_index.entriesOf(left_tag.name)) |entry| {
+                if (right_paired[entry.position]) continue;
+                const right_tag = self.program.types.tagItem(rhs, entry.position);
+                if (!try self.payloadsCompatible(left_tag.payloads, right_tag.payloads)) continue;
+                try payload_pairs.append(self.allocator, .{ .lhs = left_tag.payloads, .rhs = right_tag.payloads });
+                right_paired[entry.position] = true;
+                break true;
+            } else false;
+            if (!paired) left_unpaired += 1;
         }
 
-        if (shared_count == 0) Common.invariant("disjoint tag unions failed Lambda Solved unification");
+        // Two rows with no tag in common still join: a procedure shared by
+        // specializations whose rows differ only in tag names relates each
+        // caller's row to one result, and both callers then carry the union.
 
         // The right row already holds every left tag: the merge is the right
         // row itself.
-        if (every_left_in_right) return rhs;
+        if (left_unpaired == 0) return rhs;
 
         var merged = std.ArrayList(Type.Tag).empty;
         defer merged.deinit(self.allocator);
-        var left_names = collections.DenseMapUnmanaged(Type.names.TagNameId, void).empty;
-        defer left_names.deinit(self.allocator);
-        try left_names.ensureTotalCapacity(self.allocator, @intCast(lhs.count()));
         for (0..lhs.count()) |left_index| {
-            const left_tag = self.program.types.tagItem(lhs, left_index);
-            try merged.append(self.allocator, left_tag);
-            try left_names.put(self.allocator, left_tag.name, {});
+            try merged.append(self.allocator, self.program.types.tagItem(lhs, left_index));
         }
         for (0..rhs.count()) |right_position| {
-            const right_tag = self.program.types.tagItem(rhs, right_position);
-            if (left_names.contains(right_tag.name)) continue;
-            try merged.append(self.allocator, right_tag);
+            if (right_paired[right_position]) continue;
+            try merged.append(self.allocator, self.program.types.tagItem(rhs, right_position));
         }
         // Every right tag already sits in the left row: the merge is the
         // left row itself.
         if (merged.items.len == lhs.count()) return lhs;
+        // A row's tags are ordered by label, as Monotype orders them, so two
+        // rows holding the same tags are one representation.
+        const name_store = self.lifted.names;
+        std.mem.sort(Type.Tag, merged.items, name_store, struct {
+            fn lessThan(store: @TypeOf(name_store), a: Type.Tag, b: Type.Tag) bool {
+                return store.tagLabelTextLessThan(a.name, b.name);
+            }
+        }.lessThan);
         return try self.program.types.addTags(merged.items);
     }
 
@@ -3764,13 +3873,15 @@ const LeafContextShape = struct {
 const ReachabilityMasks = struct {
     contains_callable: []bool,
     contains_forced_dynamic: []bool,
+    contains_tag_row: []bool,
     reaches_cycle: []bool,
 };
 
 /// Reverse-reachability over the lifted Monotype store: from `func` and
-/// `erased` nodes (types whose clones need fresh callable slots) and from
+/// `erased` nodes (types whose clones need fresh callable slots), from
 /// forced-dynamic iterator named nodes (leaves the forced-dynamic scan must
-/// materialize).
+/// materialize), and from structural tag unions (types whose clones join
+/// where their values flow).
 fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Error!ReachabilityMasks {
     const count = types.types.len;
     const flags = try allocator.alloc(bool, count);
@@ -3882,6 +3993,23 @@ fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Erro
             try work.append(allocator, parent);
         }
     }
+    const rows = try allocator.alloc(bool, count);
+    errdefer allocator.free(rows);
+    @memset(rows, false);
+    for (0..types.types.len) |index| {
+        const content = types.get(@fromBackingInt(@intCast(index)));
+        if (std.meta.activeTag(content) == .tag_union) {
+            rows[index] = true;
+            try work.append(allocator, @intCast(index));
+        }
+    }
+    while (work.pop()) |index| {
+        for (parents[parent_starts[index]..parent_starts[index + 1]]) |parent| {
+            if (rows[parent]) continue;
+            rows[parent] = true;
+            try work.append(allocator, parent);
+        }
+    }
     const cycle = try allocator.alloc(bool, count);
     errdefer allocator.free(cycle);
     try markCycleMembers(allocator, parents, parent_starts, cycle);
@@ -3895,7 +4023,7 @@ fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Erro
             try work.append(allocator, parent);
         }
     }
-    return .{ .contains_callable = flags, .contains_forced_dynamic = forced, .reaches_cycle = cycle };
+    return .{ .contains_callable = flags, .contains_forced_dynamic = forced, .contains_tag_row = rows, .reaches_cycle = cycle };
 }
 
 /// Mark every lifted Monotype that lies on a cycle: a member of a strongly
@@ -4151,6 +4279,12 @@ const TypeCloner = struct {
     lazy_ctx: ?u32 = null,
     /// Callable-bearing children the current lazy expansion has registered.
     lazy_children: u32 = 0,
+    /// The argument scope (`Solver.arg_scopes`) of the lazy expansion: a
+    /// named type's own, which registers its positional components, or the
+    /// one the expanding leaf was created under, which only reads it.
+    arg_scope: ?ArgScope = null,
+
+    const ArgScope = struct { id: u32, registers: bool };
 
     fn init(solver: *Solver) TypeCloner {
         return .{
@@ -4221,12 +4355,27 @@ const TypeCloner = struct {
     /// descending; null when it must be cloned.
     fn existingClone(self: *TypeCloner, ty: MonoType.TypeId) Allocator.Error!?Type.TypeVarId {
         if (self.lazy_ctx) |parent_ctx| {
-            // A callable-free child is the same shared clone wherever it
-            // occurs, exactly as a callable-free root is: it has no callable
-            // slot to solve, so unifying two of its occurrences reaches one
-            // var instead of walking two copies of its structure.
+            // A clone-invariant child is the same shared clone wherever it
+            // occurs, exactly as a clone-invariant root is: it has nothing to
+            // solve, so unifying two of its occurrences reaches one var
+            // instead of walking two copies of its structure. A positional
+            // child (`LeafSharing.positional`) is a fresh leaf at every
+            // occurrence, registered in no context.
             const callable_free = self.solver.isCallableFree(ty);
-            const ctx = if (callable_free) try self.solver.sharedLeafContext() else parent_ctx;
+            const sharing = self.solver.leafSharing(ty);
+            if (sharing == .positional) {
+                if (self.arg_scope) |scope| {
+                    if (self.solver.arg_scopes.items[scope.id].get(ty)) |existing| return existing;
+                }
+                const created = try self.solver.program.types.add(.{ .mono = .{ .id = ty, .ctx = Type.no_leaf_context } });
+                try self.solver.leaf_origins.put(created, ty);
+                if (self.arg_scope) |scope| {
+                    try self.solver.leaf_arg_scopes.put(created, scope.id);
+                    if (scope.registers) try self.solver.arg_scopes.items[scope.id].put(ty, created);
+                }
+                return created;
+            }
+            const ctx = if (sharing == .shared) try self.solver.sharedLeafContext() else parent_ctx;
             const map = &self.solver.leaf_contexts.items[ctx];
             const shape = &self.solver.leaf_context_shapes.items[ctx];
             if (!callable_free) {
@@ -4243,7 +4392,10 @@ const TypeCloner = struct {
             const created = try self.solver.program.types.add(.{ .mono = .{ .id = ty, .ctx = ctx } });
             try self.solver.leaf_origins.put(created, ty);
             try map.put(ty, created);
-            if (!callable_free) shape.unexpanded += 1;
+            if (self.arg_scope) |scope| try self.solver.leaf_arg_scopes.put(created, scope.id);
+            // Every leaf registered outside the shared context is retired
+            // when it expands or joins a class (`retireContextLeaf`).
+            if (sharing != .shared) shape.unexpanded += 1;
             return created;
         }
         if (self.map.get(ty)) |cached| return cached;
@@ -5344,7 +5496,9 @@ test "lambda solved compact record updates relate only unchanged field represent
     try std.testing.expect((try solver.recordField(solved_base, b)) != (try solver.recordField(solved_update, b)));
 }
 
-test "lambda solved return boundaries preserve rows and propagate callable payloads" {
+test "lambda solved return boundaries join rows and propagate callable payloads" {
+    // design.md "Row Joins": a returned value's rows and the destination's
+    // rows become one row each, and callable payloads flow between them.
     const allocator = std.testing.allocator;
     var lifted = emptyLiftedProgramForTest(allocator);
     const ok_name = try lifted.names.internTagLabel("Ok");
@@ -5356,7 +5510,6 @@ test "lambda solved return boundaries preserve rows and propagate callable paylo
 
     const empty = try program.types.add(.{ .tag_union = .empty() });
     const str = try program.types.add(.{ .primitive = .str });
-    const u64_ty = try program.types.add(.{ .primitive = .u64 });
     const source_callable = try program.types.add(.{ .lambda_set = .empty() });
     const source_fn = try program.types.add(.{ .func = .{
         .args = .empty(),
@@ -5367,34 +5520,27 @@ test "lambda solved return boundaries preserve rows and propagate callable paylo
         .{ .name = ok_name, .checked_name = ok_name, .payloads = try program.types.addSpan(&.{source_fn}) },
         .{ .name = err_name, .checked_name = err_name, .payloads = try program.types.addSpan(&.{empty}) },
     }) });
-    // Two destinations disagree even on the base type of Err's payload.
-    // Neither destination may pollute the shared empty source error row.
-    for ([_]Type.TypeVarId{ str, u64_ty }) |payload| {
-        const err_row = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
-            .{ .name = err_name, .checked_name = err_name, .payloads = try program.types.addSpan(&.{payload}) },
-        }) });
-        const target_callable = try program.types.add(.unbound);
-        const target_fn = try program.types.add(.{ .func = .{
-            .args = .empty(),
-            .callable = target_callable,
-            .ret = str,
-        } });
-        const target = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
-            .{ .name = ok_name, .checked_name = ok_name, .payloads = try program.types.addSpan(&.{target_fn}) },
-            .{ .name = err_name, .checked_name = err_name, .payloads = try program.types.addSpan(&.{err_row}) },
-        }) });
-        try solver.relateReturn(source, target, .try_return);
-        try std.testing.expectEqual(program.types.rootCompressed(source_callable), program.types.rootCompressed(target_callable));
-        try std.testing.expect(program.types.rootCompressed(source) != program.types.rootCompressed(target));
-        try std.testing.expectEqual(@as(usize, 0), (try solver.shapeContent(empty)).tag_union.count());
-        try std.testing.expectEqual(@as(usize, 1), (try solver.shapeContent(err_row)).tag_union.count());
-    }
+    const err_row = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+        .{ .name = err_name, .checked_name = err_name, .payloads = try program.types.addSpan(&.{str}) },
+    }) });
+    const target_callable = try program.types.add(.unbound);
+    const target_fn = try program.types.add(.{ .func = .{
+        .args = .empty(),
+        .callable = target_callable,
+        .ret = str,
+    } });
+    const target = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+        .{ .name = ok_name, .checked_name = ok_name, .payloads = try program.types.addSpan(&.{target_fn}) },
+        .{ .name = err_name, .checked_name = err_name, .payloads = try program.types.addSpan(&.{err_row}) },
+    }) });
+    try solver.unify(source, target);
+    try std.testing.expectEqual(program.types.rootCompressed(source_callable), program.types.rootCompressed(target_callable));
+    try std.testing.expectEqual(program.types.rootCompressed(source), program.types.rootCompressed(target));
+    // The uninhabited source payload row takes the destination's row.
+    try std.testing.expectEqual(program.types.rootCompressed(empty), program.types.rootCompressed(err_row));
+    try std.testing.expectEqual(@as(usize, 1), (try solver.shapeContent(empty)).tag_union.count());
 
-    try solver.relateReturn(empty, str, .try_return);
-    try solver.relateReturn(empty, u64_ty, .try_return);
-    try std.testing.expectEqual(@as(usize, 0), (try solver.shapeContent(empty)).tag_union.count());
-
-    // A recursive payload follows the same directed pair only once.
+    // A recursive payload joins once and ends up with the union of both rows.
     const source_cycle = try program.types.add(.unbound);
     const target_cycle = try program.types.add(.unbound);
     program.types.set(source_cycle, .{ .tag_union = try program.types.addTags(&.{
@@ -5404,23 +5550,71 @@ test "lambda solved return boundaries preserve rows and propagate callable paylo
         .{ .name = ok_name, .checked_name = ok_name, .payloads = try program.types.addSpan(&.{target_cycle}) },
         .{ .name = err_name, .checked_name = err_name, .payloads = .empty() },
     }) });
-    try solver.relateReturn(source_cycle, target_cycle, .try_return);
-    try std.testing.expectEqual(@as(usize, 1), (try solver.shapeContent(source_cycle)).tag_union.count());
-    try std.testing.expectEqual(@as(usize, 2), (try solver.shapeContent(target_cycle)).tag_union.count());
+    try solver.unify(source_cycle, target_cycle);
+    try std.testing.expectEqual(program.types.rootCompressed(source_cycle), program.types.rootCompressed(target_cycle));
+    try std.testing.expectEqual(@as(usize, 2), (try solver.shapeContent(source_cycle)).tag_union.count());
 }
 
-test "lambda solved row coercion re-tags payload rows and unifies identical rows outside its reach" {
-    // design.md "Row Coercion Primitive": a row directly in a tag payload is
-    // inside the reach and keeps its own tags; a row inside a record payload
-    // is outside it, so the two sides must hold the same row and unify. A
-    // differing row outside the reach is an invariant violation (a panic in
-    // `Common.invariant`), so only the accepted side is unit-testable here.
+test "lambda solved row joins keep one label at two payload types as two variants" {
+    // design.md "Row Joins": one value's row joined with two rows that name a
+    // tag at two payload types holds both variants of that label, and the two
+    // payload records stay their own types.
+    const allocator = std.testing.allocator;
+    var lifted = emptyLiftedProgramForTest(allocator);
+    const shared_name = try lifted.names.internTagLabel("Shared");
+    const conflict_name = try lifted.names.internTagLabel("Conflict");
+    const a_field = try lifted.names.internRecordFieldLabel("a");
+    const b_field = try lifted.names.internRecordFieldLabel("b");
+    var program = Ast.Program.init(allocator, lifted);
+    defer program.deinit();
+    var solver = try Solver.init(allocator, &program);
+    defer solver.deinit();
+
+    const u64_ty = try program.types.add(.{ .primitive = .u64 });
+    const str_ty = try program.types.add(.{ .primitive = .str });
+    const a_record = try program.types.add(.{ .record = try program.types.addFields(&.{
+        .{ .name = a_field, .ty = u64_ty, .default = null },
+    }) });
+    const b_record = try program.types.add(.{ .record = try program.types.addFields(&.{
+        .{ .name = b_field, .ty = str_ty, .default = null },
+    }) });
+    const shared = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+        .{ .name = shared_name, .checked_name = shared_name, .payloads = .empty() },
+    }) });
+    const a_row = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+        .{ .name = conflict_name, .checked_name = conflict_name, .payloads = try program.types.addSpan(&.{a_record}) },
+        .{ .name = shared_name, .checked_name = shared_name, .payloads = .empty() },
+    }) });
+    const b_row = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
+        .{ .name = conflict_name, .checked_name = conflict_name, .payloads = try program.types.addSpan(&.{b_record}) },
+        .{ .name = shared_name, .checked_name = shared_name, .payloads = .empty() },
+    }) });
+
+    try solver.unify(shared, a_row);
+    try solver.unify(shared, b_row);
+    try std.testing.expectEqual(program.types.rootCompressed(a_row), program.types.rootCompressed(b_row));
+    const joined = (try solver.shapeContent(shared)).tag_union;
+    try std.testing.expectEqual(@as(usize, 3), joined.count());
+    var conflicts: usize = 0;
+    for (0..joined.count()) |index| {
+        if (program.types.tagItem(joined, index).name == conflict_name) conflicts += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), conflicts);
+    try std.testing.expect(program.types.rootCompressed(a_record) != program.types.rootCompressed(b_record));
+    try std.testing.expect(program.types.rootContent(a_record) == .record);
+    try std.testing.expect(program.types.rootContent(b_record) == .record);
+}
+
+test "lambda solved row joins reach every row of a value" {
+    // design.md "Row Joins": a row in a tag payload and a row in a record
+    // payload both join with their destination; nothing is out of reach.
     const allocator = std.testing.allocator;
     var lifted = emptyLiftedProgramForTest(allocator);
     const ok_name = try lifted.names.internTagLabel("Ok");
     const err_name = try lifted.names.internTagLabel("Err");
     const a_name = try lifted.names.internTagLabel("A");
     const b_name = try lifted.names.internTagLabel("B");
+    const c_name = try lifted.names.internTagLabel("C");
     const x_name = try lifted.names.internRecordFieldLabel("x");
     var program = Ast.Program.init(allocator, lifted);
     defer program.deinit();
@@ -5438,7 +5632,7 @@ test "lambda solved row coercion re-tags payload rows and unifies identical rows
         .{ .name = a_name, .checked_name = a_name, .payloads = .empty() },
     }) });
     const target_record_row = try program.types.add(.{ .tag_union = try program.types.addTags(&.{
-        .{ .name = a_name, .checked_name = a_name, .payloads = .empty() },
+        .{ .name = c_name, .checked_name = c_name, .payloads = .empty() },
     }) });
     const source_record = try program.types.add(.{ .record = try program.types.addFields(&.{
         .{ .name = x_name, .ty = source_record_row, .default = null },
@@ -5454,10 +5648,13 @@ test "lambda solved row coercion re-tags payload rows and unifies identical rows
         .{ .name = err_name, .checked_name = err_name, .payloads = .empty() },
     }) });
 
-    try solver.relateReturn(source, target, .row_widen);
-    try std.testing.expect(program.types.rootCompressed(source) != program.types.rootCompressed(target));
-    try std.testing.expect(program.types.rootCompressed(source_inner) != program.types.rootCompressed(target_inner));
-    try std.testing.expectEqual(@as(usize, 1), (try solver.shapeContent(source_inner)).tag_union.count());
-    try std.testing.expectEqual(@as(usize, 2), (try solver.shapeContent(target_inner)).tag_union.count());
+    try solver.unify(source, target);
+    try std.testing.expectEqual(program.types.rootCompressed(source), program.types.rootCompressed(target));
+    try std.testing.expectEqual(@as(usize, 2), (try solver.shapeContent(source)).tag_union.count());
+    try std.testing.expectEqual(program.types.rootCompressed(source_inner), program.types.rootCompressed(target_inner));
+    try std.testing.expectEqual(@as(usize, 2), (try solver.shapeContent(source_inner)).tag_union.count());
+    // Rows with no tag in common join too: a procedure shared by two
+    // specializations relates both callers' rows to one result.
     try std.testing.expectEqual(program.types.rootCompressed(source_record_row), program.types.rootCompressed(target_record_row));
+    try std.testing.expectEqual(@as(usize, 2), (try solver.shapeContent(source_record_row)).tag_union.count());
 }

@@ -297,12 +297,13 @@ test "source-forward annotated recursive use records the complete body scheme" {
     try std.testing.expect(found_complete_forward_use);
 }
 
-test "annotated recursive self use whose body closes the annotation row records the body scheme" {
+test "annotated recursive self use whose body forwards a closed row records the body scheme" {
     // Issue #11526: `walk`'s predeclared annotation opens its result row (a
-    // quantified identity variable), but the body returns the closed input
-    // parameter, so the completed scheme has no quantified variables. The
+    // quantified identity variable). The body returns the closed input
+    // parameter through a widening copy (design.md "Row Subsumption"), so the
+    // completed scheme quantifies that row as the annotation does. The
     // in-flight self-use must name the body's scheme, not the standalone
-    // annotation, so artifact construction gives it an empty substitution.
+    // annotation, so artifact construction substitutes that scheme's row.
     const source =
         \\walk : [Open, Close] -> [Open, Close]
         \\walk = |token|
@@ -343,7 +344,7 @@ test "annotated recursive self use whose body closes the annotation row records 
             env,
             @fromBackingInt(@intCast(record.scheme_root)),
         );
-        try std.testing.expect(!scheme_info.contains_identity_variables);
+        try std.testing.expect(scheme_info.contains_identity_variables);
         walk_self_use_records += 1;
     }
     try std.testing.expectEqual(@as(usize, 1), walk_self_use_records);

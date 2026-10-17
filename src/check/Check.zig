@@ -749,12 +749,12 @@ coercion_reach_stack: std.ArrayListUnmanaged(Var) = .empty,
 coercion_reach_seen: std.AutoHashMapUnmanaged(Var, void) = .empty,
 coercion_outside_stack: std.ArrayListUnmanaged(Var) = .empty,
 coercion_outside_seen: std.AutoHashMapUnmanaged(Var, void) = .empty,
-/// Scratch for `widenedValueUseVar`: each reached variable's copy.
+/// Scratch for `widenedReachCopy`: each reached variable's copy.
 widened_use_copies: std.AutoHashMapUnmanaged(Var, Var) = .empty,
 /// Whether the copy in progress re-opens only rows whose tail is closed
-/// (`widenedFunctionResultUseVar`), leaving every open row shared.
+/// (`widenedClosedRowsCopy`), leaving every open row shared.
 widen_closed_rows_only: bool = false,
-/// Scratch for `widenedValueUseVar`: one row's tags, gathered along its
+/// Scratch for `widenedReachCopy`: one row's tags, gathered along its
 /// extension chain.
 widened_use_tags: std.ArrayListUnmanaged(types_mod.Tag) = .empty,
 /// Every row a use's widening copy re-opened, paired with the value's row it
@@ -763,11 +763,9 @@ widened_use_tags: std.ArrayListUnmanaged(types_mod.Tag) = .empty,
 /// finalize), so `propagateValueRowsToWidenedUses` carries them into the
 /// copies once constraints settle.
 widened_use_rows: std.ArrayListUnmanaged(WidenedUseRow) = .empty,
-/// Every call recorded as a row-coerced callee, with the range of
-/// `widened_use_rows` its copy re-opened (`settleUnwidenedCallees`). Judged
-/// once constraints settle: until then a copied row can still gain tags
-/// (late codec finalize adds them), so whether a call widened is not known.
-widened_callees: std.ArrayListUnmanaged(WidenedCallee) = .empty,
+/// Every value expression recorded as a row-coerced result, with the range of
+/// `widened_use_rows` its copy re-opened (`settleUnwidenedResults`).
+widened_results: std.ArrayListUnmanaged(WidenedResult) = .empty,
 /// The annotation whose definition's body check is about to generate it; its
 /// implicitly opened rows are bounded for the rest of that body check
 /// (`beginBoundedAnnotationRows`).
@@ -777,6 +775,12 @@ bounding_annotation: ?CIR.Annotation.Idx = null,
 /// whole class, and rows of different definitions can share one class, so
 /// releasing one definition's bound restores every bound still owned there.
 bounded_row_marks: std.ArrayListUnmanaged(BoundedRowMark) = .empty,
+/// The annotations whose definitions' bodies are being checked, innermost
+/// last. A bounded-row refusal inside one of these bodies, of a row one of
+/// these annotations owns, is the body producing a tag its annotation does
+/// not list; any other refusal is an ordinary mismatch of a use
+/// (`mismatchContext`).
+body_annotations: std.ArrayListUnmanaged(CIR.Annotation.Idx) = .empty,
 /// Scoped sink owned by the alias declaration currently being constructed.
 alias_hidden_exts: ?*std.ArrayListUnmanaged(Var) = null,
 nominal_positions: std.AutoHashMapUnmanaged(NominalPositionKey, ?[]annotation_positions.Positions) = .empty,
@@ -1521,7 +1525,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .literal_field_kinds = .settled,
     .record_constructions = .settled,
     .widened_use_rows = .settled,
-    .widened_callees = .settled,
+    .widened_results = .settled,
     .literal_field_kind_watermark = .keyed,
     .pending_record_updates = .boundary,
     .pending_record_destructs = .boundary,
@@ -1637,6 +1641,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .implicit_open_exts = .keyed,
     .bounding_annotation = .lexical,
     .bounded_row_marks = .keyed,
+    .body_annotations = .lexical,
     .alias_hidden_exts = .lexical,
     .nominal_positions = .keyed,
     .annotation_implicit_open_exts = .keyed,
@@ -7123,6 +7128,15 @@ fn appendTypeMismatch(
     const unify_env = self.unifyEnv();
     const evidence = try unifier.snapshotMismatchEvidence(&unify_env);
     const leaf = try unifier.snapshotMismatchLeaf(&unify_env);
+    const host_fixed_row = try self.varReachesHostFixedRow(actual);
+    const host_fixed_origin: ?Ident.Idx = if (!host_fixed_row)
+        null
+    else if (diagnostic_ctx == .try_operator)
+        diagnostic_ctx.try_operator.hosted_origin
+    else if (self.exprAtVar(actual)) |expr_idx|
+        try self.tryHostedErrorOrigin(expr_idx, false)
+    else
+        null;
     const problem_idx = try self.problems.appendProblem(.{ .type_mismatch = .{
         .types = .{
             .expected_var = expected,
@@ -7133,19 +7147,33 @@ fn appendTypeMismatch(
         .context = diagnostic_ctx,
         .evidence = evidence,
         .leaf = leaf,
+        .host_fixed_row = host_fixed_row,
+        .host_fixed_origin = host_fixed_origin,
     } });
     try self.noteInterpolationTie(problem_idx);
     return problem_idx;
 }
 
+/// The expression whose type variable is `var_`, when it is one.
+fn exprAtVar(self: *const Self, var_: Var) ?CIR.Expr.Idx {
+    const raw = @backingInt(var_);
+    if (raw >= self.cir.store.nodes.len()) return null;
+    if (!isExprNodeTag(self.cir.store.nodes.get(@fromBackingInt(@intCast(raw))).tag)) return null;
+    return @fromBackingInt(@intCast(raw));
+}
+
 /// The context the relation just rejected reports under. A relation the
 /// unifier rejected because it would add a tag to a bounded annotation row
 /// reports that tag at the expression that produced it (design.md
-/// "Polarity"). Reading the refusal consumes it, so it describes only the
-/// report of the relation that made it.
+/// "Polarity") when the definition the annotation bounds is the one being
+/// checked. Outside that body check the row belongs to a value the relation
+/// merely uses (design.md "Value Rows: Uses Share One Row"), and the
+/// rejection is the ordinary mismatch of the use. Reading the refusal
+/// consumes it, so it describes only the report of the relation that made it.
 fn mismatchContext(self: *Self, ctx: problem.Context, actual: Var) problem.Context {
     const violation = self.unify_scratch.bounded_row_violation orelse return ctx;
     self.unify_scratch.bounded_row_violation = null;
+    if (!self.boundedExtRefusalIsProduction(violation.ext)) return ctx;
     const raw_actual = @backingInt(actual);
     const actual_is_pattern = raw_actual < self.cir.store.nodes.len() and
         isPatternNodeTag(self.cir.store.nodes.get(@fromBackingInt(@intCast(raw_actual))).tag);
@@ -9209,8 +9237,8 @@ fn tryNominalIdent(self: *const Self) Instantiator.TryNominalIdent {
 /// resolving polarity vars (the deferred tag-union extensions of alias
 /// declaration bodies) per `polarity_behavior`, starting the polarity walk at
 /// `polarity` (the polarity of the annotation position being generated) and the
-/// adapter-reach walk at `reach` (where that position sits relative to the row
-/// the result-row widening adapter can re-tag).
+/// reach walk at `reach` (where that position sits relative to the rows a
+/// where-method use may widen).
 /// An instantiator over this module's store that recognizes its polarity and
 /// anonymous-extension idents; callers set the remaining behavior fields.
 fn baseInstantiator(self: *Self, rank: types_mod.Rank, rigid_behavior: Instantiator.RigidBehavior) Instantiator {
@@ -9603,7 +9631,7 @@ fn groundTypeHash(self: *Self, var_: Var) std.mem.Allocator.Error!?u64 {
             continue;
         }
         visit.value_ptr.* = @intCast(seen.count() - 1);
-        std.hash.autoHash(&hasher, @as(u8, @bitCast(resolved.desc.flags.copied())));
+        std.hash.autoHash(&hasher, @as(u16, @bitCast(resolved.desc.flags.copied())));
         std.hash.autoHash(&hasher, std.meta.activeTag(resolved.desc.content));
         switch (resolved.desc.content) {
             .flex, .rigid, .field_presence, .err => return null,
@@ -9682,7 +9710,7 @@ fn groundTypesIdentical(self: *Self, left: Var, right: Var) std.mem.Allocator.Er
         const l = self.types.resolveVar(pair.left);
         const r = self.types.resolveVar(pair.right);
         if ((try seen.getOrPut(self.gpa, .{ .left = l.var_, .right = r.var_ })).found_existing) continue;
-        if (@as(u8, @bitCast(l.desc.flags.copied())) != @as(u8, @bitCast(r.desc.flags.copied()))) return false;
+        if (@as(u16, @bitCast(l.desc.flags.copied())) != @as(u16, @bitCast(r.desc.flags.copied()))) return false;
         switch (l.desc.content) {
             .flex, .rigid, .field_presence, .err => return false,
             .alias => |la| {
@@ -12204,7 +12232,6 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     try self.closeWeakValueImplicitOpenExts(&env);
     try self.closeTopLevelValueRows(&env);
-    try self.recordClosedResultBindings();
 
     try self.pruneSelectedHoistedRootsAfterSolving();
     try self.withdrawProblemsOfVoidRelations();
@@ -12447,7 +12474,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         keep_oracle.current_root_index = i;
         const intrinsic = !self.selectedHoistedRootNamesRetiredBinder(root.*) and
             (root.body == .pattern_error or root.body == .valueless_binding or !self.hoistExprInvalidated(root.expr)) and
-            !try self.hoistedRootReachesRejectedInstantiation(root.*) and
+            !try self.hoistedRootReachesRejectedCode(root.*) and
             try self.hoistedRootIsIntrinsicallyKept(root);
         // Top-level extractions define names; they are not optional hoists.
         // Like ordinary top-level constants, their complete checked bodies
@@ -12539,11 +12566,13 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     try self.debugVerifyKeptHoistedRootDependencies();
 }
 
-/// Whether evaluating a selected root's expression evaluates an expression
-/// that instantiated a requirement another expression rejected
-/// (`rejected_instantiation_exprs`).
-fn hoistedRootReachesRejectedInstantiation(self: *Self, root: hoist_roots.SelectedHoistedRoot) Allocator.Error!bool {
-    if (self.rejected_instantiation_exprs.count() == 0) return false;
+/// Whether a selected root's expression reaches code checking rejected: an
+/// expression that instantiated a requirement another expression rejected
+/// (`rejected_instantiation_exprs`), or an
+/// expression checking replaced with its error after selection. An error
+/// poisons every expression that depends on it, so the root evaluates at
+/// runtime instead, where it reaches the error in source order.
+fn hoistedRootReachesRejectedCode(self: *Self, root: hoist_roots.SelectedHoistedRoot) Allocator.Error!bool {
     switch (root.body) {
         .pattern_error, .valueless_binding => return false,
         .expr, .pattern_extraction, .pattern_validation => {},
@@ -12566,7 +12595,8 @@ fn hoistedRootReachesRejectedInstantiation(self: *Self, root: hoist_roots.Select
         fn returnTarget(_: @This(), _: CIR.Expr.Idx) Allocator.Error!void {}
     };
     while (work.pop()) |expr| {
-        if (self.rejected_instantiation_exprs.contains(expr)) return true;
+        if (self.rejected_instantiation_exprs.contains(expr) or self.hoistExprInvalidated(expr)) return true;
+        if (self.cir.store.getExpr(expr) == .e_runtime_error) return true;
         try self.visitExprChildren(expr, Collector{ .work = &work, .gpa = self.gpa });
     }
     return false;
@@ -17539,7 +17569,7 @@ fn beginDef(self: *Self, state: *DefActivity, env: *Env) std.mem.Allocator.Error
     if (def_is_function or group_prechecked) try self.activateSchemeOwner(scheme_owner);
     // The annotation bounds the definition's body: a tag it produces beyond
     // an implicitly opened union is an error (design.md "Polarity").
-    state.saved.?.bounding_annotation = self.beginBoundedAnnotationRows(self.appliedAnnotation(def.pattern, def.annotation));
+    state.saved.?.bounding_annotation = try self.beginBoundedAnnotationRows(self.appliedAnnotation(def.pattern, def.annotation));
     state.stage = .body;
     return .{ .push = .{ .expr = try self.newExprKernelActivity(.{ .expr = def.expr, .expected = def_expectation, .function_owner = def.expr }) } };
 }
@@ -20048,13 +20078,13 @@ const GenTypeAnnoCtx = union(enum) {
         /// `provides` defs): the host is not a Roc producer participating in
         /// unification, so those rows keep their written, closed meaning.
         opening: OpeningBehavior,
-        /// Where this position sits relative to the result row the Monotype
-        /// result-row widening adapter can re-tag (design.md "Result-Row
-        /// Widening Adapter"). Only an adapter-reachable position gets
-        /// `.per_use` opening; every other output position of a where-method
-        /// signature keeps its row as written, exactly as a negative position
-        /// does, so a body use that widens one is an ordinary mismatch at the
-        /// use instead of a widening no lowering can express.
+        /// Where this position sits relative to the result rows a where-method
+        /// use may widen (design.md "Closed Result Rows At Template
+        /// Boundaries"). Only a reachable position gets `.per_use` opening;
+        /// every other output position of a where-method signature keeps its
+        /// row as written, exactly as a negative position does, so a body use
+        /// that widens one is an ordinary mismatch at the use instead of a
+        /// widening outside the row coercion's reach.
         adapter_reach: AdapterReach = .nested,
 
         pub const OpeningBehavior = enum {
@@ -20075,10 +20105,10 @@ const GenTypeAnnoCtx = union(enum) {
             /// result is `.result` and whose arguments are `.nested`. The walk
             /// re-aims a function written here to those two reaches.
             signature,
-            /// The signature's direct result. The adapter re-tags a row
-            /// written here, and descends into a `Try` result's arguments.
+            /// The signature's direct result. A use may widen a row written
+            /// here, and the walk descends into a `Try` result's arguments.
             result,
-            /// A type argument of a `Try` result. The adapter re-tags a row
+            /// A type argument of a `Try` result. A use may widen a row
             /// written here, but nothing below it.
             try_row,
             /// Every other position: inside a `List`, a record field, a
@@ -20117,8 +20147,8 @@ const GenTypeAnnoCtx = union(enum) {
         };
     }
 
-    /// Where a referenced declaration's own root sits relative to the row the
-    /// result-row widening adapter can re-tag. `.defer_open` carries the walk
+    /// Where a referenced declaration's own root sits relative to the rows a
+    /// where-method use may widen. `.defer_open` carries the walk
     /// on from here, so a marker the referenced declaration mints under a
     /// `List`, a record field, a tuple, a tag payload, a function or a
     /// non-`Try` nominal closes instead of reopening per use.
@@ -20145,8 +20175,8 @@ const GenTypeAnnoCtx = union(enum) {
                 .implicit_open => .resolve_by_polarity,
                 // A referenced alias's markers stay deferred inside a
                 // where-method signature: the signature's own instantiation
-                // decides them—but only where the result-row widening
-                // adapter could re-tag the row. Elsewhere the alias
+                // decides them—but only where a use may widen the row.
+                // Elsewhere the alias
                 // contributes its row as written, like a negative position.
                 //
                 // `.defer_open` is position-aware INSIDE the referenced
@@ -20236,6 +20266,9 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
         .start = implicit_open_exts_start,
         .len = @intCast(self.implicit_open_exts.items.len - implicit_open_exts_start),
     });
+    // The host was compiled against every tag row this annotation wrote, so
+    // none of them ever joins a wider row (design.md "Row Joins").
+    if (opening == .as_written) try self.markHostFixedRows(ModuleEnv.varFrom(annotation.anno));
 
     // Redirect the root annotation to inner annotation
     _ = try self.unify(annotation_var, ModuleEnv.varFrom(annotation.anno), env);
@@ -20311,42 +20344,26 @@ const CodecRowDemand = struct {
     tags_len: u32,
 };
 
-/// After a binding's right-hand side has been checked against its annotation,
-/// verify that the definition did not EXTEND any implicitly opened tag-union
-/// row (design.md "Polarity": the annotation bounds the definition; only its
-/// callers widen the row, at instantiation). An implicitly opened extension is
-/// a flex var during the body check so a closed value can flow into the row
-/// (closing it) and an open value can share it; a tag the annotation does not
-/// list is absorbed into that flex by ordinary unification, so it is detected
-/// here rather than at the producing expression.
-///
-/// `redundant_open_warns`: the binding generalizes regardless of any written
-/// `..` (a function, a pure signature, a value alias), so an explicit
-/// anonymous `..` in an output position adds nothing and warns. On a value
-/// binding `..` is the opt-in to a quantified row, so it never warns there.
-///
-/// This is a single READ of a mutable var, and it is not always the last word:
-/// a generated codec the definition's body introduced can be validated after
-/// this point and still require tags in the row (see
-/// `runLateImplicitOpenExtAudit`). Every extension this pass clears is
-/// therefore kept, with its owner, for that audit. The `..` warning is NOT
-/// repeated—it is a property of the annotation's own text, fully decided
-/// here.
 /// Bound the implicitly opened rows of `annotation` from its definition's
 /// body check on: the annotation bounds the definition, so those rows may
 /// close or stay open but never gain a tag the annotation does not list
 /// (design.md "Polarity"). The rows are minted when the body pass generates
 /// the annotation, which `boundAnnotationRows` marks. Returns the bound an
 /// enclosing definition's body check is waiting to apply.
-fn beginBoundedAnnotationRows(self: *Self, annotation: ?CIR.Annotation.Idx) ?CIR.Annotation.Idx {
+fn beginBoundedAnnotationRows(self: *Self, annotation: ?CIR.Annotation.Idx) std.mem.Allocator.Error!?CIR.Annotation.Idx {
     const saved = self.bounding_annotation;
     self.bounding_annotation = annotation;
+    if (annotation) |annotation_idx| try self.body_annotations.append(self.gpa, annotation_idx);
     return saved;
 }
 
-/// End a definition's body check. A definition whose type generalizes keeps
-/// its rows bounded: its uses instantiate fresh copies, which they may widen.
-/// A weak value binding's row is shared by every use, so its bound ends here.
+/// End a definition's body check. The annotation's rows stay bounded: a
+/// definition whose type generalizes has uses that instantiate fresh copies,
+/// which they may widen, and a weak value binding's rows are the annotation's
+/// at every use (design.md "Value Rows: Uses Share One Row"), so a use that
+/// needs a tag the annotation does not list is a mismatch at the use. A
+/// platform-required definition's bound is released where the platform
+/// relates it, since the platform uses the definition as a caller does.
 fn endBoundedAnnotationRows(
     self: *Self,
     saved: ?CIR.Annotation.Idx,
@@ -20354,15 +20371,50 @@ fn endBoundedAnnotationRows(
     generalizes: bool,
 ) std.mem.Allocator.Error!void {
     self.bounding_annotation = saved;
-    if (generalizes) return;
-    try self.releaseBoundedAnnotationRows(annotation orelse return);
+    if (annotation) |annotation_idx| {
+        const popped = self.body_annotations.pop() orelse base.invariant("checker invariant violated: a body check ended with no annotation on the stack", .{});
+        if (popped != annotation_idx) base.invariant("checker invariant violated: body annotations ended out of order", .{});
+        if (!generalizes) {
+            for (self.bounded_row_marks.items) |*mark| {
+                if (mark.owner == annotation_idx) mark.weak_value_checked = true;
+            }
+        }
+    }
 }
 
 /// An extension one annotation's bound covers.
 const BoundedRowMark = struct {
     owner: CIR.Annotation.Idx,
     ext: Var,
+    /// The owner is a weak value binding whose body check has ended: its
+    /// rows are the annotation's at every use (design.md "Value Rows: Uses
+    /// Share One Row"), so a refusal at one of them is a use's mismatch. A
+    /// definition that generalizes keeps producing its rows at every use,
+    /// which instantiates them, so a refusal there is the definition's.
+    weak_value_checked: bool = false,
 };
+
+/// Whether a refusal to add a tag to the bounded extension `ext` is the
+/// definition that owns the row producing a tag its annotation does not
+/// list: the row belongs to an annotation whose body is being checked
+/// (`body_annotations`), or to a definition that generalizes. One of that
+/// annotation's marks reaches `ext` along its extension chain.
+fn boundedExtRefusalIsProduction(self: *Self, ext: Var) bool {
+    const target = self.types.resolveVar(ext).var_;
+    for (self.bounded_row_marks.items) |mark| {
+        const in_body = for (self.body_annotations.items) |body| {
+            if (body == mark.owner) break true;
+        } else false;
+        if (!in_body and mark.weak_value_checked) continue;
+        var current = mark.ext;
+        var remaining = self.types.len();
+        while (remaining > 0) : (remaining -= 1) {
+            if (self.types.resolveVar(current).var_ == target) return true;
+            current = self.boundedRowChainNext(current) orelse break;
+        }
+    }
+    return false;
+}
 
 fn boundAnnotationRows(self: *Self, annotation_idx: CIR.Annotation.Idx) std.mem.Allocator.Error!void {
     const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return;
@@ -20427,6 +20479,24 @@ fn boundedRowChainNext(self: *Self, current: Var) ?Var {
     };
 }
 
+/// After a binding's right-hand side has been checked against its annotation,
+/// hand each of its implicitly opened tag-union rows to the late audit. The
+/// body check bounded those rows (`beginBoundedAnnotationRows`), so the
+/// unifier already refused, at the producing expression, every relation that
+/// would add a tag the annotation does not list (design.md "Polarity").
+///
+/// `redundant_open_warns`: the binding generalizes regardless of any written
+/// `..` (a function, a pure signature, a value alias), so an explicit
+/// anonymous `..` in an output position adds nothing and warns. On a value
+/// binding `..` is the opt-in to a quantified row, so it never warns there.
+///
+/// This is a single READ of a mutable var, and it is not always the last word:
+/// a generated codec the definition's body introduced can be validated after
+/// this point and still require tags in the row (see
+/// `runLateImplicitOpenExtAudit`). Every extension this pass clears is
+/// therefore kept, with its owner, for that audit. The `..` warning is NOT
+/// repeated—it is a property of the annotation's own text, fully decided
+/// here.
 fn auditImplicitOpenExts(
     self: *Self,
     annotation_idx: CIR.Annotation.Idx,
@@ -20649,22 +20719,6 @@ fn nominalIsBuiltinTry(self: *const Self, nominal: types_mod.NominalType) bool {
     return nominal.originIsBuiltin() and nominal.sourceDeclOptional() == self.builtinTrySourceDecl();
 }
 
-/// The type a use of a top-level value relates to (design.md "Value Rows:
-/// Local Values Share, Top-Level Values Widen At Each Use"): a copy of the
-/// value's type in which every tag union the row coercion reaches has a fresh
-/// open extension, whether the value's own row is open or closed, so the use
-/// may need the value at any wider union without changing the value's type.
-/// Every position outside the reach, and every variable that is not a reached
-/// row, is shared with the value, so those stay one type for every use. Null
-/// when the coercion reaches no tag union, so the use relates to the value's
-/// type itself.
-fn widenedValueUseVar(self: *Self, value_var: Var, use_expr: CIR.Expr.Idx, env: *Env, region: Region) std.mem.Allocator.Error!?Var {
-    try self.computeCoercionReach(value_var);
-    self.widened_use_copies.clearRetainingCapacity();
-    const copy = try self.widenedReachCopy(value_var, use_expr, env, region);
-    return if (copy == self.types.resolveVar(value_var).var_) null else copy;
-}
-
 /// Whether the row coercion may widen the row at `var_`: a position it
 /// reaches and no position outside it shares.
 fn coercionMayWiden(self: *const Self, var_: Var) bool {
@@ -20672,7 +20726,7 @@ fn coercionMayWiden(self: *const Self, var_: Var) bool {
     return self.coercion_reach_seen.contains(root) and !self.coercion_outside_seen.contains(root);
 }
 
-/// One reached variable's copy for `widenedValueUseVar`; the variable itself
+/// One reached variable's copy for `widenedReachCopy`; the variable itself
 /// when nothing under it widens. Copies are shared through
 /// `widened_use_copies`. The walk keeps an explicit stack, since a value's type
 /// can nest tag payloads arbitrarily deep, and builds each copy after its
@@ -20782,6 +20836,8 @@ fn appendWidenedReachChildren(self: *Self, var_: Var, children: *std.ArrayListUn
 /// copied through the reach, under a fresh open extension. A row whose chain
 /// ends in a rigid is not the value's to widen and is shared.
 fn widenedRowCopy(self: *Self, row: Var, use_expr: CIR.Expr.Idx, env: *Env, region: Region) std.mem.Allocator.Error!Var {
+    // A host-boundary row never widens (design.md "Row Joins").
+    if (self.rowIsHostFixed(row)) return self.types.resolveVar(row).var_;
     const tags_start = self.widened_use_tags.items.len;
     defer self.widened_use_tags.shrinkRetainingCapacity(tags_start);
     var current = row;
@@ -20800,9 +20856,11 @@ fn widenedRowCopy(self: *Self, row: Var, use_expr: CIR.Expr.Idx, env: *Env, regi
                 .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return self.types.resolveVar(row).var_,
             },
             .flex => {
-                // A function result row that is still open is quantified with
-                // the rest of the function's scheme; it stays linked to it.
-                if (self.widen_closed_rows_only) return self.types.resolveVar(row).var_;
+                // A row that is still open is shared with whatever else holds
+                // it; only a row that cannot gain a tag needs its own re-opened
+                // copy: a closed one, or one an annotation bounds (an annotated
+                // value's row, which closes when its module finishes).
+                if (self.widen_closed_rows_only and !resolved.desc.flags.bounded_row_ext) return self.types.resolveVar(row).var_;
                 break;
             },
             .rigid, .err, .field_presence => return self.types.resolveVar(row).var_,
@@ -20829,110 +20887,91 @@ fn widenedRowCopy(self: *Self, row: Var, use_expr: CIR.Expr.Idx, env: *Env, regi
     return copy;
 }
 
-/// The type a use of an annotated function relates to when the function's
-/// body closed a result row its annotation leaves open (design.md "Row
-/// Subsumption"): the instantiated function type with each such closed
-/// row in its result re-opened, its arguments and every still-open row shared.
-/// A forwarder's argument and result rows can be one class, so only the
-/// result's spine down to a re-opened row is copied, and the argument stays
-/// closed. Null when nothing in the result re-opens.
-fn widenedFunctionResultUseVar(self: *Self, fn_var: Var, use_expr: CIR.Expr.Idx, env: *Env, region: Region) std.mem.Allocator.Error!?Var {
-    const resolved = self.types.resolveVar(fn_var);
-    const flat = switch (resolved.desc.content) {
-        .structure => |flat| flat,
-        .alias, .flex, .rigid, .err, .field_presence => return null,
-    };
-    const func = switch (flat) {
-        .fn_pure, .fn_effectful, .fn_unbound => |func| func,
-        .tag_union, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => return null,
-    };
-    try self.computeCoercionReach(func.ret);
+/// A copy of a value's type in which every CLOSED tag union the row coercion
+/// reaches has a fresh open extension, every open row and every position
+/// outside the reach shared with the value. Null when the reach holds no
+/// closed row, so the value's own type is what relates.
+fn widenedClosedRowsCopy(self: *Self, value_var: Var, use_expr: CIR.Expr.Idx, env: *Env, region: Region) std.mem.Allocator.Error!?Var {
+    try self.computeCoercionReach(value_var);
     self.widened_use_copies.clearRetainingCapacity();
-    const saved_closed_rows_only = self.widen_closed_rows_only;
     self.widen_closed_rows_only = true;
-    defer self.widen_closed_rows_only = saved_closed_rows_only;
-    const ret_copy = try self.widenedReachCopy(func.ret, use_expr, env, region);
-    if (ret_copy == self.types.resolveVar(func.ret).var_) return null;
-    var widened = func;
-    widened.ret = ret_copy;
-    const widened_flat: FlatType = switch (flat) {
-        .fn_pure => .{ .fn_pure = widened },
-        .fn_effectful => .{ .fn_effectful = widened },
-        .fn_unbound => .{ .fn_unbound = widened },
-        .tag_union, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => unreachable,
-    };
-    return try self.freshFromContent(.{ .structure = widened_flat }, env, region);
+    defer self.widen_closed_rows_only = false;
+    const copy = try self.widenedReachCopy(value_var, use_expr, env, region);
+    return if (copy == self.types.resolveVar(value_var).var_) null else copy;
 }
 
-/// The type the immediate callee of a call relates to when it names an
-/// annotated function whose body closed a result row its annotation leaves open
-/// (design.md "Row Subsumption"): the function's type with that row
-/// re-opened in the result (`widenedFunctionResultUseVar`). Checking records
-/// the function's own type and result for the call (`ModuleEnv.RowCoercedCallee`),
-/// which checked-body construction lowers at that type and widens by a row
-/// coercion. A use that is not a call's callee keeps the function's own type.
-fn widenedCalleeUseVar(
-    self: *Self,
+/// A widening copy of a value expression's type, made where the value flows
+/// into its function's annotated result (design.md "Row Subsumption"), before
+/// the relation that admits it. The result relates to `wide_var`; the
+/// expression keeps its own type, and once the relation is accepted the
+/// expression is recorded as a row-coerced result (`recordResultWidening`).
+const ResultWidening = struct {
     expr_idx: CIR.Expr.Idx,
-    processing_def: DefProcessed,
-    fn_var: Var,
-    env: *Env,
-    region: Region,
-) std.mem.Allocator.Error!?Var {
-    if (!self.instantiation_is_immediate_callee) return null;
-    if (processing_def.status != .processed) return null;
-    if (!try self.defClosedAnnotatedResultRow(processing_def.def_idx)) return null;
-    return try self.widenRecordedCalleeResult(expr_idx, fn_var, env, region);
-}
+    wide_var: Var,
+    rows_start: u32,
+    rows_end: u32,
+};
 
-/// Re-open the closed result rows of the callee `expr_idx`'s function type
-/// `fn_var` and record the call for checked-body construction
-/// (`ModuleEnv.RowCoercedCallee`).
-fn widenRecordedCalleeResult(self: *Self, expr_idx: CIR.Expr.Idx, fn_var: Var, env: *Env, region: Region) std.mem.Allocator.Error!?Var {
+/// The widening copy for the value `expr_idx` produces, or null when its type
+/// reaches no closed row and the expression relates at its own type. A read
+/// of a top-level value with a closed row is widened like any other closed
+/// value flowing into a result: the copy widens the function's result, and
+/// the value's own row is untouched (design.md "Value Rows: Uses Share One
+/// Row").
+fn widenResultValue(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env) std.mem.Allocator.Error!?ResultWidening {
     const rows_start: u32 = @intCast(self.widened_use_rows.items.len);
-    const widened = try self.widenedFunctionResultUseVar(fn_var, expr_idx, env, region) orelse return null;
-    try self.widened_callees.append(self.gpa, .{
+    const wide_var = try self.widenedClosedRowsCopy(
+        ModuleEnv.varFrom(expr_idx),
+        expr_idx,
+        env,
+        self.cir.store.getExprRegion(expr_idx),
+    ) orelse return null;
+    return .{
         .expr_idx = expr_idx,
+        .wide_var = wide_var,
         .rows_start = rows_start,
         .rows_end = @intCast(self.widened_use_rows.items.len),
-    });
-    const ret = switch (self.types.resolveVar(fn_var).desc.content) {
-        .structure => |flat| switch (flat) {
-            .fn_pure, .fn_effectful, .fn_unbound => |func| func.ret,
-            .tag_union, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => unreachable,
-        },
-        .alias, .flex, .rigid, .err, .field_presence => unreachable,
     };
-    try self.cir.recordRowCoercedCallee(ModuleEnv.nodeIdxFrom(expr_idx), fn_var, ret);
-    return widened;
 }
 
-/// A recorded row-coerced callee and the rows its copy re-opened.
-const WidenedCallee = struct {
+/// The relation admitted the widened value: the expression flows into its
+/// function's result through a row coercion (`ModuleEnv.RowCoercedResult`).
+fn recordResultWidening(self: *Self, widening: ResultWidening) std.mem.Allocator.Error!void {
+    try self.widened_results.append(self.gpa, .{
+        .expr_idx = widening.expr_idx,
+        .rows_start = widening.rows_start,
+        .rows_end = widening.rows_end,
+    });
+    try self.cir.recordRowCoercedResult(ModuleEnv.nodeIdxFrom(widening.expr_idx), widening.wide_var);
+}
+
+/// The relation rejected the widened value, so the expression is reported
+/// through its own type and the copy's rows need no propagation.
+fn discardResultWidening(self: *Self, widening: ResultWidening) void {
+    std.debug.assert(self.widened_use_rows.items.len == widening.rows_end);
+    self.widened_use_rows.shrinkRetainingCapacity(widening.rows_start);
+}
+
+/// A recorded row-coerced result and the rows its copy re-opened.
+const WidenedResult = struct {
     expr_idx: CIR.Expr.Idx,
     rows_start: u32,
     rows_end: u32,
 };
 
-/// A call whose re-opened result rows gained no tag beyond the function's own
-/// rows did not widen anything, so it is an ordinary call: its rows close again
-/// and its record is dropped, leaving no coercion to lower around the call
-/// (and nothing to stand between the call and inlining or fusion).
-fn settleUnwidenedCallees(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    for (self.widened_callees.items) |callee| {
-        const rows = self.widened_use_rows.items[callee.rows_start..callee.rows_end];
-        const widened = for (rows) |pair| {
-            if (try self.useRowListsExtraTag(pair)) break true;
-        } else false;
-        if (widened) continue;
-        for (rows) |pair| {
-            const tail = self.tagRowTail(pair.use_row);
-            const resolved = self.types.resolveVar(tail);
-            if (resolved.desc.content != .flex) continue;
-            const empty = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, self.getRegionAt(pair.use_row));
-            _ = try self.unify(tail, empty, env);
-        }
-        self.cir.removeRowCoercedCallee(ModuleEnv.nodeIdxFrom(callee.expr_idx));
+/// A result whose re-opened rows settled closed with exactly the value's own
+/// tags is the value itself: its record is dropped, leaving no coercion to
+/// lower around the expression. A row whose tail is still open is quantified
+/// with the function's result and may widen in a specialization, so its
+/// record stays.
+fn settleUnwidenedResults(self: *Self) std.mem.Allocator.Error!void {
+    for (self.widened_results.items) |result| {
+        const rows = self.widened_use_rows.items[result.rows_start..result.rows_end];
+        const unchanged = for (rows) |pair| {
+            if (!self.varIsEmptyTagUnion(self.tagRowTail(pair.use_row))) break false;
+            if (try self.useRowListsExtraTag(pair)) break false;
+        } else true;
+        if (unchanged) self.cir.removeRowCoercedResult(ModuleEnv.nodeIdxFrom(result.expr_idx));
     }
 }
 
@@ -20952,44 +20991,94 @@ fn useRowListsExtraTag(self: *Self, pair: WidenedUseRow) std.mem.Allocator.Error
     return false;
 }
 
-/// Whether `var_` resolves to a function type.
-fn isFunctionTypeVar(self: *const Self, var_: Var) bool {
-    return switch (self.types.resolveVar(var_).desc.content) {
-        .structure => |flat| switch (flat) {
-            .fn_pure, .fn_effectful, .fn_unbound => true,
-            .tag_union, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => false,
-        },
-        .alias, .flex, .rigid, .err, .field_presence => false,
-    };
+/// Mark every tag row reachable from `root` as a host-boundary row
+/// (`DescriptorFlags.host_fixed_row`), through aliases, nominal arguments,
+/// records, tuples, functions and tag payloads.
+fn markHostFixedRows(self: *Self, root: Var) std.mem.Allocator.Error!void {
+    const stack = &self.type_visit_stack;
+    const stack_base = stack.items.len;
+    defer stack.items.len = stack_base;
+    self.var_set.clearRetainingCapacity();
+    try stack.append(self.gpa, root);
+    while (stack.items.len > stack_base) {
+        const resolved = self.types.resolveVar(stack.pop().?);
+        if (self.var_set.contains(resolved.var_)) continue;
+        try self.var_set.put(resolved.var_, {});
+        switch (resolved.desc.content) {
+            .flex, .rigid, .field_presence, .err => {},
+            .alias => |alias| {
+                try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                try stack.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
+            },
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| {
+                    try self.types.markHostFixedRow(resolved.var_);
+                    for (self.types.getTagsSlice(tag_union.tags).items(.args)) |tag_args| {
+                        try stack.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+                    }
+                    try stack.append(self.gpa, tag_union.ext);
+                },
+                .empty_tag_union => try self.types.markHostFixedRow(resolved.var_),
+                .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try stack.append(self.gpa, func.ret);
+                },
+                .record => |record| {
+                    for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                        try stack.append(self.gpa, presence.typeVar());
+                    }
+                    try stack.append(self.gpa, record.ext);
+                },
+                .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                .empty_record => {},
+            },
+        }
+    }
 }
 
-/// Whether an annotated function definition's body closed a row its
-/// annotation implicitly opens in the function's result: some extension the
-/// annotation's generation minted is now the empty row and sits in the
-/// result within the row coercion's reach. Such a definition publishes the
-/// closed row, and each use re-opens its own copy
-/// (`widenedFunctionResultUseVar`).
-fn defClosedAnnotatedResultRow(self: *Self, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!bool {
-    const def = self.cir.store.getDef(def_idx);
-    const annotation_idx = self.appliedAnnotation(def.pattern, def.annotation) orelse return false;
-    if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) return false;
-    const range = self.annotation_implicit_open_exts.get(annotation_idx) orelse return false;
-    if (range.len == 0) return false;
-    const fn_resolved = self.types.resolveVar(ModuleEnv.varFrom(def.pattern));
-    const ret = switch (fn_resolved.desc.content) {
-        .structure => |flat| switch (flat) {
-            .fn_pure, .fn_effectful, .fn_unbound => |func| func.ret,
-            .tag_union, .record, .tuple, .nominal_type, .empty_record, .empty_tag_union => return false,
-        },
-        .alias, .flex, .rigid, .err, .field_presence => return false,
-    };
-    try self.computeCoercionReach(ret);
-    for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
-        const ext = self.types.resolveVar(entry.var_);
-        if (ext.desc.content != .structure or ext.desc.content.structure != .empty_tag_union) continue;
-        if (self.coercionMayWiden(ext.var_)) return true;
+/// Whether the tag row at `var_` is one a host-boundary annotation wrote.
+fn rowIsHostFixed(self: *const Self, var_: Var) bool {
+    return self.types.resolveVar(var_).desc.flags.host_fixed_row;
+}
+
+/// Whether a value of type `var_` carries a host-boundary tag row within the
+/// row coercion's reach: the root row, rows in tag payloads, and rows behind
+/// aliases and nominal arguments. Function arguments are outside it.
+fn varReachesHostFixedRow(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
+    const stack = &self.type_visit_stack;
+    const stack_base = stack.items.len;
+    defer stack.items.len = stack_base;
+    self.var_set.clearRetainingCapacity();
+    try stack.append(self.gpa, var_);
+    while (stack.items.len > stack_base) {
+        const resolved = self.types.resolveVar(stack.pop().?);
+        if (self.var_set.contains(resolved.var_)) continue;
+        try self.var_set.put(resolved.var_, {});
+        switch (resolved.desc.content) {
+            .flex, .rigid, .field_presence, .err => {},
+            .alias => |alias| try stack.append(self.gpa, self.types.getAliasBackingVar(alias)),
+            .structure => |flat| switch (flat) {
+                .tag_union => |tag_union| {
+                    if (resolved.desc.flags.host_fixed_row) return true;
+                    for (self.types.getTagsSlice(tag_union.tags).items(.args)) |tag_args| {
+                        try stack.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+                    }
+                    try stack.append(self.gpa, tag_union.ext);
+                },
+                .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                .fn_pure, .fn_effectful, .fn_unbound => |func| try stack.append(self.gpa, func.ret),
+                .record, .tuple, .empty_record, .empty_tag_union => {},
+            },
+        }
     }
     return false;
+}
+
+/// Whether `var_` resolves to the empty tag union.
+fn varIsEmptyTagUnion(self: *const Self, var_: Var) bool {
+    const content = self.types.resolveVar(var_).desc.content;
+    return content == .structure and content.structure == .empty_tag_union;
 }
 
 /// One row a use's widening copy re-opened (`widened_use_rows`).
@@ -21010,12 +21099,12 @@ const WidenedUseRow = struct {
     settled: bool = false,
 };
 
-/// Add to every use's widened copy each tag its value's row gained after the
-/// use copied it, with the value's own payloads, so the copy still lists
-/// every tag the value can have (design.md "Value Rows: Local Values Share,
-/// Top-Level Values Widen At Each Use"). A use whose type no longer admits
-/// such a tag is a type mismatch at the use. Returns whether any copy gained
-/// a tag, since unifying one can introduce constraints of its own.
+/// Add to every widening copy each tag its value's row gained after the copy
+/// was made, with the value's own payloads, so the copy still lists every tag
+/// the value can have (design.md "Row Subsumption"). A result whose type no
+/// longer admits such a tag is a type mismatch at the result. Returns whether
+/// any copy gained a tag, since unifying one can introduce constraints of its
+/// own.
 fn propagateValueRowsToWidenedUses(self: *Self, env: *Env) std.mem.Allocator.Error!bool {
     var changed = false;
     var missing: std.ArrayListUnmanaged(types_mod.Tag) = .empty;
@@ -21360,70 +21449,68 @@ fn definitionBodyExpr(self: *const Self, rhs: CIR.Expr.Idx) CIR.Expr.Idx {
     }
 }
 
-/// After the module solves, ground every still-open implicitly opened
-/// extension of a top-level weak value binding to `[]` (design.md
-/// "Polarity"). Nothing in this module can widen the row any further, and
-/// the closed row is exactly what the annotation produced before polarity,
-/// so importers and Monotype's stored constants see the type they always
-/// did. An extension that meanwhile joined a generalized scheme (a function's
-/// quantified row) is left alone: closing a quantified variable after it has
-/// been instantiated would desync the scheme from its uses.
-///
-/// A use may have widened the shared row, so the extension can resolve to a
-/// tag row; what is grounded is the row's tail (`tagRowTail`), which a
-/// widening leaves open.
-///
-/// Every entry point runs this AFTER `runLateImplicitOpenExtAudit`, for the
-/// reason stated there: grounding an extension empties it, and the late audit
-/// only reads extensions that still carry tags.
-/// Publish every top-level function definition whose body closed an annotated
-/// open result row (`ModuleEnv.ClosedResultBinding`), so an importer's call of
-/// it widens the result too.
-fn recordClosedResultBindings(self: *Self) std.mem.Allocator.Error!void {
-    for (0..self.cir.all_defs.span.len) |def_offset| {
-        const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
-        if (try self.defClosedAnnotatedResultRow(def_idx)) {
-            try self.cir.recordClosedResultBinding(ModuleEnv.nodeIdxFrom(def_idx));
-        }
-    }
-}
-
-/// Close every still-open row a top-level value's type reaches through the
-/// row coercion, annotated or not: the value is evaluated once, at the type
-/// its definition produces (design.md "Value Rows: Local Values Share,
-/// Top-Level Values Widen At Each Use"), and no use relates to these rows,
-/// since each use widens a copy. A row outside the reach is shared by every
-/// use and is sealed by Monotype's row defaults, and a row whose tail carries
-/// a constraint the empty row does not discharge, or that a scheme
-/// quantified, is left alone.
+/// After the module solves, close every still-open tag row anywhere in a
+/// top-level value's type (design.md "Value Rows: Uses Share One Row"). The
+/// module's uses have widened the shared rows as far as they will; nothing
+/// outside the module can widen them, so the closed type is the one importers
+/// read and the one the value is evaluated at. A row whose tail is
+/// quantified with a scheme, or carries constraints the row default does not
+/// discharge, is left alone.
 fn closeTopLevelValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    const stack = &self.type_visit_stack;
+    var tails: std.ArrayListUnmanaged(Var) = .empty;
+    defer tails.deinit(self.gpa);
     for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
         const def = self.cir.store.getDef(def_idx);
         if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(def.expr))) continue;
         const pattern_var = ModuleEnv.varFrom(def.pattern);
         if (self.isBindingSchemeVar(pattern_var)) continue;
-        try self.computeCoercionReach(pattern_var);
         // Collect first: closing a tail unifies, which must not run while the
-        // reach set is being iterated.
-        var tails: std.ArrayListUnmanaged(Var) = .empty;
-        defer tails.deinit(self.gpa);
-        var reached = self.coercion_reach_seen.keyIterator();
-        while (reached.next()) |row_ptr| {
-            const row = self.types.resolveVar(row_ptr.*);
-            const ext = switch (row.desc.content) {
-                .structure => |flat| switch (flat) {
-                    .tag_union => |union_| union_.ext,
-                    .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => continue,
+        // type is being walked.
+        tails.clearRetainingCapacity();
+        const stack_base = stack.items.len;
+        defer stack.items.len = stack_base;
+        self.var_set.clearRetainingCapacity();
+        try stack.append(self.gpa, pattern_var);
+        while (stack.items.len > stack_base) {
+            const resolved = self.types.resolveVar(stack.pop().?);
+            if (self.var_set.contains(resolved.var_)) continue;
+            try self.var_set.put(resolved.var_, {});
+            switch (resolved.desc.content) {
+                .flex, .rigid, .field_presence, .err => {},
+                .alias => |alias| {
+                    try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
+                    try stack.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
                 },
-                .alias, .flex, .rigid, .field_presence, .err => continue,
-            };
-            if (self.coercion_outside_seen.contains(row.var_)) continue;
-            const tail = self.types.resolveVar(ext);
-            if (self.coercion_outside_seen.contains(tail.var_)) continue;
-            if (tail.desc.content != .flex) continue;
-            if (tail.desc.rank == .generalized) continue;
-            if (!self.rowDefaultDischargesConstraints(tail.desc.content.flex.constraints)) continue;
-            try tails.append(self.gpa, tail.var_);
+                .structure => |flat| switch (flat) {
+                    .tag_union => |tag_union| {
+                        for (self.types.getTagsSlice(tag_union.tags).items(.args)) |tag_args| {
+                            try stack.appendSlice(self.gpa, self.types.sliceVars(tag_args));
+                        }
+                        const tail = self.types.resolveVar(self.tagRowTail(resolved.var_));
+                        if (tail.desc.content == .flex and
+                            tail.desc.rank != .generalized and
+                            self.rowDefaultDischargesConstraints(tail.desc.content.flex.constraints))
+                        {
+                            try tails.append(self.gpa, tail.var_);
+                        }
+                        try stack.append(self.gpa, tag_union.ext);
+                    },
+                    .nominal_type => |nominal| try stack.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                        try stack.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                        try stack.append(self.gpa, func.ret);
+                    },
+                    .record => |record| {
+                        for (self.types.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
+                            try stack.append(self.gpa, presence.typeVar());
+                        }
+                        try stack.append(self.gpa, record.ext);
+                    },
+                    .tuple => |tuple| try stack.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                    .empty_record, .empty_tag_union => {},
+                },
+            }
         }
         for (tails.items) |tail| {
             const empty_tu_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, self.getRegionAt(tail));
@@ -21432,6 +21519,22 @@ fn closeTopLevelValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     }
 }
 
+/// After the module solves, ground every still-open implicitly opened
+/// extension of a top-level weak value binding to `[]` (design.md
+/// "Polarity"). Nothing in this module can widen the row any further, and
+/// the closed row lists exactly the annotation's tags, which is the type
+/// importers and Monotype's stored constants see. An extension that
+/// meanwhile joined a generalized scheme (a function's quantified row) is
+/// left alone: closing a quantified variable after it has been instantiated
+/// would desync the scheme from its uses.
+///
+/// A use may have widened the shared row, so the extension can resolve to a
+/// tag row; what is grounded is the row's tail (`tagRowTail`), which a
+/// widening leaves open.
+///
+/// Every entry point runs this AFTER `runLateImplicitOpenExtAudit`, for the
+/// reason stated there: grounding an extension empties it, and the late audit
+/// only reads extensions that still carry tags.
 fn closeWeakValueImplicitOpenExts(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     for (self.weak_value_implicit_open_ext_ranges.items) |range| {
         for (self.implicit_open_exts.items[range.start..][0..range.len]) |entry| {
@@ -23207,8 +23310,8 @@ fn stepRigidAnnoGen(self: *Self, frame: *AnnoGenFrame, rigid: std.meta.fieldInfo
 /// walked like any function annotation: its arguments are inputs (closed
 /// as written) and its return an output.
 ///
-/// Only the output positions the result-row widening adapter can re-tag
-/// open per use (`AnnotationGenCtx.AdapterReach`). The return starts at
+/// Only the output positions a use may widen open per use
+/// (`AnnotationGenCtx.AdapterReach`). The return starts at
 /// `.result`; every other position of the signature—the receiver, the
 /// arguments, and anything the walk descends into that is not a `Try`
 /// result's rows—keeps its row as written.
@@ -23638,13 +23741,13 @@ fn stepTagUnionAnnoGen(self: *Self, frame: *AnnoGenFrame, tag_union: std.meta.fi
     const implicitly_open = output_opening == .implicit_open;
     // A where-method signature's output row: deferred with the
     // polarity marker, resolved per body use and per obligation—but
-    // only in a position the result-row widening adapter can re-tag
-    // (design.md "Result-Row Widening Adapter"). A row nested anywhere
+    // only in a position within the row coercion's reach (design.md
+    // "Closed Result Rows At Template Boundaries"). A row nested anywhere
     // else is generated as written, so a body use that widens it is an
-    // ordinary mismatch at the use rather than a widening no lowering
-    // can express.
+    // ordinary mismatch at the use rather than a widening outside the
+    // reach.
     const deferred_open = output_opening == .per_use and switch (ctx.annotation.adapter_reach) {
-        // Adapter-reachable: the row defers its open/closed decision to
+        // Reachable: the row defers its open/closed decision to
         // the use site (a polarity marker).
         .signature, .result, .try_row => true,
         // Out of reach: generated as written, so a body use that widens
@@ -27050,14 +27153,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
             const resolved_pat = self.types.resolveVar(pat_var);
             if (resolved_pat.desc.rank == Rank.generalized or self.isBindingSchemeVar(pat_var)) {
                 const instantiated = try self.instantiateBindingVar(pat_var, env, .use_last_var, .{ .value_use = expr_idx });
-                // A use of an annotated function whose body closed a result
-                // row its annotation leaves open re-opens that row in its own
-                // copy (design.md "Row Subsumption").
-                const widened_fn = if (mb_processing_def) |processing_def|
-                    try self.widenedCalleeUseVar(expr_idx, processing_def, instantiated, env, expr_region)
-                else
-                    null;
-                _ = try self.unify(expr_var, widened_fn orelse instantiated, env);
+                _ = try self.unify(expr_var, instantiated, env);
             } else {
                 // A fully checked top-level definition whose type is ground
                 // is copied at each use. Sharing its var would merge every
@@ -27073,36 +27169,12 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                     try self.instantiateVarOrphan(pat_var, env, env.rank(), .use_last_var)
                 else
                     pat_var;
-                // A use of a checked top-level value relates to a widening
-                // copy of the value's type, and reads the value through a
-                // row coercion (design.md "Value Rows: Local Values Share,
-                // Top-Level Values Widen At Each Use").
-                const processed_def: ?CIR.Def.Idx = if (mb_processing_def) |processing_def|
-                    if (processing_def.status == .processed) processing_def.def_idx else null
-                else
-                    null;
-                // An annotated function whose body closed a result row its
-                // annotation leaves open (design.md "Deferred: Row
-                // Subsumption"): the use re-opens that row in its own copy,
-                // and lowering adapts the call's result.
-                const widened_fn_var = if (mb_processing_def) |processing_def|
-                    try self.widenedCalleeUseVar(expr_idx, processing_def, use_var, env, expr_region)
-                else
-                    null;
-                const widened_use_var = if (widened_fn_var != null)
-                    null
-                else if (processed_def != null and !self.isFunctionTypeVar(use_var))
-                    try self.widenedValueUseVar(use_var, expr_idx, env, expr_region)
-                else
-                    null;
-                if (widened_fn_var) |widened| {
-                    _ = try self.unify(expr_var, widened, env);
-                } else if (widened_use_var) |widened| {
-                    _ = try self.unify(expr_var, widened, env);
-                    try self.cir.recordRowCoercedUse(ModuleEnv.nodeIdxFrom(expr_idx), pat_var);
-                } else {
-                    _ = try self.unify(expr_var, use_var, env);
-                }
+                // A use of a top-level value relates to the value's own type
+                // (design.md "Value Rows: Uses Share One Row"): an
+                // unannotated value's still-open rows are shared by every use
+                // in the module and widen together, and an annotated value's
+                // rows are the annotation's.
+                _ = try self.unify(expr_var, use_var, env);
                 if (mb_processing_def) |processing_def| {
                     try self.recordSharedSchemeUse(
                         @backingInt(expr_idx),
@@ -27143,33 +27215,11 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                         .{ .explicit = expr_region },
                         .{ .value_use = expr_idx },
                     );
-                    // A use of an imported value that is not a binding scheme
-                    // widens exactly as a use in its own module does (design.md
-                    // "Value Rows: Local Values Share, Top-Level Values Widen
-                    // At Each Use"); a scheme's instantiation already has
-                    // fresh rows.
-                    const is_value = !ext_ref.other_cir.nodeIsBindingScheme(ext_ref.other_cir_node_idx);
-                    // A call of an imported function whose body closed an
-                    // annotated open result row widens its result as a call in
-                    // the defining module does (design.md "Deferred: Row
-                    // Subsumption").
-                    const widened_callee_var = if (self.instantiation_is_immediate_callee and
-                        ext_ref.other_cir.nodeIsClosedResultBinding(ext_ref.other_cir_node_idx))
-                        try self.widenRecordedCalleeResult(expr_idx, ext_instantiated_var, env, expr_region)
-                    else
-                        null;
-                    const widened_use_var = if (widened_callee_var == null and is_value and !self.isFunctionTypeVar(ext_instantiated_var))
-                        try self.widenedValueUseVar(ext_instantiated_var, expr_idx, env, expr_region)
-                    else
-                        null;
-                    if (widened_callee_var) |widened| {
-                        _ = try self.unify(expr_var, widened, env);
-                    } else if (widened_use_var) |widened| {
-                        _ = try self.unify(expr_var, widened, env);
-                        try self.cir.recordRowCoercedUse(ModuleEnv.nodeIdxFrom(expr_idx), ext_instantiated_var);
-                    } else {
-                        _ = try self.unify(expr_var, ext_instantiated_var, env);
-                    }
+                    // An imported value is read at the type its module
+                    // exported, every row of which closed when that module
+                    // finished checking (design.md "Value Rows: Uses Share
+                    // One Row"); a scheme's instantiation has fresh rows.
+                    _ = try self.unify(expr_var, ext_instantiated_var, env);
                 }
             } else {
                 try self.markErroneous(expr_var);
@@ -28447,7 +28497,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
                 self.suppress_generalize_expr = decl_stmt.expr;
                 try self.activateSchemeOwner(decl_pattern_var);
             }
-            decl.saved_bounding_annotation = self.beginBoundedAnnotationRows(self.appliedAnnotation(decl_stmt.pattern, decl_stmt.anno));
+            decl.saved_bounding_annotation = try self.beginBoundedAnnotationRows(self.appliedAnnotation(decl_stmt.pattern, decl_stmt.anno));
             return .{ .expr = decl_stmt.expr, .expected = decl.expectation };
         },
         .s_var => |var_stmt| {
@@ -29226,6 +29276,13 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
             if (!self.returnFrameHasTrySuffix()) {
                 const body_result = try self.relateResultValue(expected_func.ret, lambda.body, env, state.anno_context);
                 self.refinePlatformRequirementReturnContext(body_result);
+                // A body related through a widening copy keeps its own type
+                // and crosses into the annotated result, which is then the
+                // function's result (design.md "Row Subsumption").
+                if (self.cir.rowCoercedResultWideVar(ModuleEnv.nodeIdxFrom(lambda.body)) != null) {
+                    const return_frame = &self.return_constraint_frames.items[self.innermostReturnFrameIndex(expr_idx)];
+                    return_frame.body_result = expected_func.ret;
+                }
             }
         }
 
@@ -37531,7 +37588,7 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     while (try self.propagateValueRowsToWidenedUses(env)) {
         try self.finalizeGeneratedCodecConstraintsToQuiescence(env, scope == .module);
     }
-    try self.settleUnwidenedCallees(env);
+    try self.settleUnwidenedResults();
     try self.resolvePendingTupleAccesses(env, true);
     try self.checkAllConstraints(env);
     try self.checkDefaultRestrictions();
@@ -41308,6 +41365,7 @@ fn checkReturnRelation(
     ctx: problem.Context,
     env: *Env,
 ) std.mem.Allocator.Error!void {
+    if (try self.relateWidenedResultValue(expected, actual_expr, env, ctx)) |_| return;
     const result = try self.unifyReturnContribution(expected, ModuleEnv.varFrom(actual_expr), env, ctx);
     if (result.isProblem()) {
         std.debug.assert(result == .problem);
@@ -41334,6 +41392,7 @@ fn relateResultValue(
     // the result it would flow into (Every Rejection Is Explicit Recovery).
     if (self.branchValueIsErroneous(actual_expr)) return .suppressed_by_error;
     const actual = ModuleEnv.varFrom(actual_expr);
+    if (try self.relateWidenedResultValue(expected, actual_expr, env, ctx)) |result| return result;
     const result = try self.runUnify(expected, actual, env, unifyOptionsForContext(ctx, .write_no_report));
     if (!result.isProblem()) return result;
     const result_expr = self.resultValueExpr(actual_expr);
@@ -41343,6 +41402,31 @@ fn relateResultValue(
     try self.types.poisonOnMismatch(expected, actual);
     try self.markErroneousValueExpr(result_expr);
     return .{ .problem = problem_idx };
+}
+
+/// Relate the value `actual_expr` produces to the function result it flows
+/// into through a widening copy of its type (design.md "Row Subsumption"): a
+/// value whose type reaches a closed tag union relates to the result with
+/// that row re-opened, keeps its own type, and crosses into the result through
+/// a row coercion. Null when the value reaches no closed row, or when the
+/// widened relation is rejected: the copy only re-opens rows the value's own
+/// type closes, so whatever rejected it rejects the value's own type too, and
+/// the caller relates and reports that type.
+fn relateWidenedResultValue(
+    self: *Self,
+    expected: Var,
+    actual_expr: CIR.Expr.Idx,
+    env: *Env,
+    ctx: problem.Context,
+) std.mem.Allocator.Error!?unifier.Result {
+    const widening = try self.widenResultValue(actual_expr, env) orelse return null;
+    const result = try self.runUnify(expected, widening.wide_var, env, unifyOptionsForContext(ctx, .write_no_report));
+    if (result.isAccepted()) {
+        try self.recordResultWidening(widening);
+        return result;
+    }
+    self.discardResultWidening(widening);
+    return null;
 }
 
 /// Relate one return contribution to the result it flows into. That result is
@@ -41476,14 +41560,14 @@ fn projectTryReturnRow(self: *Self, tail: Var, env: *Env, region: Region) Alloca
 fn checkProjectedTryReturn(self: *Self, expected: Var, plan: TryReturnRows.Plan, row: Var, env: *Env, ctx: problem.Context) Allocator.Error!void {
     const region = self.cir.store.getExprRegion(plan.expr);
     const actual = try self.freshFromContent(try self.mkTryContent(plan.ok, row), env, region);
-    if (self.try_return_conditions.get(ModuleEnv.varFrom(plan.expr))) |condition| {
-        try self.try_return_conditions.put(actual, condition);
-    }
-    const result = try self.unifyReturnContribution(expected, actual, env, ctx);
-    if (result.isProblem()) {
-        self.problems.problems.items[@backingInt(result.problem)].type_mismatch.types.actual_var = ModuleEnv.varFrom(plan.expr);
-        try self.markErroneousValueExpr(plan.expr);
-    }
+    const result = try self.runUnify(expected, actual, env, unifyOptionsForContext(ctx, .write_no_report));
+    if (result.isAccepted()) return;
+    // The projection is the contribution's heads over a fresh extension, which
+    // the rejected relation may already have joined with the result's other
+    // tags; the report describes the contribution's own type.
+    const source = ModuleEnv.varFrom(plan.expr);
+    _ = try self.appendTypeMismatch(expected, source, self.mismatchContext(ctx, source));
+    try self.markErroneousValueExpr(plan.expr);
 }
 
 /// The first `?` that produces the value of `expr_idx`, following tail
@@ -41644,7 +41728,7 @@ fn noteComposedBodyRelation(self: *Self, result: unifier.Result, body_expr: CIR.
 /// Composition").
 fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, anno_context: problem.Context) std.mem.Allocator.Error!Var {
     const frame_idx = self.innermostReturnFrameIndex(lambda_idx);
-    const frame = self.return_constraint_frames.items[frame_idx];
+    var frame = self.return_constraint_frames.items[frame_idx];
     defer {
         self.return_constraints.shrinkRetainingCapacity(frame.start);
         self.return_value_exprs.shrinkRetainingCapacity(frame.returns_start);
@@ -41691,6 +41775,12 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
         if (self.tryArgsFromVar(annotated_result) == null) {
             const body_result = try self.relateResultValue(annotated_result, lambda_body, env, anno_context);
             self.refinePlatformRequirementReturnContext(body_result);
+            // A body related through a widening copy keeps its own type;
+            // the annotated result is the function's (design.md "Row
+            // Subsumption").
+            if (self.cir.rowCoercedResultWideVar(ModuleEnv.nodeIdxFrom(lambda_body)) != null) {
+                frame.body_result = annotated_result;
+            }
         }
     }
 
@@ -41830,7 +41920,12 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
         }
         const gathered = try self.gatherTryReturnRow(root, false);
         if (gathered.has_tags) {
-            if (gathered.nested) {
+            // A closed source row is included by its heads alone: it has no
+            // residual to relate, and equating it with the result would close
+            // the result's row (design.md "Row Subsumption"). A host-boundary
+            // row is the exception: it never widens, so it is equated with the
+            // result and a wider result is a mismatch (design.md "Row Joins").
+            if (gathered.nested or (self.varIsEmptyTagUnion(gathered.tail) and !self.rowIsHostFixed(root))) {
                 _ = try self.gatherTryReturnRow(root, true);
                 const projection = try self.projectTryReturnRow(gathered.tail, env, self.cir.store.getExprRegion(plan.expr));
                 try rows.projections.put(root, projection);
@@ -41900,6 +41995,8 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
             .projected => |projection| tail = projection.tail,
         }
         if (self.types.resolveVar(tail).var_ == self.types.resolveVar(composed.err).var_) continue;
+        // A closed source row has no residual to relate.
+        if (self.varIsEmptyTagUnion(tail)) continue;
         const gathered = try self.gatherTryReturnRow(tail, true);
         if (rows.tags.items.len > 0) {
             const projection = try self.projectTryReturnRow(gathered.tail, env, self.cir.store.getExprRegion(plan.expr));
@@ -43857,7 +43954,8 @@ fn appendReplayShapeWalk(self: *Self) Allocator.Error!?void {
             continue;
         }
         seen.value_ptr.* = @intCast(self.scratch_replay_shape_vars.count() - 1);
-        try out.append(self.gpa, @bitCast(resolved.desc.flags.relational()));
+        const relational_flags: u16 = @bitCast(resolved.desc.flags.relational());
+        try out.appendSlice(self.gpa, &.{ @truncate(relational_flags), @truncate(relational_flags >> 8) });
         // Children are pushed in reverse, so they are encoded in order.
         switch (resolved.desc.content) {
             .err => return null,
@@ -46710,6 +46808,29 @@ inline fn processDeferredDispatchEntry(
                     region,
                     failure_expr,
                 )) orelse continue;
+
+                // A `where` requirement's result rows are opened per use, so
+                // the requiring body may use them at a wider union. A hosted
+                // declaration's rows are the host's and never widen (design.md
+                // "Row Joins"), so it satisfies no requirement whose result
+                // reaches a tag row.
+                if (constraint.origin == .where_clause and
+                    method_env.store.getExpr(def.expr) == .e_hosted_lambda and
+                    try self.varReachesHostFixedRow(method_var))
+                {
+                    const use_region = if (failure_expr orelse constraintIntroExpr(constraint)) |use_expr|
+                        self.cir.store.getExprRegion(use_expr)
+                    else
+                        self.getRegionAt(constraint.fn_var);
+                    _ = try self.problems.appendProblem(.{ .hosted_where_requirement = .{
+                        .region = use_region,
+                        .dispatcher_name = nominal_type.ident.ident_idx,
+                        .method_name = constraint.fn_name,
+                    } });
+                    try self.poisonConstraintFailure(deferred_constraint.var_, constraint, env, failure_expr);
+                    try self.markStaticDispatchRejected(constraint);
+                    continue;
+                }
 
                 // Unwrap the constraint type
                 if (constraint_fn_resolved.unwrapFunc() == null) {
@@ -55667,18 +55788,25 @@ fn checkBranchBodyAgainstExpected(
     // commit-probe. Success keeps the merge (regions/rank/deferred constraints
     // already propagated into env); failure falls through to the report below
     // AFTER the scope's rollback, so the snapshots it takes see the pristine vars.
+    // A body whose type reaches a closed tag union folds in through a widening
+    // copy and crosses into the result through a row coercion (design.md "Row
+    // Subsumption"); the copy only re-opens rows the body's own type closes,
+    // so a rejected fold is reported through that own type.
     {
+        const widening = try self.widenResultValue(body_expr_idx, env);
         var commit_probe = try self.beginCommitProbe(env);
         var committed = false;
         defer if (!committed) commit_probe.rollback();
 
-        const result = try commit_probe.unifyInContext(body_var, acc, ctx);
+        const result = try commit_probe.unifyInContext(if (widening) |w| w.wide_var else body_var, acc, ctx);
         if (result.isAccepted()) {
             committed = true;
             try commit_probe.commit();
+            if (widening) |w| try self.recordResultWidening(w);
             try self.claimRecordedProblems();
             return;
         }
+        if (widening) |w| self.discardResultWidening(w);
     }
 
     // The body matches the annotation (step 1) yet diverges from an earlier sibling

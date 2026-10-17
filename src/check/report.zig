@@ -88,6 +88,8 @@ const HostBoundaryOpenRow = problem_mod.HostBoundaryOpenRow;
 const HostBoundaryOptionalField = problem_mod.HostBoundaryOptionalField;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
 const AnnotationOnlyValueUse = problem_mod.AnnotationOnlyValueUse;
+const TypeMismatch = problem_mod.TypeMismatch;
+const HostedWhereRequirement = problem_mod.HostedWhereRequirement;
 const DerivedMethodValueUse = problem_mod.DerivedMethodValueUse;
 const CapturingMethod = problem_mod.CapturingMethod;
 const UnsupportedGeneratedMethod = problem_mod.UnsupportedGeneratedMethod;
@@ -935,106 +937,9 @@ pub const ReportBuilder = struct {
 
         switch (problem) {
             .type_mismatch => |mismatch| {
-                // A defaulted-field identity conflict gets its own dedicated
-                // report before any per-context mismatch builder runs: the
-                // generic shape renders two often identical-looking types,
-                // hiding that the real difference is two distinct `??`
-                // default identities (design.md "Defaulted Fields"—two
-                // separately written defaults never merge).
-                if (try self.findFieldDefaultMismatch(mismatch.types)) |fdm| {
-                    return self.buildIncompatibleDefaultsReport(mismatch.types, fdm);
-                }
-                // A use that gave one interpolation's values different types
-                // is reported as that, whatever relation exposed it.
-                if (mismatch.interpolation_tie) |tie| {
-                    if (mismatch.leaf) |leaf| return self.buildInterpolationTieReport(tie, leaf);
-                }
-                // All error contexts are now handled via mismatch.context
-                return switch (mismatch.context) {
-                    .if_condition => self.buildNonBoolReport(mismatch.types, "if", "condition must evaluate to a"),
-                    .if_branch => |ctx| self.buildIfBranchReport(mismatch.types, ctx),
-                    .match_pattern => |ctx| self.buildMatchPatternReport(mismatch.types, ctx),
-                    .match_alt_binder => |ctx| self.buildMatchAltBinderReport(mismatch.types, ctx),
-                    .match_branch => |ctx| self.buildMatchBranchReport(mismatch.types, ctx),
-                    .list_entry => |ctx| self.buildListEntryReport(mismatch.types, ctx),
-                    .interpolation_part => |region| self.buildGenericMismatchAtRegion(mismatch.types, .{ .direct = region }),
-                    .fn_call_arity => |ctx| self.buildIncompatibleFnCallArity(mismatch.types, ctx),
-                    .fn_call_non_function => |ctx| self.buildFnCallNonFunction(mismatch.types, ctx),
-                    .fn_call_arg => |ctx| self.buildIncompatibleFnCallArg(mismatch.types, ctx),
-                    .binop_lhs => |ctx| self.buildBinopReport(mismatch.types, ctx, .lhs),
-                    .binop_rhs => |ctx| self.buildBinopReport(mismatch.types, ctx, .rhs),
-                    .try_operator_expr => |ctx| self.buildTryOperatorExprReport(mismatch.types, ctx),
-                    .try_operator_value => |ctx| self.buildTryOperatorValueReport(mismatch.types, ctx),
-                    .statement_value => self.buildStatementValueReport(mismatch.types),
-                    .early_return => self.buildEarlyReturnReport(mismatch.types),
-                    .try_operator => |ctx| self.buildTryOperatorReport(mismatch.types, ctx),
-                    .nominal_constructor => |ctx| switch (ctx.backing_type) {
-                        .tag => self.buildInvalidNominalTag(mismatch.types),
-                        .record => self.buildInvalidNominalBacking(mismatch.types, "Invalid Nominal Record", "I'm having trouble with this nominal type that wraps a record.", "The record I found is:"),
-                        .tuple => self.buildInvalidNominalBacking(mismatch.types, "Invalid Nominal Tuple", "I'm having trouble with this nominal type that wraps a tuple.", "The tuple I found is:"),
-                        .value => self.buildInvalidNominalBacking(mismatch.types, "Invalid Nominal Type", "I'm having trouble with this nominal type.", "The value I found has type:"),
-                    },
-                    .fn_args_bound_var => |ctx| self.buildIncompatibleFnArgsBoundVar(mismatch.types, ctx),
-                    .method_type => |ctx| self.buildIncompatibleMethodType(mismatch.types, ctx),
-                    .expect => self.buildNonBoolReport(mismatch.types, "expect", "statement must evaluate to a"),
-                    .record_access => |ctx| self.buildRecordAccess(mismatch.types, mismatch.evidence, ctx),
-                    .record_update => |ctx| self.buildRecordUpdate(mismatch.types, mismatch.evidence, ctx),
-                    .recursive_def => |ctx| self.buildRecursiveDef(mismatch.types, ctx),
-                    .predeclared_use => |ctx| self.buildPredeclaredUse(mismatch.types, ctx),
-                    .platform_requirement, .platform_requirement_return => |ctx| {
-                        const is_return = mismatch.context == .platform_requirement_return;
-                        var report = try self.makeMismatchReport(
-                            ProblemRegion{ .simple = regionIdxFrom(mismatch.types.actual_var) },
-                            &.{ D.bytes("The platform requires "), D.ident(ctx.required_ident), D.bytes(if (is_return) " to return a specific type." else " to have a specific type.") },
-                            &.{D.bytes(if (is_return) "This function currently returns:" else "Here it has the type:")},
-                            mismatch.types.actual_snapshot,
-                            &.{D.bytes(if (is_return) "But the platform requires it to return:" else "But the platform requires:")},
-                            mismatch.types.expected_snapshot,
-                            &.{},
-                        );
-                        try report.document.addLineBreak();
-                        try report.document.addText("The requirement is declared here:");
-                        try report.document.addLineBreak();
-                        try self.addPlatformRequirementSourceHighlight(&report, ctx.platform_region);
-                        return report;
-                    },
-                    .type_annotation => return try self.makeMismatchReport(
-                        ProblemRegion{ .simple = regionIdxFrom(mismatch.types.actual_var) },
-                        &.{D.bytes("This expression is used in an unexpected way.")},
-                        &.{D.bytes("It has the type:")},
-                        mismatch.types.actual_snapshot,
-                        &.{D.bytes("But the annotation says it should be:")},
-                        mismatch.types.expected_snapshot,
-                        &.{},
-                    ),
-                    .tag_not_in_annotation => |ctx| return try self.makeMismatchReport(
-                        ProblemRegion{ .direct = ctx.region },
-                        switch (ctx.source) {
-                            .expression => &.{
-                                D.bytes("This expression produces the tag"),
-                                D.ident(ctx.tag_name).withAnnotation(.inline_code),
-                                D.bytes("but the annotated tag union does not list it."),
-                            },
-                            .pattern => &.{
-                                D.bytes("This pattern matches the tag"),
-                                D.ident(ctx.tag_name).withAnnotation(.inline_code),
-                                D.bytes("on a value an annotated definition produces, but that definition's annotated tag union does not list it."),
-                            },
-                            .generated_codec => &.{
-                                D.bytes("This definition can produce the tag"),
-                                D.ident(ctx.tag_name).withAnnotation(.inline_code),
-                                D.bytes("but the annotated tag union does not list it."),
-                            },
-                        },
-                        &.{D.bytes("It has the type:")},
-                        mismatch.types.actual_snapshot,
-                        &.{D.bytes("But the annotation says it should be:")},
-                        mismatch.types.expected_snapshot,
-                        &.{&.{D.bytes("A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists.")}},
-                    ),
-                    .record_destructure => return try self.buildRecordDestructureMismatch(mismatch.types),
-                    .none => return try self.buildGenericMismatch(mismatch.types),
-                };
+                var report = try self.buildTypeMismatchReport(mismatch);
+                if (mismatch.host_fixed_row) try self.appendHostFixedRowHint(&report, mismatch.host_fixed_origin, mismatch.types.actual_snapshot);
+                return report;
             },
             .type_apply_mismatch_arities => |data| {
                 return self.buildTypeApplyArityMismatchReport(data);
@@ -1110,6 +1015,9 @@ pub const ReportBuilder = struct {
             },
             .annotation_only_value_use => |data| {
                 return self.buildAnnotationOnlyValueUseReport(data);
+            },
+            .hosted_where_requirement => |data| {
+                return self.buildHostedWhereRequirementReport(data);
             },
             .derived_method_value_use => |data| {
                 return self.buildDerivedMethodValueUseReport(data);
@@ -1786,29 +1694,9 @@ pub const ReportBuilder = struct {
                 D.bytes("Try").withAnnotation(.inline_code),
                 D.bytes("the body would otherwise return. Removing it may fix this."),
             }, self, &report);
-        } else if (self.tryErrorRowNeedsWideningHint(types)) {
-            if (ctx.hosted_origin) |hosted_origin| {
-                try D.renderSlice(&.{
-                    D.bytes("This error is forwarded from host function"),
-                    D.ident(hosted_origin).withAnnotation(.inline_code),
-                    D.bytes(".").withNoPrecedingSpace(),
-                    D.bytes("Its error type has a fixed representation at the host boundary. Forwarding it through a Roc function does not make its error union open."),
-                }, self, &report);
-                try report.document.addLineBreak();
-                try report.document.addLineBreak();
-            }
-            try D.renderSlice(&.{
-                D.bytes("Hint:").withAnnotation(.emphasized),
-                D.bytes("This error payload is a closed tag union. It cannot gain the additional variants in the function's error type, even when all its variants are listed there. The two unions can have different runtime representations."),
-            }, self, &report);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try D.renderSlice(&.{
-                D.bytes("Use an explicit"),
-                D.bytes("match").withAnnotation(.inline_code),
-                D.bytes("to reconstruct each error variant in the return type, or wrap the original error in a tag of that type. Reconstructed payloads must also match the expected payload types. Forwarding the unchanged error payload does not convert it."),
-            }, self, &report);
-        } else {
+        } else if (ctx.hosted_origin == null) {
+            // A host-boundary row's report says how to write the value again
+            // instead (`appendHostFixedRowHint`).
             try D.renderSlice(&.{
                 D.bytes("Hint:").withAnnotation(.emphasized),
                 D.bytes("The error types from all"),
@@ -1818,67 +1706,6 @@ pub const ReportBuilder = struct {
         }
 
         return report;
-    }
-
-    /// Inspect immutable diagnostic snapshots only. Do not attribute a closed
-    /// row to a host: parameters and nominal fields can also supply one.
-    fn tryErrorRowNeedsWideningHint(self: *const Self, pair: TypePair) bool {
-        const snapshots = self.snapshots.?;
-        const actual = snapshots.getContentUnwrapAlias(pair.actual_snapshot);
-        const expected = snapshots.getContentUnwrapAlias(pair.expected_snapshot);
-        if (actual != .structure or actual.structure != .nominal_type or
-            expected != .structure or expected.structure != .nominal_type) return false;
-        const a = actual.structure.nominal_type;
-        const e = expected.structure.nominal_type;
-        if (!std.meta.eql(a.ident, e.ident) or a.origin_module != e.origin_module) return false;
-        const actual_args = snapshots.sliceVars(a.vars);
-        const expected_args = snapshots.sliceVars(e.vars);
-        // Nominal snapshots store the backing before the two Try arguments.
-        if (actual_args.len != 3 or expected_args.len != 3) return false;
-        const actual_err = actual_args[2];
-        const expected_err = expected_args[2];
-
-        var cursor = actual_err;
-        var has_tags = false;
-        while (true) {
-            const content = snapshots.getContentUnwrapAlias(cursor);
-            if (content != .structure) return false;
-            switch (content.structure) {
-                .empty_tag_union => break,
-                .tag_union => |row| {
-                    for (snapshots.sliceTags(row.tags).items(.name)) |name| {
-                        has_tags = true;
-                        if (!self.snapshotRowHasTag(expected_err, name)) return false;
-                    }
-                    cursor = row.ext;
-                },
-                .box, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return false,
-            }
-        }
-        if (!has_tags) return false;
-        cursor = expected_err;
-        while (true) {
-            const content = snapshots.getContentUnwrapAlias(cursor);
-            if (content != .structure or content.structure != .tag_union) return false;
-            const row = content.structure.tag_union;
-            for (snapshots.sliceTags(row.tags).items(.name)) |name| {
-                if (!self.snapshotRowHasTag(actual_err, name)) return true;
-            }
-            cursor = row.ext;
-        }
-    }
-
-    fn snapshotRowHasTag(self: *const Self, root: SnapshotContentIdx, name: Ident.Idx) bool {
-        var cursor = root;
-        while (true) {
-            const content = self.snapshots.?.getContentUnwrapAlias(cursor);
-            if (content != .structure or content.structure != .tag_union) return false;
-            const row = content.structure.tag_union;
-            for (self.snapshots.?.sliceTags(row.tags).items(.name)) |tag_name| {
-                if (tag_name.eql(name)) return true;
-            }
-            cursor = row.ext;
-        }
     }
 
     /// The region to highlight for a `?` desugared into `expr_idx`: just the
@@ -5139,6 +4966,260 @@ pub const ReportBuilder = struct {
         return self.buildHighlightedRegionReport("Declaration Has No Value", "This declaration has a type annotation but no implementation.", .warning, data.region, &.{
             D.bytes("Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary."),
         });
+    }
+
+    /// The report for a type mismatch, chosen by the context the relation
+    /// reported under.
+    fn buildTypeMismatchReport(self: *Self, mismatch: TypeMismatch) Allocator.Error!Report {
+        // A defaulted-field identity conflict gets its own dedicated
+        // report before any per-context mismatch builder runs: the
+        // generic shape renders two often identical-looking types,
+        // hiding that the real difference is two distinct `??`
+        // default identities (design.md "Defaulted Fields"—two
+        // separately written defaults never merge).
+        if (try self.findFieldDefaultMismatch(mismatch.types)) |fdm| {
+            return self.buildIncompatibleDefaultsReport(mismatch.types, fdm);
+        }
+        // A use that gave one interpolation's values different types
+        // is reported as that, whatever relation exposed it.
+        if (mismatch.interpolation_tie) |tie| {
+            if (mismatch.leaf) |leaf| return self.buildInterpolationTieReport(tie, leaf);
+        }
+        // All error contexts are now handled via mismatch.context
+        return switch (mismatch.context) {
+            .if_condition => self.buildNonBoolReport(mismatch.types, "if", "condition must evaluate to a"),
+            .if_branch => |ctx| self.buildIfBranchReport(mismatch.types, ctx),
+            .match_pattern => |ctx| self.buildMatchPatternReport(mismatch.types, ctx),
+            .match_alt_binder => |ctx| self.buildMatchAltBinderReport(mismatch.types, ctx),
+            .match_branch => |ctx| self.buildMatchBranchReport(mismatch.types, ctx),
+            .list_entry => |ctx| self.buildListEntryReport(mismatch.types, ctx),
+            .interpolation_part => |region| self.buildGenericMismatchAtRegion(mismatch.types, .{ .direct = region }),
+            .fn_call_arity => |ctx| self.buildIncompatibleFnCallArity(mismatch.types, ctx),
+            .fn_call_non_function => |ctx| self.buildFnCallNonFunction(mismatch.types, ctx),
+            .fn_call_arg => |ctx| self.buildIncompatibleFnCallArg(mismatch.types, ctx),
+            .binop_lhs => |ctx| self.buildBinopReport(mismatch.types, ctx, .lhs),
+            .binop_rhs => |ctx| self.buildBinopReport(mismatch.types, ctx, .rhs),
+            .try_operator_expr => |ctx| self.buildTryOperatorExprReport(mismatch.types, ctx),
+            .try_operator_value => |ctx| self.buildTryOperatorValueReport(mismatch.types, ctx),
+            .statement_value => self.buildStatementValueReport(mismatch.types),
+            .early_return => self.buildEarlyReturnReport(mismatch.types),
+            .try_operator => |ctx| self.buildTryOperatorReport(mismatch.types, ctx),
+            .nominal_constructor => |ctx| switch (ctx.backing_type) {
+                .tag => self.buildInvalidNominalTag(mismatch.types),
+                .record => self.buildInvalidNominalBacking(mismatch.types, "Invalid Nominal Record", "I'm having trouble with this nominal type that wraps a record.", "The record I found is:"),
+                .tuple => self.buildInvalidNominalBacking(mismatch.types, "Invalid Nominal Tuple", "I'm having trouble with this nominal type that wraps a tuple.", "The tuple I found is:"),
+                .value => self.buildInvalidNominalBacking(mismatch.types, "Invalid Nominal Type", "I'm having trouble with this nominal type.", "The value I found has type:"),
+            },
+            .fn_args_bound_var => |ctx| self.buildIncompatibleFnArgsBoundVar(mismatch.types, ctx),
+            .method_type => |ctx| self.buildIncompatibleMethodType(mismatch.types, ctx),
+            .expect => self.buildNonBoolReport(mismatch.types, "expect", "statement must evaluate to a"),
+            .record_access => |ctx| self.buildRecordAccess(mismatch.types, mismatch.evidence, ctx),
+            .record_update => |ctx| self.buildRecordUpdate(mismatch.types, mismatch.evidence, ctx),
+            .recursive_def => |ctx| self.buildRecursiveDef(mismatch.types, ctx),
+            .predeclared_use => |ctx| self.buildPredeclaredUse(mismatch.types, ctx),
+            .platform_requirement, .platform_requirement_return => |ctx| {
+                const is_return = mismatch.context == .platform_requirement_return;
+                var report = try self.makeMismatchReport(
+                    ProblemRegion{ .simple = regionIdxFrom(mismatch.types.actual_var) },
+                    &.{ D.bytes("The platform requires "), D.ident(ctx.required_ident), D.bytes(if (is_return) " to return a specific type." else " to have a specific type.") },
+                    &.{D.bytes(if (is_return) "This function currently returns:" else "Here it has the type:")},
+                    mismatch.types.actual_snapshot,
+                    &.{D.bytes(if (is_return) "But the platform requires it to return:" else "But the platform requires:")},
+                    mismatch.types.expected_snapshot,
+                    &.{},
+                );
+                try report.document.addLineBreak();
+                try report.document.addText("The requirement is declared here:");
+                try report.document.addLineBreak();
+                try self.addPlatformRequirementSourceHighlight(&report, ctx.platform_region);
+                return report;
+            },
+            .type_annotation => return try self.makeMismatchReport(
+                ProblemRegion{ .simple = regionIdxFrom(mismatch.types.actual_var) },
+                &.{D.bytes("This expression is used in an unexpected way.")},
+                &.{D.bytes("It has the type:")},
+                mismatch.types.actual_snapshot,
+                &.{D.bytes("But the annotation says it should be:")},
+                mismatch.types.expected_snapshot,
+                &.{},
+            ),
+            .tag_not_in_annotation => |ctx| return try self.makeMismatchReport(
+                ProblemRegion{ .direct = ctx.region },
+                switch (ctx.source) {
+                    .expression => &.{
+                        D.bytes("This expression produces the tag"),
+                        D.ident(ctx.tag_name).withAnnotation(.inline_code),
+                        D.bytes("but the annotated tag union does not list it."),
+                    },
+                    .pattern => &.{
+                        D.bytes("This pattern matches the tag"),
+                        D.ident(ctx.tag_name).withAnnotation(.inline_code),
+                        D.bytes("on a value an annotated definition produces, but that definition's annotated tag union does not list it."),
+                    },
+                    .generated_codec => &.{
+                        D.bytes("This definition can produce the tag"),
+                        D.ident(ctx.tag_name).withAnnotation(.inline_code),
+                        D.bytes("but the annotated tag union does not list it."),
+                    },
+                },
+                &.{D.bytes("It has the type:")},
+                mismatch.types.actual_snapshot,
+                &.{D.bytes("But the annotation says it should be:")},
+                mismatch.types.expected_snapshot,
+                &.{&.{D.bytes("A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists.")}},
+            ),
+            .record_destructure => return try self.buildRecordDestructureMismatch(mismatch.types),
+            .none => return try self.buildGenericMismatch(mismatch.types),
+        };
+    }
+
+    /// A value whose tag row a host-boundary annotation wrote cannot be used
+    /// as part of a wider union (design.md "Row Joins"): the hint says to
+    /// write the value again, with the cases spelled out for its own tags.
+    fn appendHostFixedRowHint(self: *Self, report: *Report, origin: ?Ident.Idx, actual: SnapshotContentIdx) Allocator.Error!void {
+        try report.document.addLineBreaks(2);
+        if (origin) |hosted_origin| {
+            try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("This value's tag union comes from host function"),
+                D.ident(hosted_origin).withAnnotation(.inline_code),
+                D.bytes(".").withNoPrecedingSpace(),
+                D.bytes("The host was compiled with that exact union, so it can't gain tags, even when every one of its tags is listed in the wider union."),
+            }, self, report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("This value's tag union is declared at the host boundary. The host was compiled with that exact union, so it can't gain tags, even when every one of its tags is listed in the wider union."),
+            }, self, report);
+        }
+        var example = std.ArrayList(u8).empty;
+        defer example.deinit(self.gpa);
+        if (try self.hostRowRebuildExample(&example, actual)) {
+            try D.renderSlice(&.{D.bytes("To use it as part of a wider union, rebuild it so each tag is created again:")}, self, report);
+            try report.document.addLineBreaks(2);
+            try report.document.addCodeBlock(try report.addOwnedString(example.items));
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("To use it as part of a wider union, rebuild it with a"),
+                D.bytes("match").withAnnotation(.inline_code),
+                D.bytes("that creates each tag again."),
+            }, self, report);
+        }
+    }
+
+    /// The code that rebuilds a value of the snapshotted type tag by tag:
+    /// `.map_err(..)` for a `Try` whose error union is the host's, a `match`
+    /// for a bare tag union. False when the snapshot is neither.
+    fn hostRowRebuildExample(self: *Self, out: *std.ArrayList(u8), actual: SnapshotContentIdx) Allocator.Error!bool {
+        const snapshots = self.snapshots.?;
+        const content = snapshots.getContentUnwrapAlias(actual);
+        if (content != .structure) return false;
+        var cases = std.ArrayList(u8).empty;
+        defer cases.deinit(self.gpa);
+        switch (content.structure) {
+            .nominal_type => |nominal| {
+                const args = snapshots.sliceVars(nominal.vars);
+                // Nominal snapshots store the backing before the two `Try` arguments.
+                if (args.len != 3) return false;
+                const tag_count = try self.appendRebuildCases(&cases, args[2]);
+                if (tag_count == 0) return false;
+                if (tag_count == 1) {
+                    try out.print(self.gpa, ".map_err(|{s}| {s})", .{ cases.items, cases.items });
+                } else {
+                    try out.print(self.gpa, ".map_err(|err| match err {{ {s} }})", .{cases.items});
+                }
+                return true;
+            },
+            .tag_union => {
+                const tag_count = try self.appendRebuildCases(&cases, actual);
+                if (tag_count == 0) return false;
+                if (tag_count == 1) {
+                    try out.print(self.gpa, "match value {{ {s} => {s} }}", .{ cases.items, cases.items });
+                } else {
+                    try out.print(self.gpa, "match value {{ {s} }}", .{cases.items});
+                }
+                return true;
+            },
+            .box, .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return false,
+        }
+    }
+
+    /// Append the `match` cases that write each tag of a tag union again
+    /// snapshot, `A(e) => A(e), B => B`, and return how many tags it has. A
+    /// single tag appends only its pattern, `A(e)`, which also spells its
+    /// rebuilt value. Zero when the snapshot is not a tag union.
+    fn appendRebuildCases(self: *Self, out: *std.ArrayList(u8), row: SnapshotContentIdx) Allocator.Error!usize {
+        const snapshots = self.snapshots.?;
+        var patterns = std.ArrayList(u8).empty;
+        defer patterns.deinit(self.gpa);
+        var pattern_ends = std.ArrayList(usize).empty;
+        defer pattern_ends.deinit(self.gpa);
+        var cursor = row;
+        while (true) {
+            const content = snapshots.getContentUnwrapAlias(cursor);
+            if (content != .structure) break;
+            switch (content.structure) {
+                .empty_tag_union => break,
+                .tag_union => |tag_union| {
+                    const tags = snapshots.sliceTags(tag_union.tags);
+                    for (tags.items(.name), tags.items(.args)) |name, args| {
+                        try patterns.appendSlice(self.gpa, self.can_ir.getIdentText(name));
+                        const arity = snapshots.sliceVars(args).len;
+                        if (arity == 1) {
+                            try patterns.appendSlice(self.gpa, "(e)");
+                        } else if (arity > 1) {
+                            try patterns.append(self.gpa, '(');
+                            for (0..arity) |index| {
+                                if (index != 0) try patterns.appendSlice(self.gpa, ", ");
+                                try patterns.print(self.gpa, "e{d}", .{index + 1});
+                            }
+                            try patterns.append(self.gpa, ')');
+                        }
+                        try pattern_ends.append(self.gpa, patterns.items.len);
+                    }
+                    cursor = tag_union.ext;
+                },
+                .box, .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => break,
+            }
+        }
+        if (pattern_ends.items.len == 1) {
+            try out.appendSlice(self.gpa, patterns.items);
+            return 1;
+        }
+        var start: usize = 0;
+        for (pattern_ends.items, 0..) |end, index| {
+            if (index != 0) try out.appendSlice(self.gpa, ", ");
+            const pattern = patterns.items[start..end];
+            try out.print(self.gpa, "{s} => {s}", .{ pattern, pattern });
+            start = end;
+        }
+        return pattern_ends.items.len;
+    }
+
+    fn buildHostedWhereRequirementReport(self: *Self, data: HostedWhereRequirement) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Hosted Function In Where Clause", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
+            D.ident(data.dispatcher_name).withAnnotation(.inline_code),
+            D.bytes("'s").withNoPrecedingSpace(),
+            D.ident(data.method_name).withAnnotation(.inline_code),
+            D.bytes("is a hosted function, so it can't satisfy this"),
+            D.bytes("where").withAnnotation(.inline_code),
+            D.bytes("requirement."),
+        }, self, &report, &report.headline);
+        try self.addSourceHighlightRegion(&report, data.region);
+        try report.document.addLineBreak();
+        try D.renderSlice(&.{
+            D.bytes("The requirement's result has a tag union, and the function that requires it may use that union as part of a wider one. A hosted function's unions have the exact representation the host was compiled with, so they can never gain tags."),
+        }, self, &report);
+        try report.document.addLineBreaks(2);
+        try D.renderSlice(&.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("Wrap the hosted function in a Roc function that rebuilds each tag of its result, for example with"),
+            D.bytes(".map_err(|HostErr(e)| HostErr(e))").withAnnotation(.inline_code),
+            D.bytes(", and give the type that function instead.").withNoPrecedingSpace(),
+        }, self, &report);
+        return report;
     }
 
     fn buildAnnotationOnlyValueUseReport(self: *Self, data: AnnotationOnlyValueUse) Allocator.Error!Report {

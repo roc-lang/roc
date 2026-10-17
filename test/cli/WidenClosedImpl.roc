@@ -1,10 +1,10 @@
 # `status`'s published result row is CLOSED (its
 # body returns the closed top-level `closed_value`), and the where-method use
 # in `describe` requests the wider row `[Ok(Str), Err(Str), Extra]`. The
-# implementation must stay specialized at its declared row and be reached
-# through a generated adapter that re-tags into the request. `Extra` sorts
-# between `Err` and `Ok`, so a wrong re-tag shows up as a wrong discriminant
-# through `show`, on both backends.
+# implementation stays specialized at its declared row, and its result row
+# joins the request's (design.md "Row Joins"). `Extra` sorts between `Err` and
+# `Ok`, so a result numbered by the declared row alone shows up as a wrong
+# discriminant through `show`, on both backends.
 WidenClosedImpl := {}
 
 describe : a -> [Ok(Str), Err(Str), Extra] where [a.status : a -> [Ok(Str), Err(Str)]]

@@ -597,6 +597,8 @@ pub const ErasedArgDescRead = enum(u8) {
     /// The parameter reads payload `source_nested_index` of tag
     /// `source_tag_name` in its parent's tag variants.
     tag_payload,
+    /// The parameter reads its parent's open-row extension descriptor.
+    tag_ext,
 };
 
 /// Hidden erased-procedure parameter initialized from one keyed call-site

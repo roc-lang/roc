@@ -4387,17 +4387,11 @@ pub const CheckedTypeStore = struct {
         // or a per-use where-method callable.
         try output_type_roots.forEachSchemeUseTypeRoot(module_env, &publisher);
 
-        // A row-coerced use reads its value at the value's own type
-        // (`ModuleEnv.RowCoercedUse`), which checked-body construction gives
-        // the coercion's child.
-        for (module_env.row_coerced_uses.items.items) |use| {
-            _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @fromBackingInt(use.value_var));
-        }
-        // A row-coerced call is lowered at its function's own type and result
-        // (`ModuleEnv.RowCoercedCallee`).
-        for (module_env.row_coerced_callees.items.items) |callee| {
-            _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @fromBackingInt(callee.fn_var));
-            _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @fromBackingInt(callee.ret_var));
+        // A row-coerced result's coercion node has its widening copy's type;
+        // the expression's own node keeps its own type
+        // (`ModuleEnv.RowCoercedResult`).
+        for (module_env.row_coerced_results.items.items) |result| {
+            _ = try appendCheckedTypeRoot(allocator, module, names, import_views, &store, &active, @fromBackingInt(result.wide_var));
         }
 
         for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
@@ -10956,8 +10950,9 @@ pub const CheckedExprData = union(enum) {
     },
     /// A checker-stamped row coercion (design.md "Row Coercion Primitive"):
     /// `value` is a closed tag row whose every tag this expression's wider
-    /// type lists. The two types are related, never unified, and lowering
-    /// re-tags the value. No checker site emits it yet.
+    /// type lists. The checker relates the two types without unifying them;
+    /// lowering joins their rows into one row (design.md "Row Joins") and
+    /// lowers `value` straight into this expression's destination.
     row_coerce: struct {
         value: CheckedExprId,
     },
@@ -12358,6 +12353,10 @@ pub const CheckedBodyStore = struct {
         errdefer string_builder.deinitAll();
         var source_node_map = try CheckedSourceNodeMap.init(allocator, module.nodeCount());
         errdefer source_node_map.deinit(allocator);
+        // The coercion node a parent refers to in place of each row-coerced
+        // result expression, by raw source node.
+        var result_wrappers: std.AutoHashMapUnmanaged(u32, CheckedExprId) = .empty;
+        defer result_wrappers.deinit(allocator);
 
         var top_level_defs = try TopLevelDefPatternIndex.init(allocator, module);
         defer top_level_defs.deinit(allocator);
@@ -12367,13 +12366,7 @@ pub const CheckedBodyStore = struct {
             const node: CIR.Node.Idx = @fromBackingInt(@intCast(node_idx));
             if (source_nodes.hasExpr(@fromBackingInt(@intCast(node_idx)))) {
                 const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
-                // A row-coerced callee is read at its function's own type; the
-                // call widens the result (`ModuleEnv.RowCoercedCallee`).
-                const source_var = if (module.moduleEnvConst().rowCoercedCallee(node)) |callee|
-                    @as(Var, @fromBackingInt(callee.fn_var))
-                else
-                    module.exprType(expr_idx);
-                const ty = checked_types.rootForSourceVar(module, source_var) orelse {
+                const ty = checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
                     if (builtin.mode == .debug) {
                         base.invariant("checked artifact invariant violated: checked expr type root was not published", .{});
                     }
@@ -12387,6 +12380,28 @@ pub const CheckedBodyStore = struct {
                     .data = .pending,
                 });
                 try source_node_map.putExpr(node_idx, id);
+                // A value expression checking recorded as flowing into its
+                // function's result through a widening copy of its type
+                // (`ModuleEnv.RowCoercedResult`) keeps its own node, kind and
+                // type; the coercion to the copy is a separate node that only
+                // the expression's parent refers to (design.md "Row
+                // Subsumption", "Row Coercion Primitive").
+                if (module.moduleEnvConst().rowCoercedResultWideVar(node)) |wide_var| {
+                    const wide_ty = checked_types.rootForSourceVar(module, wide_var) orelse {
+                        if (builtin.mode == .debug) {
+                            base.invariant("checked artifact invariant violated: row-coerced result's widened type root was not published", .{});
+                        }
+                        unreachable;
+                    };
+                    const wrapper: CheckedExprId = @fromBackingInt(@intCast(try checkedSourceNodeIdFromLen(exprs.items.len)));
+                    try exprs.append(allocator, .{
+                        .id = wrapper,
+                        .ty = wide_ty,
+                        .source_region = module.regionAt(node),
+                        .data = .{ .row_coerce = .{ .value = id } },
+                    });
+                    try result_wrappers.put(allocator, node_idx, wrapper);
+                }
             } else if (source_nodes.hasPattern(@fromBackingInt(@intCast(node_idx)))) {
                 const pattern_idx: CIR.Pattern.Idx = @fromBackingInt(@intCast(node_idx));
                 const ty = checked_types.rootForSourceVar(module, checkedPatternSourceTypeVar(module, &top_level_defs, pattern_idx)) orelse {
@@ -12435,6 +12450,7 @@ pub const CheckedBodyStore = struct {
             .module = module,
             .names = names,
             .source_node_map = &source_node_map,
+            .result_wrappers = &result_wrappers,
             .string_builder = &string_builder,
             .pattern_binders = &pattern_binders,
             .pattern_binder_by_pattern = pattern_binder_by_pattern,
@@ -14765,6 +14781,9 @@ const CheckedBodyPayloadCopier = struct {
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
     source_node_map: *CheckedSourceNodeMap,
+    /// The coercion node that stands for each row-coerced result expression
+    /// wherever a parent refers to it, by raw source node (`checkedExpr`).
+    result_wrappers: *const std.AutoHashMapUnmanaged(u32, CheckedExprId),
     string_builder: *CheckedStringLiteralBuilder,
     pattern_binders: *std.ArrayList(CheckedPatternBinder),
     pattern_binder_by_pattern: []?PatternBinderId,
@@ -14821,11 +14840,11 @@ const CheckedBodyPayloadCopier = struct {
             .e_str_segment => |str| .{ .str_segment = try self.string_builder.intern(str.literal) },
             .e_str => |str| try self.copyStrExpr(expr_idx, str.span),
             .e_bytes_literal => |bytes| .{ .bytes_literal = try self.string_builder.intern(bytes.literal) },
-            .e_lookup_local => |lookup| try self.rowCoercedUseData(expr_idx, .{ .lookup_local = .{
+            .e_lookup_local => |lookup| .{ .lookup_local = .{
                 .pattern = self.checkedPattern(lookup.pattern_idx),
                 .resolved = null,
-            } }),
-            .e_lookup_external, .e_lookup_associated_resolved => try self.rowCoercedUseData(expr_idx, .{ .lookup_external = null }),
+            } },
+            .e_lookup_external, .e_lookup_associated_resolved => .{ .lookup_external = null },
             .e_lookup_associated_local, .e_lookup_associated => checkedArtifactInvariant("unresolved associated lookup reached checked body publication", .{}),
             .e_lookup_required => .{ .lookup_required = null },
             .e_list => |list| .{ .list = try self.copyExprSpan(list.elems) },
@@ -14843,7 +14862,15 @@ const CheckedBodyPayloadCopier = struct {
                 .final_else = self.checkedExpr(if_.final_else),
                 .warn_unused_branches = if_.origin == .source,
             } },
-            .e_call => |call| try self.copyCallData(expr_idx, call),
+            .e_call => |call| .{ .call = .{
+                .func = self.checkedExpr(call.func),
+                .args = try self.copyExprSpan(call.args),
+                .called_via = call.called_via,
+                .source_fn_ty_payload = try self.checkedTypeForRequiredVar(
+                    call.constraint_fn_var orelse checkedArtifactInvariant("checked call expression had no published function constraint type", .{}),
+                    "checked call function constraint type root was not published",
+                ),
+            } },
             .e_record => |record| .{ .record = .{
                 .fields = try self.copyRecordFields(record.fields),
                 .unsets = try self.copyUnsetFieldLabels(record.unsets),
@@ -15699,8 +15726,12 @@ const CheckedBodyPayloadCopier = struct {
         try out.append(self.allocator, binder);
     }
 
+    /// The checked expression a parent refers to for `expr`: its coercion
+    /// node when checking recorded it as a row-coerced result, and its own
+    /// node otherwise.
     fn checkedExpr(self: *const @This(), expr: CIR.Expr.Idx) CheckedExprId {
         const raw = @backingInt(expr);
+        if (self.result_wrappers.get(raw)) |wrapper| return wrapper;
         if (self.source_node_map.expr(expr)) |id| return id;
         if (builtin.mode == .debug) {
             base.invariant("checked artifact invariant violated: expression {d} was not copied into checked body store", .{raw});
@@ -15726,54 +15757,6 @@ const CheckedBodyPayloadCopier = struct {
             };
         }
         return null;
-    }
-
-    /// A call, or, when its callee is a row-coerced callee
-    /// (`ModuleEnv.RowCoercedCallee`), a row coercion of the call made at the
-    /// function's own type: the inner call's result is the function's own
-    /// result, and the coercion's type is this expression's wider one
-    /// (design.md "Row Subsumption").
-    fn copyCallData(self: *@This(), expr_idx: CIR.Expr.Idx, call: @FieldType(CIR.Expr, "e_call")) Allocator.Error!CheckedExprData {
-        const callee = self.module.moduleEnvConst().rowCoercedCallee(ModuleEnv.nodeIdxFrom(call.func));
-        const call_data: CheckedExprData = .{ .call = .{
-            .func = self.checkedExpr(call.func),
-            .args = try self.copyExprSpan(call.args),
-            .called_via = call.called_via,
-            .source_fn_ty_payload = if (callee) |coerced|
-                try self.checkedTypeForRequiredVar(@fromBackingInt(coerced.fn_var), "row-coerced callee function type root was not published")
-            else
-                try self.checkedTypeForRequiredVar(
-                    call.constraint_fn_var orelse checkedArtifactInvariant("checked call expression had no published function constraint type", .{}),
-                    "checked call function constraint type root was not published",
-                ),
-        } };
-        const coerced = callee orelse return call_data;
-        const call_id: CheckedExprId = @fromBackingInt(try checkedSourceNodeIdFromLen(self.exprs.items.len));
-        try self.exprs.append(self.allocator, .{
-            .id = call_id,
-            .ty = try self.checkedTypeForRequiredVar(@fromBackingInt(coerced.ret_var), "row-coerced call result type root was not published"),
-            .source_region = self.module.regionAt(ModuleEnv.nodeIdxFrom(expr_idx)),
-            .data = call_data,
-        });
-        return .{ .row_coerce = .{ .value = call_id } };
-    }
-
-    /// A use checking recorded as a widening of a top-level value
-    /// (`ModuleEnv.RowCoercedUse`) coerces the value—the lookup, at the
-    /// value's own type—to the row this use relates to, which is this
-    /// expression's checked type (design.md "Value Rows: Local Values Share,
-    /// Top-Level Values Widen At Each Use", "Row Coercion Primitive"). Every
-    /// other lookup is the lookup itself.
-    fn rowCoercedUseData(self: *@This(), expr_idx: CIR.Expr.Idx, lookup_data: CheckedExprData) Allocator.Error!CheckedExprData {
-        const value_var = self.module.moduleEnvConst().rowCoercedUseValueVar(ModuleEnv.nodeIdxFrom(expr_idx)) orelse return lookup_data;
-        const value_id: CheckedExprId = @fromBackingInt(try checkedSourceNodeIdFromLen(self.exprs.items.len));
-        try self.exprs.append(self.allocator, .{
-            .id = value_id,
-            .ty = try self.checkedTypeForRequiredVar(value_var, "row-coerced value type root was not published"),
-            .source_region = self.module.regionAt(ModuleEnv.nodeIdxFrom(expr_idx)),
-            .data = lookup_data,
-        });
-        return .{ .row_coerce = .{ .value = value_id } };
     }
 
     fn checkedTypeForRequiredVar(
@@ -16655,22 +16638,13 @@ pub const ResolvedValueRefTable = struct {
                 tag != .expr_required_lookup) continue;
 
             const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(node_idx));
-            const source_checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
-            // A row-coerced use of a top-level value is a coercion of the
-            // value: the lookup, and so the reference and its type, is the
-            // coercion's child (design.md "Value Rows: Local Values Share,
-            // Top-Level Values Widen At Each Use").
-            const coerced_lookup: ?CheckedExpr = switch (checked_bodies.expr(source_checked_expr).data) {
-                .row_coerce => |coerce| blk: {
-                    const value = checked_bodies.expr(coerce.value);
-                    if (value.data != .lookup_local and value.data != .lookup_external) {
-                        checkedArtifactInvariant("row coercion of a value use did not wrap a lookup", .{});
-                    }
-                    break :blk value;
-                },
-                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
-            };
-            const checked_expr = if (coerced_lookup) |value| value.id else source_checked_expr;
+            // A lookup keeps its own node and type; a row coercion that
+            // widens it into a function's result is a separate wrapper node
+            // its parent refers to (design.md "Row Coercion Primitive").
+            const checked_expr = checked_bodies.exprIdForSource(expr_idx) orelse continue;
+            if (checked_bodies.expr(checked_expr).data == .row_coerce) {
+                checkedArtifactInvariant("a value lookup's own checked node was a row coercion", .{});
+            }
             var resolved_ref = try categorizeValueRef(
                 allocator,
                 module,
@@ -16688,8 +16662,7 @@ pub const ResolvedValueRefTable = struct {
                 &local_pattern_roles,
                 checked_bodies,
             );
-            const coerced_callee = module.moduleEnvConst().rowCoercedCallee(ModuleEnv.nodeIdxFrom(expr_idx)) != null;
-            const checked_ty = if (coerced_lookup) |value| value.ty else if (coerced_callee) checked_bodies.expr(checked_expr).ty else checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
+            const checked_ty = checked_types.rootForSourceVar(module, module.exprType(expr_idx)) orelse {
                 if (builtin.mode == .debug) {
                     base.invariant("checked artifact invariant violated: resolved value ref type root was not published", .{});
                 }
@@ -16697,7 +16670,7 @@ pub const ResolvedValueRefTable = struct {
             };
             // Publication keys every source root by this same writer.
             const checked_type_key = checked_types.store.view().rootKey(checked_ty);
-            if (builtin.mode == .debug and coerced_lookup == null and !coerced_callee) {
+            if (builtin.mode == .debug) {
                 const written = (try key_writer.fromVar(module.exprType(expr_idx))).key;
                 if (@as(u256, @bitCast(written.bytes)) != @as(u256, @bitCast(checked_type_key.bytes))) {
                     base.invariant("checked artifact invariant violated: resolved value ref type key differs from its published root", .{});
@@ -22264,21 +22237,6 @@ pub const ProcTarget = union(enum) {
     comptime_only,
 };
 
-/// Checker-owned capability for a closed `Builtin.Try` result row. General
-/// dispatch adapters use it to retag results, including hosted selections;
-/// hosted ABI validation also uses it. The nominal, tags, and type argument positions
-/// are explicit so postcheck never recognizes Try by names or backing shape.
-pub const HostedTryAdapterCapability = struct {
-    nominal: canonical.NominalTypeKey,
-    /// The nominal's declared name: display metadata for the lowered type
-    /// definition, never identity.
-    type_name: canonical.TypeNameId,
-    ok_tag: canonical.TagLabelId,
-    err_tag: canonical.TagLabelId,
-    ok_type_arg_index: u8,
-    err_type_arg_index: u8,
-};
-
 /// Public `CheckedProcedureTemplate` declaration.
 pub const CheckedProcedureTemplate = struct {
     proc_base: canonical.ProcBaseKeyRef,
@@ -22300,7 +22258,6 @@ pub const CheckedProcedureTemplate = struct {
     top_level_value_uses: TopLevelUseSummaryRef,
     nested_proc_sites: NestedProcSiteTableRef,
     target: ProcTarget,
-    hosted_try_adapter: ?HostedTryAdapterCapability = null,
     /// The low-level operation this template's body runs over its parameters,
     /// for a Builtin definition the Builtin low-level transform produced.
     /// Post-check stages read the operation from here; they never recognize a
@@ -22407,175 +22364,6 @@ test "hosted Try adapter capability recognizes only closed structural error rows
     try std.testing.expect(checkedTypeIsClosedTagRow(&store, aliased_row));
     try std.testing.expect(!checkedTypeIsClosedTagRow(&store, open_row));
     try std.testing.expect(!checkedTypeIsClosedTagRow(&store, non_row));
-}
-
-/// Whether a tag row is closed for the purposes of result-row widening: its
-/// extension chain ends in the empty tag union, or in a variable that lowering
-/// seals to one.
-///
-/// Closedness here is `CheckedTypePayload.variableSealsToRowDefault` (see its
-/// doc comment: the rule Monotype's sealed-cell guard shares, so the two
-/// cannot drift), not `checkedTypeIsClosedTagRow` above. The two differ at a
-/// rigid tail, which that rule counts as closed. A rigid result row is
-/// parametric—the caller supplies it—so a template carrying one is
-/// polymorphic in its result and must never mint a widening adapter.
-fn checkedResultRowIsClosed(
-    checked_types: *const CheckedTypeStore,
-    root: CheckedTypeId,
-) bool {
-    var remaining = checked_types.payloads.items.len;
-    var current = root;
-    while (true) {
-        const payload = checked_types.payload(current);
-        switch (payload) {
-            .alias => |alias| current = alias.backing,
-            .tag_union => |tag_union| current = tag_union.ext,
-            .empty_tag_union => return true,
-            .flex, .rigid => |variable| return payload.variableSealsToRowDefault() and
-                variable.row_default == .empty_tag_union,
-            .pending,
-            .err,
-            .record,
-            .tuple,
-            .nominal,
-            .function,
-            .empty_record,
-            => return false,
-        }
-        if (remaining == 0) {
-            checkedArtifactInvariant("result row extension chain was cyclic", .{});
-        }
-        remaining -= 1;
-    }
-}
-
-/// Whether a procedure template's published result row is closed, so a request
-/// at a row that includes it is served by a generated widening adapter
-/// (design.md "Result-Row Widening Adapter"). The result row is the function
-/// result's own tag row, or—when the result is `Builtin.Try`—its error
-/// argument's row. Monotype mirrors this walk in `lower.zig`'s
-/// `closedResultRowOrNull`.
-fn checkedRootHasClosedResultRow(
-    checked_types: *const CheckedTypeStore,
-    checked_fn_root: CheckedTypeId,
-) bool {
-    var remaining = checked_types.payloads.items.len;
-    var current = checked_fn_root;
-    const function = while (true) {
-        switch (checked_types.payload(current)) {
-            .alias => |alias| current = alias.backing,
-            .function => |function| break function,
-            .pending,
-            .err,
-            .flex,
-            .rigid,
-            .record,
-            .tuple,
-            .nominal,
-            .empty_record,
-            .tag_union,
-            .empty_tag_union,
-            => return false,
-        }
-        if (remaining == 0) {
-            checkedArtifactInvariant("procedure root alias chain was cyclic", .{});
-        }
-        remaining -= 1;
-    };
-    remaining = checked_types.payloads.items.len;
-    current = function.ret;
-    while (true) {
-        switch (checked_types.payload(current)) {
-            .alias => |alias| current = alias.backing,
-            .nominal => |nominal| {
-                if (nominal.builtin != .try_) return false;
-                if (nominal.args.len != 2) {
-                    checkedArtifactInvariant("Builtin.Try checked type did not have exactly two type arguments", .{});
-                }
-                return checkedResultRowIsClosed(checked_types, nominal.args[1]);
-            },
-            .tag_union, .empty_tag_union => return checkedResultRowIsClosed(checked_types, current),
-            .pending,
-            .err,
-            .flex,
-            .rigid,
-            .record,
-            .tuple,
-            .function,
-            .empty_record,
-            => return false,
-        }
-        if (remaining == 0) {
-            checkedArtifactInvariant("procedure result alias chain was cyclic", .{});
-        }
-        remaining -= 1;
-    }
-}
-
-fn hostedTryAdapterCapabilityForCheckedRoot(
-    names: *canonical.CanonicalNameStore,
-    checked_types: *const CheckedTypeStore,
-    checked_fn_root: CheckedTypeId,
-) Allocator.Error!?HostedTryAdapterCapability {
-    var remaining = checked_types.payloads.items.len;
-    var current = checked_fn_root;
-    const function = while (true) {
-        switch (checked_types.payload(current)) {
-            .alias => |alias| current = alias.backing,
-            .function => |function| break function,
-            .pending,
-            .err,
-            .flex,
-            .rigid,
-            .record,
-            .tuple,
-            .nominal,
-            .empty_record,
-            .tag_union,
-            .empty_tag_union,
-            => return null,
-        }
-        if (remaining == 0) {
-            checkedArtifactInvariant("hosted function type alias chain was cyclic", .{});
-        }
-        remaining -= 1;
-    };
-    remaining = checked_types.payloads.items.len;
-    current = function.ret;
-    const nominal = while (true) {
-        switch (checked_types.payload(current)) {
-            .alias => |alias| current = alias.backing,
-            .nominal => |nominal| break nominal,
-            .pending,
-            .err,
-            .flex,
-            .rigid,
-            .record,
-            .tuple,
-            .function,
-            .empty_record,
-            .tag_union,
-            .empty_tag_union,
-            => return null,
-        }
-        if (remaining == 0) {
-            checkedArtifactInvariant("hosted result type alias chain was cyclic", .{});
-        }
-        remaining -= 1;
-    };
-    if (nominal.builtin != .try_) return null;
-    if (nominal.args.len != 2) {
-        checkedArtifactInvariant("Builtin.Try checked type did not have exactly two type arguments", .{});
-    }
-    if (!checkedTypeIsClosedTagRow(checked_types, nominal.args[1])) return null;
-    return .{
-        .nominal = checkedNominalTypeKey(nominal),
-        .type_name = nominal.name,
-        .ok_tag = try names.internTagLabel("Ok"),
-        .err_tag = try names.internTagLabel("Err"),
-        .ok_type_arg_index = 0,
-        .err_type_arg_index = 1,
-    };
 }
 
 /// Public `CheckedProcedureTemplateTable` declaration.
@@ -22730,18 +22518,6 @@ pub const CheckedProcedureTemplateTable = struct {
                 else
                     .roc,
                 .provided_low_level = module.moduleEnvConst().providedLowLevelForDef(def_idx),
-                // The `Try` capability is published for every template whose
-                // published result row is closed, not only hosted ones: a Roc
-                // implementation reached at a row that includes its own is
-                // adapted by the same mechanism (design.md "Result-Row
-                // Widening Adapter"). Hosted templates keep publishing it
-                // unconditionally so the host ABI boundary is unaffected by
-                // the stricter closed-row rule.
-                .hosted_try_adapter = if (isHostedProcedureExpr(def.expr.data) or
-                    checkedRootHasClosedResultRow(&checked_type_publication.store, checked_fn_root))
-                    try hostedTryAdapterCapabilityForCheckedRoot(names, &checked_type_publication.store, checked_fn_root)
-                else
-                    null,
             });
         }
 
@@ -22809,10 +22585,6 @@ pub const CheckedProcedureTemplateTable = struct {
                 .top_level_value_uses = .{},
                 .nested_proc_sites = .{},
                 .target = .roc,
-                .hosted_try_adapter = if (checkedRootHasClosedResultRow(&checked_type_publication.store, checked_fn_root))
-                    try hostedTryAdapterCapabilityForCheckedRoot(names, &checked_type_publication.store, checked_fn_root)
-                else
-                    null,
             });
             entry.* = .{ .pattern = promoted.pattern, .template = template_ref };
         }
@@ -22891,14 +22663,6 @@ pub const CheckedProcedureTemplateTable = struct {
                     .expect => .entry,
                     .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .repl_expr => .comptime_only,
                 },
-                // Compile-time root wrappers publish the capability under the
-                // same closed-result-row rule as ordinary procedure templates,
-                // so Monotype never meets a closed `Try` result row without the
-                // provenance the adapter reads it through.
-                .hosted_try_adapter = if (checkedRootHasClosedResultRow(checked_types, checked_fn_root))
-                    try hostedTryAdapterCapabilityForCheckedRoot(names, checked_types, checked_fn_root)
-                else
-                    null,
             });
         }
     }
@@ -26980,7 +26744,6 @@ pub fn pairCheckedPlatform(
         template.checked_fn_root = try substitutions.specializeRootWithMemo(session, &result.checked_types, source_root, &type_memo);
         if (template.checked_fn_root != source_root) {
             template.checked_fn_scheme = syntheticSchemeKeyForType(result.checked_types.roots.items[@backingInt(template.checked_fn_root)].key);
-            template.hosted_try_adapter = try hostedTryAdapterCapabilityForCheckedRoot(&result.canonical_names, &result.checked_types, template.checked_fn_root);
             switch (template.body) {
                 .entry_wrapper => |id| {
                     if (!copied_entry_wrappers) {
@@ -39231,8 +38994,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x91, 0xB6, 0x15, 0x3F, 0xE2, 0xF8, 0x8A, 0x16, 0x93, 0x2D, 0x9D, 0x5A, 0x4C, 0x39, 0xBB, 0x18,
-        0x95, 0x39, 0xD7, 0xBE, 0x76, 0xAA, 0x47, 0xCC, 0x79, 0xDF, 0xC1, 0x46, 0x3E, 0xA6, 0xED, 0xBB,
+        0x29, 0xD3, 0xC9, 0x7C, 0x01, 0x03, 0x25, 0xB4, 0x28, 0xFA, 0xDB, 0xED, 0xB4, 0xEC, 0xF1, 0x01,
+        0x20, 0xEE, 0xE2, 0x3C, 0x00, 0x71, 0x64, 0xFC, 0x03, 0xC8, 0xEF, 0xC7, 0xB8, 0xED, 0x81, 0xA2,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

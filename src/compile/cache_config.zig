@@ -321,7 +321,9 @@ pub const Constants = struct {
     ///      and error-record field offsets.
     /// 151: an import's exposed items record the declaration import
     ///      resolution selected for them.
-    pub const CACHE_VERSION = 151;
+    /// 152: Module environments record row-coerced results in place of
+    ///      row-coerced callees and closed-result definitions.
+    pub const CACHE_VERSION = 152;
 };
 
 /// Configuration for the Roc cache system.

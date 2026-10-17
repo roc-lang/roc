@@ -3582,8 +3582,8 @@ const Lowerer = struct {
     }
 
     fn constructionOfTagExpr(self: *Lowerer, arena: std.mem.Allocator, name: Type.names.TagNameId, payload_span: Lifted.Span(Lifted.ExprId), ty: Type.TypeId, layout_idx: layout.Idx) Common.LowerError!ConstructionStep {
-        const variant_index = self.tagIndex(ty, name);
         const payloads = self.solved.lifted.exprSpan(payload_span);
+        const variant_index = try self.tagIndexForExpr(ty, name, payloads);
         // A payload-free two-variant union is a byte: its discriminant is
         // the value.
         if (layout_idx == .bool) {
@@ -4093,6 +4093,40 @@ const Lowerer = struct {
         }
     }
 
+    /// Put a lowered row's variants of one label into one order wherever the
+    /// row appears: by label as the row already is, then by the payload types'
+    /// digests. A joined row may hold one label at two payload types (design.md
+    /// "Row Joins"), and two rows that hold the same variants must lower to one
+    /// Lambda Mono type whatever order their joins produced them in. A row
+    /// without a repeated label is left as it is.
+    fn orderRepeatedLabels(self: *Lowerer, tags: []Type.Tag) Common.LowerError!void {
+        var repeated = false;
+        for (tags, 0..) |tag, index| {
+            if (index > 0 and tags[index - 1].name == tag.name) repeated = true;
+        }
+        if (!repeated) return;
+        const Keyed = struct { tag: Type.Tag, digest: [32]u8 };
+        const keyed = try self.allocator.alloc(Keyed, tags.len);
+        defer self.allocator.free(keyed);
+        for (tags, keyed) |tag, *entry| {
+            var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+            const payloads = self.types.span(tag.payloads);
+            for (0..payloads.len) |payload_index| {
+                const digest = try self.types.typeDigest(&self.solved.lifted.names, GuardedList.at(payloads, payload_index));
+                hasher.update(&digest.bytes);
+            }
+            entry.* = .{ .tag = tag, .digest = hasher.finalResult() };
+        }
+        const name_store = &self.solved.lifted.names;
+        std.mem.sort(Keyed, keyed, name_store, struct {
+            fn lessThan(names: @TypeOf(name_store), a: Keyed, b: Keyed) bool {
+                if (a.tag.name != b.tag.name) return names.tagLabelTextLessThan(a.tag.name, b.tag.name);
+                return std.mem.order(u8, &a.digest, &b.digest) == .lt;
+            }
+        }.lessThan);
+        for (tags, keyed) |*tag, entry| tag.* = entry.tag;
+    }
+
     fn nextTypeChild(self: *Lowerer, frame: *TypeFrame, task: *TypeVarTask) Common.LowerError!TypeStep {
         const content = self.solved.types.get(task.root);
         if (frame.cursor == TypeVarCursor.field_value) {
@@ -4135,6 +4169,7 @@ const Lowerer = struct {
                     task.tys.shrinkRetainingCapacity(task.tag_payloads_start);
                     frame.index += 1;
                 }
+                try self.orderRepeatedLabels(task.tags.items);
                 return try self.finishTypeVar(task, .{ .tag_union = try self.types.addTags(task.tags.items) });
             },
             .named => |named| {
@@ -6672,7 +6707,7 @@ const Lowerer = struct {
             .tuple => |items| try self.structExprsStep(where, target, self.solved.lifted.exprSpan(items), self.tupleItemTypes(ty), next),
             .record => |fields| try self.recordStep(where, target, ty, fields, next),
             .record_update => |update| .{ .tail = .{ .record_update = .{ .where = where, .target = target, .ty = ty, .update = update, .next = next } } },
-            .tag => |tag| .{ .tail = .{ .tag_payload = .{ .where = where, .target = target, .ty = ty, .variant_index = self.tagIndex(ty, tag.name), .payloads = tag.payloads, .next = next } } },
+            .tag => |tag| .{ .tail = .{ .tag_payload = .{ .where = where, .target = target, .ty = ty, .variant_index = try self.tagIndexForExpr(ty, tag.name, self.solved.lifted.exprSpan(tag.payloads)), .payloads = tag.payloads, .next = next } } },
             .call_proc => |call| try self.directCallStep(where, target, ty, Lifted.directCallee(call).local, call, next),
             .fn_ref => |fn_ref| try self.fnRefStep(where, target, expr_id, fn_ref.fn_id, fn_ref.captures, ty, next),
             .nominal => |backing| try self.nominalStep(where, target, ty, backing, next),
@@ -6799,15 +6834,16 @@ const Lowerer = struct {
             .static_data_candidate => |candidate| try self.staticDataCandidateStep(where, target, candidate, expr_ty, next),
             .comptime_value => |value| .{ .ret = try self.lowerComptimeValueInto(where, target, value, expr_ty, next) },
             .typed_boundary => |boundary| try self.typedBoundaryStep(where, target, expr_ty, boundary, next),
-            // A row coercion lowers as the same typed assignment: the source
-            // row's layout comes from the value's solved type, the destination
-            // from this expression's, and the tag-union boundary re-tags.
+            // A row coercion lowers its value straight into the destination:
+            // Lambda Solved joined the value's rows with this expression's
+            // (design.md "Row Joins"), so the two solved types have one
+            // representation.
             .row_widen => |widen| try self.rowWidenStep(where, target, expr_ty, widen.value, next),
             .list => |items| try self.listStep(where, target, expr_ty, items, next),
             .tuple => |items| try self.structExprsStep(where, target, self.solved.lifted.exprSpan(items), self.tupleItemTypes(expr_ty), next),
             .record => |fields| try self.recordStep(where, target, expr_ty, fields, next),
             .record_update => |update| .{ .tail = .{ .record_update = .{ .where = where, .target = target, .ty = expr_ty, .update = update, .next = next } } },
-            .tag => |tag| .{ .tail = .{ .tag_payload = .{ .where = where, .target = target, .ty = expr_ty, .variant_index = self.tagIndex(expr_ty, tag.name), .payloads = tag.payloads, .next = next } } },
+            .tag => |tag| .{ .tail = .{ .tag_payload = .{ .where = where, .target = target, .ty = expr_ty, .variant_index = try self.tagIndexForExpr(expr_ty, tag.name, self.solved.lifted.exprSpan(tag.payloads)), .payloads = tag.payloads, .next = next } } },
             .lambda,
             .def_ref,
             .fn_def,
@@ -6987,9 +7023,9 @@ const Lowerer = struct {
         return .{ .tail = exprTask(where, source, boundary.value, source_ty, after_source) };
     }
 
-    /// A checked row coercion (design.md "Row Coercion Primitive") is the
-    /// typed assignment of the return boundary, after asserting the
-    /// coercion's reach and superset rule on the two solved types.
+    /// A checked row join (design.md "Row Joins") lowers as its value: Lambda
+    /// Solved made the value's rows and the destination's rows one row each,
+    /// so the value is already at the destination's type.
     fn rowWidenStep(
         self: *Lowerer,
         where: LowerSite,
@@ -6998,64 +7034,14 @@ const Lowerer = struct {
         value: Lifted.ExprId,
         next: LIR.CFStmtId,
     ) Common.LowerError!LowerStep {
-        try self.assertRowWidenReach(target_ty, try self.lowerExprContextTy(value));
-        return try self.typedBoundaryStep(where, target, target_ty, .{ .value = value }, next);
-    }
-
-    /// Inside the reach (the root row, rows that are tag payloads of a reached
-    /// row, and rows behind a named backing) every source tag is in the
-    /// destination with the same arity; anywhere else the two sides are
-    /// value-encoding equivalent.
-    fn assertRowWidenReach(self: *Lowerer, target_ty: Type.TypeId, source_ty: Type.TypeId) Common.LowerError!void {
-        var work = std.ArrayList([2]Type.TypeId).empty;
-        defer work.deinit(self.allocator);
-        var visited = std.AutoHashMap(u64, void).init(self.allocator);
-        defer visited.deinit();
-        var equivalent_pairs = std.AutoHashMap(u64, void).init(self.allocator);
-        defer equivalent_pairs.deinit();
-        try work.append(self.allocator, .{ target_ty, source_ty });
-        while (work.pop()) |pair| {
-            const target_runtime = self.namedBackingRoot(pair[0]);
-            const source_runtime = self.namedBackingRoot(pair[1]);
-            const key = (@as(u64, @backingInt(target_runtime)) << 32) | @as(u64, @backingInt(source_runtime));
-            const entry = try visited.getOrPut(key);
-            if (entry.found_existing) continue;
-            const target_content = self.types.get(target_runtime);
-            const source_content = self.types.get(source_runtime);
-            if (source_content == .tag_union and target_content == .tag_union) {
-                const target_tags = self.types.tagSpan(target_content.tag_union);
-                const source_tags = self.types.tagSpan(source_content.tag_union);
-                for (0..source_tags.len) |source_index| {
-                    const source_tag = GuardedList.at(source_tags, source_index);
-                    const target_tag = GuardedList.at(target_tags, Lowerer.tagIndexInTags(target_tags, source_tag));
-                    const target_payloads = self.types.span(target_tag.payloads);
-                    const source_payloads = self.types.span(source_tag.payloads);
-                    if (target_payloads.len != source_payloads.len) {
-                        Common.invariant("row coercion source tag payload arity differed from its destination tag");
-                    }
-                    for (0..source_payloads.len) |payload_index| {
-                        try work.append(self.allocator, .{
-                            GuardedList.at(target_payloads, payload_index),
-                            GuardedList.at(source_payloads, payload_index),
-                        });
-                    }
-                }
-                continue;
-            }
-            if (source_content == .tag_union and self.types.tagSpan(source_content.tag_union).len == 0) continue;
-            if (!try self.typesEquivalentInMode(.value_encoding, target_runtime, source_runtime, &equivalent_pairs)) {
-                Common.invariant("row coercion reached differing types outside tag payloads and named backings");
+        if (builtin.mode == .debug) {
+            var equivalent_pairs = std.AutoHashMap(u64, void).init(self.allocator);
+            defer equivalent_pairs.deinit();
+            if (!try self.typesEquivalentInMode(.value_encoding, target_ty, try self.lowerExprContextTy(value), &equivalent_pairs)) {
+                Common.invariant("row join value and destination had different representations");
             }
         }
-    }
-
-    fn namedBackingRoot(self: *Lowerer, ty: Type.TypeId) Type.TypeId {
-        var current = ty;
-        while (true) {
-            const next = self.runtimeBackingType(current);
-            if (next == current) return current;
-            current = next;
-        }
+        return .{ .tail = exprTask(where, target, value, target_ty, next) };
     }
 
     fn listStep(
@@ -10250,8 +10236,9 @@ const Lowerer = struct {
             return .{ .index = 0, .ty = try self.l.nominalPatternBackingType(ty, inner), .pat = inner };
         }
 
-        pub fn tagVariant(self: MatchTreeCtx, pat_id: Lifted.PatId, ty: Type.TypeId) u32 {
-            return self.l.tagIndex(ty, self.l.pat(pat_id).data.tag.name);
+        pub fn tagVariant(self: MatchTreeCtx, pat_id: Lifted.PatId, ty: Type.TypeId) Common.LowerError!u32 {
+            const tag = self.l.pat(pat_id).data.tag;
+            return try self.l.tagIndexForPat(ty, tag.name, self.l.solved.lifted.patSpan(tag.payloads));
         }
 
         pub fn tagPayloadCount(self: MatchTreeCtx, pat_id: Lifted.PatId) u32 {
@@ -10261,16 +10248,30 @@ const Lowerer = struct {
         pub fn tagPayload(self: MatchTreeCtx, pat_id: Lifted.PatId, ty: Type.TypeId, i: u32) Common.LowerError!SubPat {
             const tag = self.l.pat(pat_id).data.tag;
             const payloads = self.l.solved.lifted.patSpan(tag.payloads);
-            const payload_tys = self.l.tagPayloadTypesByIndex(ty, self.l.tagIndex(ty, tag.name));
+            const payload_tys = self.l.tagPayloadTypesByIndex(ty, try self.l.tagIndexForPat(ty, tag.name, payloads));
             if (payloads.len != payload_tys.len) Common.invariant("tag pattern payload arity differed from target tag type");
             return .{ .index = i, .ty = GuardedList.at(payload_tys, i), .pat = GuardedList.at(payloads, i) };
         }
 
+        /// The labels a match over `root` must cover. A joined row may hold one
+        /// label at two payload types (design.md "Row Joins"), but the type the
+        /// match is written at lists each label once and only its own variant
+        /// can reach the match, so the arms are exhaustive once every label
+        /// has one.
         pub fn tagVariantCount(self: MatchTreeCtx, root: Type.TypeId) ?u32 {
             var ty = root;
             while (true) {
                 const content = self.l.types.get(ty);
-                if (content == .tag_union) return @intCast(self.l.types.tagSpan(content.tag_union).len);
+                if (content == .tag_union) {
+                    const tags = self.l.types.tagSpan(content.tag_union);
+                    var labels: u32 = 0;
+                    for (0..tags.len) |index| {
+                        const tag = GuardedList.at(tags, index);
+                        if (index > 0 and GuardedList.at(tags, index - 1).name == tag.name) continue;
+                        labels += 1;
+                    }
+                    return labels;
+                }
                 if (content != .named) return null;
                 ty = (content.named.backing orelse return null).ty;
             }
@@ -10312,7 +10313,7 @@ const Lowerer = struct {
 
         pub fn ctorKey(self: MatchTreeCtx, pat_id: Lifted.PatId, ty: Type.TypeId) Common.LowerError!u128 {
             return switch (self.l.pat(pat_id).data) {
-                .tag => |tag| self.l.tagIndex(ty, tag.name),
+                .tag => |tag| try self.l.tagIndexForPat(ty, tag.name, self.l.solved.lifted.patSpan(tag.payloads)),
                 .int_lit => |value| @bitCast(value.toI128()),
                 .dec_lit => |value| @bitCast(value.num),
                 // IEEE `==` behavior: +0.0 and -0.0 are the same
@@ -10989,7 +10990,7 @@ const Lowerer = struct {
             // A tested tag's payloads read from the storage type of its source;
             // a bound tag's from the storage type of its pattern type.
             const tag_ty = self.storageTypeOfLocalOr(task.source, task.ty);
-            task.variant_index = self.tagIndex(tag_ty, name);
+            task.variant_index = try self.tagIndexForPat(tag_ty, name, payloads);
             task.source_ty = self.storageTypeOfLocalOr(task.source, tag_ty);
             if (payloads.len != self.tagPayloadTypesByIndex(task.source_ty, task.variant_index).len) {
                 Common.invariant("tag pattern payload arity differed from target tag type");
@@ -12648,7 +12649,17 @@ const Lowerer = struct {
             frame.index += 1;
         } else {
             switch (task.kind) {
-                .tag_union => if (source_len == 0) Common.invariant("tag union boundary saw an empty source tag union"),
+                .tag_union => {
+                    if (source_len == 0) Common.invariant("tag union boundary saw an empty source tag union");
+                    // Rows that flow together are one row (design.md "Row
+                    // Joins"), so a boundary between two tag unions converts
+                    // payload representations only: both sides list the same
+                    // tags. `variantConversion` finds each source tag in the
+                    // target; this pins that the target lists nothing more.
+                    if (source_len != self.types.tagSpan(task.target_span).len) {
+                        Common.invariant("tag union boundary saw two different tag rows");
+                    }
+                },
                 .callable => {
                     if (source_len != self.types.fnVariantSpan(task.target_span).len) {
                         Common.invariant("callable boundary saw different source and target variant counts");
@@ -12689,7 +12700,7 @@ const Lowerer = struct {
             .tag_union => {
                 const target_tags = self.types.tagSpan(task.target_span);
                 const source_tag = GuardedList.at(self.types.tagSpan(task.source_span), source_index);
-                const target_index = Lowerer.tagIndexInTags(target_tags, source_tag);
+                const target_index = self.tagIndexInTags(target_tags, source_tag);
                 return .{
                     .kind = .tag,
                     .target = task.target,
@@ -13208,10 +13219,20 @@ const Lowerer = struct {
         Common.invariant("callable boundary target type did not contain source variant");
     }
 
-    fn tagIndexInTags(tags: anytype, needle: Type.Tag) usize {
+    /// The position of `needle` in `tags`: the same label and the same payload
+    /// types, since a joined row may hold one label at two payload types
+    /// (design.md "Row Joins").
+    fn tagIndexInTags(self: *Lowerer, tags: anytype, needle: Type.Tag) usize {
+        const needle_payloads = self.types.span(needle.payloads);
         for (0..tags.len) |index| {
             const tag = GuardedList.at(tags, index);
-            if (tag.name == needle.name and tag.checked_name == needle.checked_name) return index;
+            if (tag.name != needle.name or tag.checked_name != needle.checked_name) continue;
+            const payloads = self.types.span(tag.payloads);
+            if (payloads.len != needle_payloads.len) continue;
+            const same = for (0..payloads.len) |payload_index| {
+                if (GuardedList.at(payloads, payload_index) != GuardedList.at(needle_payloads, payload_index)) break false;
+            } else true;
+            if (same) return index;
         }
         Common.invariant("tag union boundary target type did not contain source tag");
     }
@@ -14430,13 +14451,47 @@ const Lowerer = struct {
         };
     }
 
-    fn tagIndex(self: *Lowerer, ty: Type.TypeId, name: Type.names.TagNameId) u32 {
+    /// The variant of `name` in `ty`'s row whose payload types are
+    /// `payload_tys`. A joined row may hold one label at two payload types
+    /// (design.md "Row Joins"); a constructor or pattern belongs to one static
+    /// type, which lists the label once, and its own payload types pick the
+    /// variant. A label the row holds once is that variant.
+    fn tagIndexForPayloads(self: *Lowerer, ty: Type.TypeId, name: Type.names.TagNameId, payload_tys: []const Type.TypeId) u32 {
         const tags = self.tagUnionTags(ty);
+        var only: ?u32 = null;
+        var candidates: u32 = 0;
         for (0..tags.len) |index| {
             const tag = GuardedList.at(tags, index);
-            if (tag.name == name) return @intCast(index);
+            if (tag.name != name) continue;
+            candidates += 1;
+            only = @intCast(index);
+            const payloads = self.types.span(tag.payloads);
+            if (payloads.len != payload_tys.len) continue;
+            const same = for (0..payloads.len) |payload_index| {
+                if (GuardedList.at(payloads, payload_index) != payload_tys[payload_index]) break false;
+            } else true;
+            if (same) return @intCast(index);
         }
+        if (candidates == 1) return only.?;
         Common.invariant("tag operation referenced tag absent from Lambda Mono type");
+    }
+
+    /// `tagIndexForPayloads` for a tag expression, whose payload expressions'
+    /// types are the variant's.
+    fn tagIndexForExpr(self: *Lowerer, ty: Type.TypeId, name: Type.names.TagNameId, payloads: anytype) Common.LowerError!u32 {
+        const payload_tys = try self.allocator.alloc(Type.TypeId, payloads.len);
+        defer self.allocator.free(payload_tys);
+        for (payload_tys, 0..) |*payload_ty, index| payload_ty.* = try self.lowerExprTy(GuardedList.at(payloads, index));
+        return self.tagIndexForPayloads(ty, name, payload_tys);
+    }
+
+    /// `tagIndexForPayloads` for a tag pattern, whose payload patterns' types
+    /// are the variant's.
+    fn tagIndexForPat(self: *Lowerer, ty: Type.TypeId, name: Type.names.TagNameId, payloads: anytype) Common.LowerError!u32 {
+        const payload_tys = try self.allocator.alloc(Type.TypeId, payloads.len);
+        defer self.allocator.free(payload_tys);
+        for (payload_tys, 0..) |*payload_ty, index| payload_ty.* = try self.lowerPatTy(GuardedList.at(payloads, index));
+        return self.tagIndexForPayloads(ty, name, payload_tys);
     }
 
     fn tagIndexByText(self: *Lowerer, ty: Type.TypeId, text: []const u8) u32 {

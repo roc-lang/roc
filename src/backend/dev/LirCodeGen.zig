@@ -401,6 +401,7 @@ pub const BoxyBuiltinFn = enum {
     caller_drives,
     return_pending,
     list_concat,
+    list_append_sublist,
     list_prepend,
     list_sublist,
     list_drop_at,
@@ -453,6 +454,7 @@ pub const BoxyBuiltinFn = enum {
             .call_dict => &.{ p, p, p, 4, 4, p, p, p, p, p, 4 },
             .record_update => &.{ p, p, p, 4, p, p, 4, p, 4 },
             .list_concat => &.{ p, p, p, p, p, p, p, 4, p, 4, p, p },
+            .list_append_sublist => &.{ p, p, p, p, p, p, p, p, p, 4, p, 4, p, 1 },
             .list_prepend, .list_drop_at, .list_reserve, .list_reserve_for_append => &.{ p, p, p, p, 4, p, p, 4, p, 1 },
             .list_sublist, .list_set, .list_swap => &.{ p, p, p, p, 4, p, p, p, 4, p, 1 },
             .list_replace => &.{ p, p, p, p, 4, p, p, p, p, 4, p, 1 },
@@ -2568,10 +2570,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const start_off = try self.ensureOnStack(start_loc, 8);
                     const len_off = try self.ensureOnStack(len_loc, 8);
                     const result_offset = self.codegen.allocStackSlot(roc_str_size);
-                    try self.callListBuiltin(list_abi, .{ .callbacks = try self.listElemCallbacks(list_abi, .incref_and_decref) }, &.{
+                    const rc = try self.listElemRc(list_abi, .incref_and_decref, &.{ GuardedList.at(args, 0), GuardedList.at(args, 1) }, ll.target);
+                    try self.callListBuiltin(list_abi, rc, &.{
                         .{ .lea = result_offset }, .{ .list = list_off }, .{ .list = src_off }, .{ .mem = start_off },
                         .{ .mem = len_off },       .elem_abi,             .elem_rc,             .{ .imm = updateModeImmForArg0(ll.unique_args) },
-                    }, LowLevelBuiltins.listOp(.list_append_sublist), null);
+                    }, LowLevelBuiltins.listOp(.list_append_sublist), .list_append_sublist);
                     return listStackAt(result_offset);
                 },
                 .list_prepend => {
@@ -8487,7 +8490,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn lowLevelListDescRef(self: *Self, s: anytype) ?LIR.BoxyDescRef {
             const op = s.op;
-            if (op != .list_concat and op != .list_prepend and op != .list_set and op != .list_set_in_place_unsafe and
+            if (op != .list_concat and op != .list_append_sublist and op != .list_prepend and op != .list_set and op != .list_set_in_place_unsafe and
                 op != .list_swap and
                 op != .list_take_first and op != .list_take_last and op != .list_sublist and
                 op != .list_drop_at and op != .list_reverse and
@@ -8496,7 +8499,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (abi.elem_size_align.size == 0) return null;
             const args = self.store.getLocalSpan(s.args);
             const first = GuardedList.at(args, 0);
-            const ref = if (op == .list_concat)
+            const ref = if (op == .list_concat or op == .list_append_sublist)
                 self.boxyListElementDescRef(abi, &.{ first, GuardedList.at(args, 1) }, s.target)
             else
                 self.boxyListElementDescRef(abi, &.{first}, s.target);
@@ -19400,6 +19403,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try builder.addImmArg(param.source_nested_index);
                             try self.callBoxyBuiltin(&builder, .tag_payload_desc);
                         },
+                        .tag_ext => try self.callBoxyBuiltin(&builder, .tag_ext_desc),
                     }
                     try self.emitStore(.w64, frame_ptr, desc_slot, ret_reg_0);
                 }
