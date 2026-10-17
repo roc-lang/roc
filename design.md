@@ -13655,9 +13655,12 @@ it actually reaches. A request that lowers the callee body in the caller's own
 draft (a caller-owned lexical specialization or an eager iterator completion)
 still replays them, because that replay is the body's own relation production.
 
-Repeated dependency requests are memoized by the complete procedure family
-(template, method scope, and checked source-function key), exact evidence
-topology, and the complete open input interface. Inputs include the function
+Repeated dependency requests are memoized by the procedure family (template
+and method scope), exact evidence topology, and the complete open input
+interface. The checked source-function key through which a call site reached
+the template is not part of a summary's identity: it names how that site
+spelled the callee's type, and the request's input already carries everything
+the instantiation constrains. Inputs include the function
 request and the scheme substitution cells, with their sharing and checked-error
 slots. An input identity is captured when its dependency is consumed, after the
 preceding explicit relations. Applying defaults is never part of cache identity.
