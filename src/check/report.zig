@@ -43,6 +43,7 @@ const Store = problem_mod.Store;
 
 // Type mismatch types
 const TypePair = problem_mod.TypePair;
+const MethodConflict = problem_mod.MethodConflict;
 
 // Static dispatch errors
 const DispatcherNotNominal = problem_mod.DispatcherNotNominal;
@@ -171,6 +172,11 @@ pub const ReportBuilder = struct {
     /// the pattern and value type snapshots so `makeMismatchReport` can show the
     /// tailored `field: _` / `..` hint in place of the generic field diff.
     record_pattern_hint: ?struct { pattern: SnapshotContentIdx, value: SnapshotContentIdx } = null,
+    /// When the current mismatch required one type to have two different
+    /// methods of the same name, holds those methods so `makeMismatchReport`
+    /// explains that conflict at the context's region instead of comparing the
+    /// operands, whose difference it would not show.
+    method_conflict: ?MethodConflict = null,
 
     /// Init report builder
     /// Only owned field is `buf`
@@ -233,6 +239,7 @@ pub const ReportBuilder = struct {
         self.diff_tags.items.clearRetainingCapacity();
         self.typo_suggestions.clearRetainingCapacity();
         self.record_pattern_hint = null;
+        self.method_conflict = null;
     }
 
     // Helpers
@@ -598,7 +605,17 @@ pub const ReportBuilder = struct {
     ) Allocator.Error!Report {
         var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
         errdefer report.deinit();
-        try D.renderSliceInto(title, self, &report, &report.headline);
+        if (self.method_conflict) |conflict| {
+            try D.renderSliceInto(&.{
+                D.bytes("This is used in a way that requires its type to have two different, incompatible"),
+                D.ident(conflict.method_name).withAnnotation(.inline_code),
+                D.bytes("methods, but no type can have more than one"),
+                D.ident(conflict.method_name).withAnnotation(.inline_code),
+                D.bytes("method."),
+            }, self, &report, &report.headline);
+        } else {
+            try D.renderSliceInto(title, self, &report, &report.headline);
+        }
 
         // Add the region to highlight
         switch (region) {
@@ -613,6 +630,29 @@ pub const ReportBuilder = struct {
             },
         }
         try report.document.addLineBreak();
+
+        if (self.method_conflict) |conflict| {
+            try D.renderSlice(&.{
+                D.bytes("One part of this use needs"),
+                D.ident(conflict.method_name).withAnnotation(.inline_code),
+                D.bytes("to have this type:"),
+            }, self, &report);
+            try report.document.addLineBreaks(2);
+            try report.document.addCodeBlock(try report.addOwnedString(self.problems.getExtraString(conflict.first_type)));
+            try report.document.addLineBreaks(2);
+            try D.renderSlice(&.{
+                D.bytes("Another part needs it to have this type:"),
+            }, self, &report);
+            try report.document.addLineBreaks(2);
+            try report.document.addCodeBlock(try report.addOwnedString(self.problems.getExtraString(conflict.second_type)));
+            try report.document.addLineBreaks(2);
+            try D.renderSlice(&.{
+                D.bytes("A type has only one"),
+                D.ident(conflict.method_name).withAnnotation(.inline_code),
+                D.bytes("method, so no type can satisfy both."),
+            }, self, &report);
+            return report;
+        }
 
         const actual_formatted = self.getFormattedString(actual_snapshot);
         const expected_formatted = self.getFormattedString(expected_snapshot);
@@ -949,6 +989,7 @@ pub const ReportBuilder = struct {
                 if (mismatch.interpolation_tie) |tie| {
                     if (mismatch.leaf) |leaf| return self.buildInterpolationTieReport(tie, leaf);
                 }
+                self.method_conflict = mismatch.method_conflict;
                 // All error contexts are now handled via mismatch.context
                 return switch (mismatch.context) {
                     .if_condition => self.buildNonBoolReport(mismatch.types, "if", "condition must evaluate to a"),

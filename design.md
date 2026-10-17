@@ -15382,7 +15382,14 @@ scheme. Repeated declarative constraints share one callable type, while
 independently inferred dot-method calls retain separate callable relations so a
 rank-1 method scheme can be instantiated independently at each use. Operators
 and literal conversions retain one numeric/defaulting relation per method
-identity. A relation folded into a retained one selects no target of its own,
+identity. A type has one method of each name, so two declarative requirements
+of one method on the same type whose callable types cannot be one type are a
+type mismatch: a type variable that one callee requires to parse `Json` and
+another to parse a second format has no possible type. The unifier records the
+two requirements as mismatch evidence, the report says the use needs two
+different methods of that name and shows both, and the conflicting type is
+poisoned so it reports nothing further. An annotation that declares two such
+requirements is the same mismatch, reported at the second requirement. A relation folded into a retained one selects no target of its own,
 yet its dispatch site still outputs a plan. The unifier journals each fold as
 an exact (dropped, retained) pair of raw constraint function vars, and checking
 outputs `ModuleEnv.dispatch_relation_merges`, mapping every folded relation

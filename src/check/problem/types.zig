@@ -634,6 +634,18 @@ pub const TypeMismatch = struct {
     /// Set when `leaf` failed because the use gave one instantiated
     /// interpolation's values different types.
     interpolation_tie: ?InterpolationTie = null,
+    /// Set when the relation failed because it required one type to have two
+    /// different methods of the same name.
+    method_conflict: ?MethodConflict = null,
+};
+
+/// Two requirements of one method on the same type that cannot agree. A type
+/// has one method of each name, so no type can satisfy both.
+pub const MethodConflict = struct {
+    method_name: Ident.Idx,
+    /// Display text of each required method type.
+    first_type: ExtraStringIdx,
+    second_type: ExtraStringIdx,
 };
 
 /// A use of a generalized definition gave the values one of its

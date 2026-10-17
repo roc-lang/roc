@@ -7106,6 +7106,8 @@ fn unifyOwnedRootRelation(
 /// owns its own rejection reports through here, so a rejection re-decided at
 /// the settled state renders exactly like the relation-time one. A caller
 /// reporting the relation it just ran passes `mismatchContext(ctx, actual)`.
+/// A rejection that required one type to have two different methods of the
+/// same name also poisons that type, which no type can satisfy.
 fn appendTypeMismatch(
     self: *Self,
     expected: Var,
@@ -7123,6 +7125,7 @@ fn appendTypeMismatch(
     const unify_env = self.unifyEnv();
     const evidence = try unifier.snapshotMismatchEvidence(&unify_env);
     const leaf = try unifier.snapshotMismatchLeaf(&unify_env);
+    const method_conflict = try unifier.snapshotMismatchMethodConflict(&unify_env);
     const problem_idx = try self.problems.appendProblem(.{ .type_mismatch = .{
         .types = .{
             .expected_var = expected,
@@ -7133,7 +7136,9 @@ fn appendTypeMismatch(
         .context = diagnostic_ctx,
         .evidence = evidence,
         .leaf = leaf,
+        .method_conflict = method_conflict,
     } });
+    try unifier.poisonMethodConflictReceivers(&unify_env);
     try self.noteInterpolationTie(problem_idx);
     return problem_idx;
 }
@@ -23136,7 +23141,9 @@ fn stepRigidAnnoGen(self: *Self, frame: *AnnoGenFrame, rigid: std.meta.fieldInfo
             const representative = try constraint_representatives.getOrPut(scratch_constraint.constraint.fn_name);
             if (representative.found_existing) {
                 const representative_constraint = self.scratch_static_dispatch_constraints.items.items[representative.value_ptr.*];
-                _ = try self.unify(representative_constraint.constraint.fn_var, scratch_constraint.constraint.fn_var, env);
+                _ = try self.runUnify(representative_constraint.constraint.fn_var, scratch_constraint.constraint.fn_var, env, .{
+                    .method_requirements = .{ .method_name = scratch_constraint.constraint.fn_name },
+                });
                 continue;
             }
 

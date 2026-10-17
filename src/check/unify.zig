@@ -91,11 +91,25 @@ const RawTypePair = struct {
     actual: Var,
 };
 
+/// Two requirements of one method on the same type whose method types do not
+/// agree. A type has one method of each name, so no type can satisfy both.
+const RawMethodConflict = struct {
+    method_name: Ident.Idx,
+    /// The two variables whose requirements were being merged, or null when
+    /// the requirements are an annotation's own, whose variable keeps the
+    /// requirement it declared first.
+    receivers: ?RawTypePair,
+    /// The two required method types.
+    methods: RawTypePair,
+};
+
 const RawMismatchEvidence = struct {
     record: ?RawTypePair = null,
     /// The pair whose relation failed when the mismatch left the unifier,
     /// when that failure came from relating a pair of variables.
     leaf: ?RawTypePair = null,
+    /// The first same-method requirement pair that failed to agree.
+    method_conflict: ?RawMethodConflict = null,
 };
 
 /// Exact checker evidence produced when a fresh record construction omits a
@@ -303,11 +317,21 @@ pub const Options = struct {
     /// Retain the outer nominal record opening with this semantic role if the
     /// relation rejects and its reporter needs the instantiated backing.
     nominal_record_mismatch_role: NominalRecordMismatchRole = .none,
+    /// Set when the two operands are requirements of one method on the same
+    /// type, so a mismatch is reported as that type needing two different
+    /// methods of one name.
+    method_requirements: ?MethodRequirements = null,
     /// Source-backed record construction whose omission decisions this
     /// relation owns. The checker publishes successful default absorptions
     /// against this exact expression when the empty row operand is an
     /// internal extension variable rather than the expression's own var.
     record_construction_var: ?Var = null,
+};
+
+/// The method whose two requirements on one annotation's type variable a
+/// relation compares.
+pub const MethodRequirements = struct {
+    method_name: Ident.Idx,
 };
 
 /// Unify two type variables.
@@ -345,7 +369,12 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
     );
     unifier.root_operands = .{ a, b };
     unifier.deferred_callables = env.deferred_callables;
-    unifier.scheduleRootPair(a, b, opts.root_relation, .propagate) catch |err| switch (err) {
+    const root_mismatch: MismatchHandling = if (opts.method_requirements) |requirements| .{ .record_method_conflict = .{
+        .method_name = requirements.method_name,
+        .receivers = null,
+        .methods = .{ .expected = a, .actual = b },
+    } } else .propagate;
+    unifier.scheduleRootPair(a, b, opts.root_relation, root_mismatch) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
     };
     unifier.runWorkLoop() catch |err| {
@@ -364,6 +393,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
         const actual_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, b);
         const evidence = try snapshotMismatchEvidence(env);
         const leaf = try snapshotMismatchLeaf(env);
+        const method_conflict = try snapshotMismatchMethodConflict(env);
         const problem_idx = try env.problems.appendProblem(.{ .type_mismatch = .{
             .types = .{
                 .expected_var = a,
@@ -374,8 +404,10 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
             .context = opts.context,
             .evidence = evidence,
             .leaf = leaf,
+            .method_conflict = method_conflict,
         } });
         try env.types.poisonOnMismatch(a, b);
+        try poisonMethodConflictReceivers(env);
         return Result{ .problem = problem_idx };
     };
 
@@ -465,6 +497,32 @@ pub fn snapshotMismatchLeaf(env: *const Env) std.mem.Allocator.Error!?problem_mo
         .actual_var = raw.actual,
         .actual_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, raw.actual),
     };
+}
+
+/// Record the method requirements whose disagreement rejected the relation, so
+/// the report can say that no type has two different methods of one name. Each
+/// method type is written without its `where` clause: the clause lists the
+/// requirements of the type in question, which are what conflict.
+pub fn snapshotMismatchMethodConflict(env: *const Env) std.mem.Allocator.Error!?problem_mod.MethodConflict {
+    const raw = env.unify_scratch.mismatch_evidence.method_conflict orelse return null;
+    return .{
+        .method_name = raw.method_name,
+        .first_type = try methodTypeDisplay(env, raw.methods.expected),
+        .second_type = try methodTypeDisplay(env, raw.methods.actual),
+    };
+}
+
+fn methodTypeDisplay(env: *const Env, method_var: Var) std.mem.Allocator.Error!problem_mod.ExtraStringIdx {
+    env.type_writer.writeWithoutConstraints(method_var) catch return error.OutOfMemory;
+    return env.problems.putExtraString(env.type_writer.get());
+}
+
+/// A type whose requirements conflict is erroneous: no type satisfies them,
+/// so later checks of it report nothing further.
+pub fn poisonMethodConflictReceivers(env: *const Env) std.mem.Allocator.Error!void {
+    const raw = env.unify_scratch.mismatch_evidence.method_conflict orelse return;
+    const receivers = raw.receivers orelse return;
+    try env.types.poisonOnMismatch(receivers.expected, receivers.actual);
 }
 
 /// A temporary unification context used to unify two type variables within a `Store`.
@@ -941,6 +999,12 @@ const Unifier = struct {
                 self.scratch.mismatch_evidence.record = record;
                 return error.TypeMismatch;
             },
+            .record_method_conflict => |conflict| {
+                if (self.scratch.mismatch_evidence.method_conflict == null) {
+                    self.scratch.mismatch_evidence.method_conflict = conflict;
+                }
+                return error.TypeMismatch;
+            },
         }
     }
 
@@ -1136,7 +1200,11 @@ const Unifier = struct {
                     }
                 };
 
-                const merged_constraints = try self.unifyStaticDispatchConstraints(a_flex.constraints, b_flex.constraints);
+                const merged_constraints = try self.unifyStaticDispatchConstraints(
+                    .{ .expected = vars.a.var_, .actual = vars.b.var_ },
+                    a_flex.constraints,
+                    b_flex.constraints,
+                );
                 try self.merge(vars, Content{ .flex = .{
                     .name = mb_ident,
                     .constraints = merged_constraints,
@@ -3351,6 +3419,7 @@ const Unifier = struct {
 
     fn unifyStaticDispatchConstraints(
         self: *Self,
+        receivers: RawTypePair,
         a_constraints: StaticDispatchConstraint.SafeList.Range,
         b_constraints: StaticDispatchConstraint.SafeList.Range,
     ) Error!StaticDispatchConstraint.SafeList.Range {
@@ -3380,7 +3449,7 @@ const Unifier = struct {
                 // Re-fetch on each iteration since the backing array may have moved
                 const two_constraints = self.scratch.in_both_static_dispatch_constraints.items.items[in_both_start + i];
                 // TODO: Catch type mismatch and throw a custom error message?
-                try self.unifyStaticDispatchConstraint(two_constraints.a, two_constraints.b);
+                try self.unifyStaticDispatchConstraint(receivers, two_constraints.a, two_constraints.b);
             }
         }
 
@@ -3404,9 +3473,12 @@ const Unifier = struct {
         return self.types_store.static_dispatch_constraints.rangeToEnd(top);
     }
 
-    /// Unify two static dispatch constraints
+    /// Unify two static dispatch constraints. A type has one method of each
+    /// name, so two requirements of that method on the same type must agree;
+    /// when they cannot, the mismatch records them as a method conflict.
     fn unifyStaticDispatchConstraint(
         self: *Self,
+        receivers: RawTypePair,
         a_constraint: StaticDispatchConstraint,
         b_constraint: StaticDispatchConstraint,
     ) Error!void {
@@ -3432,7 +3504,11 @@ const Unifier = struct {
         defer self.scratch.constraint_visited_vars.items.items.len -= 2;
 
         // Unify the constraint function types
-        try self.unifyGuarded(a_constraint.fn_var, b_constraint.fn_var);
+        try self.scheduleGuardedPair(a_constraint.fn_var, b_constraint.fn_var, .{ .record_method_conflict = .{
+            .method_name = a_constraint.fn_name,
+            .receivers = receivers,
+            .methods = .{ .expected = a_constraint.fn_var, .actual = b_constraint.fn_var },
+        } });
     }
 
     fn linkDeferredCallable(self: *Self, resolved: ResolvedVarDesc) std.mem.Allocator.Error!void {
@@ -3877,6 +3953,7 @@ const MismatchHandling = union(enum) {
     ignore,
     set_flag: u32,
     record_then_propagate: RawTypePair,
+    record_method_conflict: RawMethodConflict,
 };
 
 const SameAliasAfterArgs = struct {
