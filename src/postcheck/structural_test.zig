@@ -1802,3 +1802,31 @@ test "hoist-preserving iterator producers are reachable through their method nam
         try std.testing.expect(reachable);
     }
 }
+
+test "value semantics have one definition site" {
+    // Inspection, structural equality and hashing, and `to_inspect` override
+    // selection were each written once per lowering strategy, plus once more
+    // in the Boxy runtime, with nothing that failed when a change reached only
+    // some copies. They live in `semantics/` now; this keeps the copies from
+    // coming back.
+    const lowerers = [_][]const u8{
+        @embedFile("monotype/lower.zig"),
+        @embedFile("solved_lir_lower.zig"),
+        @embedFile("boxy/lower.zig"),
+        @embedFile("boxy/plan.zig"),
+    };
+    const literals = [_][]const u8{ "\"<missing>\"", "\"<function>\"", "\"<opaque>\"", "\"Box(\"", "\"{ \"", "\" }\"" };
+    for (lowerers) |source| {
+        for (literals) |literal| try expectNotContains(source, literal);
+        try expectNotContains(source, "fn lookupInspectOverride(");
+        try expectNotContains(source, "fn beginEq(");
+        try expectNotContains(source, "fn beginHash(");
+    }
+    const inspect = @embedFile("semantics/inspect.zig");
+    for (literals) |literal| try expectContains(inspect, literal);
+    try expectContains(@embedFile("semantics/inspect_override.zig"), "pub fn lookupInspectOverride(");
+    const structural = @embedFile("semantics/structural.zig");
+    try expectContains(structural, "fn beginEq(");
+    try expectContains(structural, "fn beginHash(");
+}
+

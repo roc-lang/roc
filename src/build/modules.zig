@@ -235,6 +235,7 @@ pub const ModuleType = enum {
     roc_target,
     backend,
     lir_core,
+    value_semantics,
     postcheck,
     lir,
     symbol,
@@ -326,7 +327,7 @@ pub const ModuleType = enum {
             },
             .eval => .{
                 .root = "src/eval/mod.zig",
-                .deps = &.{ .tracy, .ctx, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .static_data, .build_options, .reporting, .backend, .lir, .symbol, .roc_target, .sljmp, .ipc },
+                .deps = &.{ .tracy, .ctx, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .static_data, .build_options, .reporting, .backend, .lir, .symbol, .roc_target, .sljmp, .ipc, .value_semantics },
                 .extra_imports = &.{"vendor_relocatable_loader"},
                 .tests = .{ .unit = .{ .aggregators = &.{"eval tests"} } },
             },
@@ -359,9 +360,15 @@ pub const ModuleType = enum {
                 .deps = &.{ .base, .collections, .layout, .types, .can, .check },
                 .tests = .{ .unit = .{ .aggregators = &.{"lir core declarations are referenced"} } },
             },
+            // Shared by the post-check lowerers and the standalone Boxy
+            // runtime object, so it imports nothing from the compiler.
+            .value_semantics => .{
+                .root = "src/postcheck/semantics/mod.zig",
+                .tests = .{ .unit = .{ .aggregators = &.{"value semantics declarations are referenced"} } },
+            },
             .postcheck => .{
                 .root = "src/postcheck/mod.zig",
-                .deps = &.{ .base, .builtins, .can, .check, .collections, .layout, .lir_core, .types },
+                .deps = &.{ .base, .builtins, .can, .check, .collections, .layout, .lir_core, .types, .value_semantics },
                 .tests = .{ .unit = .{ .aggregators = &.{"postcheck declarations are referenced"} } },
             },
             .lir => .{
@@ -555,6 +562,7 @@ pub const RocModules = struct {
     lsp_integration: *Module,
     backend: *Module,
     lir_core: *Module,
+    value_semantics: *Module,
     postcheck: *Module,
     lir: *Module,
     symbol: *Module,

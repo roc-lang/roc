@@ -15,6 +15,9 @@ const lir_core = @import("lir_core");
 const types = @import("types");
 
 const Common = @import("../common.zig");
+const match_tree = @import("../match_tree.zig");
+const value_semantics = @import("value_semantics");
+const inspect_text = value_semantics.inspect.text;
 const Layouts = @import("layouts.zig");
 const Plan = @import("plan.zig");
 const LiteralRequirements = @import("literal_requirements.zig");
@@ -5695,7 +5698,7 @@ const ProcedureBuilder = struct {
         const source_rep = self.plan.representations.items[@backingInt(rep_id)];
         const source_module = Plan.moduleViewForKey(self.modules, source_rep.source_type.module);
         const owner = methodOwnerForProcedureType(source_module, source_rep.source_type.ty) orelse return null;
-        const target_lookup = Plan.lookupInspectOverride(self.methodSearchModules(), source_module, owner) orelse return null;
+        const target_lookup = Plan.inspectOverrideFor(self.methodSearchModules(), source_module, owner) orelse return null;
         const source = switch (target_lookup.target.kind) {
             .procedure => |procedure| Plan.WorkerSource{ .procedure_template = procedure.template },
             .local_proc,
@@ -14966,10 +14969,6 @@ const ProcBodyBuilder = struct {
         locals: []?LIR.LocalId,
     };
 
-    const PatternMiss = struct {
-        join_id: LIR.JoinPointId,
-    };
-
     const InspectPart = union(enum) {
         literal: []const u8,
         field: struct {
@@ -14983,14 +14982,6 @@ const ProcBodyBuilder = struct {
             payload_index: ?u32,
             rep: Plan.TypeRepId,
         },
-    };
-
-    const LiteralPattern = union(enum) {
-        int: can.CIR.IntValue,
-        dec: builtins.dec.RocDec,
-        frac_f32: f32,
-        frac_f64: f64,
-        str: checked.CheckedStringLiteralId,
     };
 
     const DescriptorArgLocal = struct {
@@ -15605,7 +15596,7 @@ const ProcBodyBuilder = struct {
             const pattern = self.module.checked_bodies.pattern(pattern_id);
             switch (pattern.data) {
                 .assign => {},
-                .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => continuation = try self.bindPatternFromLocal(pattern_id, binding_local, continuation),
+                .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => continuation = try self.runExprTasks(.{ .pattern = .{ .pattern = pattern_id, .source = binding_local, .mode = .bind, .next = continuation } }),
             }
 
             const arg_local = self.arg_locals.items[index];
@@ -16456,7 +16447,7 @@ const ProcBodyBuilder = struct {
                 value_local
             else
                 try self.addFrameBoundaryTargetLocalForRep(pattern_rep);
-            continuation = try self.bindPatternFromLocal(pattern_id, binding_local, continuation);
+            continuation = try self.runExprTasks(.{ .pattern = .{ .pattern = pattern_id, .source = binding_local, .mode = .bind, .next = continuation } });
             if (binding_local != value_local) {
                 continuation = try self.assignPlannedCallBoundary(
                     binding_local,
@@ -16658,28 +16649,8 @@ const ProcBodyBuilder = struct {
             cond_rep: Plan.TypeRepId = undefined,
             outer_descriptors: ?DescriptorBindingsSnapshot = null,
             done: LIR.JoinPointId = undefined,
-            index: usize = 0,
-            current: LIR.CFStmtId = undefined,
-            condition_started: bool = false,
-        },
-        match_branch: struct {
-            branch: checked.CheckedMatchBranch,
-            source: LIR.LocalId,
-            source_rep: Plan.TypeRepId,
-            target: LIR.LocalId,
-            result_ty: checked.CheckedTypeId,
-            done: LIR.JoinPointId,
-            next: LIR.CFStmtId,
-            outer_descriptors: ?DescriptorBindingsSnapshot = null,
-            branch_body: LIR.CFStmtId = undefined,
-            on_match: LIR.CFStmtId = undefined,
-            alternatives_started: bool = false,
-            /// The alternative whose pattern is being lowered; the ones after
-            /// it are done.
-            alt_index: usize = 0,
-            alt_current: LIR.CFStmtId = undefined,
-            alt_miss: ?PatternMiss = null,
-            alt_snapshot: ?DescriptorBindingsSnapshot = null,
+            /// The branches' decision tree, while it is being emitted.
+            tree: ?*PatternTreeRun = null,
         },
         shared_rep: struct { target: LIR.LocalId, target_rep: Plan.TypeRepId, expr_id: checked.CheckedExprId, next: LIR.CFStmtId },
         while_: struct {
@@ -16737,7 +16708,6 @@ const ProcBodyBuilder = struct {
             payload_desc: ?LIR.LocalId = undefined,
             item: LIR.LocalId = undefined,
             rest: LIR.LocalId = undefined,
-            miss: ?PatternMiss = null,
         },
         const_node: struct { target: LIR.LocalId, store_module: Plan.ModuleView, type_module: Plan.ModuleView, node: checked.ConstNodeId, checked_ty: checked.CheckedTypeId, next: LIR.CFStmtId },
         stored_node: struct { target: LIR.LocalId, store_module: Plan.ModuleView, node: checked.ConstNodeId, stored_type: check.ConstStore.ConstTypeId, rep_id: Plan.TypeRepId, next: LIR.CFStmtId },
@@ -16752,7 +16722,16 @@ const ProcBodyBuilder = struct {
             next: LIR.CFStmtId,
             state: ?*PlannedCallState = null,
         },
-        pattern: PatternTask,
+        /// One pattern over `source`, through the shared match compiler.
+        pattern: struct {
+            pattern: checked.CheckedPatternId,
+            source: LIR.LocalId,
+            /// The source's representation when it is not the pattern's.
+            source_rep: ?Plan.TypeRepId = null,
+            mode: MatchMode,
+            next: LIR.CFStmtId,
+            tree: ?*PatternTreeRun = null,
+        },
         /// Expressions lowered into a struct's fields.
         exprs_struct: struct {
             target: LIR.LocalId,
@@ -16847,8 +16826,6 @@ const ProcBodyBuilder = struct {
         capture_snapshots: checked.CheckedExprId,
         recursive_value_slots: checked.CheckedPatternId,
         runtime_error,
-        /// Crash when a declaration's pattern misses.
-        pattern_miss_crash: LIR.JoinPointId,
         /// Record a local's descriptor environment, owning the bindings.
         record_local_env: struct { target: LIR.LocalId, rep: Plan.TypeRepId, bindings: []LocalDescriptorEnvironmentBinding },
         /// Build the adapter a raw callable value continues into.
@@ -16883,7 +16860,7 @@ const ProcBodyBuilder = struct {
         var copy = task;
         switch (copy) {
             .chain => |*chain| chain.current = next,
-            inline .expr, .expected, .expected_ref, .into_rep, .payload_storage, .list, .tuple_rep, .tag_rep, .tag_variant, .record_rep, .defaulted_field, .module_expr, .statement, .decl_pattern, .if_, .bool_binop, .match_, .match_branch, .shared_rep, .while_, .iter_dispatch, .iterator_for, .iterator_loop_body, .iterator_one_branch, .const_node, .stored_node, .const_storage, .stored_storage, .const_optional_slot, .planned_call, .pattern, .stored_across, .exprs_struct => |*payload| payload.next = next,
+            inline .expr, .expected, .expected_ref, .into_rep, .payload_storage, .list, .tuple_rep, .tag_rep, .tag_variant, .record_rep, .defaulted_field, .module_expr, .statement, .decl_pattern, .if_, .bool_binop, .match_, .shared_rep, .while_, .iter_dispatch, .iterator_for, .iterator_loop_body, .iterator_one_branch, .const_node, .stored_node, .const_storage, .stored_storage, .const_optional_slot, .planned_call, .pattern, .stored_across, .exprs_struct => |*payload| payload.next = next,
         }
         return copy;
     }
@@ -16936,7 +16913,7 @@ const ProcBodyBuilder = struct {
                 for (chain.items[chain.index..]) |item| switch (item) {
                     .record_local_env => |env| self.parent.allocator.free(env.bindings),
                     .prepend_descriptor_initializers => |initializers| self.parent.allocator.free(initializers),
-                    .capture_snapshots, .recursive_value_slots, .lower, .propagate_desc, .prepend_field_initializers, .record_aggregate_env, .leave_scope, .str_concat, .missing_optional_slot, .record_ext_field, .call_operand, .boundary_assign, .const_list_element_box, .bind_shared_descriptor, .restore_descriptors, .runtime_error, .pattern_miss_crash, .callable_adapter => {},
+                    .capture_snapshots, .recursive_value_slots, .lower, .propagate_desc, .prepend_field_initializers, .record_aggregate_env, .leave_scope, .str_concat, .missing_optional_slot, .record_ext_field, .call_operand, .boundary_assign, .const_list_element_box, .bind_shared_descriptor, .restore_descriptors, .runtime_error, .callable_adapter => {},
                 };
                 if (chain.scope) |scope| self.dropNominalBackingFormalScope(scope);
                 chain.scope = null;
@@ -16961,18 +16938,14 @@ const ProcBodyBuilder = struct {
                 call.state = null;
             },
             .match_ => |*match_| {
+                if (match_.tree) |tree| self.freePatternTreeRun(tree);
+                match_.tree = null;
                 if (match_.outer_descriptors) |snapshot| snapshot.deinit(self.parent.allocator);
                 match_.outer_descriptors = null;
             },
-            .match_branch => |*branch| {
-                if (branch.outer_descriptors) |snapshot| snapshot.deinit(self.parent.allocator);
-                branch.outer_descriptors = null;
-                if (branch.alt_snapshot) |snapshot| snapshot.deinit(self.parent.allocator);
-                branch.alt_snapshot = null;
-            },
             .pattern => |*pattern| {
-                if (pattern.state) |state| self.releasePatternState(state);
-                pattern.state = null;
+                if (pattern.tree) |tree| self.freePatternTreeRun(tree);
+                pattern.tree = null;
             },
             .iter_dispatch => |*dispatch| {
                 if (dispatch.snapshot) |snapshot| {
@@ -17045,9 +17018,8 @@ const ProcBodyBuilder = struct {
             .iterator_loop_body => |*t| try self.stepIteratorLoopBody(t, stage, input),
             .iterator_one_branch => |*t| try self.stepIteratorOneBranch(t, stage, input),
             .match_ => |*t| try self.stepMatch(t, stage, input),
-            .match_branch => |*t| try self.stepMatchBranch(t, stage, input),
             .planned_call => |*t| try self.stepPlannedWorkerCall(t, stage, input),
-            .pattern => |*t| try self.stepPattern(t, input),
+            .pattern => |*t| try self.stepPatternTree(t, input),
             .exprs_struct => |t| try self.beginExprsAsStructWithReps(t.target, t.target_rep, t.items, t.item_reps, t.next),
             .stored_across => |t| try self.beginRestoreStoredConstNodeAcrossBoundary(t.target, t.store_module, t.node, t.stored_type, t.target_rep, t.stored_rep, t.next),
             .chain => |*chain| try self.stepExprChain(chain, input),
@@ -17147,17 +17119,6 @@ const ProcBodyBuilder = struct {
                 .callable_adapter => |boundary| blk: {
                     try self.finishCallableAdapterBoundary(boundary);
                     break :blk chain.current;
-                },
-                .pattern_miss_crash => |join_id| blk: {
-                    const crash = try self.parent.result.store.addCFStmt(.{ .crash = .{
-                        .msg = .{ .literal = try self.parent.result.store.insertString("pattern match failed") },
-                    } }, self.origin);
-                    break :blk try self.parent.result.store.addCFStmt(.{ .join = .{
-                        .id = join_id,
-                        .params = LIR.LocalSpan.empty(),
-                        .body = crash,
-                        .remainder = chain.current,
-                    } }, self.origin);
                 },
             };
         }
@@ -18892,17 +18853,10 @@ const ProcBodyBuilder = struct {
             .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => try self.addFrameLocalForType(pattern.ty),
         };
         const value: ExprChainItem = .{ .lower = .{ .expr = .{ .target = source, .expr_id = expr_id, .next = undefined } } };
-        if (try self.patternCanMiss(pattern_id)) {
-            const miss = PatternMiss{ .join_id = self.freshJoinPointId() };
-            const items = try self.parent.allocator.alloc(ExprChainItem, 4);
-            items[0] = .{ .lower = .{ .pattern = .{ .pattern = pattern_id, .source = source, .mode = .{ .match = .{ .miss = miss, .remaps = &.{} } }, .next = undefined } } };
-            items[1] = .{ .pattern_miss_crash = miss.join_id };
-            items[2] = value;
-            items[3] = .{ .capture_snapshots = expr_id };
-            return exprChain(items, next);
-        }
         const items = try self.parent.allocator.alloc(ExprChainItem, 3);
-        items[0] = .{ .lower = .{ .pattern = .{ .pattern = pattern_id, .source = source, .mode = .bind, .next = undefined } } };
+        // A pattern that can miss tests its value and crashes on a miss.
+        const mode: MatchMode = if (try self.patternCanMiss(pattern_id)) .declaration else .bind;
+        items[0] = .{ .lower = .{ .pattern = .{ .pattern = pattern_id, .source = source, .mode = mode, .next = undefined } } };
         items[1] = value;
         items[2] = .{ .capture_snapshots = expr_id };
         return exprChain(items, next);
@@ -19385,25 +19339,9 @@ const ProcBodyBuilder = struct {
         }
 
         const done = self.freshJoinPointId();
-        const miss = PatternMiss{ .join_id = self.freshJoinPointId() };
         const matched = try self.assignBoolLiteral(target, !negated, try self.joinJump(done));
-        const state = try self.parent.allocator.create(PatternState);
-        state.* = .{ .current = matched };
-        defer self.releasePatternState(state);
-        try self.expandTagPattern(state, value_expr.ty, value_rep, discriminant.tag, &.{}, value, .{ .miss = miss, .remaps = &.{} });
-        while (state.actions.pop()) |action| {
-            if (try self.stepPatternAction(state, action) != null) {
-                boxyLowerInvariant("payload-free tag equality requested a payload expression");
-            }
-        }
-        const tested = state.current;
         const missed = try self.assignBoolLiteral(target, negated, try self.joinJump(done));
-        const test_stmt = try self.parent.result.store.addCFStmt(.{ .join = .{
-            .id = miss.join_id,
-            .params = LIR.LocalSpan.empty(),
-            .body = missed,
-            .remainder = tested,
-        } }, self.glueOrigin());
+        const test_stmt = try self.lowerTagTest(value, value_rep, discriminant.tag, matched, missed);
         const params = [_]LIR.LocalId{target};
         const joined = try self.parent.result.store.addCFStmt(.{ .join = .{
             .id = done,
@@ -19412,6 +19350,51 @@ const ProcBodyBuilder = struct {
             .remainder = test_stmt,
         } }, self.glueOrigin());
         return .{ .tail = .{ .into_rep = .{ .target = value, .target_rep = value_rep, .expr_id = discriminant.value, .next = joined } } };
+    }
+
+    /// Whether `value`, stored at `value_rep`, holds the tag `name`: the test
+    /// a match arm for that payload-free tag performs.
+    fn lowerTagTest(
+        self: *ProcBodyBuilder,
+        value: LIR.LocalId,
+        value_rep: Plan.TypeRepId,
+        name: names.TagNameId,
+        on_match: LIR.CFStmtId,
+        on_miss: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const scope = try self.enterNominalWrapperFormalScopes(value_rep);
+        errdefer self.dropNominalBackingFormalScope(scope);
+        const tested = tested: {
+            const tag_rep = self.tagPatternRepForBoundary(value_rep) orelse
+                break :tested try BoxyMatchCtx.emitTagNameTest(self, value, value_rep, name, on_match, on_miss);
+            const rep = self.parent.plan.representations.items[@backingInt(tag_rep)];
+            const variant_index = switch (rep.kind) {
+                .bool_tag_union => self.boolVariantIndex(name),
+                .tag_union => variant: {
+                    const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
+                    const variant = self.tagVariant(rep, name);
+                    if (variants.len == 1 and !self.tagDomainHasOpenExtension(tag_rep)) break :tested on_match;
+                    break :variant variant.index;
+                },
+                .dynamic => break :tested try BoxyMatchCtx.emitTagNameTest(self, value, value_rep, name, on_match, on_miss),
+                else => boxyLowerInvariant("payload-free tag equality operand did not have a tag representation"),
+            };
+            if (self.isZstLocal(value)) break :tested on_match;
+            const disc = try self.addFrameLocal(.u32);
+            const branches = [_]LIR.CFSwitchBranch{.{ .value = variant_index, .body = on_match }};
+            const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
+                .cond = disc,
+                .branches = try self.parent.result.store.addCFSwitchBranches(&branches),
+                .default_branch = on_miss,
+                .continuation = null,
+            } }, self.glueOrigin());
+            break :tested try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                .target = disc,
+                .op = .{ .discriminant = .{ .source = value } },
+                .next = switch_stmt,
+            } }, self.glueOrigin());
+        };
+        return try self.leaveNominalBackingFormalScope(scope, tested);
     }
 
     fn beginStructuralEq(
@@ -19884,21 +19867,9 @@ const ProcBodyBuilder = struct {
             return .{ .child = .{ .expr = .{ .target = body_result, .expr_id = task.for_.body, .next = continuation } } };
         }
         if (stage == 1) {
-            task.miss = if (try self.patternCanMiss(task.for_.pattern))
-                PatternMiss{ .join_id = self.freshJoinPointId() }
-            else
-                null;
-            return .{ .child = .{ .pattern = .{ .pattern = task.for_.pattern, .source = task.item, .mode = .{ .match = .{ .miss = task.miss, .remaps = &.{} } }, .next = input.? } } };
+            return .{ .child = .{ .pattern = .{ .pattern = task.for_.pattern, .source = task.item, .mode = .loop_item, .next = input.? } } };
         }
         var continuation = input.?;
-        if (task.miss) |miss_info| {
-            continuation = try self.parent.result.store.addCFStmt(.{ .join = .{
-                .id = miss_info.join_id,
-                .params = LIR.LocalSpan.empty(),
-                .body = try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin()),
-                .remainder = continuation,
-            } }, self.glueOrigin());
-        }
 
         continuation = try self.lowerRecordFieldFromLocalInto(task.rest, self.repForTypeRef(.{ .module = step.one_payload_ty.module, .ty = step.one_rest.ty }), task.payload, self.repForTypeRef(step.one_payload_ty), step.module, step.one_rest.name, continuation);
         continuation = try self.lowerRecordFieldFromLocalInto(task.item, self.repForTypeRef(.{ .module = step.one_payload_ty.module, .ty = step.one_item.ty }), task.payload, self.repForTypeRef(step.one_payload_ty), step.module, step.one_item.name, continuation);
@@ -27239,26 +27210,18 @@ const ProcBodyBuilder = struct {
             }
             task.outer_descriptors = try self.snapshotDescriptorBindings();
             task.done = self.freshJoinPointId();
-            task.current = try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin());
-            task.index = task.branches.len;
-        } else if (!task.condition_started) {
-            task.current = input.?;
+            task.tree = try self.beginMatchTree(task.branches, task.cond_local, task.cond_rep, task.done);
         }
-        if (!task.condition_started) {
-            if (task.index > 0) {
-                task.index -= 1;
-                return .{ .child = .{ .match_branch = .{
-                    .branch = task.branches[task.index],
-                    .source = task.cond_local,
-                    .source_rep = task.cond_rep,
-                    .target = task.target,
-                    .result_ty = task.match_ty,
-                    .done = task.done,
-                    .next = task.current,
-                } } };
+        if (task.tree) |tree| {
+            const bodies: PatternTreeBodies = .{ .branches = task.branches, .target = task.target, .result_ty = task.match_ty };
+            switch (try self.advancePatternTree(tree, bodies, if (stage == 0) null else input)) {
+                .child => |child| return .{ .child = child },
+                .done => |entry| {
+                    self.freePatternTreeRun(tree);
+                    task.tree = null;
+                    return .{ .child = self.matchConditionTask(task.cond_local, task.cond_rep, task.cond, entry) };
+                },
             }
-            task.condition_started = true;
-            return .{ .child = self.matchConditionTask(task.cond_local, task.cond_rep, task.cond, task.current) };
         }
 
         const outer_descriptors = task.outer_descriptors.?;
@@ -27274,6 +27237,48 @@ const ProcBodyBuilder = struct {
         self.restoreDescriptorBindings(outer_descriptors);
         outer_descriptors.deinit(self.parent.allocator);
         return exprDone(match_stmt);
+    }
+
+    /// A match's decision tree: one row per alternative of each branch, in
+    /// source order. Alternatives share their branch's body and guard.
+    fn beginMatchTree(
+        self: *ProcBodyBuilder,
+        branches: []const checked.CheckedMatchBranch,
+        cond_local: LIR.LocalId,
+        cond_rep: Plan.TypeRepId,
+        done: LIR.JoinPointId,
+    ) Allocator.Error!*PatternTreeRun {
+        const allocator = self.parent.allocator;
+        var rows: std.ArrayList(MatchTree.Branch) = .empty;
+        defer rows.deinit(allocator);
+        var alternatives: std.ArrayList(checked.CheckedPatternId) = .empty;
+        defer alternatives.deinit(allocator);
+        var remaps: std.ArrayList([]const checked.CheckedAlternativeBinderRemap) = .empty;
+        defer remaps.deinit(allocator);
+        for (branches, 0..) |branch, branch_index| {
+            const patterns = branch.patternsSlice(self.module.checked_bodies);
+            if (patterns.len == 0) {
+                boxyLowerInvariant("checked match branch reached boxy lowering without patterns");
+            }
+            for (patterns) |branch_pattern| {
+                if (branch_pattern.degenerate) continue;
+                try rows.append(allocator, .{
+                    .pat = branch_pattern.pattern,
+                    .guard = if (branch.guard) |guard| .{ .guard = .{ .expr = guard, .branch = @intCast(branch_index) } } else null,
+                    .body = .{ .body = @intCast(branch_index) },
+                    .branch_index = @intCast(rows.items.len),
+                });
+                try alternatives.append(allocator, branch_pattern.pattern);
+                try remaps.append(allocator, branch_pattern.binderRemapsSlice(self.module.checked_bodies));
+            }
+        }
+        if (rows.items.len == 0) boxyLowerInvariant("checked match reached boxy lowering without a matchable pattern");
+        const root_ty: MatchOcc = .{
+            .checked = self.module.checked_bodies.pattern(rows.items[0].pat).ty,
+            .rep = cond_rep,
+            .read = .root,
+        };
+        return try self.beginPatternTree(.branches, cond_local, root_ty, rows.items, remaps.items, alternatives.items, branches.len, done);
     }
 
     /// A match whose scrutinee is a layout-resolved low-level (see
@@ -27551,82 +27556,6 @@ const ProcBodyBuilder = struct {
             }
             try self.reserveMatchPatternBindingsFromRep(patterns[0].pattern, source_rep);
         }
-    }
-
-    /// A match branch: its body, its guard, then its alternatives'
-    /// patterns from the last, each falling through to the next on a miss.
-    fn stepMatchBranch(self: *ProcBodyBuilder, task: anytype, stage: u32, input: ?LIR.CFStmtId) Allocator.Error!ExprStep {
-        const branch = task.branch;
-        const patterns = branch.patternsSlice(self.module.checked_bodies);
-        switch (stage) {
-            0 => {
-                if (patterns.len == 0) {
-                    boxyLowerInvariant("checked match branch reached boxy lowering without patterns");
-                }
-                task.outer_descriptors = try self.snapshotDescriptorBindings();
-                for (patterns) |branch_pattern| {
-                    if (branch_pattern.degenerate) continue;
-                    try self.walkPatternBinders(branch_pattern.pattern, .{ .match_descriptors = branch_pattern.binderRemapsSlice(self.module.checked_bodies) });
-                }
-                const branch_done = try self.joinJump(task.done);
-                return .{ .child = .{ .expected = .{ .target = task.target, .expected_ty = task.result_ty, .expr_id = branch.value, .next = branch_done } } };
-            },
-            1 => {
-                task.branch_body = input.?;
-                if (branch.guard) |guard| {
-                    const guard_expr = self.module.checked_bodies.expr(guard);
-                    const guard_local = try self.addFrameLocalForType(guard_expr.ty);
-                    const guard_switch = try self.boolSwitchNoContinuation(guard_local, task.branch_body, task.next);
-                    return .{ .child = .{ .expr = .{ .target = guard_local, .expr_id = guard, .next = guard_switch } } };
-                }
-            },
-            else => {},
-        }
-        if (!task.alternatives_started) {
-            task.on_match = if (branch.guard != null) input.? else task.branch_body;
-            const outer_descriptors = task.outer_descriptors.?;
-            task.outer_descriptors = null;
-            defer outer_descriptors.deinit(self.parent.allocator);
-            self.restoreDescriptorBindings(outer_descriptors);
-            task.alternatives_started = true;
-            task.alt_current = task.next;
-            task.alt_index = patterns.len;
-        } else {
-            const branch_start = input.?;
-            const pattern_descriptors = task.alt_snapshot.?;
-            task.alt_snapshot = null;
-            defer pattern_descriptors.deinit(self.parent.allocator);
-            self.restoreDescriptorBindings(pattern_descriptors);
-            task.alt_current = if (task.alt_miss) |miss_info|
-                try self.parent.result.store.addCFStmt(.{ .join = .{
-                    .id = miss_info.join_id,
-                    .params = LIR.LocalSpan.empty(),
-                    .body = task.alt_current,
-                    .remainder = branch_start,
-                } }, self.glueOrigin())
-            else
-                branch_start;
-        }
-        if (task.alt_index == 0) return exprDone(task.alt_current);
-        task.alt_index -= 1;
-        const branch_pattern = patterns[task.alt_index];
-        if (branch_pattern.degenerate) {
-            boxyLowerInvariant("degenerate checked match alternative reached boxy lowering");
-        }
-        const remaps = branch_pattern.binderRemapsSlice(self.module.checked_bodies);
-        const needs_miss_join = try self.patternFromRepCanMiss(branch_pattern.pattern, task.source_rep);
-        task.alt_miss = if (needs_miss_join)
-            PatternMiss{ .join_id = self.freshJoinPointId() }
-        else
-            null;
-        task.alt_snapshot = try self.snapshotDescriptorBindings();
-        return .{ .child = .{ .pattern = .{
-            .pattern = branch_pattern.pattern,
-            .source = task.source,
-            .source_rep = task.source_rep,
-            .mode = .{ .match = .{ .miss = task.alt_miss, .remaps = remaps } },
-            .next = task.on_match,
-        } } };
     }
 
     fn lowerExprIntoRep(
@@ -28814,871 +28743,1263 @@ const ProcBodyBuilder = struct {
         return try Plan.declarationOmitsRuntimeBinding(self.parent.allocator, self.module, pattern_id, expr_id);
     }
 
-    /// How a pattern treats a value it does not match.
-    const PatternMode = union(enum) {
-        /// An irrefutable binding.
-        bind,
-        /// A test that jumps to `miss` when the value does not match, binding
-        /// through `remaps`.
-        match: PatternContext,
+    // Pattern matching //
+    //
+    // Every pattern Boxy lowers (a match's branches, a declaration's or a
+    // `for` loop's destructuring, a lambda argument's or capture's pattern)
+    // compiles through the shared decision-tree match compiler
+    // (`src/postcheck/match_tree.zig`). `BoxyMatchCtx` reads checked patterns
+    // and this builder's representation plan for it, and emits each read,
+    // test, and binding with the builder's own boundary and descriptor
+    // lowering.
+    //
+    // A position's value is stored at the representation its producer chose
+    // (`MatchOcc.rep`). Tag tests read that representation, so a residual tag
+    // the producer's row holds reaches the next branch; any other pattern
+    // whose own representation stores differently first converts the value
+    // (`MatchRead.narrow`). Reads, tests, and binds under a nominal's backing
+    // tree inside that nominal's formal scope, which is entered around each
+    // emitted piece.
+
+    const MatchTree = match_tree.Compiler(BoxyMatchCtx);
+
+    /// How a position's value is read from its parent's.
+    const MatchRead = union(enum) {
+        root,
+        record_field: struct { record_ty: checked.CheckedTypeId, access: RecordFieldAccessInfo },
+        tuple_elem: struct { tuple_rep: Plan.TypeRepId, index: u32 },
+        /// A transparent nominal's backing, which is stored as the nominal is.
+        nominal_same,
+        /// An opaque nominal's backing, converted from the nominal.
+        nominal_boundary: struct { nominal_rep: Plan.TypeRepId },
+        tag_payload: MatchPayloadRead,
+        list_elem,
+        list_rest,
+        record_rest: struct { record_ty: checked.CheckedTypeId },
+        /// The parent converted into the representation its patterns read.
+        narrow,
+        /// A boxed dynamic record's payload, unboxed once for its fields.
+        record_unbox,
     };
 
-    const PatternContext = struct {
-        miss: ?PatternMiss,
-        remaps: []const checked.CheckedAlternativeBinderRemap,
-    };
-
-    /// A pattern test or binding over `source`, continuing into `next`.
-    const PatternTask = struct {
-        pattern: checked.CheckedPatternId,
-        source: LIR.LocalId,
-        /// The producer's representation, which a match observes before
-        /// narrowing into the pattern's contextual representation.
-        source_rep: ?Plan.TypeRepId = null,
-        mode: PatternMode,
-        next: LIR.CFStmtId,
-        state: ?*PatternState = null,
-    };
-
-    /// A pattern's pending pieces, applied from the continuation backwards:
-    /// each piece wraps the statement built so far, and a nested pattern
-    /// expands into the pieces it needs.
-    const PatternState = struct {
-        actions: std.ArrayList(PatternAction) = .empty,
-        current: LIR.CFStmtId,
-    };
-
-    /// The payload patterns of one tag, built last payload first.
-    const TagPayloadPatterns = struct {
+    const MatchPayloadRead = struct {
+        /// The tag representation the source is read as.
+        source_tag_rep: Plan.TypeRepId,
+        /// The source's own representation.
         source_rep: Plan.TypeRepId,
         tag_name: names.TagNameId,
+        /// The variant's index in a concrete union; null for a union only a
+        /// descriptor describes, whose payloads are read by name.
         variant_index: ?u32,
-        args: []const checked.CheckedPatternId,
-        source: LIR.LocalId,
-        source_tag_rep: Plan.TypeRepId,
-        source_payloads: []const Plan.RepChild,
-        context: PatternContext,
+        payload_index: u32,
+        payload_count: usize,
+        source_payload_rep: Plan.TypeRepId,
+        /// Whether the pattern's representation stores the payload as the
+        /// source does; otherwise the payload is extracted at its source
+        /// representation and narrowed by the patterns that need it.
+        direct: bool,
     };
 
-    /// A list pattern's element and rest tests.
-    const ListPatternShape = struct {
-        elems: []const checked.CheckedPatternId,
-        rest_index: ?u32,
-        source: LIR.LocalId,
-        len_local: LIR.LocalId,
-        fixed_count: i64,
-        context: PatternContext,
+    /// A pattern position as the decision tree reads it.
+    const MatchOcc = struct {
+        /// The checked type of the patterns at this position, when known.
+        checked: ?checked.CheckedTypeId,
+        /// The representation this position's local stores its value as.
+        rep: Plan.TypeRepId,
+        read: MatchRead,
     };
 
-    const PatternAction = union(enum) {
-        /// Lower a pattern against `source`.
-        pattern: struct { pattern: checked.CheckedPatternId, source: LIR.LocalId, mode: PatternMode },
-        /// Match a pattern against the producer's representation.
-        from_rep: struct { pattern: checked.CheckedPatternId, source: LIR.LocalId, source_rep: Plan.TypeRepId, context: PatternContext },
-        /// Match an applied tag at `rep_id`.
-        tag_rep: struct { tag_ty: checked.CheckedTypeId, rep_id: Plan.TypeRepId, name: names.TagNameId, args: []const checked.CheckedPatternId, source: LIR.LocalId, context: PatternContext },
-        /// Match the payload after `index`'s predecessor, or finish the
-        /// payloads at zero.
-        tag_payload_next: struct { payloads: TagPayloadPatterns, index: usize },
-        /// Restore the descriptors a payload pattern bound, then read the
-        /// payload.
-        tag_payload_read: struct {
-            payloads: TagPayloadPatterns,
-            index: usize,
-            snapshot: DescriptorBindingsSnapshot,
-            read: union(enum) {
-                /// The pattern's value has the payload's layout.
-                direct: struct { pattern_local: LIR.LocalId, pattern_rep: Plan.TypeRepId, pattern_desc: ?LIR.LocalId },
-                /// The payload is read at its storage and narrowed.
-                extracted: ExtractedTagPayloadLocal,
-            },
-        },
-        /// Test a concrete tag's discriminant unless the union has one variant.
-        tag_discriminant: struct { source: LIR.LocalId, variant_index: u32, single_variant: bool, context: PatternContext },
-        /// Test a dynamic tag's name unless the contextual union has one
-        /// closed variant.
-        dynamic_tag_match: struct { source: LIR.LocalId, source_rep: Plan.TypeRepId, name: names.TagNameId, cannot_miss: bool, context: PatternContext },
-        match_binder: struct { binder: checked.PatternBinderId, source: LIR.LocalId, remaps: []const checked.CheckedAlternativeBinderRemap },
-        assign_binder: struct { binder: checked.PatternBinderId, source: LIR.LocalId },
-        tuple_field: struct { tuple_ty: checked.CheckedTypeId, pattern: checked.CheckedPatternId, source: LIR.LocalId, field_index: u32, mode: PatternMode },
-        tuple_read: struct { field_local: LIR.LocalId, source: LIR.LocalId, tuple_rep: Plan.TypeRepId, field_index: u32 },
-        record_field: struct { pattern: checked.CheckedPatternId, field_read: RecordFieldReadSource, access: RecordFieldAccessInfo, mode: PatternMode },
-        record_read: struct { field_local: LIR.LocalId, field_rep: Plan.TypeRepId, field_read: RecordFieldReadSource, access: RecordFieldAccessInfo },
-        record_rest: struct { pattern: checked.CheckedPatternId, field_read: RecordFieldReadSource, record_ty: checked.CheckedTypeId, mode: PatternMode },
-        record_rest_value: struct { rest_local: LIR.LocalId, field_read: RecordFieldReadSource, record_ty: checked.CheckedTypeId, rest_ty: checked.CheckedTypeId },
-        /// Leave the nominal scopes a tuple, record, or tag entered; a
-        /// record's field source is read first.
-        leave_scope: struct { scope: NominalBackingFormalScope, field_read: ?RecordFieldReadSource },
-        boundary: struct { target: LIR.LocalId, source: LIR.LocalId, target_rep: Plan.TypeRepId, source_rep: Plan.TypeRepId },
-        /// Read the rest slice of a list pattern that also has elements.
-        list_rest: struct { shape: ListPatternShape, rest_local: LIR.LocalId, front_dropped: LIR.LocalId },
-        /// Test the element before `index`, or the length at zero.
-        list_elem_next: struct { shape: ListPatternShape, index: usize },
-        list_elem_read: struct { shape: ListPatternShape, elem_local: LIR.LocalId, index: usize },
-        /// Check the list's length before its element tests.
-        list_length: struct { shape: ListPatternShape, has_rest: bool },
-        /// Match a string pattern once its captures are bound.
-        str_match: struct { str: @FieldType(checked.CheckedPatternData, "str_interpolation"), lir_steps: []LIR.StrMatchStep, source: LIR.LocalId, context: PatternContext },
-        /// Bind a literal pattern's value before its equality guard.
-        guard_binder: struct { binder: checked.PatternBinderId, source: LIR.LocalId },
+    /// What the decision tree lowers at a leaf or guard.
+    const MatchExpr = union(enum) {
+        /// The body of the match branch at this index.
+        body: u32,
+        /// The guard of the match branch at `branch`.
+        guard: struct { expr: checked.CheckedExprId, branch: u32 },
+        /// A destructuring's continuation, already lowered.
+        continuation: LIR.CFStmtId,
     };
 
-    fn stepPattern(self: *ProcBodyBuilder, task: *PatternTask, input: ?LIR.CFStmtId) Allocator.Error!ExprStep {
-        const allocator = self.parent.allocator;
-        const state = if (task.state) |existing| blk: {
-            existing.current = input orelse boxyLowerInvariant("boxy pattern resumed without its guard comparison");
-            break :blk existing;
-        } else blk: {
-            const created = try allocator.create(PatternState);
-            created.* = .{ .current = task.next };
-            task.state = created;
-            try created.actions.append(allocator, if (task.source_rep) |source_rep| switch (task.mode) {
-                .match => |context| .{ .from_rep = .{ .pattern = task.pattern, .source = task.source, .source_rep = source_rep, .context = context } },
-                .bind => boxyLowerInvariant("boxy irrefutable binding matched against a producer representation"),
-            } else .{ .pattern = .{ .pattern = task.pattern, .source = task.source, .mode = task.mode } });
-            break :blk created;
-        };
-        while (state.actions.pop()) |action| {
-            if (try self.stepPatternAction(state, action)) |guard| return .{ .child = guard };
-        }
-        const stmt = state.current;
-        self.releasePatternState(state);
-        task.state = null;
-        return exprDone(stmt);
-    }
+    /// How the patterns being compiled treat their values.
+    const MatchMode = enum {
+        /// A match's branches.
+        branches,
+        /// An irrefutable destructuring.
+        bind,
+        /// A declaration whose pattern can miss: a miss crashes.
+        declaration,
+        /// A `for` loop item whose pattern can miss.
+        loop_item,
+    };
 
-    /// Free a pattern's pending pieces, leaving the scopes they hold,
-    /// innermost first, as the direct lowering's defers would.
-    fn releasePatternState(self: *ProcBodyBuilder, state: *PatternState) void {
-        const allocator = self.parent.allocator;
-        var index = state.actions.items.len;
-        while (index > 0) {
-            index -= 1;
-            switch (state.actions.items[index]) {
-                .leave_scope => |leave| self.dropNominalBackingFormalScope(leave.scope),
-                .tag_payload_read => |read| read.snapshot.deinit(allocator),
-                .str_match => |str_match| allocator.free(str_match.lir_steps),
-                .pattern, .from_rep, .tag_rep, .tag_payload_next, .tag_discriminant, .dynamic_tag_match, .match_binder, .assign_binder, .tuple_field, .tuple_read, .record_field, .record_read, .record_rest, .record_rest_value, .boundary, .list_rest, .list_elem_next, .list_elem_read, .list_length, .guard_binder => {},
+    /// Builder state one pattern compilation keeps for its locals.
+    const MatchLocalState = struct {
+        /// Nominal representations whose formal scopes the local's reads and
+        /// tests tree inside, outermost first.
+        scopes: []const Plan.TypeRepId = &.{},
+        /// Scoped descriptor locals reserved when the local was allocated,
+        /// initialized in front of its read.
+        pending_scoped: []const ScopedDescriptorLocal = &.{},
+        /// Descriptor bindings to restore once the local is read.
+        snapshot: ?DescriptorBindingsSnapshot = null,
+        /// A tag payload's descriptor local.
+        payload_desc: ?LIR.LocalId = null,
+        /// A list rest's intermediate slice.
+        front_dropped: ?LIR.LocalId = null,
+        /// A record's field source when its fields read an unboxed payload.
+        field_read: ?RecordFieldReadSource = null,
+    };
+
+    const MatchState = struct {
+        arena: Allocator,
+        mode: MatchMode,
+        locals: std.AutoHashMapUnmanaged(LIR.LocalId, MatchLocalState) = .empty,
+        /// Each match binder's alternative remaps.
+        remaps: std.AutoHashMapUnmanaged(checked.PatternBinderId, []const checked.CheckedAlternativeBinderRemap) = .empty,
+        /// Each branch body, once lowered; alternatives share it.
+        bodies: []?LIR.CFStmtId = &.{},
+        shapes: std.StringHashMapUnmanaged(u32) = .empty,
+    };
+
+    const BoxyMatchCtx = struct {
+        b: *ProcBodyBuilder,
+        state: *MatchState,
+
+        pub const PatId = checked.CheckedPatternId;
+        pub const TypeId = MatchOcc;
+        pub const ExprId = MatchExpr;
+        pub const LocalId = checked.PatternBinderId;
+        pub const BindingSpan = struct {
+            pub fn empty() @This() {
+                return .{};
             }
-        }
-        state.actions.deinit(allocator);
-        allocator.destroy(state);
-    }
-
-    /// Push an action that owns a scope, dropping the scope if the push
-    /// fails.
-    fn pushPatternScope(self: *ProcBodyBuilder, state: *PatternState, scope: NominalBackingFormalScope, field_read: ?RecordFieldReadSource) Allocator.Error!void {
-        state.actions.append(self.parent.allocator, .{ .leave_scope = .{ .scope = scope, .field_read = field_read } }) catch |err| {
-            self.dropNominalBackingFormalScope(scope);
-            return err;
         };
-    }
+        pub const LirLocal = LIR.LocalId;
+        pub const CFStmtId = LIR.CFStmtId;
+        pub const JoinPointId = LIR.JoinPointId;
+        pub const StrArm = LIR.StrMatchArm;
+        pub const LowerError = Allocator.Error;
 
-    /// Apply one pattern piece to the statement built so far. A literal
-    /// pattern's equality guard is returned for the expression machine to
-    /// lower into the statement built so far.
-    fn stepPatternAction(self: *ProcBodyBuilder, state: *PatternState, action: PatternAction) Allocator.Error!?ExprTask {
-        const allocator = self.parent.allocator;
-        switch (action) {
-            .pattern => |item| return try self.expandPattern(state, item.pattern, item.source, item.mode),
-            .from_rep => |item| try self.expandPatternFromRep(state, item.pattern, item.source, item.source_rep, item.context),
-            .tag_rep => |item| try self.expandTagPattern(state, item.tag_ty, item.rep_id, item.name, item.args, item.source, item.context),
-            .tag_payload_next => |item| {
-                if (item.index == 0) return null;
-                const index = item.index - 1;
-                if (index > std.math.maxInt(u32)) {
-                    boxyLowerInvariant("tag match pattern payload index exceeded LIR payload index range");
+        pub const SubPat = struct { index: u32, ty: MatchOcc, pat: checked.CheckedPatternId };
+
+        fn pattern(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId) checked.CheckedPattern {
+            return ctx.b.module.checked_bodies.pattern(pat);
+        }
+
+        fn layoutOf(ctx: BoxyMatchCtx, rep: Plan.TypeRepId) layout.Idx {
+            return ctx.b.workerRuntimeLayoutForRep(rep).layoutIdx();
+        }
+
+        // Construction //
+
+        pub fn patKind(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId) match_tree.PatKind {
+            return switch (ctx.pattern(pat).data) {
+                .assign => .bind,
+                .as => .as_pattern,
+                .underscore => .wildcard,
+                .tuple => .tuple,
+                .record_destructure => .record,
+                .nominal => .nominal,
+                .applied_tag => .tag,
+                .list => .list,
+                .numeral_literal => |literal| if (literal.guard != null) .guarded_lit else switch (builtinNumeralLayoutForType(ctx.b.module, ctx.pattern(pat).ty)) {
+                    .dec => .dec_lit,
+                    .f32 => .frac_f32_lit,
+                    .f64 => .frac_f64_lit,
+                    else => .int_lit,
+                },
+                .str_literal => |literal| if (literal.guard != null) .guarded_lit else .str_lit,
+                .str_interpolation => .str_pattern,
+                .pending, .runtime_error => boxyLowerInvariant("runtime-error or pending checked pattern reached boxy pattern lowering"),
+            };
+        }
+
+        pub fn bindLocal(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId) checked.PatternBinderId {
+            return ctx.pattern(pat).data.assign;
+        }
+
+        pub fn asInfo(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId) struct { pattern: checked.CheckedPatternId, local: checked.PatternBinderId } {
+            const as = ctx.pattern(pat).data.as;
+            return .{ .pattern = as.pattern, .local = as.binder };
+        }
+
+        /// The destructs that read a field: every one but the rest.
+        fn fieldDestruct(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId, index: u32) checked.CheckedRecordDestruct {
+            var seen: u32 = 0;
+            for (ctx.pattern(pat).data.record_destructure) |destruct| {
+                switch (destruct.kind) {
+                    .required, .sub_pattern => {
+                        if (seen == index) return destruct;
+                        seen += 1;
+                    },
+                    .rest => {},
                 }
-                const payloads = item.payloads;
-                try state.actions.append(allocator, .{ .tag_payload_next = .{ .payloads = payloads, .index = index } });
-                const source_payload_rep = payloads.source_payloads[index].rep;
-                const payload_pattern = self.module.checked_bodies.pattern(payloads.args[index]);
-                const pattern_rep = self.repForType(payload_pattern.ty);
-                try state.actions.ensureUnusedCapacity(allocator, 2);
-                if (self.workerRuntimeLayoutForRep(pattern_rep).layoutIdx() ==
-                    self.workerRuntimeLayoutForRep(source_payload_rep).layoutIdx())
-                {
-                    const pattern_layout = self.workerRuntimeLayoutForRep(pattern_rep).layoutIdx();
-                    const pattern_local = if (self.parent.layoutIsBoxStorage(pattern_layout))
-                        try self.addFrameLocalForRepWithRequiredFreshDescriptor(pattern_rep)
-                    else
-                        try self.addFrameLocalForRep(pattern_rep);
-                    const outer_descriptors = try self.snapshotDescriptorBindings();
-                    const pattern_desc = self.bindRuntimeDescriptorLocalForValueType(pattern_local, payload_pattern.ty) catch |err| {
-                        outer_descriptors.deinit(allocator);
+            }
+            boxyLowerInvariant("record pattern field index exceeded its field destructs");
+        }
+
+        pub fn recordDestructCount(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId) u32 {
+            var count: u32 = 0;
+            for (ctx.pattern(pat).data.record_destructure) |destruct| {
+                switch (destruct.kind) {
+                    .required, .sub_pattern => count += 1,
+                    .rest => {},
+                }
+            }
+            return count;
+        }
+
+        pub fn recordDestruct(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId, _: MatchOcc, index: u32) Allocator.Error!SubPat {
+            const record = ctx.pattern(pat);
+            const destruct = ctx.fieldDestruct(pat, index);
+            const child = switch (destruct.kind) {
+                .required, .sub_pattern => |child| child,
+                .rest => unreachable,
+            };
+            const access = ctx.b.recordFieldAccessInfo(ctx.b.repForType(record.ty), ctx.b.module, destruct.label);
+            const child_ty = ctx.pattern(child).ty;
+            return .{
+                .index = access.field_idx,
+                .ty = .{ .checked = child_ty, .rep = ctx.b.repForType(child_ty), .read = .{ .record_field = .{ .record_ty = record.ty, .access = access } } },
+                .pat = child,
+            };
+        }
+
+        pub fn recordRest(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId, _: MatchOcc) Allocator.Error!?SubPat {
+            const record = ctx.pattern(pat);
+            for (record.data.record_destructure) |destruct| {
+                const rest = switch (destruct.kind) {
+                    .rest => |rest| rest,
+                    .required, .sub_pattern => continue,
+                };
+                if (ctx.b.patternIsIgnored(rest)) return null;
+                const rest_ty = ctx.pattern(rest).ty;
+                return .{
+                    .index = 0,
+                    .ty = .{ .checked = rest_ty, .rep = ctx.b.repForType(rest_ty), .read = .{ .record_rest = .{ .record_ty = record.ty } } },
+                    .pat = rest,
+                };
+            }
+            return null;
+        }
+
+        pub fn tupleItemCount(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId) u32 {
+            return @intCast(ctx.pattern(pat).data.tuple.len);
+        }
+
+        pub fn tupleItem(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId, _: MatchOcc, index: u32) Allocator.Error!SubPat {
+            const tuple = ctx.pattern(pat);
+            const item = tuple.data.tuple[index];
+            const item_ty = ctx.pattern(item).ty;
+            return .{
+                .index = index,
+                .ty = .{ .checked = item_ty, .rep = ctx.b.repForType(item_ty), .read = .{ .tuple_elem = .{ .tuple_rep = ctx.b.repForType(tuple.ty), .index = index } } },
+                .pat = item,
+            };
+        }
+
+        pub fn nominalInner(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId, _: MatchOcc) Allocator.Error!SubPat {
+            const nominal = ctx.pattern(pat);
+            const backing = nominal.data.nominal.backing_pattern;
+            const backing_ty = ctx.pattern(backing).ty;
+            const nominal_rep = ctx.b.repForType(nominal.ty);
+            // A match reads a transparent nominal's backing in the
+            // declaration-owned representation the nominal stores.
+            if (ctx.state.mode != .bind) {
+                if (ctx.b.nominalPatternSourceRep(nominal_rep)) |source_rep| {
+                    return .{ .index = 0, .ty = .{ .checked = backing_ty, .rep = source_rep, .read = .nominal_same }, .pat = backing };
+                }
+            }
+            return .{
+                .index = 0,
+                .ty = .{ .checked = backing_ty, .rep = ctx.b.repForType(backing_ty), .read = .{ .nominal_boundary = .{ .nominal_rep = nominal_rep } } },
+                .pat = backing,
+            };
+        }
+
+        /// The tag representation a position's tag tests read, or null when
+        /// only a runtime descriptor knows its variants.
+        fn testedTagRep(ctx: BoxyMatchCtx, ty: MatchOcc) ?Plan.TypeRepId {
+            const tag_rep = ctx.b.tagPatternRepForBoundary(ty.rep) orelse return null;
+            return switch (ctx.b.parent.plan.representations.items[@backingInt(tag_rep)].kind) {
+                .tag_union, .bool_tag_union => tag_rep,
+                .dynamic => null,
+                .in_progress, .primitive, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => boxyLowerInvariant("boxy tag pattern position did not have a tag representation"),
+            };
+        }
+
+        pub fn tagTestKind(ctx: BoxyMatchCtx, ty: MatchOcc) match_tree.TestKind {
+            return if (ctx.testedTagRep(ty) != null) .tag else .tag_name;
+        }
+
+        pub fn tagVariant(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId, ty: MatchOcc) u32 {
+            const name = ctx.pattern(pat).data.applied_tag.name;
+            const tag_rep = ctx.testedTagRep(ty) orelse return @backingInt(name);
+            const rep = ctx.b.parent.plan.representations.items[@backingInt(tag_rep)];
+            return switch (rep.kind) {
+                .bool_tag_union => ctx.b.boolVariantIndex(name),
+                else => ctx.b.tagVariant(rep, name).index,
+            };
+        }
+
+        pub fn tagPayloadCount(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId) u32 {
+            return @intCast(ctx.pattern(pat).data.applied_tag.args.len);
+        }
+
+        pub fn tagPayload(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId, ty: MatchOcc, index: u32) Allocator.Error!SubPat {
+            const b = ctx.b;
+            const tag_pattern = ctx.pattern(pat);
+            const tag = tag_pattern.data.applied_tag;
+            var variant_index: ?u32 = null;
+            var source_tag_rep: Plan.TypeRepId = undefined;
+            var source_payloads: []const Plan.RepChild = undefined;
+            if (ctx.testedTagRep(ty)) |tag_rep| {
+                const rep = b.parent.plan.representations.items[@backingInt(tag_rep)];
+                if (rep.kind == .bool_tag_union) boxyLowerInvariant("builtin Bool match pattern carried a payload");
+                const variant = b.tagVariant(rep, tag.name);
+                try b.validateTagPatternPayloads(variant.name, variant.payloads, tag.args);
+                variant_index = variant.index;
+                source_tag_rep = tag_rep;
+                source_payloads = b.parent.plan.childSlice(variant.payloads);
+            } else {
+                // Only the source's descriptor knows its variants; the
+                // pattern's own representation supplies the payload schema.
+                const pattern_tag_rep = b.tagVariantRepForBoundary(b.repForType(tag_pattern.ty)) orelse
+                    b.tagVariantRepForBoundary(ty.rep) orelse
+                    boxyLowerInvariant("boxy dynamic tag pattern had no tag representation");
+                source_tag_rep = b.tagVariantRepForBoundary(pattern_tag_rep) orelse
+                    boxyLowerInvariant("boxy tag payload pattern schema had no tag representation");
+                source_payloads = try b.dynamicTagPayloadsForName(source_tag_rep, tag.name);
+            }
+            if (source_payloads.len != tag.args.len) {
+                boxyLowerInvariant("boxy tag match payload count disagreed with planned source representation");
+            }
+            const arg = tag.args[index];
+            const arg_ty = ctx.pattern(arg).ty;
+            const pattern_rep = b.repForType(arg_ty);
+            const source_payload_rep = source_payloads[index].rep;
+            const direct = ctx.layoutOf(pattern_rep) == ctx.layoutOf(source_payload_rep);
+            return .{
+                .index = index,
+                .ty = .{
+                    .checked = arg_ty,
+                    .rep = if (direct) pattern_rep else source_payload_rep,
+                    .read = .{ .tag_payload = .{
+                        .source_tag_rep = source_tag_rep,
+                        .source_rep = ty.rep,
+                        .tag_name = tag.name,
+                        .variant_index = variant_index,
+                        .payload_index = index,
+                        .payload_count = tag.args.len,
+                        .source_payload_rep = source_payload_rep,
+                        .direct = direct,
+                    } },
+                },
+                .pat = arg,
+            };
+        }
+
+        pub fn tagVariantCount(ctx: BoxyMatchCtx, ty: MatchOcc) ?u32 {
+            const b = ctx.b;
+            if (ctx.testedTagRep(ty)) |tag_rep| {
+                const rep = b.parent.plan.representations.items[@backingInt(tag_rep)];
+                return switch (rep.kind) {
+                    .bool_tag_union => 2,
+                    // A value of an open row can hold a tag its known
+                    // variants do not name.
+                    else => if (b.tagDomainHasOpenExtension(tag_rep)) null else @intCast(b.parent.plan.tagVariantSlice(rep.tag_variants).len),
+                };
+            }
+            // A closed union with exactly one variant cannot miss, whatever
+            // storage its source uses.
+            const checked_ty = ty.checked orelse return null;
+            const pattern_tag_rep = b.tagVariantRepForBoundary(b.repForType(checked_ty)) orelse return null;
+            const rep = b.parent.plan.representations.items[@backingInt(pattern_tag_rep)];
+            if (rep.kind != .tag_union or b.tagDomainHasOpenExtension(pattern_tag_rep)) return null;
+            return if (b.parent.plan.tagVariantSlice(rep.tag_variants).len == 1) 1 else null;
+        }
+
+        pub fn callableVariant(_: BoxyMatchCtx, _: checked.CheckedPatternId, _: MatchOcc) u32 {
+            boxyLowerInvariant("callable pattern reached boxy pattern lowering");
+        }
+
+        pub fn callablePayload(_: BoxyMatchCtx, _: checked.CheckedPatternId, _: MatchOcc) Allocator.Error!?SubPat {
+            boxyLowerInvariant("callable pattern reached boxy pattern lowering");
+        }
+
+        pub fn callableVariantCount(_: BoxyMatchCtx, _: MatchOcc) ?u32 {
+            return null;
+        }
+
+        pub const ListPatView = struct {
+            fixed_count: u32,
+            rest: ?struct { index: u32, pattern: ?checked.CheckedPatternId },
+        };
+
+        pub fn listView(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId) ListPatView {
+            const list = ctx.pattern(pat).data.list;
+            return .{
+                .fixed_count = @intCast(list.patterns.len),
+                .rest = if (list.rest) |rest| .{ .index = rest.index, .pattern = rest.pattern } else null,
+            };
+        }
+
+        pub fn listElemPat(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId, index: u32) checked.CheckedPatternId {
+            return ctx.pattern(pat).data.list.patterns[index];
+        }
+
+        pub fn listElemTy(ctx: BoxyMatchCtx, ty: MatchOcc) MatchOcc {
+            const list_ty = ty.checked orelse boxyLowerInvariant("boxy list pattern position had no checked type");
+            const elem_ty = constListElemType(ctx.b.module, list_ty);
+            return .{ .checked = elem_ty, .rep = ctx.b.repForType(elem_ty), .read = .list_elem };
+        }
+
+        /// Which representation a pattern reads its position at: tags,
+        /// binders, and wildcards read the producer's; anything else whose
+        /// own representation stores differently converts the value first.
+        pub fn retype(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId, ty: MatchOcc) ?struct { key: u32, ty: MatchOcc } {
+            const b = ctx.b;
+            const pattern_data = ctx.pattern(pat);
+            switch (pattern_data.data) {
+                .assign, .as, .applied_tag, .underscore => return null,
+                .record_destructure => {
+                    // A boxed dynamic record is unboxed once for its fields.
+                    if (ty.read != .record_unbox and b.workerRuntimeLayoutForRep(ty.rep) == .dynamic_box and
+                        b.recordDestructureNeedsSource(pattern_data.data.record_destructure))
+                    {
+                        if (ctx.layoutOf(b.repForType(pattern_data.ty)) == ctx.layoutOf(ty.rep)) {
+                            return .{ .key = std.math.maxInt(u32), .ty = .{ .checked = pattern_data.ty, .rep = ty.rep, .read = .record_unbox } };
+                        }
+                    }
+                },
+                .pending, .nominal, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .runtime_error => {},
+            }
+            const pattern_rep = b.repForType(pattern_data.ty);
+            if (pattern_rep == ty.rep or ctx.layoutOf(pattern_rep) == ctx.layoutOf(ty.rep)) return null;
+            return .{ .key = @backingInt(pattern_rep), .ty = .{ .checked = pattern_data.ty, .rep = pattern_rep, .read = .narrow } };
+        }
+
+        fn internShape(ctx: BoxyMatchCtx, encoded: []const u8) Allocator.Error!u32 {
+            const gop = try ctx.state.shapes.getOrPut(ctx.state.arena, encoded);
+            if (!gop.found_existing) {
+                gop.key_ptr.* = try ctx.state.arena.dupe(u8, encoded);
+                gop.value_ptr.* = @intCast(ctx.state.shapes.count() - 1);
+            }
+            return gop.value_ptr.*;
+        }
+
+        fn strShapeKey(ctx: BoxyMatchCtx, prefix: []const u8, steps: []const checked.CheckedStrPatternStep, tail: bool) Allocator.Error!u128 {
+            var encoded: std.ArrayList(u8) = .empty;
+            try appendLenPrefixed(&encoded, ctx.state.arena, prefix);
+            for (steps) |step| try appendLenPrefixed(&encoded, ctx.state.arena, ctx.b.module.checked_bodies.stringLiteral(step.delimiter));
+            try encoded.append(ctx.state.arena, @intFromBool(tail));
+            return try ctx.internShape(encoded.items);
+        }
+
+        fn appendLenPrefixed(list: *std.ArrayList(u8), arena: Allocator, bytes: []const u8) Allocator.Error!void {
+            var len_bytes: [4]u8 = undefined;
+            std.mem.writeInt(u32, &len_bytes, @intCast(bytes.len), .little);
+            try list.appendSlice(arena, &len_bytes);
+            try list.appendSlice(arena, bytes);
+        }
+
+        /// A numeral literal's value at its pattern's builtin numeric type:
+        /// the identity two arms testing the same value share.
+        fn numeralKey(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId) Allocator.Error!u128 {
+            const pattern_data = ctx.pattern(pat);
+            const exact = ctx.b.module.module_env.?.exactNumeral(pattern_data.data.numeral_literal.literal);
+            const numeral_layout = builtinNumeralLayoutForType(ctx.b.module, pattern_data.ty);
+            return switch (numeral_layout) {
+                .f32 => blk: {
+                    const value = try exact_numeral.floatBits(f32, ctx.state.arena, exact);
+                    // IEEE `==`: +0.0 and -0.0 are one constructor.
+                    break :blk @as(u32, @bitCast(if (value == 0.0) @as(f32, 0.0) else value));
+                },
+                .f64 => blk: {
+                    const value = try exact_numeral.floatBits(f64, ctx.state.arena, exact);
+                    break :blk @as(u64, @bitCast(if (value == 0.0) @as(f64, 0.0) else value));
+                },
+                .dec => @bitCast((try exact_numeral.decBits(ctx.state.arena, exact)) orelse
+                    boxyLowerInvariant("decimal numeral pattern had no decimal value")),
+                else => @bitCast(exactIntBitsForLayout(exact, numeral_layout) orelse
+                    boxyLowerInvariant("integer numeral pattern did not fit its type")),
+            };
+        }
+
+        pub fn ctorKey(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId, ty: MatchOcc) Allocator.Error!u128 {
+            return switch (ctx.pattern(pat).data) {
+                .applied_tag => ctx.tagVariant(pat, ty),
+                .numeral_literal => |literal| if (literal.guard != null) @backingInt(pat) else try ctx.numeralKey(pat),
+                .str_literal => |literal| if (literal.guard != null)
+                    @backingInt(pat)
+                else
+                    try ctx.strShapeKey(ctx.b.module.checked_bodies.stringLiteral(literal.literal), &.{}, false),
+                .str_interpolation => |str| try ctx.strShapeKey(ctx.b.module.checked_bodies.stringLiteral(str.prefix), str.steps, str.end == .tail),
+                .list => |list| list.patterns.len,
+                .pending, .assign, .as, .underscore, .tuple, .record_destructure, .nominal, .runtime_error => boxyLowerInvariant("constructor key requested for a non-constructor pattern"),
+            };
+        }
+
+        pub fn intSwitchValue(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId, ty: MatchOcc) ?u64 {
+            const pattern_data = ctx.pattern(pat);
+            if (pattern_data.data != .numeral_literal) return null;
+            const numeral_layout = builtinNumeralLayoutForType(ctx.b.module, pattern_data.ty);
+            // Only a value stored directly at its integer layout switches.
+            if (ctx.layoutOf(ty.rep) != numeral_layout) return null;
+            const exact = ctx.b.module.module_env.?.exactNumeral(pattern_data.data.numeral_literal.literal);
+            const value = exactIntBitsForLayout(exact, numeral_layout) orelse return null;
+            // Executors disagree on how a narrow signed condition widens, so
+            // narrow signed layouts switch only on sign-bit-clear values.
+            const width: u16 = switch (numeral_layout) {
+                .u8 => 8,
+                .u16 => 16,
+                .u32 => 32,
+                .u64, .i64 => 64,
+                .i8 => if (value < 0 or value > std.math.maxInt(i8)) return null else 8,
+                .i16 => if (value < 0 or value > std.math.maxInt(i16)) return null else 16,
+                .i32 => if (value < 0 or value > std.math.maxInt(i32)) return null else 32,
+                else => return null,
+            };
+            const bits: u128 = @bitCast(value);
+            const mask: u128 = if (width == 64) std.math.maxInt(u64) else (@as(u128, 1) << @intCast(width)) - 1;
+            return @intCast(bits & mask);
+        }
+
+        pub fn strLitIsSetArm(_: BoxyMatchCtx) bool {
+            // A string arm with no steps and an exact end is byte equality,
+            // which is exactly Str equality.
+            return true;
+        }
+
+        pub fn strCaptureCount(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId) u32 {
+            return switch (ctx.pattern(pat).data) {
+                .str_interpolation => |str| @intCast(str.steps.len),
+                else => 0,
+            };
+        }
+
+        pub fn strCapturePat(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId, index: u32) ?checked.CheckedPatternId {
+            return ctx.pattern(pat).data.str_interpolation.steps[index].capture;
+        }
+
+        // Emission //
+
+        pub fn stmtCount(ctx: BoxyMatchCtx) usize {
+            return ctx.b.parent.result.store.cf_stmts.len();
+        }
+
+        pub fn freshJoinPointId(ctx: BoxyMatchCtx) LIR.JoinPointId {
+            return ctx.b.freshJoinPointId();
+        }
+
+        pub fn joinJump(ctx: BoxyMatchCtx, id: LIR.JoinPointId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.b.joinJump(id);
+        }
+
+        pub fn addExitJoin(ctx: BoxyMatchCtx, id: LIR.JoinPointId, body: LIR.CFStmtId, remainder: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.b.parent.result.store.addCFStmt(.{ .join = .{
+                .id = id,
+                .params = LIR.LocalSpan.empty(),
+                .body = body,
+                .remainder = remainder,
+            } }, ctx.b.glueOrigin());
+        }
+
+        pub fn failTerminal(ctx: BoxyMatchCtx) Allocator.Error!LIR.CFStmtId {
+            const store = &ctx.b.parent.result.store;
+            return switch (ctx.state.mode) {
+                .branches, .loop_item => try store.addCFStmt(.runtime_error, ctx.b.glueOrigin()),
+                .declaration => try store.addCFStmt(.{ .crash = .{
+                    .msg = .{ .literal = try store.insertString("pattern match failed") },
+                } }, ctx.b.origin),
+                .bind => boxyLowerInvariant("irrefutable boxy pattern reached a miss"),
+            };
+        }
+
+        fn localState(ctx: BoxyMatchCtx, local: LIR.LocalId) MatchLocalState {
+            return ctx.state.locals.get(local) orelse .{};
+        }
+
+        /// The scopes reads from `local`'s value tree inside: its own, and its
+        /// representation's nominal wrappers.
+        fn scopesInside(ctx: BoxyMatchCtx, local: LIR.LocalId, rep: Plan.TypeRepId) Allocator.Error![]const Plan.TypeRepId {
+            const outer = ctx.localState(local).scopes;
+            if (ctx.b.nominalWrapperBackingRep(rep) == rep) return outer;
+            const scopes = try ctx.state.arena.alloc(Plan.TypeRepId, outer.len + 1);
+            @memcpy(scopes[0..outer.len], outer);
+            scopes[outer.len] = rep;
+            return scopes;
+        }
+
+        const EnteredScopes = struct {
+            scopes: [8]NominalBackingFormalScope = undefined,
+            more: std.ArrayList(NominalBackingFormalScope) = .empty,
+            len: usize = 0,
+
+            fn at(entered: *EnteredScopes, index: usize) *NominalBackingFormalScope {
+                return if (index < entered.scopes.len) &entered.scopes[index] else &entered.more.items[index - entered.scopes.len];
+            }
+        };
+
+        fn enterScopes(ctx: BoxyMatchCtx, scopes: []const Plan.TypeRepId) Allocator.Error!EnteredScopes {
+            var entered: EnteredScopes = .{};
+            errdefer ctx.dropScopes(&entered);
+            for (scopes) |rep| {
+                const scope = try ctx.b.enterNominalWrapperFormalScopes(rep);
+                if (entered.len < entered.scopes.len) {
+                    entered.scopes[entered.len] = scope;
+                } else {
+                    entered.more.append(ctx.state.arena, scope) catch |err| {
+                        ctx.b.dropNominalBackingFormalScope(scope);
                         return err;
                     };
-                    state.actions.appendAssumeCapacity(.{ .tag_payload_read = .{
-                        .payloads = payloads,
-                        .index = index,
-                        .snapshot = outer_descriptors,
-                        .read = .{ .direct = .{ .pattern_local = pattern_local, .pattern_rep = pattern_rep, .pattern_desc = pattern_desc } },
-                    } });
-                    state.actions.appendAssumeCapacity(.{ .pattern = .{ .pattern = payloads.args[index], .source = pattern_local, .mode = .{ .match = payloads.context } } });
-                    return null;
                 }
-                const source_payload = try self.addExtractedTagPayloadLocal(source_payload_rep, true);
-                const outer_descriptors = try self.snapshotDescriptorBindings();
-                state.actions.appendAssumeCapacity(.{ .tag_payload_read = .{
-                    .payloads = payloads,
-                    .index = index,
-                    .snapshot = outer_descriptors,
-                    .read = .{ .extracted = source_payload },
-                } });
-                state.actions.appendAssumeCapacity(.{ .from_rep = .{ .pattern = payloads.args[index], .source = source_payload.local, .source_rep = source_payload_rep, .context = payloads.context } });
-            },
-            .tag_payload_read => |item| {
-                defer item.snapshot.deinit(allocator);
-                self.restoreDescriptorBindings(item.snapshot);
-                const payloads = item.payloads;
-                const index = item.index;
-                const source_payload_rep = payloads.source_payloads[index].rep;
-                state.current = switch (item.read) {
-                    .direct => |direct| if (payloads.variant_index) |variant_index|
-                        try self.assignConcreteTagPayloadRead(
-                            direct.pattern_local,
-                            direct.pattern_rep,
-                            direct.pattern_desc,
-                            payloads.source,
-                            payloads.source_tag_rep,
-                            payloads.tag_name,
-                            variant_index,
-                            @intCast(index),
-                            payloads.args.len,
-                            state.current,
-                        )
-                    else
-                        try self.assignDynamicTagPayloadPatternRead(
-                            direct.pattern_local,
-                            direct.pattern_rep,
-                            payloads.source,
-                            payloads.source_rep,
-                            payloads.tag_name,
-                            @intCast(index),
-                            source_payload_rep,
-                            state.current,
-                        ),
-                    .extracted => |source_payload| if (payloads.variant_index) |variant_index|
-                        try self.assignConcreteTagPayloadRead(
-                            source_payload.local,
-                            source_payload_rep,
-                            source_payload.desc_local,
-                            payloads.source,
-                            payloads.source_tag_rep,
-                            payloads.tag_name,
-                            variant_index,
-                            @intCast(index),
-                            payloads.args.len,
-                            state.current,
-                        )
-                    else
-                        try self.assignBoxyTagPayload(
-                            source_payload.local,
-                            source_payload.desc_local,
-                            payloads.source,
-                            payloads.source_rep,
-                            payloads.tag_name,
-                            @intCast(index),
-                            state.current,
-                        ),
-                };
-            },
-            .tag_discriminant => |item| {
-                if (!item.single_variant) {
-                    state.current = try self.lowerTagDiscriminantSwitch(item.source, item.variant_index, state.current, item.context.miss);
-                }
-            },
-            .dynamic_tag_match => |item| {
-                if (!item.cannot_miss) {
-                    const match_desc = try self.descriptorRefForSourceLocalRep(item.source, item.source_rep);
-                    state.current = try self.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
-                        .source = item.source,
-                        .source_desc = match_desc,
-                        .tag_name = try self.lirTagName(item.name),
-                        .on_match = state.current,
-                        .on_miss = try self.patternMissJump(item.context.miss),
-                    } }, self.origin);
-                }
-            },
-            .match_binder => |item| state.current = try self.bindMatchBinder(item.binder, item.source, item.remaps, state.current),
-            .assign_binder => |item| {
-                const binder_local = self.localForBinder(item.binder);
-                if (binder_local != item.source) state.current = try self.assignLocal(binder_local, item.source, state.current);
-            },
-            .tuple_field => |field| {
-                if (self.patternIsIgnored(field.pattern)) return null;
-                const pattern = self.module.checked_bodies.pattern(field.pattern);
-                const field_local = try self.addFrameLocalForRepWithFreshDescriptor(self.repForType(pattern.ty));
-                // The read below writes the descriptor the tuple stores for this
-                // element; the sub-pattern, lowered first, must already see it.
-                const tuple_rep = self.tupleRepForBoundary(self.repForType(field.tuple_ty)) orelse
-                    boxyLowerInvariant("tuple pattern source did not have a tuple representation");
-                if (!self.isZstLocal(field_local) and self.payloadFieldCarriesRuntimeDesc(tuple_rep, field.field_index)) {
-                    _ = try self.mutableDescriptorLocalForValue(field_local);
-                }
-                try state.actions.append(allocator, .{ .tuple_read = .{ .field_local = field_local, .source = field.source, .tuple_rep = self.repForType(field.tuple_ty), .field_index = field.field_index } });
-                try state.actions.append(allocator, .{ .pattern = .{ .pattern = field.pattern, .source = field_local, .mode = field.mode } });
-            },
-            .tuple_read => |read| state.current = try self.lowerTupleFieldReadInto(read.field_local, read.source, read.tuple_rep, read.field_index, state.current),
-            .record_field => |field| {
-                if (self.patternIsIgnored(field.pattern)) return null;
-                const pattern = self.module.checked_bodies.pattern(field.pattern);
-                const field_local = try self.addFrameLocalForType(pattern.ty);
-                try state.actions.append(allocator, .{ .record_read = .{ .field_local = field_local, .field_rep = self.repForType(pattern.ty), .field_read = field.field_read, .access = field.access } });
-                try state.actions.append(allocator, .{ .pattern = .{ .pattern = field.pattern, .source = field_local, .mode = field.mode } });
-            },
-            .record_read => |read| state.current = try self.lowerRecordFieldReadInto(read.field_local, read.field_rep, read.field_read, read.access, state.current),
-            .record_rest => |rest| {
-                const pattern = self.module.checked_bodies.pattern(rest.pattern);
-                const rest_local = try self.addFrameLocalForType(pattern.ty);
-                try state.actions.append(allocator, .{ .record_rest_value = .{ .rest_local = rest_local, .field_read = rest.field_read, .record_ty = rest.record_ty, .rest_ty = pattern.ty } });
-                try state.actions.append(allocator, .{ .pattern = .{ .pattern = rest.pattern, .source = rest_local, .mode = rest.mode } });
-            },
-            .record_rest_value => |value| state.current = try self.lowerRecordRestValueInto(value.rest_local, value.field_read, value.record_ty, value.rest_ty, state.current),
-            .leave_scope => |leave| {
-                errdefer self.dropNominalBackingFormalScope(leave.scope);
-                const body = if (leave.field_read) |field_read|
-                    try self.prependRecordFieldReadSource(field_read, state.current)
-                else
-                    state.current;
-                state.current = try self.leaveNominalBackingFormalScope(leave.scope, body);
-            },
-            .boundary => |item| state.current = try self.assignRepresentationBoundary(item.target, item.source, item.target_rep, item.source_rep, state.current),
-            .list_rest => |rest| {
-                const shape = rest.shape;
-                const keep_len = try self.addFrameLocal(.u64);
-                var current = try self.assignBinaryLowLevel(rest.rest_local, .list_take_first, rest.front_dropped, keep_len, state.current);
-                current = try self.lenMinusConst(keep_len, shape.len_local, shape.fixed_count, current);
-                const keep_after_front = try self.addFrameLocal(.u64);
-                current = try self.assignBinaryLowLevel(rest.front_dropped, .list_take_last, shape.source, keep_after_front, current);
-                state.current = try self.lenMinusConst(keep_after_front, shape.len_local, @intCast(shape.rest_index.?), current);
-            },
-            .list_elem_next => |item| {
-                var index = item.index;
-                while (index > 0) {
-                    index -= 1;
-                    const elem_pattern = item.shape.elems[index];
-                    if (self.patternIsIgnored(elem_pattern)) continue;
-                    try state.actions.ensureUnusedCapacity(allocator, 3);
-                    state.actions.appendAssumeCapacity(.{ .list_elem_next = .{ .shape = item.shape, .index = index } });
-                    const pattern = self.module.checked_bodies.pattern(elem_pattern);
-                    const elem_local = try self.addFrameLocalForType(pattern.ty);
-                    state.actions.appendAssumeCapacity(.{ .list_elem_read = .{ .shape = item.shape, .elem_local = elem_local, .index = index } });
-                    state.actions.appendAssumeCapacity(.{ .pattern = .{ .pattern = elem_pattern, .source = elem_local, .mode = .{ .match = item.shape.context } } });
-                    return null;
-                }
-            },
-            .list_elem_read => |read| {
-                const shape = read.shape;
-                const index_local = try self.addFrameLocal(.u64);
-                const current = try self.assignBinaryLowLevel(read.elem_local, .list_get_unsafe, shape.source, index_local, state.current);
-                const matches_from_back = if (shape.rest_index) |rest_index| read.index >= rest_index else false;
-                state.current = if (matches_from_back)
-                    try self.lenMinusConst(index_local, shape.len_local, shape.fixed_count - @as(i64, @intCast(read.index)), current)
-                else
-                    try self.assignU64Literal(index_local, @intCast(read.index), current);
-            },
-            .list_length => |length| {
-                const shape = length.shape;
-                const required = try self.addFrameLocal(.u64);
-                const cond = try self.addFrameLocal(.bool);
-                const cmp_op: LIR.LowLevel = if (length.has_rest) .num_is_gte else .num_is_eq;
-                const length_check = try self.boolSwitchNoContinuation(cond, state.current, try self.patternMissJump(shape.context.miss));
-                var head = try self.assignBinaryLowLevel(cond, cmp_op, shape.len_local, required, length_check);
-                head = try self.assignU64Literal(required, shape.fixed_count, head);
-                state.current = try self.assignUnaryLowLevel(shape.len_local, .list_len, shape.source, head);
-            },
-            .str_match => |item| {
-                defer allocator.free(item.lir_steps);
-                const arm = LIR.StrMatchArm{
-                    .prefix = try self.lirStrLiteral(item.str.prefix),
-                    .steps = try self.parent.result.store.addStrMatchSteps(item.lir_steps),
-                    .end = switch (item.str.end) {
-                        .exact => .exact,
-                        .tail => .tail,
-                    },
-                    .on_match = state.current,
-                };
-                state.current = try self.parent.result.store.addCFStmt(.{ .str_match = .{
-                    .source = item.source,
-                    .prefix = arm.prefix,
-                    .steps = arm.steps,
-                    .end = arm.end,
-                    .on_match = arm.on_match,
-                    .on_miss = try self.patternMissJump(item.context.miss),
-                } }, self.origin);
-            },
-            .guard_binder => |item| state.current = try self.bindMatchBinder(item.binder, item.source, &.{}, state.current),
-        }
-        return null;
-    }
-
-    /// Expand one pattern into the pieces that lower it. A literal pattern's
-    /// equality guard is returned for the expression machine to lower.
-    fn expandPattern(
-        self: *ProcBodyBuilder,
-        state: *PatternState,
-        pattern_id: checked.CheckedPatternId,
-        source: LIR.LocalId,
-        mode: PatternMode,
-    ) Allocator.Error!?ExprTask {
-        const allocator = self.parent.allocator;
-        const pattern = self.module.checked_bodies.pattern(pattern_id);
-        const context = switch (mode) {
-            .match => |context| context,
-            .bind => {
-                switch (pattern.data) {
-                    .assign => {
-                        const target = self.localForPattern(pattern_id);
-                        if (target != source) state.current = try self.assignLocal(target, source, state.current);
-                    },
-                    .as => |as| {
-                        try state.actions.ensureUnusedCapacity(allocator, 2);
-                        state.actions.appendAssumeCapacity(.{ .assign_binder = .{ .binder = as.binder, .source = source } });
-                        state.actions.appendAssumeCapacity(.{ .pattern = .{ .pattern = as.pattern, .source = source, .mode = .bind } });
-                    },
-                    .tuple => |items| try self.expandTuplePattern(state, pattern.ty, items, source, .bind),
-                    .record_destructure => |destructs| try self.expandRecordPattern(state, pattern.ty, destructs, source, .bind),
-                    .nominal => |nominal| try self.expandNominalBacking(state, pattern.ty, nominal.backing_pattern, source, .bind),
-                    .list => |list| {
-                        if (list.patterns.len != 0) {
-                            boxyLowerInvariant("refutable list pattern reached boxy irrefutable declaration binding");
-                        }
-                        if (list.rest) |rest| {
-                            if (rest.pattern) |rest_pattern| try state.actions.append(allocator, .{ .pattern = .{ .pattern = rest_pattern, .source = source, .mode = .bind } });
-                        }
-                    },
-                    .applied_tag => |tag| {
-                        try self.requireIrrefutableTagPattern(pattern.ty, tag.name, tag.args);
-                        try state.actions.append(allocator, .{ .tag_rep = .{
-                            .tag_ty = pattern.ty,
-                            .rep_id = self.repForType(pattern.ty),
-                            .name = tag.name,
-                            .args = tag.args,
-                            .source = source,
-                            .context = .{ .miss = null, .remaps = &.{} },
-                        } });
-                    },
-                    .underscore => {},
-                    .numeral_literal,
-                    .str_literal,
-                    .str_interpolation,
-                    .runtime_error,
-                    .pending,
-                    => boxyLowerInvariant("refutable or pending checked pattern reached boxy irrefutable declaration binding"),
-                }
-                return null;
-            },
-        };
-        switch (pattern.data) {
-            .assign => |binder| state.current = try self.bindMatchBinder(binder, source, context.remaps, state.current),
-            .as => |as| {
-                state.current = try self.bindMatchBinder(as.binder, source, context.remaps, state.current);
-                try state.actions.append(allocator, .{ .pattern = .{ .pattern = as.pattern, .source = source, .mode = mode } });
-            },
-            .tuple => |items| try self.expandTuplePattern(state, pattern.ty, items, source, mode),
-            .record_destructure => |destructs| try self.expandRecordPattern(state, pattern.ty, destructs, source, mode),
-            .nominal => |nominal| {
-                const nominal_rep = self.repForType(pattern.ty);
-                if (self.nominalPatternSourceRep(nominal_rep)) |source_rep| {
-                    try state.actions.append(allocator, .{ .from_rep = .{ .pattern = nominal.backing_pattern, .source = source, .source_rep = source_rep, .context = context } });
-                    return null;
-                }
-                try self.expandNominalBacking(state, pattern.ty, nominal.backing_pattern, source, mode);
-            },
-            .applied_tag => |tag| try state.actions.append(allocator, .{ .tag_rep = .{
-                .tag_ty = pattern.ty,
-                .rep_id = self.repForType(pattern.ty),
-                .name = tag.name,
-                .args = tag.args,
-                .source = source,
-                .context = context,
-            } }),
-            .numeral_literal => |literal| {
-                if (literal.guard) |guard| return try self.expandLiteralGuard(state, pattern_id, guard, source, context);
-                state.current = try self.lowerNumeralPatternThen(pattern.ty, source, literal.literal, state.current, context.miss);
-            },
-            .str_literal => |literal| {
-                if (literal.guard) |guard| return try self.expandLiteralGuard(state, pattern_id, guard, source, context);
-                state.current = try self.lowerLiteralPatternThen(pattern.ty, source, .{ .str = literal.literal }, state.current, context.miss);
-            },
-            .underscore => {},
-            .list => |list| try self.expandListPattern(state, pattern.ty, list, source, context),
-            .str_interpolation => |str| {
-                const lir_steps = try allocator.alloc(LIR.StrMatchStep, str.steps.len);
-                var owned = true;
-                defer if (owned) allocator.free(lir_steps);
-                for (str.steps, lir_steps) |input_step, *lir_step| {
-                    lir_step.* = .{
-                        .capture = if (input_step.capture) |capture| blk: {
-                            const capture_pattern = self.module.checked_bodies.pattern(capture);
-                            break :blk .{ .view = try self.addFrameLocalForType(capture_pattern.ty) };
-                        } else .discard,
-                        .delimiter = try self.lirStrLiteral(input_step.delimiter),
-                    };
-                }
-                try state.actions.ensureUnusedCapacity(allocator, 1 + str.steps.len);
-                state.actions.appendAssumeCapacity(.{ .str_match = .{ .str = str, .lir_steps = lir_steps, .source = source, .context = context } });
-                owned = false;
-                // Captures bind last first.
-                for (str.steps, lir_steps) |input_step, lir_step| {
-                    const capture = input_step.capture orelse continue;
-                    const capture_local = switch (lir_step.capture) {
-                        .view => |local| local,
-                        .discard => boxyLowerInvariant("string-pattern capture step lowered without a capture local"),
-                    };
-                    state.actions.appendAssumeCapacity(.{ .pattern = .{ .pattern = capture, .source = capture_local, .mode = .bind } });
-                }
-            },
-            .runtime_error,
-            .pending,
-            => boxyLowerInvariant("runtime-error or pending checked pattern reached boxy match lowering"),
-        }
-        return null;
-    }
-
-    /// Bind the matched value before evaluating its checker-selected equality
-    /// guard. Ordinary expression lowering owns conversion and method dispatch.
-    fn expandLiteralGuard(
-        self: *ProcBodyBuilder,
-        state: *PatternState,
-        pattern_id: checked.CheckedPatternId,
-        guard: checked.CheckedExprId,
-        source: LIR.LocalId,
-        context: PatternContext,
-    ) Allocator.Error!ExprTask {
-        const binder = self.module.checked_bodies.literalPatternBinder(pattern_id);
-        try self.reserveBinderLocalIfFresh(binder, self.module.checked_bodies.pattern(pattern_id).ty);
-        const eq = try self.addFrameLocal(.bool);
-        const branch = try self.boolSwitchNoContinuation(eq, state.current, try self.patternMissJump(context.miss));
-        try state.actions.append(self.parent.allocator, .{ .guard_binder = .{ .binder = binder, .source = source } });
-        return .{ .expr = .{ .target = eq, .expr_id = guard, .next = branch } };
-    }
-
-    fn expandTuplePattern(
-        self: *ProcBodyBuilder,
-        state: *PatternState,
-        tuple_ty: checked.CheckedTypeId,
-        items: []const checked.CheckedPatternId,
-        source: LIR.LocalId,
-        mode: PatternMode,
-    ) Allocator.Error!void {
-        const scope = try self.enterNominalWrapperFormalScopes(self.repForType(tuple_ty));
-        try self.pushPatternScope(state, scope, null);
-        // Fields bind last first.
-        for (items, 0..) |item, index| {
-            if (index > std.math.maxInt(u32)) {
-                boxyLowerInvariant("tuple pattern index exceeded LIR field index range");
+                entered.len += 1;
             }
-            try state.actions.append(self.parent.allocator, .{ .tuple_field = .{ .tuple_ty = tuple_ty, .pattern = item, .source = source, .field_index = @intCast(index), .mode = mode } });
+            return entered;
         }
-    }
 
-    fn expandRecordPattern(
-        self: *ProcBodyBuilder,
-        state: *PatternState,
-        record_ty: checked.CheckedTypeId,
-        destructs: []const checked.CheckedRecordDestruct,
-        source: LIR.LocalId,
-        mode: PatternMode,
-    ) Allocator.Error!void {
-        if (!self.recordDestructureNeedsSource(destructs)) return;
-        const scope = try self.enterNominalWrapperFormalScopes(self.repForType(record_ty));
-        const field_read = self.recordFieldReadSourceForType(source, record_ty) catch |err| {
-            self.dropNominalBackingFormalScope(scope);
-            return err;
-        };
-        try self.pushPatternScope(state, scope, field_read);
-        // Destructs bind last first.
-        for (destructs) |destruct| {
-            switch (destruct.kind) {
-                .required,
-                .sub_pattern,
-                => |child_pattern| try state.actions.append(self.parent.allocator, .{ .record_field = .{
-                    .pattern = child_pattern,
-                    .field_read = field_read,
-                    .access = self.recordFieldAccessInfo(self.repForType(record_ty), self.module, destruct.label),
-                    .mode = mode,
-                } }),
-                .rest => |child_pattern| {
-                    if (!self.patternIsIgnored(child_pattern)) {
-                        try state.actions.append(self.parent.allocator, .{ .record_rest = .{ .pattern = child_pattern, .field_read = field_read, .record_ty = record_ty, .mode = mode } });
+        /// End the entered scopes around `body`, innermost first.
+        fn leaveScopes(ctx: BoxyMatchCtx, entered: *EnteredScopes, body: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            var current = body;
+            while (entered.len > 0) {
+                entered.len -= 1;
+                current = try ctx.b.leaveNominalBackingFormalScope(entered.at(entered.len).*, current);
+            }
+            return current;
+        }
+
+        fn dropScopes(ctx: BoxyMatchCtx, entered: *EnteredScopes) void {
+            while (entered.len > 0) {
+                entered.len -= 1;
+                ctx.b.dropNominalBackingFormalScope(entered.at(entered.len).*);
+            }
+        }
+
+        /// Leave the entered scopes without a statement, keeping the
+        /// descriptor locals they reserved for the local's read to
+        /// initialize.
+        fn suspendScopes(ctx: BoxyMatchCtx, entered: *EnteredScopes) Allocator.Error![]const ScopedDescriptorLocal {
+            if (entered.len == 0) return &.{};
+            const start = entered.at(0).scoped_locals_start;
+            const pending = try ctx.state.arena.dupe(ScopedDescriptorLocal, ctx.b.scoped_descriptor_locals.items[start..]);
+            ctx.dropScopes(entered);
+            return pending;
+        }
+
+        pub fn lirLocalForOcc(ctx: BoxyMatchCtx, step: match_tree.Step, occ_ty: MatchOcc, parent: ?LIR.LocalId) Allocator.Error!LIR.LocalId {
+            const b = ctx.b;
+            const parent_local = parent orelse boxyLowerInvariant("boxy match occurrence other than the root had no parent");
+            // A transparent nominal's backing is the nominal's own value.
+            if (occ_ty.read == .nominal_same) return parent_local;
+            // A list's rest is a slice of the list, at the list's type.
+            var ty = occ_ty;
+            if (step == .list_rest) ty.read = .list_rest;
+            const parent_rep = ctx.parentRep(parent_local, ty);
+            const scopes = try ctx.scopesInside(parent_local, parent_rep);
+            var entered = try ctx.enterScopes(scopes);
+            errdefer ctx.dropScopes(&entered);
+            var local_state: MatchLocalState = .{ .scopes = scopes };
+            const local = switch (ty.read) {
+                .root, .nominal_same => unreachable,
+                .record_field, .record_rest, .list_elem, .nominal_boundary => try b.addFrameLocalForRep(ty.rep),
+                .tuple_elem => |elem| local: {
+                    const field_local = try b.addFrameLocalForRepWithFreshDescriptor(ty.rep);
+                    // The read writes the descriptor the tuple stores for
+                    // this element; the patterns on it, lowered first, must
+                    // already see it.
+                    const tuple_rep = b.tupleRepForBoundary(elem.tuple_rep) orelse
+                        boxyLowerInvariant("tuple pattern source did not have a tuple representation");
+                    if (!b.isZstLocal(field_local) and b.payloadFieldCarriesRuntimeDesc(tuple_rep, elem.index)) {
+                        _ = try b.mutableDescriptorLocalForValue(field_local);
                     }
+                    break :local field_local;
                 },
-            }
-        }
-    }
-
-    /// Lower a nominal's backing pattern against its backing value.
-    fn expandNominalBacking(
-        self: *ProcBodyBuilder,
-        state: *PatternState,
-        nominal_ty: checked.CheckedTypeId,
-        backing_pattern: checked.CheckedPatternId,
-        source: LIR.LocalId,
-        mode: PatternMode,
-    ) Allocator.Error!void {
-        const backing = self.module.checked_bodies.pattern(backing_pattern);
-        const backing_local = try self.addFrameLocalForType(backing.ty);
-        try state.actions.ensureUnusedCapacity(self.parent.allocator, 2);
-        state.actions.appendAssumeCapacity(.{ .boundary = .{
-            .target = backing_local,
-            .source = source,
-            .target_rep = self.repForType(backing.ty),
-            .source_rep = self.repForType(nominal_ty),
-        } });
-        state.actions.appendAssumeCapacity(.{ .pattern = .{ .pattern = backing_pattern, .source = backing_local, .mode = mode } });
-    }
-
-    fn expandListPattern(
-        self: *ProcBodyBuilder,
-        state: *PatternState,
-        list_ty: checked.CheckedTypeId,
-        list: anytype,
-        source: LIR.LocalId,
-        context: PatternContext,
-    ) Allocator.Error!void {
-        const allocator = self.parent.allocator;
-        const elems = list.patterns;
-        if (elems.len == 0) {
-            if (list.rest) |rest| {
-                if (rest.pattern) |rest_pattern| {
-                    try state.actions.append(allocator, .{ .pattern = .{ .pattern = rest_pattern, .source = source, .mode = .{ .match = context } } });
-                }
-                return;
-            }
-        }
-
-        const shape = ListPatternShape{
-            .elems = elems,
-            .rest_index = if (list.rest) |rest| rest.index else null,
-            .source = source,
-            .len_local = try self.addFrameLocal(.u64),
-            .fixed_count = @intCast(elems.len),
-            .context = context,
-        };
-        try state.actions.ensureUnusedCapacity(allocator, 4);
-        state.actions.appendAssumeCapacity(.{ .list_length = .{ .shape = shape, .has_rest = list.rest != null } });
-        state.actions.appendAssumeCapacity(.{ .list_elem_next = .{ .shape = shape, .index = elems.len } });
-        const rest = list.rest orelse return;
-        const rest_pattern = rest.pattern orelse return;
-        if (self.patternIsIgnored(rest_pattern)) return;
-        const list_rep = self.repForType(list_ty);
-        const source_layout = self.parent.result.store.getLocal(source).layout_idx;
-        const rest_local = try self.addFrameLocal(source_layout);
-        const front_dropped = try self.addFrameLocal(source_layout);
-        try self.recordDescriptorPreservingListResult(front_dropped, source, list_rep);
-        try self.recordDescriptorPreservingListResult(rest_local, front_dropped, list_rep);
-        state.actions.appendAssumeCapacity(.{ .list_rest = .{ .shape = shape, .rest_local = rest_local, .front_dropped = front_dropped } });
-        state.actions.appendAssumeCapacity(.{ .pattern = .{ .pattern = rest_pattern, .source = rest_local, .mode = .{ .match = context } } });
-    }
-
-    /// Match against the representation carried by the producer before
-    /// narrowing into the checked pattern's contextual representation. Tag
-    /// tests must observe the exact producer row so an unmatched residual tag
-    /// reaches the next branch instead of being materialized into a narrower
-    /// row first.
-    fn expandPatternFromRep(
-        self: *ProcBodyBuilder,
-        state: *PatternState,
-        pattern_id: checked.CheckedPatternId,
-        source: LIR.LocalId,
-        source_rep: Plan.TypeRepId,
-        context: PatternContext,
-    ) Allocator.Error!void {
-        const allocator = self.parent.allocator;
-        const pattern = self.module.checked_bodies.pattern(pattern_id);
-        const pattern_rep = self.repForType(pattern.ty);
-        if (pattern_rep == source_rep or
-            (self.workerRuntimeLayoutForRep(pattern_rep).layoutIdx() == self.workerRuntimeLayoutForRep(source_rep).layoutIdx()))
-        {
-            try state.actions.append(allocator, .{ .pattern = .{ .pattern = pattern_id, .source = source, .mode = .{ .match = context } } });
-            return;
-        }
-
-        switch (pattern.data) {
-            .assign => |binder| state.current = try self.bindMatchBinderFromRep(binder, source, source_rep, context.remaps, state.current),
-            .as => |as| {
-                state.current = try self.bindMatchBinderFromRep(as.binder, source, source_rep, context.remaps, state.current);
-                try state.actions.append(allocator, .{ .from_rep = .{ .pattern = as.pattern, .source = source, .source_rep = source_rep, .context = context } });
-            },
-            .applied_tag => |tag| {
-                const tag_rep = self.tagPatternRepForBoundary(source_rep) orelse {
-                    const source_identity = self.descriptorStorageRep(source_rep);
-                    const source_rep_value = self.parent.plan.representations.items[@backingInt(source_identity)];
-                    if (source_rep_value.kind != .dynamic) {
-                        boxyLowerInvariant("boxy tag pattern producer had no tag representation");
+                .tag_payload => |payload| local: {
+                    if (payload.direct) {
+                        const payload_local = if (b.parent.layoutIsBoxStorage(ctx.layoutOf(ty.rep)))
+                            try b.addFrameLocalForRepWithRequiredFreshDescriptor(ty.rep)
+                        else
+                            try b.addFrameLocalForRep(ty.rep);
+                        if (!b.isZstLocal(payload_local)) {
+                            local_state.snapshot = try b.snapshotDescriptorBindings();
+                            local_state.payload_desc = try b.bindRuntimeDescriptorLocalForValueType(payload_local, ty.checked.?);
+                        }
+                        break :local payload_local;
                     }
-                    const pattern_tag_rep = self.tagVariantRepForBoundary(pattern_rep) orelse
-                        boxyLowerInvariant("boxy tag pattern contextual type had no tag representation");
-                    try self.expandTagPatternFromDynamicSource(state, pattern_tag_rep, source_rep, tag.name, tag.args, source, context);
-                    return;
-                };
-                try state.actions.append(allocator, .{ .tag_rep = .{
-                    .tag_ty = pattern.ty,
-                    .rep_id = tag_rep,
-                    .name = tag.name,
-                    .args = tag.args,
-                    .source = source,
-                    .context = context,
-                } });
-            },
-            .underscore => {},
-            .pending, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .runtime_error => {
-                const narrowed = try self.addFrameBoundaryTargetLocalForRep(pattern_rep);
-                try state.actions.ensureUnusedCapacity(allocator, 2);
-                state.actions.appendAssumeCapacity(.{ .boundary = .{ .target = narrowed, .source = source, .target_rep = pattern_rep, .source_rep = source_rep } });
-                state.actions.appendAssumeCapacity(.{ .pattern = .{ .pattern = pattern_id, .source = narrowed, .mode = .{ .match = context } } });
-            },
+                    const extracted = try b.addExtractedTagPayloadLocal(payload.source_payload_rep, true);
+                    local_state.payload_desc = extracted.desc_local;
+                    if (!b.isZstLocal(extracted.local)) local_state.snapshot = try b.snapshotDescriptorBindings();
+                    break :local extracted.local;
+                },
+                .list_rest => local: {
+                    const source_layout = b.parent.result.store.getLocal(parent_local).layout_idx;
+                    const rest_local = try b.addFrameLocal(source_layout);
+                    const front_dropped = try b.addFrameLocal(source_layout);
+                    const list_rep = ctx.parentRep(parent_local, ty);
+                    try b.recordDescriptorPreservingListResult(front_dropped, parent_local, list_rep);
+                    try b.recordDescriptorPreservingListResult(rest_local, front_dropped, list_rep);
+                    local_state.front_dropped = front_dropped;
+                    break :local rest_local;
+                },
+                .narrow => try b.addFrameBoundaryTargetLocalForRep(ty.rep),
+                .record_unbox => local: {
+                    const field_read = try b.recordFieldReadSourceForType(parent_local, ty.checked.?);
+                    local_state.field_read = field_read;
+                    break :local field_read.local;
+                },
+            };
+            local_state.pending_scoped = try ctx.suspendScopes(&entered);
+            try ctx.state.locals.put(ctx.state.arena, local, local_state);
+            return local;
         }
-    }
 
-    fn expandTagPatternFromDynamicSource(
-        self: *ProcBodyBuilder,
-        state: *PatternState,
-        pattern_tag_rep: Plan.TypeRepId,
-        source_rep: Plan.TypeRepId,
-        name: names.TagNameId,
-        args: []const checked.CheckedPatternId,
-        source: LIR.LocalId,
-        context: PatternContext,
-    ) Allocator.Error!void {
-        const pattern_rep = self.parent.plan.representations.items[@backingInt(pattern_tag_rep)];
-        switch (pattern_rep.kind) {
-            .bool_tag_union => {
-                if (args.len != 0) {
-                    boxyLowerInvariant("builtin Bool match pattern carried a payload");
-                }
-            },
-            .tag_union => {
-                const variant = self.tagVariant(pattern_rep, name);
-                try self.validateTagPatternPayloads(variant.name, variant.payloads, args);
-            },
-            .dynamic => try self.validateDynamicTagPatternPayloads(pattern_tag_rep, name, args),
-            .in_progress, .primitive, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => boxyLowerInvariant("boxy dynamic-source tag pattern contextual representation was not a tag union"),
+        /// The representation a child's parent stores its value as.
+        fn parentRep(ctx: BoxyMatchCtx, parent_local: LIR.LocalId, child: MatchOcc) Plan.TypeRepId {
+            _ = parent_local;
+            return switch (child.read) {
+                .tag_payload => |payload| payload.source_rep,
+                .tuple_elem => |elem| elem.tuple_rep,
+                .record_field => |field| ctx.b.repForType(field.record_ty),
+                .record_rest => |rest| ctx.b.repForType(rest.record_ty),
+                .nominal_boundary => |nominal| nominal.nominal_rep,
+                .list_elem, .list_rest, .narrow, .record_unbox, .root, .nominal_same => child.rep,
+            };
         }
-        // The contextual representation is the checked type the pattern
-        // matches. A closed union with exactly one variant cannot miss,
-        // whatever storage its source uses.
-        const cannot_miss = pattern_rep.kind == .tag_union and
-            !self.tagDomainHasOpenExtension(pattern_tag_rep) and
-            self.parent.plan.tagVariantSlice(pattern_rep.tag_variants).len == 1;
-        try state.actions.append(self.parent.allocator, .{ .dynamic_tag_match = .{ .source = source, .source_rep = source_rep, .name = name, .cannot_miss = cannot_miss, .context = context } });
-        try self.pushTagPayloadPatterns(state, pattern_tag_rep, source_rep, name, null, args, source, context);
-    }
 
-    fn expandTagPattern(
+        /// Emit a read of `target` from its parent inside the target's
+        /// scopes, initializing the descriptor locals its allocation
+        /// reserved in front of it.
+        fn scopedRead(ctx: BoxyMatchCtx, target: LIR.LocalId, comptime emit: anytype, args: anytype) Allocator.Error!LIR.CFStmtId {
+            const target_state = ctx.localState(target);
+            var entered = try ctx.enterScopes(target_state.scopes);
+            errdefer ctx.dropScopes(&entered);
+            try ctx.b.scoped_descriptor_locals.appendSlice(ctx.b.parent.allocator, target_state.pending_scoped);
+            const read = try @call(.auto, emit, args);
+            return try ctx.leaveScopes(&entered, read);
+        }
+
+        /// Restore the descriptor bindings a payload's allocation saved
+        /// before its read, which sees the bindings around the payload.
+        fn restorePayloadSnapshot(ctx: BoxyMatchCtx, target: LIR.LocalId) void {
+            const entry = ctx.state.locals.getPtr(target) orelse return;
+            const snapshot = entry.snapshot orelse return;
+            entry.snapshot = null;
+            ctx.b.restoreDescriptorBindings(snapshot);
+            snapshot.deinit(ctx.b.parent.allocator);
+        }
+
+        /// A test or bind on `local` runs inside its scopes and its own
+        /// nominal wrappers'.
+        fn scopedOn(ctx: BoxyMatchCtx, local: LIR.LocalId, rep: Plan.TypeRepId, comptime emit: anytype, args: anytype) Allocator.Error!LIR.CFStmtId {
+            var entered = try ctx.enterScopes(try ctx.scopesInside(local, rep));
+            errdefer ctx.dropScopes(&entered);
+            const stmt = try @call(.auto, emit, args);
+            return try ctx.leaveScopes(&entered, stmt);
+        }
+
+        pub fn lirLocalDiscriminant(ctx: BoxyMatchCtx) Allocator.Error!LIR.LocalId {
+            return try ctx.b.addFrameLocal(.u32);
+        }
+
+        pub fn lirLocalU64(ctx: BoxyMatchCtx) Allocator.Error!LIR.LocalId {
+            return try ctx.b.addFrameLocal(.u64);
+        }
+
+        pub fn isZstLirLocal(ctx: BoxyMatchCtx, local: LIR.LocalId) bool {
+            return ctx.b.isZstLocal(local);
+        }
+
+        pub fn readDiscriminant(ctx: BoxyMatchCtx, target: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.b.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                .target = target,
+                .op = .{ .discriminant = .{ .source = source } },
+                .next = next,
+            } }, ctx.b.glueOrigin());
+        }
+
+        fn fieldReadFor(ctx: BoxyMatchCtx, source: LIR.LocalId, record_rep: Plan.TypeRepId) RecordFieldReadSource {
+            if (ctx.localState(source).field_read) |unboxed| {
+                var field_read = unboxed;
+                field_read.unbox = null;
+                field_read.materialize = null;
+                return field_read;
+            }
+            return .{ .local = source, .record_rep = record_rep };
+        }
+
+        pub fn readField(ctx: BoxyMatchCtx, target: LIR.LocalId, ty: MatchOcc, source: LIR.LocalId, index: u32, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return switch (ty.read) {
+                .record_field => |field| try ctx.scopedRead(target, ProcBodyBuilder.lowerRecordFieldReadInto, .{
+                    ctx.b,
+                    target,
+                    ty.rep,
+                    ctx.fieldReadFor(source, field.access.record_rep),
+                    field.access,
+                    next,
+                }),
+                .tuple_elem => |elem| try ctx.scopedRead(target, ProcBodyBuilder.lowerTupleFieldReadInto, .{ ctx.b, target, source, elem.tuple_rep, index, next }),
+                else => boxyLowerInvariant("boxy field occurrence was neither a record field nor a tuple element"),
+            };
+        }
+
+        pub fn readTagPayload(ctx: BoxyMatchCtx, target: LIR.LocalId, ty: MatchOcc, source: LIR.LocalId, _: u32, _: u32, _: bool, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            ctx.restorePayloadSnapshot(target);
+            const payload = ty.read.tag_payload;
+            const payload_desc = ctx.localState(target).payload_desc;
+            return try ctx.scopedRead(target, readTagPayloadInto, .{ ctx.b, target, ty.rep, payload_desc, source, payload, next });
+        }
+
+        fn readTagPayloadInto(
+            b: *ProcBodyBuilder,
+            target: LIR.LocalId,
+            target_rep: Plan.TypeRepId,
+            target_desc: ?LIR.LocalId,
+            source: LIR.LocalId,
+            payload: MatchPayloadRead,
+            next: LIR.CFStmtId,
+        ) Allocator.Error!LIR.CFStmtId {
+            if (payload.variant_index) |variant_index| {
+                return try b.assignConcreteTagPayloadRead(
+                    target,
+                    target_rep,
+                    target_desc,
+                    source,
+                    payload.source_tag_rep,
+                    payload.tag_name,
+                    variant_index,
+                    payload.payload_index,
+                    payload.payload_count,
+                    next,
+                );
+            }
+            if (payload.direct) {
+                return try b.assignDynamicTagPayloadPatternRead(
+                    target,
+                    target_rep,
+                    source,
+                    payload.source_rep,
+                    payload.tag_name,
+                    payload.payload_index,
+                    payload.source_payload_rep,
+                    next,
+                );
+            }
+            return try b.assignBoxyTagPayload(target, target_desc, source, payload.source_rep, payload.tag_name, payload.payload_index, next);
+        }
+
+        pub fn readCallablePayload(_: BoxyMatchCtx, _: LIR.LocalId, _: MatchOcc, _: LIR.LocalId, _: u32, _: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            boxyLowerInvariant("callable pattern reached boxy pattern lowering");
+        }
+
+        pub fn readListLen(ctx: BoxyMatchCtx, target: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.b.assignUnaryLowLevel(target, .list_len, source, next);
+        }
+
+        pub fn readListElemFront(ctx: BoxyMatchCtx, target: LIR.LocalId, source: LIR.LocalId, index: u64, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            const index_local = try ctx.b.addFrameLocal(.u64);
+            const get = try ctx.b.assignBinaryLowLevel(target, .list_get_unsafe, source, index_local, next);
+            return try ctx.b.assignU64Literal(index_local, @intCast(index), get);
+        }
+
+        pub fn readListElemBack(ctx: BoxyMatchCtx, target: LIR.LocalId, source: LIR.LocalId, len_local: LIR.LocalId, back: u64, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            const index_local = try ctx.b.addFrameLocal(.u64);
+            const get = try ctx.b.assignBinaryLowLevel(target, .list_get_unsafe, source, index_local, next);
+            return try ctx.b.lenMinusConst(index_local, len_local, @intCast(back), get);
+        }
+
+        pub fn readListRest(ctx: BoxyMatchCtx, target: LIR.LocalId, source: LIR.LocalId, len_local: LIR.LocalId, front: u64, back: u64, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            const b = ctx.b;
+            const front_dropped = ctx.localState(target).front_dropped orelse
+                boxyLowerInvariant("boxy list rest occurrence had no intermediate slice");
+            // rest = take_first(take_last(source, len - front), len - (front + back))
+            const keep_len = try b.addFrameLocal(.u64);
+            var current = try b.assignBinaryLowLevel(target, .list_take_first, front_dropped, keep_len, next);
+            current = try b.lenMinusConst(keep_len, len_local, @intCast(front + back), current);
+            const keep_after_front = try b.addFrameLocal(.u64);
+            current = try b.assignBinaryLowLevel(front_dropped, .list_take_last, source, keep_after_front, current);
+            return try b.lenMinusConst(keep_after_front, len_local, @intCast(front), current);
+        }
+
+        pub fn readNominalBacking(ctx: BoxyMatchCtx, target: LIR.LocalId, backing_ty: MatchOcc, source: LIR.LocalId, _: MatchOcc, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return switch (backing_ty.read) {
+                .nominal_same => next,
+                .nominal_boundary => |nominal| try ctx.scopedRead(target, ProcBodyBuilder.assignRepresentationBoundary, .{ ctx.b, target, source, backing_ty.rep, nominal.nominal_rep, next }),
+                else => boxyLowerInvariant("boxy nominal backing occurrence had a non-nominal read"),
+            };
+        }
+
+        pub fn readRecordRest(ctx: BoxyMatchCtx, target: LIR.LocalId, rest_ty: MatchOcc, source: LIR.LocalId, _: MatchOcc, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            const record_ty = rest_ty.read.record_rest.record_ty;
+            const record_rep = ctx.b.recordRepForBoundary(ctx.b.repForType(record_ty)) orelse
+                boxyLowerInvariant("record pattern source did not have a record representation");
+            return try ctx.scopedRead(target, ProcBodyBuilder.lowerRecordRestValueInto, .{
+                ctx.b,
+                target,
+                ctx.fieldReadFor(source, record_rep),
+                record_ty,
+                rest_ty.checked.?,
+                next,
+            });
+        }
+
+        pub fn readRetype(ctx: BoxyMatchCtx, target: LIR.LocalId, ty: MatchOcc, source: LIR.LocalId, source_ty: MatchOcc, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return switch (ty.read) {
+                .narrow => try ctx.scopedRead(target, ProcBodyBuilder.assignRepresentationBoundary, .{ ctx.b, target, source, ty.rep, source_ty.rep, next }),
+                .record_unbox => try ctx.scopedRead(target, ProcBodyBuilder.prependRecordFieldReadSource, .{ ctx.b, ctx.localState(target).field_read.?, next }),
+                else => boxyLowerInvariant("boxy retyped occurrence had a structural read"),
+            };
+        }
+
+        pub fn switchStmt(ctx: BoxyMatchCtx, cond: LIR.LocalId, values: []const u64, bodies: []const LIR.CFStmtId, default: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            const branches = try ctx.state.arena.alloc(LIR.CFSwitchBranch, values.len);
+            for (branches, values, bodies) |*branch, value, body| branch.* = .{ .value = value, .body = body };
+            return try ctx.b.parent.result.store.addCFStmt(.{ .switch_stmt = .{
+                .cond = cond,
+                .branches = try ctx.b.parent.result.store.addCFSwitchBranches(branches),
+                .default_branch = default,
+                .continuation = null,
+            } }, ctx.b.glueOrigin());
+        }
+
+        pub fn lenGteTest(ctx: BoxyMatchCtx, len_local: LIR.LocalId, min: u64, then: LIR.CFStmtId, els: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            const b = ctx.b;
+            const required = try b.addFrameLocal(.u64);
+            const cond = try b.addFrameLocal(.bool);
+            const length_check = try b.boolSwitchNoContinuation(cond, then, els);
+            const compare = try b.assignBinaryLowLevel(cond, .num_is_gte, len_local, required, length_check);
+            return try b.assignU64Literal(required, @intCast(min), compare);
+        }
+
+        pub fn literalEqTest(ctx: BoxyMatchCtx, source: LIR.LocalId, _: MatchOcc, pat: checked.CheckedPatternId, on_match: LIR.CFStmtId, on_miss: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            const b = ctx.b;
+            const pattern_data = ctx.pattern(pat);
+            const literal_local = try b.addFrameLocalForType(pattern_data.ty);
+            const eq = try b.addFrameLocal(.bool);
+            const branch = try b.boolSwitchNoContinuation(eq, on_match, on_miss);
+            const compare = try b.lowerEqRepLocalsInto(eq, source, literal_local, b.repForType(pattern_data.ty), false, branch);
+            return switch (pattern_data.data) {
+                .numeral_literal => |literal| try b.assignCheckedNumeralLiteral(literal_local, pattern_data.ty, literal.literal, compare),
+                .str_literal => |literal| try b.assignStringLiteral(literal_local, literal.literal, compare),
+                else => boxyLowerInvariant("equality arm requested for a non-literal pattern"),
+            };
+        }
+
+        pub fn strArmCaptureLocals(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId) Allocator.Error![]const ?LIR.LocalId {
+            const str = switch (ctx.pattern(pat).data) {
+                .str_literal => return &.{},
+                .str_interpolation => |str| str,
+                else => boxyLowerInvariant("string arm requested for a non-string pattern"),
+            };
+            const locals = try ctx.state.arena.alloc(?LIR.LocalId, str.steps.len);
+            for (locals, str.steps) |*out, step| {
+                out.* = if (step.capture) |capture| try ctx.b.addFrameLocalForType(ctx.pattern(capture).ty) else null;
+            }
+            return locals;
+        }
+
+        pub fn buildStrArm(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId, capture_locals: []const ?LIR.LocalId, on_match: LIR.CFStmtId) Allocator.Error!LIR.StrMatchArm {
+            const b = ctx.b;
+            switch (ctx.pattern(pat).data) {
+                .str_literal => |literal| return .{
+                    .prefix = try b.lirStrLiteral(literal.literal),
+                    .steps = try b.parent.result.store.addStrMatchSteps(&.{}),
+                    .end = .exact,
+                    .on_match = on_match,
+                },
+                .str_interpolation => |str| {
+                    const steps = try ctx.state.arena.alloc(LIR.StrMatchStep, str.steps.len);
+                    for (steps, str.steps, capture_locals) |*lir_step, step, capture| {
+                        lir_step.* = .{
+                            .capture = if (capture) |local| .{ .view = local } else .discard,
+                            .delimiter = try b.lirStrLiteral(step.delimiter),
+                        };
+                    }
+                    return .{
+                        .prefix = try b.lirStrLiteral(str.prefix),
+                        .steps = try b.parent.result.store.addStrMatchSteps(steps),
+                        .end = switch (str.end) {
+                            .exact => .exact,
+                            .tail => .tail,
+                        },
+                        .on_match = on_match,
+                    };
+                },
+                else => boxyLowerInvariant("string arm requested for a non-string pattern"),
+            }
+        }
+
+        pub fn strMatchSet(ctx: BoxyMatchCtx, source: LIR.LocalId, arms: []const LIR.StrMatchArm, on_miss: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.b.parent.result.store.addCFStmt(.{ .str_match_set = .{
+                .source = source,
+                .arms = try ctx.b.parent.result.store.addStrMatchArms(arms),
+                .on_miss = on_miss,
+            } }, ctx.b.origin);
+        }
+
+        pub fn tagNameTest(ctx: BoxyMatchCtx, source: LIR.LocalId, ty: MatchOcc, pat: checked.CheckedPatternId, on_match: LIR.CFStmtId, on_miss: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.scopedOn(source, ty.rep, emitTagNameTest, .{ ctx.b, source, ty.rep, ctx.pattern(pat).data.applied_tag.name, on_match, on_miss });
+        }
+
+        fn emitTagNameTest(b: *ProcBodyBuilder, source: LIR.LocalId, source_rep: Plan.TypeRepId, name: names.TagNameId, on_match: LIR.CFStmtId, on_miss: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            const match_desc = try b.descriptorRefForSourceLocalRep(source, source_rep);
+            return try b.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
+                .source = source,
+                .source_desc = match_desc,
+                .tag_name = try b.lirTagName(name),
+                .on_match = on_match,
+                .on_miss = on_miss,
+            } }, b.origin);
+        }
+
+        pub fn literalGuardTemp(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId) Allocator.Error!LIR.LocalId {
+            const binder = ctx.b.module.checked_bodies.literalPatternBinder(pat);
+            try ctx.b.reserveBinderLocalIfFresh(binder, ctx.pattern(pat).ty);
+            return try ctx.b.addFrameLocal(.bool);
+        }
+
+        pub fn bindPatternLocal(ctx: BoxyMatchCtx, binder: checked.PatternBinderId, ty: MatchOcc, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            const b = ctx.b;
+            if (ctx.state.mode == .bind) {
+                const target = b.localForBinder(binder);
+                if (target == source) return next;
+                return try b.assignLocal(target, source, next);
+            }
+            const remaps = ctx.state.remaps.get(binder) orelse &.{};
+            // A producer stored at the binder's own layout binds as the
+            // binder's representation.
+            const binder_rep = b.repForType(b.binderType(binder));
+            const source_rep = if (ctx.layoutOf(binder_rep) == ctx.layoutOf(ty.rep)) binder_rep else ty.rep;
+            var entered = try ctx.enterScopes(ctx.localState(source).scopes);
+            errdefer ctx.dropScopes(&entered);
+            const bind = try b.bindMatchBinderFromRep(binder, source, source_rep, remaps, next);
+            return try ctx.leaveScopes(&entered, bind);
+        }
+
+        /// Bind a literal pattern's matched value before its checked
+        /// equality guard reads it.
+        fn bindLiteralBinder(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId, value: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            const binder = ctx.b.module.checked_bodies.literalPatternBinder(pat);
+            var entered = try ctx.enterScopes(ctx.localState(value).scopes);
+            errdefer ctx.dropScopes(&entered);
+            const bind = try ctx.b.bindMatchBinder(binder, value, &.{}, next);
+            return try ctx.leaveScopes(&entered, bind);
+        }
+
+        pub fn guardTemp(ctx: BoxyMatchCtx, guard: MatchExpr) Allocator.Error!LIR.LocalId {
+            return try ctx.b.addFrameLocalForType(ctx.b.module.checked_bodies.expr(guard.guard.expr).ty);
+        }
+
+        pub fn boolSwitch(ctx: BoxyMatchCtx, cond: LIR.LocalId, then: LIR.CFStmtId, els: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.b.boolSwitchNoContinuation(cond, then, els);
+        }
+    };
+
+    /// One pattern compilation in progress: the tree, its emitter, and the
+    /// state they share.
+    const PatternTreeRun = struct {
+        arena_state: base.SingleThreadArena,
+        state: MatchState,
+        emitter: *MatchTree.Emitter,
+        /// The descriptor bindings each body or guard lowering restores.
+        body_snapshot: ?DescriptorBindingsSnapshot = null,
+        /// The request a child lowering answers.
+        pending: ?MatchTree.EmitRequest = null,
+    };
+
+    /// Compile `rows` and begin emitting them; `root` holds the value, at
+    /// `root_ty`.
+    fn beginPatternTree(
         self: *ProcBodyBuilder,
-        state: *PatternState,
-        tag_ty: checked.CheckedTypeId,
-        root_rep: Plan.TypeRepId,
-        name: names.TagNameId,
-        args: []const checked.CheckedPatternId,
-        source: LIR.LocalId,
-        context: PatternContext,
-    ) Allocator.Error!void {
+        mode: MatchMode,
+        root: LIR.LocalId,
+        root_ty: MatchOcc,
+        rows: []const MatchTree.Branch,
+        remaps: []const []const checked.CheckedAlternativeBinderRemap,
+        alternatives: []const checked.CheckedPatternId,
+        branch_count: usize,
+        done: LIR.JoinPointId,
+    ) Allocator.Error!*PatternTreeRun {
         const allocator = self.parent.allocator;
-        var rep_id = root_rep;
+        const tree = try allocator.create(PatternTreeRun);
+        errdefer allocator.destroy(tree);
+        tree.* = .{
+            .arena_state = base.SingleThreadArena.init(allocator),
+            .state = undefined,
+            .emitter = undefined,
+        };
+        errdefer tree.arena_state.deinit();
+        const arena = tree.arena_state.allocator();
+        tree.state = .{ .arena = arena, .mode = mode };
+        tree.state.bodies = try arena.alloc(?LIR.CFStmtId, branch_count);
+        @memset(tree.state.bodies, null);
+        // Each alternative's binders bind through its own remaps.
+        for (alternatives, remaps) |alternative, alternative_remaps| {
+            if (alternative_remaps.len == 0) continue;
+            var binders: std.ArrayList(checked.PatternBinderId) = .empty;
+            try self.appendPatternBinderIds(alternative, &binders);
+            defer binders.deinit(allocator);
+            for (binders.items) |binder| try tree.state.remaps.put(arena, binder, alternative_remaps);
+        }
+        const ctx = BoxyMatchCtx{ .b = self, .state = &tree.state };
+        const built = try MatchTree.build(arena, ctx, root_ty, rows);
+        tree.emitter = try MatchTree.Emitter.begin(arena, ctx, built, root, done);
+        return tree;
+    }
+
+    fn freePatternTreeRun(self: *ProcBodyBuilder, tree: *PatternTreeRun) void {
+        var locals = tree.state.locals.valueIterator();
+        while (locals.next()) |local| {
+            if (local.snapshot) |snapshot| {
+                self.restoreDescriptorBindings(snapshot);
+                snapshot.deinit(self.parent.allocator);
+            }
+        }
+        if (tree.body_snapshot) |snapshot| {
+            self.restoreDescriptorBindings(snapshot);
+            snapshot.deinit(self.parent.allocator);
+        }
+        tree.arena_state.deinit();
+        self.parent.allocator.destroy(tree);
+    }
+
+    /// What answering a pattern tree's outstanding request needs next.
+    const PatternTreeStep = union(enum) {
+        /// Lower this; its statement answers the request.
+        child: ExprTask,
+        /// The tree's entry statement.
+        done: LIR.CFStmtId,
+    };
+
+    /// What a pattern tree's bodies and guards lower into.
+    const PatternTreeBodies = struct {
+        branches: []const checked.CheckedMatchBranch = &.{},
+        target: LIR.LocalId = undefined,
+        result_ty: checked.CheckedTypeId = undefined,
+    };
+
+    /// Drive a pattern tree's emission, answering its outstanding request
+    /// with `input`, until it needs a child lowering or is done.
+    fn advancePatternTree(
+        self: *ProcBodyBuilder,
+        tree: *PatternTreeRun,
+        bodies: PatternTreeBodies,
+        input: ?LIR.CFStmtId,
+    ) Allocator.Error!PatternTreeStep {
+        var answer = input;
+        if (tree.pending) |pending| {
+            tree.pending = null;
+            answer = try self.finishPatternTreeRequest(tree, pending, input.?);
+        }
         while (true) {
-            const rep = self.parent.plan.representations.items[@backingInt(rep_id)];
-            switch (rep.kind) {
-                .bool_tag_union => {
-                    if (args.len != 0) {
-                        boxyLowerInvariant("builtin Bool match pattern carried a payload");
-                    }
-                    state.current = try self.lowerTagDiscriminantSwitch(source, self.boolVariantIndex(name), state.current, context.miss);
-                    return;
-                },
-                .tag_union => {
-                    const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
-                    const variant = self.tagVariant(rep, name);
-                    try self.validateTagPatternPayloads(variant.name, variant.payloads, args);
-                    try state.actions.append(allocator, .{ .tag_discriminant = .{ .source = source, .variant_index = variant.index, .single_variant = variants.len == 1, .context = context } });
-                    try self.pushTagPayloadPatterns(state, rep_id, rep_id, name, variant.index, args, source, context);
-                    return;
-                },
-                .dynamic => {
-                    try self.validateDynamicTagPatternPayloads(rep_id, name, args);
-                    try state.actions.append(allocator, .{ .dynamic_tag_match = .{ .source = source, .source_rep = rep_id, .name = name, .cannot_miss = false, .context = context } });
-                    try self.pushTagPayloadPatterns(state, rep_id, rep_id, name, null, args, source, context);
-                    return;
-                },
-                .alias => rep_id = self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep,
-                .nominal => |kind| switch (kind) {
-                    .transparent, .builtin_other => {
-                        const backing_ty = checkedTypeAtNominalBacking(self.module, tag_ty);
-                        const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
-                        const scope = try self.enterNominalBackingFormalScope(rep_id);
-                        try self.pushPatternScope(state, scope, null);
-                        try state.actions.append(allocator, .{ .tag_rep = .{
-                            .tag_ty = backing_ty,
-                            .rep_id = backing_rep,
-                            .name = name,
-                            .args = args,
-                            .source = source,
-                            .context = context,
-                        } });
-                        return;
+            const request = switch (try tree.emitter.advance(answer)) {
+                .done => |stmt| return .{ .done = stmt },
+                .request => |request| request,
+            };
+            answer = null;
+            switch (request) {
+                .bindings => |bindings| answer = bindings.next,
+                .body => |body| switch (body.body) {
+                    .continuation => |stmt| answer = stmt,
+                    .body => |branch_index| {
+                        if (tree.state.bodies[branch_index]) |lowered| {
+                            answer = lowered;
+                            continue;
+                        }
+                        const branch = bodies.branches[branch_index];
+                        try self.bindBranchDescriptors(tree, branch);
+                        tree.pending = request;
+                        return .{ .child = .{ .expected = .{
+                            .target = bodies.target,
+                            .expected_ty = bodies.result_ty,
+                            .expr_id = branch.value,
+                            .next = try self.joinJump(body.done),
+                        } } };
                     },
-                    .opaque_nominal => boxyLowerInvariant("opaque nominal tag match pattern reached boxy lowering"),
+                    .guard => boxyLowerInvariant("boxy pattern tree requested a guard as a body"),
                 },
-                .empty_tag_union => boxyLowerInvariant("empty tag-union match pattern reached boxy lowering"),
-                .in_progress, .primitive, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record => boxyLowerInvariant("tag match pattern checked type did not have a boxy tag-union representation"),
+                .guard => |guard| {
+                    try self.bindBranchDescriptors(tree, bodies.branches[guard.guard.guard.branch]);
+                    tree.pending = request;
+                    return .{ .child = .{ .expr = .{ .target = guard.cond, .expr_id = guard.guard.guard.expr, .next = guard.next } } };
+                },
+                .literal_guard => |guard| {
+                    tree.pending = request;
+                    const literal_guard = switch (self.module.checked_bodies.pattern(guard.pat).data) {
+                        .numeral_literal => |literal| literal.guard,
+                        .str_literal => |literal| literal.guard,
+                        else => null,
+                    } orelse boxyLowerInvariant("boxy guarded literal pattern had no checked guard");
+                    return .{ .child = .{ .expr = .{ .target = guard.cond, .expr_id = literal_guard, .next = guard.next } } };
+                },
             }
         }
     }
 
-    /// Push the tests of a tag's payload patterns, which run before the
-    /// action already pushed for the tag itself.
-    fn pushTagPayloadPatterns(
-        self: *ProcBodyBuilder,
-        state: *PatternState,
-        pattern_tag_rep: Plan.TypeRepId,
-        source_rep: Plan.TypeRepId,
-        tag_name: names.TagNameId,
-        variant_index: ?u32,
-        args: []const checked.CheckedPatternId,
-        source: LIR.LocalId,
-        context: PatternContext,
-    ) Allocator.Error!void {
-        if (args.len == 0) return;
-
-        const source_tag_rep = self.tagVariantRepForBoundary(pattern_tag_rep) orelse
-            boxyLowerInvariant("boxy tag payload pattern schema had no tag representation");
-        const source_payloads = if (variant_index == null)
-            try self.dynamicTagPayloadsForName(source_tag_rep, tag_name)
-        else
-            self.parent.plan.childSlice(
-                self.tagVariant(
-                    self.parent.plan.representations.items[@backingInt(source_tag_rep)],
-                    tag_name,
-                ).payloads,
-            );
-        if (source_payloads.len != args.len) {
-            boxyLowerInvariant("boxy tag match payload count disagreed with planned source representation");
+    /// Bind the descriptors of a branch's representative binders, which its
+    /// body and guard read, until the lowering finishes.
+    fn bindBranchDescriptors(self: *ProcBodyBuilder, tree: *PatternTreeRun, branch: checked.CheckedMatchBranch) Allocator.Error!void {
+        tree.body_snapshot = try self.snapshotDescriptorBindings();
+        for (branch.patternsSlice(self.module.checked_bodies)) |branch_pattern| {
+            if (branch_pattern.degenerate) continue;
+            try self.walkPatternBinders(branch_pattern.pattern, .{ .match_descriptors = branch_pattern.binderRemapsSlice(self.module.checked_bodies) });
         }
-        try state.actions.append(self.parent.allocator, .{ .tag_payload_next = .{
-            .payloads = .{
-                .source_rep = source_rep,
-                .tag_name = tag_name,
-                .variant_index = variant_index,
-                .args = args,
-                .source = source,
-                .source_tag_rep = source_tag_rep,
-                .source_payloads = source_payloads,
-                .context = context,
-            },
-            .index = args.len,
-        } });
     }
 
-    fn bindPatternFromLocal(
-        self: *ProcBodyBuilder,
-        pattern_id: checked.CheckedPatternId,
-        source: LIR.LocalId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        return try self.runExprTasks(.{ .pattern = .{ .pattern = pattern_id, .source = source, .mode = .bind, .next = next } });
+    fn finishPatternTreeRequest(self: *ProcBodyBuilder, tree: *PatternTreeRun, request: MatchTree.EmitRequest, lowered: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        switch (request) {
+            .body => |body| {
+                self.restoreBranchDescriptors(tree);
+                tree.state.bodies[body.body.body] = lowered;
+                return lowered;
+            },
+            .guard => {
+                self.restoreBranchDescriptors(tree);
+                return lowered;
+            },
+            .literal_guard => |guard| {
+                const ctx = BoxyMatchCtx{ .b = self, .state = &tree.state };
+                return try ctx.bindLiteralBinder(guard.pat, guard.value, lowered);
+            },
+            .bindings => unreachable,
+        }
+    }
+
+    fn restoreBranchDescriptors(self: *ProcBodyBuilder, tree: *PatternTreeRun) void {
+        const snapshot = tree.body_snapshot orelse return;
+        tree.body_snapshot = null;
+        self.restoreDescriptorBindings(snapshot);
+        snapshot.deinit(self.parent.allocator);
+    }
+
+    /// Lower one pattern over `source` in front of `next`: a destructuring,
+    /// which binds every binder it reaches, or, for a pattern that can miss,
+    /// a test whose miss `mode` decides.
+    fn stepPatternTree(self: *ProcBodyBuilder, task: anytype, input: ?LIR.CFStmtId) Allocator.Error!ExprStep {
+        const tree = task.tree orelse tree: {
+            const pattern = self.module.checked_bodies.pattern(task.pattern);
+            const rows = [_]MatchTree.Branch{.{ .pat = task.pattern, .guard = null, .body = .{ .continuation = task.next }, .branch_index = 0 }};
+            const root_rep = task.source_rep orelse self.repForType(pattern.ty);
+            const created = try self.beginPatternTree(
+                task.mode,
+                task.source,
+                .{ .checked = pattern.ty, .rep = root_rep, .read = .root },
+                &rows,
+                &.{},
+                &.{},
+                0,
+                self.freshJoinPointId(),
+            );
+            task.tree = created;
+            break :tree created;
+        };
+        switch (try self.advancePatternTree(tree, .{}, if (tree.pending != null) input else null)) {
+            .child => |child| return .{ .child = child },
+            .done => |stmt| {
+                self.freePatternTreeRun(tree);
+                task.tree = null;
+                return exprDone(stmt);
+            },
+        }
     }
 
     fn recordDestructureNeedsSource(
@@ -29874,18 +30195,6 @@ const ProcBodyBuilder = struct {
         }
     }
 
-    fn validateDynamicTagPatternPayloads(
-        self: *ProcBodyBuilder,
-        rep_id: Plan.TypeRepId,
-        tag_name: names.TagNameId,
-        args: []const checked.CheckedPatternId,
-    ) Allocator.Error!void {
-        const payloads = try self.dynamicTagPayloadsForName(rep_id, tag_name);
-        if (payloads.len != args.len) {
-            boxyLowerInvariant("dynamic tag match pattern payload count disagreed with planned representation");
-        }
-    }
-
     fn assignDynamicTagPayloadPatternRead(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -29968,85 +30277,6 @@ const ProcBodyBuilder = struct {
             .source_mode = .copy,
             .next = next,
         } }, self.origin);
-    }
-
-    fn lowerTagDiscriminantSwitch(
-        self: *ProcBodyBuilder,
-        source: LIR.LocalId,
-        variant_index: u32,
-        on_match: LIR.CFStmtId,
-        miss: ?PatternMiss,
-    ) Allocator.Error!LIR.CFStmtId {
-        if (self.isZstLocal(source)) {
-            if (variant_index != 0) {
-                boxyLowerInvariant("zero-sized tag-union pattern expected a nonzero discriminant");
-            }
-            return on_match;
-        }
-
-        const discriminant = try self.addFrameLocal(.u32);
-        const branches = [_]LIR.CFSwitchBranch{.{ .value = variant_index, .body = on_match }};
-        const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
-            .cond = discriminant,
-            .branches = try self.parent.result.store.addCFSwitchBranches(&branches),
-            .default_branch = try self.patternMissJump(miss),
-            .continuation = null,
-        } }, self.glueOrigin());
-        return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-            .target = discriminant,
-            .op = .{ .discriminant = .{ .source = source } },
-            .next = switch_stmt,
-        } }, self.glueOrigin());
-    }
-
-    fn lowerLiteralPatternThen(
-        self: *ProcBodyBuilder,
-        pattern_ty: checked.CheckedTypeId,
-        source: LIR.LocalId,
-        literal: LiteralPattern,
-        on_match: LIR.CFStmtId,
-        miss: ?PatternMiss,
-    ) Allocator.Error!LIR.CFStmtId {
-        const literal_local = try self.addFrameLocalForType(pattern_ty);
-        const eq = try self.addFrameLocal(.bool);
-        const switch_stmt = try self.boolSwitchNoContinuation(eq, on_match, try self.patternMissJump(miss));
-        const compare = try self.lowerEqRepLocalsInto(eq, source, literal_local, self.repForType(pattern_ty), false, switch_stmt);
-        return try self.assignLiteralPattern(literal_local, literal, compare);
-    }
-
-    fn lowerNumeralPatternThen(
-        self: *ProcBodyBuilder,
-        pattern_ty: checked.CheckedTypeId,
-        source: LIR.LocalId,
-        literal: can.ModuleEnv.NumeralLiteral,
-        on_match: LIR.CFStmtId,
-        miss: ?PatternMiss,
-    ) Allocator.Error!LIR.CFStmtId {
-        const literal_local = try self.addFrameLocalForType(pattern_ty);
-        const eq = try self.addFrameLocal(.bool);
-        const switch_stmt = try self.boolSwitchNoContinuation(eq, on_match, try self.patternMissJump(miss));
-        const compare = try self.lowerEqRepLocalsInto(eq, source, literal_local, self.repForType(pattern_ty), false, switch_stmt);
-        return try self.assignCheckedNumeralLiteral(literal_local, pattern_ty, literal, compare);
-    }
-
-    fn assignLiteralPattern(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        literal: LiteralPattern,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        return switch (literal) {
-            .int => |value| try self.assignIntLiteral(target, value.toI128(), next),
-            .dec => |value| try self.assignDecLiteral(target, value, next),
-            .frac_f32 => |value| try self.assignFloatLiteral(target, f32, value, next),
-            .frac_f64 => |value| try self.assignFloatLiteral(target, f64, value, next),
-            .str => |literal_id| try self.assignStringLiteral(target, literal_id, next),
-        };
-    }
-
-    fn patternMissJump(self: *ProcBodyBuilder, miss: ?PatternMiss) Allocator.Error!LIR.CFStmtId {
-        const miss_info = miss orelse boxyLowerInvariant("refutable checked match pattern reached boxy lowering without a miss target");
-        return try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = miss_info.join_id } }, self.glueOrigin());
     }
 
     fn assignU64Literal(
@@ -34308,6 +34538,185 @@ const ProcBodyBuilder = struct {
         return .{ .done = stmt };
     }
 
+    const InspectRules = value_semantics.InspectSpec(InspectShapes);
+
+    /// Boxy representations as the shared inspect rules read them. A
+    /// component is named by its index among its representation's children,
+    /// or among its variant's payloads.
+    const InspectShapes = struct {
+        builder: *ProcBodyBuilder,
+
+        pub const Ty = Plan.TypeRepId;
+        pub const Primitive = checked.CheckedPrimitive;
+        pub const Record = Plan.TypeRepId;
+        pub const Tuple = Plan.TypeRepId;
+        pub const TagUnion = Plan.TypeRepId;
+        pub const PresenceSlot = Plan.TypeRepId;
+        pub const Override = Plan.WorkerPlanId;
+        pub const Child = u32;
+        pub const Label = []const u8;
+
+        fn rep(shapes: InspectShapes, rep_id: Plan.TypeRepId) Plan.TypeRepresentation {
+            return shapes.builder.parent.plan.representations.items[@backingInt(rep_id)];
+        }
+
+        fn children(shapes: InspectShapes, rep_id: Plan.TypeRepId) []const Plan.RepChild {
+            return shapes.builder.parent.plan.childSlice(shapes.rep(rep_id).children);
+        }
+
+        fn variants(shapes: InspectShapes, rep_id: Plan.TypeRepId) []const Plan.TagVariant {
+            return shapes.builder.parent.plan.tagVariantSlice(shapes.rep(rep_id).tag_variants);
+        }
+
+        pub fn recordSlotCount(shapes: InspectShapes, record: Plan.TypeRepId) u32 {
+            return @intCast(shapes.children(record).len);
+        }
+
+        pub fn recordField(shapes: InspectShapes, record: Plan.TypeRepId, slot: u32) ?value_semantics.inspect.RecordField(InspectShapes) {
+            const child = shapes.children(record)[slot];
+            switch (child.role) {
+                .record_field => |label| return .{ .label = shapes.builder.module.canonical_names.?.recordFieldLabelText(label), .child = slot },
+                .record_ext => {
+                    shapes.builder.requireEmptyRecordExtension(child.rep);
+                    return null;
+                },
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("record inspect representation had a non-record child role"),
+            }
+        }
+
+        pub fn tupleElemCount(shapes: InspectShapes, tuple: Plan.TypeRepId) u32 {
+            return @intCast(shapes.children(tuple).len);
+        }
+
+        pub fn tupleElem(_: InspectShapes, _: Plan.TypeRepId, index: u32) u32 {
+            return index;
+        }
+
+        pub fn variantCount(shapes: InspectShapes, tag_union: Plan.TypeRepId) u32 {
+            return @intCast(shapes.variants(tag_union).len);
+        }
+
+        pub fn variantName(shapes: InspectShapes, tag_union: Plan.TypeRepId, variant: u32) []const u8 {
+            return shapes.builder.tagVariantNameText(shapes.variants(tag_union)[variant]);
+        }
+
+        pub fn payloadCount(shapes: InspectShapes, tag_union: Plan.TypeRepId, variant: u32) u32 {
+            return @intCast(shapes.builder.parent.plan.childSlice(shapes.variants(tag_union)[variant].payloads).len);
+        }
+
+        pub fn payload(_: InspectShapes, _: Plan.TypeRepId, _: u32, index: u32) u32 {
+            return index;
+        }
+    };
+
+    /// How inspection reads a representation.
+    fn inspectShape(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) InspectRules.Shape {
+        const rep = self.parent.plan.representations.items[@backingInt(rep_id)];
+        return switch (rep.kind) {
+            .in_progress => boxyLowerInvariant("in-progress boxy representation reached inspect lowering"),
+            .dynamic => .dynamic,
+            .erased_callable => .function,
+            // Compiler-owned encoding evidence exposes no structure.
+            .generated_field,
+            .generated_field_names,
+            .generated_tag_union_spec,
+            => .{ .nominal = .{ .override = null, .backing = null } },
+            .list => .{ .list = self.repQuery().requiredSingleChild(rep_id, .list_elem).rep },
+            .box => .{ .box = self.repQuery().requiredSingleChild(rep_id, .box_payload).rep },
+            .primitive => |primitive| .{ .primitive = primitive },
+            .bool_tag_union => .bool,
+            .empty_record => .empty_record,
+            .empty_tag_union => .{ .tag_union = rep_id },
+            .alias => .{ .transparent = self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep },
+            .nominal => |kind| switch (kind) {
+                .transparent => .{ .nominal = .{
+                    .override = self.parent.inspectOverrideWorkerForRep(rep_id),
+                    .backing = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep,
+                } },
+                .opaque_nominal => .{ .nominal = .{ .override = self.parent.inspectOverrideWorkerForRep(rep_id), .backing = null } },
+                .builtin_other => .{ .nominal = .{ .override = null, .backing = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep } },
+            },
+            .record => .{ .record = rep_id },
+            .tuple => .{ .tuple = rep_id },
+            .tag_union => if (rep.presence_slot_present_discriminant != null)
+                .{ .presence_slot = rep_id }
+            else if (self.tagUnionRepHasExtension(rep))
+                // An open row's extension is known only by its descriptor.
+                .dynamic
+            else
+                .{ .tag_union = rep_id },
+        };
+    }
+
+    /// Collects one rendering's parts, naming each component by where it is
+    /// read from `source`.
+    const InspectPartSink = struct {
+        builder: *ProcBodyBuilder,
+        parts: *std.ArrayList(InspectPart),
+        source: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
+        kind: union(enum) {
+            /// Record fields, numbered in order as LIR reads them.
+            record: struct { next_field: u32 = 0 },
+            tuple,
+            variant: u32,
+        },
+
+        pub fn literal(sink: *InspectPartSink, bytes: []const u8) Allocator.Error!void {
+            try sink.parts.append(sink.builder.parent.allocator, .{ .literal = bytes });
+        }
+
+        pub fn label(sink: *InspectPartSink, bytes: []const u8) Allocator.Error!void {
+            try sink.parts.append(sink.builder.parent.allocator, .{ .literal = bytes });
+        }
+
+        pub fn child(sink: *InspectPartSink, index: u32) Allocator.Error!void {
+            const plan = sink.builder.parent.plan;
+            const part: InspectPart = switch (sink.kind) {
+                .record => |*record| part: {
+                    const field_index = record.next_field;
+                    record.next_field += 1;
+                    break :part .{ .field = .{
+                        .source = sink.source,
+                        .field_index = field_index,
+                        .rep = plan.childSlice(plan.representations.items[@backingInt(sink.rep_id)].children)[index].rep,
+                    } };
+                },
+                .tuple => part: {
+                    const elem = plan.childSlice(plan.representations.items[@backingInt(sink.rep_id)].children)[index];
+                    const elem_index = switch (elem.role) {
+                        .tuple_elem => |elem_index| elem_index,
+                        .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tuple inspect representation had a non-tuple child role"),
+                    };
+                    if (elem_index > std.math.maxInt(u32)) {
+                        boxyLowerInvariant("tuple inspect element index exceeded LIR field index range");
+                    }
+                    break :part .{ .field = .{ .source = sink.source, .field_index = @intCast(elem_index), .rep = elem.rep } };
+                },
+                .variant => |variant_index| part: {
+                    const variant = plan.tagVariantSlice(plan.representations.items[@backingInt(sink.rep_id)].tag_variants)[variant_index];
+                    const payloads = plan.childSlice(variant.payloads);
+                    const payload_child = payloads[index];
+                    switch (payload_child.role) {
+                        .tag_payload => |payload| {
+                            if (payload.tag != variant.name or payload.index != index) {
+                                boxyLowerInvariant("tag inspect payload span did not match its payload child roles");
+                            }
+                        },
+                        .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tag inspect variant payload span included a non-payload child"),
+                    }
+                    break :part .{ .tag_payload = .{
+                        .source = sink.source,
+                        .variant_index = variant_index,
+                        .payload_index = if (payloads.len == 1) null else index,
+                        .rep = payload_child.rep,
+                    } };
+                },
+            };
+            try sink.parts.append(sink.builder.parent.allocator, part);
+        }
+    };
+
     /// The rendering of `request` when it needs no component rendering;
     /// otherwise null, with the frame that builds it pushed.
     fn beginInspect(self: *ProcBodyBuilder, frames: *std.ArrayList(InspectFrame), root: InspectRequest) Allocator.Error!?LIR.CFStmtId {
@@ -34317,18 +34726,11 @@ const ProcBodyBuilder = struct {
             const source = request.source;
             const rep_id = request.rep_id;
             const next = request.next;
-            const rep = self.parent.plan.representations.items[@backingInt(rep_id)];
-            switch (rep.kind) {
-                .in_progress => boxyLowerInvariant("in-progress boxy representation reached inspect lowering"),
-                .dynamic => return try self.lowerDescriptorInspectLocalsInto(target, source, rep_id, next),
-                .erased_callable => return try self.assignStringBytesLiteral(target, "<function>", next),
-                .generated_field,
-                .generated_field_names,
-                .generated_tag_union_spec,
-                => return try self.assignStringBytesLiteral(target, "<opaque>", next),
+            switch (InspectRules.actionForShape(.{ .builder = self }, self.inspectShape(rep_id))) {
+                .literal => |text| return try self.assignStringBytesLiteral(target, text, next),
+                .descriptor => return try self.lowerDescriptorInspectLocalsInto(target, source, rep_id, next),
                 .list => return try self.beginListInspect(frames, request),
-                .box => {
-                    const payload_rep = self.repQuery().requiredSingleChild(rep_id, .box_payload).rep;
+                .box => |payload_rep| {
                     const payload = try self.addFrameLocalForRep(payload_rep);
                     const prefix = try self.addFrameLocal(.str);
                     const rendered = try self.addFrameLocal(.str);
@@ -34336,7 +34738,7 @@ const ProcBodyBuilder = struct {
                     const suffix = try self.addFrameLocal(.str);
 
                     var continuation = try self.assignStrConcat(target, with_value, suffix, next);
-                    continuation = try self.assignStringBytesLiteral(suffix, ")", continuation);
+                    continuation = try self.assignStringBytesLiteral(suffix, inspect_text.box_close, continuation);
                     continuation = try self.assignStrConcat(with_value, prefix, rendered, continuation);
                     return try self.pushInspectFrameFirst(
                         frames,
@@ -34345,31 +34747,20 @@ const ProcBodyBuilder = struct {
                     );
                 },
                 .primitive => |primitive| return try self.lowerPrimitiveInspectLocalsInto(target, source, rep_id, primitive, next),
-                .bool_tag_union => return try self.lowerBoolInspectLocalsInto(target, source, next),
-                .empty_record => return try self.assignStringBytesLiteral(target, "{}", next),
-                .empty_tag_union => return try self.parent.result.store.addCFStmt(.{ .crash = .{
-                    .msg = .{ .literal = try self.parent.result.store.insertString("uninhabited value reached Str.inspect") },
+                .bool => return try self.lowerBoolInspectLocalsInto(target, source, next),
+                .uninhabited => return try self.parent.result.store.addCFStmt(.{ .crash = .{
+                    .msg = .{ .literal = try self.parent.result.store.insertString(inspect_text.uninhabited_crash) },
                 } }, self.derivedOrigin()),
-                .alias => {
-                    request.rep_id = self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep;
+                .transparent => |backing_rep| {
+                    request.rep_id = backing_rep;
                     continue;
                 },
-                .nominal => |kind| switch (kind) {
-                    .transparent => {
-                        if (try self.lowerToInspectMethodInto(target, source, rep_id, next)) |method_call| return method_call;
-                        return try self.beginNominalInspect(frames, request);
-                    },
-                    .opaque_nominal => return try self.lowerToInspectMethodInto(target, source, rep_id, next) orelse
-                        try self.assignStringBytesLiteral(target, "<opaque>", next),
-                    .builtin_other => return try self.beginNominalInspect(frames, request),
-                },
+                .override => |worker| return try self.lowerToInspectWorkerInto(target, source, worker, next),
+                .backing => return try self.beginNominalInspect(frames, request),
                 .record => return try self.beginRecordInspect(frames, request),
                 .tuple => return try self.beginTupleInspect(frames, request),
-                .tag_union => {
-                    if (rep.presence_slot_present_discriminant != null) return try self.beginPresenceSlotInspect(frames, request);
-                    if (self.tagUnionRepHasExtension(rep)) return try self.lowerDescriptorInspectLocalsInto(target, source, rep_id, next);
-                    return try self.beginTagUnionInspect(frames, request);
-                },
+                .tag_union => return try self.beginTagUnionInspect(frames, request),
+                .presence_slot => return try self.beginPresenceSlotInspect(frames, request),
             }
         }
     }
@@ -34461,62 +34852,18 @@ const ProcBodyBuilder = struct {
     }
 
     fn beginRecordInspect(self: *ProcBodyBuilder, frames: *std.ArrayList(InspectFrame), request: InspectRequest) Allocator.Error!?LIR.CFStmtId {
-        const rep = self.parent.plan.representations.items[@backingInt(request.rep_id)];
-        const children = self.parent.plan.childSlice(rep.children);
-        const field_count = recordEqualityFieldCount(children);
-        if (field_count == 0) return try self.assignStringBytesLiteral(request.target, "{}", request.next);
-
         var parts = std.ArrayList(InspectPart).empty;
         defer parts.deinit(self.parent.allocator);
-        try parts.append(self.parent.allocator, .{ .literal = "{ " });
-
-        var field_index: u32 = 0;
-        for (children) |child| {
-            switch (child.role) {
-                .record_field => |label| {
-                    if (field_index != 0) try parts.append(self.parent.allocator, .{ .literal = ", " });
-                    try parts.append(self.parent.allocator, .{ .literal = self.module.canonical_names.?.recordFieldLabelText(label) });
-                    try parts.append(self.parent.allocator, .{ .literal = ": " });
-                    try parts.append(self.parent.allocator, .{ .field = .{
-                        .source = request.source,
-                        .field_index = field_index,
-                        .rep = child.rep,
-                    } });
-                    field_index += 1;
-                },
-                .record_ext => self.requireEmptyRecordExtension(child.rep),
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("record inspect representation had a non-record child role"),
-            }
-        }
-        try parts.append(self.parent.allocator, .{ .literal = " }" });
+        var sink = InspectPartSink{ .builder = self, .parts = &parts, .source = request.source, .rep_id = request.rep_id, .kind = .{ .record = .{} } };
+        try InspectRules.recordParts(.{ .builder = self }, request.rep_id, &sink);
         return try self.pushInspectFrame(frames, .{ .parts = try self.beginInspectParts(request.target, parts.items, request.next) });
     }
 
     fn beginTupleInspect(self: *ProcBodyBuilder, frames: *std.ArrayList(InspectFrame), request: InspectRequest) Allocator.Error!?LIR.CFStmtId {
-        const rep = self.parent.plan.representations.items[@backingInt(request.rep_id)];
-        const children = self.parent.plan.childSlice(rep.children);
-        if (children.len == 0) return try self.assignStringBytesLiteral(request.target, "()", request.next);
-
         var parts = std.ArrayList(InspectPart).empty;
         defer parts.deinit(self.parent.allocator);
-        try parts.append(self.parent.allocator, .{ .literal = "(" });
-        for (children, 0..) |child, ordinal| {
-            switch (child.role) {
-                .tuple_elem => |index| {
-                    if (ordinal != 0) try parts.append(self.parent.allocator, .{ .literal = ", " });
-                    if (index > std.math.maxInt(u32)) {
-                        boxyLowerInvariant("tuple inspect element index exceeded LIR field index range");
-                    }
-                    try parts.append(self.parent.allocator, .{ .field = .{
-                        .source = request.source,
-                        .field_index = @intCast(index),
-                        .rep = child.rep,
-                    } });
-                },
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tuple inspect representation had a non-tuple child role"),
-            }
-        }
-        try parts.append(self.parent.allocator, .{ .literal = ")" });
+        var sink = InspectPartSink{ .builder = self, .parts = &parts, .source = request.source, .rep_id = request.rep_id, .kind = .tuple };
+        try InspectRules.tupleParts(.{ .builder = self }, request.rep_id, &sink);
         return try self.pushInspectFrame(frames, .{ .parts = try self.beginInspectParts(request.target, parts.items, request.next) });
     }
 
@@ -34526,53 +34873,25 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
         source: LIR.LocalId,
-        variant: Plan.TagVariant,
+        rep_id: Plan.TypeRepId,
         variant_index: u32,
         next: LIR.CFStmtId,
     ) Allocator.Error!union(enum) { done: LIR.CFStmtId, parts: InspectPartsState } {
-        const payloads = self.parent.plan.childSlice(variant.payloads);
-        if (payloads.len == 0) {
-            return .{ .done = try self.assignStringBytesLiteral(target, self.tagVariantNameText(variant), next) };
-        }
-
         var parts = std.ArrayList(InspectPart).empty;
         defer parts.deinit(self.parent.allocator);
-        try parts.append(self.parent.allocator, .{ .literal = self.tagVariantNameText(variant) });
-        try parts.append(self.parent.allocator, .{ .literal = "(" });
-        for (payloads, 0..) |child, index| {
-            switch (child.role) {
-                .tag_payload => |payload| {
-                    if (payload.tag != variant.name or payload.index != index) {
-                        boxyLowerInvariant("tag inspect payload span did not match its payload child roles");
-                    }
-                },
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tag inspect variant payload span included a non-payload child"),
-            }
-            if (index != 0) try parts.append(self.parent.allocator, .{ .literal = ", " });
-            if (index > std.math.maxInt(u32)) {
-                boxyLowerInvariant("tag inspect payload index exceeded LIR payload index range");
-            }
-            try parts.append(self.parent.allocator, .{ .tag_payload = .{
-                .source = source,
-                .variant_index = variant_index,
-                .payload_index = if (payloads.len == 1) null else @as(u32, @intCast(index)),
-                .rep = child.rep,
-            } });
+        var sink = InspectPartSink{ .builder = self, .parts = &parts, .source = source, .rep_id = rep_id, .kind = .{ .variant = variant_index } };
+        try InspectRules.variantParts(.{ .builder = self }, rep_id, variant_index, &sink);
+        if (parts.items.len == 1) {
+            return .{ .done = try self.assignStringBytesLiteral(target, parts.items[0].literal, next) };
         }
-        try parts.append(self.parent.allocator, .{ .literal = ")" });
         return .{ .parts = try self.beginInspectParts(target, parts.items, next) };
     }
 
     fn beginTagUnionInspect(self: *ProcBodyBuilder, frames: *std.ArrayList(InspectFrame), request: InspectRequest) Allocator.Error!?LIR.CFStmtId {
         const rep = self.parent.plan.representations.items[@backingInt(request.rep_id)];
         const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
-        if (variants.len == 0) {
-            return try self.parent.result.store.addCFStmt(.{ .crash = .{
-                .msg = .{ .literal = try self.parent.result.store.insertString("uninhabited value reached Str.inspect") },
-            } }, self.derivedOrigin());
-        }
         if (variants.len == 1 and self.isZstLocal(request.source)) {
-            return switch (try self.beginTagInspectVariant(request.target, request.source, variants[0], 0, request.next)) {
+            return switch (try self.beginTagInspectVariant(request.target, request.source, request.rep_id, 0, request.next)) {
                 .done => |stmt| stmt,
                 .parts => |parts| try self.pushInspectFrame(frames, .{ .parts = parts }),
             };
@@ -34725,7 +35044,7 @@ const ProcBodyBuilder = struct {
                     if (tag.index > std.math.maxInt(u32)) {
                         boxyLowerInvariant("tag inspect variant index exceeded LIR variant range");
                     }
-                    switch (try self.beginTagInspectVariant(request.target, request.source, variants[tag.index], @intCast(tag.index), try self.joinJump(tag.done))) {
+                    switch (try self.beginTagInspectVariant(request.target, request.source, request.rep_id, @intCast(tag.index), try self.joinJump(tag.done))) {
                         .done => |stmt| {
                             tag.branches[tag.index] = .{ .value = @intCast(tag.index), .body = stmt };
                             tag.index += 1;
@@ -34761,7 +35080,7 @@ const ProcBodyBuilder = struct {
                         .next = present_body,
                     } }, self.derivedOrigin());
                 }
-                const missing_body = try self.assignStringBytesLiteral(request.target, "<missing>", try self.joinJump(presence.done));
+                const missing_body = try self.assignStringBytesLiteral(request.target, inspect_text.missing, try self.joinJump(presence.done));
                 const branches = [_]LIR.CFSwitchBranch{
                     .{ .value = presence.missing_discriminant, .body = missing_body },
                     .{ .value = presence.present_discriminant, .body = present_body },
@@ -34789,7 +35108,7 @@ const ProcBodyBuilder = struct {
                     .box_unbox,
                     child.?,
                 );
-                continuation = try self.assignStringBytesLiteral(box.prefix, "Box(", continuation);
+                continuation = try self.assignStringBytesLiteral(box.prefix, inspect_text.box_open, continuation);
                 return self.finishInspectFrame(frames, continuation);
             },
             .list => |list| {
@@ -34800,8 +35119,8 @@ const ProcBodyBuilder = struct {
                 }
                 continuation = try self.assignStrConcat(list.with_sep, list.out, list.sep, continuation);
 
-                const empty_sep = try self.assignStringBytesLiteral(list.sep, "", continuation);
-                const comma_sep = try self.assignStringBytesLiteral(list.sep, ", ", continuation);
+                const empty_sep = try self.assignStringBytesLiteral(list.sep, InspectRules.listSeparator(0), continuation);
+                const comma_sep = try self.assignStringBytesLiteral(list.sep, InspectRules.listSeparator(1), continuation);
                 const sep_switch = try self.boolSwitchNoContinuation(list.is_first, empty_sep, comma_sep);
                 const compare_first = try self.assignBinaryLowLevel(list.is_first, .num_is_eq, list.index, list.zero, sep_switch);
                 const step = try self.assignIntLiteral(list.zero, 0, compare_first);
@@ -34812,7 +35131,7 @@ const ProcBodyBuilder = struct {
                 var initial_jump = try self.parent.result.store.addCFStmt(.{ .jump = .{ .target = list.join_id } }, self.derivedOrigin());
                 initial_jump = try self.setLocalInitializeJoinParam(list.out, list.initial_out, initial_jump);
                 initial_jump = try self.setLocalInitializeJoinParam(list.index, list.zero_index, initial_jump);
-                initial_jump = try self.assignStringBytesLiteral(list.initial_out, "[", initial_jump);
+                initial_jump = try self.assignStringBytesLiteral(list.initial_out, inspect_text.list_open, initial_jump);
                 initial_jump = try self.assignIntLiteral(list.zero_index, 0, initial_jump);
                 initial_jump = try self.assignUnaryLowLevel(list.len, .list_len, request.source, initial_jump);
 
@@ -34970,8 +35289,8 @@ const ProcBodyBuilder = struct {
         source: LIR.LocalId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const false_body = try self.assignStringBytesLiteral(target, "False", next);
-        const true_body = try self.assignStringBytesLiteral(target, "True", next);
+        const false_body = try self.assignStringBytesLiteral(target, InspectRules.boolText(false), next);
+        const true_body = try self.assignStringBytesLiteral(target, InspectRules.boolText(true), next);
         const discriminant = try self.addFrameLocal(.u32);
         const branches = [_]LIR.CFSwitchBranch{.{ .value = Common.bool_true_discriminant, .body = true_body }};
         const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
@@ -34995,7 +35314,7 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const close = try self.addFrameLocal(.str);
         const concat = try self.assignStrConcat(target, out, close, next);
-        return try self.assignStringBytesLiteral(close, "]", concat);
+        return try self.assignStringBytesLiteral(close, inspect_text.list_close, concat);
     }
 
     fn concatStringLocalsInto(
@@ -35046,154 +35365,83 @@ const ProcBodyBuilder = struct {
 
     // Structural equality //
     //
-    // Equality over a representation compares its components, and components
-    // follow type nesting, so each comparison still waiting on a component's
-    // comparison is a frame on one heap-backed stack. Comparisons are built
-    // from their continuation backward; frames allocate locals, join points,
-    // and statements in the order a direct recursive build would.
+    // The shared structural-equality walker owns what comparing a
+    // representation means: the order components are compared in, the
+    // short-circuit on the first unequal one, and how tag discriminants and
+    // payloads are compared. This context decides how each representation
+    // is compared and emits the reads and joins.
 
-    const EqRequest = struct {
-        target: LIR.LocalId,
-        lhs: LIR.LocalId,
-        rhs: LIR.LocalId,
-        rep_id: Plan.TypeRepId,
-        negated: bool,
-        next: LIR.CFStmtId,
-    };
+    const EqWalk = value_semantics.structural.EqLower(EqLowering);
+    const EqRequest = EqWalk.Request;
 
-    const EqStep = union(enum) {
-        /// The frame needs this component comparison next.
-        request: EqRequest,
-        /// The frame finished with this statement and was popped.
-        done: LIR.CFStmtId,
-    };
-
-    /// A comparison waiting on its components' comparisons.
-    const EqFrame = struct {
-        /// Whether the frame's last requested comparison is still due.
-        awaiting: bool = false,
-        state: union(enum) {
-            /// Compare at another representation, then convert both
-            /// operands into it.
-            convert: struct { request: EqRequest, lhs_actual: LIR.LocalId, rhs_actual: LIR.LocalId, actual: Plan.TypeRepId },
-            /// Compare the box payloads, then unbox both operands.
-            unbox: struct { request: EqRequest, lhs_payload: LIR.LocalId, rhs_payload: LIR.LocalId, payload_rep: Plan.TypeRepId },
-            nominal: struct {
-                request: EqRequest,
-                scope: NominalBackingFormalScope,
-                backing_rep: Plan.TypeRepId,
-                /// The backing operands, when the nominal's declared fields
-                /// store differently from its backing.
-                backing: ?struct { lhs: LIR.LocalId, rhs: LIR.LocalId } = null,
-            },
-            /// A record's fields or a tuple's elements, last first.
-            fields: struct {
-                request: EqRequest,
-                kind: enum { record, tuple },
-                done: LIR.JoinPointId,
-                current: LIR.CFStmtId,
-                failed: LIR.CFStmtId,
-                remaining: usize,
-                field_index: u32,
-                pending: struct { lhs_field: LIR.LocalId, rhs_field: LIR.LocalId, field_index: u32 } = undefined,
-            },
-            tag: *EqTagState,
+    /// A comparison delegated to another representation of the operands.
+    const EqWrap = union(enum) {
+        /// Compare at another representation, then convert both operands
+        /// into it.
+        convert: struct { lhs_actual: LIR.LocalId, rhs_actual: LIR.LocalId, actual: Plan.TypeRepId },
+        /// Compare the box payloads, then unbox both operands.
+        unbox: struct { lhs_payload: LIR.LocalId, rhs_payload: LIR.LocalId, payload_rep: Plan.TypeRepId },
+        nominal: struct {
+            scope: NominalBackingFormalScope,
+            backing_rep: Plan.TypeRepId,
+            /// The backing operands, when the nominal's declared fields
+            /// store differently from its backing.
+            backing: ?struct { lhs: LIR.LocalId, rhs: LIR.LocalId } = null,
         },
     };
 
-    /// A tag union comparison: one switch branch per variant, each comparing
-    /// its payloads last first.
-    const EqTagState = struct {
-        request: EqRequest,
-        done: LIR.JoinPointId,
-        success: LIR.CFStmtId,
-        failed: LIR.CFStmtId,
-        lhs_disc: LIR.LocalId,
-        rhs_disc: LIR.LocalId,
-        same_disc: LIR.LocalId,
-        branches: []LIR.CFSwitchBranch,
-        variant: usize = 0,
-        /// The current variant's payloads still to compare.
-        remaining: usize = 0,
-        started: bool = false,
-        current: LIR.CFStmtId = undefined,
-        source_has_payload_desc: bool = false,
-        pending: struct { child: Plan.RepChild, lhs_payload: ExtractedTagPayloadLocal, rhs_payload: ExtractedTagPayloadLocal, index: usize } = undefined,
-    };
+    const EqLowering = struct {
+        builder: *ProcBodyBuilder,
 
-    fn lowerEqRepLocalsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        lhs: LIR.LocalId,
-        rhs: LIR.LocalId,
-        rep_id: Plan.TypeRepId,
-        negated: bool,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const allocator = self.parent.allocator;
-        var frames: std.ArrayList(EqFrame) = .empty;
-        defer {
-            var index = frames.items.len;
-            while (index > 0) {
-                index -= 1;
-                self.releaseEqFrame(&frames.items[index]);
-            }
-            frames.deinit(allocator);
-        }
-        var value = try self.beginEq(&frames, .{ .target = target, .lhs = lhs, .rhs = rhs, .rep_id = rep_id, .negated = negated, .next = next });
-        while (frames.items.len != 0) {
-            switch (try self.stepEqFrame(&frames, value)) {
-                .request => |request| value = try self.beginEq(&frames, request),
-                .done => |stmt| value = stmt,
-            }
-        }
-        return value.?;
-    }
+        pub const Ty = Plan.TypeRepId;
+        pub const Local = LIR.LocalId;
+        pub const Stmt = LIR.CFStmtId;
+        pub const WalkError = Allocator.Error;
+        pub const Wrap = EqWrap;
+        pub const TagUnion = Plan.TypeRepId;
+        pub const SwitchBranch = LIR.CFSwitchBranch;
+        /// Both ends write the result and jump to `done`, which continues.
+        pub const Outcome = struct { equal: LIR.CFStmtId, unequal: LIR.CFStmtId, done: LIR.JoinPointId };
+        pub const PayloadOperands = struct {
+            lhs: LIR.LocalId,
+            rhs: LIR.LocalId,
+            ty: Plan.TypeRepId,
+            lhs_payload: ExtractedTagPayloadLocal,
+            rhs_payload: ExtractedTagPayloadLocal,
+        };
 
-    /// Free what an unfinished frame owns and leave the scope it holds, as
-    /// the direct build's defers would.
-    fn releaseEqFrame(self: *ProcBodyBuilder, frame: *EqFrame) void {
-        switch (frame.state) {
-            .convert, .unbox, .fields => {},
-            .nominal => |nominal| self.dropNominalBackingFormalScope(nominal.scope),
-            .tag => |state| {
-                self.parent.allocator.free(state.branches);
-                self.parent.allocator.destroy(state);
-            },
+        pub fn allocator(ctx: EqLowering) Allocator {
+            return ctx.builder.parent.allocator;
         }
-    }
 
-    /// The comparison of `request` when it needs no component comparison;
-    /// otherwise null, with the frame that builds it pushed.
-    fn beginEq(self: *ProcBodyBuilder, frames: *std.ArrayList(EqFrame), root: EqRequest) Allocator.Error!?LIR.CFStmtId {
-        var request = root;
-        while (true) {
+        pub fn eqStep(ctx: EqLowering, request: EqRequest) Allocator.Error!EqWalk.Step {
+            const self = ctx.builder;
             const target = request.target;
             const lhs = request.lhs;
             const rhs = request.rhs;
-            const rep_id = request.rep_id;
+            const rep_id = request.ty;
             const negated = request.negated;
             const next = request.next;
             switch (try self.derivedStep(.equality, rep_id)) {
                 .expand => {},
-                .call => |index| return try self.lowerDerivedEqCallInto(target, lhs, rhs, index, negated, next),
-                .scheme_dictionary => |requirement| return try self.lowerDerivedEqDictionaryCallInto(target, lhs, rhs, rep_id, requirement, negated, next),
-                .descriptor => return try self.lowerDescriptorEqLocalsInto(target, lhs, rhs, rep_id, negated, next),
-                .checked_error => return try self.lowerCheckedErrorDispatchInto("method dispatch failed to check"),
+                .call => |index| return .{ .done = try self.lowerDerivedEqCallInto(target, lhs, rhs, index, negated, next) },
+                .scheme_dictionary => |requirement| return .{ .done = try self.lowerDerivedEqDictionaryCallInto(target, lhs, rhs, rep_id, requirement, negated, next) },
+                .descriptor => return .{ .done = try self.lowerDescriptorEqLocalsInto(target, lhs, rhs, rep_id, negated, next) },
+                .checked_error => return .{ .done = try self.lowerCheckedErrorDispatchInto("method dispatch failed to check") },
                 .helper => {
-                    if (!negated) return try self.lowerDerivedHelperCallInto(.equality, target, lhs, rhs, rep_id, next);
+                    if (!negated) return .{ .done = try self.lowerDerivedHelperCallInto(.equality, target, lhs, rhs, rep_id, next) };
                     const raw = try self.addFrameLocal(.bool);
-                    return try self.lowerDerivedHelperCallInto(.equality, raw, lhs, rhs, rep_id, try self.negateBoolInto(target, raw, next));
+                    return .{ .done = try self.lowerDerivedHelperCallInto(.equality, raw, lhs, rhs, rep_id, try self.negateBoolInto(target, raw, next)) };
                 },
                 .convert => |actual| {
                     const lhs_actual = try self.addFrameLocalForRep(actual);
                     const rhs_actual = try self.addFrameLocalForRep(actual);
-                    return try self.pushEqFrame(frames, .{ .convert = .{ .request = request, .lhs_actual = lhs_actual, .rhs_actual = rhs_actual, .actual = actual } });
+                    return .{ .wrap = .{ .convert = .{ .lhs_actual = lhs_actual, .rhs_actual = rhs_actual, .actual = actual } } };
                 },
                 .unbox => |payload_rep| {
                     const lhs_payload = try self.addFrameLocalForRep(payload_rep);
                     const rhs_payload = try self.addFrameLocalForRep(payload_rep);
-                    return try self.pushEqFrame(frames, .{ .unbox = .{ .request = request, .lhs_payload = lhs_payload, .rhs_payload = rhs_payload, .payload_rep = payload_rep } });
+                    return .{ .wrap = .{ .unbox = .{ .lhs_payload = lhs_payload, .rhs_payload = rhs_payload, .payload_rep = payload_rep } } };
                 },
             }
             const rep = self.parent.plan.representations.items[@backingInt(rep_id)];
@@ -35208,326 +35456,282 @@ const ProcBodyBuilder = struct {
                 .list,
                 .box,
                 => boxyLowerInvariant("derived equality expanded a component its step dispatches"),
-                .primitive => |primitive| return try self.lowerPrimitiveEqLocalsInto(target, lhs, rhs, primitive, negated, next),
-                .bool_tag_union => return try self.lowerBoolEqLocalsInto(target, lhs, rhs, negated, next),
+                .primitive => |primitive| return .{ .done = try self.lowerPrimitiveEqLocalsInto(target, lhs, rhs, primitive, negated, next) },
+                .bool_tag_union => return .{ .done = try self.lowerBoolEqLocalsInto(target, lhs, rhs, negated, next) },
                 .empty_record,
                 .empty_tag_union,
-                => return try self.assignBoolLiteral(target, !negated, next),
-                .alias => {
-                    request.rep_id = self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep;
-                    continue;
-                },
+                => return .always_equal,
+                .alias => return .{ .retarget = self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep },
                 .nominal => {
                     const scope = try self.enterNominalBackingFormalScope(rep_id);
                     errdefer self.dropNominalBackingFormalScope(scope);
                     const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
-                    const backing: @FieldType(@FieldType(@FieldType(EqFrame, "state"), "nominal"), "backing") = if (rep.declared_fields.len == 0) null else backing: {
+                    const backing: @FieldType(@FieldType(EqWrap, "nominal"), "backing") = if (rep.declared_fields.len == 0) null else backing: {
                         const backing_layout = self.workerRuntimeLayoutForRep(backing_rep).layoutIdx();
                         const lhs_backing = try self.addFrameLocal(backing_layout);
                         const rhs_backing = try self.addFrameLocal(backing_layout);
                         break :backing .{ .lhs = lhs_backing, .rhs = rhs_backing };
                     };
-                    try frames.append(self.parent.allocator, .{ .state = .{ .nominal = .{
-                        .request = request,
-                        .scope = scope,
-                        .backing_rep = backing_rep,
-                        .backing = backing,
-                    } } });
-                    return null;
+                    return .{ .wrap = .{ .nominal = .{ .scope = scope, .backing_rep = backing_rep, .backing = backing } } };
                 },
-                .record, .tuple => {
-                    const done = self.freshJoinPointId();
-                    const current = try self.assignBoolLiteral(target, !negated, try self.joinJump(done));
-                    const failed = try self.assignBoolLiteral(target, negated, try self.joinJump(done));
-                    const children = self.parent.plan.childSlice(rep.children);
-                    return try self.pushEqFrame(frames, .{ .fields = .{
-                        .request = request,
-                        .kind = if (rep.kind == .record) .record else .tuple,
-                        .done = done,
-                        .current = current,
-                        .failed = failed,
-                        .remaining = children.len,
-                        .field_index = if (rep.kind == .record) recordEqualityFieldCount(children) else 0,
-                    } });
+                .record => return .{ .components = try self.recordComponents(self.parent.plan.childSlice(rep.children)) },
+                .tuple => return .{ .components = try self.tupleComponents(self.parent.plan.childSlice(rep.children)) },
+                .tag_union => return .{ .tag_union = rep_id },
+            }
+        }
+
+        pub fn wrapRequest(_: EqLowering, wrap: EqWrap, request: EqRequest) EqRequest {
+            var inner = request;
+            switch (wrap) {
+                .convert => |convert| {
+                    inner.lhs = convert.lhs_actual;
+                    inner.rhs = convert.rhs_actual;
+                    inner.ty = convert.actual;
                 },
-                .tag_union => {
-                    if (self.isZstLocal(lhs) and self.isZstLocal(rhs)) {
-                        return try self.assignBoolLiteral(target, !negated, next);
+                .unbox => |unbox| {
+                    inner.lhs = unbox.lhs_payload;
+                    inner.rhs = unbox.rhs_payload;
+                    inner.ty = unbox.payload_rep;
+                },
+                .nominal => |nominal| {
+                    if (nominal.backing) |operands| {
+                        inner.lhs = operands.lhs;
+                        inner.rhs = operands.rhs;
                     }
-                    const done = self.freshJoinPointId();
-                    const success = try self.assignBoolLiteral(target, !negated, try self.joinJump(done));
-                    const failed = try self.assignBoolLiteral(target, negated, try self.joinJump(done));
-                    const lhs_disc = try self.addFrameLocal(.u32);
-                    const rhs_disc = try self.addFrameLocal(.u32);
-                    const same_disc = try self.addFrameLocal(.bool);
-                    const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
-                    const state = try self.parent.allocator.create(EqTagState);
-                    errdefer self.parent.allocator.destroy(state);
-                    const branches = try self.parent.allocator.alloc(LIR.CFSwitchBranch, variants.len);
-                    state.* = .{
-                        .request = request,
-                        .done = done,
-                        .success = success,
-                        .failed = failed,
-                        .lhs_disc = lhs_disc,
-                        .rhs_disc = rhs_disc,
-                        .same_disc = same_disc,
-                        .branches = branches,
-                    };
-                    return try self.pushEqFrame(frames, .{ .tag = state });
+                    inner.ty = nominal.backing_rep;
+                },
+            }
+            return inner;
+        }
+
+        pub fn unwrap(ctx: EqLowering, wrap: EqWrap, request: EqRequest, compared: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            const self = ctx.builder;
+            switch (wrap) {
+                .convert => |convert| {
+                    const after_rhs = try self.assignRepresentationBoundary(convert.rhs_actual, request.rhs, convert.actual, request.ty, compared);
+                    return try self.assignRepresentationBoundary(convert.lhs_actual, request.lhs, convert.actual, request.ty, after_rhs);
+                },
+                .unbox => |unbox| {
+                    const after_rhs = try self.assignBoxBoundary(unbox.rhs_payload, request.rhs, unbox.payload_rep, .box_unbox, compared);
+                    return try self.assignBoxBoundary(unbox.lhs_payload, request.lhs, unbox.payload_rep, .box_unbox, after_rhs);
+                },
+                .nominal => |nominal| {
+                    const lowered = if (nominal.backing) |operands| lowered: {
+                        const after_rhs = try self.assignRepresentationBoundary(operands.rhs, request.rhs, nominal.backing_rep, request.ty, compared);
+                        break :lowered try self.assignRepresentationBoundary(operands.lhs, request.lhs, nominal.backing_rep, request.ty, after_rhs);
+                    } else compared;
+                    return try self.leaveNominalBackingFormalScope(nominal.scope, lowered);
                 },
             }
         }
-    }
 
-    fn pushEqFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(EqFrame), state: @FieldType(EqFrame, "state")) Allocator.Error!?LIR.CFStmtId {
-        var frame: EqFrame = .{ .state = state };
-        frames.append(self.parent.allocator, frame) catch |err| {
-            self.releaseEqFrame(&frame);
-            return err;
-        };
-        return null;
-    }
-
-    fn finishEqFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(EqFrame), stmt: LIR.CFStmtId) EqStep {
-        var frame = frames.pop().?;
-        switch (frame.state) {
-            // A finished nominal comparison has left its scope already.
-            .nominal => {},
-            .convert, .unbox, .fields, .tag => self.releaseEqFrame(&frame),
-        }
-        return .{ .done = stmt };
-    }
-
-    fn stepEqFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(EqFrame), delivered: ?LIR.CFStmtId) Allocator.Error!EqStep {
-        const frame = &frames.items[frames.items.len - 1];
-        const child: ?LIR.CFStmtId = if (frame.awaiting)
-            delivered orelse boxyLowerInvariant("boxy equality frame resumed without its component comparison")
-        else
-            null;
-        frame.awaiting = false;
-        switch (frame.state) {
-            .convert => |convert| {
-                const request = convert.request;
-                const continuation = child orelse {
-                    frame.awaiting = true;
-                    return .{ .request = .{ .target = request.target, .lhs = convert.lhs_actual, .rhs = convert.rhs_actual, .rep_id = convert.actual, .negated = request.negated, .next = request.next } };
-                };
-                const after_rhs = try self.assignRepresentationBoundary(convert.rhs_actual, request.rhs, convert.actual, request.rep_id, continuation);
-                return self.finishEqFrame(frames, try self.assignRepresentationBoundary(convert.lhs_actual, request.lhs, convert.actual, request.rep_id, after_rhs));
-            },
-            .unbox => |unbox| {
-                const request = unbox.request;
-                const continuation = child orelse {
-                    frame.awaiting = true;
-                    return .{ .request = .{ .target = request.target, .lhs = unbox.lhs_payload, .rhs = unbox.rhs_payload, .rep_id = unbox.payload_rep, .negated = request.negated, .next = request.next } };
-                };
-                const after_rhs = try self.assignBoxBoundary(unbox.rhs_payload, request.rhs, unbox.payload_rep, .box_unbox, continuation);
-                return self.finishEqFrame(frames, try self.assignBoxBoundary(unbox.lhs_payload, request.lhs, unbox.payload_rep, .box_unbox, after_rhs));
-            },
-            .nominal => |nominal| {
-                const request = nominal.request;
-                const lowered_child = child orelse {
-                    frame.awaiting = true;
-                    const operands = nominal.backing orelse return .{ .request = .{ .target = request.target, .lhs = request.lhs, .rhs = request.rhs, .rep_id = nominal.backing_rep, .negated = request.negated, .next = request.next } };
-                    return .{ .request = .{ .target = request.target, .lhs = operands.lhs, .rhs = operands.rhs, .rep_id = nominal.backing_rep, .negated = request.negated, .next = request.next } };
-                };
-                const lowered = if (nominal.backing) |operands| lowered: {
-                    const after_rhs = try self.assignRepresentationBoundary(operands.rhs, request.rhs, nominal.backing_rep, request.rep_id, lowered_child);
-                    break :lowered try self.assignRepresentationBoundary(operands.lhs, request.lhs, nominal.backing_rep, request.rep_id, after_rhs);
-                } else lowered_child;
-                const stmt = try self.leaveNominalBackingFormalScope(nominal.scope, lowered);
-                return self.finishEqFrame(frames, stmt);
-            },
-            .fields => |*fields| {
-                const request = fields.request;
-                if (child) |compare| {
-                    var current = compare;
-                    const pending = fields.pending;
-                    if (!self.isZstLocal(pending.rhs_field)) {
-                        current = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-                            .target = pending.rhs_field,
-                            .op = .{ .field = .{
-                                .source = request.rhs,
-                                .field_idx = pending.field_index,
-                            } },
-                            .next = current,
-                        } }, self.derivedOrigin());
-                    }
-                    if (!self.isZstLocal(pending.lhs_field)) {
-                        current = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-                            .target = pending.lhs_field,
-                            .op = .{ .field = .{
-                                .source = request.lhs,
-                                .field_idx = pending.field_index,
-                            } },
-                            .next = current,
-                        } }, self.derivedOrigin());
-                    }
-                    fields.current = current;
-                }
-                const children = self.parent.plan.childSlice(self.parent.plan.representations.items[@backingInt(request.rep_id)].children);
-                while (fields.remaining > 0) {
-                    fields.remaining -= 1;
-                    const field = children[fields.remaining];
-                    const field_index: u32 = switch (fields.kind) {
-                        .record => switch (field.role) {
-                            .record_field => field_index: {
-                                fields.field_index -= 1;
-                                break :field_index fields.field_index;
-                            },
-                            .record_ext => {
-                                self.requireEmptyRecordExtension(field.rep);
-                                continue;
-                            },
-                            .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("record equality representation had a non-record child role"),
-                        },
-                        .tuple => switch (field.role) {
-                            .tuple_elem => |index| field_index: {
-                                if (index > std.math.maxInt(u32)) {
-                                    boxyLowerInvariant("tuple equality element index exceeded LIR field index range");
-                                }
-                                break :field_index @intCast(index);
-                            },
-                            .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tuple equality representation had a non-tuple child role"),
-                        },
-                    };
-                    const lhs_field = try self.addFrameLocalForRep(field.rep);
-                    const rhs_field = try self.addFrameLocalForRep(field.rep);
-                    const eq = try self.addFrameLocal(.bool);
-                    const on_compared = try self.boolSwitchNoContinuation(eq, fields.current, fields.failed);
-                    fields.pending = .{ .lhs_field = lhs_field, .rhs_field = rhs_field, .field_index = field_index };
-                    frame.awaiting = true;
-                    return .{ .request = .{ .target = eq, .lhs = lhs_field, .rhs = rhs_field, .rep_id = field.rep, .negated = false, .next = on_compared } };
-                }
-                return self.finishEqFrame(frames, try self.derivedResultJoin(fields.done, request.target, request.next, fields.current));
-            },
-            .tag => |state| {
-                if (child) |compare| try self.finishEqTagPayload(state, compare);
-                if (try self.nextEqTagPayload(state)) |request| {
-                    frame.awaiting = true;
-                    return .{ .request = request };
-                }
-                return self.finishEqFrame(frames, try self.finishEqTag(state));
-            },
-        }
-    }
-
-    /// The next payload comparison of a tag union comparison, or null once
-    /// every variant's branch is built.
-    fn nextEqTagPayload(self: *ProcBodyBuilder, state: *EqTagState) Allocator.Error!?EqRequest {
-        const request = state.request;
-        const rep = self.parent.plan.representations.items[@backingInt(request.rep_id)];
-        const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
-        while (state.variant < variants.len) {
-            const variant = variants[state.variant];
-            const payloads = self.parent.plan.childSlice(variant.payloads);
-            if (!state.started) {
-                if (state.variant > std.math.maxInt(u32)) {
-                    boxyLowerInvariant("tag-union equality variant index exceeded LIR variant range");
-                }
-                state.started = true;
-                state.current = state.success;
-                state.remaining = payloads.len;
-                state.source_has_payload_desc = rep.descriptor != null or
-                    self.parent.result.store.getLocal(request.lhs).boxy_desc != null or
-                    self.parent.result.store.getLocal(request.rhs).boxy_desc != null;
+        pub fn releaseWrap(ctx: EqLowering, wrap: EqWrap) void {
+            switch (wrap) {
+                .convert, .unbox => {},
+                .nominal => |nominal| ctx.builder.dropNominalBackingFormalScope(nominal.scope),
             }
-            if (state.remaining > 0) {
-                state.remaining -= 1;
-                const i = state.remaining;
-                const payload_child = payloads[i];
-                switch (payload_child.role) {
-                    .tag_payload => |payload| {
-                        if (payload.tag != variant.name or payload.index != @as(u32, @intCast(i))) {
-                            boxyLowerInvariant("tag equality payload span did not match its payload child roles");
-                        }
-                    },
-                    .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tag equality variant payload span included a non-payload child"),
-                }
-                const lhs_payload = try self.addExtractedTagPayloadLocal(payload_child.rep, state.source_has_payload_desc);
-                const rhs_payload = try self.addExtractedTagPayloadLocal(payload_child.rep, state.source_has_payload_desc);
-                const eq = try self.addFrameLocal(.bool);
-                const on_compared = try self.boolSwitchNoContinuation(eq, state.current, state.failed);
-                state.pending = .{ .child = payload_child, .lhs_payload = lhs_payload, .rhs_payload = rhs_payload, .index = i };
-                return .{ .target = eq, .lhs = lhs_payload.local, .rhs = rhs_payload.local, .rep_id = payload_child.rep, .negated = false, .next = on_compared };
-            }
-            state.branches[state.variant] = .{
-                .value = @intCast(state.variant),
-                .body = state.current,
-            };
-            state.variant += 1;
-            state.started = false;
         }
-        return null;
+
+        pub fn outcome(ctx: EqLowering, request: EqRequest) Allocator.Error!Outcome {
+            const self = ctx.builder;
+            const done = self.freshJoinPointId();
+            const equal = try self.assignBoolLiteral(request.target, !request.negated, try self.joinJump(done));
+            const unequal = try self.assignBoolLiteral(request.target, request.negated, try self.joinJump(done));
+            return .{ .equal = equal, .unequal = unequal, .done = done };
+        }
+
+        pub fn finishOutcome(ctx: EqLowering, request: EqRequest, ends: Outcome, body: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.derivedResultJoin(ends.done, request.target, request.next, body);
+        }
+
+        pub fn assignBool(ctx: EqLowering, target: LIR.LocalId, value: bool, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.assignBoolLiteral(target, value, next);
+        }
+
+        pub fn boolLocal(ctx: EqLowering) Allocator.Error!LIR.LocalId {
+            return try ctx.builder.addFrameLocal(.bool);
+        }
+
+        pub fn componentLocal(ctx: EqLowering, rep_id: Plan.TypeRepId) Allocator.Error!LIR.LocalId {
+            return try ctx.builder.addFrameLocalForRep(rep_id);
+        }
+
+        pub fn isZstLocal(ctx: EqLowering, local: LIR.LocalId) bool {
+            return ctx.builder.isZstLocal(local);
+        }
+
+        pub fn readField(ctx: EqLowering, dest: LIR.LocalId, source: LIR.LocalId, field_index: u32, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.derivedFieldRead(dest, source, field_index, next);
+        }
+
+        pub fn boolSwitch(ctx: EqLowering, cond: LIR.LocalId, then: LIR.CFStmtId, otherwise: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.boolSwitchNoContinuation(cond, then, otherwise);
+        }
+
+        pub fn discriminantLocal(ctx: EqLowering) Allocator.Error!LIR.LocalId {
+            return try ctx.builder.addFrameLocal(.u32);
+        }
+
+        pub fn readDiscriminant(ctx: EqLowering, dest: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.derivedDiscriminantRead(dest, source, next);
+        }
+
+        pub fn discriminantsEqual(ctx: EqLowering, target: LIR.LocalId, lhs: LIR.LocalId, rhs: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = target,
+                .op = .num_is_eq,
+                .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
+                .args = try ctx.builder.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ lhs, rhs }),
+                .next = next,
+            } }, ctx.builder.derivedOrigin());
+        }
+
+        pub fn discriminantSwitch(ctx: EqLowering, cond: LIR.LocalId, branches: []const LIR.CFSwitchBranch, default: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.derivedDiscriminantSwitch(cond, branches, default);
+        }
+
+        pub fn variantCount(ctx: EqLowering, rep_id: Plan.TypeRepId) u32 {
+            return @intCast(ctx.builder.repTagVariants(rep_id).len);
+        }
+
+        pub fn payloadCount(ctx: EqLowering, rep_id: Plan.TypeRepId, variant: u32) u32 {
+            return @intCast(ctx.builder.parent.plan.childSlice(ctx.builder.repTagVariants(rep_id)[variant].payloads).len);
+        }
+
+        pub fn payloadOperands(ctx: EqLowering, rep_id: Plan.TypeRepId, request: EqRequest, variant: u32, index: u32) Allocator.Error!PayloadOperands {
+            const self = ctx.builder;
+            const payload_child = self.variantPayloadChild(rep_id, variant, index);
+            const source_has_payload_desc = self.parent.plan.representations.items[@backingInt(rep_id)].descriptor != null or
+                self.parent.result.store.getLocal(request.lhs).boxy_desc != null or
+                self.parent.result.store.getLocal(request.rhs).boxy_desc != null;
+            const lhs_payload = try self.addExtractedTagPayloadLocal(payload_child.rep, source_has_payload_desc);
+            const rhs_payload = try self.addExtractedTagPayloadLocal(payload_child.rep, source_has_payload_desc);
+            return .{ .lhs = lhs_payload.local, .rhs = rhs_payload.local, .ty = payload_child.rep, .lhs_payload = lhs_payload, .rhs_payload = rhs_payload };
+        }
+
+        pub fn readPayloads(ctx: EqLowering, rep_id: Plan.TypeRepId, request: EqRequest, variant: u32, index: u32, operands: PayloadOperands, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            const self = ctx.builder;
+            const current = try self.readVariantPayload(operands.rhs_payload, operands.ty, request.rhs, rep_id, variant, index, next);
+            return try self.readVariantPayload(operands.lhs_payload, operands.ty, request.lhs, rep_id, variant, index, current);
+        }
+    };
+
+    fn lowerEqRepLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        lhs: LIR.LocalId,
+        rhs: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
+        negated: bool,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        return try EqWalk.lower(.{ .builder = self }, .{ .target = target, .lhs = lhs, .rhs = rhs, .ty = rep_id, .negated = negated, .next = next });
     }
 
-    /// Read one payload pair for its comparison, extending the variant's
-    /// branch backward.
-    fn finishEqTagPayload(self: *ProcBodyBuilder, state: *EqTagState, compare: LIR.CFStmtId) Allocator.Error!void {
-        const request = state.request;
-        const rep = self.parent.plan.representations.items[@backingInt(request.rep_id)];
-        const variant = self.parent.plan.tagVariantSlice(rep.tag_variants)[state.variant];
-        const payloads = self.parent.plan.childSlice(variant.payloads);
-        const pending = state.pending;
-        if (pending.index > std.math.maxInt(u32)) {
-            boxyLowerInvariant("tag equality payload index exceeded LIR payload index range");
+    /// A record's fields in LIR field order. Owned by the caller.
+    fn recordComponents(self: *ProcBodyBuilder, children: []const Plan.RepChild) Allocator.Error![]const StructuralComponent {
+        const components = try self.parent.allocator.alloc(StructuralComponent, recordEqualityFieldCount(children));
+        var field_index: u32 = 0;
+        for (children) |child| {
+            switch (child.role) {
+                .record_field => {
+                    components[field_index] = .{ .ty = child.rep, .field_index = field_index };
+                    field_index += 1;
+                },
+                .record_ext => self.requireEmptyRecordExtension(child.rep),
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("record representation had a non-record child role"),
+            }
         }
-        var current = try self.assignConcreteTagPayloadRead(
-            pending.rhs_payload.local,
-            pending.child.rep,
-            pending.rhs_payload.desc_local,
-            request.rhs,
-            request.rep_id,
+        return components;
+    }
+
+    /// A tuple's elements in LIR field order. Owned by the caller.
+    fn tupleComponents(self: *ProcBodyBuilder, children: []const Plan.RepChild) Allocator.Error![]const StructuralComponent {
+        const components = try self.parent.allocator.alloc(StructuralComponent, children.len);
+        for (children, components) |child, *component| {
+            switch (child.role) {
+                .tuple_elem => |index| {
+                    if (index > std.math.maxInt(u32)) {
+                        boxyLowerInvariant("tuple element index exceeded LIR field index range");
+                    }
+                    component.* = .{ .ty = child.rep, .field_index = @intCast(index) };
+                },
+                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tuple representation had a non-tuple child role"),
+            }
+        }
+        return components;
+    }
+
+    const StructuralComponent = value_semantics.structural.Component(Plan.TypeRepId);
+
+    fn repTagVariants(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) []const Plan.TagVariant {
+        return self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@backingInt(rep_id)].tag_variants);
+    }
+
+    /// Payload `index` of `variant`, checked against its payload role.
+    fn variantPayloadChild(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId, variant_index: u32, index: u32) Plan.RepChild {
+        const variant = self.repTagVariants(rep_id)[variant_index];
+        const payload_child = self.parent.plan.childSlice(variant.payloads)[index];
+        switch (payload_child.role) {
+            .tag_payload => |payload| {
+                if (payload.tag != variant.name or payload.index != index) {
+                    boxyLowerInvariant("tag payload span did not match its payload child roles");
+                }
+            },
+            .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tag variant payload span included a non-payload child"),
+        }
+        return payload_child;
+    }
+
+    /// Read payload `index` of `variant` from `source` into `payload`.
+    fn readVariantPayload(
+        self: *ProcBodyBuilder,
+        payload: ExtractedTagPayloadLocal,
+        payload_rep: Plan.TypeRepId,
+        source: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
+        variant_index: u32,
+        index: u32,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const variant = self.repTagVariants(rep_id)[variant_index];
+        return try self.assignConcreteTagPayloadRead(
+            payload.local,
+            payload_rep,
+            payload.desc_local,
+            source,
+            rep_id,
             variant.name,
-            @intCast(state.variant),
-            @intCast(pending.index),
-            payloads.len,
-            compare,
+            variant_index,
+            index,
+            self.parent.plan.childSlice(variant.payloads).len,
+            next,
         );
-        current = try self.assignConcreteTagPayloadRead(
-            pending.lhs_payload.local,
-            pending.child.rep,
-            pending.lhs_payload.desc_local,
-            request.lhs,
-            request.rep_id,
-            variant.name,
-            @intCast(state.variant),
-            @intCast(pending.index),
-            payloads.len,
-            current,
-        );
-        state.current = current;
     }
 
-    /// The tag union comparison once every variant's branch is built.
-    fn finishEqTag(self: *ProcBodyBuilder, state: *EqTagState) Allocator.Error!LIR.CFStmtId {
-        const request = state.request;
-        const payload_switch = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
-            .cond = state.lhs_disc,
-            .branches = try self.parent.result.store.addCFSwitchBranches(state.branches),
-            .default_branch = state.failed,
+    fn derivedFieldRead(self: *ProcBodyBuilder, dest: LIR.LocalId, source: LIR.LocalId, field_index: u32, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = dest,
+            .op = .{ .field = .{ .source = source, .field_idx = field_index } },
+            .next = next,
+        } }, self.derivedOrigin());
+    }
+
+    fn derivedDiscriminantRead(self: *ProcBodyBuilder, dest: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+            .target = dest,
+            .op = .{ .discriminant = .{ .source = source } },
+            .next = next,
+        } }, self.derivedOrigin());
+    }
+
+    fn derivedDiscriminantSwitch(self: *ProcBodyBuilder, cond: LIR.LocalId, branches: []const LIR.CFSwitchBranch, default: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        return try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = cond,
+            .branches = try self.parent.result.store.addCFSwitchBranches(branches),
+            .default_branch = default,
             .continuation = null,
         } }, self.derivedOrigin());
-        const disc_switch = try self.boolSwitchNoContinuation(state.same_disc, payload_switch, state.failed);
-        const compare_disc = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
-            .target = state.same_disc,
-            .op = .num_is_eq,
-            .rc_effect = LIR.LowLevel.num_is_eq.rcEffect(),
-            .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ state.lhs_disc, state.rhs_disc }),
-            .next = disc_switch,
-        } }, self.derivedOrigin());
-        const read_rhs = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-            .target = state.rhs_disc,
-            .op = .{ .discriminant = .{ .source = request.rhs } },
-            .next = compare_disc,
-        } }, self.derivedOrigin());
-        const read_lhs = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-            .target = state.lhs_disc,
-            .op = .{ .discriminant = .{ .source = request.lhs } },
-            .next = read_rhs,
-        } }, self.derivedOrigin());
-        return try self.derivedResultJoin(state.done, request.target, request.next, read_lhs);
     }
 
     /// How a derived method handles one component.
@@ -36021,171 +36225,64 @@ const ProcBodyBuilder = struct {
 
     // Structural hashing //
     //
-    // Hashing a representation hashes its components, and components follow
-    // type nesting, so each hash still waiting on a component's hash is a
-    // frame on one heap-backed stack. Hashes are built from their
-    // continuation backward; frames allocate locals, join points, and
-    // statements in the order a direct recursive build would.
+    // Structural hashing //
+    //
+    // The shared structural-hash walker owns what hashing a representation
+    // means: components and payloads feed the hasher first to last, and a
+    // tag value writes its variant index first. This context decides how
+    // each representation is hashed and emits the reads and joins.
 
-    const HashRequest = struct {
-        target: LIR.LocalId,
-        value: LIR.LocalId,
-        hasher: LIR.LocalId,
-        rep_id: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    };
+    const HashWalk = value_semantics.structural.HashLower(HashLowering);
+    const HashRequest = HashWalk.Request;
 
-    const HashStep = union(enum) {
-        /// The frame needs this component hash next.
-        request: HashRequest,
-        /// The frame finished with this statement and was popped.
-        done: LIR.CFStmtId,
-    };
-
-    const HashComponent = struct {
-        rep: Plan.TypeRepId,
-        field_index: u32,
-    };
-
-    /// One tag variant's hash: its discriminant, then its payloads last
-    /// first.
-    const HashVariantState = struct {
-        request: HashRequest,
-        variant: Plan.TagVariant,
-        variant_index: u32,
-        after_discriminant: LIR.LocalId,
-        intermediate_hashers: []LIR.LocalId = &.{},
-        source_has_payload_desc: bool = false,
-        remaining: usize,
-        current: LIR.CFStmtId,
-        pending: ExtractedTagPayloadLocal = undefined,
-    };
-
-    const HashFrame = struct {
-        /// Whether the frame's last requested hash is still due.
-        awaiting: bool = false,
-        state: union(enum) {
-            convert: struct { request: HashRequest, converted: LIR.LocalId, actual: Plan.TypeRepId },
-            unbox: struct { request: HashRequest, payload: LIR.LocalId, payload_rep: Plan.TypeRepId },
-            nominal: struct {
-                request: HashRequest,
-                scope: NominalBackingFormalScope,
-                backing_rep: Plan.TypeRepId,
-                backing: ?LIR.LocalId,
-            },
-            /// A record's fields or a tuple's elements, last first.
-            fields: struct {
-                request: HashRequest,
-                components: []HashComponent,
-                intermediate_hashers: []LIR.LocalId,
-                remaining: usize,
-                current: LIR.CFStmtId,
-                pending_field: LIR.LocalId = undefined,
-            },
-            variant: HashVariantState,
-            tag: struct {
-                request: HashRequest,
-                discriminant: LIR.LocalId,
-                done: LIR.JoinPointId,
-                branches: []LIR.CFSwitchBranch,
-                index: usize = 0,
-                variant: ?HashVariantState = null,
-            },
+    /// A hash delegated to another representation of the value.
+    const HashWrap = union(enum) {
+        convert: struct { converted: LIR.LocalId, actual: Plan.TypeRepId },
+        unbox: struct { payload: LIR.LocalId, payload_rep: Plan.TypeRepId },
+        nominal: struct {
+            scope: NominalBackingFormalScope,
+            backing_rep: Plan.TypeRepId,
+            backing: ?LIR.LocalId,
         },
     };
 
-    fn lowerHashRepLocalsInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        value: LIR.LocalId,
-        hasher: LIR.LocalId,
-        rep_id: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const allocator = self.parent.allocator;
-        var frames: std.ArrayList(HashFrame) = .empty;
-        defer {
-            var index = frames.items.len;
-            while (index > 0) {
-                index -= 1;
-                self.releaseHashFrame(&frames.items[index]);
-            }
-            frames.deinit(allocator);
-        }
-        var result = try self.beginHash(&frames, .{ .target = target, .value = value, .hasher = hasher, .rep_id = rep_id, .next = next });
-        while (frames.items.len != 0) {
-            switch (try self.stepHashFrame(&frames, result)) {
-                .request => |request| result = try self.beginHash(&frames, request),
-                .done => |stmt| result = stmt,
-            }
-        }
-        return result.?;
-    }
+    const HashLowering = struct {
+        builder: *ProcBodyBuilder,
 
-    /// Free what an unfinished frame owns and leave the scope it holds, as
-    /// the direct build's defers would.
-    fn releaseHashFrame(self: *ProcBodyBuilder, frame: *HashFrame) void {
-        const allocator = self.parent.allocator;
-        switch (frame.state) {
-            .convert, .unbox => {},
-            .nominal => |nominal| self.dropNominalBackingFormalScope(nominal.scope),
-            .fields => |fields| {
-                allocator.free(fields.components);
-                allocator.free(fields.intermediate_hashers);
-            },
-            .variant => |variant| allocator.free(variant.intermediate_hashers),
-            .tag => |tag| {
-                allocator.free(tag.branches);
-                if (tag.variant) |variant| allocator.free(variant.intermediate_hashers);
-            },
-        }
-    }
-
-    fn pushHashFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(HashFrame), state: @FieldType(HashFrame, "state")) Allocator.Error!?LIR.CFStmtId {
-        var frame: HashFrame = .{ .state = state };
-        frames.append(self.parent.allocator, frame) catch |err| {
-            self.releaseHashFrame(&frame);
-            return err;
+        pub const Ty = Plan.TypeRepId;
+        pub const Local = LIR.LocalId;
+        pub const Stmt = LIR.CFStmtId;
+        pub const WalkError = Allocator.Error;
+        pub const Wrap = HashWrap;
+        pub const TagUnion = Plan.TypeRepId;
+        pub const SwitchBranch = LIR.CFSwitchBranch;
+        pub const JoinPoint = LIR.JoinPointId;
+        pub const PayloadOperand = struct {
+            local: LIR.LocalId,
+            ty: Plan.TypeRepId,
+            payload: ExtractedTagPayloadLocal,
         };
-        return null;
-    }
 
-    fn finishHashFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(HashFrame), stmt: LIR.CFStmtId) HashStep {
-        var frame = frames.pop().?;
-        switch (frame.state) {
-            // A finished nominal hash has left its scope already.
-            .nominal => {},
-            .convert, .unbox, .fields, .variant, .tag => self.releaseHashFrame(&frame),
+        pub fn allocator(ctx: HashLowering) Allocator {
+            return ctx.builder.parent.allocator;
         }
-        return .{ .done = stmt };
-    }
 
-    /// The hash of `request` when it needs no component hash; otherwise
-    /// null, with the frame that builds it pushed.
-    fn beginHash(self: *ProcBodyBuilder, frames: *std.ArrayList(HashFrame), root: HashRequest) Allocator.Error!?LIR.CFStmtId {
-        const allocator = self.parent.allocator;
-        var request = root;
-        while (true) {
+        pub fn hashStep(ctx: HashLowering, request: HashRequest) Allocator.Error!HashWalk.Step {
+            const self = ctx.builder;
             const target = request.target;
             const value = request.value;
             const hasher = request.hasher;
-            const rep_id = request.rep_id;
+            const rep_id = request.ty;
             const next = request.next;
             switch (try self.derivedStep(.hash, rep_id)) {
                 .expand => {},
-                .call => |index| return try self.lowerDerivedComponentCallInto(target, &.{ value, hasher }, index, next),
-                .scheme_dictionary => |requirement| return try self.lowerDerivedDictionaryCallInto(target, &.{ value, hasher }, rep_id, requirement, next),
-                .descriptor => return try self.lowerDescriptorHashLocalsInto(target, value, hasher, rep_id, next),
-                .checked_error => return try self.lowerCheckedErrorDispatchInto("method dispatch failed to check"),
-                .helper => return try self.lowerDerivedHelperCallInto(.hash, target, value, hasher, rep_id, next),
-                .convert => |actual| {
-                    const converted = try self.addFrameLocalForRep(actual);
-                    return try self.pushHashFrame(frames, .{ .convert = .{ .request = request, .converted = converted, .actual = actual } });
-                },
-                .unbox => |payload_rep| {
-                    const payload = try self.addFrameLocalForRep(payload_rep);
-                    return try self.pushHashFrame(frames, .{ .unbox = .{ .request = request, .payload = payload, .payload_rep = payload_rep } });
-                },
+                .call => |index| return .{ .done = try self.lowerDerivedComponentCallInto(target, &.{ value, hasher }, index, next) },
+                .scheme_dictionary => |requirement| return .{ .done = try self.lowerDerivedDictionaryCallInto(target, &.{ value, hasher }, rep_id, requirement, next) },
+                .descriptor => return .{ .done = try self.lowerDescriptorHashLocalsInto(target, value, hasher, rep_id, next) },
+                .checked_error => return .{ .done = try self.lowerCheckedErrorDispatchInto("method dispatch failed to check") },
+                .helper => return .{ .done = try self.lowerDerivedHelperCallInto(.hash, target, value, hasher, rep_id, next) },
+                .convert => |actual| return .{ .wrap = .{ .convert = .{ .converted = try self.addFrameLocalForRep(actual), .actual = actual } } },
+                .unbox => |payload_rep| return .{ .wrap = .{ .unbox = .{ .payload = try self.addFrameLocalForRep(payload_rep), .payload_rep = payload_rep } } },
             }
             const rep = self.parent.plan.representations.items[@backingInt(rep_id)];
             switch (rep.kind) {
@@ -36199,327 +36296,165 @@ const ProcBodyBuilder = struct {
                 .list,
                 .box,
                 => boxyLowerInvariant("derived hash expanded a component its step dispatches"),
-                .primitive => |primitive| return try self.lowerPrimitiveHashLocalsInto(target, value, hasher, primitive, next),
-                .bool_tag_union => return try self.lowerPrimitiveHashLocalsInto(target, value, hasher, .bool, next),
+                .primitive => |primitive| return .{ .done = try self.lowerPrimitiveHashLocalsInto(target, value, hasher, primitive, next) },
+                .bool_tag_union => return .{ .done = try self.lowerPrimitiveHashLocalsInto(target, value, hasher, .bool, next) },
                 .empty_record,
                 .empty_tag_union,
-                => return try self.assignLocal(target, hasher, next),
-                .alias => {
-                    request.rep_id = self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep;
-                    continue;
-                },
+                => return .nothing,
+                .alias => return .{ .retarget = self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep },
                 .nominal => {
                     const scope = try self.enterNominalBackingFormalScope(rep_id);
                     errdefer self.dropNominalBackingFormalScope(scope);
                     const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
                     const backing: ?LIR.LocalId = if (rep.declared_fields.len == 0) null else try self.addFrameLocalForRep(backing_rep);
-                    try frames.append(allocator, .{ .state = .{ .nominal = .{
-                        .request = request,
-                        .scope = scope,
-                        .backing_rep = backing_rep,
-                        .backing = backing,
-                    } } });
-                    return null;
+                    return .{ .wrap = .{ .nominal = .{ .scope = scope, .backing_rep = backing_rep, .backing = backing } } };
                 },
-                .record, .tuple => {
-                    const children = self.parent.plan.childSlice(rep.children);
-                    const components = if (rep.kind == .record)
-                        try self.recordHashComponents(children)
+                .record => return .{ .components = try self.recordComponents(self.parent.plan.childSlice(rep.children)) },
+                .tuple => return .{ .components = try self.tupleComponents(self.parent.plan.childSlice(rep.children)) },
+                .tag_union => return .{ .tag_union = rep_id },
+            }
+        }
+
+        pub fn wrapRequest(_: HashLowering, wrap: HashWrap, request: HashRequest) HashRequest {
+            var inner = request;
+            switch (wrap) {
+                .convert => |convert| {
+                    inner.value = convert.converted;
+                    inner.ty = convert.actual;
+                },
+                .unbox => |unbox| {
+                    inner.value = unbox.payload;
+                    inner.ty = unbox.payload_rep;
+                },
+                .nominal => |nominal| {
+                    if (nominal.backing) |backing| inner.value = backing;
+                    inner.ty = nominal.backing_rep;
+                },
+            }
+            return inner;
+        }
+
+        pub fn unwrap(ctx: HashLowering, wrap: HashWrap, request: HashRequest, hashed: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            const self = ctx.builder;
+            switch (wrap) {
+                .convert => |convert| return try self.assignRepresentationBoundary(convert.converted, request.value, convert.actual, request.ty, hashed),
+                .unbox => |unbox| return try self.assignBoxBoundary(unbox.payload, request.value, unbox.payload_rep, .box_unbox, hashed),
+                .nominal => |nominal| {
+                    const lowered = if (nominal.backing) |backing|
+                        try self.assignRepresentationBoundary(backing, request.value, nominal.backing_rep, request.ty, hashed)
                     else
-                        try self.tupleHashComponents(children);
-                    errdefer allocator.free(components);
-                    if (components.len == 0) {
-                        allocator.free(components);
-                        return try self.assignLocal(target, hasher, next);
-                    }
-                    const intermediate_hashers = try self.intermediateHashers(hasher, components.len);
-                    return try self.pushHashFrame(frames, .{ .fields = .{
-                        .request = request,
-                        .components = components,
-                        .intermediate_hashers = intermediate_hashers,
-                        .remaining = components.len,
-                        .current = next,
-                    } });
-                },
-                .tag_union => {
-                    const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
-                    if (variants.len == 1 and self.isZstLocal(value)) {
-                        return try self.pushHashFrame(frames, .{ .variant = try self.beginHashVariant(request, variants[0], 0) });
-                    }
-                    const discriminant = try self.addFrameLocal(.u32);
-                    const done = self.freshJoinPointId();
-                    const branches = try allocator.alloc(LIR.CFSwitchBranch, variants.len);
-                    return try self.pushHashFrame(frames, .{ .tag = .{
-                        .request = request,
-                        .discriminant = discriminant,
-                        .done = done,
-                        .branches = branches,
-                    } });
+                        hashed;
+                    return try self.leaveNominalBackingFormalScope(nominal.scope, lowered);
                 },
             }
         }
-    }
 
-    /// The hashers a chain of `count` component hashes threads between its
-    /// input and output hashers.
-    fn intermediateHashers(self: *ProcBodyBuilder, hasher: LIR.LocalId, count: usize) Allocator.Error![]LIR.LocalId {
-        const hasher_layout = self.parent.result.store.getLocal(hasher).layout_idx;
-        const intermediate_hashers = try self.parent.allocator.alloc(LIR.LocalId, count - 1);
-        errdefer self.parent.allocator.free(intermediate_hashers);
-        for (intermediate_hashers) |*local| {
-            local.* = try self.addFrameLocal(hasher_layout);
-        }
-        return intermediate_hashers;
-    }
-
-    fn recordHashComponents(self: *ProcBodyBuilder, children: []const Plan.RepChild) Allocator.Error![]HashComponent {
-        const components = try self.parent.allocator.alloc(HashComponent, recordEqualityFieldCount(children));
-        var field_index: u32 = 0;
-        for (children) |child| {
-            switch (child.role) {
-                .record_field => {
-                    components[field_index] = .{
-                        .rep = child.rep,
-                        .field_index = field_index,
-                    };
-                    field_index += 1;
-                },
-                .record_ext => self.requireEmptyRecordExtension(child.rep),
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .tuple_elem, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("record hash representation had a non-record child role"),
+        pub fn releaseWrap(ctx: HashLowering, wrap: HashWrap) void {
+            switch (wrap) {
+                .convert, .unbox => {},
+                .nominal => |nominal| ctx.builder.dropNominalBackingFormalScope(nominal.scope),
             }
         }
-        return components;
-    }
 
-    fn tupleHashComponents(self: *ProcBodyBuilder, children: []const Plan.RepChild) Allocator.Error![]HashComponent {
-        const components = try self.parent.allocator.alloc(HashComponent, children.len);
-        for (children, components) |child, *component| {
-            switch (child.role) {
-                .tuple_elem => |index| {
-                    if (index > std.math.maxInt(u32)) {
-                        boxyLowerInvariant("tuple hash element index exceeded LIR field index range");
-                    }
-                    component.* = .{
-                        .rep = child.rep,
-                        .field_index = @intCast(index),
-                    };
-                },
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .function_arg, .function_ret, .tag_payload, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tuple hash representation had a non-tuple child role"),
-            }
+        pub fn assignLocal(ctx: HashLowering, target: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.assignLocal(target, source, next);
         }
-        return components;
-    }
 
-    fn stepHashFrame(self: *ProcBodyBuilder, frames: *std.ArrayList(HashFrame), delivered: ?LIR.CFStmtId) Allocator.Error!HashStep {
-        const frame = &frames.items[frames.items.len - 1];
-        const child: ?LIR.CFStmtId = if (frame.awaiting)
-            delivered orelse boxyLowerInvariant("boxy hash frame resumed without its component hash")
-        else
-            null;
-        frame.awaiting = false;
-        switch (frame.state) {
-            .convert => |convert| {
-                const request = convert.request;
-                const hash = child orelse {
-                    frame.awaiting = true;
-                    return .{ .request = .{ .target = request.target, .value = convert.converted, .hasher = request.hasher, .rep_id = convert.actual, .next = request.next } };
-                };
-                return self.finishHashFrame(frames, try self.assignRepresentationBoundary(convert.converted, request.value, convert.actual, request.rep_id, hash));
-            },
-            .unbox => |unbox| {
-                const request = unbox.request;
-                const hash = child orelse {
-                    frame.awaiting = true;
-                    return .{ .request = .{ .target = request.target, .value = unbox.payload, .hasher = request.hasher, .rep_id = unbox.payload_rep, .next = request.next } };
-                };
-                return self.finishHashFrame(frames, try self.assignBoxBoundary(unbox.payload, request.value, unbox.payload_rep, .box_unbox, hash));
-            },
-            .nominal => |nominal| {
-                const request = nominal.request;
-                const hash = child orelse {
-                    frame.awaiting = true;
-                    return .{ .request = .{ .target = request.target, .value = nominal.backing orelse request.value, .hasher = request.hasher, .rep_id = nominal.backing_rep, .next = request.next } };
-                };
-                const lowered = if (nominal.backing) |backing|
-                    try self.assignRepresentationBoundary(backing, request.value, nominal.backing_rep, request.rep_id, hash)
-                else
-                    hash;
-                return self.finishHashFrame(frames, try self.leaveNominalBackingFormalScope(nominal.scope, lowered));
-            },
-            .fields => |*fields| {
-                const request = fields.request;
-                if (child) |hash| {
-                    var current = hash;
-                    const component = fields.components[fields.remaining];
-                    if (!self.isZstLocal(fields.pending_field)) {
-                        current = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-                            .target = fields.pending_field,
-                            .op = .{ .field = .{
-                                .source = request.value,
-                                .field_idx = component.field_index,
-                            } },
-                            .next = current,
-                        } }, self.derivedOrigin());
-                    }
-                    fields.current = current;
-                }
-                if (fields.remaining == fields.components.len) {
-                    const hasher_layout = self.parent.result.store.getLocal(request.hasher).layout_idx;
-                    if (self.parent.result.store.getLocal(request.target).layout_idx != hasher_layout) {
-                        boxyLowerInvariant("structural hash target layout differed from input hasher layout");
-                    }
-                }
-                if (fields.remaining == 0) return self.finishHashFrame(frames, fields.current);
-                fields.remaining -= 1;
-                const i = fields.remaining;
-                const input_hasher = if (i == 0) request.hasher else fields.intermediate_hashers[i - 1];
-                const output_hasher = if (i == fields.components.len - 1) request.target else fields.intermediate_hashers[i];
-                const component = fields.components[i];
-                fields.pending_field = try self.addFrameLocalForRep(component.rep);
-                frame.awaiting = true;
-                return .{ .request = .{ .target = output_hasher, .value = fields.pending_field, .hasher = input_hasher, .rep_id = component.rep, .next = fields.current } };
-            },
-            .variant => |*variant| {
-                if (child) |hash| try self.finishHashVariantPayload(variant, hash);
-                if (try self.nextHashVariantPayload(variant)) |request| {
-                    frame.awaiting = true;
-                    return .{ .request = request };
-                }
-                return self.finishHashFrame(frames, try self.finishHashVariant(variant));
-            },
-            .tag => |*tag| {
-                const request = tag.request;
-                const variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@backingInt(request.rep_id)].tag_variants);
-                if (child) |hash| try self.finishHashVariantPayload(&tag.variant.?, hash);
-                while (true) {
-                    if (tag.variant) |*variant| {
-                        if (try self.nextHashVariantPayload(variant)) |component| {
-                            frame.awaiting = true;
-                            return .{ .request = component };
-                        }
-                        tag.branches[tag.index] = .{
-                            .value = @intCast(tag.index),
-                            .body = try self.finishHashVariant(variant),
-                        };
-                        self.parent.allocator.free(variant.intermediate_hashers);
-                        tag.variant = null;
-                        tag.index += 1;
-                    }
-                    if (tag.index == variants.len) break;
-                    if (tag.index > std.math.maxInt(u32)) {
-                        boxyLowerInvariant("tag-union hash variant index exceeded LIR variant range");
-                    }
-                    tag.variant = try self.beginHashVariant(.{
-                        .target = request.target,
-                        .value = request.value,
-                        .hasher = request.hasher,
-                        .rep_id = request.rep_id,
-                        .next = try self.joinJump(tag.done),
-                    }, variants[tag.index], @intCast(tag.index));
-                }
-                const bad_discriminant = try self.parent.result.store.addCFStmt(.runtime_error, self.derivedOrigin());
-                const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
-                    .cond = tag.discriminant,
-                    .branches = try self.parent.result.store.addCFSwitchBranches(tag.branches),
-                    .default_branch = bad_discriminant,
-                    .continuation = null,
-                } }, self.derivedOrigin());
-                const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-                    .target = tag.discriminant,
-                    .op = .{ .discriminant = .{ .source = request.value } },
-                    .next = switch_stmt,
-                } }, self.derivedOrigin());
-                return self.finishHashFrame(frames, try self.derivedResultJoin(tag.done, request.target, request.next, read_discriminant));
-            },
+        pub fn hasherLocal(ctx: HashLowering, like: LIR.LocalId) Allocator.Error!LIR.LocalId {
+            return try ctx.builder.addFrameLocal(ctx.builder.parent.result.store.getLocal(like).layout_idx);
         }
-    }
 
-    /// Begin one tag variant's hash, which `request.next` follows.
-    fn beginHashVariant(self: *ProcBodyBuilder, request: HashRequest, variant: Plan.TagVariant, variant_index: u32) Allocator.Error!HashVariantState {
-        const payloads = self.parent.plan.childSlice(variant.payloads);
-        const hasher_layout = self.parent.result.store.getLocal(request.hasher).layout_idx;
-        const after_discriminant = if (payloads.len == 0) request.target else try self.addFrameLocal(hasher_layout);
-        for (payloads, 0..) |child, index| {
-            switch (child.role) {
-                .tag_payload => |payload| {
-                    if (payload.tag != variant.name or payload.index != index) {
-                        boxyLowerInvariant("tag hash payload span did not match its payload child roles");
-                    }
-                },
-                .alias_backing, .alias_arg, .nominal_backing, .nominal_arg, .nominal_padding_field, .record_field, .record_ext, .tuple_elem, .function_arg, .function_ret, .tag_ext, .list_elem, .box_payload => boxyLowerInvariant("tag hash variant payload span included a non-payload child"),
-            }
+        pub fn componentLocal(ctx: HashLowering, rep_id: Plan.TypeRepId) Allocator.Error!LIR.LocalId {
+            return try ctx.builder.addFrameLocalForRep(rep_id);
         }
-        var state: HashVariantState = .{
-            .request = request,
-            .variant = variant,
-            .variant_index = variant_index,
-            .after_discriminant = after_discriminant,
-            .remaining = payloads.len,
-            .current = request.next,
-        };
-        if (payloads.len != 0) {
-            state.source_has_payload_desc = self.parent.plan.representations.items[@backingInt(request.rep_id)].descriptor != null or
+
+        pub fn isZstLocal(ctx: HashLowering, local: LIR.LocalId) bool {
+            return ctx.builder.isZstLocal(local);
+        }
+
+        pub fn readField(ctx: HashLowering, dest: LIR.LocalId, source: LIR.LocalId, field_index: u32, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.derivedFieldRead(dest, source, field_index, next);
+        }
+
+        pub fn joinPoint(ctx: HashLowering) LIR.JoinPointId {
+            return ctx.builder.freshJoinPointId();
+        }
+
+        pub fn jump(ctx: HashLowering, id: LIR.JoinPointId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.joinJump(id);
+        }
+
+        pub fn resultJoin(ctx: HashLowering, id: LIR.JoinPointId, target: LIR.LocalId, next: LIR.CFStmtId, body: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.derivedResultJoin(id, target, next, body);
+        }
+
+        pub fn discriminantLocal(ctx: HashLowering) Allocator.Error!LIR.LocalId {
+            return try ctx.builder.addFrameLocal(.u32);
+        }
+
+        pub fn readDiscriminant(ctx: HashLowering, dest: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.derivedDiscriminantRead(dest, source, next);
+        }
+
+        pub fn discriminantSwitch(ctx: HashLowering, cond: LIR.LocalId, branches: []const LIR.CFSwitchBranch, default: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.derivedDiscriminantSwitch(cond, branches, default);
+        }
+
+        pub fn unreachableDiscriminant(ctx: HashLowering) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.parent.result.store.addCFStmt(.runtime_error, ctx.builder.derivedOrigin());
+        }
+
+        pub fn variantCount(ctx: HashLowering, rep_id: Plan.TypeRepId) u32 {
+            return @intCast(ctx.builder.repTagVariants(rep_id).len);
+        }
+
+        pub fn payloadCount(ctx: HashLowering, rep_id: Plan.TypeRepId, variant: u32) u32 {
+            return @intCast(ctx.builder.parent.plan.childSlice(ctx.builder.repTagVariants(rep_id)[variant].payloads).len);
+        }
+
+        pub fn writeVariantIndex(ctx: HashLowering, target: LIR.LocalId, hasher: LIR.LocalId, variant: u32, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            const self = ctx.builder;
+            const index_value = try self.addFrameLocal(.u64);
+            const write = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = target,
+                .op = .hasher_write_u64,
+                .rc_effect = LIR.LowLevel.hasher_write_u64.rcEffect(),
+                .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ hasher, index_value }),
+                .next = next,
+            } }, self.derivedOrigin());
+            return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = index_value,
+                .value = .{ .i128_literal = .{
+                    .value = variant,
+                    .layout_idx = .u64,
+                } },
+                .next = write,
+            } }, self.derivedOrigin());
+        }
+
+        pub fn payloadOperand(ctx: HashLowering, rep_id: Plan.TypeRepId, request: HashRequest, variant: u32, index: u32) Allocator.Error!PayloadOperand {
+            const self = ctx.builder;
+            const payload_child = self.variantPayloadChild(rep_id, variant, index);
+            const source_has_payload_desc = self.parent.plan.representations.items[@backingInt(rep_id)].descriptor != null or
                 self.parent.result.store.getLocal(request.value).boxy_desc != null;
-            state.intermediate_hashers = try self.intermediateHashers(after_discriminant, payloads.len);
+            const payload = try self.addExtractedTagPayloadLocal(payload_child.rep, source_has_payload_desc);
+            return .{ .local = payload.local, .ty = payload_child.rep, .payload = payload };
         }
-        return state;
-    }
 
-    /// The next payload hash of a variant, or null once every payload is
-    /// hashed.
-    fn nextHashVariantPayload(self: *ProcBodyBuilder, state: *HashVariantState) Allocator.Error!?HashRequest {
-        if (state.remaining == 0) return null;
-        const payloads = self.parent.plan.childSlice(state.variant.payloads);
-        state.remaining -= 1;
-        const i = state.remaining;
-        const input_hasher = if (i == 0) state.after_discriminant else state.intermediate_hashers[i - 1];
-        const output_hasher = if (i == payloads.len - 1) state.request.target else state.intermediate_hashers[i];
-        const payload = payloads[i];
-        state.pending = try self.addExtractedTagPayloadLocal(payload.rep, state.source_has_payload_desc);
-        return .{ .target = output_hasher, .value = state.pending.local, .hasher = input_hasher, .rep_id = payload.rep, .next = state.current };
-    }
-
-    /// Read one payload for its hash, extending the variant's hash backward.
-    fn finishHashVariantPayload(self: *ProcBodyBuilder, state: *HashVariantState, hash: LIR.CFStmtId) Allocator.Error!void {
-        const payloads = self.parent.plan.childSlice(state.variant.payloads);
-        const i = state.remaining;
-        const payload = payloads[i];
-        if (i > std.math.maxInt(u32)) {
-            boxyLowerInvariant("tag hash payload index exceeded LIR payload index range");
+        pub fn readPayload(ctx: HashLowering, rep_id: Plan.TypeRepId, request: HashRequest, variant: u32, index: u32, operand: PayloadOperand, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+            return try ctx.builder.readVariantPayload(operand.payload, operand.ty, request.value, rep_id, variant, index, next);
         }
-        state.current = try self.assignConcreteTagPayloadRead(
-            state.pending.local,
-            payload.rep,
-            state.pending.desc_local,
-            state.request.value,
-            state.request.rep_id,
-            state.variant.name,
-            state.variant_index,
-            @intCast(i),
-            payloads.len,
-            hash,
-        );
-    }
+    };
 
-    /// The variant's hash once its payloads are hashed: the discriminant
-    /// written first.
-    fn finishHashVariant(self: *ProcBodyBuilder, state: *HashVariantState) Allocator.Error!LIR.CFStmtId {
-        const discriminant_value = try self.addFrameLocal(.u64);
-        const current = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
-            .target = state.after_discriminant,
-            .op = .hasher_write_u64,
-            .rc_effect = LIR.LowLevel.hasher_write_u64.rcEffect(),
-            .args = try self.parent.result.store.addLocalSpan(&[_]LIR.LocalId{ state.request.hasher, discriminant_value }),
-            .next = state.current,
-        } }, self.derivedOrigin());
-        return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
-            .target = discriminant_value,
-            .value = .{ .i128_literal = .{
-                .value = state.variant_index,
-                .layout_idx = .u64,
-            } },
-            .next = current,
-        } }, self.derivedOrigin());
+    fn lowerHashRepLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        value: LIR.LocalId,
+        hasher: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        return try HashWalk.lower(.{ .builder = self }, .{ .target = target, .value = value, .hasher = hasher, .ty = rep_id, .next = next });
     }
 
     fn lowerPrimitiveHashLocalsInto(
@@ -42060,37 +41995,6 @@ const ProcBodyBuilder = struct {
         }
     }
 
-    fn requireIrrefutableTagPattern(
-        self: *ProcBodyBuilder,
-        ty: checked.CheckedTypeId,
-        name: names.TagNameId,
-        args: []const checked.CheckedPatternId,
-    ) Allocator.Error!void {
-        var current = self.repForType(ty);
-        while (true) {
-            const rep = self.parent.plan.representations.items[@backingInt(current)];
-            switch (rep.kind) {
-                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
-                .nominal => |kind| switch (kind) {
-                    .transparent => current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep,
-                    .opaque_nominal, .builtin_other => boxyLowerInvariant("irrefutable tag pattern had an opaque nominal representation"),
-                },
-                .tag_union => {
-                    const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
-                    if (variants.len != 1) {
-                        boxyLowerInvariant("refutable tag pattern reached boxy irrefutable binder lowering");
-                    }
-                    const variant = self.tagVariant(rep, name);
-                    if (variant.index != 0) {
-                        boxyLowerInvariant("single-variant tag pattern had a nonzero variant index");
-                    }
-                    return try self.validateTagPatternPayloads(variant.name, variant.payloads, args);
-                },
-                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => boxyLowerInvariant("irrefutable tag pattern did not have a tag-union representation"),
-            }
-        }
-    }
-
     /// Reserve, in pre-order, the binders `root` binds from a source of
     /// representation `root_source_rep`.
     fn reserveMatchPatternBindingsFromRep(
@@ -46387,7 +46291,56 @@ test "boxy lowerer emits checked if expressions with a shared continuation join"
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = join.id } }, out.lir_result.store.getCFStmt(else_value.next));
 }
 
-test "boxy lowerer emits checked tag matches as ordered discriminant tests" {
+/// Every statement structurally reachable from a root: straight-line
+/// successors, switch and match arms, and a join's body and remainder.
+const TestReachable = struct {
+    store: *const LirStore,
+    ids: std.ArrayList(LIR.CFStmtId),
+
+    fn collect(gpa: Allocator, store: *const LirStore, root: LIR.CFStmtId) Allocator.Error!TestReachable {
+        var ids: std.ArrayList(LIR.CFStmtId) = .empty;
+        errdefer ids.deinit(gpa);
+        var work: std.ArrayList(LIR.CFStmtId) = .empty;
+        defer work.deinit(gpa);
+        try work.append(gpa, root);
+        while (work.pop()) |id| {
+            try ids.append(gpa, id);
+            switch (store.getCFStmt(id)) {
+                .switch_stmt => |stmt| {
+                    const branches = store.getCFSwitchBranches(stmt.branches);
+                    for (0..branches.len) |index| try work.append(gpa, GuardedList.at(branches, index).body);
+                    try work.append(gpa, stmt.default_branch);
+                    if (stmt.continuation) |continuation| try work.append(gpa, continuation);
+                },
+                .switch_initialized_payload => |stmt| try work.appendSlice(gpa, &.{ stmt.initialized_branch, stmt.uninitialized_branch }),
+                inline .str_match, .boxy_tag_match => |stmt| try work.appendSlice(gpa, &.{ stmt.on_match, stmt.on_miss }),
+                .str_match_set => |stmt| {
+                    const arms = store.getStrMatchArms(stmt.arms);
+                    for (0..arms.len) |index| try work.append(gpa, GuardedList.at(arms, index).on_match);
+                    try work.append(gpa, stmt.on_miss);
+                },
+                .join => |stmt| try work.appendSlice(gpa, &.{ stmt.body, stmt.remainder }),
+                .runtime_error, .comptime_exhaustiveness_failed, .expect_err, .jump, .ret, .crash => {},
+                inline else => |stmt| try work.append(gpa, stmt.next),
+            }
+        }
+        return .{ .store = store, .ids = ids };
+    }
+
+    fn deinit(self: *TestReachable, gpa: Allocator) void {
+        self.ids.deinit(gpa);
+    }
+
+    fn count(self: TestReachable, comptime tag: std.meta.Tag(LIR.CFStmt)) usize {
+        var total: usize = 0;
+        for (self.ids.items) |id| {
+            if (self.store.getCFStmt(id) == tag) total += 1;
+        }
+        return total;
+    }
+};
+
+test "boxy lowerer emits checked tag matches as one discriminant switch" {
     const gpa = std.testing.allocator;
 
     var checked_module = minimalCheckedModule(gpa);
@@ -46513,41 +46466,37 @@ test "boxy lowerer emits checked tag matches as ordered discriminant tests" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const outer_join = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
-    const cond_tag = out.lir_result.store.getCFStmtImmediate(outer_join.remainder).assign_tag;
+    const store = &out.lir_result.store;
+    const outer_join = store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
+    const cond_tag = store.getCFStmtImmediate(outer_join.remainder).assign_tag;
     try std.testing.expectEqual(@as(u32, 1), cond_tag.variant_index);
 
-    const first_join = out.lir_result.store.getCFStmtImmediate(cond_tag.next).join;
-    const first_disc = out.lir_result.store.getCFStmtImmediate(first_join.remainder).assign_ref;
-    switch (first_disc.op) {
-        .discriminant => |disc| try std.testing.expectEqual(cond_tag.target, disc.source),
+    const disc = store.getCFStmtImmediate(cond_tag.next).assign_ref;
+    switch (disc.op) {
+        .discriminant => |read| try std.testing.expectEqual(cond_tag.target, read.source),
         .local, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
-    const first_switch = out.lir_result.store.getCFStmtImmediate(first_disc.next).switch_stmt;
-    const first_branches = out.lir_result.store.getCFSwitchBranches(first_switch.branches);
-    try std.testing.expectEqual(@as(usize, 1), first_branches.len);
-    try std.testing.expectEqual(@as(u64, 0), GuardedList.at(first_branches, 0).value);
-    const first_value = out.lir_result.store.getCFStmtImmediate(GuardedList.at(first_branches, 0).body).assign_literal;
+    const switch_stmt = store.getCFStmtImmediate(disc.next).switch_stmt;
+    try std.testing.expectEqual(disc.target, switch_stmt.cond);
+    const branches = store.getCFSwitchBranches(switch_stmt.branches);
+    try std.testing.expectEqual(@as(usize, 1), branches.len);
+    try std.testing.expectEqual(@as(u64, 0), GuardedList.at(branches, 0).value);
+    const first_value = store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_literal;
     switch (first_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-
-    const second_join = out.lir_result.store.getCFStmtImmediate(first_join.body).join;
-    const second_disc = out.lir_result.store.getCFStmtImmediate(second_join.remainder).assign_ref;
-    switch (second_disc.op) {
-        .discriminant => |disc| try std.testing.expectEqual(cond_tag.target, disc.source),
-        .local, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
-    }
-    const second_switch = out.lir_result.store.getCFStmtImmediate(second_disc.next).switch_stmt;
-    const second_branches = out.lir_result.store.getCFSwitchBranches(second_switch.branches);
-    try std.testing.expectEqual(@as(usize, 1), second_branches.len);
-    try std.testing.expectEqual(@as(u64, 1), GuardedList.at(second_branches, 0).value);
-    const second_value = out.lir_result.store.getCFStmtImmediate(GuardedList.at(second_branches, 0).body).assign_literal;
+    const second_value = store.getCFStmtImmediate(switch_stmt.default_branch).assign_literal;
     switch (second_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 22), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
+
+    // The whole match is one test of the discriminant.
+    var reach = try TestReachable.collect(gpa, store, proc.body orelse return error.TestUnexpectedResult);
+    defer reach.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), reach.count(.switch_stmt));
+    try std.testing.expectEqual(@as(usize, 1), reach.count(.join));
 }
 
 test "boxy lowerer binds checked tag payload match patterns before branch bodies" {
@@ -46700,22 +46649,22 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const outer_join = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
-    const payload_literal = out.lir_result.store.getCFStmtImmediate(outer_join.remainder).assign_literal;
+    const store = &out.lir_result.store;
+    const outer_join = store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
+    const payload_literal = store.getCFStmtImmediate(outer_join.remainder).assign_literal;
     switch (payload_literal.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 41), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const cond_tag = out.lir_result.store.getCFStmtImmediate(payload_literal.next).assign_tag;
+    const cond_tag = store.getCFStmtImmediate(payload_literal.next).assign_tag;
     try std.testing.expect(cond_tag.payload != null);
 
-    const first_join = out.lir_result.store.getCFStmtImmediate(cond_tag.next).join;
-    const disc = out.lir_result.store.getCFStmtImmediate(first_join.remainder).assign_ref;
-    const switch_stmt = out.lir_result.store.getCFStmtImmediate(disc.next).switch_stmt;
-    const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
+    const disc = store.getCFStmtImmediate(cond_tag.next).assign_ref;
+    const switch_stmt = store.getCFStmtImmediate(disc.next).switch_stmt;
+    const branches = store.getCFSwitchBranches(switch_stmt.branches);
     try std.testing.expectEqual(@as(u64, 0), GuardedList.at(branches, 0).value);
 
-    const payload_read = out.lir_result.store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_ref;
+    const payload_read = store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_ref;
     switch (payload_read.op) {
         .tag_payload_struct => |payload| {
             try std.testing.expectEqual(cond_tag.target, payload.source);
@@ -46725,20 +46674,21 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
         .local, .discriminant, .field, .tag_payload, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
 
-    const binder_assign = out.lir_result.store.getCFStmtImmediate(payload_read.next).assign_ref;
+    const binder_assign = store.getCFStmtImmediate(payload_read.next).assign_ref;
     switch (binder_assign.op) {
         .local => |source| try std.testing.expectEqual(payload_read.target, source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
 
-    const branch_result = out.lir_result.store.getCFStmtImmediate(binder_assign.next).assign_ref;
+    const branch_result = store.getCFStmtImmediate(binder_assign.next).assign_ref;
     switch (branch_result.op) {
         .local => |source| try std.testing.expectEqual(binder_assign.target, source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
+    try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = outer_join.id } }, store.getCFStmt(branch_result.next));
 }
 
-test "boxy lowerer emits checked list match patterns as length checks and element reads" {
+test "boxy lowerer emits checked list match patterns as a length switch and element reads" {
     const gpa = std.testing.allocator;
 
     var checked_module = minimalCheckedModule(gpa);
@@ -46890,52 +46840,39 @@ test "boxy lowerer emits checked list match patterns as length checks and elemen
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const outer_join = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
-    const first = out.lir_result.store.getCFStmtImmediate(outer_join.remainder).assign_literal;
-    const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
-    const list = out.lir_result.store.getCFStmtImmediate(second.next).assign_list;
+    const store = &out.lir_result.store;
+    const outer_join = store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
+    const first = store.getCFStmtImmediate(outer_join.remainder).assign_literal;
+    const second = store.getCFStmtImmediate(first.next).assign_literal;
+    const list = store.getCFStmtImmediate(second.next).assign_list;
 
-    const miss_join = out.lir_result.store.getCFStmtImmediate(list.next).join;
-    const len = out.lir_result.store.getCFStmtImmediate(miss_join.remainder).assign_low_level;
+    const len = store.getCFStmtImmediate(list.next).assign_low_level;
     try std.testing.expectEqual(LIR.LowLevel.list_len, len.op);
-    try std.testing.expectEqual(list.target, GuardedList.at(out.lir_result.store.getLocalSpan(len.args), 0));
+    try std.testing.expectEqual(list.target, GuardedList.at(store.getLocalSpan(len.args), 0));
 
-    const required = out.lir_result.store.getCFStmtImmediate(len.next).assign_literal;
-    switch (required.value) {
-        .i64_literal => |literal| {
-            try std.testing.expectEqual(@as(i64, 2), literal.value);
-            try std.testing.expectEqual(@as(layout.Idx, .u64), literal.layout_idx);
-        },
-        .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
-    }
-
-    const cmp = out.lir_result.store.getCFStmtImmediate(required.next).assign_low_level;
-    try std.testing.expectEqual(LIR.LowLevel.num_is_eq, cmp.op);
-    const cmp_args = out.lir_result.store.getLocalSpan(cmp.args);
-    try std.testing.expectEqual(len.target, GuardedList.at(cmp_args, 0));
-    try std.testing.expectEqual(required.target, GuardedList.at(cmp_args, 1));
-
-    const switch_stmt = out.lir_result.store.getCFStmtImmediate(cmp.next).switch_stmt;
-    try std.testing.expectEqual(cmp.target, switch_stmt.cond);
-    const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
+    const switch_stmt = store.getCFStmtImmediate(len.next).switch_stmt;
+    try std.testing.expectEqual(len.target, switch_stmt.cond);
+    const branches = store.getCFSwitchBranches(switch_stmt.branches);
     try std.testing.expectEqual(@as(usize, 1), branches.len);
+    try std.testing.expectEqual(@as(u64, 2), GuardedList.at(branches, 0).value);
+    try std.testing.expect(store.getCFStmtImmediate(switch_stmt.default_branch).* == .runtime_error);
 
-    const item_index = out.lir_result.store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_literal;
+    const item_index = store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_literal;
     switch (item_index.value) {
         .i64_literal => |literal| try std.testing.expectEqual(@as(i64, 1), literal.value),
         .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    const item = out.lir_result.store.getCFStmtImmediate(item_index.next).assign_low_level;
+    const item = store.getCFStmtImmediate(item_index.next).assign_low_level;
     try std.testing.expectEqual(LIR.LowLevel.list_get_unsafe, item.op);
-    const item_args = out.lir_result.store.getLocalSpan(item.args);
+    const item_args = store.getLocalSpan(item.args);
     try std.testing.expectEqual(list.target, GuardedList.at(item_args, 0));
     try std.testing.expectEqual(item_index.target, GuardedList.at(item_args, 1));
 
-    const bind = out.lir_result.store.getCFStmtImmediate(item.next).assign_ref;
+    const bind = store.getCFStmtImmediate(item.next).assign_ref;
     try std.testing.expectEqual(item.target, bind.op.local);
-    const branch_result = out.lir_result.store.getCFStmtImmediate(bind.next).assign_ref;
+    const branch_result = store.getCFStmtImmediate(bind.next).assign_ref;
     try std.testing.expectEqual(bind.target, branch_result.op.local);
-    try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = outer_join.id } }, out.lir_result.store.getCFStmt(branch_result.next));
+    try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = outer_join.id } }, store.getCFStmt(branch_result.next));
 }
 
 test "boxy lowerer emits checked string interpolation match patterns" {
@@ -47071,28 +47008,32 @@ test "boxy lowerer emits checked string interpolation match patterns" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const outer_join = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
-    const source = out.lir_result.store.getCFStmtImmediate(outer_join.remainder).assign_literal;
-    const miss_join = out.lir_result.store.getCFStmtImmediate(source.next).join;
-    const str_match = out.lir_result.store.getCFStmtImmediate(miss_join.remainder).str_match;
-
+    const store = &out.lir_result.store;
+    const outer_join = store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
+    const source = store.getCFStmtImmediate(outer_join.remainder).assign_literal;
+    const str_match = store.getCFStmtImmediate(source.next).str_match_set;
     try std.testing.expectEqual(source.target, str_match.source);
-    try std.testing.expectEqualStrings("pre", out.lir_result.store.getStringLiteral(str_match.prefix));
-    try std.testing.expectEqual(LIR.StrPatternEnd.exact, str_match.end);
+    try std.testing.expect(store.getCFStmtImmediate(str_match.on_miss).* == .runtime_error);
 
-    const steps = out.lir_result.store.getStrMatchSteps(str_match.steps);
+    const arms = store.getStrMatchArms(str_match.arms);
+    try std.testing.expectEqual(@as(usize, 1), arms.len);
+    const arm = GuardedList.at(arms, 0);
+    try std.testing.expectEqualStrings("pre", store.getStringLiteral(arm.prefix));
+    try std.testing.expectEqual(LIR.StrPatternEnd.exact, arm.end);
+
+    const steps = store.getStrMatchSteps(arm.steps);
     try std.testing.expectEqual(@as(usize, 1), steps.len);
-    try std.testing.expectEqualStrings("post", out.lir_result.store.getStringLiteral(GuardedList.at(steps, 0).delimiter));
+    try std.testing.expectEqualStrings("post", store.getStringLiteral(GuardedList.at(steps, 0).delimiter));
     const capture = switch (GuardedList.at(steps, 0).capture) {
         .view => |local| local,
         .discard => return error.TestUnexpectedResult,
     };
 
-    const bind = out.lir_result.store.getCFStmtImmediate(str_match.on_match).assign_ref;
+    const bind = store.getCFStmtImmediate(arm.on_match).assign_ref;
     try std.testing.expectEqual(capture, bind.op.local);
-    const branch_result = out.lir_result.store.getCFStmtImmediate(bind.next).assign_ref;
+    const branch_result = store.getCFStmtImmediate(bind.next).assign_ref;
     try std.testing.expectEqual(bind.target, branch_result.op.local);
-    try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = outer_join.id } }, out.lir_result.store.getCFStmt(branch_result.next));
+    try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = outer_join.id } }, store.getCFStmt(branch_result.next));
 }
 
 test "boxy lowerer maps checked alternative binders onto representative match locals" {
@@ -47257,36 +47198,43 @@ test "boxy lowerer maps checked alternative binders onto representative match lo
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const outer_join = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
-    const payload_literal = out.lir_result.store.getCFStmtImmediate(outer_join.remainder).assign_literal;
-    const cond_tag = out.lir_result.store.getCFStmtImmediate(payload_literal.next).assign_tag;
+    const store = &out.lir_result.store;
+    const outer_join = store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
+    const payload_literal = store.getCFStmtImmediate(outer_join.remainder).assign_literal;
+    const cond_tag = store.getCFStmtImmediate(payload_literal.next).assign_tag;
     try std.testing.expectEqual(@as(u32, 1), cond_tag.variant_index);
 
-    const first_alt_join = out.lir_result.store.getCFStmtImmediate(cond_tag.next).join;
-    const second_alt_join = out.lir_result.store.getCFStmtImmediate(first_alt_join.body).join;
-    const second_disc = out.lir_result.store.getCFStmtImmediate(second_alt_join.remainder).assign_ref;
-    const second_switch = out.lir_result.store.getCFStmtImmediate(second_disc.next).switch_stmt;
-    const second_branches = out.lir_result.store.getCFSwitchBranches(second_switch.branches);
-    try std.testing.expectEqual(@as(u64, 1), GuardedList.at(second_branches, 0).value);
+    const disc = store.getCFStmtImmediate(cond_tag.next).assign_ref;
+    const switch_stmt = store.getCFStmtImmediate(disc.next).switch_stmt;
+    const branches = store.getCFSwitchBranches(switch_stmt.branches);
+    try std.testing.expectEqual(@as(usize, 1), branches.len);
 
-    const payload_read = out.lir_result.store.getCFStmtImmediate(GuardedList.at(second_branches, 0).body).assign_ref;
-    switch (payload_read.op) {
-        .tag_payload_struct => |payload| try std.testing.expectEqual(cond_tag.target, payload.source),
-        .local, .discriminant, .field, .tag_payload, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
-    }
-    const remapped_assign = out.lir_result.store.getCFStmtImmediate(payload_read.next).assign_ref;
-    switch (remapped_assign.op) {
-        .local => |source| try std.testing.expectEqual(payload_read.target, source),
-        .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
-    }
-    const branch_result = out.lir_result.store.getCFStmtImmediate(remapped_assign.next).assign_ref;
-    switch (branch_result.op) {
-        .local => |source| try std.testing.expectEqual(remapped_assign.target, source),
-        .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
+    // Each alternative reads its own payload and assigns it to the one
+    // representative binder local the shared body reads.
+    const arm_bodies = [_]LIR.CFStmtId{ GuardedList.at(branches, 0).body, switch_stmt.default_branch };
+    var representative: ?LIR.LocalId = null;
+    for (arm_bodies) |arm_body| {
+        const payload_read = store.getCFStmtImmediate(arm_body).assign_ref;
+        switch (payload_read.op) {
+            .tag_payload_struct => |payload| try std.testing.expectEqual(cond_tag.target, payload.source),
+            .local, .discriminant, .field, .tag_payload, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
+        }
+        const remapped_assign = store.getCFStmtImmediate(payload_read.next).assign_ref;
+        switch (remapped_assign.op) {
+            .local => |source| try std.testing.expectEqual(payload_read.target, source),
+            .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
+        }
+        if (representative) |local| try std.testing.expectEqual(local, remapped_assign.target);
+        representative = remapped_assign.target;
+        const branch_result = store.getCFStmtImmediate(remapped_assign.next).assign_ref;
+        switch (branch_result.op) {
+            .local => |source| try std.testing.expectEqual(remapped_assign.target, source),
+            .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
+        }
     }
 }
 
-test "boxy lowerer emits checked numeric literal match patterns as equality tests" {
+test "boxy lowerer emits checked integer literal match patterns as an integer switch" {
     const gpa = std.testing.allocator;
 
     var checked_module = minimalCheckedModule(gpa);
@@ -47403,25 +47351,22 @@ test "boxy lowerer emits checked numeric literal match patterns as equality test
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const outer_join = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
-    const cond_literal = out.lir_result.store.getCFStmtImmediate(outer_join.remainder).assign_literal;
-    const first_join = out.lir_result.store.getCFStmtImmediate(cond_literal.next).join;
-    const pattern_literal = out.lir_result.store.getCFStmtImmediate(first_join.remainder).assign_literal;
-    const compare = out.lir_result.store.getCFStmtImmediate(pattern_literal.next).assign_low_level;
-    try std.testing.expectEqual(LIR.LowLevel.num_is_eq, compare.op);
-    const args = out.lir_result.store.getLocalSpan(compare.args);
-    try std.testing.expectEqual(@as(usize, 2), args.len);
-    try std.testing.expectEqual(cond_literal.target, GuardedList.at(args, 0));
-    try std.testing.expectEqual(pattern_literal.target, GuardedList.at(args, 1));
-
-    const switch_stmt = out.lir_result.store.getCFStmtImmediate(compare.next).switch_stmt;
-    try std.testing.expectEqual(compare.target, switch_stmt.cond);
-    const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
+    const store = &out.lir_result.store;
+    const outer_join = store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
+    const cond_literal = store.getCFStmtImmediate(outer_join.remainder).assign_literal;
+    const switch_stmt = store.getCFStmtImmediate(cond_literal.next).switch_stmt;
+    try std.testing.expectEqual(cond_literal.target, switch_stmt.cond);
+    const branches = store.getCFSwitchBranches(switch_stmt.branches);
     try std.testing.expectEqual(@as(usize, 1), branches.len);
-    try std.testing.expectEqual(@as(u64, 1), GuardedList.at(branches, 0).value);
-    const matched_value = out.lir_result.store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_literal;
+    try std.testing.expectEqual(@as(u64, 42), GuardedList.at(branches, 0).value);
+    const matched_value = store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_literal;
     switch (matched_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
+    }
+    const missed_value = store.getCFStmtImmediate(switch_stmt.default_branch).assign_literal;
+    switch (missed_value.value) {
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 22), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 }
@@ -47549,40 +47494,40 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const outer_join = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
-    const cond_literal = out.lir_result.store.getCFStmtImmediate(outer_join.remainder).assign_literal;
+    const store = &out.lir_result.store;
+    const outer_join = store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
+    const cond_literal = store.getCFStmtImmediate(outer_join.remainder).assign_literal;
     switch (cond_literal.value) {
         .dec_literal => |literal| try std.testing.expectEqual(expected_dec, literal),
         .i64_literal, .i128_literal, .f64_literal, .f32_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
-    const first_join = out.lir_result.store.getCFStmtImmediate(cond_literal.next).join;
-    const pattern_literal = out.lir_result.store.getCFStmtImmediate(first_join.remainder).assign_literal;
+    const pattern_literal = store.getCFStmtImmediate(cond_literal.next).assign_literal;
     switch (pattern_literal.value) {
         .dec_literal => |literal| try std.testing.expectEqual(expected_dec, literal),
         .i64_literal, .i128_literal, .f64_literal, .f32_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
-    const compare = out.lir_result.store.getCFStmtImmediate(pattern_literal.next).assign_low_level;
+    const compare = store.getCFStmtImmediate(pattern_literal.next).assign_low_level;
     try std.testing.expectEqual(LIR.LowLevel.num_is_eq, compare.op);
-    const args = out.lir_result.store.getLocalSpan(compare.args);
+    const args = store.getLocalSpan(compare.args);
     try std.testing.expectEqual(@as(usize, 2), args.len);
     try std.testing.expectEqual(cond_literal.target, GuardedList.at(args, 0));
     try std.testing.expectEqual(pattern_literal.target, GuardedList.at(args, 1));
 
-    const switch_stmt = out.lir_result.store.getCFStmtImmediate(compare.next).switch_stmt;
+    const switch_stmt = store.getCFStmtImmediate(compare.next).switch_stmt;
     try std.testing.expectEqual(compare.target, switch_stmt.cond);
-    const branches = out.lir_result.store.getCFSwitchBranches(switch_stmt.branches);
+    const branches = store.getCFSwitchBranches(switch_stmt.branches);
     try std.testing.expectEqual(@as(usize, 1), branches.len);
     try std.testing.expectEqual(@as(u64, 1), GuardedList.at(branches, 0).value);
-    const matched_value = out.lir_result.store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_literal;
+    const matched_value = store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_literal;
     switch (matched_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 }
 
-test "boxy lowerer emits checked string literal match patterns as string equality tests" {
+test "boxy lowerer emits checked string literal match patterns as a string match set" {
     const gpa = std.testing.allocator;
 
     var checked_module = minimalCheckedModule(gpa);
@@ -47705,16 +47650,26 @@ test "boxy lowerer emits checked string literal match patterns as string equalit
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const outer_join = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
-    const cond_literal = out.lir_result.store.getCFStmtImmediate(outer_join.remainder).assign_literal;
-    const first_join = out.lir_result.store.getCFStmtImmediate(cond_literal.next).join;
-    const pattern_literal = out.lir_result.store.getCFStmtImmediate(first_join.remainder).assign_literal;
-    const compare = out.lir_result.store.getCFStmtImmediate(pattern_literal.next).assign_low_level;
-    try std.testing.expectEqual(LIR.LowLevel.str_is_eq, compare.op);
-    const args = out.lir_result.store.getLocalSpan(compare.args);
-    try std.testing.expectEqual(@as(usize, 2), args.len);
-    try std.testing.expectEqual(cond_literal.target, GuardedList.at(args, 0));
-    try std.testing.expectEqual(pattern_literal.target, GuardedList.at(args, 1));
+    const store = &out.lir_result.store;
+    const outer_join = store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
+    const cond_literal = store.getCFStmtImmediate(outer_join.remainder).assign_literal;
+    const str_match = store.getCFStmtImmediate(cond_literal.next).str_match_set;
+    try std.testing.expectEqual(cond_literal.target, str_match.source);
+    const arms = store.getStrMatchArms(str_match.arms);
+    try std.testing.expectEqual(@as(usize, 1), arms.len);
+    const arm = GuardedList.at(arms, 0);
+    try std.testing.expectEqual(LIR.StrPatternEnd.exact, arm.end);
+    try std.testing.expectEqual(@as(usize, 0), store.getStrMatchSteps(arm.steps).len);
+    const matched_value = store.getCFStmtImmediate(arm.on_match).assign_literal;
+    switch (matched_value.value) {
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
+    }
+    const missed_value = store.getCFStmtImmediate(str_match.on_miss).assign_literal;
+    switch (missed_value.value) {
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 22), literal.value),
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
+    }
 }
 
 test "boxy lowerer emits checked unary not as bool low-level call" {
@@ -49680,31 +49635,32 @@ test "boxy lowerer destructures tuple declaration patterns" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
-    const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
-    const tuple = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
-    const read_first = out.lir_result.store.getCFStmtImmediate(tuple.next).assign_ref;
-    const bind_first = out.lir_result.store.getCFStmtImmediate(read_first.next).assign_ref;
-    const read_second = out.lir_result.store.getCFStmtImmediate(bind_first.next).assign_ref;
-    const bind_second = out.lir_result.store.getCFStmtImmediate(read_second.next).assign_ref;
-    const final_copy = out.lir_result.store.getCFStmtImmediate(bind_second.next).assign_ref;
+    const store = &out.lir_result.store;
+    const first = store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const second = store.getCFStmtImmediate(first.next).assign_literal;
+    const tuple = store.getCFStmtImmediate(second.next).assign_struct;
+    const read_first = store.getCFStmtImmediate(tuple.next).assign_ref;
+    const read_second = store.getCFStmtImmediate(read_first.next).assign_ref;
+    const bind_first = store.getCFStmtImmediate(read_second.next).assign_ref;
+    const bind_second = store.getCFStmtImmediate(bind_first.next).assign_ref;
+    const final_copy = store.getCFStmtImmediate(bind_second.next).assign_ref;
 
     switch (first.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 1), value.value),
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 1), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 2), value.value),
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 2), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(tuple.target, read_first.op.field.source);
     try std.testing.expectEqual(@as(u32, 0), read_first.op.field.field_idx);
-    try std.testing.expectEqual(read_first.target, bind_first.op.local);
     try std.testing.expectEqual(tuple.target, read_second.op.field.source);
     try std.testing.expectEqual(@as(u32, 1), read_second.op.field.field_idx);
+    try std.testing.expectEqual(read_first.target, bind_first.op.local);
     try std.testing.expectEqual(read_second.target, bind_second.op.local);
     try std.testing.expectEqual(bind_second.target, final_copy.op.local);
-    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_copy.target } }, out.lir_result.store.getCFStmt(final_copy.next));
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_copy.target } }, store.getCFStmt(final_copy.next));
 }
 
 test "boxy lowerer materializes record rest declaration patterns" {
@@ -50046,26 +50002,25 @@ test "boxy lowerer binds irrefutable list rest declaration patterns" {
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
-    const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
-    const list = out.lir_result.store.getCFStmtImmediate(second.next).assign_list;
-    const pattern_join = out.lir_result.store.getCFStmtImmediate(list.next).join;
-    try std.testing.expect(pattern_join.params.isEmpty());
-    try std.testing.expect(out.lir_result.store.getCFStmtImmediate(pattern_join.body).* == .crash);
-    const bind_rest = out.lir_result.store.getCFStmtImmediate(pattern_join.remainder).assign_ref;
-    const final_copy = out.lir_result.store.getCFStmtImmediate(bind_rest.next).assign_ref;
+    const store = &out.lir_result.store;
+    const first = store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const second = store.getCFStmtImmediate(first.next).assign_literal;
+    const list = store.getCFStmtImmediate(second.next).assign_list;
+    // An irrefutable pattern tests nothing, so it has no miss path.
+    const bind_rest = store.getCFStmtImmediate(list.next).assign_ref;
+    const final_copy = store.getCFStmtImmediate(bind_rest.next).assign_ref;
 
     switch (first.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 3), value.value),
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 3), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 4), value.value),
+        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 4), literal.value),
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(list.target, bind_rest.op.local);
     try std.testing.expectEqual(bind_rest.target, final_copy.op.local);
-    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_copy.target } }, out.lir_result.store.getCFStmt(final_copy.next));
+    try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_copy.target } }, store.getCFStmt(final_copy.next));
 }
 
 test "boxy lowerer emits tuple construction in element order" {
@@ -52060,7 +52015,7 @@ test "boxy lowerer inspects concrete lists with an index and string accumulator 
 
     const close = out.lir_result.store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_literal;
     switch (close.value) {
-        .str_literal => |literal| try std.testing.expectEqualStrings("]", out.lir_result.store.getStringLiteral(literal)),
+        .str_literal => |literal| try std.testing.expectEqualStrings(inspect_text.list_close, out.lir_result.store.getStringLiteral(literal)),
         .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const finish = out.lir_result.store.getCFStmtImmediate(close.next).assign_low_level;
@@ -52718,7 +52673,7 @@ test "boxy lowerer inspects concrete Box payloads" {
 
     const prefix = out.lir_result.store.getCFStmtImmediate(boxed.next).assign_literal;
     switch (prefix.value) {
-        .str_literal => |literal| try std.testing.expectEqualStrings("Box(", out.lir_result.store.getStringLiteral(literal)),
+        .str_literal => |literal| try std.testing.expectEqualStrings(inspect_text.box_open, out.lir_result.store.getStringLiteral(literal)),
         .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const unboxed = out.lir_result.store.getCFStmtImmediate(prefix.next).assign_low_level;

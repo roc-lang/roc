@@ -1,10 +1,9 @@
-//! Decision-tree match compiler for the direct solved-to-LIR lowering.
+//! Decision-tree match compiler shared by both LIR lowerers.
 //!
-//! `.boxy` does not consume this yet: it folds match branches into a
-//! sequential chain of its own pattern tests, so the sharing invariant and
-//! the statement-count lint below cover `.lss` only. Bringing `.boxy` onto
-//! this compiler needs a `Ctx` written over its checked patterns and its
-//! representation plan.
+//! The direct solved-to-LIR lowering (`.lss`) reads Lambda Solved patterns
+//! through its `MatchTreeCtx`; Boxy lowering (`.boxy`) reads checked patterns
+//! and its representation plan through its own. Both get the sharing
+//! invariant and the statement-count lint below.
 //!
 //! This module turns a `match` (a list of branches, each a pattern plus an
 //! optional guard and a body) into an explicit decision tree that the host
@@ -52,8 +51,8 @@ const base = @import("base");
 const collections = @import("collections");
 
 /// Pattern kinds the accessor context reports. This is the module's neutral
-/// view of `PatData` across Monotype Lifted and Lambda Mono inputs; `callable`
-/// only occurs for Lambda Mono.
+/// view of each lowerer's patterns; `callable` only occurs for Lambda Mono,
+/// and `guarded_lit` only for checked patterns.
 pub const PatKind = enum {
     bind,
     wildcard,
@@ -70,6 +69,10 @@ pub const PatKind = enum {
     frac_f64_lit,
     str_lit,
     str_pattern,
+    /// A literal of a type with its own literal conversion: it matches when
+    /// its checked equality guard, which reads the matched value through the
+    /// pattern's binder, holds.
+    guarded_lit,
 };
 
 /// What a test node switches on.
@@ -90,6 +93,11 @@ pub const TestKind = enum {
     str_set,
     /// List length dispatch: exact lengths as switch arms.
     list_len,
+    /// Tag variants tested by name, one test per arm in order: for a union
+    /// whose runtime representation is described only at runtime.
+    tag_name,
+    /// Literal arms decided one at a time by their checked equality guards.
+    guard_lit,
 };
 
 /// One step from a parent occurrence to a child occurrence.
@@ -114,6 +122,11 @@ pub const Step = union(enum) {
     nominal_backing,
     /// Capture `index` of a string-set arm with the given shape key.
     str_capture: struct { shape: u32, index: u32 },
+    /// The record minus the fields its record pattern destructures.
+    record_rest,
+    /// The parent value read at another representation, which the context
+    /// names by key.
+    retype: u32,
 };
 
 /// Interned occurrence id; `root` is always index 0.
@@ -144,6 +157,9 @@ pub const OccId = enum(u32) {
 /// tagPayloadCount(pat) u32
 /// tagPayload(pat, ty, i) LowerError!SubPat
 /// tagVariantCount(ty) ?u32                                // null: unknown, never exhaustive
+/// tagTestKind(ty) TestKind                                // .tag or .tag_name
+/// recordRest(pat, ty) LowerError!?SubPat                  // a record pattern's rest
+/// retype(pat, ty) ?Retype                                 // match `pat` at another representation
 /// callableVariant(pat, ty) u32                            // Lambda Mono only
 /// callablePayload(pat, ty) LowerError!?SubPat
 /// callableVariantCount(ty) ?u32
@@ -159,8 +175,10 @@ pub const OccId = enum(u32) {
 /// strCapturePat(pat, i) ?PatId
 /// ```
 ///
-/// where `SubPat = struct { index: u32, ty: TypeId, pat: PatId }` (field
-/// names, not the concrete type, are what matters).
+/// where `SubPat = struct { index: u32, ty: TypeId, pat: PatId }` and
+/// `Retype = struct { key: u32, ty: TypeId }` (field names, not the concrete
+/// types, are what matters). A `retype` answer must be null for the
+/// representation it names.
 pub fn Compiler(comptime Ctx: type) type {
     return struct {
         pub const PatId = Ctx.PatId;
@@ -341,6 +359,8 @@ pub fn Compiler(comptime Ctx: type) type {
                     .list_rest => |r| .{ .parent = parent.idx(), .tag = 6, .a = r.front, .b = r.back },
                     .nominal_backing => .{ .parent = parent.idx(), .tag = 7, .a = 0, .b = 0 },
                     .str_capture => |c| .{ .parent = parent.idx(), .tag = 8, .a = c.shape, .b = c.index },
+                    .record_rest => .{ .parent = parent.idx(), .tag = 9, .a = 0, .b = 0 },
+                    .retype => |key| .{ .parent = parent.idx(), .tag = 10, .a = key, .b = 0 },
                 };
             }
 
@@ -378,7 +398,13 @@ pub fn Compiler(comptime Ctx: type) type {
                         .field => |field| {
                             const is_record = self.ctx.patKind(field.pat) == .record;
                             const count = if (is_record) self.ctx.recordDestructCount(field.pat) else self.ctx.tupleItemCount(field.pat);
-                            if (field.index == count) continue;
+                            if (field.index == count) {
+                                if (!is_record) continue;
+                                const rest = (try self.ctx.recordRest(field.pat, field.ty)) orelse continue;
+                                const child = try self.intern(field.occ, .record_rest, rest.ty);
+                                try pending.append(self.arena, .{ .pattern = .{ .occ = child, .ty = rest.ty, .pat = rest.pat } });
+                                continue;
+                            }
                             const sub = if (is_record)
                                 try self.ctx.recordDestruct(field.pat, field.ty, field.index)
                             else
@@ -391,6 +417,11 @@ pub fn Compiler(comptime Ctx: type) type {
                             continue;
                         },
                     };
+                    if (self.ctx.retype(current.pat, current.ty)) |retyped| {
+                        const child = try self.intern(current.occ, .{ .retype = retyped.key }, retyped.ty);
+                        try pending.append(self.arena, .{ .pattern = .{ .occ = child, .ty = retyped.ty, .pat = current.pat } });
+                        continue;
+                    }
                     self.stats.pattern_nodes += 1;
                     switch (self.ctx.patKind(current.pat)) {
                         .bind => try binds.append(self.arena, .{ .occ = current.occ, .ty = current.ty, .local = self.ctx.bindLocal(current.pat) }),
@@ -420,7 +451,7 @@ pub fn Compiler(comptime Ctx: type) type {
                             }
                             try cols.append(self.arena, .{ .occ = current.occ, .ty = current.ty, .pat = current.pat });
                         },
-                        .tag, .callable, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => {
+                        .tag, .callable, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern, .guarded_lit => {
                             try cols.append(self.arena, .{ .occ = current.occ, .ty = current.ty, .pat = current.pat });
                         },
                     }
@@ -458,13 +489,14 @@ pub fn Compiler(comptime Ctx: type) type {
 
             fn testKindOf(self: *Builder, col: Col) TestKind {
                 return switch (self.ctx.patKind(col.pat)) {
-                    .tag => .tag,
+                    .tag => self.ctx.tagTestKind(col.ty),
                     .callable => .callable,
                     .int_lit => if (self.ctx.intSwitchValue(col.pat, col.ty) != null) .int_switch else .eq_chain,
                     .dec_lit, .frac_f32_lit, .frac_f64_lit => .eq_chain,
                     .str_lit => if (self.ctx.strLitIsSetArm()) .str_set else .eq_chain,
                     .str_pattern => .str_set,
                     .list => .list_len,
+                    .guarded_lit => .guard_lit,
                     .bind, .wildcard, .as_pattern, .record, .tuple, .nominal => unreachable, // normalized away
                 };
             }
@@ -527,7 +559,7 @@ pub fn Compiler(comptime Ctx: type) type {
                 try binds.appendSlice(self.arena, row.binds);
 
                 switch (kind) {
-                    .tag => {
+                    .tag, .tag_name => {
                         const variant = self.ctx.tagVariant(col.pat, col.ty);
                         const count = self.ctx.tagPayloadCount(col.pat);
                         const single = count == 1;
@@ -549,7 +581,7 @@ pub fn Compiler(comptime Ctx: type) type {
                             try self.normalize(child, sub.ty, sub.pat, &cols, &binds);
                         }
                     },
-                    .int_switch, .eq_chain, .str_set, .list_len => unreachable,
+                    .int_switch, .eq_chain, .str_set, .list_len, .guard_lit => unreachable,
                 }
 
                 for (row.cols) |c| {
@@ -792,9 +824,9 @@ pub fn Compiler(comptime Ctx: type) type {
                         }
                         const arms = task.arms;
                         const exhaustive = switch (task.kind) {
-                            .tag => if (self.ctx.tagVariantCount(task.occ_ty)) |count| arms.len == count else false,
+                            .tag, .tag_name => if (self.ctx.tagVariantCount(task.occ_ty)) |count| arms.len == count else false,
                             .callable => if (self.ctx.callableVariantCount(task.occ_ty)) |count| arms.len == count else false,
-                            .int_switch, .eq_chain, .str_set, .list_len => false,
+                            .int_switch, .eq_chain, .str_set, .list_len, .guard_lit => false,
                         };
 
                         const default: ?*Tree = if (exhaustive) null else if (have_below)
@@ -863,7 +895,11 @@ pub fn Compiler(comptime Ctx: type) type {
                         i += 1;
                         continue;
                     }
-                    const run = self.runLength(rows[i..], col.occ, kind);
+                    // A guarded literal's test is a predicate of its own, so
+                    // one passing says nothing about another: each row tests
+                    // alone, and a miss anywhere in it (its test, a later
+                    // column, or its guard) continues with the rows after it.
+                    const run = if (kind == .guard_lit) 1 else self.runLength(rows[i..], col.occ, kind);
                     std.debug.assert(run > 0);
                     try segments.append(self.arena, .{ .start = i, .end = i + run, .kind = .{ .group = .{ .occ = col.occ, .ty = col.ty, .kind = kind } } });
                     i += run;
@@ -975,8 +1011,8 @@ pub fn Compiler(comptime Ctx: type) type {
                         try arm_rows.append(self.arena, .empty);
                     }
                     const spec = switch (kind) {
-                        .tag, .callable => try self.specTagRow(row, col, kind),
-                        .int_switch, .eq_chain => try self.specLiteralRow(row, col),
+                        .tag, .tag_name, .callable => try self.specTagRow(row, col, kind),
+                        .int_switch, .eq_chain, .guard_lit => try self.specLiteralRow(row, col),
                         .str_set => try self.specStrRow(row, col, @truncate(key)),
                         .list_len => try self.specListRow(row, col, .{ .exact = @truncate(key) }),
                     };
@@ -1072,6 +1108,10 @@ pub fn Compiler(comptime Ctx: type) type {
         /// readListElemBack(target, source, len_local, back, next) CFStmtId
         /// readListRest(target, source, len_local, front, back, next) CFStmtId
         /// readNominalBacking(target, backing_ty, source, nominal_ty, next) CFStmtId
+        /// readRecordRest(target, rest_ty, source, record_ty, next) CFStmtId
+        /// readRetype(target, ty, source, source_ty, next) CFStmtId
+        /// tagNameTest(source, ty, pat, on_match, on_miss) CFStmtId
+        /// literalGuardTemp(pat) LirLocal
         /// switchStmt(cond, values: []const u64, bodies: []const CFStmtId, default) CFStmtId
         /// lenGteTest(len_local, min, then, els) CFStmtId
         /// literalEqTest(source, ty, pat, on_match, on_miss) CFStmtId
@@ -1143,6 +1183,9 @@ pub fn Compiler(comptime Ctx: type) type {
             bindings: struct { bindings: BindingSpan, next: CtxStmt },
             /// Lower a guard expression into `cond`, then `next`.
             guard: struct { cond: CtxLocal, guard: ExprId, next: CtxStmt },
+            /// Bind `pat`'s matched value from `value`, lower its checked
+            /// equality guard into `cond`, then `next`.
+            literal_guard: struct { pat: PatId, value: CtxLocal, cond: CtxLocal, next: CtxStmt },
         };
 
         pub const EmitProgress = union(enum) {
@@ -1221,6 +1264,8 @@ pub fn Compiler(comptime Ctx: type) type {
                 switch_: SwitchTask,
                 eq_chain: struct { t: TestNode, env: *Env, source: CtxLocal = undefined, current: CtxStmt = undefined },
                 str_set: StrSetTask,
+                tag_name: struct { t: TestNode, env: *Env, source: CtxLocal = undefined, current: CtxStmt = undefined },
+                guard_chain: struct { t: TestNode, env: *Env, source: CtxLocal = undefined, current: CtxStmt = undefined },
             };
 
             const TreeTask = struct {
@@ -1359,6 +1404,8 @@ pub fn Compiler(comptime Ctx: type) type {
                     .switch_ => |*task| self.stepSwitch(frame, task, input),
                     .eq_chain => |*task| self.stepEqChain(frame, task, input),
                     .str_set => |*task| self.stepStrSet(frame, task, input),
+                    .tag_name => |*task| self.stepTagName(frame, task, input),
+                    .guard_chain => |*task| self.stepGuardChain(frame, task, input),
                 };
             }
 
@@ -1397,6 +1444,8 @@ pub fn Compiler(comptime Ctx: type) type {
                         .list_elem_front,
                         .nominal_backing,
                         .str_capture,
+                        .record_rest,
+                        .retype,
                         => {},
                     }
                 }
@@ -1418,7 +1467,8 @@ pub fn Compiler(comptime Ctx: type) type {
                             // read (payload extraction marks the value on its
                             // own).
                             .tag, .callable => if (!(t.exhaustive and t.arms.len == 1)) try self.markUse(t.occ, .disc),
-                            .int_switch, .eq_chain, .str_set => try self.markUse(t.occ, .value),
+                            .tag_name => if (!(t.exhaustive and t.arms.len == 1)) try self.markUse(t.occ, .value),
+                            .int_switch, .eq_chain, .str_set, .guard_lit => try self.markUse(t.occ, .value),
                             .list_len => try self.markUse(t.occ, .len),
                         }
                         for (t.arms) |arm| try trees.append(self.arena, arm.subtree);
@@ -1449,7 +1499,7 @@ pub fn Compiler(comptime Ctx: type) type {
                         .list_elem_back => |j| return .{ .list_len = .{ .occ = entry.parent, .min_len = j } },
                         .list_rest => |r| return .{ .list_len = .{ .occ = entry.parent, .min_len = @as(u64, r.front) + r.back } },
                         .str_capture => |c| return .{ .str_arm = .{ .occ = entry.parent, .shape = c.shape } },
-                        .root, .field, .nominal_backing => walk = entry.parent,
+                        .root, .field, .nominal_backing, .record_rest, .retype => walk = entry.parent,
                     }
                 }
                 return .top;
@@ -1585,6 +1635,8 @@ pub fn Compiler(comptime Ctx: type) type {
                                 .list_elem_back => |back| try self.ctx.readListElemBack(target, parent, self.lenLocal(env, entry.parent), back, current),
                                 .list_rest => |r| try self.ctx.readListRest(target, parent, self.lenLocal(env, entry.parent), r.front, r.back, current),
                                 .nominal_backing => try self.ctx.readNominalBacking(target, entry.ty, parent, self.occEntry(entry.parent).ty, current),
+                                .record_rest => try self.ctx.readRecordRest(target, entry.ty, parent, self.occEntry(entry.parent).ty, current),
+                                .retype => try self.ctx.readRetype(target, entry.ty, parent, self.occEntry(entry.parent).ty, current),
                                 .str_capture => unreachable, // registered by the string arm
                             };
                         },
@@ -1659,6 +1711,8 @@ pub fn Compiler(comptime Ctx: type) type {
                         .list_len => .{ .switch_ = .{ .t = t, .env = env, .selector = .len } },
                         .eq_chain => .{ .eq_chain = .{ .t = t, .env = env } },
                         .str_set => .{ .str_set = .{ .t = t, .env = env } },
+                        .tag_name => .{ .tag_name = .{ .t = t, .env = env } },
+                        .guard_lit => .{ .guard_chain = .{ .t = t, .env = env } },
                     } },
                     .len_check => |lc| switch (frame.cursor) {
                         0 => {
@@ -1704,10 +1758,10 @@ pub fn Compiler(comptime Ctx: type) type {
                 }
                 const t = task.t;
                 const scope: Scope = switch (t.kind) {
-                    .tag => .{ .tag_arm = .{ .occ = t.occ, .variant = @intCast(task.arm.key) } },
+                    .tag, .tag_name => .{ .tag_arm = .{ .occ = t.occ, .variant = @intCast(task.arm.key) } },
                     .callable => .{ .callable_arm = .{ .occ = t.occ, .variant = @intCast(task.arm.key) } },
                     .list_len => .{ .list_len = .{ .occ = t.occ, .min_len = @truncate(task.arm.key) } },
-                    .int_switch, .eq_chain => {
+                    .int_switch, .eq_chain, .guard_lit => {
                         // Literal arms impose no sub-structure; no new scope.
                         return .{ .tail = .{ .tree = .{ .tree = task.arm.subtree, .env = task.env } } };
                     },
@@ -1791,6 +1845,63 @@ pub fn Compiler(comptime Ctx: type) type {
                     else => {
                         const arm = t.arms[frame.index];
                         task.current = try self.ctx.literalEqTest(task.source, arm.example_ty, arm.example, input.?, task.current);
+                    },
+                }
+                if (frame.index == 0) return .{ .ret = task.current };
+                frame.index -= 1;
+                frame.cursor = 2;
+                return .{ .call = .{ .arm = .{ .t = t, .arm = t.arms[frame.index], .env = task.env } } };
+            }
+
+            /// Name tests, one per arm in order, each falling through to the
+            /// next. An exhaustive test takes its last arm without a test.
+            fn stepTagName(self: *Emitter, frame: *EmitFrame, task: anytype, input: ?CtxStmt) Ctx.LowerError!EmitStep {
+                const t = task.t;
+                switch (frame.cursor) {
+                    0 => {
+                        if (t.exhaustive and t.arms.len == 1) {
+                            return .{ .tail = .{ .arm = .{ .t = t, .arm = t.arms[0], .env = task.env } } };
+                        }
+                        task.source = self.valueLocal(task.env, t.occ);
+                        frame.cursor = 1;
+                        if (t.exhaustive) {
+                            frame.index = t.arms.len - 1;
+                            return .{ .call = .{ .arm = .{ .t = t, .arm = t.arms[frame.index], .env = task.env } } };
+                        }
+                        frame.index = t.arms.len;
+                        return .{ .call = .{ .tree = .{ .tree = t.default.?, .env = task.env } } };
+                    },
+                    1 => task.current = input.?,
+                    else => {
+                        const arm = t.arms[frame.index];
+                        task.current = try self.ctx.tagNameTest(task.source, t.ty, arm.example, input.?, task.current);
+                    },
+                }
+                if (frame.index == 0) return .{ .ret = task.current };
+                frame.index -= 1;
+                frame.cursor = 2;
+                return .{ .call = .{ .arm = .{ .t = t, .arm = t.arms[frame.index], .env = task.env } } };
+            }
+
+            /// Checked equality guards, one per arm in order: each binds the
+            /// matched value and evaluates its guard, falling through to the
+            /// next arm when it does not hold.
+            fn stepGuardChain(self: *Emitter, frame: *EmitFrame, task: anytype, input: ?CtxStmt) Ctx.LowerError!EmitStep {
+                const t = task.t;
+                switch (frame.cursor) {
+                    0 => {
+                        task.source = self.valueLocal(task.env, t.occ);
+                        frame.index = t.arms.len;
+                        frame.cursor = 1;
+                        return .{ .call = .{ .tree = .{ .tree = t.default.?, .env = task.env } } };
+                    },
+                    1, 3 => task.current = input.?,
+                    else => {
+                        const arm = t.arms[frame.index];
+                        const cond = try self.ctx.literalGuardTemp(arm.example);
+                        const branch = try self.ctx.boolSwitch(cond, input.?, task.current);
+                        frame.cursor = 3;
+                        return .{ .request = .{ .literal_guard = .{ .pat = arm.example, .value = task.source, .cond = cond, .next = branch } } };
                     },
                 }
                 if (frame.index == 0) return .{ .ret = task.current };
@@ -1964,6 +2075,18 @@ const MockCtx = struct {
     }
 
     pub fn callableVariantCount(_: MockCtx, _: u32) ?u32 {
+        return null;
+    }
+
+    pub fn tagTestKind(_: MockCtx, _: u32) TestKind {
+        return .tag;
+    }
+
+    pub fn recordRest(_: MockCtx, _: u32, _: u32) LowerError!?MockSub {
+        return null;
+    }
+
+    pub fn retype(_: MockCtx, _: u32, _: u32) ?struct { key: u32, ty: u32 } {
         return null;
     }
 

@@ -10382,7 +10382,7 @@ when `MethodRegistry.fromModule` finds the method's target is a procedure and
 the instance is `T -> Str`, and `inspect_evidence` is
 the use's evidence node, produced by the evidence pass. Monotype and Boxy
 planning and lowering select the declaring view exactly as method dispatch does
-and consume that decision through `MethodRegistry.lookupInspectOverride`; they
+and consume that decision through `MethodRegistry.inspectOverride`; they
 never re-examine the method's type. Monotype requests the method at `T -> Str`.
 Boxy plans its worker at the instance type and supplies the worker's hidden
 descriptors and dictionaries from the use's evidence, as it does for a resolved
@@ -13009,6 +13009,27 @@ descriptors, dictionaries, or host ABI adapters.
 
 ### Strategy Equivalence Tests
 
+Value semantics must not depend on the strategy either. The cross-strategy
+differential harness (`zig build run-test-strategy-differential`,
+`src/eval/test/strategy_differential_runner.zig`) compiles every runnable eval
+case, every runtime host-effects case, and its own corpus
+(`strategy_differential_corpus.zig`) under `.lss` and `.boxy`, runs each on the
+LIR interpreter and the dev backend, and requires all four executions to agree
+on the inspect string or crash message, the `dbg` transcript, and the
+expect-failure transcript. An execution a case cannot run (a backend the case
+skips, a backend the host lacks) is counted and reported per reason, never
+silently skipped. An eval case whose `.boxy` executions do not yet agree is
+listed in `strategy_differential_gaps.zig` with the failure it shows and a
+reason; the harness counts these per reason, and fails on any unlisted
+failure, on a listed case that now agrees, and on an entry naming no case, so
+the list only shrinks. The harness's own corpus builds its values from a seed
+read after a `dbg` statement, which no compile-time evaluation performs, and
+requires each case to report that `dbg` at runtime, so each strategy's
+runtime rendering, equality, hashing, and matching run rather than a
+compile-time constant; a comptime check fails the build until every
+`ShapeKind` has an inspect, an equality, and a hashing case (or a stated
+exemption).
+
 The compiler does not perform production-release ABI equivalence verification
 between `.lss` and `.boxy`. Doing so would spend end-user time on an invariant
 that the compiler test suite owns.
@@ -13021,6 +13042,38 @@ descriptors/dictionaries, indirect calls, RC statement count, backend code size,
 or runtime performance are allowed.
 
 ## Shared Post-Check Model
+
+### Value Semantics
+
+`Str.inspect` rendering, structural equality, structural hashing, and the
+selection of a `to_inspect` override are value semantics: they depend on a
+type's shape, not on which strategy lowered it. They are defined once, in the
+`value_semantics` module (`src/postcheck/semantics/`), which depends on
+nothing else in the compiler so the standalone Boxy runtime object can import
+it too. Each consumer reads its own representation into the shared
+`ShapeKind` view through a comptime context:
+
+- `inspect.zig`: every literal inspection renders (`text`), and
+  `InspectSpec(Ctx)`, which decides from a shape what a rendering is (a whole
+  literal, the ordered parts of a record, tuple, or tag variant, a list loop,
+  an override call, ...). Monotype lowering builds rendering expressions from
+  it, Boxy lowering emits rendering LIR from it, and the Boxy runtime renders
+  descriptor-described values to bytes from it.
+- `inspect_override.zig`: `lookupInspectOverride`, the one selection of whose
+  registry decides an owner's override (the first view, in method-dispatch
+  search order, that declares `owner.to_inspect`), shared by Monotype
+  lowering, Boxy planning, and Boxy lowering.
+- `structural.zig`: what comparing and hashing a value means (component order,
+  short-circuit on the first unequal component, discriminant-then-payload
+  comparison, a tag's variant index hashed before its payloads, a list's
+  length before its items). `EqLower` and `HashLower` lower it to LIR for the
+  direct solved-to-LIR lowering's `structural_eq`/`structural_hash` and for
+  Boxy's derived equality and hashing; `EqEval` and `HashEval` evaluate it for
+  the Boxy runtime's descriptor-driven `assign_boxy_eq`/`assign_boxy_hash`, so
+  a value hashed by generic code and probed by specialized code lands in the
+  same bucket.
+
+### Typed Stores
 
 Every typed post-check IR has an explicit typed store. `.lss` uses this for
 the Monotype, Monotype Lifted, Lambda Solved, and Lambda Mono stages. `.boxy`
@@ -15093,7 +15146,7 @@ specialize=yes and specialize=no. Inspection is never a dispatch to
 override (Inspect Overrides), and a rejected declaration has no callable type
 to be one. `MethodRegistry.fromModule` records that decision on the rejected
 key itself (`inspect_override = null` beside `target = null`), and Monotype and
-Boxy consume it through `lookupInspectOverride` exactly as they consume an
+Boxy consume it through `MethodRegistry.inspectOverride` exactly as they consume an
 ineligible method's decision; neither stage branches on `rejected` to choose
 inspection's rendering. The program still reports the declaration's diagnostic
 and cannot be mistaken for valid.

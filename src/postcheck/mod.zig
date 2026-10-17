@@ -31,9 +31,8 @@ pub const LambdaSolved = struct {
 pub const LambdaMono = struct {
     pub const Type = @import("lambda_mono/type.zig");
 };
-/// Decision-tree match compiler used by the direct solved-to-LIR lowering.
-/// `.boxy` does not use it yet and folds match branches into a sequential
-/// chain of its own pattern tests.
+/// Decision-tree match compiler shared by both LIR lowerers: the direct
+/// solved-to-LIR lowering and Boxy lowering.
 pub const MatchTree = @import("match_tree.zig");
 pub const SolvedInline = @import("solved_inline.zig");
 pub const SolvedLirLower = @import("solved_lir_lower.zig");
