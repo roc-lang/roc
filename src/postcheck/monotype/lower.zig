@@ -8400,7 +8400,7 @@ const Builder = struct {
                         break;
                     }
                 },
-                else => where = "self",
+                .primitive, .zst, .erased, .named, .record, .tuple, .tag_union, .list, .box => where = "self",
             }
             std.debug.print("CENSUS_UNKEYED\t{s}\t{s}{d}\t{s}\n", .{ name, where, position, @tagName(spec_identity.callable) });
         }
