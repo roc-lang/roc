@@ -2802,11 +2802,6 @@ const Formatter = struct {
             },
             inline .if_then_else, .if_without_else => |i, tag| {
                 const else_expr: ?AST.Expr.Idx = if (tag == .if_then_else) i.@"else" else null;
-                // Check if then/else are blocks - blocks use original behavior,
-                // non-blocks use base_indent to keep else at the same level as if
-                const then_is_block = fmt.ast.store.getExpr(i.then) == .block;
-                const else_is_block = if (else_expr) |else_idx| fmt.ast.store.getExpr(else_idx) == .block else false;
-                const has_blocks = then_is_block or else_is_block;
                 const then_region = fmt.nodeRegion(@backingInt(i.then));
                 switch (f.phase) {
                     0 => {
@@ -2826,24 +2821,23 @@ const Formatter = struct {
                         });
                     },
                     1 => {
-                        const base_indent = f.locals.conditional.base_indent;
-                        if (!has_blocks) fmt.curr_indent = base_indent;
+                        // The then branch continues the condition's line, so a block
+                        // opened there indents relative to that line.
                         try fmt.indentedBeforeOrSpace(then_region.start);
                         f.phase = 2;
                         return call(exprFrame(i.then, .{}));
                     },
                     2 => {
                         const else_idx = else_expr orelse return fmt.finishExpr(f);
-                        const base_indent = f.locals.conditional.base_indent;
-                        if (!has_blocks) fmt.curr_indent = base_indent;
+                        // `else` on its own line aligns with `if`, and its branch
+                        // indents relative to `else`.
+                        fmt.curr_indent = f.locals.conditional.base_indent;
                         if (try fmt.flushCommentsBefore(then_region.end)) {
-                            if (has_blocks) fmt.curr_indent += 1;
                             try fmt.pushIndent();
                         } else {
                             try fmt.push(' ');
                         }
                         try fmt.pushAll(kw(.KwElse));
-                        if (!has_blocks) fmt.curr_indent = base_indent;
                         const else_region = fmt.nodeRegion(@backingInt(else_idx));
                         try fmt.indentedBeforeOrSpace(else_region.start);
                         f.phase = 3;
@@ -9694,4 +9688,56 @@ test "if condition is parenthesized unless the then branch is a block" {
             "commented = |n| if (\n\tn < 0 # why\n) {\n\t-n\n} else n\n",
         result,
     );
+}
+
+test "else block aligns with if when only the else branch has braces" {
+    const input =
+        "value =\n" ++
+        "\tif (True) 1\n" ++
+        "\telse { # comment\n" ++
+        "\t\t2\n" ++
+        "\t}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(input, result);
+}
+
+test "else on its own line aligns with if when the then branch is a block" {
+    const input =
+        "value =\n" ++
+        "\tif True {\n" ++
+        "\t\t1\n" ++
+        "\t}\n" ++
+        "\telse {\n" ++
+        "\t\t2\n" ++
+        "\t}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(input, result);
+}
+
+test "else chain with a final block stays aligned with if" {
+    const input =
+        "value =\n" ++
+        "\tif (True) 1\n" ++
+        "\telse if (False) 3\n" ++
+        "\telse {\n" ++
+        "\t\t2\n" ++
+        "\t}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(input, result);
+}
+
+test "block then branch after a comment-broken condition indents under the condition" {
+    const input =
+        "value =\n" ++
+        "\tif # c\n" ++
+        "\t\tTrue {\n" ++
+        "\t\t\t1\n" ++
+        "\t\t}\n" ++
+        "\telse 2\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(input, result);
 }

@@ -85,9 +85,9 @@ EndOfFile,
 ~~~roc
 foo = if (1) A
 
-	else {
-		"hello"
-	}
+else {
+	"hello"
+}
 ~~~
 # CANONICALIZE
 ~~~clojure

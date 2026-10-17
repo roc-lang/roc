@@ -4,11 +4,13 @@
 //! The encoding is a pure function of its inputs (fixed-width little-endian
 //! integers, length-prefixed bytes, artifacts in set order, specs in table
 //! order), so two builds of the same module write identical files and the
-//! store's rename-into-place protocol never has to compare contents.
+//! store's rename-into-place protocol leaves a pack already in place alone
+//! (builds with runtime safety compare the bytes).
 //!
-//! Line entries preserve exact SourceLoc values and order. Their file indices
-//! are meaningful only with the originating LIR source-file domain; a persistent
-//! consumer must bind that domain explicitly or omit lines from debug emission.
+//! Line entries keep their order, lines, and columns. Their file indices are
+//! indices into the pack's own source-file table, which names each file by
+//! its module's content identity in the order the lines first use it, so a
+//! splicing program binds them to its own table (`ProcArtifact.splice`).
 
 const std = @import("std");
 const collections = @import("collections");
@@ -20,7 +22,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 7;
+pub const format_version: u32 = 8;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// artifact holding its procedure, and the ownership signature and
@@ -74,6 +76,23 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
     try writer.word(format_version);
     try writer.word(@intCast(set.artifacts.len));
     try writer.word(@intCast(specs.len));
+
+    // The files the lines use, in first-use order, so the table depends only
+    // on the artifacts and not on the writing program's whole file table.
+    const file_map = try allocator.alloc(u32, set.source_files.len);
+    defer allocator.free(file_map);
+    @memset(file_map, std.math.maxInt(u32));
+    var used_files = std.ArrayList([32]u8).empty;
+    defer used_files.deinit(allocator);
+    for (set.artifacts) |artifact| {
+        for (artifact.lines) |line| {
+            if (!line.loc.hasLocation() or file_map[line.loc.file] != std.math.maxInt(u32)) continue;
+            file_map[line.loc.file] = @intCast(used_files.items.len);
+            try used_files.append(allocator, set.source_files[line.loc.file]);
+        }
+    }
+    try writer.word(@intCast(used_files.items.len));
+    for (used_files.items) |identity| try writer.raw(&identity);
 
     for (set.artifacts) |artifact| {
         switch (artifact.kind) {
@@ -145,7 +164,7 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
         try writer.word(@intCast(artifact.lines.len));
         for (artifact.lines) |line| {
             try writer.word(line.offset);
-            try writer.word(line.loc.file);
+            try writer.word(ProcArtifact.rebindLoc(line.loc, file_map).file);
             try writer.word(line.loc.line);
             try writer.word(line.loc.column);
         }
@@ -220,6 +239,8 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
     if (try reader.word() != format_version) return error.UnsupportedPackVersion;
     const artifact_count = try reader.word();
     const spec_count = try reader.word();
+    const source_files = try arena_allocator.alloc([32]u8, try reader.word());
+    for (source_files) |*identity| identity.* = (try reader.raw(32))[0..32].*;
 
     const artifacts = try arena_allocator.alloc(ProcArtifact.Artifact, artifact_count);
     for (artifacts) |*artifact| {
@@ -296,6 +317,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
                 .offset = try reader.word(),
                 .loc = .{ .file = try reader.word(), .line = try reader.word(), .column = try reader.word() },
             };
+            if (line.loc.hasLocation() and line.loc.file >= source_files.len) return error.MalformedPack;
         }
         const relocations = try arena_allocator.alloc(ProcArtifact.NamedRelocation, try reader.word());
         for (relocations) |*relocation| {
@@ -406,7 +428,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
     if (reader.offset != bytes.len) return error.MalformedPack;
 
     return .{
-        .set = .{ .arena = arena, .artifacts = artifacts },
+        .set = .{ .arena = arena, .artifacts = artifacts, .source_files = source_files },
         .specs = specs,
     };
 }
@@ -484,7 +506,7 @@ fn testOwnedPack(allocator: Allocator) (ReadError || error{TestExpectedEqual})!v
             .frame = null,
             .refs = &.{.{ .site = 0, .form = .call, .target = 0, .delta = 0, .veneer = 3 }},
             .symbolic_refs = &.{.{ .site = 1, .form = .call, .target = .{ .rc_helper = "external" } }},
-            .lines = &.{.{ .offset = 0, .loc = .{ .file = 2, .line = 10, .column = 8 } }},
+            .lines = &.{.{ .offset = 0, .loc = .{ .file = 0, .line = 10, .column = 8 } }},
             .relocations = &.{.{ .offset = 0, .name = "builtin", .scope = .shared, .kind = .function }},
             .data = &.{.{
                 .name = "datum",
@@ -494,6 +516,7 @@ fn testOwnedPack(allocator: Allocator) (ReadError || error{TestExpectedEqual})!v
                 .relocations = &.{.{ .offset = 0, .name = "target", .addend = -2, .function = true, .external = true }},
             }},
         }},
+        .source_files = &.{@as([32]u8, @splat(5))},
     };
     const bytes = try write(allocator, &set, &.{});
     var bytes_live = true;
@@ -503,6 +526,7 @@ fn testOwnedPack(allocator: Allocator) (ReadError || error{TestExpectedEqual})!v
     allocator.free(bytes);
     bytes_live = false;
     try std.testing.expectEqualDeep(set.artifacts, pack.set.artifacts);
+    try std.testing.expectEqualDeep(set.source_files, pack.set.source_files);
 }
 
 test "pack bytes round-trip every artifact field and spec entry" {
@@ -559,7 +583,10 @@ test "pack bytes round-trip every artifact field and spec entry" {
         },
         .{ .kind = .message_pool_run, .code = try a.dupe(u8, "hello"), .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = &.{} },
     });
-    var set = ProcArtifact.Set{ .arena = arena, .artifacts = artifacts };
+    // Lines use file 3 of the writing program's table, which the pack keeps
+    // as its own first file.
+    const source_files = try a.dupe([32]u8, &.{ @as([32]u8, @splat(0x30)), @as([32]u8, @splat(0x31)), @as([32]u8, @splat(0x32)), @as([32]u8, @splat(0x33)) });
+    var set = ProcArtifact.Set{ .arena = arena, .artifacts = artifacts, .source_files = source_files };
     defer set.deinit();
     const specs = [_]SpecEntry{
         .{
@@ -603,7 +630,14 @@ test "pack bytes round-trip every artifact field and spec entry" {
     try testing.expectEqual(@as(usize, 2), proc.refs.len);
     try testing.expectEqual(@as(usize, 3), proc.symbolic_refs.len);
     try testing.expectEqualDeep(artifacts[0].symbolic_refs, proc.symbolic_refs);
-    try testing.expectEqualDeep(artifacts[0].lines, proc.lines);
+    try testing.expectEqual(artifacts[0].lines.len, proc.lines.len);
+    for (artifacts[0].lines, proc.lines) |written, read_back| {
+        try testing.expectEqual(written.offset, read_back.offset);
+        try testing.expectEqual(written.loc.line, read_back.loc.line);
+        try testing.expectEqual(written.loc.column, read_back.loc.column);
+        try testing.expectEqualSlices(u8, &source_files[written.loc.file], &pack.set.source_files[read_back.loc.file]);
+    }
+    try testing.expectEqual(@as(usize, 1), pack.set.source_files.len);
     try testing.expectEqual(ProcArtifact.Form.addr, proc.refs[1].form);
     try testing.expectEqual(@as(u32, 9), proc.relocations[1].offset);
     try testing.expectEqualStrings("roc__d1", proc.relocations[1].name);

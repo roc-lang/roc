@@ -1243,12 +1243,14 @@ fn startBackgroundCacheCleanup(gpa: Allocator, arena: Allocator, std_io: std.Io)
     // artifacts are written. The background thread itself is CoreCtx-free and
     // allocation-free; it only borrows this path (copied in by value).
     const cleanup_ctx = CoreCtx.default(gpa, arena, std_io);
-    const cache_base: []const u8 = blk: {
-        const cfg = cache_config_mod.CacheConfig{ .roc_ctx = cleanup_ctx };
-        break :blk cfg.getEffectiveCacheDir(arena) catch "";
-    };
+    const cfg = cache_config_mod.CacheConfig{ .roc_ctx = cleanup_ctx };
+    const cache_base: []const u8 = cfg.getEffectiveCacheDir(arena) catch "";
     if (cache_base.len != 0) {
-        if (compile.CacheCleanup.startBackgroundCleanup(cache_base, std_io)) |_| {
+        const limits: compile.CacheCleanup.Limits = .{
+            .object_pack_format_version = backend.dev.PackFile.format_version,
+            .max_size_bytes = @as(u64, cfg.max_size_mb) * 1024 * 1024,
+        };
+        if (compile.CacheCleanup.startBackgroundCleanup(cache_base, std_io, limits)) |_| {
             // Thread started successfully, will run in background.
         } else |_| {
             // Non-fatal: cleanup failure shouldn't prevent compilation.
@@ -8070,6 +8072,15 @@ fn defaultBuildTarget(args: cli_args.BuildArgs) RocTarget {
     return RocTarget.detectNative().defaultCpuTarget();
 }
 
+/// Read one of the developer-diagnostic environment variables. A compiler
+/// built without developer diagnostics (see `build_options.dev_diagnostics`)
+/// reads none of them: every call is a compile-time null, so the code it
+/// guards is not compiled in.
+inline fn devDiagnosticEnv(comptime name: [:0]const u8) ?[*:0]u8 {
+    if (comptime !build_options.dev_diagnostics) return null;
+    return std.c.getenv(name);
+}
+
 /// Build using the dev backend to generate native machine code.
 /// This produces truly compiled executables without an interpreter.
 /// `ROC_DEV_PACK_OBJECTS` makes a native dev build also lower every visible
@@ -8088,7 +8099,7 @@ fn writePackObjects(
     target: RocTarget,
     final_output_path: []const u8,
 ) CliMainError!void {
-    if (std.c.getenv("ROC_DEV_PACK_OBJECTS") == null) return;
+    if (devDiagnosticEnv("ROC_DEV_PACK_OBJECTS") == null) return;
     {
         // The app program's own procedures, in the same shape as a pack
         // manifest, so identities can be compared across the two lowerings.
@@ -8252,7 +8263,7 @@ fn writePacksToStore(
     args: cli_args.BuildArgs,
     target: RocTarget,
 ) CliMainError!void {
-    if (std.c.getenv("ROC_PACK_TRACE") != null) {
+    if (devDiagnosticEnv("ROC_PACK_TRACE") != null) {
         // What this program lowered from source: every procedure by identity,
         // for comparison with another build of the same source, and every
         // specialization by the key a pack serves it by, for comparison with
@@ -8301,7 +8312,7 @@ fn writePacksToStore(
         const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
         defer ctx.gpa.free(roots);
         if (roots.len == 0) continue;
-        if (std.c.getenv("ROC_PACK_TRACE") != null) {
+        if (devDiagnosticEnv("ROC_PACK_TRACE") != null) {
             std.debug.print("module pack {s}\n", .{artifact.canonical_names.moduleNameText(artifact.module_identity.module_name)});
         }
         var pack = try compileModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args, target);
@@ -8358,7 +8369,7 @@ fn publishCompileTimePack(ctx: *CliCtx, build_env: *BuildEnv) (Allocator.Error |
     const set = &(compiled.artifacts orelse return);
     const bytes = try packFileBytes(ctx.gpa, set, host);
     defer ctx.gpa.free(bytes);
-    if (std.c.getenv("ROC_PACK_TRACE") != null) std.debug.print("compile-time pack {d} bytes\n", .{bytes.len});
+    if (devDiagnosticEnv("ROC_PACK_TRACE") != null) std.debug.print("compile-time pack {d} bytes\n", .{bytes.len});
     store.write(placement.origin, placement.identity, key, bytes) catch |err| {
         std.log.warn("object cache could not store the compile-time pack: {}", .{err});
     };
@@ -8384,7 +8395,7 @@ fn packFileBytes(
     defer specs.deinit(allocator);
     var conditions_arena = base.SingleThreadArena.init(allocator);
     defer conditions_arena.deinit();
-    const trace = std.c.getenv("ROC_PACK_TRACE") != null;
+    const trace = devDiagnosticEnv("ROC_PACK_TRACE") != null;
     var withheld: usize = 0;
     const procs = lowered.lir_result.store.getProcSpecs();
     const converting = try lir.PackProgram.literalConvertingProcs(allocator, &lowered.lir_result.store);
@@ -10586,7 +10597,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     var own_packs: ?pack_store.LoadedPacks = null;
     defer if (own_packs) |*packs| packs.deinit();
     var loaded_packs: ?*pack_store.LoadedPacks = null;
-    if (std.c.getenv("ROC_DEV_PACK_HITS")) |dir_z| {
+    if (devDiagnosticEnv("ROC_DEV_PACK_HITS")) |dir_z| {
         own_packs = pack_store.LoadedPacks.loadDir(ctx.gpa, ctx.io.std_io, std.mem.span(dir_z)) catch |err| {
             std.log.err("failed to load packs from {s}: {}", .{ std.mem.span(dir_z), err });
             return error.NativeCompilationFailed;
@@ -10630,7 +10641,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     }
     runtime_lowering.target.code_provision = nativeObjectCodeProvision(target, args.opt, loaded_packs != null);
     // This program's specializations go into packs.
-    runtime_lowering.target.spec_comptime_reads = object_store != null or std.c.getenv("ROC_DEV_PACK_OBJECTS") != null;
+    runtime_lowering.target.spec_comptime_reads = object_store != null or devDiagnosticEnv("ROC_DEV_PACK_OBJECTS") != null;
     build_env.setRuntimeLowering(runtime_lowering);
     build_env.setValidateTargetFilesForSelectedTarget(true);
     build_env.setDetailedLoweringTiming(args.timings);
@@ -10646,7 +10657,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     defer lowered.deinit();
     // Cache statistics are diagnostic output. Ordinary successful builds must
     // leave stderr empty so build runners do not report false warnings.
-    if (loaded_packs != null and std.c.getenv("ROC_PACK_STATS") != null) {
+    if (loaded_packs != null and devDiagnosticEnv("ROC_PACK_STATS") != null) {
         const packs = loaded_packs.?.*;
         var external_procs: usize = 0;
         for (lowered.lir_result.store.getProcSpecs()) |proc| {

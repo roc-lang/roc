@@ -240,6 +240,7 @@ pub fn listOp(op: LowLevel) BuiltinFn {
         .{ LowLevel.list_append_range_within_unsafe, BuiltinFn.list_append_range_within_unsafe },
         .{ LowLevel.list_append_sublist, BuiltinFn.list_append_sublist },
         .{ LowLevel.list_append_le_bytes, BuiltinFn.list_append_le_bytes },
+        .{ LowLevel.list_append_le_bytes_unsafe, BuiltinFn.list_append_le_bytes },
         .{ LowLevel.list_slack_unique, BuiltinFn.list_slack_unique },
         .{ LowLevel.list_owned_unique, BuiltinFn.list_owned_unique },
         .{ LowLevel.list_prepend, BuiltinFn.list_prepend },

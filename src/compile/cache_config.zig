@@ -14,6 +14,16 @@ const Allocator = std.mem.Allocator;
 /// directories (see `CacheConfig.getScratchDir`).
 pub const scratch_dir_name = "tmp";
 
+/// Prefix of the per-version subdirectories that hold object-cache packs. One
+/// namespace exists per pack format, named by appending the format version, so
+/// packs of different formats never share a directory.
+pub const object_pack_namespace_prefix = "objects-v";
+
+/// The object-cache namespace of pack format `format_version`.
+pub fn objectPackNamespace(comptime format_version: u32) []const u8 {
+    return std.fmt.comptimePrint(object_pack_namespace_prefix ++ "{d}", .{format_version});
+}
+
 const CacheOs = enum { windows, macos, other };
 
 fn cacheOs(os: std.Target.Os.Tag) CacheOs {
@@ -321,7 +331,9 @@ pub const Constants = struct {
     ///      and error-record field offsets.
     /// 151: an import's exposed items record the declaration import
     ///      resolution selected for them.
-    pub const CACHE_VERSION = 151;
+    /// 152: a nested procedure site records whether its module's source
+    ///      calls it at exactly one site.
+    pub const CACHE_VERSION = 152;
 };
 
 /// Configuration for the Roc cache system.
