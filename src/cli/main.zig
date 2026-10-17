@@ -304,11 +304,13 @@ const CompileTimeObjectCache = struct {
     publications: std.ArrayList(Publication) = .empty,
 
     const Publication = struct {
+        /// The placement and code-generation key a pack of offers or of
+        /// discovery summaries is filed under; a pack of artifacts is filed
+        /// by content in the store's artifacts directory.
         placement: BuildEnv.PackPlacement,
         key: [32]u8,
         bytes: backend.dev.PackFile.Bytes,
-        /// A pack of discovery summaries, filed apart from code packs.
-        discovery: bool = false,
+        kind: enum { offers, artifacts, discovery } = .offers,
     };
 
     fn defaultPolicy() lir.CheckedPipeline.TargetConfig {
@@ -537,35 +539,105 @@ const CompileTimeObjectCache = struct {
             if (!generated[@backingInt(offer.proc)]) continue;
             if (cachePublicationOwner(offer.owner, requester, builtin_owner)) |owner| try owners.put(owner.bytes, {});
         }
+        // Each owner's offers select the artifacts they serve; the artifacts
+        // the store lacks go into one pack of artifacts, and each owner's
+        // pack of offers names its roots by content address.
+        const OwnerOffers = struct {
+            placement: BuildEnv.PackPlacement,
+            key: [32]u8,
+            offers: PackOwnerOffers,
+        };
+        var owner_offers = std.ArrayList(OwnerOffers).empty;
+        defer {
+            for (owner_offers.items) |*owner| owner.offers.deinit(self.allocator);
+            owner_offers.deinit(self.allocator);
+        }
+        const union_selected = try self.allocator.alloc(bool, set.artifacts.len);
+        defer self.allocator.free(union_selected);
+        @memset(union_selected, false);
         var owner_keys = owners.keyIterator();
         while (owner_keys.next()) |owner_bytes| {
             const owner = check.CheckedArtifact.ModuleId{ .bytes = owner_bytes.* };
             const producer = if (owner.eql(requester)) artifact else self.declaredArtifact(owner.bytes) orelse continue;
             const placement = build_env.packPlacementForArtifactKey(producer.key) orelse continue;
-            const encode_started = std.Io.Timestamp.now(self.io, .awake).nanoseconds;
-            const bytes = try packFileBytesFiltered(self.allocator, &set, lowered, .{
+            var offers = try selectOwnerOffers(self.allocator, &set, lowered, .{
                 .carried_reads = &self.packs.materializer_reads,
                 .generated_roots = generated,
                 .checked_owner = owner,
                 .requester = requester,
                 .builtin_owner = builtin_owner,
-            }, &encoding, self.store.version_hash);
-            errdefer self.allocator.free(bytes);
-            const encoded_at = std.Io.Timestamp.now(self.io, .awake).nanoseconds;
-            self.packs.capture_encode_ns += encoded_at - encode_started;
-            defer self.packs.capture_stage_ns += std.Io.Timestamp.now(self.io, .awake).nanoseconds - encoded_at;
+            }, &encoding);
             // Stage only offers owned by this immutable checked module. App
             // edits must not hide an imported helper in the old app namespace.
-            const offered = backend.dev.PackFile.View.init(bytes, self.store.version_hash) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.MalformedPack, error.UnsupportedPackVersion => unreachable,
-            };
-            if (offered.specCount() == 0) {
-                self.allocator.free(bytes);
+            if (offers.specs.items.len == 0) {
+                offers.deinit(self.allocator);
                 continue;
             }
-            try self.stagePublication(placement, producer.codeGenerationKey().bytes, bytes);
+            for (union_selected, offers.selected) |*mark, selected| mark.* = mark.* or selected;
+            try owner_offers.append(self.allocator, .{ .placement = placement, .key = producer.codeGenerationKey().bytes, .offers = offers });
         }
+        if (owner_offers.items.len == 0) return;
+        const encode_started = std.Io.Timestamp.now(self.io, .awake).nanoseconds;
+        // The serving closure of every owner's offers, addressed by content.
+        // A pack owns exactly the serving closure, not unrelated evaluator
+        // roots: their source observations may name an app this independent
+        // offer never reaches, and must not veto its admission after an app
+        // edit.
+        var serving = try backend.dev.ArtifactClosure.selectMarked(self.allocator, &set, union_selected);
+        defer serving.deinit();
+        var names = try backend.dev.ProcArtifact.ContentNames.init(self.allocator, &serving.set);
+        defer names.deinit();
+        var graph = try backend.dev.ArtifactClosure.init(self.allocator, &serving.set);
+        defer graph.deinit();
+        const addresses = try graph.contentAddresses(&names);
+        defer self.allocator.free(addresses);
+        const carried = try self.allocator.alloc(bool, addresses.len);
+        defer self.allocator.free(carried);
+        var carried_count: usize = 0;
+        for (carried, addresses, serving.set.artifacts) |*mark, address, member| {
+            mark.* = !self.packs.carries(address);
+            carried_count += @intFromBool(mark.*);
+            if (trace and mark.*) {
+                const name = if (member.producer_proc) |proc| lowered.lir_result.store.procDebugName(proc) orelse "" else "";
+                switch (member.kind) {
+                    .proc, .boxy_thunk => |identity| std.debug.print("capture-new {s} {s} code={d} name={s}\n", .{ @tagName(member.kind), &identity.symbolHex(), member.code.len, name }),
+                    .rc_helper => |helper| std.debug.print("capture-new helper {s} code={d}\n", .{ helper, member.code.len }),
+                    .entrypoint, .message_pool_run, .branch_island => std.debug.print("capture-new {s} code={d}\n", .{ @tagName(member.kind), member.code.len }),
+                }
+            }
+        }
+        if (trace) std.debug.print("capture: serving closure {d} artifacts, {d} not yet in the store\n", .{ addresses.len, carried_count });
+        if (carried_count != 0) {
+            var body = try backend.dev.PackFile.encodeBody(self.allocator, &serving.set, .{ .addresses = addresses, .carried = carried });
+            defer body.deinit();
+            const bytes = try backend.dev.PackFile.writeWithBody(self.allocator, &body, &.{}, &.{}, &.{}, self.store.version_hash);
+            errdefer self.allocator.free(bytes);
+            try self.stageArtifacts(bytes);
+        }
+        var roots = std.ArrayList([32]u8).empty;
+        defer roots.deinit(self.allocator);
+        var root_rows = std.AutoHashMap([32]u8, u32).init(self.allocator);
+        defer root_rows.deinit();
+        for (owner_offers.items) |*owner| {
+            roots.clearRetainingCapacity();
+            root_rows.clearRetainingCapacity();
+            for (owner.offers.specs.items) |*spec| {
+                const address = addresses[serving.old_to_new[spec.artifact].?];
+                const entry = try root_rows.getOrPut(address);
+                if (!entry.found_existing) {
+                    entry.value_ptr.* = @intCast(roots.items.len);
+                    try roots.append(self.allocator, address);
+                }
+                spec.artifact = entry.value_ptr.*;
+            }
+            var body = try backend.dev.PackFile.encodeReferences(self.allocator, roots.items);
+            defer body.deinit();
+            const bytes = try backend.dev.PackFile.writeWithBody(self.allocator, &body, owner.offers.specs.items, &.{}, owner.offers.materializer_reads.items, self.store.version_hash);
+            errdefer self.allocator.free(bytes);
+            try self.stagePublication(owner.placement, owner.key, bytes);
+        }
+        const encoded_at = std.Io.Timestamp.now(self.io, .awake).nanoseconds;
+        self.packs.capture_encode_ns += encoded_at - encode_started;
     }
 
     /// Publish each discovery summary this program produced in a pack of
@@ -618,7 +690,25 @@ const CompileTimeObjectCache = struct {
             .placement = placement,
             .key = key,
             .bytes = bytes,
-            .discovery = true,
+            .kind = .discovery,
+        });
+    }
+
+    /// Stage a pack of artifacts, which later consumers of this session find
+    /// the carriers of their closures in. On success, owns the bytes.
+    fn stageArtifacts(self: *CompileTimeObjectCache, bytes: backend.dev.PackFile.Bytes) Allocator.Error!void {
+        std.debug.assert(!self.packs.revoked);
+        if (self.packs.state != .unavailable) {
+            self.packs.retain(bytes) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.MalformedPack, error.UnsupportedPackVersion, error.PackDirectoryUnreadable => unreachable,
+            };
+        }
+        try self.publications.append(self.allocator, .{
+            .placement = .{ .origin = .local, .identity = @splat(0) },
+            .key = @splat(0),
+            .bytes = bytes,
+            .kind = .artifacts,
         });
     }
 
@@ -662,10 +752,11 @@ const CompileTimeObjectCache = struct {
         };
         for (self.publications.items) |publication| {
             if (accepted) {
-                const written = if (publication.discovery)
-                    self.store.writeDiscovery(publication.placement.origin, publication.placement.identity, publication.key, publication.bytes)
-                else
-                    self.store.writePartial(publication.placement.origin, publication.placement.identity, publication.key, publication.bytes);
+                const written = switch (publication.kind) {
+                    .offers => self.store.writePartial(publication.placement.origin, publication.placement.identity, publication.key, publication.bytes),
+                    .artifacts => self.store.writeArtifacts(publication.bytes),
+                    .discovery => self.store.writeDiscovery(publication.placement.origin, publication.placement.identity, publication.key, publication.bytes),
+                };
                 written catch |err| {
                     std.log.warn("object cache could not store normal native offers: {}", .{err});
                 };
@@ -9030,40 +9121,6 @@ const PackEncodingPlan = struct {
     closure: SpliceClosure,
     eligible: []bool = &.{},
     offer_graph: ?PackOfferGraph = null,
-    /// The serving closure the last owner's offers selected, with its
-    /// encoded pack body, kept for the next owner selecting the same
-    /// artifacts: the owners of one program usually all serve its whole
-    /// closure, and the body is by far the larger part of each pack.
-    serving: ?CachedServing = null,
-
-    const CachedServing = struct {
-        selected: []bool,
-        selection: backend.dev.ArtifactClosure.Selection,
-        body: backend.dev.PackFile.Body,
-
-        fn deinit(self: *CachedServing, allocator: Allocator) void {
-            self.body.deinit();
-            self.selection.deinit();
-            allocator.free(self.selected);
-        }
-    };
-
-    /// The serving closure of `set` marked by `selected`, encoded; the cached
-    /// one when the marks are the same.
-    fn servingFor(self: *PackEncodingPlan, set: *const backend.dev.ProcArtifact.Set, selected: []const bool) Allocator.Error!*CachedServing {
-        if (self.serving) |*cached| {
-            if (std.mem.eql(bool, cached.selected, selected)) return cached;
-            cached.deinit(self.allocator);
-            self.serving = null;
-        }
-        var selection = try backend.dev.ArtifactClosure.selectMarked(self.allocator, set, selected);
-        errdefer selection.deinit();
-        var body = try backend.dev.PackFile.encodeBody(self.allocator, &selection.set);
-        errdefer body.deinit();
-        const marks = try self.allocator.dupe(bool, selected);
-        self.serving = .{ .selected = marks, .selection = selection, .body = body };
-        return &self.serving.?;
-    }
 
     fn init(allocator: Allocator, set: *const backend.dev.ProcArtifact.Set, lowered: *const lir.CheckedPipeline.LoweredProgram) Allocator.Error!PackEncodingPlan {
         var self = PackEncodingPlan{
@@ -9122,7 +9179,6 @@ const PackEncodingPlan = struct {
     }
 
     fn deinit(self: *PackEncodingPlan) void {
-        if (self.serving) |*cached| cached.deinit(self.allocator);
         if (self.offer_graph) |*graph| graph.deinit();
         self.allocator.free(self.eligible);
         self.closure.deinit();
@@ -9330,6 +9386,25 @@ test "pack publication selects exact semantic literal producers without fixed wr
     }
 }
 
+/// One owner's offers of a program: the specs it may serve, each naming its
+/// artifact by its index in the program's artifact set, the literal reads
+/// behind the materializers the served code calls, and which artifacts of
+/// the set the offers' serving closures hold.
+const PackOwnerOffers = struct {
+    specs: std.ArrayList(backend.dev.PackFile.SpecEntry),
+    materializer_reads: std.ArrayList(backend.dev.PackFile.MaterializerRead),
+    selected: []bool,
+    conditions: base.SingleThreadArena,
+
+    fn deinit(self: *PackOwnerOffers, allocator: Allocator) void {
+        self.specs.deinit(allocator);
+        self.materializer_reads.deinit(allocator);
+        allocator.free(self.selected);
+        self.conditions.deinit();
+    }
+};
+
+/// A self-contained pack of one owner's offers with their serving closure.
 /// CTFE publishes only newly generated keyed roots; cached dependencies remain
 /// carried code, not unrelated offers rewritten into the new publication.
 fn packFileBytesFiltered(
@@ -9346,18 +9421,36 @@ fn packFileBytesFiltered(
         owned = try PackEncodingPlan.init(allocator, set, lowered);
         break :blk &owned.?;
     };
+    var offers = try selectOwnerOffers(allocator, set, lowered, filter, plan);
+    defer offers.deinit(allocator);
+    var serving = try backend.dev.ArtifactClosure.selectMarked(allocator, set, offers.selected);
+    defer serving.deinit();
+    for (offers.specs.items) |*spec| spec.artifact = serving.old_to_new[spec.artifact].?;
+    var body = try backend.dev.PackFile.encodeBody(allocator, &serving.set, .{});
+    defer body.deinit();
+    return backend.dev.PackFile.writeWithBody(allocator, &body, offers.specs.items, &.{}, offers.materializer_reads.items, version_hash);
+}
+
+/// Select the offers of `filter`'s owner from a program's artifact set.
+fn selectOwnerOffers(
+    allocator: Allocator,
+    set: *const backend.dev.ProcArtifact.Set,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    filter: PackOfferFilter,
+    plan: *PackEncodingPlan,
+) Allocator.Error!PackOwnerOffers {
     std.debug.assert(plan.closure.set == set);
     var specs = std.ArrayList(backend.dev.PackFile.SpecEntry).empty;
     defer specs.deinit(allocator);
     var conditions_arena = base.SingleThreadArena.init(allocator);
-    defer conditions_arena.deinit();
+    errdefer conditions_arena.deinit();
     const trace = std.c.getenv("ROC_PACK_TRACE") != null;
     var withheld: usize = 0;
     const procs = lowered.lir_result.store.getProcSpecs();
     var roots = std.ArrayList(u32).empty;
     defer roots.deinit(allocator);
     const selected = try allocator.alloc(bool, set.artifacts.len);
-    defer allocator.free(selected);
+    errdefer allocator.free(selected);
     @memset(selected, false);
     const comptime_reads = if (lowered.spec_comptime_reads) |*reads| reads else {
         if (builtin.mode == .debug) std.debug.panic("a program written to the object cache recorded no compile-time reads", .{});
@@ -9516,32 +9609,82 @@ fn packFileBytesFiltered(
     if (plan.offer_graph == null) plan.offer_graph = try PackOfferGraph.init(allocator, plan, specs.items);
     const graph = &plan.offer_graph.?;
     var selected_specs = std.ArrayList(backend.dev.PackFile.SpecEntry).empty;
-    defer selected_specs.deinit(allocator);
+    errdefer selected_specs.deinit(allocator);
     try graph.select(roots.items, selected, specs.items, &selected_specs, allocator);
     if (trace) {
         std.debug.print("pack: {d} artifacts, {d} specs offered, {d} withheld\n", .{ set.artifacts.len, selected_specs.items.len, withheld });
     }
-    // A pack owns exactly the serving closure, not unrelated evaluator roots.
-    // Their source observations may name an app this independent offer never
-    // reaches, and must not veto its admission after an app edit.
-    const cached = try plan.servingFor(set, selected);
-    const serving = &cached.selection;
-    for (selected_specs.items) |*spec| spec.artifact = serving.old_to_new[spec.artifact].?;
+    // Every checked module an offer's facts and serving closure name, so a
+    // program lacking one declines the offer without admitting its closure.
+    // The closure's modules are summed per component, callees first.
+    var condensed = try plan.closure.components();
+    defer condensed.deinit();
+    var module_scratch = collections.SingleThreadArena.init(allocator);
+    defer module_scratch.deinit();
+    const ma = module_scratch.allocator();
+    const Modules = std.AutoArrayHashMapUnmanaged([32]u8, void);
+    const component_modules = try ma.alloc(Modules, condensed.callees.len);
+    @memset(component_modules, .empty);
+    for (set.artifacts, condensed.nodes) |artifact, component| {
+        const modules = &component_modules[component];
+        for (artifact.materializations) |dependency| try modules.put(ma, dependency.materialization.module, {});
+        for (artifact.source_events) |certificate| {
+            const descriptor = certificate.descriptor;
+            if (descriptor.source.has_location != 0) try modules.put(ma, descriptor.source.checked_module, {});
+            if (certificate.site_origin != null) try modules.put(ma, descriptor.site.checked_module, {});
+            if (descriptor.failure.has_literal_rejection != 0) try modules.put(ma, descriptor.failure.literal_rejection.checked_module, {});
+        }
+    }
+    var component = condensed.callees.len;
+    while (component != 0) {
+        component -= 1;
+        for (condensed.callees[component]) |callee| {
+            for (component_modules[callee].keys()) |module| try component_modules[component].put(ma, module, {});
+        }
+    }
+    var module_set = Modules.empty;
+    for (selected_specs.items) |*spec| {
+        module_set.clearRetainingCapacity();
+        const demand = spec.demand orelse unreachable;
+        for (demand.eager_reads) |read| {
+            try module_set.put(ma, read.module, {});
+            if (read.cause.module) |module| try module_set.put(ma, module, {});
+        }
+        for (demand.literal_reads) |read| {
+            if (read.cause.module) |module| try module_set.put(ma, module, {});
+            try module_set.put(ma, read.recipe.module, {});
+            try module_set.put(ma, read.recipe.method_scope, {});
+            try module_set.put(ma, read.recipe.owner_template.artifact.bytes, {});
+            for (read.recipe.local_contexts) |context| try module_set.put(ma, context.module, {});
+        }
+        for (spec.comptime_root_reads) |read| try module_set.put(ma, read.module, {});
+        for (component_modules[condensed.nodes[spec.artifact]].keys()) |module| try module_set.put(ma, module, {});
+        const modules = try conditions_arena.allocator().dupe([32]u8, module_set.keys());
+        std.mem.sort([32]u8, modules, {}, struct {
+            fn lessThan(_: void, left: [32]u8, right: [32]u8) bool {
+                return std.mem.order(u8, &left, &right) == .lt;
+            }
+        }.lessThan);
+        spec.modules = modules;
+    }
     // Each literal materializer the serving code calls carries its read:
     // this program's own, or the one the carried code's pack recorded.
     var materializer_reads = std.ArrayList(backend.dev.PackFile.MaterializerRead).empty;
-    defer materializer_reads.deinit(allocator);
+    errdefer materializer_reads.deinit(allocator);
     var recorded = std.AutoHashMap([32]u8, void).init(allocator);
     defer recorded.deinit();
-    for (serving.set.artifacts) |artifact| for (artifact.materializations) |dependency| {
-        const wrapper = dependency.materialization.wrapper_identity;
-        if (dependency.materialization.producer != .literal) continue;
-        if ((try recorded.getOrPut(wrapper)).found_existing) continue;
-        const read = lowered.lir_result.literal_materializer_reads.get(wrapper) orelse
-            (if (filter.carried_reads) |carried| carried.get(wrapper) else null) orelse continue;
-        try materializer_reads.append(allocator, .{ .wrapper_identity = wrapper, .read = read });
-    };
-    return backend.dev.PackFile.writeWithBody(allocator, &serving.set, &cached.body, selected_specs.items, &.{}, materializer_reads.items, version_hash);
+    for (set.artifacts, selected) |artifact, in_closure| {
+        if (!in_closure) continue;
+        for (artifact.materializations) |dependency| {
+            const wrapper = dependency.materialization.wrapper_identity;
+            if (dependency.materialization.producer != .literal) continue;
+            if ((try recorded.getOrPut(wrapper)).found_existing) continue;
+            const read = lowered.lir_result.literal_materializer_reads.get(wrapper) orelse
+                (if (filter.carried_reads) |carried| carried.get(wrapper) else null) orelse continue;
+            try materializer_reads.append(allocator, .{ .wrapper_identity = wrapper, .read = read });
+        }
+    }
+    return .{ .specs = selected_specs, .materializer_reads = materializer_reads, .selected = selected, .conditions = conditions_arena };
 }
 
 /// The LIR fingerprint of one procedure of `lowered`, which is the same in

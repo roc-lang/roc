@@ -257,6 +257,12 @@ pub const Artifact = struct {
     /// in a pack: cached dependencies do not become this session's offers.
     producer_proc: ?lir.LIR.LirProcSpecId = null,
     producer_helper: ?u64 = null,
+    /// The artifact's content address (`ArtifactClosure.contentAddresses`)
+    /// when known: read from the store pack that carries it, or computed for
+    /// publication. An artifact served from the store keeps it, so a program
+    /// that publishes the code it was served names it rather than carrying
+    /// it again.
+    content_address: ?[32]u8 = null,
 };
 
 fn contractWord(hasher: *Sha256, value: u64) void {
@@ -372,6 +378,11 @@ pub const Set = struct {
     /// graph, so two such sets name a shared definition the same way. Null
     /// when the set is the whole graph.
     definitions: ?[]const u32 = null,
+    /// For a set admitted from the object store, each artifact's content
+    /// address, which is its physical identity: the store holds one
+    /// artifact per address, whichever packs carry it. Null for a set the
+    /// physical namespace and definition indices name.
+    addresses: ?[]const [32]u8 = null,
 
     pub fn deinit(self: *Set) void {
         self.arena.deinit();
@@ -380,6 +391,14 @@ pub const Set = struct {
     /// The index of artifact `index` in the physical graph the set belongs to.
     pub fn physicalDefinition(self: *const Set, index: u32) u32 {
         return if (self.definitions) |definitions| definitions[index] else index;
+    }
+
+    /// The physical provision of artifact `index`, given the set's physical
+    /// namespace: its content address when the set is addressed, otherwise
+    /// its definition in the namespace's graph.
+    pub fn provisionIn(self: *const Set, namespace: ?[32]u8, index: u32) LirCodeGenMod.PhysicalProvision {
+        if (self.addresses) |addresses| return .{ .graph = addresses[index], .definition = 0 };
+        return .{ .graph = namespace orelse unreachable, .definition = self.physicalDefinition(index) };
     }
 };
 
@@ -1683,7 +1702,7 @@ pub fn spliceIndexed(
     for (roots) |root| try stack.append(allocator, root);
     while (stack.pop()) |index| {
         if (placed.contains(index)) continue;
-        const provision: LirCodeGenMod.PhysicalProvision = .{ .graph = graph.physicalNamespace(), .definition = set.physicalDefinition(index) };
+        const provision = graph.provision(index);
         if (codegen.physical_provisions.get(provision)) |start| {
             try placed.putNoClobber(index, start);
             continue;
@@ -1725,7 +1744,7 @@ pub fn spliceIndexed(
         // as belonging to this program. Session append does preserve lines.
         try appendMetadata(CG, codegen, artifact, start, false, false);
         try placed.putNoClobber(index, start);
-        try codegen.physical_provisions.putNoClobber(codegen.allocator, .{ .graph = graph.physicalNamespace(), .definition = set.physicalDefinition(index) }, start);
+        try codegen.physical_provisions.putNoClobber(codegen.allocator, graph.provision(index), start);
         for (artifact.relocations) |relocation| {
             const symbol = try codegen.internSymbolName(relocation.name, relocation.scope);
             const offset: u64 = start + relocation.offset;
@@ -2051,7 +2070,8 @@ test "frozen callable names distinguish physical graphs with equal logical ident
     const set = Set{ .arena = collections.SingleThreadArena.init(allocator), .artifacts = &artifacts };
     var first = try ContentNames.init(allocator, &set);
     defer first.deinit();
-    artifacts[1].context_dependencies.?.dict_seed = true;
+    // The same logical function and ordinal, compiled to different code.
+    artifacts[1].code = "\x90\xc3";
     var second = try ContentNames.init(allocator, &set);
     defer second.deinit();
     try std.testing.expect(!std.mem.eql(u8, first.of("roc__d0"), second.of("roc__d0")));

@@ -193,11 +193,16 @@ pub const MaterializationRow = extern struct {
     present: u8,
 };
 
-/// One artifact: where its code and rows lie, and its contracts.
+/// One artifact the pack carries: where its code and rows lie, and its
+/// contracts. The pack's rows are its artifacts followed by its references
+/// (`Columns.references`), so an index at or past the artifact count names
+/// an artifact another pack carries, by content address alone.
 pub const ArtifactRow = extern struct {
     /// The procedure or Boxy thunk identity; zero for other kinds.
     identity: [32]u8,
     callable_contract: [32]u8,
+    /// The artifact's content address (`ArtifactClosure.contentAddresses`).
+    content: [32]u8,
     /// The refcount helper's name; empty for other kinds.
     helper_name: NameRef,
     code: Range,
@@ -346,6 +351,10 @@ pub const SpecRow = extern struct {
     demand: Range,
     root_reads: Range,
     conditions: Range,
+    /// The checked modules the offer's facts and serving closure name, in
+    /// the modules column; a program lacking one of them never admits the
+    /// closure.
+    modules: Range,
     artifact: u32,
     has_relation: u8,
     has_demand: u8,
@@ -385,6 +394,9 @@ pub const Columns = struct {
     data_bytes: []const u8 = &.{},
     blobs: []const u8 = &.{},
     artifacts: []const ArtifactRow = &.{},
+    /// Content addresses of the artifacts the pack names without carrying
+    /// them, as rows numbered after the artifacts.
+    references: []const [32]u8 = &.{},
     refs: []const RefRow = &.{},
     symbolic_refs: []const SymbolicRefRow = &.{},
     lines: []const LineRow = &.{},
@@ -398,6 +410,8 @@ pub const Columns = struct {
     specs: []const SpecRow = &.{},
     root_reads: []const RootReadRow = &.{},
     conditions: []const u32 = &.{},
+    /// Checked module keys offers name (`SpecRow.modules`).
+    modules: []const [32]u8 = &.{},
     discovery: []const DiscoveryRow = &.{},
     materializer_reads: []const MaterializerReadRow = &.{},
 };
@@ -409,6 +423,7 @@ pub const Serialized = extern struct {
     data_bytes: Column(u8),
     blobs: Column(u8),
     artifacts: Column(ArtifactRow),
+    references: Column([32]u8),
     refs: Column(RefRow),
     symbolic_refs: Column(SymbolicRefRow),
     lines: Column(LineRow),
@@ -422,6 +437,7 @@ pub const Serialized = extern struct {
     specs: Column(SpecRow),
     root_reads: Column(RootReadRow),
     conditions: Column(u32),
+    modules: Column([32]u8),
     discovery: Column(DiscoveryRow),
     materializer_reads: Column(MaterializerReadRow),
 
@@ -468,6 +484,11 @@ pub const SpecEntry = struct {
     rc_ret_unique_fields: u64,
     /// Each entry an `lir.LIR.RcRetCondition`.
     rc_ret_conditions: []const u32,
+    /// Every checked module the offer's facts and the artifacts of its
+    /// serving closure name: demand reads, root reads, materializers and
+    /// source-event certificates. A program that lacks one of them cannot be
+    /// served the offer, and declines it before admitting its closure.
+    modules: []const [32]u8 = &.{},
 };
 
 /// A specialization whose discovery outcome is settled, under the
@@ -534,10 +555,26 @@ pub const Body = struct {
     arena: collections.SingleThreadArena,
     columns: Columns,
     physical_namespace: [32]u8,
+    /// The content address of each artifact of the set, in the arena.
+    addresses: []const [32]u8,
+    /// The row of each artifact of the set: its index among the carried
+    /// artifacts, or, past them, among the references.
+    rows: []const u32,
 
     pub fn deinit(self: *Body) void {
         self.arena.deinit();
     }
+};
+
+/// What a body carries of its set.
+pub const BodyOptions = struct {
+    /// The content address of each artifact, when the producer has them;
+    /// computed from the set otherwise.
+    addresses: ?[]const [32]u8 = null,
+    /// Which artifacts the pack carries. The rest are named by address
+    /// alone, for a reader that finds them in the pack that carries them.
+    /// Every artifact is carried when null.
+    carried: ?[]const bool = null,
 };
 
 /// Write a pack of `set` offering `specs`, stamped with `version_hash`.
@@ -555,15 +592,15 @@ pub fn writeOffers(
     materializer_reads: []const MaterializerRead,
     version_hash: [32]u8,
 ) WriteError!Bytes {
-    var body = try encodeBody(allocator, set);
+    var body = try encodeBody(allocator, set, .{});
     defer body.deinit();
-    return writeWithBody(allocator, set, &body, specs, discovery, materializer_reads, version_hash);
+    return writeWithBody(allocator, &body, specs, discovery, materializer_reads, version_hash);
 }
 
 /// Gather a set's artifacts into pack columns. What the producer handed over
 /// is checked in debug builds only: the shape of an artifact is a compiler
 /// invariant, and a pack is read without re-checking it.
-pub fn encodeBody(allocator: Allocator, set: *const ProcArtifact.Set) WriteError!Body {
+pub fn encodeBody(allocator: Allocator, set: *const ProcArtifact.Set, options: BodyOptions) WriteError!Body {
     if (builtin.mode == .debug) debugValidateArtifacts(allocator, set);
     var arena = collections.SingleThreadArena.init(allocator);
     errdefer arena.deinit();
@@ -573,11 +610,39 @@ pub fn encodeBody(allocator: Allocator, set: *const ProcArtifact.Set) WriteError
     defer names.deinit();
     var graph = try ArtifactClosure.init(allocator, set);
     defer graph.deinit();
+    const addresses = if (options.addresses) |given|
+        try arena.allocator().dupe([32]u8, given)
+    else blk: {
+        const computed = try graph.contentAddresses(&names);
+        defer allocator.free(computed);
+        break :blk try arena.allocator().dupe([32]u8, computed);
+    };
+    std.debug.assert(addresses.len == set.artifacts.len);
+    // Carried artifacts take the first rows, in set order; the rest are
+    // references after them, so every edge and offer names a row.
+    const rows_of = try arena.allocator().alloc(u32, set.artifacts.len);
+    var carried_count: u32 = 0;
+    for (set.artifacts, 0..) |_, index| {
+        if (options.carried == null or options.carried.?[index]) {
+            rows_of[index] = carried_count;
+            carried_count += 1;
+        }
+    }
+    var reference_count: u32 = 0;
+    for (set.artifacts, 0..) |_, index| {
+        if (options.carried != null and !options.carried.?[index]) {
+            rows_of[index] = carried_count + reference_count;
+            reference_count += 1;
+            try builder.references.append(builder.lists, addresses[index]);
+        }
+    }
     var edges = std.ArrayList(u32).empty;
     defer edges.deinit(allocator);
 
     for (set.artifacts, 0..) |artifact, index| {
+        if (options.carried) |carried| if (!carried[index]) continue;
         var row = std.mem.zeroes(ArtifactRow);
+        row.content = addresses[index];
         switch (artifact.kind) {
             .proc => |identity| {
                 row.kind = 0;
@@ -613,7 +678,7 @@ pub fn encodeBody(allocator: Allocator, set: *const ProcArtifact.Set) WriteError
         for (artifact.refs) |ref| {
             try builder.refs.append(builder.lists, .{
                 .site = ref.site,
-                .target = ref.target,
+                .target = rows_of[ref.target],
                 .delta = ref.delta,
                 .veneer = ref.veneer orelse no_veneer,
                 .form = @backingInt(ref.form),
@@ -676,7 +741,7 @@ pub fn encodeBody(allocator: Allocator, set: *const ProcArtifact.Set) WriteError
                 if (relocation.code_target) |target| switch (target) {
                     .local => |node| {
                         relocation_row.target = 1;
-                        relocation_row.local = node;
+                        relocation_row.local = rows_of[node];
                     },
                     .symbolic => |symbol| {
                         relocation_row.target = 2;
@@ -748,12 +813,12 @@ pub fn encodeBody(allocator: Allocator, set: *const ProcArtifact.Set) WriteError
         // closure from the rows alone.
         edges.clearRetainingCapacity();
         var unresolved = false;
-        for (artifact.refs) |ref| try edges.append(allocator, ref.target);
+        for (artifact.refs) |ref| try edges.append(allocator, rows_of[ref.target]);
         for (graph.symbolicTargets(@intCast(index))) |target| {
-            if (target) |node| try edges.append(allocator, node) else unresolved = true;
+            if (target) |node| try edges.append(allocator, rows_of[node]) else unresolved = true;
         }
         for (graph.dataTargets(@intCast(index))) |target| {
-            if (target) |node| try edges.append(allocator, node) else unresolved = true;
+            if (target) |node| try edges.append(allocator, rows_of[node]) else unresolved = true;
         }
         for (artifact.data) |item| for (item.relocations) |relocation| {
             if (relocation.function and !relocation.external and relocation.code_target == null) unresolved = true;
@@ -773,12 +838,29 @@ pub fn encodeBody(allocator: Allocator, set: *const ProcArtifact.Set) WriteError
     // columns, so no reader hashes the artifacts again.
     var namespace = std.crypto.hash.Blake3.init(.{});
     namespace.update("roc.native.physical.pack.v2");
-    inline for (.{ "code", "names", "data_bytes", "artifacts", "refs", "symbolic_refs", "lines", "relocations", "data_items", "data_relocations", "certificates", "regions", "materializations", "edges" }) |field| {
+    inline for (.{ "code", "names", "data_bytes", "artifacts", "references", "refs", "symbolic_refs", "lines", "relocations", "data_items", "data_relocations", "certificates", "regions", "materializations", "edges" }) |field| {
         namespace.update(std.mem.sliceAsBytes(@field(columns, field)));
     }
     var physical_namespace: [32]u8 = undefined;
     namespace.final(&physical_namespace);
-    return .{ .arena = arena, .columns = columns, .physical_namespace = physical_namespace };
+    return .{ .arena = arena, .columns = columns, .physical_namespace = physical_namespace, .addresses = addresses, .rows = rows_of };
+}
+
+/// A body that carries nothing: it names the artifacts at `addresses`, each
+/// a reference row, for a pack of offers whose code other packs carry.
+pub fn encodeReferences(allocator: Allocator, addresses: []const [32]u8) WriteError!Body {
+    var arena = collections.SingleThreadArena.init(allocator);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+    const owned = try a.dupe([32]u8, addresses);
+    const rows_of = try a.alloc(u32, addresses.len);
+    for (rows_of, 0..) |*row, index| row.* = @intCast(index);
+    var namespace = std.crypto.hash.Blake3.init(.{});
+    namespace.update("roc.native.physical.pack.v2");
+    namespace.update(std.mem.sliceAsBytes(owned));
+    var physical_namespace: [32]u8 = undefined;
+    namespace.final(&physical_namespace);
+    return .{ .arena = arena, .columns = .{ .references = owned }, .physical_namespace = physical_namespace, .addresses = owned, .rows = rows_of };
 }
 
 fn materializationRow(declaration: lir.Program.RootMaterialization) MaterializationRow {
@@ -823,17 +905,17 @@ fn materializationFromRow(row: MaterializationRow) lir.Program.RootMaterializati
     };
 }
 
-/// Write a pack of `set` from its gathered body with these offers.
+/// Write a pack from a gathered body with these offers, each naming its
+/// artifact by its index in the body's set.
 pub fn writeWithBody(
     allocator: Allocator,
-    set: *const ProcArtifact.Set,
     body: *const Body,
     specs: []const SpecEntry,
     discovery: []const DiscoveryEntry,
     materializer_reads: []const MaterializerRead,
     version_hash: [32]u8,
 ) WriteError!Bytes {
-    if (builtin.mode == .debug) debugValidateOffers(allocator, set, specs, materializer_reads);
+    if (builtin.mode == .debug) debugValidateOffers(allocator, body, specs, materializer_reads);
     var arena = collections.SingleThreadArena.init(allocator);
     defer arena.deinit();
     var offers = Builder.init(allocator, arena.allocator());
@@ -842,7 +924,7 @@ pub fn writeWithBody(
         var row = std.mem.zeroes(SpecRow);
         row.key = spec.key;
         row.by_identity = @intFromBool(spec.by_identity);
-        row.artifact = spec.artifact;
+        row.artifact = body.rows[spec.artifact];
         if (spec.platform_requirement_relation) |relation| {
             row.has_relation = 1;
             row.relation = relation;
@@ -851,9 +933,8 @@ pub fn writeWithBody(
             row.has_demand = 1;
             row.demand = try offers.blob(demand);
         }
-        row.root_reads.start = @intCast(offers.root_reads.items.len);
-        for (spec.comptime_root_reads) |root_read| try offers.root_reads.append(offers.lists, .{ .module = root_read.module, .root = root_read.root, .reserved = 0 });
-        row.root_reads.len = @intCast(offers.root_reads.items.len - row.root_reads.start);
+        row.root_reads = try offers.rootReads(spec.comptime_root_reads);
+        row.modules = try offers.moduleKeys(spec.modules);
         row.conditions.start = @intCast(offers.conditions.items.len);
         try offers.conditions.appendSlice(offers.lists, spec.rc_ret_conditions);
         row.conditions.len = @intCast(spec.rc_ret_conditions.len);
@@ -888,8 +969,14 @@ pub fn writeWithBody(
     columns.specs = offer_columns.specs;
     columns.root_reads = offer_columns.root_reads;
     columns.conditions = offer_columns.conditions;
+    columns.modules = offer_columns.modules;
     columns.discovery = offer_columns.discovery;
     columns.materializer_reads = offer_columns.materializer_reads;
+    if (builtin.os.tag != .freestanding and std.c.getenv("ROC_PACK_TRACE") != null) {
+        std.debug.print("pack-offer-columns specs={d} references={d} blobs={d} root_reads={d} conditions={d} discovery={d} materializer_reads={d}\n", .{
+            columns.specs.len, columns.references.len, columns.blobs.len, columns.root_reads.len, columns.conditions.len, columns.discovery.len, columns.materializer_reads.len,
+        });
+    }
 
     var plan = CompactWriter.init();
     defer plan.deinit(allocator);
@@ -932,11 +1019,19 @@ const Builder = struct {
     name_table: std.StringHashMap(NameRef),
     /// The data column range first appended for each data item name.
     data_ranges: std.AutoHashMapUnmanaged(NameRef, Range) = .empty,
+    /// The range first appended for each distinct run of root reads, and
+    /// for each distinct blob, by content digest: many offers of one pack
+    /// read the same roots and carry the same demand, so each distinct run
+    /// is stored once and every offer names its range.
+    read_ranges: std.AutoHashMapUnmanaged([32]u8, Range) = .empty,
+    blob_ranges: std.AutoHashMapUnmanaged([32]u8, Range) = .empty,
+    module_ranges: std.AutoHashMapUnmanaged([32]u8, Range) = .empty,
     code: std.ArrayList(u8) = .empty,
     names: std.ArrayList(u8) = .empty,
     data_bytes: std.ArrayList(u8) = .empty,
     blobs: std.ArrayList(u8) = .empty,
     artifacts: std.ArrayList(ArtifactRow) = .empty,
+    references: std.ArrayList([32]u8) = .empty,
     refs: std.ArrayList(RefRow) = .empty,
     symbolic_refs: std.ArrayList(SymbolicRefRow) = .empty,
     lines: std.ArrayList(LineRow) = .empty,
@@ -950,6 +1045,7 @@ const Builder = struct {
     specs: std.ArrayList(SpecRow) = .empty,
     root_reads: std.ArrayList(RootReadRow) = .empty,
     conditions: std.ArrayList(u32) = .empty,
+    modules: std.ArrayList([32]u8) = .empty,
     discovery: std.ArrayList(DiscoveryRow) = .empty,
     materializer_reads: std.ArrayList(MaterializerReadRow) = .empty,
 
@@ -960,6 +1056,9 @@ const Builder = struct {
     fn deinit(self: *Builder) void {
         self.name_table.deinit();
         self.data_ranges.deinit(self.lists);
+        self.read_ranges.deinit(self.lists);
+        self.blob_ranges.deinit(self.lists);
+        self.module_ranges.deinit(self.lists);
         inline for (@typeInfo(Columns).@"struct".field_names) |field_name| {
             @field(self, field_name).deinit(self.lists);
         }
@@ -997,12 +1096,67 @@ const Builder = struct {
         return entry.value_ptr.*;
     }
 
-    /// Encode a value field-wise into the blob column, returning its range.
+    /// Encode a value field-wise into the blob column, returning its range;
+    /// a value already encoded returns the range it was first encoded at.
     fn blob(self: *Builder, value: anytype) Allocator.Error!Range {
         const start: u32 = @intCast(self.blobs.items.len);
         var writer = Writer{ .allocator = self.lists, .bytes = &self.blobs };
         try writer.context(value);
-        return .{ .start = start, .len = @intCast(self.blobs.items.len - start) };
+        const encoded = self.blobs.items[start..];
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.Blake3.hash(encoded, &digest, .{});
+        const entry = try self.blob_ranges.getOrPut(self.lists, digest);
+        if (entry.found_existing) {
+            const existing = entry.value_ptr.*;
+            if (std.mem.eql(u8, self.blobs.items[existing.start .. existing.start + existing.len], encoded)) {
+                self.blobs.shrinkRetainingCapacity(start);
+                return existing;
+            }
+            return .{ .start = start, .len = @intCast(encoded.len) };
+        }
+        entry.value_ptr.* = .{ .start = start, .len = @intCast(encoded.len) };
+        return entry.value_ptr.*;
+    }
+
+    /// The modules column range holding `modules`, appended once per
+    /// distinct run.
+    fn moduleKeys(self: *Builder, modules: []const [32]u8) Allocator.Error!Range {
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.Blake3.hash(std.mem.sliceAsBytes(modules), &digest, .{});
+        const entry = try self.module_ranges.getOrPut(self.lists, digest);
+        if (entry.found_existing) {
+            const existing = entry.value_ptr.*;
+            if (std.mem.eql(u8, std.mem.sliceAsBytes(self.modules.items[existing.start .. existing.start + existing.len]), std.mem.sliceAsBytes(modules))) return existing;
+            const start: u32 = @intCast(self.modules.items.len);
+            try self.modules.appendSlice(self.lists, modules);
+            return .{ .start = start, .len = @intCast(modules.len) };
+        }
+        const start: u32 = @intCast(self.modules.items.len);
+        try self.modules.appendSlice(self.lists, modules);
+        entry.value_ptr.* = .{ .start = start, .len = @intCast(modules.len) };
+        return entry.value_ptr.*;
+    }
+
+    /// The root-read column range holding `reads`, appended once per
+    /// distinct run.
+    fn rootReads(self: *Builder, reads: []const lir.CheckedPipeline.ComptimeRootRead) Allocator.Error!Range {
+        const rows_in = try self.lists.alloc(RootReadRow, reads.len);
+        defer self.lists.free(rows_in);
+        for (reads, rows_in) |root_read, *row| row.* = .{ .module = root_read.module, .root = root_read.root, .reserved = 0 };
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.Blake3.hash(std.mem.sliceAsBytes(rows_in), &digest, .{});
+        const entry = try self.read_ranges.getOrPut(self.lists, digest);
+        if (entry.found_existing) {
+            const existing = entry.value_ptr.*;
+            if (std.mem.eql(u8, std.mem.sliceAsBytes(self.root_reads.items[existing.start .. existing.start + existing.len]), std.mem.sliceAsBytes(rows_in))) return existing;
+            const start: u32 = @intCast(self.root_reads.items.len);
+            try self.root_reads.appendSlice(self.lists, rows_in);
+            return .{ .start = start, .len = @intCast(rows_in.len) };
+        }
+        const start: u32 = @intCast(self.root_reads.items.len);
+        try self.root_reads.appendSlice(self.lists, rows_in);
+        entry.value_ptr.* = .{ .start = start, .len = @intCast(rows_in.len) };
+        return entry.value_ptr.*;
     }
 
     fn symbolicTarget(self: *Builder, target: @FieldType(ProcArtifact.SymbolicReference, "target"), kind: *u8, identity: *[32]u8, name_ref: *NameRef) Allocator.Error!void {
@@ -1062,16 +1216,18 @@ fn debugValidateArtifacts(allocator: Allocator, set: *const ProcArtifact.Set) vo
     }
 }
 
-fn debugValidateOffers(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const SpecEntry, materializer_reads: []const MaterializerRead) void {
+fn debugValidateOffers(allocator: Allocator, body: *const Body, specs: []const SpecEntry, materializer_reads: []const MaterializerRead) void {
     for (specs) |spec| {
-        std.debug.assert(spec.artifact < set.artifacts.len and set.artifacts[spec.artifact].root_materialization == null);
-        if (spec.by_identity) {
-            // An identity offer names the procedure it offers, whose code
-            // reads no literal roots.
-            const root = set.artifacts[spec.artifact];
-            std.debug.assert(root.kind == .proc and std.mem.eql(u8, &root.kind.proc.bytes, &spec.key));
-            std.debug.assert(spec.demand != null and spec.demand.?.literal_reads.len == 0);
+        std.debug.assert(spec.artifact < body.rows.len);
+        const row = body.rows[spec.artifact];
+        if (row < body.columns.artifacts.len) {
+            const root = body.columns.artifacts[row];
+            std.debug.assert(root.root_materialization.present == 0);
+            // An identity offer names the procedure it offers.
+            if (spec.by_identity) std.debug.assert(root.kind == 0 and std.mem.eql(u8, &root.identity, &spec.key));
         }
+        // An identity offer's code reads no literal roots.
+        if (spec.by_identity) std.debug.assert(spec.demand != null and spec.demand.?.literal_reads.len == 0);
         if (spec.demand) |demand| for (demand.literal_reads) |literal| {
             const valid = literal.recipe.valid(allocator) catch |err| std.debug.panic("{}", .{err});
             std.debug.assert(valid);
@@ -1117,15 +1273,16 @@ pub const View = struct {
                 !inBounds(row.source_events, c.certificates.len) or !inBounds(row.materializations, c.materializations.len) or
                 !inBounds(row.edges, c.edges.len) or !nameInBounds(row.helper_name, c.names.len)) return false;
         }
-        for (c.refs) |row| if (row.target >= c.artifacts.len) return false;
-        for (c.edges) |edge| if (edge >= c.artifacts.len) return false;
+        const row_count = c.artifacts.len + c.references.len;
+        for (c.refs) |row| if (row.target >= row_count) return false;
+        for (c.edges) |edge| if (edge >= row_count) return false;
         for (c.symbolic_refs) |row| if (!nameInBounds(row.name, c.names.len)) return false;
         for (c.relocations) |row| if (!nameInBounds(row.name, c.names.len)) return false;
         for (c.data_items) |row| if (!nameInBounds(row.name, c.names.len) or !inBounds(row.bytes, c.data_bytes.len) or !inBounds(row.relocations, c.data_relocations.len)) return false;
-        for (c.data_relocations) |row| if (!nameInBounds(row.name, c.names.len) or !nameInBounds(row.symbolic_name, c.names.len) or (row.target == 1 and row.local >= c.artifacts.len)) return false;
+        for (c.data_relocations) |row| if (!nameInBounds(row.name, c.names.len) or !nameInBounds(row.symbolic_name, c.names.len) or (row.target == 1 and row.local >= row_count)) return false;
         for (c.certificates) |row| if (!nameInBounds(row.data_name, c.names.len) or !inBounds(row.branch_regions, c.regions.len)) return false;
         for (c.materializations) |row| if (!nameInBounds(row.binding_name, c.names.len) or !nameInBounds(row.header_name, c.names.len)) return false;
-        for (c.specs) |row| if (row.artifact >= c.artifacts.len or !inBounds(row.demand, c.blobs.len) or !inBounds(row.root_reads, c.root_reads.len) or !inBounds(row.conditions, c.conditions.len)) return false;
+        for (c.specs) |row| if (row.artifact >= row_count or !inBounds(row.demand, c.blobs.len) or !inBounds(row.root_reads, c.root_reads.len) or !inBounds(row.conditions, c.conditions.len) or !inBounds(row.modules, c.modules.len)) return false;
         for (c.materializer_reads) |row| if (!inBounds(row.read, c.blobs.len)) return false;
         return true;
     }
@@ -1186,6 +1343,17 @@ pub const View = struct {
         return self.columns.specs[index].artifact;
     }
 
+    /// The platform/app relation offer `index` depends on, if any.
+    pub fn specRelation(self: *const View, index: usize) ?[32]u8 {
+        const row = self.columns.specs[index];
+        return if (row.has_relation != 0) row.relation else null;
+    }
+
+    /// The checked modules offer `index` names (`SpecEntry.modules`).
+    pub fn specModules(self: *const View, index: usize) []const [32]u8 {
+        return rows([32]u8, self.columns.modules, self.columns.specs[index].modules);
+    }
+
     /// The artifacts artifact `index` reaches directly.
     pub fn edges(self: *const View, index: usize) []const u32 {
         return rows(u32, self.columns.edges, self.columns.artifacts[index].edges);
@@ -1194,6 +1362,24 @@ pub const View = struct {
     /// Whether a reference of artifact `index` resolves to nothing in the pack.
     pub fn unresolved(self: *const View, index: usize) bool {
         return self.columns.artifacts[index].unresolved != 0;
+    }
+
+    /// How many rows the pack has: its artifacts, then its references.
+    pub fn rowCount(self: *const View) usize {
+        return self.columns.artifacts.len + self.columns.references.len;
+    }
+
+    /// The content address of row `index`: a carried artifact's or a
+    /// reference's.
+    pub fn contentAddress(self: *const View, index: usize) [32]u8 {
+        const artifacts = self.columns.artifacts;
+        return if (index < artifacts.len) artifacts[index].content else self.columns.references[index - artifacts.len];
+    }
+
+    /// Whether row `index` is an artifact the pack carries, rather than a
+    /// reference to one another pack carries.
+    pub fn carried(self: *const View, index: usize) bool {
+        return index < self.columns.artifacts.len;
     }
 
     fn rows(comptime T: type, column: []const T, range: Range) []const T {
@@ -1213,9 +1399,9 @@ pub const View = struct {
         };
     }
 
-    /// Artifact `index` as the backend consumes it. Its code, data, names
-    /// and descriptors are the image's bytes; the row arrays that describe
-    /// it are built in `arena`.
+    /// Artifact `index`, which the pack carries, as the backend consumes it.
+    /// Its code, data, names and descriptors are the image's bytes; the row
+    /// arrays that describe it are built in `arena`.
     pub fn artifact(self: *const View, index: usize, arena: Allocator) Allocator.Error!ProcArtifact.Artifact {
         const c = &self.columns;
         const row = c.artifacts[index];
@@ -1350,6 +1536,7 @@ pub const View = struct {
             } else null,
             .context_complete = row.context_complete != 0,
             .callable_contract = if (row.has_callable != 0) row.callable_contract else null,
+            .content_address = row.content,
         };
     }
 
@@ -1373,6 +1560,7 @@ pub const View = struct {
             .rc_ret_unique = row.rc_ret_unique != 0,
             .rc_ret_unique_fields = row.rc_ret_unique_fields,
             .rc_ret_conditions = rows(u32, c.conditions, row.conditions),
+            .modules = rows([32]u8, c.modules, row.modules),
         };
     }
 
@@ -1401,11 +1589,12 @@ pub const View = struct {
         return value;
     }
 
-    /// Every artifact a set of roots reaches, ascending, or null when one of
-    /// them has a reference that resolves to nothing in the pack: such a
-    /// closure cannot be served.
+    /// Every artifact a set of roots reaches within the pack, ascending, or
+    /// null when one of them has a reference that resolves to nothing in the
+    /// pack: such a closure cannot be served. An artifact the pack only
+    /// names is a leaf here; the reader continues in the pack carrying it.
     pub fn closure(self: *const View, allocator: Allocator, roots: []const u32) Allocator.Error!?[]u32 {
-        const seen = try allocator.alloc(bool, self.columns.artifacts.len);
+        const seen = try allocator.alloc(bool, self.rowCount());
         defer allocator.free(seen);
         @memset(seen, false);
         var stack = std.ArrayList(u32).empty;
@@ -1418,6 +1607,10 @@ pub const View = struct {
             try stack.append(allocator, root);
         }
         while (stack.pop()) |node| {
+            if (!self.carried(node)) {
+                try members.append(allocator, node);
+                continue;
+            }
             if (self.unresolved(node)) {
                 members.deinit(allocator);
                 return null;
@@ -1438,20 +1631,25 @@ pub const View = struct {
     fn readAll(self: *const View, arena: *collections.SingleThreadArena) ReadError!Pack {
         const a = arena.allocator();
         const count = self.columns.artifacts.len;
+        // A whole decode has no other pack to continue in, so a pack that
+        // only names some of its artifacts is one it cannot place.
+        if (self.columns.references.len != 0) return error.MalformedPack;
         const artifacts = try a.alloc(ProcArtifact.Artifact, count);
         const edges_out = try a.alloc([]const u32, count);
         const unresolved_flags = try a.alloc(bool, count);
-        for (artifacts, edges_out, unresolved_flags, 0..) |*out, *artifact_edges, *flag, index| {
+        const addresses = try a.alloc([32]u8, count);
+        for (artifacts, edges_out, unresolved_flags, addresses, 0..) |*out, *artifact_edges, *flag, *address, index| {
             out.* = try self.artifact(index, a);
             artifact_edges.* = try a.dupe(u32, self.edges(index));
             flag.* = self.unresolved(index);
+            address.* = self.contentAddress(index);
         }
         const specs = try a.alloc(SpecEntry, self.columns.specs.len);
         for (specs, 0..) |*entry, index| entry.* = try self.spec(index, a);
         const discovery_entries = try self.discovery(a);
         const materializer_reads = try self.materializerReads(a);
         return .{
-            .set = .{ .arena = arena.*, .artifacts = artifacts, .physical_namespace = self.header.physical_namespace },
+            .set = .{ .arena = arena.*, .artifacts = artifacts, .physical_namespace = self.header.physical_namespace, .addresses = addresses },
             .specs = specs,
             .discovery = discovery_entries,
             .materializer_reads = materializer_reads,
@@ -1513,6 +1711,7 @@ test "pack image round-trips every artifact field and offer" {
         .rc_ret_unique = false,
         .rc_ret_unique_fields = 4,
         .rc_ret_conditions = &.{ 0x0001_02ff, 7 },
+        .modules = &.{ @splat(6), @splat(7) },
     }};
     const discovery = [_]DiscoveryEntry{.{ .key = @splat(5), .platform_requirement_relation = null }};
     const bytes = try writeOffers(allocator, &set, &specs, &discovery, &.{}, version);
@@ -1520,8 +1719,14 @@ test "pack image round-trips every artifact field and offer" {
 
     var decoded = try read(allocator, bytes, version);
     defer decoded.deinit();
-    try std.testing.expectEqualDeep(leaf, decoded.set.artifacts[0]);
-    try std.testing.expectEqualDeep(caller, decoded.set.artifacts[1]);
+    // A decoded artifact knows its content address; the producer's did not.
+    var expected_leaf = leaf;
+    expected_leaf.content_address = decoded.set.addresses.?[0];
+    var expected_caller = caller;
+    expected_caller.content_address = decoded.set.addresses.?[1];
+    try std.testing.expectEqualDeep(expected_leaf, decoded.set.artifacts[0]);
+    try std.testing.expectEqualDeep(expected_caller, decoded.set.artifacts[1]);
+    try std.testing.expect(!std.mem.eql(u8, &decoded.set.addresses.?[0], &decoded.set.addresses.?[1]));
     try std.testing.expectEqualDeep(specs[0], decoded.specs[0]);
     try std.testing.expectEqualDeep(discovery[0], decoded.discovery[0]);
     try std.testing.expectEqualSlices(u32, &.{0}, decoded.edges[1]);
@@ -1627,7 +1832,9 @@ test "pack image selects closures and reads their artifacts alone" {
     var arena = collections.SingleThreadArena.init(allocator);
     defer arena.deinit();
     const decoded = try view.artifact(1, arena.allocator());
-    try std.testing.expectEqualDeep(caller, decoded);
+    var expected = caller;
+    expected.content_address = view.contentAddress(1);
+    try std.testing.expectEqualDeep(expected, decoded);
     // The decoded artifact's code is the image's bytes.
     try std.testing.expect(@intFromPtr(decoded.code.ptr) >= @intFromPtr(bytes.ptr) and @intFromPtr(decoded.code.ptr) < @intFromPtr(bytes.ptr) + bytes.len);
 }
@@ -1647,12 +1854,12 @@ test "pack bodies are shared by packs with different offers" {
     };
     var artifacts = [_]ProcArtifact.Artifact{leaf};
     const set = ProcArtifact.Set{ .arena = collections.SingleThreadArena.init(allocator), .artifacts = &artifacts };
-    var body = try encodeBody(allocator, &set);
+    var body = try encodeBody(allocator, &set, .{});
     defer body.deinit();
     const spec = SpecEntry{ .key = @splat(2), .artifact = 0, .demand = .{ .complete = true }, .rc_borrowed_params = 0, .rc_ret_borrowed = false, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique = false, .rc_ret_unique_fields = 0, .rc_ret_conditions = &.{} };
-    const first = try writeWithBody(allocator, &set, &body, &.{spec}, &.{}, &.{}, version);
+    const first = try writeWithBody(allocator, &body, &.{spec}, &.{}, &.{}, version);
     defer allocator.free(first);
-    const second = try writeWithBody(allocator, &set, &body, &.{}, &.{}, &.{}, version);
+    const second = try writeWithBody(allocator, &body, &.{}, &.{}, &.{}, version);
     defer allocator.free(second);
     const first_view = try View.init(first, version);
     const second_view = try View.init(second, version);

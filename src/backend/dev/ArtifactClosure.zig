@@ -4,9 +4,11 @@
 //! not add source-context requirements or claim complete-module availability.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const lir = @import("lir");
 const collections = @import("collections");
 const ProcArtifact = @import("ProcArtifact.zig");
+const LirCodeGenMod = @import("LirCodeGen.zig");
 const Allocator = std.mem.Allocator;
 const Self = @This();
 
@@ -113,6 +115,424 @@ pub fn derivedPhysicalNamespace(set: *const ProcArtifact.Set) [32]u8 {
     var namespace: [32]u8 = undefined;
     physical.final(&namespace);
     return namespace;
+}
+
+/// The physical provision of artifact `index`: its content address when the
+/// set is addressed (admitted from the object store), otherwise its
+/// definition in the set's physical namespace.
+pub fn provision(self: *const Self, index: u32) LirCodeGenMod.PhysicalProvision {
+    if (self.set.addresses) |addresses| return .{ .graph = addresses[index], .definition = 0 };
+    return .{ .graph = self.physicalNamespace(), .definition = self.set.physicalDefinition(index) };
+}
+
+/// The edges of artifact `index` in the order the content address renders
+/// them: its set-local references, its symbolic references, and the code
+/// targets of its data; null for a reference that resolves to nothing in
+/// the set.
+fn contentEdges(self: *const Self, arena: Allocator, index: u32) Allocator.Error![]const ?u32 {
+    const artifact = self.set.artifacts[index];
+    const symbolic = self.symbolicTargets(index);
+    const data = self.dataTargets(index);
+    const edges = try arena.alloc(?u32, artifact.refs.len + symbolic.len + data.len);
+    for (artifact.refs, edges[0..artifact.refs.len]) |ref, *edge| edge.* = ref.target;
+    @memcpy(edges[artifact.refs.len..][0..symbolic.len], symbolic);
+    @memcpy(edges[artifact.refs.len + symbolic.len ..], data);
+    return edges;
+}
+
+/// The content address of every artifact of the set: a digest of what
+/// determines the artifact's placed bytes and everything it reaches. An
+/// artifact's own rendering is its kind, code, entry, frame, references,
+/// relocations, carried data, source-event certificates, materializer
+/// dependencies and contracts, with carried data named by content
+/// (`ContentNames`); its debug lines are not part of it, as they are not of
+/// `derivedPhysicalNamespace`, since their file ordinals belong to the
+/// program that emitted them. The address then takes in the addresses of
+/// the artifacts its edges reach, so two artifacts with one address place
+/// the same bytes and call the same code however many packs carry them.
+/// Recursive groups are digested as a group: members are partitioned by
+/// repeated refinement of their renderings over their in-group edges, and
+/// each member's address is the group's digest with its class, so a group
+/// drawn from two programs' graphs gives every member one address.
+///
+/// An artifact whose `content_address` is known (one served from the store)
+/// keeps it, and its edges are not followed: nothing it reaches is new.
+pub fn contentAddresses(self: *const Self, names: *const ProcArtifact.ContentNames) Allocator.Error![]const [32]u8 {
+    const addresses = try self.computeContentAddresses(names, true);
+    if (builtin.mode == .debug) {
+        // A known address is a function of the artifact's content alone, so
+        // computing it again from the content gives the same address.
+        var any_known = false;
+        for (self.set.artifacts) |artifact| any_known = any_known or artifact.content_address != null;
+        if (any_known) {
+            const recomputed = try self.computeContentAddresses(names, false);
+            defer self.allocator.free(recomputed);
+            for (addresses, recomputed, self.set.artifacts) |known, fresh, artifact| {
+                if (artifact.content_address != null and !std.mem.eql(u8, &known, &fresh)) {
+                    std.debug.panic("an artifact's recorded content address differs from the address of its content", .{});
+                }
+            }
+        }
+    }
+    return addresses;
+}
+
+fn computeContentAddresses(self: *const Self, names: *const ProcArtifact.ContentNames, trust_known: bool) Allocator.Error![]const [32]u8 {
+    const allocator = self.allocator;
+    const set = self.set;
+    const count = set.artifacts.len;
+    const addresses = try allocator.alloc([32]u8, count);
+    errdefer allocator.free(addresses);
+    var scratch = collections.SingleThreadArena.init(allocator);
+    defer scratch.deinit();
+    const a = scratch.allocator();
+
+    const known = try a.alloc(bool, count);
+    const edges = try a.alloc([]const ?u32, count);
+    for (set.artifacts, 0..) |artifact, index| {
+        known[index] = trust_known and artifact.content_address != null;
+        if (known[index]) addresses[index] = artifact.content_address.?;
+        edges[index] = try self.contentEdges(a, @intCast(index));
+    }
+
+    // The condensation of the graph over resolved edges out of unknown
+    // artifacts; a known artifact is a leaf.
+    const succ_starts = try a.alloc(u32, count + 1);
+    const pred_starts = try a.alloc(u32, count + 1);
+    @memset(pred_starts, 0);
+    succ_starts[0] = 0;
+    for (edges, 0..) |targets, node| {
+        var kept: u32 = 0;
+        if (!known[node]) for (targets) |target| if (target) |callee| {
+            kept += 1;
+            pred_starts[callee + 1] += 1;
+        };
+        succ_starts[node + 1] = succ_starts[node] + kept;
+    }
+    for (1..count + 1) |node| pred_starts[node] += pred_starts[node - 1];
+    const succs = try a.alloc(u32, succ_starts[count]);
+    const preds = try a.alloc(u32, pred_starts[count]);
+    const cursors = try a.dupe(u32, pred_starts[0..count]);
+    var next: usize = 0;
+    for (edges, 0..) |targets, node| {
+        if (known[node]) continue;
+        for (targets) |target| if (target) |callee| {
+            succs[next] = callee;
+            next += 1;
+            preds[cursors[callee]] = @intCast(node);
+            cursors[callee] += 1;
+        };
+    }
+    const condensation = try collections.scc.compute(a, succ_starts, succs, pred_starts, preds);
+
+    // Callees first: no edge leads into a lower-numbered component.
+    var component = condensation.count();
+    while (component != 0) {
+        component -= 1;
+        const members = condensation.membersOf(component);
+        if (members.len == 1 and known[members[0]]) continue;
+        var cyclic = members.len > 1;
+        for (edges[members[0]]) |target| if (target == members[0]) {
+            cyclic = true;
+        };
+        if (!cyclic) {
+            const member = members[0];
+            var hasher = std.crypto.hash.Blake3.init(.{});
+            hasher.update("roc.artifact.address.v1");
+            hasher.update("acyclic");
+            try hashArtifactContent(a, &hasher, set.artifacts[member], names);
+            hashEdges(&hasher, edges[member], condensation.component_of, component, addresses);
+            hasher.final(&addresses[member]);
+            continue;
+        }
+        // Members start in classes by their own rendering, with in-group
+        // edges as such, and are refined over those edges until the number
+        // of classes is stable: then two members in one class are bisimilar
+        // and place the same bytes.
+        const ids = try a.alloc([32]u8, members.len);
+        const refined = try a.alloc([32]u8, members.len);
+        const position = try a.alloc(u32, count);
+        for (members, 0..) |member, rank| position[member] = @intCast(rank);
+        for (members, ids) |member, *id| {
+            var hasher = std.crypto.hash.Blake3.init(.{});
+            hasher.update("roc.artifact.local.v1");
+            try hashArtifactContent(a, &hasher, set.artifacts[member], names);
+            hashEdges(&hasher, edges[member], condensation.component_of, component, addresses);
+            hasher.final(id);
+        }
+        var classes = try distinctCount(a, ids);
+        while (true) {
+            for (members, refined) |member, *id| {
+                var hasher = std.crypto.hash.Blake3.init(.{});
+                hasher.update("roc.artifact.refine.v1");
+                hasher.update(&ids[position[member]]);
+                for (edges[member]) |target| {
+                    const callee = target orelse continue;
+                    if (condensation.component_of[callee] != component) continue;
+                    hasher.update(&ids[position[callee]]);
+                }
+                hasher.final(id);
+            }
+            const refined_classes = try distinctCount(a, refined);
+            @memcpy(ids, refined);
+            if (refined_classes == classes) break;
+            classes = refined_classes;
+        }
+        const sorted = try a.dupe([32]u8, ids);
+        std.mem.sort([32]u8, sorted, {}, addressLessThan);
+        var group_hasher = std.crypto.hash.Blake3.init(.{});
+        group_hasher.update("roc.artifact.group.v1");
+        for (sorted) |id| group_hasher.update(&id);
+        var group: [32]u8 = undefined;
+        group_hasher.final(&group);
+        for (members, ids) |member, id| {
+            var hasher = std.crypto.hash.Blake3.init(.{});
+            hasher.update("roc.artifact.address.v1");
+            hasher.update("cyclic");
+            hasher.update(&group);
+            hasher.update(&id);
+            hasher.final(&addresses[member]);
+        }
+    }
+    return addresses;
+}
+
+fn addressLessThan(_: void, left: [32]u8, right: [32]u8) bool {
+    return std.mem.order(u8, &left, &right) == .lt;
+}
+
+/// How many distinct digests `ids` holds.
+fn distinctCount(arena: Allocator, ids: []const [32]u8) Allocator.Error!usize {
+    var seen = std.AutoHashMap([32]u8, void).init(arena);
+    for (ids) |id| try seen.put(id, {});
+    return seen.count();
+}
+
+/// Hash an artifact's edges: each resolved edge out of the component by the
+/// address of the artifact it reaches, each edge within the component as
+/// such (the component's refinement names it), and each unresolved one as
+/// unresolved.
+fn hashEdges(hasher: *std.crypto.hash.Blake3, edges: []const ?u32, component_of: []const u32, component: usize, addresses: []const [32]u8) void {
+    hashWord(hasher, @intCast(edges.len));
+    for (edges) |target| {
+        const callee = target orelse {
+            hasher.update("unresolved");
+            continue;
+        };
+        if (component_of[callee] == component) {
+            hasher.update("intra");
+        } else {
+            hasher.update("address");
+            hasher.update(&addresses[callee]);
+        }
+    }
+}
+
+fn hashWord(hasher: *std.crypto.hash.Blake3, value: u32) void {
+    var buffer: [4]u8 = undefined;
+    std.mem.writeInt(u32, &buffer, value, .little);
+    hasher.update(&buffer);
+}
+
+fn hashWide(hasher: *std.crypto.hash.Blake3, value: u64) void {
+    var buffer: [8]u8 = undefined;
+    std.mem.writeInt(u64, &buffer, value, .little);
+    hasher.update(&buffer);
+}
+
+fn hashBytes(hasher: *std.crypto.hash.Blake3, bytes: []const u8) void {
+    hashWord(hasher, @intCast(bytes.len));
+    hasher.update(bytes);
+}
+
+fn hashSymbolicTarget(hasher: *std.crypto.hash.Blake3, target: @FieldType(ProcArtifact.SymbolicReference, "target")) void {
+    switch (target) {
+        .proc => |identity| {
+            hasher.update("proc");
+            hasher.update(&identity.bytes);
+        },
+        .rc_helper => |name| {
+            hasher.update("helper");
+            hashBytes(hasher, name);
+        },
+        .boxy_thunk => |identity| {
+            hasher.update("thunk");
+            hasher.update(&identity.bytes);
+        },
+    }
+}
+
+fn hashMaterialization(hasher: *std.crypto.hash.Blake3, declaration: lir.Program.RootMaterialization) void {
+    hasher.update(&declaration.module);
+    switch (declaration.producer) {
+        .checked => |root| {
+            hasher.update("checked");
+            hashWord(hasher, root);
+        },
+        .literal => |literal| {
+            hasher.update("literal");
+            hashWord(hasher, literal.checked_expr);
+            hashWord(hasher, @backingInt(literal.kind));
+            hasher.update(&literal.conversion_identity);
+        },
+    }
+    hasher.update(&declaration.representation_digest);
+    hasher.update(&declaration.layout_digest);
+    hasher.update(&declaration.wrapper_identity);
+    hashWord(hasher, @backingInt(declaration.abi));
+}
+
+/// Hash what an artifact's own rows record, in the order a pack writes them,
+/// with its edges left to `hashEdges`: a reference's target and a data
+/// relocation's local code target are edges, not content. Carried data is
+/// rendered by structure, and a name that means a carried item (one a pack
+/// names by content) by the item's position in the artifact's data: a
+/// content name is derived from the item and the set it was encoded in, so
+/// two packs may carry one artifact under different data names, and the
+/// address must not see that.
+fn hashArtifactContent(arena: Allocator, hasher: *std.crypto.hash.Blake3, artifact: ProcArtifact.Artifact, names: *const ProcArtifact.ContentNames) Allocator.Error!void {
+    var items = std.StringHashMap(u32).init(arena);
+    for (artifact.data, 0..) |item, index| try items.put(item.name, @intCast(index));
+    const Named = struct {
+        fn hash(h: *std.crypto.hash.Blake3, carried: *const std.StringHashMap(u32), content_names: *const ProcArtifact.ContentNames, name: []const u8) void {
+            if (content_names.renames(name)) if (carried.get(name)) |index| {
+                h.update("carried");
+                hashWord(h, index);
+                return;
+            };
+            h.update("named");
+            hashBytes(h, content_names.of(name));
+        }
+    };
+    switch (artifact.kind) {
+        .proc => |identity| {
+            hasher.update("proc");
+            hasher.update(&identity.bytes);
+        },
+        .rc_helper => |name| {
+            hasher.update("helper");
+            hashBytes(hasher, name);
+        },
+        .boxy_thunk => |identity| {
+            hasher.update("thunk");
+            hasher.update(&identity.bytes);
+        },
+        .entrypoint => hasher.update("entrypoint"),
+        .message_pool_run => hasher.update("message-pool-run"),
+        .branch_island => hasher.update("branch-island"),
+    }
+    hashBytes(hasher, artifact.code);
+    hashWord(hasher, artifact.entry);
+    if (artifact.frame) |frame| {
+        hasher.update("frame");
+        hashWord(hasher, frame.prologue_size);
+        hashWord(hasher, frame.stack_alloc);
+        hashWord(hasher, frame.frame_size);
+        hashWord(hasher, frame.callee_saved_mask);
+        hashWord(hasher, frame.epilogue_offset);
+        hasher.update(&.{@intFromBool(frame.uses_frame_pointer)});
+    } else hasher.update("no-frame");
+    hashWord(hasher, @intCast(artifact.refs.len));
+    for (artifact.refs) |ref| {
+        hashWord(hasher, ref.site);
+        hashWord(hasher, @backingInt(ref.form));
+        hashWord(hasher, ref.delta);
+        hashWord(hasher, ref.veneer orelse std.math.maxInt(u32));
+    }
+    hashWord(hasher, @intCast(artifact.symbolic_refs.len));
+    for (artifact.symbolic_refs) |ref| {
+        hashWord(hasher, ref.site);
+        hashWord(hasher, @backingInt(ref.form));
+        hashWord(hasher, ref.veneer orelse std.math.maxInt(u32));
+        hashSymbolicTarget(hasher, ref.target);
+    }
+    hashWord(hasher, @intCast(artifact.relocations.len));
+    for (artifact.relocations) |relocation| {
+        hashWord(hasher, relocation.offset);
+        // A pack names carried program data by content and in shared scope.
+        const scope: ProcArtifact.SymbolScope = if (names.renames(relocation.name)) .shared else relocation.scope;
+        hashWord(hasher, @backingInt(scope));
+        switch (relocation.kind) {
+            .function => hasher.update("function"),
+            .data => |kind| {
+                hasher.update("data");
+                hashWord(hasher, @backingInt(kind));
+            },
+        }
+        Named.hash(hasher, &items, names, relocation.name);
+    }
+    hashWord(hasher, @intCast(artifact.data.len));
+    for (artifact.data) |item| {
+        hashBytes(hasher, item.bytes);
+        hashWord(hasher, item.alignment);
+        hashWord(hasher, item.symbol_offset);
+        hasher.update(&.{@intFromBool(item.program_local_name)});
+        hashWord(hasher, @intCast(item.relocations.len));
+        for (item.relocations) |relocation| {
+            hashWord(hasher, relocation.offset);
+            hashWide(hasher, @bitCast(relocation.addend));
+            hasher.update(&.{ @intFromBool(relocation.function), @intFromBool(relocation.external) });
+            // An external binding names the linking image's symbol.
+            if (relocation.external) {
+                hasher.update("external");
+                hashBytes(hasher, relocation.name);
+            } else Named.hash(hasher, &items, names, relocation.name);
+            if (relocation.code_target) |target| switch (target) {
+                .local => hasher.update("local"),
+                .symbolic => |symbol| {
+                    hasher.update("symbolic");
+                    hashSymbolicTarget(hasher, symbol);
+                },
+                // Native-image offsets have no persistent representation.
+                .image_offset => unreachable,
+            } else hasher.update("no-code");
+        }
+    }
+    hashWord(hasher, @intCast(artifact.source_events.len));
+    for (artifact.source_events) |certificate| {
+        Named.hash(hasher, &items, names, certificate.data_name);
+        hasher.update(std.mem.asBytes(&certificate.descriptor));
+        hashWord(hasher, @intCast(certificate.branch_regions.len));
+        for (certificate.branch_regions) |region| {
+            hashWord(hasher, region.start.offset);
+            hashWord(hasher, region.end.offset);
+        }
+        if (certificate.site_origin) |origin| switch (origin) {
+            .checked_expr => |id| {
+                hasher.update("expr");
+                hashWord(hasher, id);
+            },
+            .checked_pattern => |id| {
+                hasher.update("pattern");
+                hashWord(hasher, id);
+            },
+        } else hasher.update("no-site");
+    }
+    hashWord(hasher, @intCast(artifact.materializations.len));
+    for (artifact.materializations) |dependency| {
+        Named.hash(hasher, &items, names, dependency.binding_name);
+        Named.hash(hasher, &items, names, dependency.header_name);
+        hashMaterialization(hasher, dependency.materialization);
+    }
+    if (artifact.root_materialization) |declaration| {
+        hasher.update("materializer");
+        hashMaterialization(hasher, declaration);
+    } else hasher.update("no-materializer");
+    if (artifact.context_contract) |contract| {
+        hasher.update("contract");
+        hashWord(hasher, @backingInt(contract.target));
+        hashWord(hasher, @backingInt(contract.cpu_level));
+        hasher.update(&.{ @intFromBool(contract.hot_reload), @intFromBool(contract.default_platform_runtime) });
+    } else hasher.update("no-contract");
+    if (artifact.context_dependencies) |dependencies| {
+        hasher.update("dependencies");
+        hasher.update(&.{ @intFromBool(dependencies.static_data), @intFromBool(dependencies.boxy_runtime_entry), @intFromBool(dependencies.boxy_runtime), @intFromBool(dependencies.dict_seed) });
+    } else hasher.update("no-dependencies");
+    hasher.update(&.{@intFromBool(artifact.context_complete)});
+    if (artifact.callable_contract) |contract| {
+        hasher.update("callable");
+        hasher.update(&contract);
+    } else hasher.update("no-callable");
 }
 
 fn resolveSymbolic(self: *const Self, target: @FieldType(ProcArtifact.SymbolicReference, "target")) ?u32 {
@@ -1066,5 +1486,10 @@ fn testSelection(allocator: Allocator) (@import("PackFile.zig").WriteError || @i
     defer allocator.free(bytes);
     var decoded = try PackFile.read(allocator, bytes, PackFile.test_version_hash);
     defer decoded.deinit();
-    try std.testing.expectEqualDeep(selected.set.artifacts, decoded.set.artifacts);
+    try std.testing.expectEqual(selected.set.artifacts.len, decoded.set.artifacts.len);
+    for (selected.set.artifacts, decoded.set.artifacts, decoded.set.addresses.?) |original, read_back, address| {
+        var expected = original;
+        expected.content_address = address;
+        try std.testing.expectEqualDeep(expected, read_back);
+    }
 }

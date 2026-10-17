@@ -723,8 +723,24 @@ checking never demanded. Identical subsets deduplicate, and loading remains
 scoped to the visible modules rather than scanning other cache namespaces.
 Offers are filed under their producer-stamped checked template owner, not the
 app that happened to demand them. Builtin instantiations retain the explicitly
-declared requester's placement. Owner partitions share closure/admission facts
-and carry only their serving dependencies.
+declared requester's placement. The artifacts the offers serve are filed
+apart, by content: every artifact has a content address
+(`ArtifactClosure.contentAddresses`), the digest of what determines its placed
+bytes—its own rendering, with carried data rendered by structure rather than
+by the name a set gave it, and debug lines left out as
+`derivedPhysicalNamespace` leaves them out—joined with the addresses of the
+artifacts its edges reach; a recursive group is digested as a group, its
+members partitioned by refinement over their in-group edges, so a group drawn
+from two programs' graphs gives every member one address. A build writes one
+pack of artifacts, holding those of its serving closures that no loaded pack
+carries, into the store's `artifacts` directory under the pack's content
+digest, and one pack of offers per owner under the owner's placement, whose
+rows are references naming each offer's root by address. Offers stay scoped
+to the visible modules; artifacts are universal within the store's compiler,
+target and policy namespace, since an address names one artifact wherever it
+is carried. An edit therefore adds to the store only the artifacts it compiled
+anew, and the artifacts a program is served are the same bytes however many
+revisions and owners offer them.
 
 Native providers are immutable physical capabilities selected before producer
 lowering. Checking and native dev output use one authoritative ordinary body
@@ -772,25 +788,35 @@ in debug builds at write time and trusted afterwards; a read's only
 release-mode checks are the header's hash and the bounds of each column and
 row range, which admitting any cache entry costs. Offer metadata whose shape
 nests (storage-demand facts, literal recipes) travels as opaque field-wise
-blobs decoded only for the offers a lookup admits. The image's artifact rows
-give each artifact's edges (set-local references, symbolic references the
-writer resolved to a definition in the pack, and the code targets of its
-data). A lookup that selects one of a pack's offers walks exactly the closure
-of that offer's root over those rows and admits it into the one set admitted
-from that pack, which grows by the artifacts the closure adds; a key's
-candidate packs are tried in load order and left alone once an offer serves
-the lookup. The set names its definitions
-by their index in the pack (`ProcArtifact.Set.definitions`) and carries the
-table's edges, so indexing computes the components, serving demand, and
-admission of the artifacts a set gained over those edges alone, with the
-artifacts indexed earlier taking part only as settled callees: an artifact's
-serving facts depend on its closure, and nothing an admitted artifact reaches
-arrives later. A closure containing an artifact whose reference resolves to
-nothing in the pack is not admitted, as whole-pack admission would also decline
-it. Packs with different offers of one program's closure share one encoded
-body (`PackFile.Body`), and within a body the bytes of a data item are stored
-once per name: every artifact lists the items it carries, and many carry the
-same frozen constant, so their rows share one range of the data column. The
+blobs decoded only for the offers a lookup admits. A pack's rows are the artifacts it
+carries followed by its references, the addresses of artifacts other packs
+carry; the artifact rows give each artifact's edges (set-local references,
+symbolic references the writer resolved to a definition in the pack, and the
+code targets of its data) as rows of either kind. A lookup that selects one
+of a pack's offers walks the closure of that offer's root by address, from
+row to row within a pack and on into the pack carrying each referenced
+address (`LoadedPacks.carriers`: the first registered pack carrying it), and
+admits it into the one set admitted from the store (`LoadedPacks.store_set`),
+which holds each address once and grows by the artifacts a closure adds; a
+key's candidate packs are tried in load order and left alone once an offer
+serves the lookup. The set names its definitions by address
+(`ProcArtifact.Set.addresses`): a store artifact's physical provision is its
+address, so a program that splices it through two offers places it once. The
+set carries the closure's edges, so indexing computes the components, serving
+demand, and admission of the artifacts the set gained over those edges alone,
+with the artifacts indexed earlier taking part only as settled callees: an
+artifact's serving facts depend on its closure, and nothing an admitted
+artifact reaches arrives later. A closure that reaches an address no loaded
+pack carries, or an artifact whose reference resolves to nothing in its pack,
+is not admitted, as whole-pack admission would also decline it. The packs
+that contribute to the set record the literal read behind each materializer
+their code calls; a materializer's identity fixes the literal's declaration,
+so the first read recorded for it stands for every pack's, and an offer of an
+artifact the set already held is indexed when it arrives. Packs written
+from one body (`PackFile.Body`) share its encoding, and within a body the
+bytes of a data item are stored once per name: every artifact lists the items
+it carries, and many carry the same frozen constant, so their rows share one
+range of the data column. The
 producer supplies its checked module capability directly; an unpublished app
 artifact is not a reason to delay loading until after specialization. Exact
 checked-root layout/role certificates come from a type-only projection through
