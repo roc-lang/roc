@@ -313,6 +313,12 @@ pub const StructData = struct {
     /// when the struct is committed (its field layouts are already committed by
     /// then) so `Store.layoutContainsRefcounted` is an O(1), infallible lookup.
     contains_refcounted: bool = false,
+    /// Whether a field is itself a struct holding refcounted data, so that
+    /// field ownership slots differ from semantic indices. Precomputed at
+    /// commit with `ownership_slots`; see `Store.ownershipSlotCount`.
+    expands_fields: bool = false,
+    /// The ownership slots of this struct when it holds refcounted data.
+    ownership_slots: u32 = 1,
 
     pub fn getFields(self: StructData) StructField.SafeMultiList.Range {
         // Handle empty structs specially - NonEmptyRange.toRange() asserts count > 0

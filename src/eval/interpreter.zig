@@ -2036,20 +2036,42 @@ pub const Interpreter = struct {
             .struct_ => {
                 const struct_info = self.layout_store.getStructInfo(layout_val);
                 const absent_fields = self.store.getU32Span(residual_shell_absent_fields);
+                // Residual-shell metadata names ownership slots of the local's
+                // own layout, so it applies only while the path from the local
+                // to this struct runs through struct fields.
+                const shell_base: ?u32 = if (absent_fields.len == 0) null else blk: {
+                    var slot_base: u32 = 0;
+                    var current = self.store.getLocal(local_id).layout_idx;
+                    for (path_buf[0..path_len]) |step| {
+                        switch (step) {
+                            .struct_field => |field| {
+                                slot_base += self.layout_store.ownershipSlotBase(current, field.semantic_index);
+                                current = field.field_layout;
+                            },
+                            .box_payload, .list_elem, .tag_payload => break :blk null,
+                        }
+                    }
+                    break :blk slot_base;
+                };
                 for (0..struct_info.fields.len) |i| {
                     const field = struct_info.fields.get(@intCast(i));
                     // Padding spacers hold uninitialized bytes; there is no value
                     // to validate against their (size-only) layout.
                     if (field.is_padding) continue;
-                    if (path_len == 0) {
-                        var is_absent = false;
-                        for (0..absent_fields.len) |absent_index| {
-                            if (GuardedList.at(absent_fields, absent_index) == field.index) {
-                                is_absent = true;
-                                break;
+                    if (shell_base) |slot_base| {
+                        const field_layout = self.layout_store.getLayout(field.layout);
+                        const expands = field_layout.tag == .struct_ and self.layout_store.layoutContainsRefcounted(field_layout);
+                        if (!expands) {
+                            const slot = slot_base + self.layout_store.ownershipSlotBase(layout_idx, field.index);
+                            var is_absent = false;
+                            for (0..absent_fields.len) |absent_index| {
+                                if (GuardedList.at(absent_fields, absent_index) == slot) {
+                                    is_absent = true;
+                                    break;
+                                }
                             }
+                            if (is_absent) continue;
                         }
-                        if (is_absent) continue;
                     }
                     const field_offset = self.layout_store.getStructFieldOffset(layout_val.getStruct().idx, @intCast(i));
                     var next_len = path_len;

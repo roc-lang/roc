@@ -1559,10 +1559,14 @@ const ArcPlanStep = struct {
     pre_retain: std.ArrayList(PreRetain) = .empty,
     retain_assign_ref_target: bool = true,
     take_assign_ref_target: bool = false,
-    /// Absent committed field places on a same-layout representation-shell
-    /// alias, indexed by the fields' semantic record positions.
+    /// Absent committed field places on a representation shell: the
+    /// container's piece mask, for a same-layout alias of the container or
+    /// for a view of it (`residual_shell_view`).
     residual_shell_absent_mask: u64 = 0,
     residual_shell_all_rc_fields_absent: bool = false,
+    /// The view whose container and first slot number the absent pieces,
+    /// when the shell is a view's.
+    residual_shell_view: ?LIR.LocalId = null,
     retain_set_target: bool = true,
     preserve_consumed_args: u64 = 0,
     transfer_mask: u64 = 0,
@@ -1592,6 +1596,7 @@ const ArcPlanStep = struct {
         self.take_assign_ref_target = false;
         self.residual_shell_absent_mask = 0;
         self.residual_shell_all_rc_fields_absent = false;
+        self.residual_shell_view = null;
         self.retain_set_target = true;
         self.preserve_consumed_args = 0;
         self.transfer_mask = 0;
@@ -2135,58 +2140,66 @@ const Inserter = struct {
         assign: @FieldType(LIR.CFStmt, "assign_ref"),
         absent_mask: u64,
         all_rc_fields_absent: bool,
+        shell_view: ?LIR.LocalId,
     ) ResourceError!LIR.U32Span {
         if (absent_mask == 0 and !all_rc_fields_absent) return .empty();
-        const source = switch (assign.op) {
-            .local => |local| local,
+        switch (assign.op) {
+            .local => |source| if (self.store.getLocal(source).layout_idx != self.store.getLocal(assign.target).layout_idx) {
+                arcInvariant("ARC attached representation-shell fields to a layout-changing alias");
+            },
+            .field => if (shell_view == null) {
+                arcInvariant("ARC attached representation-shell fields to a field read that is no view");
+            },
             .discriminant,
-            .field,
             .tag_payload,
             .tag_payload_struct,
             .list_reinterpret,
             .nominal,
             => arcInvariant("ARC attached representation-shell fields to a non-local alias"),
-        };
-        if (self.store.getLocal(source).layout_idx != self.store.getLocal(assign.target).layout_idx) {
-            arcInvariant("ARC attached representation-shell fields to a layout-changing alias");
         }
+        const target_layout = self.store.getLocal(assign.target).layout_idx;
+        if (self.layouts.getLayout(target_layout).tag != .struct_) arcInvariant("ARC representation shell did not have struct layout");
+        var absent = std.ArrayList(u32).empty;
+        defer absent.deinit(self.emission_allocator);
         if (all_rc_fields_absent) {
             if (absent_mask != 0) arcInvariant("ARC representation-shell alias mixed full and residual absent-field domains");
-            const source_layout = self.layouts.getLayout(self.store.getLocal(source).layout_idx);
-            if (source_layout.tag != .struct_) arcInvariant("ARC full representation shell did not have struct layout");
-            const info = self.layouts.getStructInfo(source_layout);
-            var count: usize = 0;
-            for (0..info.fields.len) |index| {
-                const field = info.fields.get(@intCast(index));
-                if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(field.layout))) continue;
-                count += 1;
-            }
-            const semantic_fields = try self.emission_allocator.alloc(u32, count);
-            var next_field: usize = 0;
-            for (0..info.fields.len) |index| {
-                const field = info.fields.get(@intCast(index));
-                if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(field.layout))) continue;
-                semantic_fields[next_field] = field.index;
-                next_field += 1;
-            }
-            return try self.store.addU32Span(semantic_fields);
+            var slots = std.ArrayList(layout_mod.Store.RcSlot).empty;
+            defer slots.deinit(self.emission_allocator);
+            try self.layouts.appendRcSlots(self.emission_allocator, target_layout, 0, &slots);
+            for (slots.items) |slot| try absent.append(self.emission_allocator, slot.slot);
+            return try self.store.addU32Span(absent.items);
         }
 
-        const container = self.dismantleFor(self.unitOf(source)) orelse
+        // The absent pieces' stored units, in the shell's own slots.
+        const container_unit, const first: u32 = if (shell_view) |view| blk: {
+            const placement = self.dismantles.viewOf(view) orelse arcInvariant("ARC view shell named a local that is no view");
+            break :blk .{ self.unitOf(placement.root), placement.base };
+        } else .{ self.unitOf(assign.op.local), 0 };
+        const container = self.dismantleFor(container_unit) orelse
             arcInvariant("ARC residual representation-shell alias has no committed field domain");
         if ((absent_mask & ~container.full_mask) != 0) {
             arcInvariant("ARC representation-shell alias exceeded its committed field domain");
         }
+        try self.appendAbsentSlots(container, ~absent_mask, target_layout, first, first, &absent);
+        return try self.store.addU32Span(absent.items);
+    }
 
-        var semantic_fields: [64]u32 = undefined;
-        var count: usize = 0;
-        for (container.fields) |field| {
-            const field_mask = @as(u64, 1) << @intCast(field.field_idx);
-            if ((absent_mask & field_mask) == 0) continue;
-            semantic_fields[count] = field.field_idx;
-            count += 1;
+    /// The pieces of the container behind `view` that its container no
+    /// longer holds on this path and that overlap the view's slots.
+    fn viewShellAbsentMask(self: *const Inserter, owned: *const OwnedSet, view: LIR.LocalId) u64 {
+        const placement = self.dismantles.viewOf(view) orelse arcInvariant("ARC view shell query named a local that is no view");
+        const root_unit = self.unitOf(placement.root);
+        const container = self.dismantleFor(root_unit) orelse return 0;
+        const absent = if (owned.contains(root_unit))
+            container.full_mask & ~owned.residualMask(root_unit)
+        else
+            container.full_mask;
+        const range: arc_dismantle.SlotRange = .{ .first = placement.base, .count = self.layouts.ownershipSlotCount(self.store.getLocal(view).layout_idx) };
+        var mask: u64 = 0;
+        for (container.pieces, 0..) |piece, index| {
+            if (piece.first < range.end() and range.first < piece.end()) mask |= @as(u64, 1) << @intCast(index);
         }
-        return try self.store.addU32Span(semantic_fields[0..count]);
+        return absent & mask;
     }
 
     fn materializeArcPlanStep(self: *Inserter, step: *const ArcPlanStep, tail: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
@@ -2215,6 +2228,7 @@ const Inserter = struct {
                         assign,
                         step.residual_shell_absent_mask,
                         step.residual_shell_all_rc_fields_absent,
+                        step.residual_shell_view,
                     ),
                     .next = next,
                 } }, origin);
@@ -2520,7 +2534,18 @@ const Inserter = struct {
             switch (stmt) {
                 .assign_ref => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    if (assign.op == .local and
+                    const any_views = self.dismantles.views.count() != 0;
+                    if (any_views and assign.op == .field and self.dismantles.viewOf(assign.target) != null and self.isBindingBorrowed(assign.target)) {
+                        // A view copies its container's representation,
+                        // including slots already given away on this path.
+                        step.residual_shell_absent_mask = self.viewShellAbsentMask(&segment.owned, assign.target);
+                        step.residual_shell_view = assign.target;
+                    } else if (any_views and assign.op == .local and self.dismantles.viewOf(assign.op.local) != null and self.isBindingBorrowed(assign.op.local) and
+                        self.store.getLocal(assign.op.local).layout_idx == self.store.getLocal(assign.target).layout_idx)
+                    {
+                        step.residual_shell_absent_mask = self.viewShellAbsentMask(&segment.owned, assign.op.local);
+                        step.residual_shell_view = assign.op.local;
+                    } else if (assign.op == .local and
                         self.store.getLocal(assign.op.local).layout_idx == self.store.getLocal(assign.target).layout_idx and
                         self.layouts.getLayout(self.store.getLocal(assign.op.local).layout_idx).tag == .struct_ and
                         self.localContainsRefcounted(assign.op.local))
@@ -5196,9 +5221,13 @@ const Inserter = struct {
         return self.solution.isUniqueUnder(local, self.current_sig.unique_params);
     }
 
-    /// True when another operand of the same statement belongs to this
-    /// argument's borrow group, so the group is still live at the statement
-    /// even though no later statement uses it.
+    /// True when another operand of the same statement reads this
+    /// argument's ownership place in the current emission, so the place is
+    /// still live at the statement even though no later statement uses it.
+    /// Field takes give their targets places of their own, so two takes of
+    /// different fields of one container never share. A place lies on its
+    /// local's solved borrow chain, which ends at the solved leader, so only
+    /// operands with the same leader can share one.
     fn groupSharesOtherOperand(
         self: *const Inserter,
         locals: anytype,
@@ -5206,11 +5235,20 @@ const Inserter = struct {
         local: LIR.LocalId,
     ) bool {
         const leader = self.solution.leaderOf(local);
+        var place: ?LIR.LocalId = null;
         for (0..GuardedList.borrowLen(locals)) |j| {
             if (j == position) continue;
             const other = GuardedList.at(locals, j);
             if (other == local) return true;
-            if (self.solution.leaderOf(other) == leader) return true;
+            if (self.solution.leaderOf(other) != leader) {
+                if (builtin.mode == .debug and self.ownershipPlaceLeader(other) == self.ownershipPlaceLeader(local)) {
+                    arcInvariant("ARC ownership place left its solved borrow leader");
+                }
+                continue;
+            }
+            const local_place = place orelse self.ownershipPlaceLeader(local);
+            place = local_place;
+            if (self.ownershipPlaceLeader(other) == local_place) return true;
         }
         return false;
     }
@@ -7164,20 +7202,120 @@ const Inserter = struct {
         cause: RcCause,
         next: LIR.CFStmtId,
     ) ResourceError!LIR.CFStmtId {
+        return try self.releaseResidualSlots(local, fields_source, container.layout_idx, 0, container, residual_mask, cause, next);
+    }
+
+    /// Which of a field's refcounted slots its container still holds.
+    const SlotCoverage = struct {
+        residual: bool = false,
+        absent: bool = false,
+    };
+
+    /// The residual coverage of the refcounted slots of a value of
+    /// `layout_idx` whose slots start at `slot_base` in `container`.
+    fn residualCoverage(
+        self: *const Inserter,
+        container: arc_dismantle.Container,
+        residual_mask: u64,
+        layout_idx: layout_mod.Idx,
+        slot_base: u32,
+        coverage: *SlotCoverage,
+    ) void {
+        const layout_val = self.layouts.getLayout(layout_idx);
+        if (!self.layouts.layoutContainsRefcounted(layout_val)) return;
+        if (layout_val.tag != .struct_) {
+            const piece = container.pieceOf(slot_base) orelse arcInvariant("ARC container pieces missed a refcounted slot");
+            if ((residual_mask & (@as(u64, 1) << piece)) != 0) coverage.residual = true else coverage.absent = true;
+            return;
+        }
+        const info = self.layouts.getStructInfo(layout_val);
+        for (0..info.fields.len) |index| {
+            const field = info.fields.get(@intCast(index));
+            if (field.is_padding) continue;
+            self.residualCoverage(container, residual_mask, field.layout, slot_base + self.layouts.ownershipSlotBase(layout_idx, field.index), coverage);
+        }
+    }
+
+    /// Append the refcounted slots of a value of `layout_idx` (slots from
+    /// `slot_base` in `container`) the container no longer holds, numbered
+    /// from `shell_base`.
+    fn appendAbsentSlots(
+        self: *Inserter,
+        container: arc_dismantle.Container,
+        residual_mask: u64,
+        layout_idx: layout_mod.Idx,
+        slot_base: u32,
+        shell_base: u32,
+        absent: *std.ArrayList(u32),
+    ) ResourceError!void {
+        const layout_val = self.layouts.getLayout(layout_idx);
+        if (!self.layouts.layoutContainsRefcounted(layout_val)) return;
+        if (layout_val.tag != .struct_) {
+            const piece = container.pieceOf(slot_base) orelse arcInvariant("ARC container pieces missed a refcounted slot");
+            if ((residual_mask & (@as(u64, 1) << piece)) == 0) try absent.append(self.emission_allocator, slot_base - shell_base);
+            return;
+        }
+        const info = self.layouts.getStructInfo(layout_val);
+        for (0..info.fields.len) |index| {
+            const field = info.fields.get(@intCast(index));
+            if (field.is_padding) continue;
+            try self.appendAbsentSlots(container, residual_mask, field.layout, slot_base + self.layouts.ownershipSlotBase(layout_idx, field.index), shell_base, absent);
+        }
+    }
+
+    /// Release the residual stored units of the struct `source`, whose slots
+    /// start at `slot_base` among the container's. A field all of whose
+    /// refcounted slots are residual is taken whole into a temporary and
+    /// released through its layout's helper; a struct field holding only
+    /// some is read as a view, marked with the slots it no longer holds, and
+    /// released field by field.
+    fn releaseResidualSlots(
+        self: *Inserter,
+        local: LIR.LocalId,
+        source: LIR.LocalId,
+        layout_idx: layout_mod.Idx,
+        slot_base: u32,
+        container: arc_dismantle.Container,
+        residual_mask: u64,
+        cause: RcCause,
+        next: LIR.CFStmtId,
+    ) ResourceError!LIR.CFStmtId {
         const atomicity = self.rcAtomicity(local);
+        const info = self.layouts.getStructInfo(self.layouts.getLayout(layout_idx));
         var tail = next;
-        var index = container.fields.len;
+        var index = info.fields.len;
         while (index > 0) {
             index -= 1;
-            const field = container.fields[index];
-            const field_mask = @as(u64, 1) << @intCast(field.field_idx);
-            if ((residual_mask & field_mask) == 0) continue;
-            const rc = self.rcHelperForLayout(.decref, field.layout_idx);
+            const field = info.fields.get(@intCast(index));
+            if (field.is_padding) continue;
+            if (!self.layouts.layoutContainsRefcounted(self.layouts.getLayout(field.layout))) continue;
+            const first = slot_base + self.layouts.ownershipSlotBase(layout_idx, field.index);
+            var coverage: SlotCoverage = .{};
+            self.residualCoverage(container, residual_mask, field.layout, first, &coverage);
+            if (!coverage.residual) continue;
+            const temp = try self.store.addLocal(.{ .layout_idx = field.layout });
+            try self.dismantle_temps.append(self.emission_allocator, temp);
+            const read_op: LIR.RefOp = .{ .field = .{
+                .source = source,
+                .field_idx = @intCast(field.index),
+            } };
+            if (coverage.absent) {
+                tail = try self.releaseResidualSlots(local, temp, field.layout, first, container, residual_mask, cause, tail);
+                var absent = std.ArrayList(u32).empty;
+                defer absent.deinit(self.emission_allocator);
+                try self.appendAbsentSlots(container, residual_mask, field.layout, first, first, &absent);
+                tail = try self.store.addCFStmt(.{ .assign_ref = .{
+                    .target = temp,
+                    .op = read_op,
+                    .residual_shell_absent_fields = try self.store.addU32Span(absent.items),
+                    .next = tail,
+                } }, self.dismantleOrigin(cause, local));
+                continue;
+            }
+            const rc = self.rcHelperForLayout(.decref, field.layout);
             if (self.layouts.rcHelperPlan(rc) == .noop) {
                 arcInvariant("ARC dismantle selected a noop RC helper for a refcounted residual field");
             }
-            const temp = try self.store.addLocal(.{ .layout_idx = field.layout_idx });
-            try self.dismantle_temps.append(self.emission_allocator, temp);
             tail = try self.store.addCFStmt(.{ .decref = .{
                 .value = temp,
                 .rc = LIR.RcHelper.fromConcrete(rc),
@@ -7186,10 +7324,7 @@ const Inserter = struct {
             } }, self.rcOrigin(cause, .decref, local));
             tail = try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = temp,
-                .op = .{ .field = .{
-                    .source = fields_source,
-                    .field_idx = @intCast(field.field_idx),
-                } },
+                .op = read_op,
                 .take_kind = .take,
                 .next = tail,
             } }, self.dismantleOrigin(cause, local));
@@ -10496,6 +10631,228 @@ test "RC residual shell metadata uses semantic field indices" {
         found = true;
     }
     try testing.expect(found);
+}
+
+/// The residual shell ARC wrote on the statement defining `target`. The
+/// store also keeps the ownership-neutral statements ARC rewrote, which
+/// carry none.
+fn residualShellOf(f: *const ArcTest, target: LIR.LocalId) Allocator.Error!?[]const u32 {
+    for (0..f.store.cfStmtCount()) |stmt_index| {
+        const stmt = f.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
+        if (stmt != .assign_ref or stmt.assign_ref.target != target) continue;
+        const absent = f.store.getU32Span(stmt.assign_ref.residual_shell_absent_fields);
+        if (absent.len == 0) continue;
+        const out = try testing.allocator.alloc(u32, absent.len);
+        for (out, 0..) |*slot, index| slot.* = GuardedList.at(absent, index);
+        return out;
+    }
+    return null;
+}
+
+test "RC field takes reach a record nested in a dying record through repeated views" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    // outer = { inner: { a: Str, b: Str }, c: Str }: slots 0 and 1 are the
+    // inner record's fields, slot 2 is `c`.
+    const outer_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = f.pair_str },
+        .{ .index = 1, .layout = .str },
+    });
+    const a = try f.local(.str);
+    const b = try f.local(.str);
+    const c = try f.local(.str);
+    const inner = try f.local(f.pair_str);
+    const outer = try f.local(outer_layout);
+    const first_view = try f.local(f.pair_str);
+    const taken_b = try f.local(.str);
+    const second_view = try f.local(f.pair_str);
+    const taken_a = try f.local(.str);
+    const taken_c = try f.local(.str);
+    const b_result = try f.local(.i64);
+    const a_result = try f.local(.i64);
+    const c_result = try f.local(.i64);
+
+    const ret = try f.ret(c_result);
+    const consume_c = try f.assignCall(c_result, &.{taken_c}, ret);
+    const read_c = try f.assignRefField(taken_c, outer, 1, consume_c);
+    const consume_a = try f.assignCall(a_result, &.{taken_a}, read_c);
+    const read_a = try f.assignRefField(taken_a, second_view, 0, consume_a);
+    const read_second_view = try f.assignRefField(second_view, outer, 0, read_a);
+    const consume_b = try f.assignCall(b_result, &.{taken_b}, read_second_view);
+    const read_b = try f.assignRefField(taken_b, first_view, 1, consume_b);
+    const read_first_view = try f.assignRefField(first_view, outer, 0, read_b);
+    const make_outer = try f.assignStruct(outer, &.{ inner, c }, read_first_view);
+    const make_inner = try f.assignStruct(inner, &.{ a, b }, make_outer);
+    const make_c = try f.assignStr(c, "c", make_inner);
+    const make_b = try f.assignStr(b, "b", make_c);
+    const body = try f.assignStr(a, "a", make_b);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+
+    // Each list leaves the record by a take, without a retain, and the
+    // record is never released whole.
+    try testing.expectEqual(@as(usize, 0), f.countRc(taken_a, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(taken_b, .incref));
+    try testing.expectEqual(@as(usize, 0), f.countRc(taken_c, .incref));
+    try f.expectRc(outer, 0, 0, 0);
+    // The second view copies the inner record after `b` left it.
+    const shell = (try residualShellOf(&f, second_view)).?;
+    defer testing.allocator.free(shell);
+    try testing.expectEqualSlices(u32, &.{1}, shell);
+}
+
+test "RC residual release reads a partly taken nested record as a view" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const outer_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = f.pair_str },
+        .{ .index = 1, .layout = .str },
+    });
+    const a = try f.local(.str);
+    const b = try f.local(.str);
+    const c = try f.local(.str);
+    const inner = try f.local(f.pair_str);
+    const outer = try f.local(outer_layout);
+    const view = try f.local(f.pair_str);
+    const taken_b = try f.local(.str);
+    const result = try f.local(.i64);
+
+    const ret = try f.ret(result);
+    const consume_b = try f.assignCall(result, &.{taken_b}, ret);
+    const read_b = try f.assignRefField(taken_b, view, 1, consume_b);
+    const read_view = try f.assignRefField(view, outer, 0, read_b);
+    const make_outer = try f.assignStruct(outer, &.{ inner, c }, read_view);
+    const make_inner = try f.assignStruct(inner, &.{ a, b }, make_outer);
+    const make_c = try f.assignStr(c, "c", make_inner);
+    const make_b = try f.assignStr(b, "b", make_c);
+    const body = try f.assignStr(a, "a", make_b);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+
+    // `b` is taken; `a` and `c` are released one by one, `a` through a
+    // view of the inner record that names `b` absent. The certifier run by
+    // `run` checks each stored unit is spent exactly once.
+    try testing.expectEqual(@as(usize, 0), f.countRc(taken_b, .incref));
+    try f.expectRc(outer, 0, 0, 0);
+    var residual_views: usize = 0;
+    for (0..f.store.cfStmtCount()) |stmt_index| {
+        const stmt = f.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
+        if (stmt != .assign_ref or stmt.assign_ref.op != .field) continue;
+        if (stmt.assign_ref.op.field.source != outer or stmt.assign_ref.target == view) continue;
+        const absent = f.store.getU32Span(stmt.assign_ref.residual_shell_absent_fields);
+        if (absent.len == 0) continue;
+        try testing.expectEqual(@as(usize, 1), absent.len);
+        try testing.expectEqual(@as(u32, 1), GuardedList.at(absent, 0));
+        residual_views += 1;
+    }
+    try testing.expectEqual(@as(usize, 1), residual_views);
+}
+
+test "RC nested field take keeps a retain when a later view reads the taken field" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const outer_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = f.pair_str },
+        .{ .index = 1, .layout = .str },
+    });
+    const a = try f.local(.str);
+    const b = try f.local(.str);
+    const c = try f.local(.str);
+    const inner = try f.local(f.pair_str);
+    const outer = try f.local(outer_layout);
+    const first_view = try f.local(f.pair_str);
+    const taken_b = try f.local(.str);
+    const second_view = try f.local(f.pair_str);
+    const borrowed_b = try f.local(.str);
+    const call_result = try f.local(.i64);
+    const result = try f.local(.i64);
+
+    const ret = try f.ret(result);
+    const result_assign = try f.assignI64(result, 1, ret);
+    const use_borrowed = try f.expectStmt(borrowed_b, result_assign);
+    const read_borrowed = try f.assignRefField(borrowed_b, second_view, 1, use_borrowed);
+    const read_second_view = try f.assignRefField(second_view, outer, 0, read_borrowed);
+    const consume_b = try f.assignCall(call_result, &.{taken_b}, read_second_view);
+    const read_b = try f.assignRefField(taken_b, first_view, 1, consume_b);
+    const read_first_view = try f.assignRefField(first_view, outer, 0, read_b);
+    const make_outer = try f.assignStruct(outer, &.{ inner, c }, read_first_view);
+    const make_inner = try f.assignStruct(inner, &.{ a, b }, make_outer);
+    const make_c = try f.assignStr(c, "c", make_inner);
+    const make_b = try f.assignStr(b, "b", make_c);
+    const body = try f.assignStr(a, "a", make_b);
+    _ = try f.addProc(&.{}, body, .i64);
+    try f.run();
+
+    try testing.expect(f.countRc(taken_b, .incref) >= 1);
+}
+
+test "RC specialization: fields taken from one dying record select the owned variant together" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Repro for https://github.com/roc-lang/roc/issues/12327: each callee
+    // parameter is a pair whose owned variant takes its first list. The
+    // caller passes two different fields of one dying record. They are
+    // separate ownership places, so neither keeps the other's unit live and
+    // the call selects the owned variant.
+    const left = try f.local(f.pair_list);
+    const right = try f.local(f.pair_list);
+    const left_field = try f.local(f.list_i64);
+    const right_field = try f.local(f.list_i64);
+    const elem = try f.local(.i64);
+    const left_appended = try f.local(f.list_i64);
+    const right_appended = try f.local(f.list_i64);
+    const callee_result = try f.local(.i64);
+    const callee_ret = try f.ret(callee_result);
+    const result_assign = try f.assignI64(callee_result, 1, callee_ret);
+    const append_right = try f.assignLowLevel(right_appended, &.{ right_field, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), result_assign);
+    const read_right = try f.assignRefField(right_field, right, 0, append_right);
+    const append_left = try f.assignLowLevel(left_appended, &.{ left_field, elem }, LIR.LowLevel.RcEffect.runtimeUniqueness(1), read_right);
+    const elem_assign = try f.assignI64(elem, 5, append_left);
+    const read_left = try f.assignRefField(left_field, left, 0, elem_assign);
+    const callee = try f.addProc(&.{ left, right }, read_left, .i64);
+
+    const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
+        .{ .index = 0, .layout = f.pair_list },
+        .{ .index = 1, .layout = f.pair_list },
+    });
+    const a = try f.local(f.list_i64);
+    const b = try f.local(f.list_i64);
+    const c = try f.local(f.list_i64);
+    const d = try f.local(f.list_i64);
+    const first_pair = try f.local(f.pair_list);
+    const second_pair = try f.local(f.pair_list);
+    const record = try f.local(record_layout);
+    const first_arg = try f.local(f.pair_list);
+    const second_arg = try f.local(f.pair_list);
+    const caller_result = try f.local(.i64);
+    const caller_ret = try f.ret(caller_result);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = caller_result,
+        .proc = callee,
+        .args = try f.span(&.{ first_arg, second_arg }),
+        .next = caller_ret,
+    } }, .test_fixture);
+    const read_second = try f.assignRefField(second_arg, record, 1, call);
+    const read_first = try f.assignRefField(first_arg, record, 0, read_second);
+    const record_assign = try f.assignStruct(record, &.{ first_pair, second_pair }, read_first);
+    const second_assign = try f.assignStruct(second_pair, &.{ c, d }, record_assign);
+    const first_assign = try f.assignStruct(first_pair, &.{ a, b }, second_assign);
+    const d_assign = try f.assignList(d, &.{}, first_assign);
+    const c_assign = try f.assignList(c, &.{}, d_assign);
+    const b_assign = try f.assignList(b, &.{}, c_assign);
+    const caller_body = try f.assignList(a, &.{}, b_assign);
+    _ = try f.addProc(&.{}, caller_body, .i64);
+
+    const base_proc_count = f.store.procSpecCount();
+    try insert(&f.store, &f.layouts, .{ .specialize = true });
+
+    // Only the base proc retains each borrowed field; the owned variant the
+    // caller selects takes both.
+    try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
+    try testing.expectEqual(@as(usize, 1), f.countRc(left_field, .incref));
+    try testing.expectEqual(@as(usize, 1), f.countRc(right_field, .incref));
+    try f.expectRc(record, 0, 0, 0);
 }
 
 test "RC early_return emits correct number of decrefs for multi-use symbol" {
