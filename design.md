@@ -15377,11 +15377,14 @@ occurrence, then constraint fn types walked the same way). Index `k` in this
 list is the shared identity between a plan's `constraint(k)` resolution and
 the k-th evidence entry a call edge supplies. The definition's module and any
 importing module enumerate identical lists from their structural copies of the
-scheme. Repeated declarative constraints share one callable type, while
-independently inferred dot-method calls retain separate callable relations so a
-rank-1 method scheme can be instantiated independently at each use. Operators
-and literal conversions retain one numeric/defaulting relation per method
-identity. A relation folded into a retained one selects no target of its own,
+scheme. A where clause's own repeated requirements of one method share one
+callable type. Dot-method calls and requirements instantiated from a callee's
+where clause are independent uses that retain separate callable relations, so a
+rank-1 method scheme can be instantiated independently at each use: a receiver
+one callee requires to parse `Json` and another to parse a second format holds
+both `parser_for` requirements. Operators and literal conversions retain one
+numeric/defaulting relation per method identity, which every same-name
+relation on that receiver must satisfy. A relation folded into a retained one selects no target of its own,
 yet its dispatch site still outputs a plan. The unifier journals each fold as
 an exact (dropped, retained) pair of raw constraint function vars, and checking
 outputs `ModuleEnv.dispatch_relation_merges`, mapping every folded relation
