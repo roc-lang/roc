@@ -3426,6 +3426,60 @@ Builtin :: [].{
 					},
 			)
 
+		## Run the given function on each item of an iterator, and return an
+		## iterator of the values it wrapped in `Ok`. Items the function maps
+		## to `Err` are dropped. Use [Iter.keep_errs] to keep the `Err`
+		## values instead.
+		## ```roc
+		## expect {
+		## 	numbers = [1.I64, 2, 3, 4]
+		## 	to_even = |n| if n.is_even() { Ok(n) } else { Err({}) }
+		## 	numbers.iter().keep_oks(to_even).collect() == [2, 4]
+		## }
+		## ```
+		keep_oks : Iter(before), (before -> Try(after, _err)) -> Iter(after)
+		keep_oks = |iterator, transform|
+			iter_from_step(
+				Unknown,
+				||
+					match Iter.next(iterator) {
+						Done => Done
+						Skip({ rest }) => Skip({ rest: Iter.keep_oks(rest, transform) })
+						One({ item, rest }) =>
+							match transform(item) {
+								Ok(after) => One({ item: after, rest: Iter.keep_oks(rest, transform) })
+								Err(_) => Skip({ rest: Iter.keep_oks(rest, transform) })
+							}
+					},
+			)
+
+		## Run the given function on each item of an iterator, and return an
+		## iterator of the values it wrapped in `Err`. Items the function maps
+		## to `Ok` are dropped. Use [Iter.keep_oks] to keep the `Ok`
+		## values instead.
+		## ```roc
+		## expect {
+		## 	numbers = [1.I64, 2, 3, 4]
+		## 	to_even = |n| if n.is_even() { Ok(n) } else { Err(n) }
+		## 	numbers.iter().keep_errs(to_even).collect() == [1, 3]
+		## }
+		## ```
+		keep_errs : Iter(before), (before -> Try(_ok, after)) -> Iter(after)
+		keep_errs = |iterator, transform|
+			iter_from_step(
+				Unknown,
+				||
+					match Iter.next(iterator) {
+						Done => Done
+						Skip({ rest }) => Skip({ rest: Iter.keep_errs(rest, transform) })
+						One({ item, rest }) =>
+							match transform(item) {
+								Err(after) => One({ item: after, rest: Iter.keep_errs(rest, transform) })
+								Ok(_) => Skip({ rest: Iter.keep_errs(rest, transform) })
+							}
+					},
+			)
+
 		fold : Iter(a), acc, (acc, a -> acc) -> acc
 		fold = |iterator, init, step| {
 			var $state = init
