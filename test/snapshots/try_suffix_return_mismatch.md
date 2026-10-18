@@ -656,7 +656,7 @@ EndOfFile,
 ~~~roc
 # repro for https://github.com/roc-lang/roc/issues/11030
 parse : Str -> Try(Str, [BadInput])
-parse = |s| if s == "" Err(BadInput) else Ok(s)
+parse = |s| if (s == "") Err(BadInput) else Ok(s)
 
 # The trailing `?` unwraps the Try the body would otherwise return, so the
 # earlier `?` has nothing compatible to return into.

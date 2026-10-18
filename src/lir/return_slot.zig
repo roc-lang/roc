@@ -108,6 +108,7 @@ const Spec = struct {
         return try body_clone.cloneCallVariant(
             ReturnSlotRewriter,
             store,
+            layouts,
             key.source,
             .{ .out_ptr = out_ptr, .store_unit = store_unit },
             .{

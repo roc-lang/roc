@@ -45,6 +45,18 @@ const LirProcSpec = lir.LirProcSpec;
 const LirProcSpecId = lir.LirProcSpecId;
 const RcAtomicity = lir.LIR.RcAtomicity;
 const StrLiteral = lir.LIR.StrLiteral;
+const RocStr = builtins.str.RocStr;
+const RocList = builtins.list.RocList;
+const SEAMLESS_SLICE_TAG = builtins.list.SEAMLESS_SLICE_TAG;
+
+comptime {
+    // `loadPointer`/`storePointer` on a RocStr's or RocList's own address
+    // access its `bytes` field.
+    std.debug.assert(@offsetOf(RocStr, "bytes") == 0);
+    std.debug.assert(@offsetOf(RocList, "bytes") == 0);
+    // `emitRocStrLenIsSmall` tests the flag as the sign bit of `length`.
+    std.debug.assert(@as(i8, @bitCast(RocStr.small_str_flag)) == std.math.minInt(i8));
+}
 
 const BuiltinSymbol = builtins.builtin_registry.BuiltinFn;
 const builtin_symbol_count = @typeInfo(BuiltinSymbol).@"enum".field_names.len;
@@ -353,6 +365,12 @@ pub const MonoLlvmCodeGen = struct {
     static_data_symbols: std.StringHashMap(LlvmBuilder.Constant),
     /// Distinguishes callable exports from independent modules in one JIT library.
     static_symbol_prefix: []const u8 = "",
+    /// Emit an object-cache pack's object: every procedure, static datum,
+    /// and helper is internal to the object, and each entrypoint is a weak
+    /// C-ABI entry, so the object links beside the program and beside other
+    /// packs' objects (two of which may export the same entry) without any
+    /// other name in common.
+    object_cache_pack: bool = false,
     runtime_error_func: ?LlvmBuilder.Function.Index = null,
     rc_helpers: std.AutoHashMap(u64, RcHelperEntry),
     /// Atomic helpers required by relocations in the separately emitted
@@ -913,6 +931,7 @@ pub const MonoLlvmCodeGen = struct {
             if (self.target.ofmt == .elf) try self.embedGdbScript(&builder);
         }
 
+        if (self.object_cache_pack) try self.definePackStaticData();
         const procs = self.store.getProcSpecs();
         try self.compileAllProcSpecs(procs);
         for (self.static_data_rc_helpers) |helper_key| {
@@ -1272,52 +1291,36 @@ pub const MonoLlvmCodeGen = struct {
         ) catch return error.OutOfMemory;
     }
 
-    /// `Str` and `List` are both three words starting with a bytes pointer,
-    /// but the order of their remaining two fields differs.
+    /// The debug type of a `Str` or `List` (`Repr` is `RocStr` or `RocList`):
+    /// three words starting with a bytes pointer, with the remaining two in
+    /// `Repr`'s field order at its target-width offsets.
     fn debugSequenceType(
         self: *MonoLlvmCodeGen,
         builder: *LlvmBuilder,
+        comptime Repr: type,
         name: []const u8,
         elem_ptr_ty: LlvmBuilder.Metadata,
-        second_field: []const u8,
-        third_field: []const u8,
         size_bits: u64,
         align_bits: u64,
     ) Error!LlvmBuilder.Metadata {
         const usize_ty = try self.debugUsizeType(builder);
         const word_bits: u64 = self.target.ptrBitWidth();
-        const members = [_]LlvmBuilder.Metadata{
-            builder.debugMemberType(
-                builder.metadataString("bytes") catch return error.OutOfMemory,
+        const field_names = comptime std.meta.fieldNames(Repr);
+        var members: [field_names.len]LlvmBuilder.Metadata = undefined;
+        inline for (field_names, &members) |field_name, *member| {
+            const field = @field(std.meta.FieldEnum(Repr), field_name);
+            const offset_bits = @as(u64, Repr.targetFieldOffset(field, self.targetWordSize())) * 8;
+            member.* = builder.debugMemberType(
+                builder.metadataString(field_name) catch return error.OutOfMemory,
                 null,
                 self.debug_compile_unit.unwrap(),
                 0,
-                elem_ptr_ty,
+                if (field == .bytes) elem_ptr_ty else usize_ty,
                 word_bits,
                 word_bits,
-                0,
-            ) catch return error.OutOfMemory,
-            builder.debugMemberType(
-                builder.metadataString(second_field) catch return error.OutOfMemory,
-                null,
-                self.debug_compile_unit.unwrap(),
-                0,
-                usize_ty,
-                word_bits,
-                word_bits,
-                word_bits,
-            ) catch return error.OutOfMemory,
-            builder.debugMemberType(
-                builder.metadataString(third_field) catch return error.OutOfMemory,
-                null,
-                self.debug_compile_unit.unwrap(),
-                0,
-                usize_ty,
-                word_bits,
-                word_bits,
-                word_bits * 2,
-            ) catch return error.OutOfMemory,
-        };
+                offset_bits,
+            ) catch return error.OutOfMemory;
+        }
         return builder.debugStructType(
             builder.metadataString(name) catch return error.OutOfMemory,
             null,
@@ -1358,7 +1361,7 @@ pub const MonoLlvmCodeGen = struct {
                             word_bits,
                             0,
                         ) catch return error.OutOfMemory;
-                        return try self.debugSequenceType(builder, "Str", bytes_ptr, "capacity_or_alloc_ptr", "length", size_bits, align_bits);
+                        return try self.debugSequenceType(builder, RocStr, "Str", bytes_ptr, size_bits, align_bits);
                     },
                     .int => {
                         const precision = scalar.getInt();
@@ -1470,7 +1473,7 @@ pub const MonoLlvmCodeGen = struct {
                     word_bits,
                     0,
                 ) catch return error.OutOfMemory;
-                return try self.debugSequenceType(builder, "List", elem_ptr, "length", "capacity_or_alloc_ptr", size_bits, align_bits);
+                return try self.debugSequenceType(builder, RocList, "List", elem_ptr, size_bits, align_bits);
             },
             .struct_ => unreachable,
             .tag_union => {
@@ -2521,7 +2524,7 @@ pub const MonoLlvmCodeGen = struct {
     /// procedure a static-data relocation points at can; entrypoints reach
     /// their procedure through a wrapper compiled into this same module.
     fn procNeedsExternalLinkage(self: *const MonoLlvmCodeGen, proc_id: LirProcSpecId) bool {
-        if (self.proc_symbol_mode != .lir_symbol) return false;
+        if (self.proc_symbol_mode != .lir_symbol or self.object_cache_pack) return false;
         for (self.static_data_procs) |referenced| {
             if (referenced == proc_id) return true;
         }
@@ -2815,7 +2818,7 @@ pub const MonoLlvmCodeGen = struct {
         const wrapper_ty = builder.fnType(ret_ty, param_types.items, .normal) catch return error.OutOfMemory;
         const wrapper_name = try self.exportedFunctionName(builder, symbol_name);
         const wrapper = builder.addFunction(wrapper_ty, wrapper_name, .default) catch return error.OutOfMemory;
-        wrapper.setLinkage(.external, builder);
+        wrapper.setLinkage(if (self.object_cache_pack) .weak_odr else .external, builder);
         try self.addGeneratedFunctionStackProbeAttrs(&attrs_wip);
         wrapper.setAttributes(attrs_wip.finish(builder) catch return error.OutOfMemory, builder);
         self.configureExportCallConv(wrapper, builder);
@@ -3074,7 +3077,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn configureExportCallConv(self: *MonoLlvmCodeGen, func: LlvmBuilder.Function.Index, builder: *LlvmBuilder) void {
-        if (self.target.os.tag == .windows) {
+        if (self.target.os.tag == .windows and !self.object_cache_pack) {
             func.ptrConst(builder).global.setDllStorageClass(.dllexport, builder);
         }
         if (self.target.cpu.arch != .x86_64) return;
@@ -3809,7 +3812,10 @@ pub const MonoLlvmCodeGen = struct {
 
         const builder = self.builder orelse return error.CompilationFailed;
         const scope = self.store.inlineScope(id);
-        const linkage_name = builder.metadataStringFmt("{s}{x}", .{ lir.ProcIdentity.symbol_name_prefix, scope.source_symbol.raw() }) catch return error.OutOfMemory;
+        const linkage_name = linkage: {
+            var symbol_name: [lir.ProcIdentity.symbol_name_len]u8 = undefined;
+            break :linkage builder.metadataString(scope.source_identity.writeSymbolName(&symbol_name)) catch return error.OutOfMemory;
+        };
         const name = if (scope.source_name.isNone())
             linkage_name
         else
@@ -5392,6 +5398,7 @@ pub const MonoLlvmCodeGen = struct {
             .list_append_range_within_unsafe => try self.emitListAppendRangeWithinUnsafe(target, arg_locals),
             .list_append_sublist => try self.emitListAppendSublist(target, arg_locals, unique_args),
             .list_append_le_bytes => try self.emitListAppendLeBytes(target, arg_locals, unique_args),
+            .list_append_le_bytes_unsafe => try self.emitListAppendLeBytesUnsafe(target, arg_locals),
             .list_slack_unique => try self.emitListSlackUnique(target, arg_locals),
             .list_owned_unique => try self.emitListOwnedUnique(target, arg_locals, unique_args),
             .list_prepend => try self.emitListPrepend(target, arg_locals, unique_args),
@@ -8215,10 +8222,9 @@ pub const MonoLlvmCodeGen = struct {
         const builder, const wip = try self.builderAndWip();
         const usize_ty = self.ptrSizedIntType();
         const ptr_ty = try self.ptrType();
-        const word_size = self.targetWordSize();
 
         const raw_len = try self.loadUsize(try self.offsetPtr(source_ptr, self.rocStrLenOffset()));
-        const small_bit = @as(u64, 1) << @intCast(self.target.ptrBitWidth() - 1);
+        const small_bit = self.rocStrSmallBit();
         const small_mask = wip.bin(.@"and", raw_len, builder.intValue(usize_ty, small_bit) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const is_small = wip.icmp(.ne, small_mask, builder.intValue(usize_ty, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
 
@@ -8228,8 +8234,8 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.brCond(is_small, small_block, heap_block, .then_likely) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = small_block };
-        const small_len_byte = wip.load(.normal, .i8, try self.offsetPtr(source_ptr, 3 * word_size - 1), LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
-        const small_len_masked = wip.bin(.@"and", small_len_byte, builder.intValue(.i8, 0x7F) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const small_len_byte = wip.load(.normal, .i8, try self.offsetPtr(source_ptr, self.rocStrFlagByteOffset()), LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
+        const small_len_masked = wip.bin(.@"and", small_len_byte, builder.intValue(.i8, RocStr.small_str_len_mask) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const small_len = try self.coerceScalar(small_len_masked, usize_ty, false);
         const zero = builder.intValue(usize_ty, 0) catch return error.OutOfMemory;
         _ = wip.br(after_block) catch return error.OutOfMemory;
@@ -8237,10 +8243,10 @@ pub const MonoLlvmCodeGen = struct {
         wip.cursor = .{ .block = heap_block };
         const heap_bytes = try self.loadPointer(source_ptr);
         const cap_or_alloc = try self.loadUsize(try self.offsetPtr(source_ptr, self.rocStrCapacityOffset()));
-        const slice_tag = wip.bin(.@"and", cap_or_alloc, builder.intValue(usize_ty, 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const slice_tag = wip.bin(.@"and", cap_or_alloc, builder.intValue(usize_ty, SEAMLESS_SLICE_TAG) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const is_slice = wip.icmp(.ne, slice_tag, builder.intValue(usize_ty, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const heap_bytes_int = wip.cast(.ptrtoint, heap_bytes, usize_ty, "") catch return error.OutOfMemory;
-        const encoded_heap_ptr = wip.bin(.@"or", heap_bytes_int, builder.intValue(usize_ty, 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const encoded_heap_ptr = wip.bin(.@"or", heap_bytes_int, builder.intValue(usize_ty, SEAMLESS_SLICE_TAG) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const heap_alloc = wip.select(.normal, is_slice, cap_or_alloc, encoded_heap_ptr, "") catch return error.OutOfMemory;
         _ = wip.br(after_block) catch return error.OutOfMemory;
 
@@ -8263,15 +8269,14 @@ pub const MonoLlvmCodeGen = struct {
     fn emitRocStrLen(self: *MonoLlvmCodeGen, str_ptr: LlvmBuilder.Value) Error!LlvmBuilder.Value {
         const builder, const wip = try self.builderAndWip();
         const usize_ty = self.ptrSizedIntType();
-        const word_size = self.targetWordSize();
 
         const raw_len = try self.loadUsize(try self.offsetPtr(str_ptr, self.rocStrLenOffset()));
-        const small_bit = @as(u64, 1) << @intCast(self.target.ptrBitWidth() - 1);
+        const small_bit = self.rocStrSmallBit();
         const small_mask = wip.bin(.@"and", raw_len, builder.intValue(usize_ty, small_bit) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const is_small = wip.icmp(.ne, small_mask, builder.intValue(usize_ty, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
 
-        const small_len_byte = wip.load(.normal, .i8, try self.offsetPtr(str_ptr, 3 * word_size - 1), LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
-        const small_len_masked = wip.bin(.@"and", small_len_byte, builder.intValue(.i8, 0x7F) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const small_len_byte = wip.load(.normal, .i8, try self.offsetPtr(str_ptr, self.rocStrFlagByteOffset()), LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
+        const small_len_masked = wip.bin(.@"and", small_len_byte, builder.intValue(.i8, RocStr.small_str_len_mask) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const small_len = try self.coerceScalar(small_len_masked, usize_ty, false);
 
         return wip.select(.normal, is_small, small_len, raw_len, "") catch return error.OutOfMemory;
@@ -8683,7 +8688,7 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.brCond(source.is_small, small_block, heap_block, .then_likely) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = small_block };
-        try self.zeroBytes(target_ptr, 3 * self.targetWordSize());
+        try self.zeroBytes(target_ptr, self.rocStrSize());
         const small_src = try self.offsetPtrValue(source.bytes, start);
         _ = wip.callMemCpy(
             target_ptr,
@@ -8695,8 +8700,8 @@ pub const MonoLlvmCodeGen = struct {
             false,
         ) catch return error.OutOfMemory;
         const len_byte = try self.coerceScalar(capture_len, .i8, false);
-        const tagged_len = wip.bin(.@"or", len_byte, builder.intValue(.i8, 0x80) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-        const small_len_ptr = try self.offsetPtr(target_ptr, 3 * self.targetWordSize() - 1);
+        const tagged_len = wip.bin(.@"or", len_byte, builder.intValue(.i8, RocStr.small_str_flag) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const small_len_ptr = try self.offsetPtr(target_ptr, self.rocStrFlagByteOffset());
         _ = wip.store(.normal, tagged_len, small_len_ptr, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.OutOfMemory;
         _ = wip.br(after_block) catch return error.OutOfMemory;
 
@@ -9034,13 +9039,11 @@ pub const MonoLlvmCodeGen = struct {
         loc: SourceLoc,
     ) Error!LlvmBuilder.Constant {
         const builder = self.builder orelse return error.CompilationFailed;
-        var allocated_name: ?[]u8 = null;
-        defer if (allocated_name) |name| self.allocator.free(name);
-        const name = if (scope.source_name.isNone()) blk: {
-            const generated = try std.fmt.allocPrint(self.allocator, "{s}{x}", .{ lir.ProcIdentity.symbol_name_prefix, scope.source_symbol.raw() });
-            allocated_name = generated;
-            break :blk generated;
-        } else self.store.getString(scope.source_name);
+        var symbol_name: [lir.ProcIdentity.symbol_name_len]u8 = undefined;
+        const name = if (scope.source_name.isNone())
+            scope.source_identity.writeSymbolName(&symbol_name)
+        else
+            self.store.getString(scope.source_name);
         const file = if (loc.file == SourceLoc.no_file or loc.file >= self.store.sourceFileCount())
             ""
         else
@@ -9087,7 +9090,6 @@ pub const MonoLlvmCodeGen = struct {
     fn emitStrLiteral(self: *MonoLlvmCodeGen, out: LlvmBuilder.Value, literal: StrLiteral) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const bytes = self.store.getStringLiteral(literal);
-        const RocStr = builtins.str.RocStr;
         if (bytes.len < RocStr.word_count * self.targetWordSize()) {
             // Construct the complete value here. Inlining the runtime constructor
             // makes LLVM rediscover these constants through partial-byte stores
@@ -9171,9 +9173,23 @@ pub const MonoLlvmCodeGen = struct {
     /// function pointer, or a pointer field the target's word alignment
     /// cannot place in a packed struct.
     fn frozenExportConstant(self: *MonoLlvmCodeGen, data_export: lir.Program.StaticDataExport) Error!?LlvmBuilder.Constant {
+        const image = (try self.frozenExportImage(data_export, true)) orelse return null;
+        return image.value;
+    }
+
+    /// The type and, with `with_value`, the constant of a frozen export's
+    /// image: its bytes as chunks, with each address relocation a
+    /// pointer-sized field. The type depends only on where the relocations
+    /// sit, so it is known before any relocation target is declared.
+    fn frozenExportImage(
+        self: *MonoLlvmCodeGen,
+        data_export: lir.Program.StaticDataExport,
+        comptime with_value: bool,
+    ) Error!?struct { ty: LlvmBuilder.Type, value: if (with_value) LlvmBuilder.Constant else void } {
         const builder = self.builder orelse return error.CompilationFailed;
         if (data_export.relocations.len == 0) {
-            return builder.stringConst(builder.string(data_export.bytes) catch return error.OutOfMemory) catch return error.OutOfMemory;
+            const bytes = builder.stringConst(builder.string(data_export.bytes) catch return error.OutOfMemory) catch return error.OutOfMemory;
+            return .{ .ty = bytes.typeOf(builder), .value = if (with_value) bytes else {} };
         }
         const word: usize = self.targetWordSize();
         for (data_export.relocations) |relocation| {
@@ -9200,27 +9216,64 @@ pub const MonoLlvmCodeGen = struct {
             if (offset > cursor) {
                 const chunk = builder.stringConst(builder.string(data_export.bytes[cursor..offset]) catch return error.OutOfMemory) catch return error.OutOfMemory;
                 try field_types.append(self.allocator, chunk.typeOf(builder));
-                try field_values.append(self.allocator, chunk);
+                if (with_value) try field_values.append(self.allocator, chunk);
             }
-            const target = try self.staticDataSymbol(relocation.target_symbol_name);
-            const addend = builder.intConst(.i64, relocation.addend) catch return error.OutOfMemory;
-            const address = builder.gepConst(.normal, .i8, target, null, &.{addend}) catch return error.OutOfMemory;
+            if (with_value) {
+                const target = try self.staticDataSymbol(relocation.target_symbol_name);
+                const addend = builder.intConst(.i64, relocation.addend) catch return error.OutOfMemory;
+                const address = builder.gepConst(.normal, .i8, target, null, &.{addend}) catch return error.OutOfMemory;
+                try field_values.append(self.allocator, address);
+            }
             try field_types.append(self.allocator, try self.ptrType());
-            try field_values.append(self.allocator, address);
             cursor = offset + word;
         }
         if (cursor < data_export.bytes.len) {
             const tail = builder.stringConst(builder.string(data_export.bytes[cursor..]) catch return error.OutOfMemory) catch return error.OutOfMemory;
             try field_types.append(self.allocator, tail.typeOf(builder));
-            try field_values.append(self.allocator, tail);
+            if (with_value) try field_values.append(self.allocator, tail);
         }
         const struct_ty = builder.structType(.@"packed", field_types.items) catch return error.OutOfMemory;
-        return builder.structConst(struct_ty, field_values.items) catch return error.OutOfMemory;
+        return .{
+            .ty = struct_ty,
+            .value = if (with_value) builder.structConst(struct_ty, field_values.items) catch return error.OutOfMemory else {},
+        };
+    }
+
+    /// Define every static-data export inside an object-cache pack's object
+    /// as an internal constant, so the object carries the data its code
+    /// reads and links beside any other object without a name in common.
+    /// Every export is declared before any is initialized, so constants that
+    /// point at one another resolve. An export whose image has no constant
+    /// form here (a code pointer, or a pointer field off word alignment)
+    /// fails the pack, which is then not written.
+    fn definePackStaticData(self: *MonoLlvmCodeGen) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const variables = self.allocator.alloc(LlvmBuilder.Variable.Index, self.static_data_exports.len) catch return error.OutOfMemory;
+        defer self.allocator.free(variables);
+        for (self.static_data_exports, variables, 0..) |data_export, *variable, row| {
+            const image = (try self.frozenExportImage(data_export, false)) orelse return error.CompilationFailed;
+            const name = builder.strtabStringFmt(".roc.pack_data.{d}", .{row}) catch return error.OutOfMemory;
+            variable.* = builder.addVariable(name, image.ty, .default) catch return error.OutOfMemory;
+            variable.ptrConst(builder).global.setLinkage(.internal, builder);
+            variable.setMutability(.constant, builder);
+            variable.setAlignment(LlvmBuilder.Alignment.fromByteUnits(@max(data_export.alignment, 1)), builder);
+            const offset = builder.intConst(.i64, data_export.symbol_offset) catch return error.OutOfMemory;
+            const address = builder.gepConst(.normal, .i8, variable.toConst(builder), null, &.{offset}) catch return error.OutOfMemory;
+            const key = self.allocator.dupe(u8, data_export.symbol_name) catch return error.OutOfMemory;
+            errdefer self.allocator.free(key);
+            try self.static_data_symbols.put(key, address);
+        }
+        for (self.static_data_exports, variables) |data_export, variable| {
+            const initializer = (try self.frozenExportConstant(data_export)) orelse return error.CompilationFailed;
+            variable.setInitializer(initializer, builder) catch return error.OutOfMemory;
+        }
     }
 
     /// Declares a readonly-object symbol once and returns its address.
     fn staticDataSymbol(self: *MonoLlvmCodeGen, symbol_name: []const u8) Error!LlvmBuilder.Constant {
         if (self.static_data_symbols.get(symbol_name)) |existing| return existing;
+        // A pack's object defines all of its data itself.
+        if (self.object_cache_pack) return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
         const key = self.allocator.dupe(u8, symbol_name) catch return error.OutOfMemory;
         errdefer self.allocator.free(key);
@@ -9235,7 +9288,7 @@ pub const MonoLlvmCodeGen = struct {
         const builder, const wip = try self.builderAndWip();
         const bytes = self.store.getStringLiteral(literal.bytes);
         if (bytes.len == 0) {
-            try self.storeListFields(out, builder.nullValue(try self.ptrType()) catch return error.OutOfMemory, literal.len, @as(u64, literal.len) << 1);
+            try self.storeListFields(out, builder.nullValue(try self.ptrType()) catch return error.OutOfMemory, literal.len, @as(u64, literal.len) << RocList.capacity_shift);
             return;
         }
 
@@ -9250,10 +9303,10 @@ pub const MonoLlvmCodeGen = struct {
         try self.storePointer(out, bytes_ptr);
         try self.storeListLen(out, builder.intValue(self.ptrSizedIntType(), literal.len) catch return error.OutOfMemory);
         if (whole_backing) {
-            try self.storeListCapacity(out, builder.intValue(self.ptrSizedIntType(), @as(u64, literal.len) << 1) catch return error.OutOfMemory);
+            try self.storeListCapacity(out, builder.intValue(self.ptrSizedIntType(), @as(u64, literal.len) << RocList.capacity_shift) catch return error.OutOfMemory);
         } else {
             const backing_int = wip.cast(.ptrtoint, backing_ptr, self.ptrSizedIntType(), "") catch return error.OutOfMemory;
-            const alloc_ptr = wip.bin(.add, backing_int, builder.intValue(self.ptrSizedIntType(), 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+            const alloc_ptr = wip.bin(.add, backing_int, builder.intValue(self.ptrSizedIntType(), SEAMLESS_SLICE_TAG) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
             try self.storeListCapacity(out, alloc_ptr);
         }
     }
@@ -9296,6 +9349,14 @@ pub const MonoLlvmCodeGen = struct {
         defer self.allocator.free(storage);
 
         @memset(storage[0..data_offset], 0);
+        const rc_offset: usize = @intCast(@as(i64, @intCast(data_offset)) + builtins.utils.targetRefcountOffset(@intCast(word_size)));
+        const endian = self.target.cpu.arch.endian();
+        switch (word_size) {
+            2 => std.mem.writeInt(i16, storage[rc_offset..][0..2], builtins.utils.REFCOUNT_STATIC_DATA, endian),
+            4 => std.mem.writeInt(i32, storage[rc_offset..][0..4], builtins.utils.REFCOUNT_STATIC_DATA, endian),
+            8 => std.mem.writeInt(i64, storage[rc_offset..][0..8], builtins.utils.REFCOUNT_STATIC_DATA, endian),
+            else => unreachable,
+        }
         @memcpy(storage[data_offset..][0..bytes.len], bytes);
 
         const arr_ty = builder.arrayType(storage.len, .i8) catch return error.OutOfMemory;
@@ -9643,15 +9704,15 @@ pub const MonoLlvmCodeGen = struct {
         const target_ptr = self.slot(target).ptr;
 
         const raw_len = try self.loadUsize(try self.offsetPtr(str_ptr, self.rocStrLenOffset()));
-        const is_small = wip.icmp(.slt, raw_len, builder.intValue(usize_ty, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const is_small = try self.emitRocStrLenIsSmall(raw_len);
         const last_byte = wip.load(
             .normal,
             .i8,
-            try self.offsetPtr(str_ptr, self.targetWordSize() * 3 - 1),
+            try self.offsetPtr(str_ptr, self.rocStrFlagByteOffset()),
             LlvmBuilder.Alignment.fromByteUnits(1),
             "",
         ) catch return error.OutOfMemory;
-        const small_len_byte = wip.bin(.@"and", last_byte, builder.intValue(.i8, 0x7f) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const small_len_byte = wip.bin(.@"and", last_byte, builder.intValue(.i8, RocStr.small_str_len_mask) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const small_len = try self.coerceScalar(small_len_byte, usize_ty, false);
         const runtime_len = wip.select(.normal, is_small, small_len, raw_len, "") catch return error.OutOfMemory;
 
@@ -9735,15 +9796,15 @@ pub const MonoLlvmCodeGen = struct {
         const target_ptr = self.slot(target).ptr;
 
         const raw_len = try self.loadUsize(try self.offsetPtr(str_ptr, self.rocStrLenOffset()));
-        const is_small = wip.icmp(.slt, raw_len, builder.intValue(usize_ty, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const is_small = try self.emitRocStrLenIsSmall(raw_len);
         const last_byte = wip.load(
             .normal,
             .i8,
-            try self.offsetPtr(str_ptr, self.targetWordSize() * 3 - 1),
+            try self.offsetPtr(str_ptr, self.rocStrFlagByteOffset()),
             LlvmBuilder.Alignment.fromByteUnits(1),
             "",
         ) catch return error.OutOfMemory;
-        const small_len_byte = wip.bin(.@"and", last_byte, builder.intValue(.i8, 0x7f) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const small_len_byte = wip.bin(.@"and", last_byte, builder.intValue(.i8, RocStr.small_str_len_mask) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const small_len = try self.coerceScalar(small_len_byte, usize_ty, false);
         const runtime_len = wip.select(.normal, is_small, small_len, raw_len, "") catch return error.OutOfMemory;
 
@@ -9776,7 +9837,7 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.brCond(in_range, compare_block, done_block, .then_likely) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = compare_block };
-        const inline_bytes = self.targetWordSize() * 3;
+        const inline_bytes = self.rocStrSize();
         const small_last_full_offset = inline_bytes - @sizeOf(u64);
         const small_full_load_available = wip.icmp(.ule, offset, builder.intValue(usize_ty, small_last_full_offset) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const runtime_len_ge_word = wip.icmp(.uge, runtime_len, builder.intValue(usize_ty, 8) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
@@ -10750,13 +10811,14 @@ pub const MonoLlvmCodeGen = struct {
     fn emitListCapacity(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         const builder, const wip = try self.builderAndWip();
         const usize_ty = self.ptrSizedIntType();
-        const one = builder.intValue(usize_ty, 1) catch return error.OutOfMemory;
+        const capacity_shift = builder.intValue(usize_ty, RocList.capacity_shift) catch return error.OutOfMemory;
+        const seamless_slice_tag = builder.intValue(usize_ty, SEAMLESS_SLICE_TAG) catch return error.OutOfMemory;
         const zero = builder.intValue(usize_ty, 0) catch return error.OutOfMemory;
         const list_ptr = self.slot(arg).ptr;
         const len = try self.loadUsize(try self.offsetPtr(list_ptr, self.rocListLenOffset()));
         const cap_or_alloc = try self.loadUsize(try self.offsetPtr(list_ptr, self.rocListCapacityOffset()));
-        const decoded_capacity = wip.bin(.lshr, cap_or_alloc, one, "") catch return error.OutOfMemory;
-        const slice_tag = wip.bin(.@"and", cap_or_alloc, one, "") catch return error.OutOfMemory;
+        const decoded_capacity = wip.bin(.lshr, cap_or_alloc, capacity_shift, "") catch return error.OutOfMemory;
+        const slice_tag = wip.bin(.@"and", cap_or_alloc, seamless_slice_tag, "") catch return error.OutOfMemory;
         const is_slice = wip.icmp(.ne, slice_tag, zero, "") catch return error.OutOfMemory;
         const capacity = wip.select(.normal, is_slice, len, decoded_capacity, "") catch return error.OutOfMemory;
         try self.storeIntToLayout(self.slot(target).ptr, capacity, self.localLayout(target));
@@ -10916,13 +10978,13 @@ pub const MonoLlvmCodeGen = struct {
             const len = try self.loadUsize(try self.offsetPtr(list_ptr, self.rocListLenOffset()));
             const cap = try self.loadUsize(try self.offsetPtr(list_ptr, self.rocListCapacityOffset()));
             const word = self.ptrSizedIntType();
-            const one = builder.intValue(word, 1) catch return error.OutOfMemory;
+            const seamless_slice_tag = builder.intValue(word, SEAMLESS_SLICE_TAG) catch return error.OutOfMemory;
             const zero = builder.intValue(word, 0) catch return error.OutOfMemory;
             const eight = builder.intValue(word, 8) catch return error.OutOfMemory;
-            const tag = wip.bin(.@"and", cap, one, "") catch return error.OutOfMemory;
+            const tag = wip.bin(.@"and", cap, seamless_slice_tag, "") catch return error.OutOfMemory;
             const is_plain = wip.icmp(.eq, tag, zero, "") catch return error.OutOfMemory;
             const needed = wip.bin(.add, len, eight, "") catch return error.OutOfMemory;
-            const capacity_shift = builder.intValue(word, builtins.list.RocList.capacity_shift) catch return error.OutOfMemory;
+            const capacity_shift = builder.intValue(word, RocList.capacity_shift) catch return error.OutOfMemory;
             const capacity = wip.bin(.lshr, cap, capacity_shift, "") catch return error.OutOfMemory;
             const fits = wip.icmp(.uge, capacity, needed, "") catch return error.OutOfMemory;
             const take_fast = wip.bin(.@"and", is_plain, fits, "") catch return error.OutOfMemory;
@@ -10953,10 +11015,49 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, .i64, count);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, 1) catch return error.OutOfMemory);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_append_le_bytes), call_args.types.items, call_args.values.items);
         if (done) |join| {
+            self.enterInlineSlowArm();
+            try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_append_le_bytes), call_args.types.items, call_args.values.items);
+            self.leaveInlineSlowArm();
             try brAndEnter(wip, join);
+        } else {
+            try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_append_le_bytes), call_args.types.items, call_args.values.items);
         }
+    }
+
+    /// Brackets the slow arm of a diamond this backend introduces itself: an
+    /// inline fast path whose fallback is the builtin. The arm is as cold as
+    /// a `default_is_cold` switch arm, and the builtin call in it takes the
+    /// same cold-path shim, so the result slot it would otherwise be handed
+    /// never escapes and the fast arm's three header stores stay in registers.
+    fn enterInlineSlowArm(self: *MonoLlvmCodeGen) void {
+        self.cold_depth += 1;
+    }
+
+    fn leaveInlineSlowArm(self: *MonoLlvmCodeGen) void {
+        self.cold_depth -= 1;
+    }
+
+    /// The loop-append promotion pass has discharged every check: the list
+    /// uniquely owns an unsliced allocation with a word of spare capacity.
+    /// The append is then one unaligned little-endian store of the whole
+    /// value at the length and a length bump by `count`; the bytes past
+    /// `count` land in capacity slack nothing can observe.
+    fn emitListAppendLeBytesUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const list_ptr = self.slot(GuardedList.at(args, 0)).ptr;
+        const value = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), .i64, false);
+        const count = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 2)).ptr, self.localLayout(GuardedList.at(args, 2))), self.ptrSizedIntType(), false);
+        const bytes = try self.loadPointer(list_ptr);
+        const len = try self.loadUsize(try self.offsetPtr(list_ptr, self.rocListLenOffset()));
+        const cap = try self.loadUsize(try self.offsetPtr(list_ptr, self.rocListCapacityOffset()));
+        const dst = try self.offsetPtrValue(bytes, len);
+        _ = wip.store(.normal, value, dst, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.OutOfMemory;
+        const new_len = wip.bin(.add, len, count, "") catch return error.OutOfMemory;
+        const out_ptr = self.slot(target).ptr;
+        try self.storePointer(out_ptr, bytes);
+        try self.storeListLen(out_ptr, new_len);
+        try self.storeListCapacity(out_ptr, cap);
     }
 
     fn emitListAppendSublist(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
@@ -11292,9 +11393,11 @@ pub const MonoLlvmCodeGen = struct {
 
         const zero = builder.intValue(usize_ty, 0) catch return error.OutOfMemory;
         const one = builder.intValue(usize_ty, 1) catch return error.OutOfMemory;
-        const slice_tag = wip.bin(.@"and", cap_word, one, "") catch return error.OutOfMemory;
+        const seamless_slice_tag = builder.intValue(usize_ty, SEAMLESS_SLICE_TAG) catch return error.OutOfMemory;
+        const capacity_shift = builder.intValue(usize_ty, RocList.capacity_shift) catch return error.OutOfMemory;
+        const slice_tag = wip.bin(.@"and", cap_word, seamless_slice_tag, "") catch return error.OutOfMemory;
         const is_slice = wip.icmp(.ne, slice_tag, zero, "") catch return error.OutOfMemory;
-        const decoded_cap = wip.bin(.lshr, cap_word, one, "") catch return error.OutOfMemory;
+        const decoded_cap = wip.bin(.lshr, cap_word, capacity_shift, "") catch return error.OutOfMemory;
         const capacity = wip.select(.normal, is_slice, len, decoded_cap, "") catch return error.OutOfMemory;
         const slack = wip.bin(.sub, capacity, len, "") catch return error.OutOfMemory;
         const slack_wide = try self.coerceScalar(slack, .i64, false);
@@ -11327,8 +11430,8 @@ pub const MonoLlvmCodeGen = struct {
             const bytes_int = wip.cast(.ptrtoint, bytes, usize_ty, "") catch return error.OutOfMemory;
             const alloc_int = wip.select(.normal, is_slice, untagged_alloc, bytes_int, "") catch return error.OutOfMemory;
             const alloc_ptr = wip.cast(.inttoptr, alloc_int, try self.ptrType(), "") catch return error.OutOfMemory;
-            const word_bytes: i64 = @intCast(self.rocListLenOffset());
-            const rc_ptr = try self.offsetPtrValue(alloc_ptr, builder.intValue(usize_ty, -word_bytes) catch return error.OutOfMemory);
+            const rc_offset = builtins.utils.targetRefcountOffset(self.targetWordSize());
+            const rc_ptr = try self.offsetPtrValue(alloc_ptr, builder.intValue(usize_ty, rc_offset) catch return error.OutOfMemory);
             const rc = try self.loadUsize(rc_ptr);
             const rc_is_one = wip.icmp(.eq, rc, one, "") catch return error.OutOfMemory;
             _ = wip.brCond(rc_is_one, fast_block, slow_block, .then_likely) catch return error.OutOfMemory;
@@ -11342,7 +11445,9 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.br(merge_block) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = slow_block };
+        self.enterInlineSlowArm();
         try self.emitListReserveCall(target, boxy_symbol, builtin_fn, args, unique_args);
+        self.leaveInlineSlowArm();
         _ = wip.br(merge_block) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = merge_block };
@@ -11652,8 +11757,9 @@ pub const MonoLlvmCodeGen = struct {
             },
         }) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, fn_name, .default) catch return error.OutOfMemory;
-        func.setLinkage(if (is_static_data_helper) .external else .internal, builder);
-        if (is_static_data_helper and self.target.os.tag == .windows) {
+        const helper_exported = is_static_data_helper and !self.object_cache_pack;
+        func.setLinkage(if (helper_exported) .external else .internal, builder);
+        if (helper_exported and self.target.os.tag == .windows) {
             func.ptrConst(builder).global.setDllStorageClass(.dllexport, builder);
         }
         var attrs: LlvmBuilder.FunctionAttributes.Wip = .{};
@@ -11817,11 +11923,11 @@ pub const MonoLlvmCodeGen = struct {
         const cap_or_alloc = try self.loadUsize(try self.offsetPtr(value_ptr, self.rocStrCapacityOffset()));
         const ptr_int_ty = self.ptrSizedIntType();
         const bytes_int = wip.cast(.ptrtoint, bytes, ptr_int_ty, "") catch return error.OutOfMemory;
-        const slice_tag = wip.bin(.@"and", cap_or_alloc, builder.intValue(ptr_int_ty, 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const slice_tag = wip.bin(.@"and", cap_or_alloc, builder.intValue(ptr_int_ty, SEAMLESS_SLICE_TAG) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const slice_mask = wip.bin(.sub, builder.intValue(ptr_int_ty, 0) catch return error.OutOfMemory, slice_tag, "") catch return error.OutOfMemory;
         const owned_mask = wip.not(slice_mask, "") catch return error.OutOfMemory;
         const owned_ptr = wip.bin(.@"and", bytes_int, owned_mask, "") catch return error.OutOfMemory;
-        const slice_alloc = wip.bin(.@"and", cap_or_alloc, builder.intValue(ptr_int_ty, -2) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const slice_alloc = wip.bin(.@"and", cap_or_alloc, builder.intValue(ptr_int_ty, ~@as(i64, SEAMLESS_SLICE_TAG)) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const slice_ptr = wip.bin(.@"and", slice_alloc, slice_mask, "") catch return error.OutOfMemory;
         const data_ptr = wip.bin(.@"or", owned_ptr, slice_ptr, "") catch return error.OutOfMemory;
         return wip.cast(.inttoptr, data_ptr, try self.ptrType(), "") catch return error.OutOfMemory;
@@ -11832,9 +11938,9 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitRcHelperStrIncref(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value, count_value: LlvmBuilder.Value, atomicity: RcAtomicity) Error!void {
-        const builder, const wip = try self.builderAndWip();
+        const wip = self.wip orelse return error.CompilationFailed;
         const len = try self.loadUsize(try self.offsetPtr(value_ptr, self.rocStrLenOffset()));
-        const is_small = wip.icmp(.slt, len, builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const is_small = try self.emitRocStrLenIsSmall(len);
         const heap_str = wip.block(0, "str_heap") catch return error.OutOfMemory;
         const after = wip.block(0, "str_after") catch return error.OutOfMemory;
         _ = wip.brCond(is_small, after, heap_str, .else_likely) catch return error.OutOfMemory;
@@ -11850,7 +11956,7 @@ pub const MonoLlvmCodeGen = struct {
     fn emitRcHelperStrDrop(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value, builtin_fn: BuiltinSymbol) Error!void {
         const builder, const wip = try self.builderAndWip();
         const len = try self.loadUsize(try self.offsetPtr(value_ptr, self.rocStrLenOffset()));
-        const is_small = wip.icmp(.slt, len, builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const is_small = try self.emitRocStrLenIsSmall(len);
         const heap_str = wip.block(0, "str_heap") catch return error.OutOfMemory;
         const after = wip.block(0, "str_after") catch return error.OutOfMemory;
         _ = wip.brCond(is_small, after, heap_str, .else_likely) catch return error.OutOfMemory;
@@ -12063,19 +12169,40 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn rocListLenOffset(self: *const MonoLlvmCodeGen) u32 {
-        return self.targetWordSize();
+        return RocList.targetFieldOffset(.length, self.targetWordSize());
     }
 
     fn rocListCapacityOffset(self: *const MonoLlvmCodeGen) u32 {
-        return 2 * self.targetWordSize();
+        return RocList.targetFieldOffset(.capacity_or_alloc_ptr, self.targetWordSize());
     }
 
     fn rocStrCapacityOffset(self: *const MonoLlvmCodeGen) u32 {
-        return self.targetWordSize();
+        return RocStr.targetFieldOffset(.capacity_or_alloc_ptr, self.targetWordSize());
     }
 
     fn rocStrLenOffset(self: *const MonoLlvmCodeGen) u32 {
-        return 2 * self.targetWordSize();
+        return RocStr.targetFieldOffset(.length, self.targetWordSize());
+    }
+
+    fn rocStrSize(self: *const MonoLlvmCodeGen) u32 {
+        return RocStr.word_count * self.targetWordSize();
+    }
+
+    /// Offset of a small RocStr's final byte, which holds its flag and length.
+    fn rocStrFlagByteOffset(self: *const MonoLlvmCodeGen) u32 {
+        return RocStr.targetFlagByteOffset(self.targetWordSize());
+    }
+
+    /// The small-string flag as a bit of a RocStr's `length` word.
+    fn rocStrSmallBit(self: *const MonoLlvmCodeGen) u64 {
+        return RocStr.targetSmallStrBit(self.targetWordSize());
+    }
+
+    /// Whether a RocStr whose `length` word is `raw_len` is small. The flag is
+    /// the sign bit of `length`, so this is a signed comparison against zero.
+    fn emitRocStrLenIsSmall(self: *MonoLlvmCodeGen, raw_len: LlvmBuilder.Value) Error!LlvmBuilder.Value {
+        const builder, const wip = try self.builderAndWip();
+        return wip.icmp(.slt, raw_len, builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
     }
 
     fn layouts(self: *MonoLlvmCodeGen) *const layout.Store {
@@ -12503,7 +12630,7 @@ pub const MonoLlvmCodeGen = struct {
 
     fn entrypointParamSlotSize(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) u32 {
         const runtime_layout_idx = self.layouts().runtimeRepresentationLayoutIdx(layout_idx);
-        if (runtime_layout_idx == .str) return 3 * self.targetWordSize();
+        if (runtime_layout_idx == .str) return self.rocStrSize();
         if (runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec) return 16;
         const layout_val = self.layoutValue(runtime_layout_idx);
         const size = self.layoutByteSize(runtime_layout_idx);
@@ -12513,7 +12640,7 @@ pub const MonoLlvmCodeGen = struct {
         // down to the ordinary scalar slot size makes the following argument
         // overlap the vector's upper half.
         if (layout_val.tag == .scalar and layout_val.getScalar().tag == .vector) return 16;
-        if (layout_val.tag == .list or layout_val.tag == .list_of_zst) return 24;
+        if (layout_val.tag == .list or layout_val.tag == .list_of_zst) return RocList.word_count * @sizeOf(u64);
         if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
             if (size > 8) return @intCast(std.mem.alignForward(u32, size, 8));
         }
@@ -12985,16 +13112,15 @@ pub const MonoLlvmCodeGen = struct {
         const usize_ty = self.ptrSizedIntType();
 
         const raw_len = try self.loadUsize(try self.offsetPtr(str_ptr, self.rocStrLenOffset()));
-        const is_small = wip.icmp(.slt, raw_len, builder.intValue(usize_ty, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const is_small = try self.emitRocStrLenIsSmall(raw_len);
         const small_block = wip.block(0, "echo_small_str") catch return error.OutOfMemory;
         const heap_block = wip.block(0, "echo_heap_str") catch return error.OutOfMemory;
         const after = wip.block(0, "echo_after") catch return error.OutOfMemory;
         _ = wip.brCond(is_small, small_block, heap_block, .then_likely) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = small_block };
-        const last_byte_offset = self.targetWordSize() * 3 - 1;
-        const last_byte = wip.load(.normal, .i8, try self.offsetPtr(str_ptr, last_byte_offset), LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
-        const small_len_byte = wip.bin(.@"and", last_byte, builder.intValue(.i8, 0x7f) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const last_byte = wip.load(.normal, .i8, try self.offsetPtr(str_ptr, self.rocStrFlagByteOffset()), LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
+        const small_len_byte = wip.bin(.@"and", last_byte, builder.intValue(.i8, RocStr.small_str_len_mask) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const small_len = try self.coerceScalar(small_len_byte, usize_ty, false);
         try self.emitDefaultPlatformWriteStdout(str_ptr, small_len);
         _ = wip.br(after) catch return error.OutOfMemory;
@@ -13204,7 +13330,8 @@ pub const MonoLlvmCodeGen = struct {
     /// never-inlined call would make the slot's address escape, and an escaped
     /// slot pins the local to memory for every hot-path update too. On hot
     /// paths the call is ordinary; the builtin inlines and the store through
-    /// the pointer dissolves.
+    /// the pointer dissolves. The slow arm of a backend-emitted inline fast
+    /// path counts as a cold path (`enterInlineSlowArm`).
     fn callBuiltinVoid(self: *MonoLlvmCodeGen, f: BuiltinSymbol, param_types: []const LlvmBuilder.Type, args: []const LlvmBuilder.Value) Error!void {
         if (self.cold_depth == 0 or !f.writesResultWordTriple()) {
             _ = try self.emitBuiltinCall(f, .void, param_types, args);
@@ -13334,15 +13461,21 @@ pub const MonoLlvmCodeGen = struct {
                 _ = wip.call(.normal, .ccc, .none, shim.target.typeOf(builder), shim.target.toValue(builder), args, "") catch return error.OutOfMemory;
 
                 // `self.wip` is null between procs, so read the slot with
-                // this shim's own instruction builder.
+                // this shim's own instruction builder. The result is a RocStr
+                // or RocList; both are `bytes` followed by two words, which
+                // travel back positionally.
+                comptime std.debug.assert(RocStr.word_count == RocList.word_count);
                 const word = self.targetWordSize();
-                const len_ptr = wip.gep(.inbounds, .i8, out_slot, &.{builder.intValue(.i32, word) catch return error.OutOfMemory}, "") catch return error.OutOfMemory;
-                const cap_ptr = wip.gep(.inbounds, .i8, out_slot, &.{builder.intValue(.i32, 2 * word) catch return error.OutOfMemory}, "") catch return error.OutOfMemory;
-                const fields = [_]LlvmBuilder.Value{
-                    wip.load(.normal, try self.ptrType(), out_slot, self.targetPointerAlignment(), "") catch return error.OutOfMemory,
-                    wip.load(.normal, self.ptrSizedIntType(), len_ptr, self.targetPointerAlignment(), "") catch return error.OutOfMemory,
-                    wip.load(.normal, self.ptrSizedIntType(), cap_ptr, self.targetPointerAlignment(), "") catch return error.OutOfMemory,
-                };
+                var word_ptrs: [RocList.word_count]LlvmBuilder.Value = undefined;
+                word_ptrs[0] = out_slot;
+                for (word_ptrs[1..], 1..) |*word_ptr, word_index| {
+                    word_ptr.* = wip.gep(.inbounds, .i8, out_slot, &.{builder.intValue(.i32, word_index * word) catch return error.OutOfMemory}, "") catch return error.OutOfMemory;
+                }
+                var fields: [RocList.word_count]LlvmBuilder.Value = undefined;
+                for (&fields, word_ptrs, 0..) |*field, word_ptr, word_index| {
+                    const field_ty = if (word_index == 0) try self.ptrType() else self.ptrSizedIntType();
+                    field.* = wip.load(.normal, field_ty, word_ptr, self.targetPointerAlignment(), "") catch return error.OutOfMemory;
+                }
                 const aggregate = wip.buildAggregate(slot_ty, &fields, "") catch return error.OutOfMemory;
                 _ = wip.ret(aggregate) catch return error.OutOfMemory;
                 wip.finish() catch return error.OutOfMemory;
@@ -13536,8 +13669,7 @@ fn repeatedByte(byte: u8, width: u8) u128 {
 
 /// Encode the runtime's inline RocStr layout as target-width integer constants.
 /// The final byte is the length/flag byte regardless of target endianness.
-fn smallStrLiteralWords(bytes: []const u8, word_size: u32, endian: std.builtin.Endian) [builtins.str.RocStr.word_count]u64 {
-    const RocStr = builtins.str.RocStr;
+fn smallStrLiteralWords(bytes: []const u8, word_size: u32, endian: std.builtin.Endian) [RocStr.word_count]u64 {
     std.debug.assert(word_size == 2 or word_size == 4 or word_size == 8);
     const str_size = RocStr.word_count * word_size;
     std.debug.assert(bytes.len < str_size);
@@ -13558,7 +13690,6 @@ fn smallStrLiteralWords(bytes: []const u8, word_size: u32, endian: std.builtin.E
 }
 
 test "LLVM small string constants match the runtime constructor" {
-    const RocStr = builtins.str.RocStr;
     // Include embedded NUL and UTF-8 in partial and full words.
     const contents = "a\x00é🙂bc\x00é🙂defghijkl";
     for (0..@sizeOf(RocStr)) |len| {
@@ -13573,7 +13704,7 @@ test "LLVM small string constants match the runtime constructor" {
 test "LLVM small string constants preserve target layout at every length" {
     const contents = "a\x00é🙂bc\x00é🙂defghijkl";
     inline for (.{ u16, u32, u64 }) |Word| {
-        const size = builtins.str.RocStr.word_count * @sizeOf(Word);
+        const size = RocStr.word_count * @sizeOf(Word);
         inline for (.{ std.builtin.Endian.little, std.builtin.Endian.big }) |endian| {
             for (0..size) |len| {
                 const words = smallStrLiteralWords(contents[0..len], @sizeOf(Word), endian);
@@ -13583,7 +13714,7 @@ test "LLVM small string constants preserve target layout at every length" {
                 }
                 try std.testing.expectEqualSlices(u8, contents[0..len], memory[0..len]);
                 for (memory[len .. size - 1]) |byte| try std.testing.expectEqual(@as(u8, 0), byte);
-                try std.testing.expectEqual(@as(u8, 0x80) | @as(u8, @intCast(len)), memory[size - 1]);
+                try std.testing.expectEqual(RocStr.small_str_flag | @as(u8, @intCast(len)), memory[size - 1]);
             }
         }
     }

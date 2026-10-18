@@ -7,6 +7,7 @@ const std = @import("std");
 const Registers = @import("Registers.zig");
 const GeneralReg = Registers.GeneralReg;
 const FloatReg = Registers.FloatReg;
+const abi = @import("layout").abi;
 
 /// AAPCS64 calling convention
 pub const Call = @This();
@@ -50,6 +51,11 @@ pub const FLOAT_PARAM_REGS = [_]FloatReg{
 pub const FLOAT_RETURN_REGS = [_]FloatReg{
     .V0, .V1, .V2, .V3, .V4, .V5, .V6, .V7,
 };
+
+comptime {
+    std.debug.assert(GENERAL_PARAM_REGS.len == abi.aarch64_gp_registers);
+    std.debug.assert(FLOAT_PARAM_REGS.len == abi.simd_argument_registers);
+}
 
 /// Caller-saved (volatile) general registers
 pub const CALLER_SAVED_GENERAL = [_]GeneralReg{

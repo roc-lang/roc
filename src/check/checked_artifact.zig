@@ -22127,6 +22127,12 @@ pub const NestedProcSite = struct {
     kind: NestedProcKind,
     checked_expr: ?CheckedExprId,
     checked_pattern: ?CheckedPatternId,
+    /// The module's source uses the function this site constructs exactly
+    /// once, as the function of a call: either the site's expression is that
+    /// call's function, or it is the whole value of a non-recursive binding
+    /// whose one reference is. Every call to the function, in any program,
+    /// is then that call (`NestedProcSiteTable.markSingleSourceCalls`).
+    single_source_call: bool = false,
 };
 
 /// Public `NestedProcSiteTable` declaration.
@@ -22205,6 +22211,7 @@ pub const NestedProcSiteTable = struct {
 
         const sites = try builder.sites.toOwnedSlice(allocator);
         errdefer allocator.free(sites);
+        try markSingleSourceCalls(allocator, checked_bodies, sites);
         const path_components = try builder.path_pool.toOwnedSlice(allocator);
         errdefer allocator.free(path_components);
 
@@ -22220,6 +22227,78 @@ pub const NestedProcSiteTable = struct {
     }
 
     pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+
+    /// Set `single_source_call` on each template-owned site whose function
+    /// the module's source calls at one site and never otherwise uses. A
+    /// default-root site is lowered at every construction site that omits
+    /// its field, and an expression with more than one site is lowered once
+    /// per site, so neither qualifies.
+    fn markSingleSourceCalls(
+        allocator: Allocator,
+        checked_bodies: *const CheckedBodyStore,
+        sites: []NestedProcSite,
+    ) Allocator.Error!void {
+        const expr_count = checked_bodies.exprCount();
+        const pattern_count = checked_bodies.patternCount();
+
+        // Whether each expression is the function of a call.
+        const callees = try allocator.alloc(bool, expr_count);
+        defer allocator.free(callees);
+        @memset(callees, false);
+        // Each pattern's references, and how many of them are a call's
+        // function.
+        const references = try allocator.alloc(u32, pattern_count);
+        defer allocator.free(references);
+        @memset(references, 0);
+        const calls = try allocator.alloc(u32, pattern_count);
+        defer allocator.free(calls);
+        @memset(calls, 0);
+        for (0..expr_count) |raw| {
+            const expr = checked_bodies.expr(@fromBackingInt(@intCast(@as(u32, @intCast(raw)))));
+            if (expr.data == .call) callees[@backingInt(expr.data.call.func)] = true;
+        }
+        for (0..expr_count) |raw| {
+            const expr = checked_bodies.expr(@fromBackingInt(@intCast(@as(u32, @intCast(raw)))));
+            if (expr.data != .lookup_local) continue;
+            const pattern = @backingInt(expr.data.lookup_local.pattern);
+            references[pattern] += 1;
+            if (callees[raw]) calls[pattern] += 1;
+        }
+
+        // The pattern each expression is the whole value of, for a
+        // non-recursive binding of one name.
+        const bound_by = try allocator.alloc(?CheckedPatternId, expr_count);
+        defer allocator.free(bound_by);
+        @memset(bound_by, null);
+        for (0..checked_bodies.statementCount()) |raw| {
+            const statement = checked_bodies.statement(@fromBackingInt(@intCast(@as(u32, @intCast(raw)))));
+            if (statement.data != .decl) continue;
+            const decl = statement.data.decl;
+            if (decl.recursive) continue;
+            if (checked_bodies.pattern(decl.pattern).data != .assign) continue;
+            bound_by[@backingInt(decl.expr)] = decl.pattern;
+        }
+
+        // How many sites each expression has.
+        const site_counts = try allocator.alloc(u32, expr_count);
+        defer allocator.free(site_counts);
+        @memset(site_counts, 0);
+        for (sites) |site| {
+            const expr_id = site.checked_expr orelse continue;
+            site_counts[@backingInt(expr_id)] += 1;
+        }
+
+        for (sites) |*site| {
+            if (site.owner != .template) continue;
+            const expr_id = site.checked_expr orelse continue;
+            const raw = @backingInt(expr_id);
+            if (site_counts[raw] != 1) continue;
+            site.single_source_call = callees[raw] or if (bound_by[raw]) |pattern|
+                references[@backingInt(pattern)] == 1 and calls[@backingInt(pattern)] == 1
+            else
+                false;
+        }
+    }
 
     /// The binders of enclosing frames whose values the procedure at `site`
     /// needs at runtime (see `NestedProcSite.runtime_captures`).
@@ -35919,6 +35998,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .diag_private_type_in_exposed_field,
             .diag_type_from_missing_module,
             .diag_module_not_imported,
+            .diag_public_type_not_defined,
             .diag_nested_type_not_found,
             .diag_internal_builtin_type,
             .diag_nested_value_not_found,
@@ -38994,8 +39074,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x29, 0xD3, 0xC9, 0x7C, 0x01, 0x03, 0x25, 0xB4, 0x28, 0xFA, 0xDB, 0xED, 0xB4, 0xEC, 0xF1, 0x01,
-        0x20, 0xEE, 0xE2, 0x3C, 0x00, 0x71, 0x64, 0xFC, 0x03, 0xC8, 0xEF, 0xC7, 0xB8, 0xED, 0x81, 0xA2,
+        0x22, 0xB9, 0xB1, 0xFE, 0xC0, 0x0F, 0x94, 0x12, 0x58, 0x00, 0xF0, 0x05, 0x7A, 0x5E, 0xA3, 0xE5,
+        0x88, 0xB8, 0x94, 0x90, 0xAC, 0x70, 0xD1, 0x52, 0x11, 0x80, 0x7F, 0xDF, 0x63, 0x09, 0x1B, 0x43,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

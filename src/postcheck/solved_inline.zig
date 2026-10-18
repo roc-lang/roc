@@ -238,8 +238,6 @@ const InlineAnalyzer = struct {
         const template = source_fn.source orelse return null;
         if (!template.single_source_call) return null;
         if (self.procedure_usage.get(fn_id).contains_return) return null;
-        if (self.solved.lifted.typedLocalSpan(source_fn.captures).len != 0) return null;
-        if (self.solvedCaptureCount(fn_id) != 0) return null;
         return switch (source_fn.body) {
             .roc => |body_expr| body_expr,
             .hosted => null,
@@ -264,8 +262,6 @@ const InlineAnalyzer = struct {
         if (call.is_cold) return null;
 
         const source_fn = self.solved.lifted.getFn(fn_id);
-        if (self.solved.lifted.typedLocalSpan(source_fn.captures).len != 0) return null;
-        if (self.solvedCaptureCount(fn_id) != 0) return null;
         const body = switch (source_fn.body) {
             .roc => |body_expr| body_expr,
             .hosted => return null,

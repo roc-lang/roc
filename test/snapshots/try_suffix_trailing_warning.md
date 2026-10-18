@@ -391,7 +391,23 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+# A `?` applied to a function's return value only type-checks when the Ok
+# payload is itself a Try, and even then it is confusing to read, so it warns.
+nested : Str -> Try(Try(Str, [Bad]), [Bad])
+nested = |s| if (s == "") Err(Bad) else Ok(Ok(s))
+
+tail : Str -> Try(Str, [Bad])
+tail = |s| {
+	nested(s)?
+}
+
+returned : Str -> Try(Str, [Bad])
+returned = |s| {
+	if s == "x" {
+		return nested(s)?
+	}
+	if (s == "y") nested(s)? else Ok(s)
+}
 ~~~
 # CANONICALIZE
 ~~~clojure

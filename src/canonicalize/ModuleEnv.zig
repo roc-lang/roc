@@ -1210,6 +1210,12 @@ pub const DeferredRefKind = enum(u8) {
     /// An `import "path" as name` file import. Reading the file is filesystem
     /// input, so the expression waits here for its bytes.
     file_import,
+    /// A platform or package header's `exposes` entry naming a type nested in
+    /// another module (`Util.Inner`). Whether that module defines it is
+    /// settled once, when the module completes, and handed to the drain.
+    /// `item_name` is the public name the entry makes, `module_name` its
+    /// qualifier, and `path` the nested type it names.
+    header_exposure,
 };
 
 /// The diagnostic a deferred import reference produces when resolution cannot
@@ -2833,6 +2839,21 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addText("The module ");
             try report.headline.addInlineCode(module_name);
             try report.headline.addReflowingText(" was not found in this Roc project.");
+
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
+
+            break :blk report;
+        },
+        .public_type_not_defined => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            const import_name_bytes = self.getIdent(data.import_name);
+
+            var report = try Report.init(allocator, "Public Type Not Defined", "", .runtime_error);
+            const import_name = try report.addOwnedString(import_name_bytes);
+            try report.headline.addText("The package import ");
+            try report.headline.addInlineCode(import_name);
+            try report.headline.addReflowingText(" names a type its package exposes, but the package does not define that type.");
 
             try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 

@@ -6913,6 +6913,9 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
         .problem => |problem_idx| {
             const mismatch = &self.problems.problems.items[@backingInt(problem_idx)].type_mismatch;
             mismatch.context = self.mismatchContext(mismatch.context, b);
+            const roots = self.unify_scratch.rejected_roots orelse
+                base.invariant("type checker invariant violated: a reported mismatch did not record its root operands", .{});
+            mismatch.str_conversion = try self.strConversionFor(mismatch.context, roots.expected, roots.actual);
             try self.noteInterpolationTie(problem_idx);
         },
         .unified, .suppressed_by_error, .mismatch => {},
@@ -7149,6 +7152,11 @@ fn appendTypeMismatch(
         .leaf = leaf,
         .host_fixed_row = host_fixed_row,
         .host_fixed_origin = host_fixed_origin,
+        .str_conversion = try self.strConversionFor(
+            diagnostic_ctx,
+            self.types.resolveThroughAliases(expected).desc.content,
+            self.types.resolveThroughAliases(actual).desc.content,
+        ),
     } });
     try self.noteInterpolationTie(problem_idx);
     return problem_idx;
@@ -7160,6 +7168,112 @@ fn exprAtVar(self: *const Self, var_: Var) ?CIR.Expr.Idx {
     if (raw >= self.cir.store.nodes.len()) return null;
     if (!isExprNodeTag(self.cir.store.nodes.get(@fromBackingInt(@intCast(raw))).tag)) return null;
     return @fromBackingInt(@intCast(raw));
+}
+
+/// The conversion a mismatch's report suggests for a value of type `actual`
+/// used where `expected` is needed in `context`. Only a use where the builtin
+/// `Str` is needed gets one, and only for a value that is not a function.
+/// `to_str` converts a value in any context; defining `to_str` or using
+/// `Str.inspect` is suggested only where the value is handed over to be shown
+/// as a `Str`.
+fn strConversionFor(
+    self: *Self,
+    context: problem.Context,
+    expected: types_mod.Content,
+    actual: types_mod.Content,
+) Allocator.Error!problem.StrConversion {
+    const expected_nominal = expected.unwrapNominalType() orelse return .none;
+    if (!self.nominalIsBuiltinStrType(expected_nominal)) return .none;
+    const flat = switch (actual) {
+        .structure => |flat| flat,
+        .flex => |flex| return if (self.constraintsIncludeNumeral(flex.constraints))
+            try self.numeralStrConversion()
+        else
+            .none,
+        .rigid, .alias, .field_presence, .err => return .none,
+    };
+    return switch (flat) {
+        .nominal_type => |nominal| if (self.nominalHasMethod(nominal, try self.toStrMethodName()))
+            .to_str
+        else if (!contextShowsValueAsStr(context))
+            .none
+        else if (nominal.origin_module == self.cir.selfModuleIdentity())
+            .define_to_str
+        else
+            .inspect,
+        .record, .tuple, .tag_union, .empty_record, .empty_tag_union => if (contextShowsValueAsStr(context)) .inspect else .none,
+        .fn_pure, .fn_effectful, .fn_unbound => .none,
+    };
+}
+
+/// Whether a mismatch in `context` hands a value over to be shown as a `Str`:
+/// passed as a function's argument or interpolated into a string.
+fn contextShowsValueAsStr(context: problem.Context) bool {
+    return switch (context) {
+        .fn_call_arg, .interpolation_part => true,
+        .none,
+        .fn_call_arity,
+        .fn_call_non_function,
+        .if_condition,
+        .if_branch,
+        .match_pattern,
+        .match_alt_binder,
+        .match_branch,
+        .list_entry,
+        .type_annotation,
+        .tag_not_in_annotation,
+        .record_destructure,
+        .binop_lhs,
+        .binop_rhs,
+        .record_access,
+        .record_update,
+        .try_operator,
+        .try_operator_expr,
+        .try_operator_value,
+        .early_return,
+        .statement_value,
+        .nominal_constructor,
+        .fn_args_bound_var,
+        .platform_requirement,
+        .platform_requirement_return,
+        .method_type,
+        .expect,
+        .recursive_def,
+        .predeclared_use,
+        => false,
+    };
+}
+
+/// Whether `constraints` include a number literal's conversion.
+fn constraintsIncludeNumeral(self: *Self, constraints: StaticDispatchConstraint.SafeList.Range) bool {
+    for (self.types.sliceStaticDispatchConstraints(constraints)) |constraint| {
+        if (constraint.origin.literalKind() == .numeral) return true;
+    }
+    return false;
+}
+
+/// The conversion a report suggests for a number literal whose type is the
+/// dispatcher `dispatcher_var`, when that is the builtin `Str`.
+fn numeralDispatcherStrConversion(self: *Self, dispatcher_var: Var) Allocator.Error!problem.StrConversion {
+    const dispatcher = self.types.resolveThroughAliases(dispatcher_var).desc.content.unwrapNominalType() orelse return .none;
+    if (!self.nominalIsBuiltinStrType(dispatcher)) return .none;
+    return self.numeralStrConversion();
+}
+
+/// The conversion a report suggests for a number whose type is not yet
+/// decided: `to_str` converts it if every type a number literal can be has
+/// that method.
+fn numeralStrConversion(self: *Self) Allocator.Error!problem.StrConversion {
+    const to_str = try self.toStrMethodName();
+    for (numeral_default_candidates) |num_kind| {
+        if (!self.builtinNumberHasMethod(num_kind, to_str)) return .none;
+    }
+    return .to_str;
+}
+
+/// The `to_str` method name, interned for lookup against a value's type.
+fn toStrMethodName(self: *Self) Allocator.Error!Ident.Idx {
+    return try @constCast(self.cir).insertIdent(base.Ident.for_text("to_str"));
 }
 
 /// The context the relation just rejected reports under. A relation the
@@ -40745,20 +40859,15 @@ fn builtinLiteralCandidatesLackMethod(
 ) Allocator.Error!bool {
     switch (literal_defaulting.defaultTargetForKind(kind)) {
         .dec => {
-            // Building a candidate's nominal content appends to the store;
-            // the lookup only reads it, so nothing built here outlives it.
-            var savepoint = try self.types.createSavepoint();
-            defer self.types.rollbackToSavepoint(&savepoint);
             for (numeral_default_candidates) |num_kind| {
-                const content = try self.mkNumberTypeContent(num_kind);
-                if (self.builtinNominalHasMethod(content.structure.nominal_type, method_name)) return false;
+                if (self.builtinNumberHasMethod(num_kind, method_name)) return false;
             }
             return true;
         },
         .str => {
             const str_content = self.types.resolveVar(self.str_var).desc.content;
             if (str_content == .structure and str_content.structure == .nominal_type) {
-                return !self.builtinNominalHasMethod(str_content.structure.nominal_type, method_name);
+                return !self.nominalHasMethod(str_content.structure.nominal_type, method_name);
             }
             if (builtin.mode == .debug) {
                 std.debug.panic("type checker invariant violated: the builtin Str type is not a nominal type", .{});
@@ -40768,7 +40877,15 @@ fn builtinLiteralCandidatesLackMethod(
     }
 }
 
-fn builtinNominalHasMethod(self: *Self, nominal_type: types_mod.NominalType, method_name: Ident.Idx) bool {
+/// Whether the builtin number type `num_kind` has the method `method_name`,
+/// looked up by the type's declaration without building its type.
+fn builtinNumberHasMethod(self: *Self, num_kind: CIR.NumKind, method_name: Ident.Idx) bool {
+    const source_decl = self.sourceDeclForBuiltinNominal(.{ .num = num_kind });
+    const owner_env, _ = self.builtinOwnerEnvForSourceDecl(source_decl, "number type");
+    return self.lookupStaticDispatchMethodBinding(owner_env, source_decl, self.cir, method_name) != null;
+}
+
+fn nominalHasMethod(self: *Self, nominal_type: types_mod.NominalType, method_name: Ident.Idx) bool {
     const owner_env = self.getNominalOriginEnv(nominal_type);
     return self.lookupStaticDispatchMethodBinding(owner_env, nominal_type.sourceDeclOptional(), self.cir, method_name) != null;
 }
@@ -47236,6 +47353,11 @@ fn recordInterpolationPartTypeMismatch(self: *Self, expected_var: Var, actual_va
             .actual_snapshot = actual_snapshot,
         },
         .context = .{ .interpolation_part = region },
+        .str_conversion = try self.strConversionFor(
+            .{ .interpolation_part = region },
+            self.types.resolveThroughAliases(expected_var).desc.content,
+            self.types.resolveThroughAliases(actual_var).desc.content,
+        ),
     } });
 }
 
@@ -55674,6 +55796,7 @@ fn checkAllFromNumeralFlexConstraintCompatibility(
 fn recordBranchTypeMismatch(self: *Self, body_var: Var, expected_ret: Var, ctx: problem.Context) std.mem.Allocator.Error!void {
     const expected_snapshot = try self.snapshotVarForError(expected_ret);
     const actual_snapshot = try self.snapshotVarForError(body_var);
+    const context = self.mismatchContext(ctx, body_var);
     _ = try self.problems.appendProblem(.{ .type_mismatch = .{
         .types = .{
             .expected_var = expected_ret,
@@ -55681,7 +55804,12 @@ fn recordBranchTypeMismatch(self: *Self, body_var: Var, expected_ret: Var, ctx: 
             .actual_var = body_var,
             .actual_snapshot = actual_snapshot,
         },
-        .context = self.mismatchContext(ctx, body_var),
+        .context = context,
+        .str_conversion = try self.strConversionFor(
+            context,
+            self.types.resolveThroughAliases(expected_ret).desc.content,
+            self.types.resolveThroughAliases(body_var).desc.content,
+        ),
     } });
 }
 
@@ -55995,6 +56123,10 @@ fn reportConstraintErrorAt(
                     .owner_region = owner_region,
                     .num_literal = constraint.origin.numeralInfo(),
                     .quote_region = self.quoteLiteralRegionForDispatcher(constraint, dispatcher_var),
+                    .str_conversion = if (constraint.origin.literalKind() == .numeral)
+                        try self.numeralDispatcherStrConversion(dispatcher_var)
+                    else
+                        .none,
                     .row_extension_of = if (self.rowExtensionDerivation(constraint)) |entry| .{
                         .row_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, entry.row),
                         .ext_name = self.rowExtensionSourceName(dispatcher_var),
