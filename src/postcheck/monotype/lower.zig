@@ -40034,12 +40034,11 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
-        // A nominal opaque with a scalar backing and no custom parser (e.g. `Username := Str`)
-        // parses its backing scalar, then rewraps the value in the nominal.
-        if (self.nominalExprBackingType(shape_ty)) |backing_ty| {
-            if (self.scalarCodecMethodName(backing_ty, "parse_") != null) {
-                return try self.lowerParseNominalScalarFromState(shape_ty, backing_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
-            }
+        // A derived parser for a nominal backed by a scalar or another nominal
+        // (`Username := Str.{ parser_for : _ }`) parses its backing, then rewraps
+        // the value in the nominal.
+        if (self.derivedCodecLayerBackingType(shape_ty, "parse_")) |backing_ty| {
+            return try self.lowerParseNominalLayerFromState(shape_ty, backing_ty, encoding_expr, encoding_ty, state_expr, state_ty, ret_ty, precomputed_plan);
         }
         const selected = self.parseShapeSelection(shape_ty);
         if (Ident.textEql(selected.tag_text, "Record")) {
@@ -40165,7 +40164,7 @@ const BodyContext = struct {
         return wrapped;
     }
 
-    fn lowerParseNominalScalarFromState(
+    fn lowerParseNominalLayerFromState(
         self: *BodyContext,
         nominal_ty: Type.TypeId,
         backing_ty: Type.TypeId,
@@ -50841,6 +50840,19 @@ const BodyContext = struct {
         return try self.lowerUnaryContainerMethodCall(.encoder, "to_list", "Dict.to_list", "Dict type", "generated List type", dict_ty, dict_ty, list_ty, dict_expr);
     }
 
+    /// The backing a derived codec for nominal `ty` reads or writes after
+    /// unwrapping exactly one nominal layer: a builtin scalar, or another user
+    /// nominal whose own codec then handles it. Null for any other backing,
+    /// which the structural shape walk reaches through the nominal directly.
+    fn derivedCodecLayerBackingType(self: *BodyContext, ty: Type.TypeId, comptime prefix: []const u8) ?Type.TypeId {
+        const backing_ty = self.nominalExprBackingType(ty) orelse return null;
+        if (self.scalarCodecMethodName(backing_ty, prefix) != null) return backing_ty;
+        return switch (methodOwnerFromType(self.typeStore(), backing_ty) orelse return null) {
+            .builtin => null,
+            .nominal => backing_ty,
+        };
+    }
+
     /// The format method (`prefix` plus the scalar's name) that reads or
     /// writes a builtin scalar type, or null when the type is not one.
     fn scalarCodecMethodName(self: *BodyContext, ty: Type.TypeId, comptime prefix: []const u8) ?[]const u8 {
@@ -54611,11 +54623,8 @@ const BodyContext = struct {
         if (runtime_arg_tys.len != 1) Common.invariant("structural parser runtime function must have one state argument");
 
         const top_level_null_try = self.tryNullInfo(shape_ty);
-        const nominal_scalar_backing = if (self.nominalExprBackingType(shape_ty)) |backing_ty|
-            self.scalarCodecMethodName(backing_ty, "parse_") != null
-        else
-            false;
-        if (self.scalarCodecMethodName(shape_ty, "parse_") == null and top_level_null_try == null and !nominal_scalar_backing) {
+        const nominal_layer_backing = self.derivedCodecLayerBackingType(shape_ty, "parse_") != null;
+        if (self.scalarCodecMethodName(shape_ty, "parse_") == null and top_level_null_try == null and !nominal_layer_backing) {
             if (self.setPayloadType(shape_ty)) |elem_ty| {
                 if (!try self.codecFieldTypeIsSupported(.parser, elem_ty, false)) Common.invariant("structural parser set element type was not supported");
             } else if (self.dictEntryShape(shape_ty)) |dict| {
@@ -55703,18 +55712,17 @@ const BodyContext = struct {
         if (self.scalarCodecMethodName(shape_ty, "encode_")) |method_name| {
             return encodeExpr(try self.lowerEncodeFormatMethod(method_name, &.{ value.value_expr, value.state_expr }, &.{ shape_ty, value.state_ty }, shape_ty, value.ret_ty));
         }
-        // A nominal opaque with a scalar backing and no custom encoder (e.g. `Username := Str`)
-        // encodes as its backing: unwrap one nominal layer and encode the scalar.
-        if (self.nominalExprBackingType(shape_ty)) |backing_ty| {
-            if (self.scalarCodecMethodName(backing_ty, "encode_") != null) {
-                task.backing_ty = backing_ty;
-                task.value_local = try self.addLocal(self.builder.symbols.fresh(), shape_ty);
-                task.backing_local = try self.addLocal(self.builder.symbols.fresh(), backing_ty);
-                var backing = value;
-                backing.shape_ty = backing_ty;
-                backing.value_expr = try self.localExpr(task.backing_local, backing_ty);
-                return .{ .child = .{ .shape = .{ .inputs = task.inputs, .value = backing } } };
-            }
+        // A derived encoder for a nominal backed by a scalar or another nominal
+        // (`Username := Str.{ encoder_for : _ }`) encodes as its backing: unwrap
+        // one nominal layer and encode the backing value.
+        if (self.derivedCodecLayerBackingType(shape_ty, "encode_")) |backing_ty| {
+            task.backing_ty = backing_ty;
+            task.value_local = try self.addLocal(self.builder.symbols.fresh(), shape_ty);
+            task.backing_local = try self.addLocal(self.builder.symbols.fresh(), backing_ty);
+            var backing = value;
+            backing.shape_ty = backing_ty;
+            backing.value_expr = try self.localExpr(task.backing_local, backing_ty);
+            return .{ .child = .{ .shape = .{ .inputs = task.inputs, .value = backing } } };
         }
         return switch (self.shapeContent(shape_ty)) {
             .record, .zst => .{ .tail = .{ .record = .{ .inputs = task.inputs, .value = value } } },
@@ -57017,8 +57025,9 @@ const BodyContext = struct {
             return true;
         }
         if (self.frozenCustomCodecCallForShape(kind, ty) != null) return true;
-        if (self.nominalExprBackingType(ty)) |backing_ty| {
-            if (self.scalarCodecMethodName(backing_ty, scalar_prefix) != null) return true;
+        if (self.derivedCodecLayerBackingType(ty, scalar_prefix)) |backing_ty| {
+            try pending.append(self.allocator, .{ .check = .{ .ty = backing_ty } });
+            return true;
         }
         if (self.setPayloadType(ty)) |payload_ty| {
             try pending.append(self.allocator, .{ .check = .{ .ty = payload_ty } });
@@ -58784,6 +58793,21 @@ const BodyContext = struct {
         return (try self.graphScalarCodecMethodName(node, "parse_")) != null;
     }
 
+    /// The graph counterpart of `derivedCodecLayerBackingType`: the backing
+    /// node a derived codec for `node` reaches after unwrapping exactly one
+    /// named layer, when that backing is a builtin scalar or a user nominal.
+    fn graphDerivedCodecLayerBackingNode(self: *BodyContext, node: NodeId, comptime prefix: []const u8) Allocator.Error!?NodeId {
+        const backing = switch ((try self.graph.content(node))) {
+            .named => |named| named.backing orelse return null,
+            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
+        };
+        if ((try self.graphScalarCodecMethodName(backing.node, prefix)) != null) return backing.node;
+        return switch ((try self.methodOwnerFromNode(backing.node)) orelse return null) {
+            .builtin => null,
+            .nominal => backing.node,
+        };
+    }
+
     /// The format method (`prefix` plus the scalar's name) that reads or
     /// writes a builtin scalar node, or null when the node is not one.
     fn graphScalarCodecMethodName(self: *BodyContext, node: NodeId, comptime prefix: []const u8) Allocator.Error!?[]const u8 {
@@ -59480,19 +59504,15 @@ const BodyContext = struct {
             );
         }
 
-        // A nominal opaque with a scalar backing (e.g. `Username := Str`) prepares the codec for
-        // its backing scalar; the encoder/parser reaches it after unwrapping the nominal.
-        switch ((try self.graph.content(shape_node))) {
-            .named => |named| if (named.backing) |backing| {
-                const backing_is_scalar = if (kind == .parser)
-                    (try self.graphScalarCodecMethodName(backing.node, "parse_")) != null
-                else
-                    (try self.graphScalarCodecMethodName(backing.node, "encode_")) != null;
-                if (backing_is_scalar) {
-                    return try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, backing.node, boundary_callable_node, seen);
-                }
-            },
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => {},
+        // A derived codec for a nominal backed by a scalar or another nominal
+        // (`Username := Str.{ encoder_for : _ }`) prepares the codec for its
+        // backing; the encoder/parser reaches it after unwrapping one nominal layer.
+        const layer_backing = switch (kind) {
+            .parser => try self.graphDerivedCodecLayerBackingNode(shape_node, "parse_"),
+            .encoder => try self.graphDerivedCodecLayerBackingNode(shape_node, "encode_"),
+        };
+        if (layer_backing) |backing_node| {
+            return try self.prepareCustomCodecCallsAtNode(boundary_expr, kind, backing_node, boundary_callable_node, seen);
         }
 
         if ((try self.graphNodeIsBuiltinTry(shape_node))) {
