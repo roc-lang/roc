@@ -357,8 +357,14 @@ const Engine = struct {
             },
             .named => |named| {
                 try self.putBytes("named");
-                try self.putBytes(&named.named_type.module.bytes);
-                try self.putBytes(renderer.names.moduleIdentityBytes(named.def.module));
+                // A root app module type is named by its declaration; its
+                // backing, rendered below, names its structure.
+                if (named.def.site) {
+                    try self.putBytes("site");
+                } else {
+                    try self.putBytes(&named.named_type.module.bytes);
+                    try self.putBytes(renderer.names.moduleIdentityBytes(named.def.module));
+                }
                 if (named.def.source_decl) |decl| {
                     try self.putBytes("source-decl");
                     try self.putU32(decl);

@@ -752,11 +752,12 @@ pub const LocatedArtifact = struct {
     index: u32,
 };
 
-/// The object cache's artifacts, asked by procedure identity. The consumer
-/// that loaded the packs supplies the context and the lookup.
+/// The object cache's artifacts, asked by the key an entry was served under
+/// (`LIR.LirProcSpec.cache_key`). The consumer that loaded the packs
+/// supplies the context and the lookup.
 pub const SpliceSource = struct {
     context: *anyopaque,
-    find: *const fn (context: *anyopaque, identity: lir.ProcIdentity) ?LocatedArtifact,
+    find: *const fn (context: *anyopaque, key: [32]u8) ?LocatedArtifact,
 };
 
 /// Place the object-cache entry of each of `external_procs`, with its
@@ -791,7 +792,11 @@ pub fn spliceExternalProcs(
     for (external_procs) |proc_id| {
         const proc = proc_specs[@backingInt(proc_id)];
         if (!proc.external) invariant("procedure {d} was offered for splicing but is not an object-cache entry", .{@backingInt(proc_id)});
-        const located = source.find(source.context, proc.identity) orelse {
+        const key = proc.cache_key orelse {
+            if (builtin.mode == .debug) invariant("object-cache procedure {d} had no cache key", .{@backingInt(proc_id)});
+            unreachable;
+        };
+        const located = source.find(source.context, key) orelse {
             if (builtin.mode == .debug) {
                 invariant("object cache served a specialization whose artifact {s} is not in any loaded pack", .{&proc.identity.symbolHex()});
             }

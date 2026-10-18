@@ -228,6 +228,7 @@ fn inlineAt(store: *LirStore, layouts: *layout_mod.Store, site: CallSite) Resour
 
     const inline_scope = try store.addInlineScope(.{
         .source_identity = callee.identity,
+        .copies_site_code = callee.code_key != null,
         .source_name = store.procDebugNameString(call.proc),
         .source_loc = store.procLoc(call.proc),
         .call_site = store.stmtLoc(site.stmt),

@@ -565,7 +565,17 @@ fn resolveShimFunction(name: []const u8) ?usize {
     }
     if (resolveRuntimeSymbol(name)) |address| return address;
     if (resolveHostedSymbol(name)) |address| return address;
+    if (resolvePackageSymbol(name)) |address| return address;
     return resolveBoxyShimFunction(name);
+}
+
+/// An object-cache entry linked into this executable, by its C-ABI entry
+/// name, which the generated platform shim recorded next to its address.
+fn resolvePackageSymbol(name: []const u8) ?usize {
+    for (shim_host_abi.packageNames(), shim_host_abi.packageFns()) |package_name, package_fn| {
+        if (std.mem.eql(u8, std.mem.span(package_name), name)) return @intFromPtr(package_fn);
+    }
+    return null;
 }
 
 /// The host's runtime symbols, which this shim links against directly.

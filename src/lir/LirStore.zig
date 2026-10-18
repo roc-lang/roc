@@ -2317,6 +2317,7 @@ test "body shard relocates nonzero local and body suffixes" {
     const coordinator_name = try coordinator.insertString("coordinator");
     const body_inline_scope = try coordinator.addInlineScope(.{
         .source_identity = lir_defs.ProcIdentity.forTest(123),
+        .copies_site_code = false,
         .source_name = coordinator_name,
         .source_loc = .{ .file = 1, .line = 2, .column = 3 },
         .call_site = .{ .file = 4, .line = 5, .column = 6 },
@@ -2334,6 +2335,7 @@ test "body shard relocates nonzero local and body suffixes" {
     const body_name: base.StringLiteral.Idx = @fromBackingInt(@intCast(worker.getLocalNameRaw(body_local)));
     const worker_inline_scope = try worker.addInlineScope(.{
         .source_identity = lir_defs.ProcIdentity.forTest(456),
+        .copies_site_code = false,
         .source_name = body_name,
         .source_loc = .{ .file = 2, .line = 3, .column = 4 },
         .call_site = .{ .file = 5, .line = 6, .column = 7 },
@@ -2394,6 +2396,7 @@ test "body shard relocates nonzero local and body suffixes" {
     const destination_name = try coordinator.insertString("destination");
     _ = try coordinator.addInlineScope(.{
         .source_identity = lir_defs.ProcIdentity.forTest(789),
+        .copies_site_code = false,
         .source_name = destination_name,
         .source_loc = .{ .file = 8, .line = 9, .column = 10 },
         .call_site = .{ .file = 11, .line = 12, .column = 13 },
@@ -2465,6 +2468,7 @@ test "body shard append preserves destination on every reserve-stage allocation 
             for (0..9) |index| {
                 _ = try source.addInlineScope(.{
                     .source_identity = lir_defs.ProcIdentity.forTest(@intCast(index)),
+                    .copies_site_code = false,
                     .source_name = source_name,
                     .source_loc = base.SourceLoc.none,
                     .call_site = base.SourceLoc.none,
@@ -2534,6 +2538,7 @@ test "body shard append preserves destination on every reserve-stage allocation 
             const destination_name = try destination.insertString("destination metadata");
             _ = try destination.addInlineScope(.{
                 .source_identity = lir_defs.ProcIdentity.forTest(99),
+                .copies_site_code = false,
                 .source_name = destination_name,
                 .source_loc = base.SourceLoc.none,
                 .call_site = base.SourceLoc.none,

@@ -34,7 +34,7 @@ pub const renderDocumentToHtml = @import("renderer.zig").renderDocumentToHtml;
 pub const renderDocumentToLsp = @import("renderer.zig").renderDocumentToLsp;
 pub const writeShouted = @import("renderer.zig").writeShouted;
 pub const writeEscapedHtml = @import("renderer.zig").writeEscapedHtml;
-pub const sanitisePathForSnapshots = @import("renderer.zig").sanitisePathForSnapshots;
+pub const displayPath = @import("renderer.zig").displayPath;
 
 // Canonical (presentation-independent) S-expression serialization
 pub const pushReportToSExprTree = @import("report_sexpr.zig").pushReportToSExprTree;
