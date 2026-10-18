@@ -28852,9 +28852,9 @@ const ProcBodyBuilder = struct {
     const MatchState = struct {
         arena: Allocator,
         mode: MatchMode,
-        locals: std.AutoHashMapUnmanaged(LIR.LocalId, MatchLocalState) = .empty,
+        locals: collections.DenseMap(LIR.LocalId, MatchLocalState),
         /// Each match binder's alternative remaps.
-        remaps: std.AutoHashMapUnmanaged(checked.PatternBinderId, []const checked.CheckedAlternativeBinderRemap) = .empty,
+        remaps: collections.DenseMap(checked.PatternBinderId, []const checked.CheckedAlternativeBinderRemap),
         /// Each branch body, once lowered; alternatives share it.
         bodies: []?LIR.CFStmtId = &.{},
         shapes: std.StringHashMapUnmanaged(u32) = .empty,
@@ -29453,7 +29453,7 @@ const ProcBodyBuilder = struct {
                 },
             };
             local_state.pending_scoped = try ctx.suspendScopes(&entered);
-            try ctx.state.locals.put(ctx.state.arena, local, local_state);
+            try ctx.state.locals.put(local, local_state);
             return local;
         }
 
@@ -29832,7 +29832,12 @@ const ProcBodyBuilder = struct {
         };
         errdefer tree.arena_state.deinit();
         const arena = tree.arena_state.allocator();
-        tree.state = .{ .arena = arena, .mode = mode };
+        tree.state = .{
+            .arena = arena,
+            .mode = mode,
+            .locals = collections.DenseMap(LIR.LocalId, MatchLocalState).init(arena),
+            .remaps = collections.DenseMap(checked.PatternBinderId, []const checked.CheckedAlternativeBinderRemap).init(arena),
+        };
         tree.state.bodies = try arena.alloc(?LIR.CFStmtId, branch_count);
         @memset(tree.state.bodies, null);
         // Each alternative's binders bind through its own remaps.
@@ -29841,7 +29846,7 @@ const ProcBodyBuilder = struct {
             var binders: std.ArrayList(checked.PatternBinderId) = .empty;
             try self.appendPatternBinderIds(alternative, &binders);
             defer binders.deinit(allocator);
-            for (binders.items) |binder| try tree.state.remaps.put(arena, binder, alternative_remaps);
+            for (binders.items) |binder| try tree.state.remaps.put(binder, alternative_remaps);
         }
         const ctx = BoxyMatchCtx{ .b = self, .state = &tree.state };
         const built = try MatchTree.build(arena, ctx, root_ty, rows);
