@@ -7514,7 +7514,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
         .boxy_tag_match => |tag_match| {
-            try self.emitBoxyPlanCall(&boxy_call_plan.tagMatch(tag_match), undefined, undefined);
+            try self.emitBoxyPlanCall(&boxy_call_plan.tagMatch(tag_match, self.store.stmtRow(tag_match.source_desc)), undefined, undefined);
             try self.emitVoidIf();
             self.cf_depth += 1;
             try work.append(wa, .str_match_close);
@@ -7538,8 +7538,8 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                     .args = assign.args,
                     .target = assign.target,
                     .ret_layout = self.procLocalLayoutIdx(assign.target),
-                    .unique_args = assign.unique_args,
-                    .interchangeable = assign.interchangeable,
+                    .unique_args = self.store.stmtRowOrDefault(assign.extra).unique_args,
+                    .interchangeable = self.store.stmtRowOrDefault(assign.extra).interchangeable,
                 }) catch |err| {
                     self.pending_overflow_result_target = null;
                     return err;
@@ -7716,16 +7716,17 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try work.append(wa, .{ .node = .{ .stmt_id = sw.initialized_branch, .stop = stop } });
             try work.append(wa, .{ .switch_test = .{ .state = state, .branch_value = @bitCast(sw.cond_mask) } });
         },
-        .str_match => |str_match| {
-            const matched_local = try self.generateStrMatch(str_match);
+        .str_match => |str_match_stmt| {
+            const str_match = self.store.stmtRow(str_match_stmt.data);
+            const matched_local = try self.generateStrMatch(str_match_stmt.source, str_match);
             try self.emitLocalGet(matched_local);
             try self.emitVoidIf();
             self.cf_depth += 1;
 
             try work.append(wa, .str_match_close);
-            try work.append(wa, .{ .node = .{ .stmt_id = str_match.on_miss, .stop = stop } });
+            try work.append(wa, .{ .node = .{ .stmt_id = str_match_stmt.on_miss, .stop = stop } });
             try work.append(wa, .str_match_else);
-            try work.append(wa, .{ .node = .{ .stmt_id = str_match.on_match, .stop = stop } });
+            try work.append(wa, .{ .node = .{ .stmt_id = str_match_stmt.on_match, .stop = stop } });
         },
         .str_match_set => |str_match_set| {
             const matched_arm = try self.generateStrMatchSet(str_match_set);
@@ -7800,11 +7801,11 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try self.emitBr(br_target);
         },
         .incref => |inc| {
-            try self.generateRcStmt(.incref, inc.value, inc.rc, inc.atomicity, inc.count);
+            try self.generateRcStmt(.incref, inc.value, self.store.rcHelper(inc.rc), inc.atomicity, inc.count);
             try work.append(wa, .{ .node = .{ .stmt_id = inc.next, .stop = stop } });
         },
         .decref => |dec| {
-            try self.generateRcStmt(.decref, dec.value, dec.rc, dec.atomicity, 1);
+            try self.generateRcStmt(.decref, dec.value, self.store.rcHelper(dec.rc), dec.atomicity, 1);
             try work.append(wa, .{ .node = .{ .stmt_id = dec.next, .stop = stop } });
         },
         .decref_if_initialized => |dec_stmt| {
@@ -7840,7 +7841,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try work.append(wa, .{ .node = .{ .stmt_id = dec_stmt.next, .stop = stop } });
         },
         .free => |free_stmt| {
-            try self.generateRcStmt(.free, free_stmt.value, free_stmt.rc, free_stmt.atomicity, 1);
+            try self.generateRcStmt(.free, free_stmt.value, self.store.rcHelper(free_stmt.rc), free_stmt.atomicity, 1);
             try work.append(wa, .{ .node = .{ .stmt_id = free_stmt.next, .stop = stop } });
         },
         .runtime_error => {
@@ -7923,7 +7924,7 @@ fn generateLiteral(self: *Self, target: ProcLocalId, value: LIR.LiteralValue) Al
             self.store.stmtRow(id).default_layout,
             true,
         ),
-        .static_data => |id| try self.generateStaticDataLiteral(id, self.procLocalLayoutIdx(target)),
+        .static_data => |read| try self.generateStaticDataLiteral(read.id, self.procLocalLayoutIdx(target)),
         .bytes_literal => |bytes_idx| try self.generateBytesLiteral(bytes_idx),
         .proc_ref => |proc_id| {
             const key: u32 = @backingInt(proc_id);
@@ -15046,8 +15047,8 @@ fn emitStrMatchCapture(
     }
 }
 
-fn generateStrMatch(self: *Self, str_match: anytype) Allocator.Error!u32 {
-    const source = try self.emitStrMatchSourceShape(str_match.source);
+fn generateStrMatch(self: *Self, source_local: LIR.LocalId, str_match: anytype) Allocator.Error!u32 {
+    const source = try self.emitStrMatchSourceShape(source_local);
     return self.generateStrMatchWithSource(source, str_match);
 }
 

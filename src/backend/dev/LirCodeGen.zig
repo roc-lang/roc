@@ -8659,7 +8659,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     inline .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt => |s| ctx.outputDescriptor(s.target),
                     .assign_call_dict => |s| ctx.outputDescriptor(s.target),
                     inline .incref, .decref, .free => |s| if (s.rc == .boxy) {
-                        ctx.descriptor(s.rc.boxy);
+                        ctx.descriptor(self.store.stmtRow(s.rc.boxy));
                     },
                     .decref_if_initialized => |s| {
                         const rc = self.store.stmtRow(s.data).rc;
@@ -8723,11 +8723,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         for (0..branches.len) |i| try successors.append(self.allocator, GuardedList.at(branches, i).body);
                         try successors.append(self.allocator, s.default_branch);
                     },
-                    .str_match => |s| {
-                        const capture = try self.stackPlanCaptures(&plan, at, s.source, s.steps);
-                        const next = try self.stackPlanNode(&plan, indexes, &work, s.on_match);
+                    .str_match => |s_stmt| {
+                        const s = self.store.stmtRow(s_stmt.data);
+                        const capture = try self.stackPlanCaptures(&plan, at, s_stmt.source, s.steps);
+                        const next = try self.stackPlanNode(&plan, indexes, &work, s_stmt.on_match);
                         try plan.edge(capture, next);
-                        try successors.append(self.allocator, s.on_miss);
+                        try successors.append(self.allocator, s_stmt.on_miss);
                     },
                     .str_match_set => |s| {
                         const arms = self.store.getStrMatchArms(s.arms);
@@ -16400,7 +16401,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// miss target. Returns the jump patch taken when the tag does not
         /// match (the wrapper returned zero).
         fn generateBoxyTagMatch(self: *Self, tag_match: anytype) Allocator.Error!usize {
-            _ = try self.callBoxyPlan(&boxy_call_plan.tagMatch(tag_match), undefined);
+            _ = try self.callBoxyPlan(&boxy_call_plan.tagMatch(tag_match, self.store.stmtRow(tag_match.source_desc)), undefined);
             // The wrapper returns a C `bool` in the low byte of the return
             // register; the upper bits are undefined, so mask before testing.
             const result_reg = try self.allocTempGeneral();
@@ -17874,7 +17875,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Generate code for free operation.
         fn generateFree(self: *Self, rc_op: anytype) Allocator.Error!ValueLocation {
             const value_loc = try self.generateRcOperandValue(rc_op.value);
-            try self.emitExplicitRcStmtHelperCallForValue(rc_op.rc, .free, rc_op.atomicity, value_loc, self.localLayout(rc_op.value), 1);
+            try self.emitExplicitRcStmtHelperCallForValue(self.store.rcHelper(rc_op.rc), .free, rc_op.atomicity, value_loc, self.localLayout(rc_op.value), 1);
             return value_loc;
         }
 
@@ -20248,7 +20249,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                     break :blk try self.generateBoxyDynamicLiteral(assign.target, lit.desc, lit.dec_bits, lit.default_layout, .dynamic_frac_literal_ref);
                                 },
                                 .bytes_literal => |bytes_idx| try self.generateBytesLiteral(bytes_idx),
-                                .static_data => |id| blk: {
+                                .static_data => |read| blk: {
+                                    const id = read.id;
                                     self.fragment_context.static_data = true;
                                     if (self.comptime_hooks) |hooks| {
                                         try self.spillAllVectorLocals();
@@ -20395,8 +20397,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                     .args = assign.args,
                                     .target = assign.target,
                                     .ret_layout = self.localLayout(assign.target),
-                                    .unique_args = assign.unique_args,
-                                    .interchangeable = assign.interchangeable,
+                                    .unique_args = self.store.stmtRowOrDefault(assign.extra).unique_args,
+                                    .interchangeable = self.store.stmtRowOrDefault(assign.extra).interchangeable,
                                 }) catch |err| {
                                     self.pending_overflow_result_target = null;
                                     return err;
@@ -20694,19 +20696,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try work.append(wa, .{ .node = sw.initialized_branch });
                         },
 
-                        .str_match => |str_match| {
+                        .str_match => |str_match_stmt| {
+                            const str_match = self.store.stmtRow(str_match_stmt.data);
                             const before_env = try self.captureStmtEnv();
-                            const miss_patches = try self.generateStrMatch(str_match);
+                            const miss_patches = try self.generateStrMatch(str_match_stmt.source, str_match);
                             const state = try self.allocator.create(StrMatchState);
                             state.* = .{
                                 .owner = stmt_id,
                                 .before_env = before_env,
                                 .miss_patches = miss_patches,
-                                .on_miss = str_match.on_miss,
+                                .on_miss = str_match_stmt.on_miss,
                                 .end_patch = 0,
                             };
                             try work.append(wa, .{ .str_match_after_match = state });
-                            try work.append(wa, .{ .node = str_match.on_match });
+                            try work.append(wa, .{ .node = str_match_stmt.on_match });
                         },
 
                         .str_match_set => |str_match_set| {
@@ -20729,7 +20732,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .incref => |inc| {
                             _ = try self.generateIncref(.{
                                 .value = inc.value,
-                                .rc = inc.rc,
+                                .rc = self.store.rcHelper(inc.rc),
                                 .count = inc.count,
                                 .atomicity = inc.atomicity,
                             });
@@ -20739,7 +20742,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .decref => |dec| {
                             _ = try self.generateDecref(.{
                                 .value = dec.value,
-                                .rc = dec.rc,
+                                .rc = self.store.rcHelper(dec.rc),
                                 .atomicity = dec.atomicity,
                             });
                             try work.append(wa, .{ .node = dec.next });
@@ -20975,8 +20978,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
         }
 
-        fn generateStrMatch(self: *Self, str_match: anytype) Allocator.Error!std.ArrayList(usize) {
-            const source = try self.emitStrMatchSourceRegs(str_match.source);
+        fn generateStrMatch(self: *Self, source_local: LocalId, str_match: anytype) Allocator.Error!std.ArrayList(usize) {
+            const source = try self.emitStrMatchSourceRegs(source_local);
             defer self.codegen.freeGeneral(source.allocation);
             defer self.codegen.freeGeneral(source.is_small);
             defer self.codegen.freeGeneral(source.len);
@@ -24953,7 +24956,7 @@ test "two-arg proc list join loop returns full length" {
     const ret_result = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const drop_list = try store.addCFStmt(.{ .decref = .{
         .value = root_list,
-        .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = list_layout }),
+        .rc = try store.addRcHelperRef(LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = list_layout })),
         .next = ret_result,
     } }, .test_fixture);
     const call_args = try store.addLocalSpan(&.{ root_list, ignored });
@@ -25088,7 +25091,7 @@ test "box_alloc_zeroed cell is zeroed, writable through ptr_cast, and freed by d
     // decref also verifies the cell came from allocateWithRefcount with rc=1.
     const drop_cell = try store.addCFStmt(.{ .decref = .{
         .value = cell,
-        .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = box_u64 }),
+        .rc = try store.addRcHelperRef(LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = box_u64 })),
         .next = ret,
     } }, .test_fixture);
     const add_args = try store.addLocalSpan(&.{ pre, post });
@@ -26008,7 +26011,7 @@ test "independent fragment defers shared RC helper demand" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = string } }, .test_fixture);
     const drop = try store.addCFStmt(.{ .decref = .{
         .value = string,
-        .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .str }),
+        .rc = try store.addRcHelperRef(LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .str })),
         .next = ret,
     } }, .test_fixture);
     const proc = try addProc(&store, &.{string}, drop, .str);
@@ -26209,7 +26212,7 @@ test "independent fragment symbolic hooks record actual context use" {
     defer layouts.deinit();
     const pure = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, .i64);
     const data_id: LIR.StaticDataId = @fromBackingInt(@intCast(8));
-    const data_proc = try addLiteralProc(&store, .{ .static_data = data_id }, .i64);
+    const data_proc = try addLiteralProc(&store, .{ .static_data = .{ .id = data_id } }, .i64);
     var source = try HostLirCodeGen.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
     defer source.deinit();
     try source.setStaticDataSymbols(&.{.{

@@ -51,6 +51,9 @@ const Self = @This();
 pub const stmt_row_types = .{
     lir_defs.LowLevel.RcEffect,
     lir_defs.CallExtra,
+    lir_defs.RefExtra,
+    lir_defs.LowLevelExtra,
+    lir_defs.StrMatchData,
     lir_defs.LiteralExtra,
     lir_defs.JoinExtra,
     lir_defs.BoxyDescRef,
@@ -101,7 +104,7 @@ pub fn isStmtRowId(comptime T: type) bool {
 /// may hold one.
 fn holdsRewriteIdentity(comptime T: type) bool {
     @setEvalBranchQuota(100_000);
-    if (T == CFStmtId or T == CFSwitchBranchSpan or T == StrMatchArmSpan or T == JoinPointSpan) return true;
+    if (T == CFStmtId or T == lir_defs.TailCallLink or T == CFSwitchBranchSpan or T == StrMatchArmSpan or T == JoinPointSpan) return true;
     if (isStmtRowId(T)) return true;
     return anyFieldType(T, holdsRewriteIdentity);
 }
@@ -356,6 +359,12 @@ const ProcRewrite = struct {
     fn prepareValue(self: *ProcRewrite, source: *const Self, allocator: Allocator, comptime T: type, value: T) Allocator.Error!void {
         if (T == CFStmtId) {
             _ = try self.cf_stmts.prepare(allocator, @backingInt(value));
+            return;
+        }
+        if (T == lir_defs.TailCallLink) {
+            if (value.isSite()) {
+                if (value.next()) |next| try self.prepareValue(source, allocator, CFStmtId, next);
+            }
             return;
         }
         inline for (.{
@@ -713,6 +722,11 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
         const column = comptime stmtRowColumn(T.Row);
         return @fromBackingInt(movedIndex(@backingInt(value), prefix.stmt_rows[column], bases.stmt_rows[column]));
     }
+    if (T == lir_defs.TailCallLink) {
+        if (!value.isSite()) return value;
+        const next = value.next() orelse return value;
+        return .site(relocateBodyValue(CFStmtId, next, prefix, bases));
+    }
     if (T == LocalId) return @fromBackingInt(@intCast(movedIndex(@backingInt(value), prefix.locals, bases.locals)));
     if (T == CFStmtId) return @fromBackingInt(@intCast(movedIndex(@backingInt(value), prefix.cf_stmts, bases.cf_stmts)));
     if (T == ErasedCallArgsPlanId) return @fromBackingInt(@intCast(movedIndex(@backingInt(value), prefix.erased_call_arg_plans, bases.erased_call_arg_plans)));
@@ -832,6 +846,7 @@ pub fn appendBodyShardWithJoinRelocation(
         .erased_arg_layout_base = shard.erased_arg_layout_base,
     };
     const stmt_len = source.cf_stmts.len() - source_prefix.cf_stmts;
+    if (stmt_len > lir_defs.max_cf_stmt_count - bases.cf_stmts) return error.OutOfMemory;
     const local_len = source.locals.len() - source_prefix.locals;
     const source_string_bytes = source.strings.encodedBytesFrom(source_prefix.string_bytes);
     const source_string_entries = source.stringEntryCountFrom(source_prefix.string_bytes) orelse
@@ -1782,6 +1797,30 @@ pub fn addStmtRowIfPresent(self: *Self, comptime T: type, value: ?T) Allocator.E
     return if (value) |row| self.addStmtRow(T, row) else .none;
 }
 
+/// The list-of-copies facts of a literal read: set only for a static data
+/// read of a compile-time list of copies.
+pub fn literalExtra(self: *const Self, value: lir_defs.LiteralValue) lir_defs.LiteralExtra {
+    if (value != .static_data) return .{};
+    return self.stmtRowOrDefault(value.static_data.copies);
+}
+
+/// Adds the compact form of a reference-count helper for an `incref`,
+/// `decref`, or `free`.
+pub fn addRcHelperRef(self: *Self, helper: lir_defs.RcHelper) Allocator.Error!lir_defs.RcHelperRef {
+    return switch (helper) {
+        .concrete => |concrete| .{ .concrete = concrete },
+        .boxy => |desc| .{ .boxy = try self.addStmtRow(lir_defs.BoxyDescRef, desc) },
+    };
+}
+
+/// The reference-count helper a compact helper names.
+pub fn rcHelper(self: *const Self, helper: lir_defs.RcHelperRef) lir_defs.RcHelper {
+    return switch (helper) {
+        .concrete => |concrete| .{ .concrete = concrete },
+        .boxy => |desc| .{ .boxy = self.stmtRow(desc) },
+    };
+}
+
 /// Adds the reference-count effect of a low-level operation.
 pub fn addRcEffect(self: *Self, effect: lir_defs.LowLevel.RcEffect) Allocator.Error!lir_defs.StmtRowId(lir_defs.LowLevel.RcEffect) {
     return self.addStmtRow(lir_defs.LowLevel.RcEffect, effect);
@@ -1796,6 +1835,7 @@ pub fn addRcEffect(self: *Self, effect: lir_defs.LowLevel.RcEffect) Allocator.Er
 /// Appends a statement with its explicit provenance and returns its id.
 pub fn addCFStmt(self: *Self, stmt: CFStmt, origin: StmtOrigin) Allocator.Error!CFStmtId {
     const idx = self.cf_stmts.len() + if (self.body_coordinator != null) self.body_prefix.cf_stmts else 0;
+    if (idx >= lir_defs.max_cf_stmt_count) return error.OutOfMemory;
     try self.cf_stmts.ensureUnusedCapacity(self.allocator, 1);
     try self.cf_stmt_locs.ensureUnusedCapacity(self.allocator, 1);
     try self.cf_stmt_regions.ensureUnusedCapacity(self.allocator, 1);
@@ -2189,7 +2229,7 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
         .proc = first,
         .args = span_a,
         .next = appended_a,
-        .tail_call = .{ .next = appended_a },
+        .tail_call = .site(appended_a),
     } };
     GuardedList.atPtr(a.getCFSwitchBranchesMut(branches), 0).body = appended_a;
     GuardedList.atPtr(a.getJoinPointSpanMut(joins), 0).params = span_a;
@@ -2222,7 +2262,7 @@ test "procedure rewrite shards preserve frozen prefixes and relocate ordered com
     try std.testing.expectEqual(appended_a, committed_a.body.?);
     try std.testing.expectEqual(@backingInt(appended_b) + 1, @backingInt(committed_b.body.?));
     try std.testing.expectEqual(committed_a.body.?, coordinator.getCFStmt(ret).assign_call.next);
-    try std.testing.expectEqual(committed_a.body.?, coordinator.getCFStmt(ret).assign_call.tail_call.?.next.?);
+    try std.testing.expectEqual(committed_a.body.?, coordinator.getCFStmt(ret).assign_call.tail_call.next().?);
     try std.testing.expectEqual(committed_a.body.?, committed_a.tail_calls.?.head);
     try std.testing.expectEqual(@as(u32, 77), @backingInt(committed_a.tail_calls.?.loop));
     try std.testing.expectEqual(lir_defs.TailTransform.tce, committed_a.tail_transform);
@@ -2327,14 +2367,14 @@ test "procedure rewrite prepares tail chains and overlapping arm spans" {
         .proc = proc,
         .args = .empty(),
         .next = ret,
-        .tail_call = .{ .next = null },
+        .tail_call = .site(null),
     } }, .test_fixture);
     const head = try coordinator.addCFStmt(.{ .assign_call = .{
         .target = local,
         .proc = proc,
         .args = .empty(),
         .next = ret,
-        .tail_call = .{ .next = tail },
+        .tail_call = .site(tail),
     } }, .test_fixture);
     const text = try coordinator.insertString("prefix");
     const arm: StrMatchArm = .{
@@ -2365,13 +2405,13 @@ test "procedure rewrite prepares tail chains and overlapping arm spans" {
     try std.testing.expectEqual(@as(usize, 2), worker.proc_rewrite.?.str_match_arms.data.rows.len());
     const appended = try worker.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     GuardedList.atPtr(worker.getStrMatchArmsMut(subset), 0).on_match = appended;
-    worker.getCFStmtPtr(tail).assign_call.tail_call.?.next = appended;
+    worker.getCFStmtPtr(tail).assign_call.tail_call = .site(appended);
     try std.testing.expectEqual(appended, GuardedList.at(worker.getStrMatchArms(arms), 1).on_match);
     try std.testing.expectEqual(ret, GuardedList.at(coordinator.getStrMatchArms(arms), 1).on_match);
-    try std.testing.expect(coordinator.getCFStmt(tail).assign_call.tail_call.?.next == null);
+    try std.testing.expect(coordinator.getCFStmt(tail).assign_call.tail_call.next() == null);
     try coordinator.commitProcRewriteWithJoinRelocation(&worker, null);
     try std.testing.expectEqual(appended, GuardedList.at(coordinator.getStrMatchArms(arms), 1).on_match);
-    try std.testing.expectEqual(appended, coordinator.getCFStmt(tail).assign_call.tail_call.?.next.?);
+    try std.testing.expectEqual(appended, coordinator.getCFStmt(tail).assign_call.tail_call.next().?);
 }
 
 test "procedure rewrite allocation failures leave coordinator unchanged" {
@@ -3070,8 +3110,8 @@ fn testTailCallRelocation(existing_join: ?u32) (AppendBodyError || error{ TestEx
         try std.testing.expectEqual(100 + id, @backingInt(coordinator.getCFStmt(appended.root.?).join.id));
     }
     try std.testing.expectEqual(appended.relocation.stmt(prefix, second), head);
-    const link = coordinator.getCFStmt(head).assign_call.tail_call.?.next.?;
+    const link = coordinator.getCFStmt(head).assign_call.tail_call.next().?;
     try std.testing.expectEqual(appended.relocation.stmt(prefix, first), link);
-    try std.testing.expect(coordinator.getCFStmt(link).assign_call.tail_call.?.next == null);
+    try std.testing.expect(coordinator.getCFStmt(link).assign_call.tail_call.next() == null);
     try std.testing.expect(coordinator.tail_call_builder == null);
 }

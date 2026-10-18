@@ -289,7 +289,7 @@ const Analysis = struct {
         while (true) {
             if (self.shared.contains(cursor)) break;
             const pred = self.single_pred.get(cursor) orelse break;
-            if (!edgeStatement(self.store.getCFStmt(pred))) break;
+            if (!edgeStatement(self.store, self.store.getCFStmt(pred))) break;
             if (self.shared.contains(pred)) break;
             try reversed.append(self.allocator, pred);
             cursor = pred;
@@ -466,11 +466,11 @@ fn boolLiteralDiscriminant(value: LIR.LiteralValue) ?u32 {
 
 /// Statements an edge may consist of before its jump: pure local aliases,
 /// payload-free tags, literals, structs, and join-parameter writes.
-fn edgeStatement(stmt: LIR.CFStmt) bool {
-    if (stmt == .assign_ref) return stmt.assign_ref.op == .local and stmt.assign_ref.take_kind == .none;
+fn edgeStatement(store: *const LirStore, stmt: LIR.CFStmt) bool {
+    if (stmt == .assign_ref) return stmt.assign_ref.op == .local and store.stmtRowOrDefault(stmt.assign_ref.extra).take_kind == .none;
     if (stmt == .assign_tag) return stmt.assign_tag.payload == null and stmt.assign_tag.target_desc == .none;
     if (stmt == .assign_literal) return true;
-    if (stmt == .assign_struct) return stmt.assign_struct.contents_desc == null;
+    if (stmt == .assign_struct) return stmt.assign_struct.contents_desc == .none;
     if (stmt == .set_local) return stmt.set_local.mode == .initialize_join_param;
     return false;
 }

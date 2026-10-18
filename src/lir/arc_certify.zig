@@ -508,7 +508,7 @@ fn certifyUniqueArgs(
 
         for (proc_stmts.items) |current| {
             const stmt = store.getCFStmt(current);
-            if (stmt == .assign_literal and store.stmtRowOrDefault(stmt.assign_literal.extra).fresh_alternative != null) {
+            if (stmt == .assign_literal and store.literalExtra(stmt.assign_literal.value).fresh_alternative != null) {
                 diag.context_proc = proc_id;
                 diag.context_stmt = current;
                 diag.set("stmt={d}: a read still names a fresh form after ARC chose", .{@backingInt(current)});
@@ -516,9 +516,10 @@ fn certifyUniqueArgs(
             }
             if (stmt != .assign_low_level) continue;
             const assign = stmt.assign_low_level;
-            if (assign.unique_args == 0) continue;
+            const unique_args = store.stmtRowOrDefault(assign.extra).unique_args;
+            if (unique_args == 0) continue;
             const stmt_index = @backingInt(current);
-            if ((assign.unique_args & ~store.stmtRow(assign.rc_effect).may_runtime_uniqueness_check_args) != 0) {
+            if ((unique_args & ~store.stmtRow(assign.rc_effect).may_runtime_uniqueness_check_args) != 0) {
                 diag.context_proc = proc_id;
                 diag.context_stmt = current;
                 diag.set("stmt={d}: unique_args bit outside the op's runtime-checked argument mask", .{stmt_index});
@@ -529,7 +530,7 @@ fn certifyUniqueArgs(
                 const arg = GuardedList.at(args, position);
                 if (position >= 64) break;
                 const bit = @as(u64, 1) << @as(u6, @intCast(position));
-                if ((assign.unique_args & bit) == 0) continue;
+                if ((unique_args & bit) == 0) continue;
                 const raw = @backingInt(arg);
                 const dense = if (raw < local_to_dense.len) local_to_dense[raw] else no_dense;
                 // The birth must hold under the parameter positions this
@@ -3954,8 +3955,9 @@ const Certifier = struct {
                     try self.noteProcLocal(switch_stmt.cond);
                     try self.noteProcLocal(switch_stmt.payload);
                 },
-                .str_match => |str_match| {
-                    try self.noteProcLocal(str_match.source);
+                .str_match => |str_match_stmt| {
+                    const str_match = self.store.stmtRow(str_match_stmt.data);
+                    try self.noteProcLocal(str_match_stmt.source);
                     const steps = self.store.getStrMatchSteps(str_match.steps);
                     for (0..GuardedList.borrowLen(steps)) |step_index| {
                         const step = GuardedList.at(steps, step_index);
@@ -3967,7 +3969,7 @@ const Certifier = struct {
                 },
                 .boxy_tag_match => |tag_match| {
                     try self.noteProcLocal(tag_match.source);
-                    if (tag_match.source_desc.localOrNull()) |local| try self.noteProcLocal(local);
+                    if (self.store.stmtRow(tag_match.source_desc).localOrNull()) |local| try self.noteProcLocal(local);
                 },
                 .str_match_set => |str_match_set| {
                     try self.noteProcLocal(str_match_set.source);
@@ -5491,16 +5493,16 @@ const Certifier = struct {
                             assign.target,
                             op.source,
                             arc_dismantle.encodeProjection(assign.op).?,
-                            assign.take_kind,
+                            self.store.stmtRowOrDefault(assign.extra).take_kind,
                             null,
-                            self.store.getU32Span(assign.residual_shell_absent_fields),
+                            self.store.getU32Span(self.store.stmtRowOrDefault(assign.extra).residual_shell_absent_fields),
                         ),
                         .tag_payload => |op| try self.bindPayloadRead(
                             &state,
                             assign.target,
                             op.source,
                             arc_dismantle.encodeProjection(assign.op).?,
-                            assign.take_kind,
+                            self.store.stmtRowOrDefault(assign.extra).take_kind,
                             op.tag_discriminant,
                         ),
                         .tag_payload_struct => |op| try self.bindPayloadRead(
@@ -5508,7 +5510,7 @@ const Certifier = struct {
                             assign.target,
                             op.source,
                             arc_dismantle.encodeProjection(assign.op).?,
-                            assign.take_kind,
+                            self.store.stmtRowOrDefault(assign.extra).take_kind,
                             op.tag_discriminant,
                         ),
                         inline .list_reinterpret, .nominal => |op| try self.bindSameValue(&state, assign.target, op.backing_ref),
@@ -5693,7 +5695,7 @@ const Certifier = struct {
                 },
                 .boxy_tag_match => |tag_match| {
                     _ = try self.requireLive(&state, tag_match.source);
-                    try self.requireBoxyDescRef(&state, tag_match.source_desc);
+                    try self.requireBoxyDescRef(&state, self.store.stmtRow(tag_match.source_desc));
                     var match_state = try state.clone();
                     errdefer match_state.deinit();
                     try work.append(self.allocator, .{ .segment = .{ .cursor = tag_match.on_match, .state = match_state, .origin_join = segment.origin_join, .walk = segment.walk } });
@@ -5927,8 +5929,9 @@ const Certifier = struct {
                     try work.append(self.allocator, .{ .segment = .{ .cursor = switch_stmt.uninitialized_branch, .state = uninitialized_state, .origin_join = segment.origin_join, .walk = segment.walk } });
                     return;
                 },
-                .str_match => |str_match| {
-                    const source_value = try self.requireLive(&state, str_match.source);
+                .str_match => |str_match_stmt| {
+                    const str_match = self.store.stmtRow(str_match_stmt.data);
+                    const source_value = try self.requireLive(&state, str_match_stmt.source);
                     var match_state = try state.clone();
                     errdefer match_state.deinit();
                     const steps = self.store.getStrMatchSteps(str_match.steps);
@@ -5941,11 +5944,11 @@ const Certifier = struct {
                             },
                         }
                     }
-                    try work.append(self.allocator, .{ .segment = .{ .cursor = str_match.on_match, .state = match_state, .origin_join = segment.origin_join, .walk = segment.walk } });
+                    try work.append(self.allocator, .{ .segment = .{ .cursor = str_match_stmt.on_match, .state = match_state, .origin_join = segment.origin_join, .walk = segment.walk } });
 
                     var miss_state = try state.clone();
                     errdefer miss_state.deinit();
-                    try work.append(self.allocator, .{ .segment = .{ .cursor = str_match.on_miss, .state = miss_state, .origin_join = segment.origin_join, .walk = segment.walk } });
+                    try work.append(self.allocator, .{ .segment = .{ .cursor = str_match_stmt.on_miss, .state = miss_state, .origin_join = segment.origin_join, .walk = segment.walk } });
                     return;
                 },
                 .str_match_set => |str_match_set| {
@@ -6210,7 +6213,7 @@ const Certifier = struct {
         state: *const State,
         assign: @FieldType(LIR.CFStmt, "assign_ref"),
     ) CertifyError!void {
-        const absent_fields = self.store.getU32Span(assign.residual_shell_absent_fields);
+        const absent_fields = self.store.getU32Span(self.store.stmtRowOrDefault(assign.extra).residual_shell_absent_fields);
         const source = switch (assign.op) {
             .local => |local| local,
             .field => {
@@ -6821,7 +6824,7 @@ const CertifyTest = struct {
     fn decrefStmt(self: *CertifyTest, value: LIR.LocalId, layout_idx: layout_mod.Idx, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .decref = .{
             .value = value,
-            .rc = rcHelper(.decref, layout_idx),
+            .rc = try self.store.addRcHelperRef(rcHelper(.decref, layout_idx)),
             .next = next,
         } }, .test_fixture);
     }
@@ -6840,7 +6843,7 @@ const CertifyTest = struct {
     fn increfStmt(self: *CertifyTest, value: LIR.LocalId, layout_idx: layout_mod.Idx, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .incref = .{
             .value = value,
-            .rc = rcHelper(.incref, layout_idx),
+            .rc = try self.store.addRcHelperRef(rcHelper(.incref, layout_idx)),
             .next = next,
         } }, .test_fixture);
     }
@@ -7129,7 +7132,9 @@ test "unique-argument certification isolates shared locals between procedures" {
             .op = .str_concat,
             .rc_effect = try f.store.addRcEffect(LIR.LowLevel.str_concat.rcEffect()),
             .args = checked_args,
-            .unique_args = 1,
+            .extra = try f.store.addOptionalStmtRow(LIR.LowLevelExtra, .{
+                .unique_args = 1,
+            }),
             .next = ret,
         } }, .test_fixture);
         const birth = try f.store.addCFStmt(.{ .assign_low_level = .{
@@ -7169,7 +7174,9 @@ test "unique-argument certification rejects a multiply-defined local with a fore
         .op = .str_concat,
         .rc_effect = try f.store.addRcEffect(LIR.LowLevel.str_concat.rcEffect()),
         .args = checked_args,
-        .unique_args = 1,
+        .extra = try f.store.addOptionalStmtRow(LIR.LowLevelExtra, .{
+            .unique_args = 1,
+        }),
         .next = ret,
     } }, .test_fixture);
     const first_birth = try f.store.addCFStmt(.{ .assign_low_level = .{
@@ -7541,12 +7548,12 @@ test "certify accepts a retained Boxy field borrowed from implicit capture stora
     const result_assign = try f.assignI64(result, ret);
     const release = try f.store.addCFStmt(.{ .decref = .{
         .value = field,
-        .rc = .{ .boxy = desc },
+        .rc = try f.store.addRcHelperRef(.{ .boxy = desc }),
         .next = result_assign,
     } }, .test_fixture);
     const retain = try f.store.addCFStmt(.{ .incref = .{
         .value = field,
-        .rc = .{ .boxy = desc },
+        .rc = try f.store.addRcHelperRef(.{ .boxy = desc }),
         .next = release,
     } }, .test_fixture);
     const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
@@ -8521,7 +8528,9 @@ fn buildPayloadViewDismantledBeforeJoin(f: *CertifyTest, retain: bool) Allocator
             .variant_index = 1,
             .tag_discriminant = 1,
         } },
-        .take_kind = .take,
+        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+            .take_kind = .take,
+        }),
         .next = alias_copy,
     } }, .test_fixture);
     const make_tag = try f.store.addCFStmt(.{ .assign_tag = .{
@@ -8601,7 +8610,9 @@ fn buildTakenPayloadInInnerJoinFrame(f: *CertifyTest, release_both: bool) Alloca
             .variant_index = 1,
             .tag_discriminant = 1,
         } },
-        .take_kind = .take,
+        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+            .take_kind = .take,
+        }),
         .next = retain_payload,
     } }, .test_fixture);
     const make_tag = try f.store.addCFStmt(.{ .assign_tag = .{
@@ -9079,7 +9090,9 @@ fn takeFieldStmt(f: *CertifyTest, target: LIR.LocalId, source: LIR.LocalId, fiel
     return try f.store.addCFStmt(.{ .assign_ref = .{
         .target = target,
         .op = .{ .field = .{ .source = source, .field_idx = field_idx } },
-        .take_kind = .take,
+        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+            .take_kind = .take,
+        }),
         .next = next,
     } }, .test_fixture);
 }
@@ -9119,7 +9132,9 @@ test "certify carries a released struct representation across a join for scalar 
     const alias_shell = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
         .op = .{ .local = record },
-        .residual_shell_absent_fields = try f.store.addU32Span(&.{0}),
+        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+            .residual_shell_absent_fields = try f.store.addU32Span(&.{0}),
+        }),
         .next = read_scalar,
     } }, .test_fixture);
     const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
@@ -9231,7 +9246,9 @@ test "certify accepts shell fields transferred before their lazy claims settle" 
     const alias_shell = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
         .op = .{ .local = record },
-        .residual_shell_absent_fields = try f.store.addU32Span(&.{0}),
+        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+            .residual_shell_absent_fields = try f.store.addU32Span(&.{0}),
+        }),
         .next = read_scalar,
     } }, .test_fixture);
     const body = try fieldReadStmt(&f, field, record, 0, alias_shell);
@@ -9455,7 +9472,9 @@ test "certify accepts a retained record moved whole after a field take across a 
         const take_before_jump = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = taken,
             .op = .{ .field = .{ .source = record, .field_idx = 0 } },
-            .take_kind = .take,
+            .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+                .take_kind = .take,
+            }),
             .next = release_before_jump,
         } }, .test_fixture);
 
@@ -9463,7 +9482,9 @@ test "certify accepts a retained record moved whole after a field take across a 
         const take_after_move = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = taken,
             .op = .{ .field = .{ .source = record, .field_idx = 0 } },
-            .take_kind = .take,
+            .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+                .take_kind = .take,
+            }),
             .next = release_after_move,
         } }, .test_fixture);
         const move_before_take = try f.store.addCFStmt(.{ .assign_struct = .{
@@ -9496,7 +9517,9 @@ test "certify accepts a retained record moved whole after a field take across a 
         const body = if (projected) try f.store.addCFStmt(.{ .assign_ref = .{
             .target = record,
             .op = .{ .field = .{ .source = parent, .field_idx = 0 } },
-            .take_kind = .take,
+            .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+                .take_kind = .take,
+            }),
             .next = alias,
         } }, .test_fixture) else alias;
         _ = try f.addProc(&.{ if (projected) parent else record, cond }, body, holder_layout);
@@ -9562,7 +9585,9 @@ test "certify whole consumption of dismantled projections requires an available 
                 var body = try f.store.addCFStmt(.{ .assign_ref = .{
                     .target = taken,
                     .op = .{ .field = .{ .source = record, .field_idx = 0 } },
-                    .take_kind = .take,
+                    .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+                        .take_kind = .take,
+                    }),
                     .next = try f.decrefStmt(taken, .str, consume),
                 } }, .test_fixture);
                 // Releasing the parent after the retain leaves only the unit
@@ -9573,7 +9598,9 @@ test "certify whole consumption of dismantled projections requires an available 
                     body = try f.store.addCFStmt(.{ .assign_ref = .{
                         .target = locals[index],
                         .op = .{ .field = .{ .source = locals[index + 1], .field_idx = 0 } },
-                        .take_kind = .take,
+                        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+                            .take_kind = .take,
+                        }),
                         .next = body,
                     } }, .test_fixture);
                 }
@@ -9863,7 +9890,9 @@ test "certify validates wide residual shell identities across a join" {
         const alias_shell = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = alias,
             .op = .{ .local = record },
-            .residual_shell_absent_fields = try f.store.addU32Span(absent),
+            .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+                .residual_shell_absent_fields = try f.store.addU32Span(absent),
+            }),
             .next = read_scalar,
         } }, .test_fixture);
         const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
@@ -9942,7 +9971,9 @@ fn buildNestedViewTakes(f: *CertifyTest, second_view_shell: []const u32, release
     const read_second_view = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = second_view,
         .op = .{ .field = .{ .source = outer, .field_idx = 0 } },
-        .residual_shell_absent_fields = try f.store.addU32Span(second_view_shell),
+        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+            .residual_shell_absent_fields = try f.store.addU32Span(second_view_shell),
+        }),
         .next = take_a,
     } }, .test_fixture);
     const release_b = try f.decrefStmt(b, .str, read_second_view);

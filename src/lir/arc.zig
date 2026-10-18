@@ -2048,9 +2048,7 @@ const Inserter = struct {
                 const on_match = try self.retainLocalIfRcCount(source.source, str_plan.capture_retain_count, .{ .stmt = str_plan.stmt, .reason = .str_match_capture }, state.child_results[0]);
                 tail = try self.addCFStmtAtSource(str_plan.stmt, .{ .str_match = .{
                     .source = source.source,
-                    .prefix = source.prefix,
-                    .steps = source.steps,
-                    .end = source.end,
+                    .data = source.data,
                     .on_match = on_match,
                     .on_miss = state.child_results[1],
                 } });
@@ -2221,13 +2219,15 @@ const Inserter = struct {
                 break :blk try self.store.addCFStmt(.{ .assign_ref = .{
                     .target = assign.target,
                     .op = assign.op,
-                    .take_kind = if (step.take_assign_ref_target) .take else .none,
-                    .residual_shell_absent_fields = try self.materializeResidualShellAbsentFields(
-                        assign,
-                        step.residual_shell_absent_mask,
-                        step.residual_shell_all_rc_fields_absent,
-                        step.residual_shell_view,
-                    ),
+                    .extra = try self.store.addOptionalStmtRow(LIR.RefExtra, .{
+                        .take_kind = if (step.take_assign_ref_target) .take else .none,
+                        .residual_shell_absent_fields = try self.materializeResidualShellAbsentFields(
+                            assign,
+                            step.residual_shell_absent_mask,
+                            step.residual_shell_all_rc_fields_absent,
+                            step.residual_shell_view,
+                        ),
+                    }),
                     .next = next,
                 } }, origin);
             },
@@ -2235,22 +2235,28 @@ const Inserter = struct {
             // some uniqueness verdict rests on call the fresh procedure, and
             // every other one keeps the static datum, its fresh procedure
             // leaving with the next reachability pass.
-            .assign_literal => |assign| if (self.store.stmtRowOrDefault(assign.extra).fresh_alternative != null and self.solution.fresh_reads.isSet(@backingInt(at)))
+            .assign_literal => |assign| if (self.store.literalExtra(assign.value).fresh_alternative != null and self.solution.fresh_reads.isSet(@backingInt(at)))
                 try self.store.addCFStmt(.{ .assign_call = .{
                     .target = assign.target,
-                    .proc = self.store.stmtRowOrDefault(assign.extra).fresh_alternative.?,
+                    .proc = self.store.literalExtra(assign.value).fresh_alternative.?,
                     .args = LIR.LocalSpan.empty(),
                     .next = next,
                 } }, origin)
-            else
-                try self.store.addCFStmt(.{ .assign_literal = .{
+            else blk: {
+                var value = assign.value;
+                if (value == .static_data) {
+                    var copies = self.store.stmtRowOrDefault(value.static_data.copies);
+                    if (copies.fresh_alternative != null) {
+                        copies.fresh_alternative = null;
+                        value.static_data.copies = try self.store.addOptionalStmtRow(LIR.LiteralExtra, copies);
+                    }
+                }
+                break :blk try self.store.addCFStmt(.{ .assign_literal = .{
                     .target = assign.target,
-                    .value = assign.value,
-                    .extra = try self.store.addOptionalStmtRow(LIR.LiteralExtra, .{
-                        .list_len = self.store.stmtRowOrDefault(assign.extra).list_len,
-                    }),
+                    .value = value,
                     .next = next,
-                } }, origin),
+                } }, origin);
+            },
             .assign_call => |assign| blk: {
                 if (step.retain_call_result) next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .borrowed_call_result }, next);
                 if (step.replaces_frame) {
@@ -2348,15 +2354,17 @@ const Inserter = struct {
                     rc_effect = op.rcEffect();
                     rc_effect_row = null;
                 }
+                var extra = self.store.stmtRowOrDefault(assign.extra);
+                const extra_row = if (extra.unique_args == step.unique_args) assign.extra else row: {
+                    extra.unique_args = step.unique_args;
+                    break :row try self.store.addOptionalStmtRow(LIR.LowLevelExtra, extra);
+                };
                 break :blk try self.store.addCFStmt(.{ .assign_low_level = .{
                     .target = assign.target,
                     .op = op,
                     .rc_effect = rc_effect_row orelse try self.store.addRcEffect(rc_effect),
-                    .unique_args = step.unique_args,
                     .args = assign.args,
-                    .interchangeable = assign.interchangeable,
-                    .map_output_elem = assign.map_output_elem,
-                    .simd_concat_count = assign.simd_concat_count,
+                    .extra = extra_row,
                     .next = next,
                 } }, origin);
             },
@@ -3088,8 +3096,9 @@ const Inserter = struct {
                     try self.pushBranchSolveSegment(tasks, switch_stmt.uninitialized_branch, &uninitialized_owned, segment.ctx, child_plans.uninitialized_plan);
                     return;
                 },
-                .str_match => |str_match| {
-                    const terminal = try self.prepareStrMatchPlan(segment.plan_index, segment.cursor, str_match.on_match, str_match.on_miss);
+                .str_match => |str_match_stmt| {
+                    const str_match = self.store.stmtRow(str_match_stmt.data);
+                    const terminal = try self.prepareStrMatchPlan(segment.plan_index, segment.cursor, str_match_stmt.on_match, str_match_stmt.on_miss);
                     const child_plans = terminal.str_match;
                     var match_owned = try cloneOwnedSetWith(self.solve_allocator, &segment.owned);
                     const steps = self.store.getStrMatchSteps(str_match.steps);
@@ -3100,8 +3109,8 @@ const Inserter = struct {
                             .view => |local| try self.placeUnit(&match_owned, local),
                         }
                     }
-                    try self.pushBranchSolveSegment(tasks, str_match.on_match, &match_owned, segment.ctx, child_plans.match_plan);
-                    try self.pushBranchSolveSegment(tasks, str_match.on_miss, &segment.owned, segment.ctx, child_plans.miss_plan);
+                    try self.pushBranchSolveSegment(tasks, str_match_stmt.on_match, &match_owned, segment.ctx, child_plans.match_plan);
+                    try self.pushBranchSolveSegment(tasks, str_match_stmt.on_miss, &segment.owned, segment.ctx, child_plans.miss_plan);
                     return;
                 },
                 .str_match_set => |str_match_set| {
@@ -3757,9 +3766,11 @@ const Inserter = struct {
     fn prepareStrMatchPlan(self: *Inserter, plan_index: u32, stmt: LIR.CFStmtId, match_start: LIR.CFStmtId, miss_start: LIR.CFStmtId) ResourceError!*ArcPlanTerminal {
         const previous_terminal = self.arcPlan(plan_index).previous_terminal;
         const children = switch (previous_terminal) {
-            .str_match => |previous| blk: {
-                if (previous.stmt != stmt) arcInvariant("ARC string-match plan changed structural shape");
-                break :blk .{ previous.match_plan, previous.miss_plan };
+            .str_match => |previous| blk_previous: {
+                break :blk_previous blk: {
+                    if (previous.stmt != stmt) arcInvariant("ARC string-match plan changed structural shape");
+                    break :blk .{ previous.match_plan, previous.miss_plan };
+                };
             },
             .none,
             .stop,
@@ -3775,7 +3786,7 @@ const Inserter = struct {
         if (self.arcPlan(children[0]).start != match_start or self.arcPlan(children[1]).start != miss_start) {
             arcInvariant("ARC string-match child plan changed its structured start");
         }
-        const capture_retain_count = self.strMatchCaptureRetainCount(self.store.getCFStmtImmediate(stmt).str_match.steps);
+        const capture_retain_count = self.strMatchCaptureRetainCount(self.store.stmtRow(self.store.getCFStmtImmediate(stmt).str_match.data).steps);
         self.arcPlan(plan_index).terminal = .{ .str_match = .{
             .stmt = stmt,
             .match_plan = children[0],
@@ -6894,8 +6905,9 @@ const Inserter = struct {
                     try self.noteLivenessUseLocal(reads, switch_stmt.cond);
                     try self.noteLivenessUseLocal(reads, switch_stmt.payload);
                 },
-                .str_match => |str_match| {
-                    try self.noteLivenessUseLocal(reads, str_match.source);
+                .str_match => |str_match_stmt| {
+                    const str_match = self.store.stmtRow(str_match_stmt.data);
+                    try self.noteLivenessUseLocal(reads, str_match_stmt.source);
                     try self.attachStrMatchEdgeKills(&graph, node_index, str_match.steps, 0);
                 },
                 .str_match_set => |str_match_set| {
@@ -6908,7 +6920,7 @@ const Inserter = struct {
                 },
                 .boxy_tag_match => |tag_match| {
                     try self.noteLivenessUseLocal(reads, tag_match.source);
-                    if (tag_match.source_desc.localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
+                    if (self.store.stmtRow(tag_match.source_desc).localOrNull()) |local| try self.noteLivenessUseLocal(reads, local);
                 },
                 .ret => |ret_stmt| try self.noteLivenessUseLocal(reads, ret_stmt.value),
                 .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| {
@@ -7192,7 +7204,7 @@ const Inserter = struct {
         const rc = self.rcHelperForLocal(.decref, local);
         return try self.store.addCFStmt(.{ .decref = .{
             .value = local,
-            .rc = rc,
+            .rc = try self.store.addRcHelperRef(rc),
             .atomicity = self.rcAtomicity(local),
             .next = next,
         } }, self.rcOrigin(cause, .decref, local));
@@ -7231,7 +7243,7 @@ const Inserter = struct {
     ) ResourceError!LIR.CFStmtId {
         const whole = try self.store.addCFStmt(.{ .decref = .{
             .value = local,
-            .rc = self.rcHelperForLocal(.decref, local),
+            .rc = try self.store.addRcHelperRef(self.rcHelperForLocal(.decref, local)),
             .atomicity = self.rcAtomicity(local),
             .next = next,
         } }, self.rcOrigin(cause, .decref, local));
@@ -7375,7 +7387,9 @@ const Inserter = struct {
                 tail = try self.store.addCFStmt(.{ .assign_ref = .{
                     .target = temp,
                     .op = read_op,
-                    .residual_shell_absent_fields = try self.store.addU32Span(absent.items),
+                    .extra = try self.store.addOptionalStmtRow(LIR.RefExtra, .{
+                        .residual_shell_absent_fields = try self.store.addU32Span(absent.items),
+                    }),
                     .next = tail,
                 } }, self.dismantleOrigin(cause, local));
                 continue;
@@ -7386,14 +7400,16 @@ const Inserter = struct {
             }
             tail = try self.store.addCFStmt(.{ .decref = .{
                 .value = temp,
-                .rc = LIR.RcHelper.fromConcrete(rc),
+                .rc = try self.store.addRcHelperRef(LIR.RcHelper.fromConcrete(rc)),
                 .atomicity = atomicity,
                 .next = tail,
             } }, self.rcOrigin(cause, .decref, local));
             tail = try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = temp,
                 .op = read_op,
-                .take_kind = .take,
+                .extra = try self.store.addOptionalStmtRow(LIR.RefExtra, .{
+                    .take_kind = .take,
+                }),
                 .next = tail,
             } }, self.dismantleOrigin(cause, local));
         }
@@ -7676,7 +7692,7 @@ fn addCanonicalRetain(
     }
     return try store.addCFStmt(.{ .incref = .{
         .value = local,
-        .rc = rc,
+        .rc = try store.addRcHelperRef(rc),
         .count = canonical_count,
         .atomicity = atomicity,
         .next = canonical_next,
@@ -7818,7 +7834,7 @@ test "RC elision removes adjacent retain release pairs" {
     const ret = try f.ret(value);
     const release = try f.store.addCFStmt(.{ .decref = .{
         .value = value,
-        .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .str }),
+        .rc = try f.store.addRcHelperRef(LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .str })),
         .next = ret,
     } }, .test_fixture);
     const retain = try addCanonicalRetain(
@@ -7841,7 +7857,7 @@ test "RC elision lowers adjacent multi retain count" {
     const ret = try f.ret(value);
     const release = try f.store.addCFStmt(.{ .decref = .{
         .value = value,
-        .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .str }),
+        .rc = try f.store.addRcHelperRef(LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .str })),
         .next = ret,
     } }, .test_fixture);
     const retain = try addCanonicalRetain(
@@ -8181,11 +8197,13 @@ const ArcTest = struct {
         });
         return try self.store.addCFStmt(.{ .str_match = .{
             .source = source,
-            .prefix = try self.store.insertStringView(prefix, 0, @intCast(prefix.len)),
-            .steps = steps,
-            .end = .tail,
             .on_match = on_match,
             .on_miss = on_miss,
+            .data = try self.store.addStmtRow(LIR.StrMatchData, .{
+                .prefix = try self.store.insertStringView(prefix, 0, @intCast(prefix.len)),
+                .steps = steps,
+                .end = .tail,
+            }),
         } }, .test_fixture);
     }
 
@@ -8361,7 +8379,7 @@ const ArcTest = struct {
         for (0..self.store.cfStmtCount()) |stmt_index| {
             const stmt = self.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
             if (stmt == .assign_low_level and stmt.assign_low_level.target == target) {
-                mask |= stmt.assign_low_level.unique_args;
+                mask |= self.store.stmtRowOrDefault(stmt.assign_low_level.extra).unique_args;
             }
         }
         return mask;
@@ -8440,7 +8458,7 @@ const ArcTest = struct {
             try visited.put(current, {});
             switch (self.store.getCFStmtImmediate(current).*) {
                 .assign_low_level => |assign| if (assign.target == target) {
-                    mask |= assign.unique_args;
+                    mask |= self.store.stmtRowOrDefault(assign.extra).unique_args;
                 },
                 .init_uninitialized,
                 .assign_ref,
@@ -10716,7 +10734,7 @@ test "RC residual shell metadata uses semantic field indices" {
     for (0..f.store.cfStmtCount()) |stmt_index| {
         const stmt = f.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
         if (stmt != .assign_ref or stmt.assign_ref.target != shell) continue;
-        const absent = f.store.getU32Span(stmt.assign_ref.residual_shell_absent_fields);
+        const absent = f.store.getU32Span(f.store.stmtRowOrDefault(stmt.assign_ref.extra).residual_shell_absent_fields);
         if (absent.len == 0) continue;
         try testing.expectEqual(@as(usize, 1), absent.len);
         try testing.expectEqual(@as(u32, 2), GuardedList.at(absent, 0));
@@ -10732,7 +10750,7 @@ fn residualShellOf(f: *const ArcTest, target: LIR.LocalId) Allocator.Error!?[]co
     for (0..f.store.cfStmtCount()) |stmt_index| {
         const stmt = f.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
         if (stmt != .assign_ref or stmt.assign_ref.target != target) continue;
-        const absent = f.store.getU32Span(stmt.assign_ref.residual_shell_absent_fields);
+        const absent = f.store.getU32Span(f.store.stmtRowOrDefault(stmt.assign_ref.extra).residual_shell_absent_fields);
         if (absent.len == 0) continue;
         const out = try testing.allocator.alloc(u32, absent.len);
         for (out, 0..) |*slot, index| slot.* = GuardedList.at(absent, index);
@@ -10831,7 +10849,7 @@ test "RC residual release reads a partly taken nested record as a view" {
         const stmt = f.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
         if (stmt != .assign_ref or stmt.assign_ref.op != .field) continue;
         if (stmt.assign_ref.op.field.source != outer or stmt.assign_ref.target == view) continue;
-        const absent = f.store.getU32Span(stmt.assign_ref.residual_shell_absent_fields);
+        const absent = f.store.getU32Span(f.store.stmtRowOrDefault(stmt.assign_ref.extra).residual_shell_absent_fields);
         if (absent.len == 0) continue;
         try testing.expectEqual(@as(usize, 1), absent.len);
         try testing.expectEqual(@as(u32, 1), GuardedList.at(absent, 0));

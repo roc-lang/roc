@@ -2117,7 +2117,7 @@ const Pass = struct {
                 },
                 .boxy_tag_match => |s| {
                     try self.noteUse(s.source);
-                    try self.noteDescUse(s.source_desc);
+                    try self.noteDescUse(self.store.stmtRow(s.source_desc));
                 },
                 .assign_call_dict => |assign_stmt| {
                     const assign = self.store.stmtRow(assign_stmt.data);
@@ -2192,8 +2192,9 @@ const Pass = struct {
                 .expect => |s| try self.noteUse(s.condition),
                 .switch_stmt => |s| try self.noteUse(s.cond),
                 .switch_initialized_payload => |s| try self.noteUse(s.cond),
-                .str_match => |s| {
-                    try self.noteUse(s.source);
+                .str_match => |s_stmt| {
+                    const s = self.store.stmtRow(s_stmt.data);
+                    try self.noteUse(s_stmt.source);
                     const steps = self.store.getStrMatchSteps(s.steps);
                     for (0..steps.len) |index| {
                         const step = GuardedList.at(steps, index);

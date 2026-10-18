@@ -169,10 +169,11 @@ fn tagPayload(target: LocalId, s: anytype) Plan {
     });
 }
 
-/// `roc_boxy_tag_match(source, source_layout, source_desc, tag_name) -> bool`.
-pub fn tagMatch(s: anytype) Plan {
+/// `roc_boxy_tag_match(source, source_layout, source_desc, tag_name) -> bool`,
+/// with the match's descriptor resolved from its row.
+pub fn tagMatch(s: anytype, source_desc: LIR.BoxyDescRef) Plan {
     return .init(.tag_match, undefined, .none, &.{
-        .{ .value = s.source }, .{ .local_layout = s.source }, .{ .desc = s.source_desc }, .{ .imm32 = @backingInt(s.tag_name) },
+        .{ .value = s.source }, .{ .local_layout = s.source }, .{ .desc = source_desc }, .{ .imm32 = @backingInt(s.tag_name) },
     });
 }
 

@@ -55,7 +55,7 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
         // neither variant has a payload, so the copies drop the release.
         const arm_start = if (phase == .tag_fusion) try store.addCFStmt(.{ .decref = .{
             .value = outer,
-            .rc = core.LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .bool }),
+            .rc = .{ .concrete = .{ .op = .decref, .layout_idx = .bool } },
             .atomicity = .single_thread,
             .next = initialize,
         } }, .test_fixture) else initialize;
@@ -960,7 +960,7 @@ test "LIR proc pass range phase admits a body whose only provable statement is a
 
     try passes.run(testing.allocator, &store, &layouts, .range, null, null);
 
-    try testing.expectEqual(@as(?u5, 3), store.getCFStmtImmediate(shift).assign_low_level.simd_concat_count);
+    try testing.expectEqual(@as(?u5, 3), store.stmtRowOrDefault(store.getCFStmtImmediate(shift).assign_low_level.extra).simd_concat_count);
 }
 
 test "LIR store records an unsigned comparison shape only for range-tracked operand layouts" {

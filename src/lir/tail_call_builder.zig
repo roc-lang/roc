@@ -144,7 +144,7 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
         // A producer can move a provisional call and retire its old node.
         if (stmt != .assign_call) continue;
         const call = stmt.assign_call;
-        if (call.tail_call != null) continue;
+        if (call.tail_call.isSite()) continue;
         // A runtime result descriptor is another call output. It is returned
         // with the value only when the callee writes it to the descriptor
         // local this procedure returns, which is the value's own.
@@ -158,7 +158,7 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
         // A self-call that returns a descriptor replaces its frame like a
         // call to any other procedure; the loop form carries only the value.
         if (call.proc == proc and store.stmtRowOrDefault(call.extra).out_desc == null) {
-            store.getCFStmtPtr(id).assign_call.tail_call = .{ .next = head };
+            store.getCFStmtPtr(id).assign_call.tail_call = .site(head);
             head = id;
         } else if (store.getCFStmtImmediate(call.next).* != .ret and store.getLocal(call.target).layout_idx == ret_layout) {
             const ret = try store.addCFStmt(.{ .ret = .{ .value = call.target } }, store.stmtOrigin(id));

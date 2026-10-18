@@ -18616,27 +18616,42 @@ same signature, which is the wrapper's C ABI.
 ### Statement Storage
 
 Every LIR statement occupies one fixed-size slot in the store's statement
-column: 48 bytes, holding the statement's kind and at most 44 bytes of inline
+column: 36 bytes, holding the statement's kind and at most 32 bytes of inline
 fields aligned to 4 bytes. The LIR store is alive through the program's later
 memory peaks (code generation for compile-time evaluation, pack compiles, and
 dev builds), so a statement kind's inline fields are chosen by how often they
-are read and set, not by what the largest kind needs.
+are read and set, not by what the largest kind needs. No id, index, or count
+is narrowed below the width its owner allows to fit a slot (see
+"Representation Capacity"); a field that does not fit moves out of line
+instead.
 
 Fields that do not fit live in out-of-line rows. A statement names a row by a
 `LIR.StmtRowId(Row)`, and each row type has its own column in the store
 (`LirStore.stmt_row_types`). Rows hold:
 
 - the payload of a rare, large statement kind (Boxy value statements, erased
-  calls, packed erased functions, dictionary calls, and conditional releases).
-  The statement keeps its target, its successor, and the few fields generic
-  statement walkers read inline; every other field is in the row
+  calls, packed erased functions, dictionary calls, and conditional releases)
+  and a string match's pattern. The statement keeps its target, its
+  successors, and the few fields generic statement walkers read inline;
+  every other field is in the row
 - a low-level operation's reference-count effect, which is larger than every
   inline payload
 - the rarely set fields of a common kind: a call's descriptors and pending
-  return, a literal's fresh form and stated length, a join's
-  maybe-uninitialized environment, and a tag's descriptor. Such a row is
-  optional: `none` names no row, meaning the tag has no descriptor or every
-  field of the row has its default (`optionalStmtRow`, `stmtRowOrDefault`)
+  return; the ownership facts ARC stamps on a reference read; the uniqueness
+  proofs and single-operation facts of a low-level operation; a static data
+  read's list-of-copies facts; a join's maybe-uninitialized environment; and
+  the descriptors of tags, struct contents, Boxy tag matches, and Boxy
+  reference-count helpers.
+  Such a row is optional: `none` names no row, meaning there is no
+  descriptor or every field of the row has its default (`optionalStmtRow`,
+  `stmtRowOrDefault`)
+
+Optional inline references use types that reserve their own absent values
+rather than Zig optionals, which would double their size: a call's
+self-tail link is a `TailCallLink`, whose `none` and `last` tags occupy the
+top two `CFStmtId` values (so the statement count stays below them), and an
+incref, decref, or free names its helper by an `RcHelperRef`, which keeps a
+concrete layout helper inline.
 
 Rows are immutable. A rewrite that changes a field adds a new row and points
 the statement at it, and statements copied from one another share their rows.

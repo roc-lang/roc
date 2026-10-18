@@ -632,7 +632,7 @@ const OutcomeFixture = struct {
                 const stmt = s.getCFStmt(cursor);
                 if (stmt == .assign_low_level) {
                     try testing.expectEqual(core.LIR.LowLevel.list_reverse, stmt.assign_low_level.op);
-                    try testing.expectEqual(@as(u64, if (proc == 0) 0 else 1), stmt.assign_low_level.unique_args);
+                    try testing.expectEqual(@as(u64, if (proc == 0) 0 else 1), s.stmtRowOrDefault(stmt.assign_low_level.extra).unique_args);
                     break;
                 }
                 if (stmt == .switch_stmt) {

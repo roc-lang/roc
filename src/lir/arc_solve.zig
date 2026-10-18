@@ -3081,7 +3081,7 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
         .assign_struct => |assign| {
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
             try solver.unique_facts.append(allocator, .{ .birth = assign.target });
-            if (assign.contents_desc) |desc| {
+            if (store.optionalStmtRow(assign.contents_desc)) |desc| {
                 try liftBoxyDescRead(solver, desc);
                 if (desc.localOrNull()) |local| try liftVisibilityLink(solver, assign.target, local);
             }
@@ -3160,16 +3160,17 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             try solver.unique_facts.append(allocator, .{ .read = switch_stmt.cond });
         },
         .switch_initialized_payload => |switch_stmt| try solver.unique_facts.append(allocator, .{ .read = switch_stmt.cond }),
-        .str_match => |str_match| {
-            try solver.unique_facts.append(allocator, .{ .read = str_match.source });
+        .str_match => |str_match_stmt| {
+            const str_match = store.stmtRow(str_match_stmt.data);
+            try solver.unique_facts.append(allocator, .{ .read = str_match_stmt.source });
             const steps = store.getStrMatchSteps(str_match.steps);
             for (0..GuardedList.borrowLen(steps)) |step_index| {
                 const step = GuardedList.at(steps, step_index);
                 switch (step.capture) {
                     .discard => {},
                     .view => |local| {
-                        try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = local, .source = str_match.source } });
-                        try liftVisibilityLink(solver, local, str_match.source);
+                        try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = local, .source = str_match_stmt.source } });
+                        try liftVisibilityLink(solver, local, str_match_stmt.source);
                         try solver.unique_facts.append(allocator, .{ .foreign = local });
                     },
                 }
@@ -3177,7 +3178,7 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
         },
         .boxy_tag_match => |tag_match| {
             try solver.unique_facts.append(allocator, .{ .read = tag_match.source });
-            try liftBoxyDescRead(solver, tag_match.source_desc);
+            try liftBoxyDescRead(solver, store.stmtRow(tag_match.source_desc));
         },
         .str_match_set => |str_match_set| {
             try solver.unique_facts.append(allocator, .{ .read = str_match_set.source });
@@ -3560,7 +3561,7 @@ fn computeVisibilityFromLift(
                 }
             },
             .assign_struct => |assign| {
-                if (assign.contents_desc) |contents_desc| {
+                if (store.optionalStmtRow(assign.contents_desc)) |contents_desc| {
                     if (contents_desc.localOrNull()) |local| {
                         addEdge(&sets, rc_local, @backingInt(assign.target), @backingInt(local));
                     }
@@ -3632,13 +3633,14 @@ fn computeVisibilityFromLift(
                 }
                 seedLocal(&visible, rc_local, @backingInt(assign_stmt.target));
             },
-            .str_match => |str_match| {
+            .str_match => |str_match_stmt| {
+                const str_match = store.stmtRow(str_match_stmt.data);
                 const steps = store.getStrMatchSteps(str_match.steps);
                 for (0..GuardedList.borrowLen(steps)) |step_index| {
                     const step = GuardedList.at(steps, step_index);
                     switch (step.capture) {
                         .discard => {},
-                        .view => |local| addEdge(&sets, rc_local, @backingInt(local), @backingInt(str_match.source)),
+                        .view => |local| addEdge(&sets, rc_local, @backingInt(local), @backingInt(str_match_stmt.source)),
                     }
                 }
             },
@@ -5768,7 +5770,7 @@ fn computeUniquenessDetailed(
                     // A read of a static list of copies that names a fresh
                     // form is a birth if the read takes that form; which
                     // reads do is settled from where their values reach.
-                    .static_data => if (store.stmtRowOrDefault(assign.extra).fresh_alternative != null) {
+                    .static_data => if (store.literalExtra(assign.value).fresh_alternative != null) {
                         marks.noteBirth(&born, assign.target);
                         if (marks.indexOf(assign.target)) |target| try candidate_defs.append(allocator, .{ .stmt = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))), .target = target });
                     } else {
@@ -5964,7 +5966,8 @@ fn computeUniquenessDetailed(
                     marks.destroy(&destroyed, arg);
                 }
             },
-            .str_match => |str_match| {
+            .str_match => |str_match_stmt| {
+                const str_match = store.stmtRow(str_match_stmt.data);
                 const steps = store.getStrMatchSteps(str_match.steps);
                 for (0..GuardedList.borrowLen(steps)) |step_index| {
                     const step = GuardedList.at(steps, step_index);
@@ -6681,7 +6684,7 @@ fn noteFieldRead(
     const container = marks.indexOf(container_local) orelse return;
     const take = switch (takes) {
         .none => false,
-        .stamped => store.getCFStmtImmediate(@fromBackingInt(@intCast(stmt))).assign_ref.take_kind == .take,
+        .stamped => store.stmtRowOrDefault(store.getCFStmtImmediate(@fromBackingInt(@intCast(stmt))).assign_ref.extra).take_kind == .take,
         .set => |set| set.isSet(stmt),
     };
     try reads.append(allocator, .{ .container = container, .target = target, .field = field, .stmt = stmt, .take = take });
@@ -7546,16 +7549,20 @@ test "uniqueness carries a candidate read's origin through a returned record fie
     const take = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = first,
         .op = .{ .field = .{ .source = got, .field_idx = 0 } },
-        .take_kind = .take,
+        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+            .take_kind = .take,
+        }),
         .next = check,
     } }, .test_fixture);
     const call = try f.call(got, callee, &.{candidate}, take);
     const read = try f.store.addCFStmt(.{ .assign_literal = .{
         .target = candidate,
-        .value = .{ .static_data = static_list },
-        .extra = try f.store.addOptionalStmtRow(LIR.LiteralExtra, .{
-            .fresh_alternative = fresh_form,
-        }),
+        .value = .{ .static_data = .{
+            .id = static_list,
+            .copies = try f.store.addOptionalStmtRow(LIR.LiteralExtra, .{
+                .fresh_alternative = fresh_form,
+            }),
+        } },
         .next = call,
     } }, .test_fixture);
     _ = try f.proc(&.{}, read, f.list);
@@ -7568,16 +7575,20 @@ test "uniqueness carries a candidate read's origin through a returned record fie
     const idle_take = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = idle_first,
         .op = .{ .field = .{ .source = idle_got, .field_idx = 0 } },
-        .take_kind = .take,
+        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+            .take_kind = .take,
+        }),
         .next = try f.ret(idle_first),
     } }, .test_fixture);
     const idle_call = try f.call(idle_got, callee, &.{idle}, idle_take);
     const idle_read = try f.store.addCFStmt(.{ .assign_literal = .{
         .target = idle,
-        .value = .{ .static_data = static_list },
-        .extra = try f.store.addOptionalStmtRow(LIR.LiteralExtra, .{
-            .fresh_alternative = fresh_form,
-        }),
+        .value = .{ .static_data = .{
+            .id = static_list,
+            .copies = try f.store.addOptionalStmtRow(LIR.LiteralExtra, .{
+                .fresh_alternative = fresh_form,
+            }),
+        } },
         .next = idle_call,
     } }, .test_fixture);
     _ = try f.proc(&.{}, idle_read, f.list);
@@ -7643,7 +7654,9 @@ test "uniqueness vetoes a join cell's field that a call definition does not vouc
     const take = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = first,
         .op = .{ .field = .{ .source = cell, .field_idx = 0 } },
-        .take_kind = .take,
+        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
+            .take_kind = .take,
+        }),
         .next = try f.ret(first),
     } }, .test_fixture);
     const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);

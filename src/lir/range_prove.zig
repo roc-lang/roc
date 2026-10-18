@@ -489,10 +489,12 @@ test "range prove reads a static list of copies' stated item count as its length
                 .target = list,
                 // The prover reads only the literal's stated length, never its
                 // static data.
-                .value = .{ .static_data = undefined },
-                .extra = try store.addOptionalStmtRow(LIR.LiteralExtra, .{
-                    .list_len = list_len,
-                }),
+                .value = .{ .static_data = .{
+                    .id = undefined,
+                    .copies = try store.addOptionalStmtRow(LIR.LiteralExtra, .{
+                        .list_len = list_len,
+                    }),
+                } },
                 .next = measure,
             },
         }, .test_fixture);
@@ -4753,7 +4755,7 @@ const Pass = struct {
                     },
                     .assign_literal => |s| {
                         try self.visited.put(current, {});
-                        try self.modelLiteral(s.target, s.value, self.store.stmtRowOrDefault(s.extra).list_len);
+                        try self.modelLiteral(s.target, s.value, self.store.literalExtra(s.value).list_len);
                         current = s.next;
                     },
                     .assign_tag => |s| {
@@ -5099,7 +5101,8 @@ const Pass = struct {
         switch (s.op) {
             .simd_concat_shift_bytes => {
                 std.debug.assert(arg_count == 3);
-                if (s.simd_concat_count == null) {
+                const s_extra = self.store.stmtRowOrDefault(s.extra);
+                if (s_extra.simd_concat_count == null) {
                     if (try self.valueOf(GuardedList.at(args, 2))) |node| {
                         if (self.constValueOf(node)) |count| {
                             // Unreachable invalid-count arms can still be in
@@ -5107,7 +5110,10 @@ const Pass = struct {
                             // A node's window never rests on an assumption,
                             // so the count needs no verification round.
                             if (count >= 0 and count <= 16) {
-                                self.store.getCFStmtPtr(stmt).assign_low_level.simd_concat_count = @intCast(count);
+                                var extra = s_extra;
+                                extra.simd_concat_count = @intCast(count);
+                                const row = try self.store.addStmtRow(LIR.LowLevelExtra, extra);
+                                self.store.getCFStmtPtr(stmt).assign_low_level.extra = row;
                             }
                         }
                     }

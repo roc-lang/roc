@@ -862,7 +862,7 @@ pub const LiteralValue = union(enum) {
     /// descriptor's payload layout (`Dec`, `F64`, or `F32`) and boxes it into
     /// the dynamic-storage target.
     boxy_dynamic_frac_literal: StmtRowId(BoxyDynamicFracLiteral),
-    static_data: StaticDataId,
+    static_data: StaticDataLiteral,
     bytes_literal: ListLiteral,
     proc_ref: LirProcSpecId,
 };
@@ -1128,9 +1128,114 @@ pub const CallExtra = struct {
     returns_pending: ?PendingReturn = null,
 };
 
-/// The fields of `CFStmt.assign_literal` set only for a read of a
-/// compile-time list of copies of one value, held as static data in the
-/// literal's `value`, stored out of line.
+/// The ownership facts ARC stamps on a `CFStmt.assign_ref`, stored out of
+/// line.
+pub const RefExtra = struct {
+    take_kind: TakeKind = .none,
+    /// Semantic struct-field indices whose stored ownership units are
+    /// absent from a same-layout representation-shell alias. ARC writes
+    /// this exact path state; evaluators must not inspect those stale
+    /// field bytes as live values.
+    residual_shell_absent_fields: U32Span = .empty(),
+};
+
+/// The fields of `CFStmt.assign_low_level` that only particular operations
+/// set, stored out of line: ARC's uniqueness proofs for runtime uniqueness
+/// checks, and facts single operations consume.
+pub const LowLevelExtra = struct {
+    /// Bit i set => argument i is named by the op's
+    /// `may_runtime_uniqueness_check_args` and ARC emission proved its
+    /// runtime count check redundant: the argument's value was born
+    /// unique, its single ownership unit moves into this op (or is owned
+    /// here, for a check that only reads the count), and no borrow of it
+    /// is live here. Consumers may take the in-place path, or answer a
+    /// count check with true, without inspecting the count; the runtime
+    /// check is always sound, so a zero mask reproduces fully checked
+    /// behavior.
+    unique_args: u64 = 0,
+    /// For `list_map_can_reuse`: whether the input and output element
+    /// layouts are interchangeable in one allocation, computed per pointer
+    /// width. Resolved at codegen for the target being built—a `false`
+    /// width forces the op to a constant `0` (reuse statically impossible),
+    /// so the in-place branch is never taken there. Target-independent
+    /// because both widths are stored; ignored by every other op.
+    interchangeable: layout.WidthValues(bool) = layout.WidthValues(bool).both(true, true),
+    /// Committed output element layout for `list_map_can_reuse`. Consumers
+    /// with different storage representations use this explicit fact rather
+    /// than reconstructing the transform function return type.
+    map_output_elem: ?layout.Idx = null,
+    /// Exact in-range byte alignment count proved by range analysis.
+    /// Only `simd_concat_shift_bytes` uses this; null retains the dynamic
+    /// operation. Backends consume this fact without inspecting definitions.
+    simd_concat_count: ?u5 = null,
+};
+
+/// The pattern of a `CFStmt.str_match`, stored out of line.
+pub const StrMatchData = struct {
+    prefix: StrLiteral,
+    steps: StrMatchStepSpan,
+    end: StrPatternEnd,
+};
+
+/// A read of a static data value.
+pub const StaticDataLiteral = struct {
+    id: StaticDataId,
+    /// Set only for a read of a compile-time list of copies; `none`
+    /// otherwise.
+    copies: StmtRowId(LiteralExtra) = .none,
+};
+
+/// The reference-count helper of a `CFStmt.incref`, `decref`, or `free`:
+/// a concrete layout helper inline, or a Boxy descriptor helper whose
+/// descriptor is stored out of line.
+pub const RcHelperRef = union(enum) {
+    concrete: layout.RcHelper,
+    boxy: StmtRowId(BoxyDescRef),
+
+    pub fn concreteOrNull(self: RcHelperRef) ?layout.RcHelper {
+        return switch (self) {
+            .concrete => |helper| helper,
+            .boxy => null,
+        };
+    }
+};
+
+/// Whether a direct call is a producer-proven self-tail site, and the next
+/// such site in its procedure's chain. Self-tail sites are consumed before
+/// ARC; no backend tail-call inference is required.
+pub const TailCallLink = enum(u32) {
+    /// The call is not a self-tail site.
+    none = std.math.maxInt(u32),
+    /// The call is the last self-tail site of its chain.
+    last = std.math.maxInt(u32) - 1,
+    /// The call is a self-tail site; the value is the next site's
+    /// `CFStmtId`.
+    _,
+
+    /// The link of a self-tail site whose chain continues at `next`.
+    pub fn site(next_site: ?CFStmtId) TailCallLink {
+        const id = next_site orelse return .last;
+        return @fromBackingInt(@backingInt(id));
+    }
+
+    pub fn isSite(self: TailCallLink) bool {
+        return self != .none;
+    }
+
+    /// The next self-tail site after this one, which must be a site.
+    pub fn next(self: TailCallLink) ?CFStmtId {
+        std.debug.assert(self != .none);
+        if (self == .last) return null;
+        return @fromBackingInt(@backingInt(self));
+    }
+};
+
+/// The largest statement count, leaving the top two `CFStmtId` values for
+/// `TailCallLink`'s tags.
+pub const max_cf_stmt_count: u32 = std.math.maxInt(u32) - 1;
+
+/// The fields of a `LiteralValue.static_data` read set only for a
+/// compile-time list of copies of one value, stored out of line.
 pub const LiteralExtra = struct {
     /// The argument-free procedure that builds the same list fresh. ARC
     /// chooses one form per read—the static datum when nothing the value
@@ -1385,20 +1490,14 @@ pub const CFStmt = union(enum) {
     assign_ref: struct {
         target: LocalId,
         op: RefOp,
-        take_kind: TakeKind = .none,
-        /// Semantic struct-field indices whose stored ownership units are
-        /// absent from a same-layout representation-shell alias. ARC writes
-        /// this exact path state; evaluators must not inspect those stale
-        /// field bytes as live values.
-        residual_shell_absent_fields: U32Span = .empty(),
+        /// The ownership facts ARC stamps on the read; `none` when it stamps
+        /// none.
+        extra: StmtRowId(RefExtra) = .none,
         next: CFStmtId,
     },
     assign_literal: struct {
         target: LocalId,
         value: LiteralValue,
-        /// Set only for a read of a compile-time list of copies; `none`
-        /// otherwise.
-        extra: StmtRowId(LiteralExtra) = .none,
         next: CFStmtId,
     },
     assign_call: struct {
@@ -1410,7 +1509,7 @@ pub const CFStmt = union(enum) {
         is_cold: bool = false,
         /// Producer-proven self-tail site, linked for procedure finalization.
         /// Consumed before ARC; no backend tail-call inference is required.
-        tail_call: ?struct { next: ?CFStmtId } = null,
+        tail_call: TailCallLink = .none,
         /// Set by ARC emission on a call to a procedure in the caller's own
         /// call-graph SCC whose next statement returns `target`: the caller
         /// frame owns nothing afterwards, so every backend must replace that
@@ -1504,7 +1603,7 @@ pub const CFStmt = union(enum) {
     },
     boxy_tag_match: struct {
         source: LocalId,
-        source_desc: BoxyDescRef,
+        source_desc: StmtRowId(BoxyDescRef),
         tag_name: BoxyNameId,
         on_match: CFStmtId,
         on_miss: CFStmtId,
@@ -1519,31 +1618,8 @@ pub const CFStmt = union(enum) {
         op: LowLevel,
         /// The operation's reference-count effect, stored out of line.
         rc_effect: StmtRowId(LowLevel.RcEffect),
-        /// Bit i set => argument i is named by the op's
-        /// `may_runtime_uniqueness_check_args` and ARC emission proved its
-        /// runtime count check redundant: the argument's value was born
-        /// unique, its single ownership unit moves into this op (or is owned
-        /// here, for a check that only reads the count), and no borrow of it
-        /// is live here. Consumers may take the in-place path, or answer a
-        /// count check with true, without inspecting the count; the runtime
-        /// check is always sound, so a zero mask reproduces fully checked
-        /// behavior.
-        unique_args: u64 align(4) = 0,
-        /// For `list_map_can_reuse`: whether the input and output element
-        /// layouts are interchangeable in one allocation, computed per pointer
-        /// width. Resolved at codegen for the target being built—a `false`
-        /// width forces the op to a constant `0` (reuse statically impossible),
-        /// so the in-place branch is never taken there. Target-independent
-        /// because both widths are stored; ignored by every other op.
-        interchangeable: layout.WidthValues(bool) = layout.WidthValues(bool).both(true, true),
-        /// Committed output element layout for `list_map_can_reuse`. Consumers
-        /// with different storage representations use this explicit fact rather
-        /// than reconstructing the transform function return type.
-        map_output_elem: ?layout.Idx = null,
-        /// Exact in-range byte alignment count proved by range analysis.
-        /// Only `simd_concat_shift_bytes` uses this; null retains the dynamic
-        /// operation. Backends consume this fact without inspecting definitions.
-        simd_concat_count: ?u5 = null,
+        /// The fields only particular operations set; `none` when none is.
+        extra: StmtRowId(LowLevelExtra) = .none,
         args: LocalSpan,
         next: CFStmtId,
     },
@@ -1557,8 +1633,9 @@ pub const CFStmt = union(enum) {
         fields: LocalSpan,
         /// A static descriptor ARC adopts for the aggregate when a constructed
         /// field carries a runtime descriptor, so the aggregate is released
-        /// through the descriptor rather than its box-free concrete layout.
-        contents_desc: ?BoxyDescRef = null,
+        /// through the descriptor rather than its box-free concrete layout;
+        /// `none` when there is none.
+        contents_desc: StmtRowId(BoxyDescRef) = .none,
         next: CFStmtId,
     },
     assign_tag: struct {
@@ -1624,14 +1701,14 @@ pub const CFStmt = union(enum) {
     },
     incref: struct {
         value: LocalId,
-        rc: RcHelper,
+        rc: RcHelperRef,
         count: u32 = 1,
         atomicity: RcAtomicity = .atomic,
         next: CFStmtId,
     },
     decref: struct {
         value: LocalId,
-        rc: RcHelper,
+        rc: RcHelperRef,
         atomicity: RcAtomicity = .atomic,
         next: CFStmtId,
     },
@@ -1647,7 +1724,7 @@ pub const CFStmt = union(enum) {
     },
     free: struct {
         value: LocalId,
-        rc: RcHelper,
+        rc: RcHelperRef,
         atomicity: RcAtomicity = .atomic,
         next: CFStmtId,
     },
@@ -1685,9 +1762,8 @@ pub const CFStmt = union(enum) {
     /// miss edge no capture locals are initialized.
     str_match: struct {
         source: LocalId,
-        prefix: StrLiteral,
-        steps: StrMatchStepSpan,
-        end: StrPatternEnd,
+        /// The pattern, stored out of line.
+        data: StmtRowId(StrMatchData),
         on_match: CFStmtId,
         on_miss: CFStmtId,
     },
@@ -1932,10 +2008,10 @@ pub const LirProcSpec = struct {
     rc_variant_demandable: bool = false,
 };
 
-test "a statement occupies one 48-byte slot" {
-    // A statement's inline fields fit in 44 bytes beside its 4-byte-aligned
+test "a statement occupies one 36-byte slot" {
+    // A statement's inline fields fit in 32 bytes beside its 4-byte-aligned
     // tag; larger payloads live in out-of-line rows (`StmtRowId`).
-    try std.testing.expectEqual(@as(usize, 48), @sizeOf(CFStmt));
+    try std.testing.expectEqual(@as(usize, 36), @sizeOf(CFStmt));
     try std.testing.expectEqual(@as(usize, 4), @alignOf(CFStmt));
 }
 

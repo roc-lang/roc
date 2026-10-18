@@ -461,13 +461,16 @@ const Pass = struct {
             .assign_literal => |*literal| {
                 switch (literal.value) {
                     .proc_ref => |*proc| proc.* = self.remapProc(proc.*),
-                    .static_data => |*id| id.* = self.remapStaticData(id.*),
+                    .static_data => |*read| read.id = self.remapStaticData(read.id),
                     .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal => {},
                 }
-                var extra = self.store.stmtRowOrDefault(literal.extra);
-                if (extra.fresh_alternative) |fresh| {
-                    extra.fresh_alternative = self.remapProc(fresh);
-                    literal.extra = try self.store.addStmtRow(LIR.LiteralExtra, extra);
+                if (literal.value == .static_data) {
+                    const read = &literal.value.static_data;
+                    var copies = self.store.stmtRowOrDefault(read.copies);
+                    if (copies.fresh_alternative) |fresh| {
+                        copies.fresh_alternative = self.remapProc(fresh);
+                        read.copies = try self.store.addStmtRow(LIR.LiteralExtra, copies);
+                    }
                 }
             },
             .init_uninitialized,
@@ -927,10 +930,10 @@ fn stmtRefs(store: *const LirStore, stmt: LIR.CFStmt) StmtRefs {
         .assign_packed_erased_fn => |packed_fn| return .{ .procs = .{ store.stmtRow(packed_fn.data).proc, null } },
         .assign_literal => |literal| {
             var refs: StmtRefs = .{};
-            refs.procs[1] = store.stmtRowOrDefault(literal.extra).fresh_alternative;
+            refs.procs[1] = store.literalExtra(literal.value).fresh_alternative;
             switch (literal.value) {
                 .proc_ref => |proc| refs.procs[0] = proc,
-                .static_data => |id| refs.static_data = id,
+                .static_data => |read| refs.static_data = read.id,
                 .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal => {},
             }
             return refs;
@@ -1088,7 +1091,7 @@ test "reachable proc pass follows static initializer proc refs" {
     const root_ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     const root_body = try result.store.addCFStmt(.{ .assign_literal = .{
         .target = value,
-        .value = .{ .static_data = static_data },
+        .value = .{ .static_data = .{ .id = static_data } },
         .next = root_ret,
     } }, .test_fixture);
     const root_proc = try result.store.addProcSpec(.{
@@ -1155,7 +1158,7 @@ test "reachable proc pass follows packed erased callable refs in static initiali
     const root_ret = try result.store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     const root_body = try result.store.addCFStmt(.{ .assign_literal = .{
         .target = value,
-        .value = .{ .static_data = static_data },
+        .value = .{ .static_data = .{ .id = static_data } },
         .next = root_ret,
     } }, .test_fixture);
     const root_proc = try result.store.addProcSpec(.{
@@ -1262,7 +1265,7 @@ test "frozen runtime data prunes witnesses and remaps callable and data identiti
     try result.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .zst });
     const body = try result.store.addCFStmt(.{ .assign_literal = .{
         .target = local,
-        .value = .{ .static_data = retained_slot },
+        .value = .{ .static_data = .{ .id = retained_slot } },
         .next = ret,
     } }, .test_fixture);
     const runtime = try result.store.addProcSpec(.{

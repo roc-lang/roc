@@ -1914,7 +1914,7 @@ test "in-place frozen image retains existing LIR arrays" {
     try program.static_data_values.append(image_allocator, .{ .initializer = null, .layout_idx = .u64 });
     const local = try program.store.addLocal(.{ .layout_idx = .u64 });
     const ret = try program.store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
-    const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = value_slot }, .next = ret } }, .test_fixture);
+    const body = try program.store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .static_data = .{ .id = value_slot } }, .next = ret } }, .test_fixture);
     const proc = try program.store.addProcSpec(.{ .name = .fromRaw(1), .identity = LIR.ProcIdentity.forTest(1), .args = .empty(), .frame_locals = try program.store.addLocalSpan(&.{local}), .body = body, .ret_layout = .u64 }, .none);
     try program.root_procs.append(image_allocator, proc);
     var value: [8]u8 = undefined;

@@ -83,8 +83,8 @@ const Printer = struct {
                         .list_reinterpret => |l| try writer.print("ref.list_reinterpret l{d}", .{@backingInt(l.backing_ref)}),
                         .nominal => |n| try writer.print("ref.nominal l{d}", .{@backingInt(n.backing_ref)}),
                     }
-                    if (s.take_kind == .take) try writer.writeAll(" take");
-                    const absent_fields = self.store.getU32Span(s.residual_shell_absent_fields);
+                    if (self.store.stmtRowOrDefault(s.extra).take_kind == .take) try writer.writeAll(" take");
+                    const absent_fields = self.store.getU32Span(self.store.stmtRowOrDefault(s.extra).residual_shell_absent_fields);
                     if (absent_fields.len != 0) {
                         try writer.writeAll(" shell_absent={");
                         for (0..absent_fields.len) |index| {
@@ -106,11 +106,11 @@ const Printer = struct {
                         .str_literal => try writer.writeAll("literal str"),
                         .boxy_dynamic_num_literal => |l| try writer.print("literal boxy_dynamic_num {d}", .{self.store.stmtRow(l).value}),
                         .boxy_dynamic_frac_literal => |l| try writer.print("literal boxy_dynamic_frac {d}", .{self.store.stmtRow(l).dec_bits}),
-                        .static_data => |id| try writer.print("literal static_data s{d}", .{@backingInt(id)}),
+                        .static_data => |read| try writer.print("literal static_data s{d}", .{@backingInt(read.id)}),
                         .bytes_literal => try writer.writeAll("literal bytes"),
                         .proc_ref => |p| try writer.print("literal proc_ref p{d}", .{@backingInt(p)}),
                     }
-                    const extra = self.store.stmtRowOrDefault(s.extra);
+                    const extra = self.store.literalExtra(s.value);
                     if (extra.fresh_alternative) |proc| try writer.print(" fresh=p{d}", .{@backingInt(proc)});
                     if (extra.list_len) |len| try writer.print(" len={d}", .{len});
                     try writer.writeAll("\n");
@@ -353,7 +353,7 @@ const Printer = struct {
                 .boxy_tag_match => |s| {
                     try writeIndent(indent, writer);
                     try writer.print("boxy_tag_match l{d} desc=", .{@backingInt(s.source)});
-                    try writeBoxyDescRef(s.source_desc, writer);
+                    try writeBoxyDescRef(self.store.stmtRow(s.source_desc), writer);
                     try writer.print(" tag={s}\n", .{self.store.getBoxyName(s.tag_name)});
                     try writeIndent(indent, writer);
                     try writer.writeAll("on_match:\n");
@@ -387,8 +387,8 @@ const Printer = struct {
                     try writer.print("low_level {s}(", .{@tagName(s.op)});
                     try self.writeLocals(s.args, writer);
                     try writer.writeAll(")");
-                    if (s.unique_args != 0) try writer.print(" unique=0x{x}", .{s.unique_args});
-                    if (s.simd_concat_count) |count| try writer.print(" concat_count={d}", .{count});
+                    if (self.store.stmtRowOrDefault(s.extra).unique_args != 0) try writer.print(" unique=0x{x}", .{self.store.stmtRowOrDefault(s.extra).unique_args});
+                    if (self.store.stmtRowOrDefault(s.extra).simd_concat_count) |count| try writer.print(" concat_count={d}", .{count});
                     try writer.writeAll("\n");
                     current = s.next;
                 },
@@ -463,7 +463,7 @@ const Printer = struct {
                 .incref => |s| {
                     try writeIndent(indent, writer);
                     try writer.print("incref l{d} x{d} ", .{ @backingInt(s.value), s.count });
-                    try writeRcHelper(s.rc, writer);
+                    try writeRcHelper(self.store.rcHelper(s.rc), writer);
                     try writeAtomicity(s.atomicity, writer);
                     try writer.writeAll("\n");
                     current = s.next;
@@ -471,7 +471,7 @@ const Printer = struct {
                 .decref => |s| {
                     try writeIndent(indent, writer);
                     try writer.print("decref l{d} ", .{@backingInt(s.value)});
-                    try writeRcHelper(s.rc, writer);
+                    try writeRcHelper(self.store.rcHelper(s.rc), writer);
                     try writeAtomicity(s.atomicity, writer);
                     try writer.writeAll("\n");
                     current = s.next;
@@ -492,7 +492,7 @@ const Printer = struct {
                 .free => |s| {
                     try writeIndent(indent, writer);
                     try writer.print("free l{d} ", .{@backingInt(s.value)});
-                    try writeRcHelper(s.rc, writer);
+                    try writeRcHelper(self.store.rcHelper(s.rc), writer);
                     try writeAtomicity(s.atomicity, writer);
                     try writer.writeAll("\n");
                     current = s.next;
@@ -536,9 +536,10 @@ const Printer = struct {
                     try self.writeChainInner(gpa, s.uninitialized_branch, indent + 2, writer);
                     return;
                 },
-                .str_match => |s| {
+                .str_match => |s_stmt| {
+                    const s = self.store.stmtRow(s_stmt.data);
                     try writeIndent(indent, writer);
-                    try writer.print("str_match l{d} prefix_len={d} end={s}\n", .{ @backingInt(s.source), s.prefix.len, @tagName(s.end) });
+                    try writer.print("str_match l{d} prefix_len={d} end={s}\n", .{ @backingInt(s_stmt.source), s.prefix.len, @tagName(s.end) });
                     const steps = self.store.getStrMatchSteps(s.steps);
                     for (0..steps.len) |index| {
                         const step = GuardedList.at(steps, index);
@@ -552,10 +553,10 @@ const Printer = struct {
                     }
                     try writeIndent(indent + 1, writer);
                     try writer.writeAll("match:\n");
-                    try self.writeChainInner(gpa, s.on_match, indent + 2, writer);
+                    try self.writeChainInner(gpa, s_stmt.on_match, indent + 2, writer);
                     try writeIndent(indent + 1, writer);
                     try writer.writeAll("miss:\n");
-                    try self.writeChainInner(gpa, s.on_miss, indent + 2, writer);
+                    try self.writeChainInner(gpa, s_stmt.on_miss, indent + 2, writer);
                     return;
                 },
                 .str_match_set => |s| {
@@ -937,7 +938,7 @@ test "debug print includes boxy RC helper descriptor references" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     const incref = try store.addCFStmt(.{ .incref = .{
         .value = value,
-        .rc = .{ .boxy = .{ .static = @fromBackingInt(@intCast(3)) } },
+        .rc = try store.addRcHelperRef(.{ .boxy = .{ .static = @fromBackingInt(@intCast(3)) } }),
         .next = ret,
     } }, .test_fixture);
     const proc = try store.addProcSpec(.{

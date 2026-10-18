@@ -285,7 +285,7 @@ fn checkedListOpUniqueMasks(result: *const lir.Program.Result, out: *std.ArrayLi
         if (stmt != .assign_low_level) continue;
         const assign = stmt.assign_low_level;
         if (!std.mem.startsWith(u8, @tagName(assign.op), "list_") or result.store.stmtRow(assign.rc_effect).may_runtime_uniqueness_check_args == 0) continue;
-        try out.append(allocator, assign.unique_args);
+        try out.append(allocator, result.store.stmtRowOrDefault(assign.extra).unique_args);
     }
 }
 

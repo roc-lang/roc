@@ -577,7 +577,7 @@ pub fn forEachStmtRead(
         },
         .boxy_tag_match => |s| {
             note(ctx, s.source);
-            emitDesc(ctx, note, s.source_desc);
+            emitDesc(ctx, note, store.stmtRow(s.source_desc));
         },
         .assign_boxy_eq => |inline_stmt| {
             const s = store.stmtRow(inline_stmt.data);
@@ -726,7 +726,10 @@ pub fn forEachStmtDef(
             if (store.stmtRow(s.data).target_desc) |target_desc| note(ctx, target_desc);
         },
         .join => |s| emitSpan(store, ctx, note, s.params),
-        .str_match => |s| emitStepCaptures(store, ctx, note, s.steps),
+        .str_match => |s_stmt| blk_s: {
+            const s = store.stmtRow(s_stmt.data);
+            break :blk_s emitStepCaptures(store, ctx, note, s.steps);
+        },
         .str_match_set => |s| {
             const arms = store.getStrMatchArms(s.arms);
             for (0..arms.len) |index| emitStepCaptures(store, ctx, note, GuardedList.at(arms, index).steps);
@@ -1161,7 +1164,10 @@ pub fn visitStmtDefinitions(store: *const LirStore, defined: anytype, stmt_id: C
             const maybe_uninitialized = store.getLocalSpan(store.stmtRowOrDefault(join.extra).maybe_uninitialized_params);
             for (0..maybe_uninitialized.len) |index| noteDefinition(defined, GuardedList.at(maybe_uninitialized, index));
         },
-        .str_match => |str_match| markStrMatchDefinitions(store, defined, str_match.steps),
+        .str_match => |str_match_stmt| blk_str_match: {
+            const str_match = store.stmtRow(str_match_stmt.data);
+            break :blk_str_match markStrMatchDefinitions(store, defined, str_match.steps);
+        },
         .str_match_set => |str_match_set| {
             const arms = store.getStrMatchArms(str_match_set.arms);
             for (0..arms.len) |index| {
@@ -1845,14 +1851,12 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .assign_ref => |s| .{ .assign_ref = .{
                     .target = try self.mapLocal(s.target),
                     .op = try self.mapRefOp(s.op),
-                    .take_kind = s.take_kind,
-                    .residual_shell_absent_fields = s.residual_shell_absent_fields,
+                    .extra = s.extra,
                     .next = s.next,
                 } },
                 .assign_literal => |s| .{ .assign_literal = .{
                     .target = try self.mapLocal(s.target),
                     .value = s.value,
-                    .extra = s.extra,
                     .next = s.next,
                 } },
                 .assign_call => |s| .{ .assign_call = .{
@@ -2063,10 +2067,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .target = try self.mapLocal(s.target),
                     .op = s.op,
                     .rc_effect = s.rc_effect,
-                    .unique_args = s.unique_args,
-                    .interchangeable = s.interchangeable,
-                    .map_output_elem = s.map_output_elem,
-                    .simd_concat_count = s.simd_concat_count,
+                    .extra = s.extra,
                     .args = try self.mapLocalSpan(s.args),
                     .next = s.next,
                 } },
@@ -2232,32 +2233,37 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                         return .{ .finished = try self.store.addCFStmt(frame.built, frame.origin) };
                     },
                 },
-                .str_match => |s| switch (step) {
-                    0 => {
-                        frame.built = .{ .str_match = .{
-                            .source = try self.mapLocal(s.source),
-                            .prefix = s.prefix,
-                            .steps = try self.mapStrMatchSteps(s.steps),
-                            .end = s.end,
-                            .on_match = undefined,
-                            .on_miss = undefined,
-                        } };
-                        return .{ .clone = s.on_match };
-                    },
-                    1 => {
-                        frame.built.str_match.on_match = returned.?;
-                        return .{ .clone = s.on_miss };
-                    },
-                    else => {
-                        frame.built.str_match.on_miss = returned.?;
-                        return .{ .finished = try self.store.addCFStmt(frame.built, frame.origin) };
-                    },
+                .str_match => |s_stmt| blk_s: {
+                    const s = self.store.stmtRow(s_stmt.data);
+                    break :blk_s switch (step) {
+                        0 => {
+                            frame.built = .{ .str_match = .{
+                                .source = try self.mapLocal(s_stmt.source),
+                                .data = try self.store.addStmtRow(LIR.StrMatchData, .{
+                                    .prefix = s.prefix,
+                                    .steps = try self.mapStrMatchSteps(s.steps),
+                                    .end = s.end,
+                                }),
+                                .on_match = undefined,
+                                .on_miss = undefined,
+                            } };
+                            return .{ .clone = s_stmt.on_match };
+                        },
+                        1 => {
+                            frame.built.str_match.on_match = returned.?;
+                            return .{ .clone = s_stmt.on_miss };
+                        },
+                        else => {
+                            frame.built.str_match.on_miss = returned.?;
+                            return .{ .finished = try self.store.addCFStmt(frame.built, frame.origin) };
+                        },
+                    };
                 },
                 .boxy_tag_match => |s| switch (step) {
                     0 => {
                         frame.built = .{ .boxy_tag_match = .{
                             .source = try self.mapLocal(s.source),
-                            .source_desc = try self.mapBoxyDescRef(s.source_desc),
+                            .source_desc = try self.store.addStmtRow(LIR.BoxyDescRef, try self.mapBoxyDescRef(self.store.stmtRow(s.source_desc))),
                             .tag_name = s.tag_name,
                             .on_match = undefined,
                             .on_miss = undefined,
@@ -3206,12 +3212,14 @@ test "body cloning preserves committed list map output layout" {
         .target = target,
         .op = .list_map_can_reuse,
         .rc_effect = try store.addRcEffect(LIR.LowLevel.list_map_can_reuse.rcEffect()),
-        .map_output_elem = .u64,
         .args = try store.addLocalSpan(&.{}),
+        .extra = try store.addOptionalStmtRow(LIR.LowLevelExtra, .{
+            .map_output_elem = .u64,
+        }),
         .next = ret,
     } }, .test_fixture);
     var cloner = try BodyCloner(TestRetRewriter).init(&store, .{});
     defer cloner.deinit();
     const cloned = store.getCFStmt(try cloner.cloneStmt(source)).assign_low_level;
-    try std.testing.expectEqual(@as(?layout_mod.Idx, .u64), cloned.map_output_elem);
+    try std.testing.expectEqual(@as(?layout_mod.Idx, .u64), store.stmtRowOrDefault(cloned.extra).map_output_elem);
 }

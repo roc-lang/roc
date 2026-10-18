@@ -3992,7 +3992,7 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_low_level => |assign| {
-                try self.emitLowLevel(assign.target, assign.op, assign.args, assign.unique_args, assign.interchangeable, assign.simd_concat_count);
+                try self.emitLowLevel(assign.target, assign.op, assign.args, self.store.stmtRowOrDefault(assign.extra).unique_args, self.store.stmtRowOrDefault(assign.extra).interchangeable, self.store.stmtRowOrDefault(assign.extra).simd_concat_count);
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_list => |assign| {
@@ -4038,11 +4038,11 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = marker.next });
             },
             .incref => |inc| {
-                try self.emitExplicitRcStmt(inc.rc, .incref, inc.value, inc.count, inc.atomicity);
+                try self.emitExplicitRcStmt(self.store.rcHelper(inc.rc), .incref, inc.value, inc.count, inc.atomicity);
                 try work.append(wa, .{ .node = inc.next });
             },
             .decref => |dec| {
-                try self.emitExplicitRcStmt(dec.rc, .decref, dec.value, 1, dec.atomicity);
+                try self.emitExplicitRcStmt(self.store.rcHelper(dec.rc), .decref, dec.value, 1, dec.atomicity);
                 try work.append(wa, .{ .node = dec.next });
             },
             .decref_if_initialized => |dec_stmt| {
@@ -4051,7 +4051,7 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = dec_stmt.next });
             },
             .free => |free_stmt| {
-                try self.emitExplicitRcStmt(free_stmt.rc, .free, free_stmt.value, 1, free_stmt.atomicity);
+                try self.emitExplicitRcStmt(self.store.rcHelper(free_stmt.rc), .free, free_stmt.value, 1, free_stmt.atomicity);
                 try work.append(wa, .{ .node = free_stmt.next });
             },
             .switch_stmt => |sw| try self.emitSwitch(sw, wa, work),
@@ -4157,7 +4157,7 @@ pub const MonoLlvmCodeGen = struct {
                 const lit = self.store.stmtRow(id);
                 try self.emitBoxyDynamicLiteral(target, lit.dec_bits, lit.desc, lit.default_layout, true);
             },
-            .static_data => |id| try self.emitStaticDataLiteral(slot_v, id),
+            .static_data => |read| try self.emitStaticDataLiteral(slot_v, read.id),
             .bytes_literal => |bytes_idx| try self.emitBytesLiteral(slot_v.ptr, bytes_idx),
             .proc_ref => |proc_id| {
                 const func = self.proc_registry.get(@backingInt(proc_id)) orelse return error.CompilationFailed;
@@ -4426,7 +4426,7 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitBoxyTagMatch(self: *MonoLlvmCodeGen, tag_match: anytype, wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
-        const matches = try self.callBoxyPlan(&boxy_call_plan.tagMatch(tag_match), .i1, undefined);
+        const matches = try self.callBoxyPlan(&boxy_call_plan.tagMatch(tag_match, self.store.stmtRow(tag_match.source_desc)), .i1, undefined);
         const on_match = wip.block(0, "boxy_tag_match") catch return error.OutOfMemory;
         const on_miss = wip.block(0, "boxy_tag_miss") catch return error.OutOfMemory;
         _ = wip.brCond(matches, on_match, on_miss, .none) catch return error.OutOfMemory;
@@ -7965,7 +7965,7 @@ pub const MonoLlvmCodeGen = struct {
         end_ptr: LlvmBuilder.Value,
     };
 
-    fn emitStrMatch(self: *MonoLlvmCodeGen, str_match: anytype, wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
+    fn emitStrMatch(self: *MonoLlvmCodeGen, str_match: @FieldType(lir.LIR.CFStmt, "str_match"), wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
 
         try self.materializeAllDeferredStrCaptures();
@@ -7973,7 +7973,9 @@ pub const MonoLlvmCodeGen = struct {
 
         const on_miss_block = wip.block(0, "str_match_miss") catch return error.OutOfMemory;
         const source = try self.emitStrMatchSourceShape(self.slot(str_match.source).ptr);
-        const match_body = try self.emitStrMatchArmTest(str_match.source, source, str_match, on_miss_block);
+        const pattern = self.store.stmtRow(str_match.data);
+        const arm = .{ .prefix = pattern.prefix, .steps = pattern.steps, .end = pattern.end, .on_match = str_match.on_match };
+        const match_body = try self.emitStrMatchArmTest(str_match.source, source, arm, on_miss_block);
         try work.append(wa, .{ .str_match_body = .{ .block = on_miss_block, .stmt = str_match.on_miss } });
         try work.append(wa, .{ .str_match_body = match_body });
     }

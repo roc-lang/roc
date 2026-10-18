@@ -149,7 +149,7 @@ fn transformProc(
     var tail_site: ?CFStmtId = if (proc.tail_calls) |sites| sites.head else null;
     while (tail_site) |id| {
         tail_count += 1;
-        tail_site = store.getCFStmtImmediate(id).assign_call.tail_call.?.next;
+        tail_site = store.getCFStmtImmediate(id).assign_call.tail_call.next();
     }
     if (construct_count == 0 and tail_count == 0) return null;
     if (builtin.mode == .debug) detection.assertRewrittenStmtsUnshared();
@@ -611,7 +611,7 @@ const Detection = struct {
 
         // A self-call starts a new candidate (after the use checks above, so
         // its arguments invalidate any candidate locals they mention).
-        if (stmt == .assign_call and stmt.assign_call.proc == self.proc_id and stmt.assign_call.tail_call == null) {
+        if (stmt == .assign_call and stmt.assign_call.proc == self.proc_id and !stmt.assign_call.tail_call.isSite()) {
             if (self.scratch.candidates.items.len == max_candidates) {
                 self.bail = true;
                 return;
@@ -1134,7 +1134,7 @@ const Transform = struct {
         var site: ?CFStmtId = if (self.store.getProcSpecImmediate(self.proc_id).tail_calls) |sites| sites.head else null;
         while (site) |id| {
             const call = self.store.getCFStmtImmediate(id).assign_call;
-            site = call.tail_call.?.next;
+            site = call.tail_call.next();
             // Every incoming reference reaches the same replacement. The
             // shared return continuation remains available to other paths.
             const loop_back = try self.buildLoopBack(call.args, null, id, trmcOrigin(self.store.stmtOrigin(id)));

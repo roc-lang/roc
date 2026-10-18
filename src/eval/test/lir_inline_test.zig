@@ -11237,7 +11237,7 @@ fn listSetCounts(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) ListSet
         switch (store.getCFStmtImmediate(cursor).*) {
             .assign_low_level => |stmt| {
                 if (stmt.op == .list_set) {
-                    if (stmt.unique_args == 0) counts.checked += 1 else counts.check_free += 1;
+                    if (store.stmtRowOrDefault(stmt.extra).unique_args == 0) counts.checked += 1 else counts.check_free += 1;
                 }
                 if (top < cursor_stack.len) {
                     cursor_stack[top] = stmt.next;

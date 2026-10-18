@@ -243,7 +243,7 @@ const BranchRewriter = struct {
                 const rc = self.payloadRelease() orelse return next;
                 return try cloner.store.addCFStmt(.{ .decref = .{
                     .value = self.payload,
-                    .rc = rc,
+                    .rc = try cloner.store.addRcHelperRef(rc),
                     .atomicity = release.atomicity,
                     .next = next,
                 } }, origin);
@@ -1453,7 +1453,7 @@ const TestGraph = struct {
     fn releaseUnion(self: *TestGraph, param: LIR.LocalId, next: LIR.CFStmtId) ResourceError!LIR.CFStmtId {
         return self.store.addCFStmt(.{ .decref = .{
             .value = param,
-            .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .bool }),
+            .rc = try self.store.addRcHelperRef(LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .bool })),
             .atomicity = .single_thread,
             .next = next,
         } }, .test_fixture);
@@ -2351,7 +2351,7 @@ test "tag case fusion carries releases on a producer edge" {
     const jump_zero = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const release = try store.addCFStmt(.{ .decref = .{
         .value = finished,
-        .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .str }),
+        .rc = try store.addRcHelperRef(LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .str })),
         .next = jump_zero,
     } }, .test_fixture);
     const build_zero = try store.addCFStmt(.{ .assign_tag = .{
@@ -2424,7 +2424,7 @@ test "tag case fusion releases the payload where an arm released the union" {
     const ret_one = try store.addCFStmt(.{ .ret = .{ .value = one } }, .test_fixture);
     const release_union = try store.addCFStmt(.{ .decref = .{
         .value = param,
-        .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = tag_layout }),
+        .rc = try store.addRcHelperRef(LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = tag_layout })),
         .next = ret_one,
     } }, .test_fixture);
     const lit_one = try store.addCFStmt(.{ .assign_literal = .{

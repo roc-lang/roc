@@ -7337,7 +7337,7 @@ const ProcedureBuilder = struct {
         defer accessor.deinit();
         const value = try accessor.addFrameLocalForRep(initializer.rep);
         const ret = try self.result.store.addCFStmt(.{ .ret = .{ .value = value } }, origin);
-        const read = try self.result.store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = value_slot }, .next = ret } }, origin);
+        const read = try self.result.store.addCFStmt(.{ .assign_literal = .{ .target = value, .value = .{ .static_data = .{ .id = value_slot } }, .next = ret } }, origin);
         const symbol = self.symbols.fresh();
         const accessor_id = try self.result.store.addProcSpec(.{
             .name = lirSymbol(symbol),
@@ -12951,7 +12951,7 @@ const ProcedureBuilder = struct {
         var continuation = try self.result.store.addCFStmt(.{ .assign_struct = .{
             .target = value,
             .fields = try self.result.store.addLocalSpan(fields),
-            .contents_desc = aggregate_desc.contents_desc,
+            .contents_desc = try self.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, aggregate_desc.contents_desc),
             .next = success,
         } }, proc.derivedOrigin());
         continuation = try proc.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
@@ -13987,7 +13987,7 @@ const ProcedureBuilder = struct {
         continuation = try self.result.store.addCFStmt(.{ .assign_struct = .{
             .target = context.value,
             .fields = try self.result.store.addLocalSpan(shape_fields),
-            .contents_desc = aggregate_desc.contents_desc,
+            .contents_desc = try self.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, aggregate_desc.contents_desc),
             .next = continuation,
         } }, proc.derivedOrigin());
         continuation = try proc.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
@@ -17736,7 +17736,7 @@ const ProcBodyBuilder = struct {
         var continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
             .target = target,
             .fields = try self.parent.result.store.addLocalSpan(field_locals),
-            .contents_desc = aggregate_desc.contents_desc,
+            .contents_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, aggregate_desc.contents_desc),
             .next = next,
         } }, self.origin);
         continuation = try self.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
@@ -18577,7 +18577,7 @@ const ProcBodyBuilder = struct {
         var continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
             .target = target,
             .fields = try self.parent.result.store.addLocalSpan(field_locals),
-            .contents_desc = aggregate_desc.contents_desc,
+            .contents_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, aggregate_desc.contents_desc),
             .next = next,
         } }, self.origin);
         continuation = try self.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
@@ -19852,21 +19852,21 @@ const ProcBodyBuilder = struct {
                 const impossible = try self.parent.result.store.addCFStmt(.runtime_error, self.glueOrigin());
                 const skip_match = try self.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
                     .source = step_local,
-                    .source_desc = source_desc,
+                    .source_desc = try self.parent.result.store.addStmtRow(LIR.BoxyDescRef, source_desc),
                     .tag_name = try self.parent.result.store.insertBoxyName(step.module.canonical_names.?.tagLabelText(step.skip_tag)),
                     .on_match = skip_body,
                     .on_miss = impossible,
                 } }, self.glueOrigin());
                 const one_match = try self.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
                     .source = step_local,
-                    .source_desc = source_desc,
+                    .source_desc = try self.parent.result.store.addStmtRow(LIR.BoxyDescRef, source_desc),
                     .tag_name = try self.parent.result.store.insertBoxyName(step.module.canonical_names.?.tagLabelText(step.one_tag)),
                     .on_match = one_body,
                     .on_miss = skip_match,
                 } }, self.glueOrigin());
                 const done_match = try self.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
                     .source = step_local,
-                    .source_desc = source_desc,
+                    .source_desc = try self.parent.result.store.addStmtRow(LIR.BoxyDescRef, source_desc),
                     .tag_name = try self.parent.result.store.insertBoxyName(step.module.canonical_names.?.tagLabelText(step.done_tag)),
                     .on_match = task.done_body,
                     .on_miss = one_match,
@@ -20781,7 +20781,7 @@ const ProcBodyBuilder = struct {
         if (tag_rep.kind == .dynamic) {
             return try self.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
                 .source = source,
-                .source_desc = try self.descriptorRefForSourceLocalRep(source, source_rep),
+                .source_desc = try self.parent.result.store.addStmtRow(LIR.BoxyDescRef, try self.descriptorRefForSourceLocalRep(source, source_rep)),
                 .tag_name = try self.parent.result.store.insertBoxyName("Ok"),
                 .on_match = read_ok,
                 .on_miss = invalid,
@@ -21301,7 +21301,7 @@ const ProcBodyBuilder = struct {
                     index -= 1;
                     dispatch = try self.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
                         .source = source,
-                        .source_desc = source_desc,
+                        .source_desc = try self.parent.result.store.addStmtRow(LIR.BoxyDescRef, source_desc),
                         .tag_name = try self.lirTagNameForVariant(variants[index].variant),
                         .on_match = bodies[index],
                         .on_miss = dispatch,
@@ -21856,7 +21856,7 @@ const ProcBodyBuilder = struct {
         continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
             .target = payload,
             .fields = try self.parent.result.store.addLocalSpan(&fields),
-            .contents_desc = aggregate_desc.contents_desc,
+            .contents_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, aggregate_desc.contents_desc),
             .next = continuation,
         } }, self.derivedOrigin());
         var index = fields.len;
@@ -21947,7 +21947,7 @@ const ProcBodyBuilder = struct {
         continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
             .target = payload,
             .fields = try self.parent.result.store.addLocalSpan(&.{field}),
-            .contents_desc = aggregate_desc.contents_desc,
+            .contents_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, aggregate_desc.contents_desc),
             .next = continuation,
         } }, self.derivedOrigin());
         continuation = try self.assignGeneratedParserValueToStorage(
@@ -22646,7 +22646,7 @@ const ProcBodyBuilder = struct {
         var continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
             .target = record_target,
             .fields = try self.parent.result.store.addLocalSpan(field_locals),
-            .contents_desc = aggregate_desc.contents_desc,
+            .contents_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, aggregate_desc.contents_desc),
             .next = record_next,
         } }, self.scaffoldOrigin());
         continuation = try self.prependOptionalDescriptorMaterialization(aggregate_desc.materialize, continuation);
@@ -23849,7 +23849,7 @@ const ProcBodyBuilder = struct {
             try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
                 .target = capture_local,
                 .fields = try self.parent.result.store.addLocalSpan(capture_fields),
-                .contents_desc = capture_contents_desc,
+                .contents_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, capture_contents_desc),
                 .next = assign,
             } }, self.origin);
         continuation = try self.prependDescriptorArgMaterializations(result_desc_initializers.items, continuation);
@@ -24433,7 +24433,7 @@ const ProcBodyBuilder = struct {
             try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
                 .target = capture_local,
                 .fields = try self.parent.result.store.addLocalSpan(capture_fields),
-                .contents_desc = capture_contents_desc,
+                .contents_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, capture_contents_desc),
                 .next = pack,
             } }, self.derivedOrigin());
         continuation = try self.prependDescriptorArgMaterializations(result_desc_initializers.items, continuation);
@@ -29196,7 +29196,7 @@ const ProcBodyBuilder = struct {
                     const match_desc = try self.descriptorRefForSourceLocalRep(item.source, item.source_rep);
                     state.current = try self.parent.result.store.addCFStmt(.{ .boxy_tag_match = .{
                         .source = item.source,
-                        .source_desc = match_desc,
+                        .source_desc = try self.parent.result.store.addStmtRow(LIR.BoxyDescRef, match_desc),
                         .tag_name = try self.lirTagName(item.name),
                         .on_match = state.current,
                         .on_miss = try self.patternMissJump(item.context.miss),
@@ -29304,11 +29304,13 @@ const ProcBodyBuilder = struct {
                 };
                 state.current = try self.parent.result.store.addCFStmt(.{ .str_match = .{
                     .source = item.source,
-                    .prefix = arm.prefix,
-                    .steps = arm.steps,
-                    .end = arm.end,
                     .on_match = arm.on_match,
                     .on_miss = try self.patternMissJump(item.context.miss),
+                    .data = try self.parent.result.store.addStmtRow(LIR.StrMatchData, .{
+                        .prefix = arm.prefix,
+                        .steps = arm.steps,
+                        .end = arm.end,
+                    }),
                 } }, self.origin);
             },
             .guard_binder => |item| state.current = try self.bindMatchBinder(item.binder, item.source, &.{}, state.current),
@@ -31122,8 +31124,10 @@ const ProcBodyBuilder = struct {
             .op = .list_map_can_reuse,
             .rc_effect = try self.parent.result.store.addRcEffect(LIR.LowLevel.list_map_can_reuse.rcEffect()),
             .args = try self.parent.result.store.addLocalSpan(lowered),
-            .interchangeable = interchangeable,
-            .map_output_elem = map_output_elem,
+            .extra = try self.parent.result.store.addOptionalStmtRow(LIR.LowLevelExtra, .{
+                .interchangeable = interchangeable,
+                .map_output_elem = map_output_elem,
+            }),
             .next = next,
         } }, self.origin);
         return try self.loweredExprsChain(args, lowered, continuation);
@@ -37025,7 +37029,7 @@ const ProcBodyBuilder = struct {
         continuation = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
             .target = payload,
             .fields = try self.parent.result.store.addLocalSpan(&fields),
-            .contents_desc = aggregate_desc.contents_desc,
+            .contents_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, aggregate_desc.contents_desc),
             .next = continuation,
         } }, self.derivedOrigin());
 
@@ -39630,7 +39634,7 @@ const ProcBodyBuilder = struct {
         const assign_struct = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
             .target = state.target,
             .fields = try self.parent.result.store.addLocalSpan(state.target_fields),
-            .contents_desc = state.aggregate_desc.contents_desc,
+            .contents_desc = try self.parent.result.store.addStmtRowIfPresent(LIR.BoxyDescRef, state.aggregate_desc.contents_desc),
             .next = request.next,
         } }, self.glueOrigin());
         state.current = try self.prependOptionalDescriptorMaterialization(state.aggregate_desc.materialize, assign_struct);
@@ -47268,9 +47272,10 @@ test "boxy lowerer emits checked string interpolation match patterns" {
     const outer_join = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
     const source = out.lir_result.store.getCFStmtImmediate(outer_join.remainder).assign_literal;
     const miss_join = out.lir_result.store.getCFStmtImmediate(source.next).join;
-    const str_match = out.lir_result.store.getCFStmtImmediate(miss_join.remainder).str_match;
+    const str_match_stmt = out.lir_result.store.getCFStmtImmediate(miss_join.remainder).str_match;
+    const str_match = out.lir_result.store.stmtRow(str_match_stmt.data);
 
-    try std.testing.expectEqual(source.target, str_match.source);
+    try std.testing.expectEqual(source.target, str_match_stmt.source);
     try std.testing.expectEqualStrings("pre", out.lir_result.store.getStringLiteral(str_match.prefix));
     try std.testing.expectEqual(LIR.StrPatternEnd.exact, str_match.end);
 
@@ -47282,7 +47287,7 @@ test "boxy lowerer emits checked string interpolation match patterns" {
         .discard => return error.TestUnexpectedResult,
     };
 
-    const bind = out.lir_result.store.getCFStmtImmediate(str_match.on_match).assign_ref;
+    const bind = out.lir_result.store.getCFStmtImmediate(str_match_stmt.on_match).assign_ref;
     try std.testing.expectEqual(capture, bind.op.local);
     const branch_result = out.lir_result.store.getCFStmtImmediate(bind.next).assign_ref;
     try std.testing.expectEqual(bind.target, branch_result.op.local);
@@ -52976,10 +52981,11 @@ test "boxy lowerer emits list_map_can_reuse when list map layouts are interchang
 
     const reuse = out.lir_result.store.getCFStmtImmediate(transform_arg.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .list_map_can_reuse), reuse.op);
-    try std.testing.expectEqual(@as(?layout.Idx, .u64), reuse.map_output_elem);
+    const reuse_extra = out.lir_result.store.stmtRowOrDefault(reuse.extra);
+    try std.testing.expectEqual(@as(?layout.Idx, .u64), reuse_extra.map_output_elem);
     try std.testing.expectEqual(LIR.LowLevel.list_map_can_reuse.rcEffect(), out.lir_result.store.stmtRow(reuse.rc_effect));
-    try std.testing.expect(reuse.interchangeable.get(.u32));
-    try std.testing.expect(reuse.interchangeable.get(.u64));
+    try std.testing.expect(reuse_extra.interchangeable.get(.u32));
+    try std.testing.expect(reuse_extra.interchangeable.get(.u64));
 
     const reuse_args = out.lir_result.store.getLocalSpan(reuse.args);
     try std.testing.expectEqual(@as(usize, 2), reuse_args.len);

@@ -510,7 +510,7 @@ pub fn procCallClosure(allocator: Allocator, store: *const LirStore, root: LIR.L
                     const packed_fn = store.stmtRow(packed_fn_stmt.data);
                     break :blk_packed_fn packed_fn.proc;
                 },
-                .assign_literal => |literal| store.stmtRowOrDefault(literal.extra).fresh_alternative,
+                .assign_literal => |literal| store.literalExtra(literal.value).fresh_alternative,
                 .init_uninitialized,
                 .assign_ref,
                 .assign_call_erased,

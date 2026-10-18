@@ -314,10 +314,10 @@ const StaticInitializerMachine = struct {
             current = switch (self.store().getCFStmt(current)) {
                 .assign_literal => |assign| blk: {
                     switch (assign.value) {
-                        .static_data => |dependency| if (self.static_roots[@backingInt(dependency)] == null and
-                            self.frozen_roots[@backingInt(dependency)] == null)
+                        .static_data => |dependency| if (self.static_roots[@backingInt(dependency.id)] == null and
+                            self.frozen_roots[@backingInt(dependency.id)] == null)
                         {
-                            if (try self.readyStatic(dependency) == null) return dependency;
+                            if (try self.readyStatic(dependency.id) == null) return dependency.id;
                         },
                         .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bytes_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .proc_ref => {},
                     }
@@ -540,7 +540,7 @@ const StaticInitializerMachine = struct {
             .f32_literal => |float| std.mem.writeInt(u32, value.bytes[0..4], @bitCast(float), .little),
             .dec_literal => |dec| std.mem.writeInt(i128, value.bytes[0..16], dec, .little),
             .str_literal => |str| return try self.evalStr(str, target_layout),
-            .static_data => |id| return try self.cloneValueAs(try self.evaluateStatic(id), target_layout),
+            .static_data => |read| return try self.cloneValueAs(try self.evaluateStatic(read.id), target_layout),
             .bytes_literal => |list| return try self.evalBytes(list, target_layout),
             .boxy_dynamic_num_literal,
             .boxy_dynamic_frac_literal,

@@ -2236,8 +2236,9 @@ fn classifyStatement(
             try analysis.useWhole(current, stmt.cond);
             try analysis.useWhole(current, stmt.payload);
         },
-        .str_match => |stmt| {
-            try analysis.useWhole(current, stmt.source);
+        .str_match => |stmt_stmt| {
+            const stmt = store.stmtRow(stmt_stmt.data);
+            try analysis.useWhole(current, stmt_stmt.source);
             const steps = store.getStrMatchSteps(stmt.steps);
             for (0..GuardedList.borrowLen(steps)) |i| {
                 switch (GuardedList.at(steps, i).capture) {

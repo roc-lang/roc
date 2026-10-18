@@ -2628,7 +2628,7 @@ pub const Interpreter = struct {
                         assign.target,
                         value,
                         false,
-                        assign.residual_shell_absent_fields,
+                        self.store.stmtRowOrDefault(assign.extra).residual_shell_absent_fields,
                         switch (assign.op) {
                             .local, .list_reinterpret, .nominal => .descriptor,
                             .field, .tag_payload, .tag_payload_struct, .discriminant => .items,
@@ -3210,7 +3210,7 @@ pub const Interpreter = struct {
                     current = assign_stmt.next;
                 },
                 .boxy_tag_match => |tag_match| {
-                    const source_desc = try self.resolveBoxyDescRef(frame, tag_match.source_desc);
+                    const source_desc = try self.resolveBoxyDescRef(frame, self.store.stmtRow(tag_match.source_desc));
                     const source_value = try self.getLocalChecked(frame, tag_match.source);
                     const matched = try self.boxy_runtime.boxyTagMatches(self.boxyFrameHooks(frame), source_value, self.store.getLocal(tag_match.source).layout_idx, source_desc, tag_match.tag_name);
                     current = if (matched) tag_match.on_match else tag_match.on_miss;
@@ -3250,8 +3250,8 @@ pub const Interpreter = struct {
                         .ret_desc = ret_desc,
                         .frame = frame,
                         .callable_proc = null,
-                        .unique_args = assign.unique_args,
-                        .interchangeable = assign.interchangeable,
+                        .unique_args = self.store.stmtRowOrDefault(assign.extra).unique_args,
+                        .interchangeable = self.store.stmtRowOrDefault(assign.extra).interchangeable,
                     });
                     if (observation) |obs| {
                         self.conformanceSnapshotResult(obs, value, ret_layout);
@@ -3268,7 +3268,7 @@ pub const Interpreter = struct {
                 },
                 .assign_struct => |assign| {
                     try self.setLocalChecked(frame, current, assign.target, try self.evalStructLiteral(frame, assign.fields, self.store.getLocal(assign.target).layout_idx), false);
-                    const target_desc = assign.contents_desc orelse self.store.getLocal(assign.target).boxy_desc;
+                    const target_desc = self.store.optionalStmtRow(assign.contents_desc) orelse self.store.getLocal(assign.target).boxy_desc;
                     frame.setLocalDesc(assign.target, try self.resolveOptionalBoxyDescRef(frame, target_desc));
                     current = assign.next;
                 },
@@ -3384,14 +3384,14 @@ pub const Interpreter = struct {
                         @backingInt(self.store.getLocal(inc.value).layout_idx),
                         inc.count,
                         @intFromPtr((try self.getLocalChecked(frame, inc.value)).ptr),
-                        inc.rc,
+                        self.store.rcHelper(inc.rc),
                     });
                     const inc_value = try self.getLocalChecked(frame, inc.value);
                     const inc_layout = self.store.getLocal(inc.value).layout_idx;
                     try self.performExplicitRcStmt(
                         frame,
                         .incref,
-                        inc.rc,
+                        self.store.rcHelper(inc.rc),
                         inc_value,
                         inc_layout,
                         inc.count,
@@ -3413,14 +3413,14 @@ pub const Interpreter = struct {
                         @backingInt(dec.value),
                         @backingInt(self.store.getLocal(dec.value).layout_idx),
                         @intFromPtr((try self.getLocalChecked(frame, dec.value)).ptr),
-                        dec.rc,
+                        self.store.rcHelper(dec.rc),
                     });
                     const dec_value = try self.getLocalChecked(frame, dec.value);
                     const dec_layout = self.store.getLocal(dec.value).layout_idx;
                     try self.performExplicitRcStmt(
                         frame,
                         .decref,
-                        dec.rc,
+                        self.store.rcHelper(dec.rc),
                         dec_value,
                         dec_layout,
                         0,
@@ -3481,7 +3481,7 @@ pub const Interpreter = struct {
                     try self.performExplicitRcStmt(
                         frame,
                         .free,
-                        free_stmt.rc,
+                        self.store.rcHelper(free_stmt.rc),
                         try self.getLocalChecked(frame, free_stmt.value),
                         self.store.getLocal(free_stmt.value).layout_idx,
                         0,
@@ -3990,7 +3990,7 @@ pub const Interpreter = struct {
             ),
             .bytes_literal => |idx| self.evalBytesLiteral(idx, target_layout),
             .proc_ref => |proc_id| self.evalProcRefLiteral(proc_id),
-            .static_data => |id| self.evalStaticDataLiteral(id, target_layout),
+            .static_data => |read| self.evalStaticDataLiteral(read.id, target_layout),
         };
     }
 
@@ -5218,12 +5218,12 @@ pub const Interpreter = struct {
         self: *LirInterpreter,
         frame: *Frame,
         stmt_id: CFStmtId,
-        str_match: anytype,
+        str_match: @FieldType(LIR.CFStmt, "str_match"),
     ) Error!CFStmtId {
         const source_value = try self.getLocalChecked(frame, str_match.source);
         const source_rs = valueToRocStr(source_value);
         const source_bytes = self.readRocStr(source_value);
-        return if (try self.execStrMatchArm(frame, stmt_id, source_rs, source_bytes, str_match))
+        return if (try self.execStrMatchArm(frame, stmt_id, source_rs, source_bytes, self.store.stmtRow(str_match.data)))
             str_match.on_match
         else
             str_match.on_miss;
@@ -9151,7 +9151,7 @@ test "interpreter evaluates explicit static data by compact id" {
     const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = result_local } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_literal = .{
         .target = result_local,
-        .value = .{ .static_data = static_data_id },
+        .value = .{ .static_data = .{ .id = static_data_id } },
         .next = ret_stmt,
     } }, .test_fixture);
     const frame_locals = try store.addLocalSpan(&.{result_local});

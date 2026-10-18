@@ -5796,11 +5796,13 @@ const Lowerer = struct {
         }
         return try self.result.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
-            .value = .{ .static_data = id },
-            .extra = try self.result.store.addOptionalStmtRow(LIR.LiteralExtra, .{
-                .fresh_alternative = fresh_alternative,
-                .list_len = list_len,
-            }),
+            .value = .{ .static_data = .{
+                .id = id,
+                .copies = try self.result.store.addOptionalStmtRow(LIR.LiteralExtra, .{
+                    .fresh_alternative = fresh_alternative,
+                    .list_len = list_len,
+                }),
+            } },
             .next = next,
         } }, where.source());
     }
@@ -5883,7 +5885,7 @@ const Lowerer = struct {
         const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, origin);
         const read = try store.addCFStmt(.{ .assign_literal = .{
             .target = value,
-            .value = .{ .static_data = id },
+            .value = .{ .static_data = .{ .id = id } },
             .next = ret,
         } }, origin);
         const frame_locals = try store.addLocalSpan(&[_]LIR.LocalId{value});
@@ -7158,11 +7160,13 @@ const Lowerer = struct {
             }
             return .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
-                .value = .{ .static_data = id },
-                .extra = try self.result.store.addOptionalStmtRow(LIR.LiteralExtra, .{
-                    .fresh_alternative = fresh_alternative,
-                    .list_len = list_len,
-                }),
+                .value = .{ .static_data = .{
+                    .id = id,
+                    .copies = try self.result.store.addOptionalStmtRow(LIR.LiteralExtra, .{
+                        .fresh_alternative = fresh_alternative,
+                        .list_len = list_len,
+                    }),
+                } },
                 .next = next,
             } }, where.source()) };
         }
@@ -8490,8 +8494,10 @@ const Lowerer = struct {
                 .op = op,
                 .rc_effect = try self.result.store.addRcEffect(op.rcEffect()),
                 .args = try self.result.store.addLocalSpan(lowered.ids),
-                .interchangeable = interchangeable,
-                .map_output_elem = map_output_elem,
+                .extra = try self.result.store.addOptionalStmtRow(LIR.LowLevelExtra, .{
+                    .interchangeable = interchangeable,
+                    .map_output_elem = map_output_elem,
+                }),
                 .next = next,
             } }, where.source());
             return .{ .tail = try self.operandChain(where, lowered, null, null, current) };
@@ -11536,11 +11542,13 @@ const Lowerer = struct {
         const arm = try self.lowerStrPatternArm(where, str, on_match);
         return try self.result.store.addCFStmt(.{ .str_match = .{
             .source = source,
-            .prefix = arm.prefix,
-            .steps = arm.steps,
-            .end = arm.end,
             .on_match = arm.on_match,
             .on_miss = try self.patternMissJump(where, miss),
+            .data = try self.result.store.addStmtRow(LIR.StrMatchData, .{
+                .prefix = arm.prefix,
+                .steps = arm.steps,
+                .end = arm.end,
+            }),
         } }, where.source());
     }
 
