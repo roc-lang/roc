@@ -23409,8 +23409,7 @@ The compiler's developer-only environment variables (`ROC_LIR_DUMP`,
 `ROC_SPEC_CENSUS`, `ROC_PACK_TRACE`, `ROC_PACK_STATS`, `ROC_CTFE_DEMAND_TRACE`,
 `ROC_DEV_PACK_OBJECTS`, `ROC_DEV_PACK_HITS`, the object-compile round-trip
 variable and `ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE`) are honored only by a
-compiler for
-which `build_options.dev_diagnostics` is true: every Debug compiler, and any
+compiler for which `build_options.dev_diagnostics` is true: every Debug compiler, and any
 other build made with `-Ddev-diagnostics`. Every site tests that constant at
 compile time, so a release compiler neither reads these variables nor
 carries the code they enable, and an end user's environment cannot change
