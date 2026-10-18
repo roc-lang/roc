@@ -383,9 +383,6 @@ pub const Interpreter = struct {
     static_strings: backend.StaticStringData.View,
     /// Resolved immutable values indexed directly by compact `StaticDataId`.
     static_data: []const usize,
-    /// Explicit compile-time slot readiness callback; ordinary runtime images
-    /// are already complete and leave this unset.
-    static_data_demand: ?StaticDataDemand = null,
     /// Direct slot lookup per entered procedure: a frame local's slot is
     /// `slot_of[id - base]`, and ids outside the frame hold `FrameSlotIndex.none`.
     /// An index is built the first time a procedure is entered and is checked
@@ -437,11 +434,6 @@ pub const Interpreter = struct {
     retained_owner: ?*Retained = null,
 
     pub const Error = boxy_runtime.Error;
-
-    pub const StaticDataDemand = struct {
-        context: *anyopaque,
-        ensure: *const fn (*anyopaque, LIR.StaticDataId) Error!void,
-    };
 
     /// Explicit hosted-call data produced by LIR and the interpreter's ABI
     /// packing. Integrations consume this without reconstructing hosted
@@ -3949,14 +3941,6 @@ pub const Interpreter = struct {
         return val;
     }
 
-    pub fn failStaticDataDemand(self: *LirInterpreter, message: []const u8) Error {
-        const owned = self.allocator.dupe(u8, message) catch return error.OutOfMemory;
-        if (self.roc_env.crash_message) |old| self.allocator.free(old);
-        self.roc_env.crash_message = owned;
-        self.roc_env.crashed = true;
-        return error.Crash;
-    }
-
     fn evalStaticDataLiteral(self: *LirInterpreter, id: LIR.StaticDataId, target_layout: layout_mod.Idx) Error!Value {
         const index: usize = @backingInt(id);
         if (index >= self.static_data.len) {
@@ -3965,7 +3949,6 @@ pub const Interpreter = struct {
                 .{index},
             );
         }
-        if (self.static_data_demand) |demand| try demand.ensure(demand.context, id);
         const result = try self.alloc(target_layout);
         const size = self.helper.sizeOf(target_layout);
         if (size != 0) {

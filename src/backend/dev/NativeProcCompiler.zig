@@ -123,12 +123,10 @@ fn reusable(source: Emitter.FragmentContract, target: Emitter.FragmentContract, 
     }
     // Static-data ordinals are rebound by runtime compaction. String symbols
     // are relocatable and deliberately do not count as static-data dependencies.
-    const hook_transition = source.hooks_enabled and !target.hooks_enabled and !deps.comptime_hooks;
     if (source.hot_reload != target.hot_reload or
         source.default_platform_runtime != target.default_platform_runtime or
         (source.static_data_readonly != target.static_data_readonly and deps.static_data) or
-        (source.hooks_enabled != target.hooks_enabled and !hook_transition) or
-        deps.comptime_hooks or deps.static_data or
+        deps.static_data or
         (source.initialize_boxy_runtime != target.initialize_boxy_runtime and deps.boxy_runtime_entry))
     {
         metrics.rejected_context +|= 1;
@@ -174,7 +172,6 @@ fn Job(comptime CG: type) type {
             cg.generation_mode = source.generation_mode;
             cg.enable_hot_reload = source.enable_hot_reload;
             cg.enable_default_platform_runtime = source.enable_default_platform_runtime;
-            cg.comptime_hooks = source.comptime_hooks;
             cg.borrowStaticDataSymbolsFrom(source);
             self.fragment = if (self.proc) |id|
                 try Artifact.compileProcFragmentPrepared(CG, worker.allocator, &cg, id, source.store.getProcSpecs(), source.layout_store, self.data)
@@ -562,16 +559,15 @@ test "native driver reuse contract is directional and dependency sensitive" {
         .cpu_level = .default,
         .hot_reload = false,
         .default_platform_runtime = false,
-        .hooks_enabled = true,
         .initialize_boxy_runtime = false,
         .static_data_readonly = false,
     };
     var runtime = source;
-    runtime.hooks_enabled = false;
     var metrics: Metrics = .{};
     try std.testing.expect(reusable(source, runtime, .{}, &metrics));
-    try std.testing.expect(!reusable(runtime, source, .{}, &metrics));
-    try std.testing.expect(!reusable(source, runtime, .{ .comptime_hooks = true }, &metrics));
+    runtime.hot_reload = true;
+    try std.testing.expect(!reusable(source, runtime, .{}, &metrics));
+    runtime.hot_reload = false;
     try std.testing.expect(!reusable(source, source, .{ .static_data = true }, &metrics));
     try std.testing.expect(reusable(source, runtime, .{ .boxy_runtime = true }, &metrics));
     runtime.target = .arm64linux;

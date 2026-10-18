@@ -37,6 +37,8 @@ pub const CompileTimeFinalization = @import("compile_time_finalization.zig");
 pub const CompilerHost = @import("compiler_host.zig");
 /// Dev-backend RocOps environment for native compile-time evaluation
 pub const CompileTimeHost = @import("compile_time_host.zig");
+/// The compile-time producers each compile-time root's evaluation reads.
+pub const CompileTimeRootGraph = @import("compile_time_root_graph.zig");
 /// Stores compile-time interpreter results in ConstStore
 pub const ConstStoreWriter = @import("const_store_writer.zig");
 pub const NativeRootExport = @import("native_root_export.zig");
@@ -119,6 +121,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("compile_time_finalization.zig"));
     std.testing.refAllDecls(@import("compiler_host.zig"));
     std.testing.refAllDecls(@import("compile_time_host.zig"));
+    std.testing.refAllDecls(@import("compile_time_root_graph.zig"));
     std.testing.refAllDecls(@import("const_store_writer.zig"));
     std.testing.refAllDecls(@import("native_root_export.zig"));
     std.testing.refAllDecls(@import("frozen_root_transcode.zig"));

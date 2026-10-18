@@ -282,28 +282,10 @@ pub const GenerationMode = enum {
     }
 };
 
-/// Compiler-internal callbacks emitted only for native compile-time evaluation.
-pub const ComptimeHooks = struct {
-    ensure_static_value: *const fn (u32) callconv(.c) void,
-};
-
-/// Compiler-private relocations; execution-image finalizers, never retained
-/// machine code, bind these names to the active compile-time host.
-pub const ComptimeHook = enum {
-    ensure_static_value,
-
-    pub fn symbolName(self: ComptimeHook) []const u8 {
-        return switch (self) {
-            inline .ensure_static_value => |hook| "roc__comptime_" ++ @tagName(hook),
-        };
-    }
-};
-
 /// Dependencies actually emitted by a fragment, not merely enabled options.
-/// Static-data and hook immediates are meaningful only in their producer LIR
-/// domain. A runtime entry also depends on who installs the Boxy runtime.
+/// Static-data immediates are meaningful only in their producer LIR domain. A
+/// runtime entry also depends on who installs the Boxy runtime.
 pub const FragmentContextDependencies = struct {
-    comptime_hooks: bool = false,
     static_data: bool = false,
     boxy_runtime_entry: bool = false,
     boxy_runtime: bool = false,
@@ -311,15 +293,14 @@ pub const FragmentContextDependencies = struct {
 
 /// Non-LIR inputs to fragment emission. Reuse additionally requires producer
 /// domain/revision authority; the owner supplies that, not the code generator.
-/// Dependency flags permit ignoring hook/seed/Boxy-init policy differences only
-/// when the emitted artifact proves it does not depend on that policy.
+/// Dependency flags permit ignoring Boxy-init policy differences only when the
+/// emitted artifact proves it does not depend on that policy.
 pub const FragmentContract = struct {
     /// Platform/codegen identity; the selected instruction floor is separate.
     target: RocTarget,
     cpu_level: CpuLevel,
     hot_reload: bool,
     default_platform_runtime: bool,
-    hooks_enabled: bool,
     initialize_boxy_runtime: bool,
     /// Execution roots retain mutable slot identity; object roots own constants.
     static_data_readonly: bool,
@@ -881,8 +862,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         hosted_symbol_resolver: ?HostedSymbolResolver = null,
         /// Compiler-internal hooks enabled only for native compile-time
         /// evaluation. Normal dev backend output leaves these null.
-        comptime_hooks: ?ComptimeHooks = null,
-
         /// Independent emission borrows global LIR metadata but owns only the
         /// requested body's machine-code state. Helpers remain coordinator work.
         fragment_mode: bool = false,
@@ -1313,10 +1292,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Where native execution resolves hosted symbols.
         pub fn setHostedSymbolResolver(self: *Self, resolver: ?HostedSymbolResolver) void {
             self.hosted_symbol_resolver = resolver;
-        }
-
-        pub fn setComptimeHooks(self: *Self, hooks: ?ComptimeHooks) void {
-            self.comptime_hooks = hooks;
         }
 
         pub fn setNativeStaticData(self: *Self, addresses: []const usize) void {
@@ -18003,7 +17978,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .cpu_level = self.cpu_level,
                 .hot_reload = self.enable_hot_reload,
                 .default_platform_runtime = self.enable_default_platform_runtime,
-                .hooks_enabled = self.comptime_hooks != null,
                 .initialize_boxy_runtime = mode == .object_file,
                 .static_data_readonly = mode == .object_file,
             };
@@ -20214,13 +20188,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .bytes_literal => |bytes_idx| try self.generateBytesLiteral(bytes_idx),
                                 .static_data => |id| blk: {
                                     self.fragment_context.static_data = true;
-                                    if (self.comptime_hooks) |hooks| {
-                                        try self.spillAllVectorLocals();
-                                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                                        defer builder.deinit();
-                                        try builder.addImmArg(@intCast(@backingInt(id)));
-                                        try self.callComptimeHook(&builder, hooks, .ensure_static_value);
-                                    }
                                     break :blk try self.generateStaticDataLiteral(id, self.localLayout(assign.target));
                                 },
                                 .proc_ref => |proc_id| blk: {
@@ -21630,18 +21597,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // their declaring module (the host consumes the pending location
             // per expect event; see CompileTimeHost.rocExpectFailed).
             try self.emitRocStaticMessageCall(.roc_expect_failed, "expect failed");
-        }
-
-        fn callComptimeHook(self: *Self, builder: *Builder, hooks: ComptimeHooks, hook: ComptimeHook) Allocator.Error!void {
-            self.fragment_context.comptime_hooks = true;
-            if (self.generation_mode == .native_execution) {
-                const address = switch (hook) {
-                    inline .ensure_static_value => |which| @intFromPtr(@field(hooks, @tagName(which))),
-                };
-                try builder.call(address);
-            } else {
-                try builder.callRelocatable(try self.internSymbolName(hook.symbolName(), .shared), &self.codegen);
-            }
         }
 
         /// Emit a `roc_crashed` call with a static message.
@@ -25904,7 +25859,6 @@ test "independent fragment emits only requested procedure with unresolved self a
         try std.testing.expectEqual(@as(usize, 2), cg.codeRefs().len);
         try std.testing.expectEqual(other, cg.codeRefs()[0].target.proc);
         try std.testing.expectEqual(proc, cg.codeRefs()[1].target.proc);
-        try std.testing.expect(!cg.getFragmentContextDependencies().comptime_hooks);
         try std.testing.expectEqual(@as(usize, 1), cg.getUnwindFunctions().len);
         try std.testing.expect(cg.getLineEntries().len > 0);
         for (cg.getLineEntries()) |line| {
@@ -25943,7 +25897,6 @@ test "independent fragment defers shared RC helper demand" {
     defer helper_lane.deinit();
     try helper_lane.emitRcHelperFragment(keys[0]);
     try std.testing.expectEqual(@as(usize, 1), helper_lane.compiled_rc_helpers.count());
-    try std.testing.expect(!helper_lane.getFragmentContextDependencies().comptime_hooks);
     try std.testing.expect(helper_lane.getGeneratedCode().len > 0);
 }
 
@@ -26103,15 +26056,9 @@ test "independent fragment ownership survives allocation failure" {
     }.run, .{ &store, &layouts.layout_store, proc });
 }
 
-test "independent fragment symbolic hooks record actual context use" {
+test "independent fragments record their static data use" {
     if (comptime !host_lir_codegen_available) return error.SkipZigTest;
     const allocator = std.testing.allocator;
-    const Hooks = struct {
-        fn one(_: u32) callconv(.c) void {}
-    };
-    const hooks = ComptimeHooks{
-        .ensure_static_value = Hooks.one,
-    };
     var store = LirStore.init(allocator);
     defer store.deinit();
     var layouts = try TestLayoutState.init(allocator);
@@ -26129,29 +26076,22 @@ test "independent fragment symbolic hooks record actual context use" {
     }});
     var cg = try HostLirCodeGen.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
     defer cg.deinit();
-    cg.setComptimeHooks(hooks);
     cg.borrowStaticDataSymbolsFrom(&source);
     try cg.emitProcFragment(pure);
-    try std.testing.expect(!cg.getFragmentContextDependencies().comptime_hooks);
+    try std.testing.expect(!cg.getFragmentContextDependencies().static_data);
     cg.reset();
     try cg.emitProcFragment(data_proc);
-    try std.testing.expect(cg.getFragmentContextDependencies().comptime_hooks);
     try std.testing.expect(cg.getFragmentContextDependencies().static_data);
     try std.testing.expectEqual(@as(usize, 0), source.getSymbolNames().len);
     try std.testing.expectEqual(@as(usize, 1), cg.bindingDataCells().len);
     try std.testing.expectEqualStrings("roc__b8", cg.bindingDataCells()[0].name);
     try std.testing.expectEqualStrings("fragment_static_value", cg.bindingDataCells()[0].target_name);
-    var found_hook = false;
     for (cg.getRelocations()) |reloc| {
         switch (reloc) {
-            .linked_function => |function| {
-                if (std.mem.eql(u8, cg.symbolName(function.symbol), ComptimeHook.ensure_static_value.symbolName())) found_hook = true;
-            },
             .local_data => return error.NativePointerInFragment,
-            .linked_data, .jmp_to_return, .retired => {},
+            .linked_function, .linked_data, .jmp_to_return, .retired => {},
         }
     }
-    try std.testing.expect(found_hook);
     try std.testing.checkAllAllocationFailures(allocator, struct {
         fn run(a: Allocator, owner: *const HostLirCodeGen, id: LIR.LirProcSpecId) (Allocator.Error || error{TestExpectedEqual})!void {
             var lane = try HostLirCodeGen.init(a, owner.store, owner.layout_store, .{}, &.{}, .default);

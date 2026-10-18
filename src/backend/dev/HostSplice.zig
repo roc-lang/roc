@@ -61,8 +61,6 @@ pub const HostSplice = struct {
     spliced_procs: usize = 0,
     /// The name of the last relocation `link` could not bind.
     unresolved: ?[]const u8 = null,
-    /// Process-local bindings, never carried by reusable code or artifacts.
-    comptime_hooks: ?LirCodeGenMod.ComptimeHooks = null,
     /// Owned names for borrowed process data; mutable slots must not be copied.
     static_data_bindings: std.StringHashMapUnmanaged(usize) = .empty,
 
@@ -73,12 +71,6 @@ pub const HostSplice = struct {
             .data_offsets = std.StringHashMap(usize).init(allocator),
             .hosted_stubs = std.StringHashMap(usize).init(allocator),
         };
-    }
-
-    /// The callbacks must remain callable for the linked executable's lifetime.
-    /// Runtime object generation leaves these bindings unset.
-    pub fn setComptimeHooks(self: *HostSplice, hooks: ?LirCodeGenMod.ComptimeHooks) void {
-        self.comptime_hooks = hooks;
     }
 
     /// Copy explicit symbol bindings, not data. The image allocation must outlive
@@ -172,7 +164,6 @@ pub const HostSplice = struct {
                 },
                 .local_data, .jmp_to_return, .retired => continue,
             };
-            if (ComptimeHook.fromName(name) != null) continue;
             if (compilerFunction(name, boxy_native_fns) != null or code_symbols.contains(name) or self.data_names.contains(name) or self.hosted_stubs.contains(name)) continue;
             if (!containsName(needed.items, name)) try needed.append(self.allocator, name);
         }
@@ -182,7 +173,6 @@ pub const HostSplice = struct {
             // process slots reached through symbolic pointer cells.
             if (!relocation.function) continue;
             const name = relocation.name;
-            if (ComptimeHook.fromName(name) != null) continue;
             if (compilerFunction(name, boxy_native_fns) != null or code_symbols.contains(name) or self.data_names.contains(name) or self.hosted_stubs.contains(name)) continue;
             if (!containsName(needed.items, name)) try needed.append(self.allocator, name);
         };
@@ -309,23 +299,6 @@ fn containsName(names: []const []const u8, name: []const u8) bool {
 
 const Binding = enum { compiler_function, image, process_data, unresolved };
 
-/// These private ABI names cannot be supplied by a platform or an artifact.
-const ComptimeHook = enum {
-    ensure_static_value,
-
-    fn fromName(name: []const u8) ?ComptimeHook {
-        return std.StaticStringMap(ComptimeHook).initComptime(.{
-            .{ "roc__comptime_ensure_static_value", .ensure_static_value },
-        }).get(name);
-    }
-
-    fn address(self: ComptimeHook, hooks: LirCodeGenMod.ComptimeHooks) usize {
-        return switch (self) {
-            inline .ensure_static_value => |hook| @intFromPtr(@field(hooks, @tagName(hook))),
-        };
-    }
-};
-
 /// Resolves relocation names against the compiler and the image.
 const Binder = struct {
     splice: *HostSplice,
@@ -339,11 +312,6 @@ const Binder = struct {
     /// Bind `name` before the image exists, registering a stub for a
     /// function of the compiler.
     fn classify(self: *Binder, name: []const u8) Allocator.Error!Binding {
-        if (ComptimeHook.fromName(name)) |hook| {
-            const hooks = self.splice.comptime_hooks orelse return .unresolved;
-            try self.stub_targets.put(self.allocator, hook.address(hooks), {});
-            return .compiler_function;
-        }
         if (compilerFunction(name, self.boxy_native_fns)) |target| {
             try self.stub_targets.put(self.allocator, target, {});
             return .compiler_function;
@@ -353,11 +321,6 @@ const Binder = struct {
     }
 
     fn address(self: *const Binder, name: []const u8) ?usize {
-        if (ComptimeHook.fromName(name)) |hook| {
-            const hooks = self.splice.comptime_hooks orelse return null;
-            const index = self.stub_targets.getIndex(hook.address(hooks)) orelse return null;
-            return self.image_base + self.stubs_start + index * stub_size;
-        }
         if (compilerFunction(name, self.boxy_native_fns)) |target| {
             const index = self.stub_targets.getIndex(target) orelse return null;
             return self.image_base + self.stubs_start + index * stub_size;
@@ -377,15 +340,12 @@ const Binder = struct {
     }
 
     fn classifyData(self: *Binder, name: []const u8) Allocator.Error!Binding {
-        // Private hooks cannot be supplied as data by a caller, either.
-        if (ComptimeHook.fromName(name) == null and self.splice.static_data_bindings.contains(name)) return .process_data;
+        if (self.splice.static_data_bindings.contains(name)) return .process_data;
         return self.classify(name);
     }
 
     fn dataAddress(self: *const Binder, name: []const u8) ?usize {
-        if (ComptimeHook.fromName(name) == null) {
-            if (self.splice.static_data_bindings.get(name)) |address_value| return address_value;
-        }
+        if (self.splice.static_data_bindings.get(name)) |address_value| return address_value;
         return self.address(name);
     }
 
@@ -473,16 +433,7 @@ test "a stub jumps to its target" {
     try std.testing.expectEqual(@as(u64, 42), stub());
 }
 
-test "comptime hook bindings are explicit for every private ABI symbol" {
-    const Hooks = struct {
-        var ensured: ?u32 = null;
-        fn ensure(slot: u32) callconv(.c) void {
-            ensured = slot;
-        }
-    };
-    const hooks: LirCodeGenMod.ComptimeHooks = .{
-        .ensure_static_value = &Hooks.ensure,
-    };
+test "compiler symbols keep precedence over image definitions" {
     const allocator = std.testing.allocator;
     var splice = HostSplice.init(allocator);
     defer splice.deinit();
@@ -501,52 +452,12 @@ test "comptime hook bindings are explicit for every private ABI symbol" {
         .image_base = 4096,
         .stubs_start = 32,
     };
-    inline for (@typeInfo(ComptimeHook).@"enum".field_names) |field_name| {
-        const name = "roc__comptime_" ++ field_name;
-        // Even an image definition cannot mask a missing private binding.
-        try symbols.put(name, 8);
-        try std.testing.expectEqual(Binding.unresolved, try binder.classify(name));
-        try std.testing.expectEqual(null, binder.address(name));
-        try std.testing.expectEqual(@as(usize, 0), targets.count());
-    }
-    splice.setComptimeHooks(hooks);
-    inline for (@typeInfo(ComptimeHook).@"enum".field_names) |field_name| {
-        const name = "roc__comptime_" ++ field_name;
-        const target = @intFromPtr(@field(hooks, field_name));
-        try std.testing.expectEqual(Binding.compiler_function, try binder.classify(name));
-        const index = targets.getIndex(target).?;
-        try std.testing.expectEqual(@as(?usize, 4096 + 32 + index * stub_size), binder.address(name));
-    }
-    try std.testing.expectEqual(null, ComptimeHook.fromName("roc__comptime_ensure_static_value_extra"));
-    try std.testing.expectEqual(null, ComptimeHook.fromName("roc__comptime_unknown"));
     try std.testing.expectEqual(Binding.unresolved, try binder.classify("roc__comptime_unknown"));
-    // Ordinary compiler symbols retain precedence over image definitions.
     try symbols.put("memcpy", 8);
     try std.testing.expectEqual(Binding.compiler_function, try binder.classify("memcpy"));
     try symbols.put("roc__pexample", 8);
     try std.testing.expectEqual(Binding.image, try binder.classify("roc__pexample"));
     try std.testing.expectEqual(@as(?usize, 4104), binder.address("roc__pexample"));
-
-    if (builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .aarch64) {
-        var executable = try ExecutableMemory.initWritable(targets.count() * stub_size, stub_size, 0);
-        defer executable.deinit();
-        binder.image_base = @intFromPtr(executable.memory.ptr);
-        binder.stubs_start = 0;
-        for (targets.keys(), 0..) |target, index| {
-            writeStub(executable.memory[index * stub_size ..][0..stub_size], target);
-        }
-        try executable.finishWrite();
-        const ensure: @TypeOf(hooks.ensure_static_value) = @ptrFromInt(binder.address("roc__comptime_ensure_static_value").?);
-        Hooks.ensured = null;
-        ensure(7);
-        try std.testing.expectEqual(@as(?u32, 7), Hooks.ensured);
-    }
-    splice.setComptimeHooks(null);
-    inline for (@typeInfo(ComptimeHook).@"enum".field_names) |field_name| {
-        const name = "roc__comptime_" ++ field_name;
-        try std.testing.expectEqual(Binding.unresolved, try binder.classify(name));
-        try std.testing.expectEqual(null, binder.address(name));
-    }
 }
 
 test "static bindings link pointer cells without copying mutable slots" {

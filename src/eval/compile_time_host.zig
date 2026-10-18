@@ -8,15 +8,7 @@
 const std = @import("std");
 const base = @import("base");
 const builtins = @import("builtins");
-const lir = @import("lir");
-const FinalizeError = @import("check").CheckedArtifact.CompileTimeFinalizer.Error;
 
-/// Exact producer-completion callback for a compile-time static slot read.
-pub const SlotDemand = struct {
-    pub const Error = FinalizeError || error{CompileTimeDependencyCycle};
-    context: *anyopaque,
-    ensure: *const fn (*anyopaque, lir.LIR.StaticDataId) Error!void,
-};
 const sljmp = @import("sljmp");
 const crash_boundary_mod = @import("crash_boundary.zig");
 const signal_handler = base.signal_handler;
@@ -38,7 +30,6 @@ pub const Termination = enum {
     returned,
     crashed,
     host_oom,
-    host_error,
 };
 
 /// Where in generated code a failure happened, as the machine left it. The
@@ -89,10 +80,7 @@ code_end: usize = 0,
 entry_frame: usize = 0,
 /// Where the run failed, once it has.
 failure: ?FailurePoint = null,
-slot_demand: ?SlotDemand = null,
-operational_error: ?FinalizeError = null,
 timing_io: ?std.Io = null,
-suspended_ns: u64 = 0,
 jmp_buf: JmpBuf = undefined,
 active_jmp_buf: ?*JmpBuf = null,
 termination: Termination = .returned,
@@ -134,8 +122,6 @@ pub fn resetForRun(self: *CompileTimeHost) void {
     self.clearHostState();
     _ = self.host_arena.reset(.free_all);
     self.failure = null;
-    self.operational_error = null;
-    self.suspended_ns = 0;
     _ = self.arena.reset(.free_all);
     self.termination = .returned;
     self.active_jmp_buf = null;
@@ -207,42 +193,6 @@ pub fn crashMessage(self: *const CompileTimeHost) ?[]const u8 {
         }
     }
     return null;
-}
-
-/// Start measuring time spent suspended while another root completes.
-pub fn startDemandTiming(self: *CompileTimeHost) i128 {
-    return if (self.timing_io) |io| std.Io.Timestamp.now(io, .awake).nanoseconds else 0;
-}
-
-/// Accumulate nested demand time for exclusive root timing.
-pub fn finishDemandTiming(self: *CompileTimeHost, started: i128) void {
-    if (self.timing_io) |io| self.suspended_ns += @intCast(@max(0, std.Io.Timestamp.now(io, .awake).nanoseconds - started));
-}
-
-/// A static read demands completion of its explicitly identified producer.
-pub fn rocComptimeEnsureStaticValue(slot: u32) callconv(.c) void {
-    const roc_ops = enteredOps();
-    const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
-    const demand = self.slot_demand orelse return;
-    const started = self.startDemandTiming();
-    const result = demand.ensure(demand.context, @fromBackingInt(@intCast(slot)));
-    self.finishDemandTiming(started);
-    result catch |err| switch (err) {
-        error.CompileTimeDependencyCycle => {
-            const message = "cyclic compile-time value dependency";
-            rocCrashed(roc_ops, message.ptr, message.len);
-        },
-        else => |operational| {
-            self.operational_error = operational;
-            self.jump(.host_error);
-        },
-    };
-}
-
-/// The ops of the evaluation this thread entered, which the hook above is
-/// only ever called from.
-fn enteredOps() *RocOps {
-    return builtins.in_process_host.current() orelse base.invariant("{s}", .{"compile-time hook ran on a thread that entered no host"});
 }
 
 fn clearHostState(self: *CompileTimeHost) void {

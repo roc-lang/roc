@@ -546,8 +546,7 @@ A symbol's scope says whether its name means the same thing in every program,
 which decides whether code referring to it can be cached and linked into
 another program. Code generation declares the scope of every symbol it refers
 to when it interns it (`SymbolTable.Scope`): `shared` for procedures, refcount
-helpers, builtins, host and hosted functions, compile-time hooks, and
-content-named data; `program` for slot values and binding cells, and for the
+helpers, builtins, host and hosted functions, and content-named data; `program` for slot values and binding cells, and for the
 Boxy runtime, whose calls index this program's descriptor sidecar. Symbols
 only object emission names declare no scope, and reading the scope of a
 relocation target no reference declared is an invariant violation. Relocations
@@ -2035,9 +2034,8 @@ Native compile-time instruction generation consumes an explicit, read-only LIR
 demand closure seeded by compile-time root procedures and materialized callable
 relocations. Runtime-only procedures are in that program only when the runtime
 consumer shares it, and are then left un-JIT-compiled. Runtime
-machine emission is a distinct consumer: compile-time
-hooks, deterministic dictionary seed, host CPU, and root-entry wrapper ABI are
-explicit execution policies. That machine emission does not repeat checked,
+machine emission is a distinct consumer: host CPU and root-entry wrapper ABI
+are explicit execution policies. That machine emission does not repeat checked,
 Monotype, or host-compatible LIR lowering.
 
 Both native consumers emit native procedure code through the same bounded worker
@@ -2055,12 +2053,12 @@ code revision. Guard completion invalidates every recorded owner of a changed
 statement; accessor replacement advances its owner's revision once. These
 revisions survive compaction but are not cross-program identities. An independent
 target lowering cannot reuse code merely because its procedure identity matches.
-Actual hook, static-binding, dictionary-seed, and entry-initialization dependencies
-further restrict reuse across execution policies. Rejected native procedure code is emitted
+Actual static-binding and entry-initialization dependencies further restrict
+reuse across execution policies. Rejected native procedure code is emitted
 from the consumer's explicit LIR; no body hashing or reconstruction proves reuse.
 
-Native procedure code contains no process-local callback or slot addresses. Compile-time hooks
-use reserved symbolic names. Mutable root bindings use producer-declared pointer
+Native procedure code contains no process-local callback or slot addresses,
+and compile-time code calls nothing in the compiler. Mutable root bindings use producer-declared pointer
 cells with external relocations; JIT image linking supplies the original slot
 address without copying its mutable storage. Immutable carried data is captured
 only from referenced export closure using one prepared catalog. Native procedure code ownership
@@ -6110,7 +6108,7 @@ Every live literal-origin record leaves checking with one explicit resolution:
   definition the draft registers; the specialization reads the root's
   `comptime_value` slot (producer `.literal`); LIR carries `LiteralRootPlan`s
   beside the checked roots' plans; and finalization evaluates each literal root
-  on its first slot demand, and the rest after every checked root. The same
+  in dependency order with every other root. The same
   literal at the same type is one literal root however many specializations
   convert it: its definition's content identity names the conversion. A later specialization reads the first one's root, and its
   read's representation evidence calls the first one's definition, so a
@@ -22377,33 +22375,57 @@ complete identity and requires one exact target member. These identities are
 positions in one Solved program, which is why every LSS runtime consumer
 continues evaluation's Solved program rather than preparing its own.
 
-Shared compile-time execution completes slots on demand. Each declared
-value and failure slot carries its producer's exact checked module and root ID.
-Before reading a static slot, the compile-time interpreter or native hook asks
-the session to ensure that producer has completed. Ordinary materialized slots
-are already ready. A pending producer runs synchronously with independent host,
-return storage, and execution state; the result is stored before the suspended
-read resumes. Completed producers never run again. Re-entering an active
-producer reports an actual cyclic compile-time value dependency through the
-ordinary compile-time crash path. No execution is probed, abandoned, or retried.
+### Dependency-Ordered Compile-Time Evaluation
+
+Compile-time code never asks the compiler to complete a value while it runs:
+evaluation orders its roots so that every value a root reads is complete
+before the root starts. Each declared value and failure slot carries its
+producer's exact checked module and root ID. A root's evaluation runs the
+procedures its root procedure reaches through calls, static data it builds,
+and the constructors a read of a list of copies names; the slots those
+procedures read name the producers the root depends on
+(`CompileTimeRootGraph`). A procedure packed into an erased callable runs only
+when something calls that callable, so it joins a root's evaluation exactly
+when that evaluation makes an erased call: then every callable the evaluation
+packs, and every callable a value it reads holds, may run. A Boxy dictionary
+call, comparison, hash, inspection, or adaptation runs a worker procedure its
+descriptor or dictionary names, so it is an erased call that may run any of
+the program's Boxy workers.
+
+Producers are grouped into the strongly connected groups of that graph, and
+each group gets a level one past the deepest level it reads. The roots of one
+level are independent pure computations and run together, each module's
+checked roots as one batch on the post-check executor's lanes, then each
+literal root. Every root of a level publishes its value or failure before the
+next level starts. A batch's results are committed and reported in the
+batch's root order, so output does not depend on scheduling.
+
+Checking rejects every cycle among named values ("Function Values In Strict
+Demand"), so only hoisted roots can form a group that reads itself: a hoisted
+expression whose evaluation reaches a read of its own value, possibly through
+other hoisted roots. Hoisting is an optimization, so such a value means what
+evaluating the expression in place means, and an evaluation that actually
+reaches a read of a member would, in place, evaluate the member again and
+recurse forever. Every member therefore starts out failed with the stack
+overflow that recursion ends in. Each pass runs the members not yet
+completed; a member whose failure read one of those is neither reported nor
+completed, and runs again once some other member completes. When a pass
+completes no member, the remaining ones fail as they read. Compile-time code
+is pure, so the result is the result of evaluating every member in place, and
+a member that never reaches such a read completes on its first pass.
 
 Writing completed slot values uses session-local reverse links indexed by the
-existing lowering-module and producer IDs. Every representation-specific slot belongs
-to its producer's list; a consumer's optional materialization slot is not a
-complete inventory. Demand and completed slot writes share that association.
-Guard insertion records each slot's guards and their procedure owners, so successful
-completion touches only the affected guards and invalidates each owner's native
-code. Frozen exports retain a direct slot-to-export index. None of these
-execution indexes is serialized in `CheckedModule`. Interpreter forks share the session's append-only frozen-callable registry; resuming after
-nested demand refreshes the borrowed slice, without rescanning completed images.
+existing lowering-module and producer IDs. Every representation-specific slot
+belongs to its producer's list; a consumer's optional materialization slot is
+not a complete inventory. Guard insertion records each slot's guards and their
+procedure owners, so successful completion touches only the affected guards and
+invalidates each owner's native code. Frozen exports retain a direct
+slot-to-export index. None of these execution indexes is serialized in
+`CheckedModule`. Interpreter forks share the session's append-only
+frozen-callable registry.
 
-All declared roots are still requested for diagnostics. Session execution is
-serial and nested demands execute on the same thread; lowering and specialization
-retain their independent parallelism. This preserves the executed dependency
-path for conditional and erased calls without approximating it by every latent
-closure body. Runtime consumers have no demand hook and receive only completed
-slot images. Operational failures unwind through the host boundary and retain
-their original error identity instead of becoming language crashes.
+All declared roots are still requested for diagnostics. Runtime consumers
+receive only completed slot images.
 
 
 ## LirImage And Hosted Functions
