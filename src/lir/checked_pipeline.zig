@@ -1399,6 +1399,8 @@ pub const PreparedMonotype = struct {
 pub const SpecKeyAliases = postcheck.Monotype.Lower.SpecKeyAliases;
 /// See `postcheck.Monotype.Lower.ComptimeDemand`.
 pub const ComptimeDemand = postcheck.Monotype.Lower.ComptimeDemand;
+/// See `PreparedSolved.producerGraph`.
+pub const ComptimeRootGraph = postcheck.ComptimeRootGraph;
 /// See `postcheck.Monotype.Lower.SpecComptimeReads`.
 pub const SpecComptimeReads = postcheck.Monotype.Lower.SpecComptimeReads;
 /// See `postcheck.Common.ComptimeRootRead`.
@@ -1717,6 +1719,29 @@ pub const PreparedSolved = struct {
     /// How many literal roots the producer registered.
     pub fn literalRootCount(self: *const PreparedSolved) usize {
         return self.program.lifted.literalRootsView().len;
+    }
+
+    /// The producers each compile-time producer's evaluation reads: the
+    /// program's first `root_count` roots, which are compile-time roots, as
+    /// producers `0..root_count`, then its literal roots in id order.
+    pub fn producerGraph(self: *const PreparedSolved, allocator: Allocator, root_count: usize) Allocator.Error!postcheck.ComptimeRootGraph.Graph {
+        const lifted = &self.program.lifted;
+        const roots = lifted.rootsView();
+        const literal_roots = lifted.literalRootsView();
+        const lowering_modules = lifted.loweringModules();
+        const producers = try allocator.alloc(postcheck.ComptimeRootGraph.Producer, root_count + literal_roots.len);
+        defer allocator.free(producers);
+        for (roots[0..root_count], producers[0..root_count]) |root, *producer| producer.* = .{
+            .fn_id = root.fn_id,
+            .module = lowering_modules[@backingInt(root.owner)],
+            .root = .{ .checked = root.request.compile_time_root orelse checkedPipelineInvariant("compile-time root reached producer ordering without its checked root identity") },
+        };
+        for (literal_roots, producers[root_count..], 0..) |root, *producer, index| producer.* = .{
+            .fn_id = root.fn_id,
+            .module = root.module,
+            .root = .{ .literal = @fromBackingInt(@intCast(index)) },
+        };
+        return postcheck.ComptimeRootGraph.build(allocator, lifted, producers);
     }
 
     /// Release the retained solved program and its owned continuation metadata.

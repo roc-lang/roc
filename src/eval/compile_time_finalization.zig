@@ -416,7 +416,7 @@ pub const ProgramSession = struct {
         var owned = prepared;
         var owned_live = true;
         errdefer if (owned_live) owned.deinit();
-        const consumer_roots: lir.CheckedPipeline.ConsumerRoots = .{ .roots = self.runtime_positions, .literal_roots = false };
+        const consumer_roots: lir.CheckedPipeline.ConsumerRoots = .{ .roots = self.runtime_positions, .literal_roots = .none };
         const source = if (self.host) |*host| host else {
             // Nothing was evaluated, so the program reads no compile-time
             // value slot.
@@ -917,6 +917,8 @@ pub fn finalizeProgram(
                 .observers = lir.CheckedPipeline.Observers.fromTarget(host_target),
                 .lir_policy = host_lir_policy,
             };
+            var producer_graph = try prepared.producerGraph(allocator, compile_time_root_count);
+            defer producer_graph.deinit(allocator);
             if (!shares_solved) prepared_owned = false;
             host = (if (shares_solved)
                 lir.CheckedPipeline.lowerConsumerToLir(&prepared, host_consumer)
@@ -929,7 +931,7 @@ pub fn finalizeProgram(
                 finalizationInvariant("compile-time consumer lowering changed the requested root count");
             var evaluation_options = options;
             evaluation_options.debug_events = &debug_events;
-            try evaluateLoweredRoots(allocator, modules, &published, lowering_modules, &host.?, compile_time_root_count, evaluation_options);
+            try evaluateLoweredRoots(allocator, modules, &published, lowering_modules, &host.?, compile_time_root_count, .{ .solved = producer_graph.deps }, evaluation_options);
         } else {
             for (modules) |entry| {
                 if (entry.problem_store) |store| try finishPendingExhaustiveness(entry.module, store);
@@ -1146,7 +1148,7 @@ fn materializeBoxyLiterals(
     };
     errdefer host.deinit();
     if (host.lir_result.literal_roots.items.len != 0)
-        try evaluateLoweredRootsWithObservations(allocator, &.{}, &PublishedRequests{}, modules, &host, 0, .{ .stderr = .{} }, false);
+        try evaluateLoweredRootsWithObservations(allocator, &.{}, &PublishedRequests{}, modules, &host, 0, .lir, .{ .stderr = .{} }, false);
 
     if (target.target_usize != host_target.target_usize or target.erased_capture_prefix != host_target.erased_capture_prefix) {
         var runtime_target = target;
@@ -1213,10 +1215,20 @@ fn evaluateLoweredRoots(
     lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
     host: *lir.CheckedPipeline.LoweredProgram,
     compile_time_root_count: usize,
+    producer_deps: ProducerDeps,
     options: Options,
 ) FinalizeError!void {
-    return evaluateLoweredRootsWithObservations(allocator, modules, published, lowering_modules, host, compile_time_root_count, options, true);
+    return evaluateLoweredRootsWithObservations(allocator, modules, published, lowering_modules, host, compile_time_root_count, producer_deps, options, true);
 }
+
+/// Where the order compile-time producers evaluate in comes from. A program
+/// lowered from a Solved program takes it from that program, before any of
+/// its code is lowered (`PreparedSolved.producerGraph`); a Boxy program has
+/// no Solved program and takes it from its own LIR.
+const ProducerDeps = union(enum) {
+    solved: []const []const u32,
+    lir,
+};
 
 fn evaluateLoweredRootsWithObservations(
     allocator: Allocator,
@@ -1225,13 +1237,14 @@ fn evaluateLoweredRootsWithObservations(
     lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
     host: *lir.CheckedPipeline.LoweredProgram,
     compile_time_root_count: usize,
+    producer_deps: ProducerDeps,
     options: Options,
     comptime report_observations: bool,
 ) FinalizeError!void {
     if (comptime compilerHostMustUseInterpreterForCtfe()) {
         const interpreted = try InterpreterProgram.init(allocator, lowering_modules, host, options);
         defer interpreted.deinit();
-        try finalizeLoweredProgram(allocator, modules, published, host, compile_time_root_count, interpreted, options, report_observations);
+        try finalizeLoweredProgram(allocator, modules, published, host, compile_time_root_count, producer_deps, interpreted, options, report_observations);
         host.frozen_static_data = try interpreted.slots.freezeCompleted();
         return;
     }
@@ -1239,7 +1252,7 @@ fn evaluateLoweredRootsWithObservations(
     var native = try DevProgram.init(allocator, lowering_modules, host, options);
     defer native.deinit();
     native.codegen.static_strings = native.static_strings.view();
-    try finalizeLoweredProgram(allocator, modules, published, host, compile_time_root_count, &native, options, report_observations);
+    try finalizeLoweredProgram(allocator, modules, published, host, compile_time_root_count, producer_deps, &native, options, report_observations);
     host.frozen_static_data = try native.freezeCompleted();
 }
 
@@ -1323,23 +1336,31 @@ fn Scheduler(comptime ProgramPtr: type, comptime State: type, comptime Root: typ
             return self.states[self.roots[ordinal].module].ordinals[@backingInt(self.rootId(ordinal))].?;
         }
 
-        fn run(self: *Self, slot_roots: []const ?usize) FinalizeError!void {
+        fn run(self: *Self, slot_roots: []const ?usize, producer_deps: ProducerDeps) FinalizeError!void {
             const allocator = self.allocator;
             const root_count = self.roots.len;
             const producer_count = root_count + self.literalCount();
-            const const_roots = self.lowered.lir_result.const_roots.items;
-            const literal_roots = self.lowered.lir_result.literal_roots.items;
-            const producer_procs = try allocator.alloc(lir.LIR.LirProcSpecId, producer_count);
-            defer allocator.free(producer_procs);
-            for (const_roots[0..root_count], producer_procs[0..root_count]) |plan, *proc| proc.* = plan.proc;
-            for (literal_roots, producer_procs[root_count..]) |plan, *proc| proc.* = plan.proc;
-            var graph = try RootGraph.build(allocator, &self.lowered.lir_result.store, producer_procs, slot_roots, self.lowered.lir_result.boxy_worker_procs.items);
-            defer graph.deinit(allocator);
+            var lir_graph: ?RootGraph.Graph = null;
+            defer if (lir_graph) |*graph| graph.deinit(allocator);
+            const deps = switch (producer_deps) {
+                .solved => |deps| deps,
+                .lir => blk: {
+                    const const_roots = self.lowered.lir_result.const_roots.items;
+                    const literal_roots = self.lowered.lir_result.literal_roots.items;
+                    const producer_procs = try allocator.alloc(lir.LIR.LirProcSpecId, producer_count);
+                    defer allocator.free(producer_procs);
+                    for (const_roots[0..root_count], producer_procs[0..root_count]) |plan, *proc| proc.* = plan.proc;
+                    for (literal_roots, producer_procs[root_count..]) |plan, *proc| proc.* = plan.proc;
+                    lir_graph = try RootGraph.build(allocator, &self.lowered.lir_result.store, producer_procs, slot_roots, self.lowered.lir_result.boxy_worker_procs.items);
+                    break :blk lir_graph.?.deps;
+                },
+            };
+            if (deps.len != producer_count) finalizationInvariant("producer graph named a different count of producers than the program evaluates");
 
             // Producers by strongly connected group, every group after the
             // groups it reads, with each group's level: one past the
             // deepest level it reads.
-            var groups = try ProducerGroups.build(allocator, self, graph);
+            var groups = try ProducerGroups.build(allocator, self, deps);
             defer groups.deinit(allocator);
             var batch = std.ArrayList(usize).empty;
             defer batch.deinit(allocator);
@@ -1541,8 +1562,8 @@ const ProducerGroups = struct {
 
     /// Tarjan's algorithm over canonical producers; groups come out after
     /// every group they read.
-    fn build(allocator: Allocator, scheduler: anytype, graph: RootGraph.Graph) Allocator.Error!ProducerGroups {
-        const count = graph.deps.len;
+    fn build(allocator: Allocator, scheduler: anytype, deps_of: []const []const u32) Allocator.Error!ProducerGroups {
+        const count = deps_of.len;
         var result = ProducerGroups{};
         errdefer result.deinit(allocator);
         const unvisited = std.math.maxInt(u32);
@@ -1575,7 +1596,7 @@ const ProducerGroups = struct {
             while (frames.items.len != 0) {
                 const frame = &frames.items[frames.items.len - 1];
                 const node = frame.node;
-                const deps = graph.deps[node];
+                const deps = deps_of[node];
                 if (frame.next < deps.len) {
                     const dep = scheduler.canonical(deps[frame.next]);
                     frame.next += 1;
@@ -1612,7 +1633,7 @@ const ProducerGroups = struct {
                 // Members in ascending order keep each batch in request order.
                 std.sort.pdq(usize, members, {}, std.sort.asc(usize));
                 for (members) |member| {
-                    for (graph.deps[member]) |raw_dep| {
+                    for (deps_of[member]) |raw_dep| {
                         const dep = scheduler.canonical(raw_dep);
                         if (group_of[dep] == group_id) {
                             reads_itself = true;
@@ -1640,6 +1661,7 @@ fn finalizeLoweredProgram(
     published: *const PublishedRequests,
     lowered: *lir.CheckedPipeline.LoweredProgram,
     root_count: usize,
+    producer_deps: ProducerDeps,
     program: anytype,
     options: Options,
     comptime report_observations: bool,
@@ -1758,7 +1780,7 @@ fn finalizeLoweredProgram(
         .roots = roots,
         .literal_done = literal_done,
     };
-    try scheduler.run(slot_roots);
+    try scheduler.run(slot_roots, producer_deps);
     for (literal_failures.records, literal_failures.embedded, literal_roots) |maybe_record, embedded, plan| {
         const entry = maybe_record orelse continue;
         if (embedded) continue;

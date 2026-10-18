@@ -158,9 +158,17 @@ pub const RootManifest = struct {
     layout_requests: bool = true,
     /// Whether this consumer emits the producer's runtime value schemas.
     runtime_schema_requests: bool = true,
-    /// Whether this consumer lowers the producer's literal roots. Only a
+    /// Which of the producer's literal roots this consumer lowers. Only a
     /// consumer that evaluates compile-time roots runs them.
-    literal_roots: bool = true,
+    literal_roots: LiteralRootShare = .all,
+};
+
+/// The producer literal roots one consumer lowers.
+pub const LiteralRootShare = union(enum) {
+    all,
+    none,
+    /// These, by producer id, in ascending order.
+    only: []const Common.LiteralRootId,
 };
 
 /// Configuration for direct solved-to-LIR lowering.
@@ -499,8 +507,9 @@ const RootEntry = struct {
     request_index: u32,
 };
 
-/// A literal root this consumer lowers, at its producer position.
+/// A literal root this consumer lowers, with its producer id.
 const LiteralRootEntry = struct {
+    id: Common.LiteralRootId,
     fn_id: Type.FnId,
     module: check.CheckedModule.ModuleId,
     site: Common.LiteralRejectionSite,
@@ -1377,16 +1386,22 @@ const Lowerer = struct {
                 });
             }
         }
-        if (self.lowersLiteralRoots()) {
-            const produced_literal_roots = self.solved.lifted.literalRootsView();
-            try self.literal_roots.ensureTotalCapacity(self.allocator, produced_literal_roots.len);
-            for (produced_literal_roots) |root| {
-                self.literal_roots.appendAssumeCapacity(.{
-                    .fn_id = try self.ensureOwnFnSpec(root.fn_id, .finite),
-                    .module = root.module,
-                    .site = root.site,
-                });
-            }
+        const produced_literal_roots = self.solved.lifted.literalRootsView();
+        switch (self.literalRootShare()) {
+            .none => {},
+            .all => {
+                try self.literal_roots.ensureTotalCapacity(self.allocator, produced_literal_roots.len);
+                for (produced_literal_roots, 0..) |root, index| {
+                    try self.appendLiteralRoot(@fromBackingInt(@intCast(index)), root);
+                }
+            },
+            .only => |ids| {
+                try self.literal_roots.ensureTotalCapacity(self.allocator, ids.len);
+                for (ids) |id| {
+                    if (@backingInt(id) >= produced_literal_roots.len) Common.invariant("consumer named a literal root outside the producer's literal roots");
+                    try self.appendLiteralRoot(id, produced_literal_roots[@backingInt(id)]);
+                }
+            },
         }
         // The compile-time roots' closure lowers first, so that a procedure
         // the evaluator runs is known as such when the object cache is
@@ -1421,10 +1436,19 @@ const Lowerer = struct {
         return manifest.runtime_schema_requests;
     }
 
-    /// Whether this consumer lowers the producer's literal roots.
-    fn lowersLiteralRoots(self: *const Lowerer) bool {
-        const manifest = self.root_manifest orelse return true;
+    /// Which of the producer's literal roots this consumer lowers.
+    fn literalRootShare(self: *const Lowerer) LiteralRootShare {
+        const manifest = self.root_manifest orelse return .all;
         return manifest.literal_roots;
+    }
+
+    fn appendLiteralRoot(self: *Lowerer, id: Common.LiteralRootId, root: Lifted.LiteralRoot) Common.LowerError!void {
+        self.literal_roots.appendAssumeCapacity(.{
+            .id = id,
+            .fn_id = try self.ensureOwnFnSpec(root.fn_id, .finite),
+            .module = root.module,
+            .site = root.site,
+        });
     }
 
     fn lowerLayoutRequests(self: *Lowerer) Common.LowerError!void {
@@ -4549,12 +4573,12 @@ const Lowerer = struct {
             }
         }
 
-        // A literal root's position is its id, and its reads and its
+        // A literal root keeps its producer id, and its reads and its
         // evaluation meet in one slot.
-        for (self.literal_roots.items, 0..) |root, index| {
+        for (self.literal_roots.items) |root| {
             const entry = self.fn_entries.items[@backingInt(root.fn_id)];
             const ret_layout = try self.layoutOfType(entry.ret);
-            const id: Common.LiteralRootId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+            const id = root.id;
             try self.result.literal_roots.append(self.allocator, .{
                 .module = root.module,
                 .id = id,
@@ -5918,7 +5942,7 @@ const Lowerer = struct {
         // expression names it within its module.
         const tag: u8, const index: u32 = switch (root.root) {
             .checked => |checked_root| .{ 0, @backingInt(checked_root) },
-            .literal => |literal| .{ 1, self.literal_roots.items[@backingInt(literal)].site.checked_expr },
+            .literal => |literal| .{ 1, self.solved.lifted.literalRootsView()[@backingInt(literal)].site.checked_expr },
         };
         hasher.update(&[_]u8{ tag, @truncate(index), @truncate(index >> 8), @truncate(index >> 16), @truncate(index >> 24) });
         hasher.update(&representation.bytes);
