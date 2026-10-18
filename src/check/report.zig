@@ -5452,14 +5452,31 @@ pub const ReportBuilder = struct {
     /// another module, e.g. a `??` field default materialized per
     /// specialization) as `Module (line N, column M),` owned by the report.
     /// Shared by every comptime problem kind that carries provenance.
-    fn comptimeOriginLocation(self: *Self, report: *Report, origin: ComptimeOrigin) Allocator.Error![]const u8 {
-        const location = try std.fmt.allocPrint(self.gpa, "{s} (line {d}, column {d}),", .{
-            self.problems.getExtraString(origin.module_name),
-            origin.line,
-            origin.column,
-        });
-        defer self.gpa.free(location);
-        return try report.addOwnedString(location);
+    /// A foreign compile-time failure's module and position. A module
+    /// qualified by a package that has no shorthand starts with that
+    /// package's path, so the module name is shown as a path: the report
+    /// spells it the way reports spell every path, and a name that is not an
+    /// absolute path shows as written.
+    const OriginLocation = struct {
+        module_name: []const u8,
+        position: []const u8,
+    };
+
+    fn comptimeOriginLocation(self: *Self, report: *Report, origin: ComptimeOrigin) Allocator.Error!OriginLocation {
+        const position = try std.fmt.allocPrint(self.gpa, " (line {d}, column {d}),", .{ origin.line, origin.column });
+        defer self.gpa.free(position);
+        return .{
+            .module_name = try report.addOwnedString(self.problems.getExtraString(origin.module_name)),
+            .position = try report.addOwnedString(position),
+        };
+    }
+
+    /// The docs naming a foreign failure's location (`comptimeOriginLocation`).
+    fn originLocationDocs(location: OriginLocation) [2]D {
+        return .{
+            D.bytes(location.module_name).withAnnotation(.path),
+            D.bytes(location.position).withAnnotation(.emphasized).withNoPrecedingSpace(),
+        };
     }
 
     /// Build a report for compile-time crash
@@ -5480,10 +5497,11 @@ pub const ReportBuilder = struct {
         if (data.origin) |origin| {
             // The rejected literal was inlined from another module (see
             // ComptimeOrigin); name its declaring module and exact location.
-            const owned_origin_location = try self.comptimeOriginLocation(&report, origin);
+            const origin_docs = originLocationDocs(try self.comptimeOriginLocation(&report, origin));
             try D.renderSlice(&.{
                 D.bytes("The rejected literal is in the module"),
-                D.bytes(owned_origin_location).withAnnotation(.emphasized),
+                origin_docs[0],
+                origin_docs[1],
                 D.bytes("and the implementation returned this error message:"),
             }, self, &report);
         } else {
@@ -5516,10 +5534,11 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         if (data.origin) |origin| {
-            const owned_origin_location = try self.comptimeOriginLocation(&report, origin);
+            const origin_docs = originLocationDocs(try self.comptimeOriginLocation(&report, origin));
             try D.renderSlice(&.{
                 D.bytes("The rejected interpolation is in the module"),
-                D.bytes(owned_origin_location).withAnnotation(.emphasized),
+                origin_docs[0],
+                origin_docs[1],
                 D.bytes("and the implementation returned this error message:"),
             }, self, &report);
         } else {
@@ -5551,12 +5570,13 @@ pub const ReportBuilder = struct {
             // `??` field default materialized per specialization), so the
             // failing expression is not in this module's source; name its
             // declaring module and exact location instead.
-            const owned_origin_location = try self.comptimeOriginLocation(&report, origin);
+            const origin_docs = originLocationDocs(try self.comptimeOriginLocation(&report, origin));
             try D.renderSlice(&.{
                 D.bytes("The"),
                 D.bytes("crash").withAnnotation(.keyword),
                 D.bytes("happened in the module"),
-                D.bytes(owned_origin_location).withAnnotation(.emphasized),
+                origin_docs[0],
+                origin_docs[1],
                 D.bytes("with this message:"),
             }, self, &report);
             try report.document.addLineBreaks(2);
@@ -5592,12 +5612,13 @@ pub const ReportBuilder = struct {
             // `??` field default materialized per specialization), so the
             // failing statement is not in this module's source; name its
             // declaring module and exact location instead.
-            const owned_origin_location = try self.comptimeOriginLocation(&report, origin);
+            const origin_docs = originLocationDocs(try self.comptimeOriginLocation(&report, origin));
             try D.renderSlice(&.{
                 D.bytes("The"),
                 D.bytes("expect").withAnnotation(.keyword),
                 D.bytes("failed in the module"),
-                D.bytes(owned_origin_location).withAnnotation(.emphasized),
+                origin_docs[0],
+                origin_docs[1],
                 D.bytes("with this message:"),
             }, self, &report);
         } else {

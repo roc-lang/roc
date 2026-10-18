@@ -255,6 +255,24 @@ pub const Report = struct {
         return report;
     }
 
+    /// A report whose headline names a file: `before`, then `path`, then
+    /// `after`. Renderers show the path relative to the working directory.
+    pub fn initWithPath(
+        allocator: Allocator,
+        title: []const u8,
+        before: []const u8,
+        path: []const u8,
+        after: []const u8,
+        severity: Severity,
+    ) Allocator.Error!Report {
+        var report = try init(allocator, title, "", severity);
+        errdefer report.deinit();
+        try report.headline.addReflowingText(before);
+        try report.headline.addAnnotated(path, .path);
+        try report.headline.addReflowingText(after);
+        return report;
+    }
+
     pub fn deinit(self: *Report) void {
         for (self.owned_strings.items) |owned_string| {
             self.allocator.free(@constCast(owned_string));
