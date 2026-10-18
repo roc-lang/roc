@@ -151,10 +151,48 @@ test "lambda solved named backing preserves generated-private authority" {
     );
 }
 
+/// A variable's content as the store keeps it: `Content` with its two large
+/// payloads, `named` and `erased`, held out of line by index. Solving leaves
+/// nearly every variable a link, and the Solved program stays alive while
+/// compile-time evaluation lowers each level from it, so a variable takes a
+/// few words rather than the size of the largest payload.
+const Slot = union(enum) {
+    link: TypeVarId,
+    unbound,
+    forall,
+    primitive: MonoType.Primitive,
+    named: u32,
+    record: Span,
+    tuple: Span,
+    tag_union: Span,
+    list: TypeVarId,
+    box: TypeVarId,
+    func: @FieldType(Content, "func"),
+    lambda_set: Span,
+    erased: u32,
+    zst,
+    mono: @FieldType(Content, "mono"),
+};
+
+const NamedPayload = @FieldType(Content, "named");
+const ErasedPayload = @FieldType(Content, "erased");
+
+fn slotContent(slots: []const Slot, named: []const NamedPayload, erased: []const ErasedPayload, id: TypeVarId) Content {
+    return switch (slots[@backingInt(id)]) {
+        .named => |index| .{ .named = named[index] },
+        .erased => |index| .{ .erased = erased[index] },
+        inline else => |payload, tag| @unionInit(Content, @tagName(tag), payload),
+    };
+}
+
 /// Store for Lambda Solved type variables and their shared spans.
 pub const Store = struct {
     allocator: std.mem.Allocator,
-    vars: std.ArrayList(Content),
+    vars: std.ArrayList(Slot),
+    /// Out-of-line payloads of `named` and `erased` variables. Rewriting a
+    /// variable that already holds one reuses its entry.
+    named_payloads: std.ArrayList(NamedPayload),
+    erased_payloads: std.ArrayList(ErasedPayload),
     owned_named_backings: std.ArrayList(bool),
     spans: std.ArrayList(TypeVarId),
     fields: std.ArrayList(Field),
@@ -170,6 +208,8 @@ pub const Store = struct {
         return .{
             .allocator = allocator,
             .vars = .empty,
+            .named_payloads = .empty,
+            .erased_payloads = .empty,
             .owned_named_backings = .empty,
             .spans = .empty,
             .fields = .empty,
@@ -188,24 +228,55 @@ pub const Store = struct {
         self.fields.deinit(self.allocator);
         self.spans.deinit(self.allocator);
         self.owned_named_backings.deinit(self.allocator);
+        self.erased_payloads.deinit(self.allocator);
+        self.named_payloads.deinit(self.allocator);
         self.vars.deinit(self.allocator);
+    }
+
+    /// The number of variables.
+    pub fn varCount(self: *const Store) usize {
+        return self.vars.items.len;
     }
 
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeVarId {
         const id: TypeVarId = @fromBackingInt(@intCast(@as(u32, @intCast(self.vars.items.len))));
-        try self.vars.append(self.allocator, content);
-        errdefer _ = self.vars.pop();
-        try self.owned_named_backings.append(self.allocator, false);
+        try self.vars.ensureUnusedCapacity(self.allocator, 1);
+        try self.owned_named_backings.ensureUnusedCapacity(self.allocator, 1);
+        const slot = try self.slotFor(null, content);
+        self.vars.appendAssumeCapacity(slot);
+        self.owned_named_backings.appendAssumeCapacity(false);
         return id;
     }
 
-    pub fn set(self: *Store, id: TypeVarId, content: Content) void {
+    pub fn set(self: *Store, id: TypeVarId, content: Content) std.mem.Allocator.Error!void {
+        const slot = try self.slotFor(self.vars.items[@backingInt(id)], content);
         self.mutation_epoch +%= 1;
         if (content == .link and self.owned_named_backings.items[@backingInt(id)]) {
             const target = self.root(content.link);
             self.owned_named_backings.items[@backingInt(target)] = true;
         }
-        self.vars.items[@backingInt(id)] = content;
+        self.vars.items[@backingInt(id)] = slot;
+    }
+
+    /// The slot holding `content`, in place of `previous` when the variable
+    /// already has one: a payload goes into the entry `previous` holds, if it
+    /// holds one of the same kind.
+    fn slotFor(self: *Store, previous: ?Slot, content: Content) std.mem.Allocator.Error!Slot {
+        return switch (content) {
+            .named => |payload| .{ .named = try storePayload(NamedPayload, self.allocator, &self.named_payloads, if (previous) |slot| if (slot == .named) slot.named else null else null, payload) },
+            .erased => |payload| .{ .erased = try storePayload(ErasedPayload, self.allocator, &self.erased_payloads, if (previous) |slot| if (slot == .erased) slot.erased else null else null, payload) },
+            inline else => |payload, tag| @unionInit(Slot, @tagName(tag), payload),
+        };
+    }
+
+    fn storePayload(comptime T: type, allocator: std.mem.Allocator, payloads: *std.ArrayList(T), reuse: ?u32, payload: T) std.mem.Allocator.Error!u32 {
+        if (reuse) |index| {
+            payloads.items[index] = payload;
+            return index;
+        }
+        const index: u32 = @intCast(payloads.items.len);
+        try payloads.append(allocator, payload);
+        return index;
     }
 
     pub fn markNamedBacking(self: *Store, id: TypeVarId) void {
@@ -219,16 +290,20 @@ pub const Store = struct {
     }
 
     pub fn get(self: *const Store, id: TypeVarId) Content {
-        return self.vars.items[@backingInt(id)];
+        return slotContent(self.vars.items, self.named_payloads.items, self.erased_payloads.items, id);
+    }
+
+    fn isLink(self: *const Store, id: TypeVarId) ?TypeVarId {
+        return switch (self.vars.items[@backingInt(id)]) {
+            .link => |target| target,
+            else => null,
+        };
     }
 
     pub fn root(self: *const Store, id: TypeVarId) TypeVarId {
         var current = id;
-        while (true) {
-            const content = self.get(current);
-            if (std.meta.activeTag(content) != .link) return current;
-            current = content.link;
-        }
+        while (self.isLink(current)) |target| current = target;
+        return current;
     }
 
     pub fn rootContent(self: *const Store, id: TypeVarId) Content {
@@ -236,24 +311,18 @@ pub const Store = struct {
     }
 
     pub fn rootCompressed(self: *Store, id: TypeVarId) TypeVarId {
-        var current = id;
-        while (true) {
-            const content = self.get(current);
-            if (std.meta.activeTag(content) != .link) break;
-            current = content.link;
-        }
-
-        const root_id = current;
+        const root_id = self.root(id);
         // Path compression preserves every variable's meaning, so it is not a
-        // mutation observers must see.
-        const epoch = self.mutation_epoch;
-        defer self.mutation_epoch = epoch;
-        current = id;
+        // mutation observers must see. A link's slot holds no payload, so
+        // rewriting one never allocates.
+        var current = id;
         while (current != root_id) {
-            const content = self.get(current);
-            if (std.meta.activeTag(content) != .link) break;
-            self.set(current, .{ .link = root_id });
-            current = content.link;
+            const next = self.isLink(current) orelse break;
+            if (self.owned_named_backings.items[@backingInt(current)]) {
+                self.owned_named_backings.items[@backingInt(root_id)] = true;
+            }
+            self.vars.items[@backingInt(current)] = .{ .link = root_id };
+            current = next;
         }
 
         return root_id;
@@ -342,7 +411,9 @@ pub const Store = struct {
     }
 
     pub const View = struct {
-        vars: []const Content,
+        vars: []const Slot,
+        named_payloads: []const NamedPayload,
+        erased_payloads: []const ErasedPayload,
         spans: []const TypeVarId,
         fields: []const Field,
         tags: []const Tag,
@@ -351,16 +422,20 @@ pub const Store = struct {
         declared_fields: []const DeclaredField,
 
         pub fn get(self: View, id: TypeVarId) Content {
-            return self.vars[@backingInt(id)];
+            return slotContent(self.vars, self.named_payloads, self.erased_payloads, id);
+        }
+
+        /// The number of variables.
+        pub fn varCount(self: View) usize {
+            return self.vars.len;
         }
 
         pub fn root(self: View, id: TypeVarId) TypeVarId {
             var current = id;
-            while (true) {
-                const content = self.get(current);
-                if (std.meta.activeTag(content) != .link) return current;
-                current = content.link;
-            }
+            while (true) switch (self.vars[@backingInt(current)]) {
+                .link => |target| current = target,
+                else => return current,
+            };
         }
 
         pub fn rootContent(self: View, id: TypeVarId) Content {
@@ -395,6 +470,8 @@ pub const Store = struct {
     pub fn view(self: *const Store) View {
         return .{
             .vars = self.vars.items,
+            .named_payloads = self.named_payloads.items,
+            .erased_payloads = self.erased_payloads.items,
             .spans = self.spans.items,
             .fields = self.fields.items,
             .tags = self.tags.items,

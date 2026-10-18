@@ -4423,7 +4423,8 @@ const Lowerer = struct {
         types: SolvedType.Store.View,
         owners: *collections.DenseMap(SolvedType.TypeVarId, SolvedType.TypeVarId),
     ) Common.LowerError!void {
-        for (types.vars, 0..) |content, index| {
+        for (0..types.varCount()) |index| {
+            const content = types.get(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
             if (content != .named) continue;
             const named = content.named;
             if (named.kind == .alias or named.declared_order.len == 0) continue;
