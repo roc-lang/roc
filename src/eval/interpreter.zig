@@ -349,7 +349,6 @@ pub const Interpreter = struct {
     store: *const LirStore,
     layout_store: *const layout_mod.Store,
     helper: LayoutHelper,
-    dict_seed_mode: builtins.utils.DictSeedMode = .runtime,
     /// Arena for runtime-created descriptors whose identities can escape in a
     /// retained callable or host result and must survive later evaluations.
     descriptor_arena: base.SingleThreadArena,
@@ -6879,10 +6878,7 @@ pub const Interpreter = struct {
             },
 
             // ── Hasher ──
-            .dict_pseudo_seed => self.writeHasherValue(ll.ret_layout, switch (self.dict_seed_mode) {
-                .runtime => builtins.utils.dictPseudoSeed(),
-                .comptime_zero => 0,
-            }),
+            .dict_pseudo_seed => self.writeHasherValue(ll.ret_layout, builtins.utils.dictPseudoSeed()),
             .hasher_finish => self.writeHasherValue(ll.ret_layout, builtins.hash.hasher_finish(args[0].read(u64))),
             .hasher_write_bool => blk: {
                 const seed = args[0].read(u64);

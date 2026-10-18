@@ -3261,7 +3261,26 @@ fn lowLevelBorrowSource(
 
 fn computePins(solver: *Solver, roots: []const LIR.LirProcSpecId) SolveError!void {
     fillPinnedProcContracts(solver.store, roots, &solver.pinned);
-    solver.pinned.setUnion(solver.address_taken);
+    debugAssertAddressTakenPinned(solver.store, &solver.address_taken, &solver.pinned);
+}
+
+/// A procedure whose address a value holds is always an erased-callable
+/// specialization, a separate procedure from the one direct calls reach, so
+/// its fixed all-owned convention never constrains the signature direct
+/// callers see (design.md "Erased Callables Are Separate Specializations").
+fn debugAssertAddressTakenPinned(
+    store: *const LirStore,
+    address_taken: *const std.bit_set.DynamicBitSetUnmanaged,
+    pinned: *const std.bit_set.DynamicBitSetUnmanaged,
+) void {
+    if (@import("builtin").mode != .debug) return;
+    var iter = address_taken.iterator(.{});
+    while (iter.next()) |proc_index| {
+        if (!pinned.isSet(proc_index)) {
+            const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+            invariant("ARC invariant violated: proc {d} with ABI {s} has its address taken without an erased-callable ABI", .{ proc_index, @tagName(proc.abi) });
+        }
+    }
 }
 
 /// Computes the pinned-proc set over a freshly allocated bit set; the
@@ -3274,17 +3293,6 @@ pub fn computePinnedProcs(
     var pinned = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.procSpecCount());
     errdefer pinned.deinit(allocator);
     fillPinnedProcContracts(store, roots, &pinned);
-    var reachable = try reachableStatementSet(allocator, store, null);
-    defer reachable.deinit(allocator);
-    var iter = reachable.iterator(.{});
-    while (iter.next()) |stmt_index| {
-        const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-        if (stmt.* == .assign_literal and stmt.assign_literal.value == .proc_ref) {
-            pinned.set(@backingInt(stmt.assign_literal.value.proc_ref));
-        } else if (stmt.* == .assign_packed_erased_fn) {
-            pinned.set(@backingInt(stmt.assign_packed_erased_fn.proc));
-        }
-    }
     return pinned;
 }
 

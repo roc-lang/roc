@@ -87,6 +87,10 @@ pub const CompilationError = error{
 pub const ObjectFileCompiler = struct {
     allocator: Allocator,
     enable_default_platform_runtime: bool = false,
+    /// The program's erased callables reserve the hot-reload capture prefix
+    /// (`LirProgram.Result.erased_capture_prefix`), so its code supports a
+    /// hot-reload session.
+    enable_hot_reload: bool = false,
     timing: ?*Timing = null,
     post_check_executor: ?Executor = null,
     /// Borrowed artifacts from this exact LIR program, never an executable image.
@@ -186,7 +190,7 @@ pub const ObjectFileCompiler = struct {
         boxy_worker_procs: []const lir.LIR.LirProcSpecId,
         target: RocTarget,
     ) CompilationError!CompilationResult {
-        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target, self.enable_default_platform_runtime, self.timing, self.pack_mode, self.splice_source, self.capture_artifacts, self.post_check_executor, self.reuse_same_program);
+        return crossCompileDispatch(self.allocator, lir_store, layout_store, entrypoints, static_data_exports, proc_specs, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target, self.enable_default_platform_runtime, self.enable_hot_reload, self.timing, self.pack_mode, self.splice_source, self.capture_artifacts, self.post_check_executor, self.reuse_same_program);
     }
 
     /// Compile to an object file and write it to a path. Returns whether the
@@ -301,6 +305,7 @@ fn compileWithCodeGen(
     boxy_worker_procs: []const lir.LIR.LirProcSpecId,
     target: RocTarget,
     enable_default_platform_runtime: bool,
+    enable_hot_reload: bool,
     timing: ?*ObjectFileCompiler.Timing,
     pack_mode: bool,
     splice_source: ?SpliceSource,
@@ -335,6 +340,7 @@ fn compileWithCodeGen(
     codegen.generation_mode = .object_file;
     codegen.setStaticDataSymbols(static_data_exports) catch return CompilationError.OutOfMemory;
     codegen.enable_default_platform_runtime = enable_default_platform_runtime;
+    codegen.enable_hot_reload = enable_hot_reload;
 
     const static_rc_helpers = static_data_export.collectRequiredRcHelpers(allocator, static_data_exports) catch {
         return CompilationError.OutOfMemory;
@@ -621,6 +627,7 @@ fn compileWithCodeGen(
         fresh.generation_mode = .object_file;
         fresh.setStaticDataSymbols(static_data_exports) catch return CompilationError.OutOfMemory;
         fresh.enable_default_platform_runtime = enable_default_platform_runtime;
+        fresh.enable_hot_reload = enable_hot_reload;
         ProcArtifact.verifyRoundTrip(CodeGen, allocator, &codegen, &fresh, proc_specs, layout_store, static_strings.exports) catch |err| switch (err) {
             error.OutOfMemory => return CompilationError.OutOfMemory,
             error.NestedCodeRegion,
@@ -1014,6 +1021,7 @@ fn crossCompileDispatch(
     boxy_worker_procs: []const lir.LIR.LirProcSpecId,
     target: RocTarget,
     enable_default_platform_runtime: bool,
+    enable_hot_reload: bool,
     timing: ?*ObjectFileCompiler.Timing,
     pack_mode: bool,
     splice_source: ?SpliceSource,
@@ -1042,6 +1050,7 @@ fn crossCompileDispatch(
                     boxy_worker_procs,
                     target,
                     enable_default_platform_runtime,
+                    enable_hot_reload,
                     timing,
                     pack_mode,
                     splice_source,

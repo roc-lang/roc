@@ -129,7 +129,6 @@ fn reusable(source: Emitter.FragmentContract, target: Emitter.FragmentContract, 
         (source.static_data_readonly != target.static_data_readonly and deps.static_data) or
         (source.hooks_enabled != target.hooks_enabled and !hook_transition) or
         deps.comptime_hooks or deps.static_data or
-        (source.dict_seed_mode != target.dict_seed_mode and deps.dict_seed) or
         (source.initialize_boxy_runtime != target.initialize_boxy_runtime and deps.boxy_runtime_entry))
     {
         metrics.rejected_context +|= 1;
@@ -173,7 +172,6 @@ fn Job(comptime CG: type) type {
             defer cg.deinit();
             cg.borrowStackPlanIndexes(try laneStackPlanIndexes(worker));
             cg.generation_mode = source.generation_mode;
-            cg.dict_seed_mode = source.dict_seed_mode;
             cg.enable_hot_reload = source.enable_hot_reload;
             cg.enable_default_platform_runtime = source.enable_default_platform_runtime;
             cg.comptime_hooks = source.comptime_hooks;
@@ -564,19 +562,16 @@ test "native driver reuse contract is directional and dependency sensitive" {
         .cpu_level = .default,
         .hot_reload = false,
         .default_platform_runtime = false,
-        .dict_seed_mode = .comptime_zero,
         .hooks_enabled = true,
         .initialize_boxy_runtime = false,
         .static_data_readonly = false,
     };
     var runtime = source;
     runtime.hooks_enabled = false;
-    runtime.dict_seed_mode = .runtime;
     var metrics: Metrics = .{};
     try std.testing.expect(reusable(source, runtime, .{}, &metrics));
     try std.testing.expect(!reusable(runtime, source, .{}, &metrics));
     try std.testing.expect(!reusable(source, runtime, .{ .comptime_hooks = true }, &metrics));
-    try std.testing.expect(!reusable(source, runtime, .{ .dict_seed = true }, &metrics));
     try std.testing.expect(!reusable(source, source, .{ .static_data = true }, &metrics));
     try std.testing.expect(reusable(source, runtime, .{ .boxy_runtime = true }, &metrics));
     runtime.target = .arm64linux;

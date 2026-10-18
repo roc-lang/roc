@@ -128,6 +128,16 @@ pub const WorkMetrics = struct {
     lir_continuations: u32 = 0,
 };
 
+/// The inlining a dev build specializes under. The object cache links dev
+/// procedures into other programs, so dev decides inlining from source alone,
+/// the same in every program; compile-time evaluation specializes under it
+/// too, so its code is the code a dev build compiles.
+pub const dev_inline_mode: InlineMode = .wrappers_and_source_single_use;
+
+/// SpecConstr's clone-inlining scope for dev builds and compile-time
+/// evaluation.
+pub const dev_spec_constr_clone_inlining: SpecConstrCloneInlining = .iterator_fusion;
+
 /// Target settings and checked module state for the checked-to-LIR pipeline.
 pub const TargetConfig = struct {
     work_metrics: ?*WorkMetrics = null,
@@ -163,6 +173,12 @@ pub const TargetConfig = struct {
     inline_expects: InlineExpectMode = .run,
     /// Whether ARC may consume a dead Box lender while unboxing.
     consume_dead_boxes: bool = false,
+    /// Lower `Dict`'s pseudo-random seed to zero. The seed decides only bucket
+    /// placement, never anything a program observes, so it changes only
+    /// hash-flooding resistance; dev builds and compile-time evaluation lower
+    /// it to zero so their code is identical, and optimized builds, which are
+    /// what get deployed, keep the runtime seed.
+    zero_dict_seed: bool = false,
     /// Allow `List.map` and `List.update` to reuse a unique input list's
     /// allocation. Map additionally requires interchangeable input and output
     /// element layouts. Optimized builds enable this; dev builds and
@@ -1065,6 +1081,7 @@ pub const SolvedPolicy = struct {
 /// under. A consumer continuing a shared Solved program brings its own.
 pub const LirPolicy = struct {
     consume_dead_boxes: bool,
+    zero_dict_seed: bool,
     list_in_place_map: bool,
     proc_debug_names: bool,
     spec_cache: ?postcheck.Common.SpecCacheLookup,
@@ -1830,10 +1847,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
         .post_check_executor = target.post_check_executor,
         .inline_expects = target.inline_expects,
         .list_in_place_map = target.list_in_place_map,
-        .dict_seed_mode = if (target.comptime_value_reads) .runtime else switch (target.checked_module_state) {
-            .complete => .runtime,
-            .checking_finalization => .comptime_zero,
-        },
+        .dict_seed_mode = if (target.zero_dict_seed) .comptime_zero else .runtime,
         .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
         .layout_request_const_plans = target.layout_request_const_plans,
         .test_plan_metadata = prepared.test_plan_metadata,

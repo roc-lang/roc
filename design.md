@@ -1796,9 +1796,17 @@ LSS runtime program evaluates the requested roots its program demands, a set
 that is itself a function of the checked program and the build's roots
 ("Demand-Driven Compile-Time Evaluation"). Its Solved policy is that of the program
 being built, so evaluation runs inside that program's one specialization;
-with no runtime program, as in `roc check`, it is dev's. Inlining and
-SpecConstr preserve meaning, so the policy changes how evaluation's code is
-built, never what it computes. Every command also gives evaluation the same
+with no runtime program, as in `roc check`, it is a dev build's
+(`CheckedPipeline.dev_inline_mode`). Inlining and SpecConstr preserve meaning,
+so the policy changes how evaluation's code is built, never what it computes.
+Every LIR setting evaluation lowers under is a dev build's too: the rewrites
+that only speed up the produced program stay off, tag-case fusion (which
+bounds list copying) stays on, ARC may consume dead boxes, and `Dict`'s
+pseudo-random seed lowers to zero (`TargetConfig.zero_dict_seed`). The seed
+decides only bucket placement, never anything a program observes, so it
+matters only for hash-flooding resistance, which matters for deployed
+programs: optimized builds keep the runtime seed, and dev builds and
+compile-time evaluation compile the same code. Every command also gives evaluation the same
 object cache (`CompileTimeObjectCache`): the host's dev-policy packs, whose
 procedures run expects. The evaluator's program takes a hit for a procedure
 it runs (under `comptime_closure_hits`) only when the entry names that
@@ -23224,6 +23232,16 @@ rebuilds prefer suitably sized reclaimed image regions and otherwise append
 below the descriptor-slot area. If filesystem changes arrive faster than the host
 can enter the shim, the newest rebuild can still commit a descriptor as long as
 shared memory has capacity; there is no small fixed "loaded slot" cap.
+
+#### Erased Callables Are Separate Specializations
+
+A function turned into an erased callable is specialized separately under the
+erased-callable ABI, a procedure of its own beside the one direct calls reach.
+Only that procedure's address is ever taken (`assign_packed_erased_fn`), and its
+ABI fixes its ownership convention, so whether a function is ever erased never
+changes the signature ARC gives the procedure direct callers use: its code is
+the same in every program. ARC pins every erased-callable procedure by its ABI
+and verifies in debug builds that no other procedure's address is taken.
 
 This lifetime rule also covers boxed Roc closures that cross the host boundary.
 The dev backend generates real erased-callable procedures; it does not insert

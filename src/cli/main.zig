@@ -6197,7 +6197,7 @@ fn writeDevRunImageToSharedMemory(
         defer codegen.deinit();
         codegen.generation_mode = .shim_execution;
         try codegen.setStaticDataSymbols(internal_static_data);
-        codegen.enable_hot_reload = hot_reload_allocation != null;
+        codegen.enable_hot_reload = lowered.lir_result.erased_capture_prefix != 0;
 
         const proc_specs = store.getProcSpecs();
         try codegen.compileAllProcSpecs(proc_specs);
@@ -8255,6 +8255,7 @@ fn compileModulePack(
 
     var object_compiler = backend.ObjectFileCompiler.initForPack(ctx.gpa);
     object_compiler.post_check_executor = build_env.postCheckExecutor();
+    object_compiler.enable_hot_reload = lowered.lir_result.erased_capture_prefix != 0;
     const compiled = object_compiler.compileToObjectFile(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
@@ -8558,6 +8559,7 @@ fn publishCompileTimePack(ctx: *CliCtx, build_env: *BuildEnv) (Allocator.Error |
 
     var object_compiler = backend.ObjectFileCompiler.initForPack(ctx.gpa);
     object_compiler.post_check_executor = build_env.postCheckExecutor();
+    object_compiler.enable_hot_reload = host.lir_result.erased_capture_prefix != 0;
     // Procedures the evaluation spliced from packs are spliced here too.
     object_compiler.splice_source = cache.packs.spliceSource();
     const exports = if (host.frozen_static_data) |frozen| frozen.exports else &.{};
@@ -10961,6 +10963,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     object_compiler.post_check_executor = build_env.postCheckExecutor();
     if (loaded_packs) |packs| object_compiler.splice_source = packs.spliceSource();
     object_compiler.capture_artifacts = object_cache_enabled;
+    object_compiler.enable_hot_reload = lowered.lir_result.erased_capture_prefix != 0;
     defer if (object_compiler.captured_artifacts) |*set| set.deinit();
 
     const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
@@ -12395,9 +12398,7 @@ test "only optimized builds emit thread-confined count updates" {
 fn postCheckInlineModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineMode {
     return switch (opt) {
         .size, .speed => .wrappers,
-        // The object cache links dev procedures into other programs, so dev
-        // decides inlining from source alone, the same in every program.
-        .dev => .wrappers_and_source_single_use,
+        .dev => lir.CheckedPipeline.dev_inline_mode,
         .interpreter => .none,
     };
 }
@@ -12410,7 +12411,16 @@ fn postCheckInlineModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineM
 fn specConstrCloneInliningForOpt(opt: cli_args.OptLevel) postcheck.MonotypeLifted.SpecConstr.CloneInlining {
     return switch (opt) {
         .size, .speed => .all_calls,
-        .dev, .interpreter => .iterator_fusion,
+        .dev, .interpreter => lir.CheckedPipeline.dev_spec_constr_clone_inlining,
+    };
+}
+
+/// Only optimized builds, which are what get deployed, keep `Dict`'s runtime
+/// seed (`TargetConfig.zero_dict_seed`).
+fn zeroDictSeedForOpt(opt: cli_args.OptLevel) bool {
+    return switch (opt) {
+        .size, .speed => false,
+        .dev, .interpreter => true,
     };
 }
 
@@ -12524,6 +12534,7 @@ fn checkedRuntimeLoweringConfig(
                 .platform_entrypoints, .linked_output => inlineExpectModeForOpt(opt),
             },
             .list_in_place_map = listInPlaceMapForOpt(opt),
+            .zero_dict_seed = zeroDictSeedForOpt(opt),
             .tag_reachability = tagReachabilityForOpt(opt),
             .prove_ranges = proveRangesForOpt(opt),
             .scalarize_joins = optimizeLirForOpt(opt),

@@ -307,7 +307,6 @@ pub const FragmentContextDependencies = struct {
     static_data: bool = false,
     boxy_runtime_entry: bool = false,
     boxy_runtime: bool = false,
-    dict_seed: bool = false,
 };
 
 /// Non-LIR inputs to fragment emission. Reuse additionally requires producer
@@ -320,7 +319,6 @@ pub const FragmentContract = struct {
     cpu_level: CpuLevel,
     hot_reload: bool,
     default_platform_runtime: bool,
-    dict_seed_mode: builtins.utils.DictSeedMode,
     hooks_enabled: bool,
     initialize_boxy_runtime: bool,
     /// Execution roots retain mutable slot identity; object roots own constants.
@@ -648,7 +646,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Resolved readonly values used only by in-process native execution.
         native_static_data: []const usize,
         /// Explicit execution-environment policy for shared compile-time LIR.
-        dict_seed_mode: builtins.utils.DictSeedMode = .runtime,
         /// Borrowed producer declarations and cached IDs for internal static roots.
         static_data_symbols: collections.DenseMap(lir.LIR.StaticDataId, StaticDataSymbol),
         literal_symbols: collections.DenseMap(u32, SymbolTable.Id),
@@ -7248,8 +7245,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (narrowEnum(HasherOp, ll.op)) {
                 .dict_pseudo_seed => {
                     if (args.len != 0) unreachable;
-                    self.fragment_context.dict_seed = true;
-                    if (self.dict_seed_mode == .comptime_zero) return .{ .immediate_i64 = 0 };
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     defer builder.deinit();
                     try self.callBuiltin(&builder, LowLevelBuiltins.hasherOp(.dict_pseudo_seed));
@@ -18008,7 +18003,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .cpu_level = self.cpu_level,
                 .hot_reload = self.enable_hot_reload,
                 .default_platform_runtime = self.enable_default_platform_runtime,
-                .dict_seed_mode = self.dict_seed_mode,
                 .hooks_enabled = self.comptime_hooks != null,
                 .initialize_boxy_runtime = mode == .object_file,
                 .static_data_readonly = mode == .object_file,

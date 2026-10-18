@@ -572,10 +572,12 @@ fn deinitRootRequests(allocator: Allocator, roots: lir.CheckedPipeline.RootReque
 }
 
 /// The Solved policy compile-time evaluation specializes under when no
-/// runtime program shares its specialization, as in `roc check`: dev's.
+/// runtime program shares its specialization, as in `roc check`: a dev
+/// build's, so the code it compiles and caches is what a dev build of the
+/// same program compiles.
 const check_solved_policy = lir.CheckedPipeline.SolvedPolicy.fromTarget(.{
-    .inline_mode = .wrappers,
-    .spec_constr_clone_inlining = .iterator_fusion,
+    .inline_mode = lir.CheckedPipeline.dev_inline_mode,
+    .spec_constr_clone_inlining = lir.CheckedPipeline.dev_spec_constr_clone_inlining,
 });
 
 /// The target compile-time evaluation lowers under. Its Solved policy is
@@ -592,9 +594,12 @@ fn compileTimeTarget(options: Options, solved_policy: lir.CheckedPipeline.Solved
         .comptime_value_reads = true,
         .literal_roots = true,
         .inline_expects = .run,
-        // The rewrites that only speed up the produced program stay off,
-        // as in dev builds: compile-time code runs once.
-        .fuse_tag_cases = false,
+        // Every LIR setting is a dev build's, so compile-time code is the
+        // code a dev build compiles: the rewrites that only speed up the
+        // produced program stay off, and tag-case fusion, which bounds list
+        // copying, stays on.
+        .consume_dead_boxes = true,
+        .zero_dict_seed = true,
         .scalarize_joins = false,
         .reuse_boxes = false,
         // Specialization records procedure names for every consumer of the
@@ -884,6 +889,7 @@ pub fn finalizeProgram(
                     .runtime_schema_requests = false,
                 },
                 .target_usize = host_target.target_usize,
+                .erased_capture_prefix = host_target.erased_capture_prefix,
                 .inline_expects = host_target.inline_expects,
                 .observers = lir.CheckedPipeline.Observers.fromTarget(host_target),
                 .lir_policy = host_lir_policy,
@@ -3070,7 +3076,6 @@ const InterpreterProgram = struct {
         errdefer self.interpreter.deinit();
         self.host.bindInterpreter(&self.interpreter);
         self.callable_owner = .forInterpreter(&self.interpreter);
-        self.interpreter.dict_seed_mode = .comptime_zero;
         self.slots.image.resolveFunctionRelocations(.{ .resolve = resolveFunction }) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => finalizationInvariant("interpreter image omitted a callable procedure"),
@@ -3104,7 +3109,6 @@ const InterpreterProgram = struct {
         child.interpreter = try Interpreter.initWithBoxyTables(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, Interpreter.BoxyTables.fromResult(&lowered.lir_result), self.interpreter.static_strings, child.host.ops());
         errdefer child.interpreter.deinit();
         child.host.bindInterpreter(&child.interpreter);
-        child.interpreter.dict_seed_mode = .comptime_zero;
         child.interpreter.static_data_demand = .{ .context = child, .ensure = ensureStaticData };
         child.refreshCallableMetadata();
         return child;
@@ -3598,9 +3602,9 @@ const DevProgram = struct {
             roc_target.host_cpu.level(),
         );
         errdefer codegen.deinit();
-        codegen.dict_seed_mode = .comptime_zero;
         codegen.setNativeStaticData(slots.addresses);
         try codegen.setStaticDataSymbols(slots.materialized);
+        codegen.enable_hot_reload = lowered.lir_result.erased_capture_prefix != 0;
         const hooks = backend.dev.LirCodeGenMod.ComptimeHooks{
             .ensure_static_value = CompileTimeHost.rocComptimeEnsureStaticValue,
         };
@@ -5150,7 +5154,6 @@ test "CTFE native emission uses worker callbacks and retains reusable code witho
         defer strings.deinit();
         var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(allocator, &program.store, &program.layouts, strings.view(), &.{}, &.{}, &.{}, roc_target.host_cpu.level());
         defer codegen.deinit();
-        codegen.dict_seed_mode = .comptime_zero;
         codegen.setComptimeHooks(.{
             .ensure_static_value = CompileTimeHost.rocComptimeEnsureStaticValue,
         });
