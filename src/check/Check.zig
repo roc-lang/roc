@@ -1175,6 +1175,10 @@ scratch_replay_walked: std.AutoHashMapUnmanaged(DispatchReplayPair, void) = .emp
 /// constraint fixpoints revisit the same raw body-dispatch use; this index makes them reuse
 /// the recorded signature copy in constant time.
 where_method_use_record_by_fn_var: std.AutoHashMapUnmanaged(Var, u32) = .empty,
+/// Obligations that relating a generalized type's same-method requirements
+/// deferred onto the types it related, keyed by the obligation's callable. One
+/// that fails reports the method conflict that forced it.
+merged_method_obligations: std.AutoHashMapUnmanaged(Var, MergedMethodObligation) = .empty,
 /// Explicit derivation edges for constraints copied while instantiating a
 /// selected method target. This distinguishes target-owned recursive
 /// obligations from unrelated caller constraints merely grounded by the same
@@ -1761,6 +1765,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .scratch_replay_walk = .scratch,
     .scratch_replay_walked = .scratch,
     .where_method_use_record_by_fn_var = .keyed,
+    .merged_method_obligations = .keyed,
     .dispatch_derivations = .keyed,
     .dispatch_derivation_by_child_fn_var = .keyed,
     .method_name_mints = .keyed,
@@ -23142,7 +23147,10 @@ fn stepRigidAnnoGen(self: *Self, frame: *AnnoGenFrame, rigid: std.meta.fieldInfo
             if (representative.found_existing) {
                 const representative_constraint = self.scratch_static_dispatch_constraints.items.items[representative.value_ptr.*];
                 _ = try self.runUnify(representative_constraint.constraint.fn_var, scratch_constraint.constraint.fn_var, env, .{
-                    .method_requirements = .{ .method_name = scratch_constraint.constraint.fn_name },
+                    .method_requirements = .{
+                        .method_name = scratch_constraint.constraint.fn_name,
+                        .receiver = anno_var,
+                    },
                 });
                 continue;
             }
@@ -39043,33 +39051,81 @@ fn relateGeneralizedSameMethodRequirements(
     value: ?Var,
     env: *Env,
 ) Allocator.Error!SameMethodRelation {
+    const deferred_start = env.deferred_static_dispatch_constraints.len();
     var probe = try self.beginCommitProbe(env);
     const result = try probe.unify(retained_fn_var, duplicate.fn_var);
     if (result.isEstablished()) {
-        try probe.commit();
+        if (env.deferred_static_dispatch_constraints.len() == deferred_start) {
+            try probe.commit();
+            return .merged;
+        }
+        // The relation deferred obligations onto the types it related. Those
+        // fail as this method conflict, which is described by the two method
+        // types as they were before the relation, so the relation is redone
+        // after recording them.
+        probe.rollback();
+        const merged: MergedMethodObligation = .{
+            .conflict = try self.methodConflict(retained_fn_var, duplicate, receiver_var),
+            .first_fn_var = retained_fn_var,
+            .use_var = self.methodConflictUseVar(duplicate, scheme_var, value),
+            .definition_var = scheme_var,
+        };
+        var redo = try self.beginCommitProbe(env);
+        const redo_result = try redo.unify(retained_fn_var, duplicate.fn_var);
+        std.debug.assert(redo_result.isEstablished());
+        try redo.commit();
+        const deferred_end = env.deferred_static_dispatch_constraints.len();
+        var deferred_index = deferred_start;
+        while (deferred_index < deferred_end) : (deferred_index += 1) {
+            const entry = env.deferred_static_dispatch_constraints.items.items[@intCast(deferred_index)];
+            for (self.types.sliceStaticDispatchConstraints(entry.constraints)) |constraint| {
+                try self.merged_method_obligations.put(self.gpa, constraint.fn_var, merged);
+            }
+        }
         return .merged;
     }
     probe.rollback();
     if (!result.isProblem()) return .erroneous;
 
-    const unify_env = self.unifyEnv();
-    const use_var = self.methodConflictUseVar(duplicate, scheme_var, value);
-    _ = try self.problems.appendProblem(.{ .type_mismatch = .{
-        .types = .{
-            .expected_var = retained_fn_var,
-            .expected_snapshot = try self.snapshotVarForError(retained_fn_var),
-            .actual_var = use_var,
-            .actual_snapshot = try self.snapshotVarForError(duplicate.fn_var),
-        },
-        .method_conflict = .{
-            .method_name = duplicate.fn_name,
-            .first_type = try unifier.methodTypeDisplay(&unify_env, retained_fn_var),
-            .second_type = try unifier.methodTypeDisplay(&unify_env, duplicate.fn_var),
-        },
-    } });
+    try self.appendMethodConflict(.{
+        .conflict = try self.methodConflict(retained_fn_var, duplicate, receiver_var),
+        .first_fn_var = retained_fn_var,
+        .use_var = self.methodConflictUseVar(duplicate, scheme_var, value),
+        .definition_var = scheme_var,
+    }, duplicate.fn_var);
     self.types.assertNoSavepointActive();
     try self.types.poisonOnMismatch(receiver_var, receiver_var);
     return .conflict;
+}
+
+/// A method conflict between two requirements of one method, where it is
+/// reported, and the definition whose generalized type related them.
+const MergedMethodObligation = struct {
+    conflict: problem.MethodConflict,
+    first_fn_var: Var,
+    use_var: Var,
+    definition_var: Var,
+};
+
+fn methodConflict(self: *Self, first_fn_var: Var, second: StaticDispatchConstraint, receiver_var: Var) Allocator.Error!problem.MethodConflict {
+    const unify_env = self.unifyEnv();
+    return .{
+        .method_name = second.fn_name,
+        .first_type = try unifier.methodTypeDisplay(&unify_env, first_fn_var, receiver_var),
+        .second_type = try unifier.methodTypeDisplay(&unify_env, second.fn_var, receiver_var),
+    };
+}
+
+fn appendMethodConflict(self: *Self, merged: MergedMethodObligation, second_fn_var: Var) Allocator.Error!void {
+    _ = try self.problems.appendProblem(.{ .type_mismatch = .{
+        .types = .{
+            .expected_var = merged.first_fn_var,
+            .expected_snapshot = try self.snapshotVarForError(merged.first_fn_var),
+            .actual_var = merged.use_var,
+            .actual_snapshot = try self.snapshotVarForError(second_fn_var),
+        },
+        .method_conflict = merged.conflict,
+    } });
 }
 
 fn methodConflictUseVar(self: *Self, duplicate: StaticDispatchConstraint, scheme_var: Var, value: ?Var) Var {
@@ -55929,6 +55985,19 @@ fn reportConstraintErrorAt(
     owner_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
     if (try self.constraintErrorAlreadyReported(dispatcher_var, constraint, env, explicit_error_expr)) return;
+
+    // An obligation that relating two requirements of one method deferred
+    // fails because the uses needed two different methods of that name. The
+    // definition's type was generalized from that relation, so it is poisoned
+    // with the obligation: its uses report nothing further.
+    if (self.merged_method_obligations.get(constraint.fn_var)) |merged| {
+        try self.appendMethodConflict(merged, constraint.fn_var);
+        try self.poisonConstraintFailure(dispatcher_var, constraint, env, explicit_error_expr);
+        try self.markStaticDispatchRejected(constraint);
+        self.types.assertNoSavepointActive();
+        try self.types.poisonOnMismatch(merged.definition_var, merged.definition_var);
+        return;
+    }
 
     if (self.defaultDecidedRecordFor(dispatcher_var)) |record_idx| {
         try self.reportUndeterminedType(record_idx, dispatcher_var, constraint, explicit_error_expr orelse owner_expr);

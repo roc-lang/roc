@@ -137,3 +137,34 @@ test "issue 12310: a parser whose type is already known meets the second format'
     defer env.deinit();
     try env.assertNoErrors();
 }
+
+test "issue 12310: a literal forced onto a type by relating two same-method requirements is one method conflict" {
+    var env = try TestEnv.init("Test",
+        \\Runner :: {}.{
+        \\    run = |_runner, body| body({}).repeat(3)
+        \\}
+        \\
+        \\demo = |runner| (runner.run(|{}| "a"), runner.run(|{}| [1.U64]))
+    );
+    defer env.deinit();
+    try env.assertOneTypeErrorMsg(
+        \\**Type Mismatch**
+        \\This is used in a way that requires its type to have two different, incompatible `run` methods, but no type can have more than one `run` method.
+        \\```roc
+        \\demo = |runner| (runner.run(|{}| "a"), runner.run(|{}| [1.U64]))
+        \\```
+        \\                 ^^^^^^^^^^^^^^^^^^^^
+        \\
+        \\One part of this use needs `run` to have this type:
+        \\
+        \\    a, ({} -> List(U64)) -> _ret
+        \\
+        \\Another part needs it to have this type:
+        \\
+        \\    a, ({} -> b) -> _ret where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]
+        \\
+        \\A type has only one `run` method, so no type can satisfy both.
+        \\
+        \\
+    );
+}

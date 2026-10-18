@@ -107,6 +107,10 @@ polarity: types_mod.Polarity,
 /// rendering a type as the program wrote it before a default was chosen: a
 /// literal's own conversion is the literal, not a requirement on its type.
 omit_literal_conversion_constraints: bool = false,
+/// Leave this variable's own requirements out of where clauses. Set only
+/// while writing one of its method types, whose conflict with another of its
+/// requirements is what is being shown.
+omitted_dispatcher: ?Var = null,
 /// The allocator used to create owned fields
 gpa: std.mem.Allocator,
 
@@ -437,6 +441,14 @@ pub fn writeIntoAtPolarity(self: *TypeWriter, into: *std.array_list.Managed(u8),
         try self.writeWhereClause(&aw.writer, var_, into_end - into_start, format);
         collections_mod.managedWriterFinish(&aw, into);
     }
+}
+
+/// Writes `method_var`, a method type `receiver` is required to have, with a
+/// where clause for every requirement it mentions except `receiver`'s own.
+pub fn writeMethodType(self: *TypeWriter, method_var: Var, receiver: Var) error{ OutOfMemory, WriteFailed }!void {
+    self.omitted_dispatcher = self.types.resolveVar(receiver).var_;
+    defer self.omitted_dispatcher = null;
+    try self.write(method_var, .wrap);
 }
 
 /// Writes a type variable to the buffer WITHOUT the where clause.
@@ -1316,6 +1328,9 @@ pub fn writeTagGet(self: *TypeWriter, tag: Tag, root_var: Var) error{ OutOfMemor
 /// Append a constraint with its dispatcher var to the list, if it doesn't already exist
 fn appendStaticDispatchConstraint(self: *TypeWriter, dispatcher_var: Var, constraint_to_add: types_mod.StaticDispatchConstraint) error{ OutOfMemory, WriteFailed }!void {
     if (self.omit_literal_conversion_constraints and constraint_to_add.origin == .from_literal) return;
+    if (self.omitted_dispatcher) |omitted| {
+        if (self.types.resolveVar(dispatcher_var).var_ == omitted) return;
+    }
     for (self.static_dispatch_constraints.items) |item| {
         if (item.constraint.fn_name == constraint_to_add.fn_name and item.constraint.fn_var == constraint_to_add.fn_var) {
             return;

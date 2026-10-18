@@ -95,10 +95,11 @@ const RawTypePair = struct {
 /// agree. A type has one method of each name, so no type can satisfy both.
 const RawMethodConflict = struct {
     method_name: Ident.Idx,
-    /// The two variables whose requirements were being merged, or null when
-    /// the requirements are an annotation's own, whose variable keeps the
-    /// requirement it declared first.
-    receivers: ?RawTypePair,
+    /// The two variables whose requirements were being merged.
+    receivers: RawTypePair,
+    /// False when the requirements are an annotation's own, whose variable
+    /// keeps the requirement it declared first.
+    poison_receivers: bool,
     /// The two required method types.
     methods: RawTypePair,
 };
@@ -332,6 +333,7 @@ pub const Options = struct {
 /// relation compares.
 pub const MethodRequirements = struct {
     method_name: Ident.Idx,
+    receiver: Var,
 };
 
 /// Unify two type variables.
@@ -371,7 +373,8 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
     unifier.deferred_callables = env.deferred_callables;
     const root_mismatch: MismatchHandling = if (opts.method_requirements) |requirements| .{ .record_method_conflict = .{
         .method_name = requirements.method_name,
-        .receivers = null,
+        .receivers = .{ .expected = requirements.receiver, .actual = requirements.receiver },
+        .poison_receivers = false,
         .methods = .{ .expected = a, .actual = b },
     } } else .propagate;
     unifier.scheduleRootPair(a, b, opts.root_relation, root_mismatch) catch |err| switch (err) {
@@ -500,21 +503,20 @@ pub fn snapshotMismatchLeaf(env: *const Env) std.mem.Allocator.Error!?problem_mo
 }
 
 /// Record the method requirements whose disagreement rejected the relation, so
-/// the report can say that no type has two different methods of one name. Each
-/// method type is written without its `where` clause: the clause lists the
-/// requirements of the type in question, which are what conflict.
+/// the report can say that no type has two different methods of one name.
 pub fn snapshotMismatchMethodConflict(env: *const Env) std.mem.Allocator.Error!?problem_mod.MethodConflict {
     const raw = env.unify_scratch.mismatch_evidence.method_conflict orelse return null;
     return .{
         .method_name = raw.method_name,
-        .first_type = try methodTypeDisplay(env, raw.methods.expected),
-        .second_type = try methodTypeDisplay(env, raw.methods.actual),
+        .first_type = try methodTypeDisplay(env, raw.methods.expected, raw.receivers.expected),
+        .second_type = try methodTypeDisplay(env, raw.methods.actual, raw.receivers.actual),
     };
 }
 
-/// A method type's display text, written without its `where` clause.
-pub fn methodTypeDisplay(env: *const Env, method_var: Var) std.mem.Allocator.Error!problem_mod.ExtraStringIdx {
-    env.type_writer.writeWithoutConstraints(method_var) catch return error.OutOfMemory;
+/// A method type's display text. Its where clause leaves out the receiver's
+/// own requirements, which are the ones that conflict.
+pub fn methodTypeDisplay(env: *const Env, method_var: Var, receiver: Var) std.mem.Allocator.Error!problem_mod.ExtraStringIdx {
+    env.type_writer.writeMethodType(method_var, receiver) catch return error.OutOfMemory;
     return env.problems.putExtraString(env.type_writer.get());
 }
 
@@ -522,8 +524,8 @@ pub fn methodTypeDisplay(env: *const Env, method_var: Var) std.mem.Allocator.Err
 /// so later checks of it report nothing further.
 pub fn poisonMethodConflictReceivers(env: *const Env) std.mem.Allocator.Error!void {
     const raw = env.unify_scratch.mismatch_evidence.method_conflict orelse return;
-    const receivers = raw.receivers orelse return;
-    try env.types.poisonOnMismatch(receivers.expected, receivers.actual);
+    if (!raw.poison_receivers) return;
+    try env.types.poisonOnMismatch(raw.receivers.expected, raw.receivers.actual);
 }
 
 /// A temporary unification context used to unify two type variables within a `Store`.
@@ -3508,6 +3510,7 @@ const Unifier = struct {
         try self.scheduleGuardedPair(a_constraint.fn_var, b_constraint.fn_var, .{ .record_method_conflict = .{
             .method_name = a_constraint.fn_name,
             .receivers = receivers,
+            .poison_receivers = true,
             .methods = .{ .expected = a_constraint.fn_var, .actual = b_constraint.fn_var },
         } });
     }
