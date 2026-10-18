@@ -134,7 +134,6 @@ pub const Problem = union(enum) {
     unmatchable_pattern: UnmatchablePattern,
     match_alt_binder_missing: MatchAltBinderMissing,
     discarded_var_update: DiscardedVarUpdate,
-    comptime_unused_branch: ComptimeUnusedBranch,
     comptime_condition: ComptimeCondition,
     derived_parser_error_row: DerivedParserErrorRow,
     derived_codec_open_record: DerivedCodecOpenRecord,
@@ -724,16 +723,6 @@ pub const NonExhaustiveDestructure = struct {
     empirical: bool = false,
 };
 
-/// A compile-time-only branch or match alternative was not taken by compile-time evaluation.
-pub const ComptimeUnusedBranch = struct {
-    kind: enum {
-        match,
-        if_,
-    },
-    site_region: base.Region,
-    branch_region: base.Region,
-};
-
 /// A conditional expression was known while checking, so it will always make the same choice.
 pub const ComptimeCondition = struct {
     kind: enum {
@@ -744,18 +733,36 @@ pub const ComptimeCondition = struct {
     region: base.Region,
 };
 
+/// The part of a match branch that a redundant or unmatchable pattern problem
+/// is about: either every `|` alternative of the branch, or one alternative.
+pub const MatchBranchPart = enum(u32) {
+    whole_branch = std.math.maxInt(u32),
+    _,
+
+    /// The alternative at this zero-based index within its branch.
+    pub fn alternative(index: u32) MatchBranchPart {
+        std.debug.assert(index != std.math.maxInt(u32));
+        return @fromBackingInt(index);
+    }
+
+    /// The zero-based alternative index, or null for the whole branch.
+    pub fn alternativeIndex(self: MatchBranchPart) ?u32 {
+        return if (self == .whole_branch) null else @backingInt(self);
+    }
+};
+
 /// Problem data for a redundant pattern in a match
 pub const RedundantPattern = struct {
     match_expr: CIR.Expr.Idx,
-    num_branches: u32,
-    problem_branch_index: u32,
+    branch_index: u32,
+    part: MatchBranchPart,
 };
 
 /// Problem data for an unmatchable pattern (pattern on uninhabited type)
 pub const UnmatchablePattern = struct {
     match_expr: CIR.Expr.Idx,
-    num_branches: u32,
-    problem_branch_index: u32,
+    branch_index: u32,
+    part: MatchBranchPart,
 };
 
 /// A name bound by one `|` alternative of a match branch but not by another,

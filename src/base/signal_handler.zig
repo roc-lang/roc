@@ -149,6 +149,40 @@ pub const StackOverflowRecovery = struct {
 
 threadlocal var stack_overflow_recovery: ?*const StackOverflowRecovery = null;
 
+/// The program counter, frame pointer, and stack pointer a stack overflow
+/// interrupted.
+pub const FaultFrame = struct {
+    pc: usize,
+    fp: usize,
+    sp: usize,
+};
+
+threadlocal var overflow_frame: ?FaultFrame = null;
+
+/// The frame the last recovered stack overflow on this thread interrupted,
+/// once; null when the platform's fault context does not provide one.
+pub fn takeOverflowFrame() ?FaultFrame {
+    const frame = overflow_frame;
+    overflow_frame = null;
+    return frame;
+}
+
+fn faultFrame(cpu: anytype) ?FaultFrame {
+    const sp: usize = if (comptime builtin.cpu.arch == .x86_64)
+        @intCast(cpu.gprs.get(.rsp))
+    else if (comptime builtin.cpu.arch == .aarch64)
+        @intCast(cpu.sp)
+    else
+        return null;
+    return .{ .pc = cpu.getPc(), .fp = cpu.getFp(), .sp = sp };
+}
+
+fn posixFaultFrame(context: ?*anyopaque) ?FaultFrame {
+    if (comptime std.debug.cpu_context.Native == noreturn) return null;
+    const cpu = std.debug.cpu_context.fromPosixSignalContext(context) orelse return null;
+    return faultFrame(cpu);
+}
+
 /// Install `recovery` as the current thread's stack-overflow escape route and
 /// return the previously installed one so nested boundaries can restore it.
 /// While no recovery is installed, a stack overflow terminates the process
@@ -541,6 +575,9 @@ fn handleExceptionWindows(exception_info: *EXCEPTION_POINTERS) callconv(.winapi)
 
     if (is_stack_overflow) {
         if (takeStackOverflowRecovery()) |recovery| {
+            if (comptime std.debug.cpu_context.Native != noreturn) {
+                overflow_frame = faultFrame(std.debug.cpu_context.fromWindowsContext(@ptrCast(@alignCast(exception_info.ContextRecord))));
+            }
             recovery.escape(recovery.context);
         }
         if (stack_overflow_callback) |callback| callback();
@@ -571,6 +608,7 @@ fn handleSegvSignal(_: posix.SIG, info: *const posix.siginfo_t, context: ?*anyop
     switch (memory_fault.classifyFault(fault_addr, stack_pointer, thread_stack_bounds)) {
         .stack_overflow => {
             if (takeStackOverflowRecovery()) |recovery| {
+                overflow_frame = posixFaultFrame(context);
                 if (comptime is_darwin) {
                     if (redirectDarwinContextToEscape(context, recovery)) return;
                 }

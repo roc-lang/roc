@@ -38,6 +38,8 @@ pub const MatchTree = @import("match_tree.zig");
 pub const SolvedInline = @import("solved_inline.zig");
 pub const SolvedLirLower = @import("solved_lir_lower.zig");
 pub const ComptimeScalarValues = @import("comptime_scalar_values.zig");
+/// The compile-time producers each producer's evaluation reads.
+pub const ComptimeRootGraph = @import("comptime_root_graph.zig");
 /// Boxy checked-to-LIR planning and lowering components.
 pub const Boxy = @import("boxy/mod.zig");
 pub const StructuralTest = @import("structural_test.zig");
@@ -66,6 +68,7 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("solved_lir_lower.zig"));
     std.testing.refAllDecls(@import("proc_identity.zig"));
     std.testing.refAllDecls(@import("structural_test.zig"));
+    std.testing.refAllDecls(@import("comptime_root_graph.zig"));
 }
 
 test "lambda solved unification loop is iterative" {

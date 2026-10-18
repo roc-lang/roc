@@ -435,11 +435,6 @@ const Printer = struct {
                     try writer.print("expect l{d}\n", .{@backingInt(s.condition)});
                     current = s.next;
                 },
-                .comptime_branch_taken => |s| {
-                    try writeIndent(indent, writer);
-                    try writer.print("comptime_branch_taken site={d} branch={d}\n", .{ @backingInt(s.site), s.branch_index });
-                    current = s.next;
-                },
                 .expect_err => |s| {
                     try writeIndent(indent, writer);
                     try writer.print("expect_err l{d}\n", .{@backingInt(s.message)});
@@ -630,7 +625,7 @@ const Printer = struct {
                 },
                 .comptime_exhaustiveness_failed => |s| {
                     try writeIndent(indent, writer);
-                    try writer.print("comptime_exhaustiveness_failed site={d}\n", .{@backingInt(s.site)});
+                    try writer.print("comptime_exhaustiveness_failed owner={d} checked_site={?d}\n", .{ @backingInt(s.owner), if (s.checked_site) |site| @backingInt(site) else null });
                     return;
                 },
             }

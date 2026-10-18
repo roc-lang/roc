@@ -388,6 +388,30 @@ pub fn localDirectCallee(call: Mono.CallProc) ?FnId {
     };
 }
 
+/// Which functions' code reaches the app filling a platform requirement from
+/// outside it, what each depends on there, and which app functions it
+/// reaches (`Program.fnReachesApp`).
+pub const AppDependencies = struct {
+    reaching: std.DynamicBitSetUnmanaged,
+    /// Per function, meaningful for a reaching one: the digest of what the
+    /// app functions it reaches, directly or through other functions, make
+    /// its code depend on. A closed app function named by site contributes
+    /// its own source identity, so editing its body leaves the digest
+    /// unchanged; any other contributes the platform/app relation.
+    digests: [][32]u8,
+    /// One column per app function referenced from outside the app, set in
+    /// the row of each function reaching it.
+    columns: std.DynamicBitSetUnmanaged,
+    column_callees: []FnId,
+
+    pub fn deinit(self: *AppDependencies, allocator: std.mem.Allocator) void {
+        self.reaching.deinit(allocator);
+        allocator.free(self.digests);
+        self.columns.deinit(allocator);
+        allocator.free(self.column_callees);
+    }
+};
+
 /// Complete Monotype Lifted program plus side arrays.
 pub const Program = struct {
     /// A shard owns only its raw list suffixes. Source rows remain immutable
@@ -443,9 +467,9 @@ pub const Program = struct {
     lowering_modules: ProgramList(check.CheckedModule.ModuleId, "lowering_modules") = .empty,
     /// See `Common.PlatformRequirementFilling` (moved from Monotype).
     platform_requirement_filling: ?Common.PlatformRequirementFilling = null,
-    /// Functions whose code reaches a platform requirement, computed on first
-    /// use by `fnReachesPlatformRequirement`.
-    requirement_reaching_fns: ?std.DynamicBitSetUnmanaged = null,
+    /// Functions whose code reaches the app from outside it, computed on
+    /// first use by `fnReachesApp`.
+    app_dependencies: ?AppDependencies = null,
     /// Source file table for `SourceLoc.file` indices (moved from Monotype).
     source_files: ProgramList(base.SourceFileEntry, "source_files"),
     /// Source location per expression, parallel to `exprs`.
@@ -492,7 +516,7 @@ pub const Program = struct {
         result.current_region = self.current_region;
         result.current_inline_scope = self.current_inline_scope;
         result.platform_requirement_filling = self.platform_requirement_filling;
-        result.requirement_reaching_fns = null;
+        result.app_dependencies = null;
         return result;
     }
 
@@ -689,10 +713,7 @@ pub const Program = struct {
         }
         self.source_files.deinit(self.allocator);
         self.lowering_modules.deinit(self.allocator);
-        if (self.requirement_reaching_fns) |*reaching| reaching.deinit(self.allocator);
-        for (self.comptime_sites.unsafeRawItemsForView()) |site| {
-            self.allocator.free(site.branch_regions);
-        }
+        if (self.app_dependencies) |*dependencies| dependencies.deinit(self.allocator);
         self.comptime_sites.deinit(self.allocator);
         self.comptime_value_roots.deinit(self.allocator);
         self.static_data_values.deinit(self.allocator);
@@ -1018,7 +1039,7 @@ pub const Program = struct {
                     self.shapes.loop_tuple_result = true;
                 }
             },
-            .local, .int_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .row_widen, .let_, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .join_point, .jump, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .literal_rejected, .expect, .@"unreachable", .unit, .frac_f32_lit, .frac_f64_lit, .uninitialized => {},
+            .local, .int_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .row_widen, .let_, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .join_point, .jump, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .literal_rejected, .expect, .@"unreachable", .unit, .frac_f32_lit, .frac_f64_lit, .uninitialized => {},
         }
     }
 
@@ -1180,76 +1201,118 @@ pub const Program = struct {
     /// entry written under that key would then disagree with the identity the
     /// reading program lowered for it.
     pub fn fnSourceDigest(self: *Program, fn_id: FnId) std.mem.Allocator.Error!?[TypeDigestHasher.digest_length]u8 {
-        const fn_ = self.getFn(fn_id);
         var hasher = TypeDigestHasher.init();
-        writeIdentityBytes(&hasher, "roc.lifted.fn-source.v2");
-        if (fn_.source) |template| {
-            writeIdentityBytes(&hasher, "template");
-            writeFnDefDigest(&hasher, &self.names, template.fn_def);
-            if (Mono.generatedBodyKey(template)) |body_key| {
-                writeIdentityBytes(&hasher, "generated_body");
-                hasher.update(&body_key.bytes);
-            } else {
-                writeIdentityBytes(&hasher, "no_generated_body");
-            }
-            hasher.update(&template.evidence_digest.bytes);
-            // The equality digest, not the stored-identity digest: the latter
-            // names a nominal type by the checked type id of whichever
-            // module's store lowered it, and the same specialization lowered
-            // by two programs must have one identity.
-            const mono_digest = self.types.equalityDigest(&self.names, template.mono_fn_ty);
-            hasher.update(&mono_digest.bytes);
-            if (template.discovery) writeIdentityBytes(&hasher, "discovery");
-        } else {
-            const root = fn_.root_identity orelse return null;
-            writeIdentityBytes(&hasher, "root");
-            hasher.update(&root.bytes);
-        }
-        if (fn_.spec_constr_pattern) |pattern| {
-            writeIdentityBytes(&hasher, "spec-constr-clone");
-            hasher.update(&pattern.bytes);
-        } else {
-            writeIdentityBytes(&hasher, "source");
-        }
-        writeIdentityBytes(&hasher, if (fn_.iterator_fusion_scope) "iterator-fusion" else "plain");
-        // The app procedure a platform requirement resolves to is chosen by
-        // the app, not by this function's source or types.
-        if (try self.fnReachesPlatformRequirement(fn_id)) {
-            writeIdentityBytes(&hasher, "platform-requirement");
-            hasher.update(&self.platform_requirement_filling.?.relation);
+        if (!self.writeFnOwnSource(&hasher, fn_id)) return null;
+        // The app procedures a function's code reaches from outside the app
+        // are not determined by its source or types.
+        if (try self.fnAppDependency(fn_id)) |dependency| {
+            writeIdentityBytes(&hasher, "app-dependency");
+            hasher.update(&dependency);
         }
         return hasher.finalResult();
     }
 
-    /// Whether a function's code reaches a value filling a platform
-    /// requirement: it references a function of the filling app from outside
-    /// the app, which only a requirement can, or it references a function
-    /// that reaches one. A function of the app itself does not, since its
-    /// source identity already names the app.
-    pub fn fnReachesPlatformRequirement(self: *Program, fn_id: FnId) std.mem.Allocator.Error!bool {
-        const filling = self.platform_requirement_filling orelse return false;
-        if (self.requirement_reaching_fns) |*reaching| {
-            // Functions added since the last computation have no bit yet.
-            if (reaching.bit_length != self.fnCount()) {
-                reaching.deinit(self.allocator);
-                self.requirement_reaching_fns = null;
+    /// Everything `fnSourceDigest` digests except what the function reaches
+    /// in the app. False for a function with no checked source.
+    fn writeFnOwnSource(self: *Program, hasher: *TypeDigestHasher, fn_id: FnId) bool {
+        const fn_ = self.getFn(fn_id);
+        writeIdentityBytes(hasher, "roc.lifted.fn-source.v2");
+        if (fn_.source) |template| {
+            writeIdentityBytes(hasher, "template");
+            writeFnDefDigest(hasher, &self.names, template.fn_def, template.site_identity);
+            if (Mono.generatedBodyKey(template)) |body_key| {
+                writeIdentityBytes(hasher, "generated_body");
+                hasher.update(&body_key.bytes);
+            } else {
+                writeIdentityBytes(hasher, "no_generated_body");
             }
+            hasher.update(&(template.evidence_site_digest orelse template.evidence_digest).bytes);
+            // The equality digest, not the stored-identity digest: the latter
+            // names a nominal type by the checked type id of whichever
+            // module's store lowered it, and the same specialization lowered
+            // by two programs must have one identity.
+            hasher.update(&self.types.equalityDigest(&self.names, template.mono_fn_ty).bytes);
+            if (template.discovery) writeIdentityBytes(hasher, "discovery");
+        } else {
+            const root = fn_.root_identity orelse return false;
+            writeIdentityBytes(hasher, "root");
+            hasher.update(&root.bytes);
         }
-        if (self.requirement_reaching_fns == null) {
-            self.requirement_reaching_fns = try self.computeRequirementReachingFns(filling);
+        if (fn_.spec_constr_pattern) |pattern| {
+            writeIdentityBytes(hasher, "spec-constr-clone");
+            hasher.update(&pattern.bytes);
+        } else {
+            writeIdentityBytes(hasher, "source");
         }
-        return self.requirement_reaching_fns.?.isSet(@backingInt(fn_id));
+        writeIdentityBytes(hasher, if (fn_.iterator_fusion_scope) "iterator-fusion" else "plain");
+        return true;
     }
 
-    /// The frozen dependency record exported to cache-writing consumers.
-    /// Preparation computes reachability before any consumer borrows it.
-    pub fn fnPlatformRequirementRelation(self: *const Program, fn_id: FnId) ?[32]u8 {
+    /// Whether a function's code reaches the app filling a platform
+    /// requirement, through the requirement or a method of an app type: it
+    /// references a function of the app from outside the app, or it
+    /// references a function that reaches one. A function of the app itself
+    /// does not; its code is the program's own (`LIR.LirProcSpec.code_key`).
+    pub fn fnReachesApp(self: *Program, fn_id: FnId) std.mem.Allocator.Error!bool {
+        const dependencies = (try self.appDependencies()) orelse return false;
+        return dependencies.reaching.isSet(@backingInt(fn_id));
+    }
+
+    /// What a function's code depends on in the app, for a function that
+    /// reaches it (`AppDependencies.digests`).
+    fn fnAppDependency(self: *Program, fn_id: FnId) std.mem.Allocator.Error!?[32]u8 {
+        const dependencies = (try self.appDependencies()) orelse return null;
+        if (!dependencies.reaching.isSet(@backingInt(fn_id))) return null;
+        return dependencies.digests[@backingInt(fn_id)];
+    }
+
+    fn appDependencies(self: *Program) std.mem.Allocator.Error!?*const AppDependencies {
         const filling = self.platform_requirement_filling orelse return null;
-        const reaching = self.requirement_reaching_fns orelse
-            Common.invariant("consumer read platform dependencies before producer preparation");
-        if (reaching.bit_length != self.fnCount())
+        if (self.app_dependencies) |*dependencies| {
+            // Functions added since the last computation have no entry yet.
+            if (dependencies.reaching.bit_length != self.fnCount()) {
+                dependencies.deinit(self.allocator);
+                self.app_dependencies = null;
+            }
+        }
+        if (self.app_dependencies == null) {
+            self.app_dependencies = try self.computeAppDependencies(filling);
+        }
+        return &self.app_dependencies.?;
+    }
+
+    fn frozenAppDependencies(self: *const Program) *const AppDependencies {
+        const dependencies = &(self.app_dependencies orelse
+            Common.invariant("consumer read platform dependencies before producer preparation"));
+        if (dependencies.reaching.bit_length != self.fnCount())
             Common.invariant("consumer read a stale platform dependency record");
-        return if (reaching.isSet(@backingInt(fn_id))) filling.relation else null;
+        return dependencies;
+    }
+
+    /// Whether `fn_id`'s code reaches the app, from the frozen record
+    /// preparation computed before any consumer borrows it. Such code is
+    /// never offered under a specialization key: Monotype would skip its
+    /// body, and with it the app functions the program must lower for it
+    /// (`appCalleesReachedBy`).
+    pub fn fnReachesAppRecord(self: *const Program, fn_id: FnId) bool {
+        if (self.platform_requirement_filling == null) return false;
+        return self.frozenAppDependencies().reaching.isSet(@backingInt(fn_id));
+    }
+
+    /// Append each app function `fn_id`'s code reaches from outside the app.
+    /// A program serving `fn_id`'s code from the object cache lowers these
+    /// itself: the served code calls them by identity, an app function's
+    /// identity names it by site rather than by its code, and only the
+    /// program has its current body.
+    pub fn appCalleesReachedBy(self: *const Program, fn_id: FnId, out: *std.ArrayList(FnId), allocator: std.mem.Allocator) std.mem.Allocator.Error!void {
+        if (self.platform_requirement_filling == null) return;
+        const dependencies = self.frozenAppDependencies();
+        const raw: usize = @backingInt(fn_id);
+        if (!dependencies.reaching.isSet(raw)) return;
+        const width = dependencies.column_callees.len;
+        for (dependencies.column_callees, 0..) |callee, column| {
+            if (dependencies.columns.isSet(raw * width + column)) try out.append(allocator, callee);
+        }
     }
 
     fn fnIsInApp(self: *const Program, fn_id: FnId, filling: Common.PlatformRequirementFilling) bool {
@@ -1263,7 +1326,31 @@ pub const Program = struct {
         return std.mem.eql(u8, &proc_template.artifact.bytes, &filling.app_module);
     }
 
-    fn computeRequirementReachingFns(self: *Program, filling: Common.PlatformRequirementFilling) std.mem.Allocator.Error!std.DynamicBitSetUnmanaged {
+    /// Whether the procedure of the app function `callee` is determined by
+    /// its own source identity: its template is named by site and its
+    /// request is closed (`Mono.FnTemplate.spec_key`), so its signature has
+    /// no lambda sets for the app's bodies to fill.
+    fn appCalleeIsSiteNamed(self: *const Program, callee: FnId) bool {
+        const template = self.getFn(callee).source orelse return false;
+        return template.site_identity != null and template.spec_key != null;
+    }
+
+    /// What a reference from outside the app to the app function `callee`
+    /// makes the referencing code depend on: a site-named callee's own source
+    /// identity, or else the app's code, which the relation names.
+    fn appCalleeDependency(self: *Program, callee: FnId, filling: Common.PlatformRequirementFilling) [32]u8 {
+        var hasher = TypeDigestHasher.init();
+        if (self.appCalleeIsSiteNamed(callee)) {
+            writeIdentityBytes(&hasher, "site-callee");
+            if (!self.writeFnOwnSource(&hasher, callee)) Common.invariant("app function named by site had no checked source");
+        } else {
+            writeIdentityBytes(&hasher, "relation");
+            hasher.update(&filling.relation);
+        }
+        return hasher.finalResult();
+    }
+
+    fn computeAppDependencies(self: *Program, filling: Common.PlatformRequirementFilling) std.mem.Allocator.Error!AppDependencies {
         const fn_count = self.fnCount();
         var reaching = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, fn_count);
         errdefer reaching.deinit(self.allocator);
@@ -1300,47 +1387,99 @@ pub const Program = struct {
         }
         edge_starts[fn_count] = @intCast(edges.items.len);
 
-        // Seed with direct references into the app from outside it, then
-        // propagate to every function referencing a reaching one.
+        // One column per app function referenced from outside the app, with
+        // the dependency it contributes; `seeds` pairs a function with a
+        // column it references directly. A function Monotype completed from
+        // the object cache has no body and reaches nothing: code reaching
+        // the app is never offered under a specialization key.
+        var column_callees = std.ArrayList(FnId).empty;
+        defer column_callees.deinit(self.allocator);
+        var column_digests = std.ArrayList([32]u8).empty;
+        defer column_digests.deinit(self.allocator);
+        var column_by_callee = collections.DenseMap(FnId, u32).init(self.allocator);
+        defer column_by_callee.deinit();
+        const Seed = struct { fn_index: u32, column: u32 };
+        var seeds = std.ArrayList(Seed).empty;
+        defer seeds.deinit(self.allocator);
         for (0..fn_count) |raw| {
             const fn_id: FnId = @fromBackingInt(@intCast(@as(u32, @intCast(raw))));
             if (self.fnIsInApp(fn_id, filling)) continue;
-            const fn_ = self.getFn(fn_id);
-            if (fn_.body == .hosted) if (fn_.source) |template| if (template.cached) |hit| {
-                if (hit.platform_requirement_relation) |relation| {
-                    if (!std.mem.eql(u8, &relation, &filling.relation)) {
-                        Common.invariant("cached requirement dependency disagrees with the producer's app filling");
-                    }
-                    // The cache producer already proved the transitive dependency.
-                    // Its skipped body has no edges to rediscover it from.
-                    reaching.set(raw);
-                    continue;
-                }
-            };
             for (edges.items[edge_starts[raw]..edge_starts[raw + 1]]) |callee| {
-                if (self.fnIsInApp(callee, filling)) {
-                    reaching.set(raw);
-                    break;
+                if (!self.fnIsInApp(callee, filling)) continue;
+                const entry = try column_by_callee.getOrPut(callee);
+                if (!entry.found_existing) {
+                    entry.value_ptr.* = @intCast(column_callees.items.len);
+                    try column_callees.append(self.allocator, callee);
+                    try column_digests.append(self.allocator, self.appCalleeDependency(callee, filling));
                 }
+                try seeds.append(self.allocator, .{ .fn_index = @intCast(raw), .column = entry.value_ptr.* });
             }
         }
-        var changed = true;
+
+        // One row of column bits per function, propagated to every function
+        // referencing one with bits set.
+        const width = column_callees.items.len;
+        var columns = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, fn_count * width);
+        errdefer columns.deinit(self.allocator);
+        for (seeds.items) |seed| {
+            columns.set(seed.fn_index * width + seed.column);
+            reaching.set(seed.fn_index);
+        }
+        var changed = width != 0;
         while (changed) {
             changed = false;
             for (0..fn_count) |raw| {
-                if (reaching.isSet(raw)) continue;
                 const fn_id: FnId = @fromBackingInt(@intCast(@as(u32, @intCast(raw))));
                 if (self.fnIsInApp(fn_id, filling)) continue;
                 for (edges.items[edge_starts[raw]..edge_starts[raw + 1]]) |callee| {
-                    if (reaching.isSet(@backingInt(callee))) {
-                        reaching.set(raw);
-                        changed = true;
-                        break;
+                    const callee_raw: usize = @backingInt(callee);
+                    if (!reaching.isSet(callee_raw)) continue;
+                    for (0..width) |column| {
+                        if (columns.isSet(callee_raw * width + column) and !columns.isSet(raw * width + column)) {
+                            columns.set(raw * width + column);
+                            reaching.set(raw);
+                            changed = true;
+                        }
                     }
                 }
             }
         }
-        return reaching;
+
+        // A reaching function's digest is that of the distinct dependencies
+        // of its columns, in digest order so it does not depend on discovery
+        // order.
+        const digests = try self.allocator.alloc([32]u8, fn_count);
+        errdefer self.allocator.free(digests);
+        @memset(digests, @splat(0));
+        var members = std.ArrayList([32]u8).empty;
+        defer members.deinit(self.allocator);
+        for (0..fn_count) |raw| {
+            if (!reaching.isSet(raw)) continue;
+            members.clearRetainingCapacity();
+            for (0..width) |column| {
+                if (columns.isSet(raw * width + column)) try members.append(self.allocator, column_digests.items[column]);
+            }
+            std.mem.sort([32]u8, members.items, {}, struct {
+                fn lessThan(_: void, lhs: [32]u8, rhs: [32]u8) bool {
+                    return std.mem.order(u8, &lhs, &rhs) == .lt;
+                }
+            }.lessThan);
+            var hasher = TypeDigestHasher.init();
+            writeIdentityBytes(&hasher, "roc.lifted.app-dependency.v1");
+            var previous: ?[32]u8 = null;
+            for (members.items) |member| {
+                if (previous) |prior| if (std.mem.eql(u8, &prior, &member)) continue;
+                hasher.update(&member);
+                previous = member;
+            }
+            digests[raw] = hasher.finalResult();
+        }
+        return .{
+            .reaching = reaching,
+            .digests = digests,
+            .columns = columns,
+            .column_callees = try column_callees.toOwnedSlice(self.allocator),
+        };
     }
 
     /// Checked source identity of a function whose template is keyed by
@@ -1355,7 +1494,7 @@ pub const Program = struct {
         if (!template.procedure_keyed_by_layout or fn_.spec_constr_pattern != null) return null;
         var hasher = TypeDigestHasher.init();
         writeIdentityBytes(&hasher, "roc.lifted.fn-layout-keyed-source.v1");
-        writeFnDefDigest(&hasher, &self.names, template.fn_def);
+        writeFnDefDigest(&hasher, &self.names, template.fn_def, template.site_identity);
         hasher.update(&template.evidence_digest.bytes);
         writeIdentityBytes(&hasher, if (fn_.iterator_fusion_scope) "iterator-fusion" else "plain");
         return hasher.finalResult();
@@ -1956,7 +2095,6 @@ pub fn appendChildren(allocator: std.mem.Allocator, program: *const Program, exp
         .return_ => |ret| try sink.one(ret.value),
         .expect_err => |expect_err| try sink.one(expect_err.msg),
         .literal_rejected => |rejected| try sink.one(rejected.msg),
-        .comptime_branch_taken => |taken| try sink.one(taken.body),
         .let_ => |let_| {
             try sink.one(let_.value);
             try sink.one(let_.rest);
@@ -2300,13 +2438,12 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
     try std.testing.expect(!std.mem.eql(u8, ordinary_digest[0..], clone_digest[0..]));
 }
 
-test "cached requirement summaries preserve source identity and transitive callers" {
+test "code reaching the app digests what it reaches there and names its app callees" {
     var symbols: Common.SymbolGen = .{};
     var program = testLiftedProgram(std.testing.allocator);
     defer program.deinit();
     const app_identity = @as([32]u8, @splat(11));
-    const relation = @as([32]u8, @splat(17));
-    program.platform_requirement_filling = .{ .app_module = app_identity, .relation = relation };
+    program.platform_requirement_filling = .{ .app_module = app_identity, .relation = @splat(17) };
     const ret_ty = try program.types.add(.zst);
     const fn_ty = try program.types.add(.{ .func = .{ .args = Type.Span.empty(), .ret = ret_ty } });
     var app_template = try testSourceDigestTemplate(&program.names, 1);
@@ -2317,7 +2454,11 @@ test "cached requirement summaries preserve source identity and transitive calle
         .source_fn_key = .{},
         .mono_fn_ty = fn_ty,
     };
+    var site_app_source = app_source;
+    site_app_source.site_identity = testSourceDigestKey(3);
+    site_app_source.spec_key = testSourceDigestKey(4);
     const app_fn = try addSourceDigestFn(&program, &symbols, app_source, ret_ty);
+    const site_app_fn = try addSourceDigestFn(&program, &symbols, site_app_source, ret_ty);
     const template = try testSourceDigestTemplate(&program.names, 2);
     const ordinary: Mono.FnTemplate = .{
         .fn_def = .{ .local_template = template },
@@ -2325,54 +2466,55 @@ test "cached requirement summaries preserve source identity and transitive calle
         .source_fn_key = .{},
         .mono_fn_ty = fn_ty,
     };
-    const body = try program.addExpr(.{
+    var callers: [2]FnId = undefined;
+    for ([_]FnId{ app_fn, site_app_fn }, 0..) |callee, index| {
+        const body = try program.addExpr(.{
+            .ty = ret_ty,
+            .data = .{ .call_proc = .{ .callee = .{ .lifted = callee }, .args = Span(ExprId).empty() } },
+        });
+        callers[index] = try program.addFn(.{
+            .symbol = symbols.fresh(),
+            .source = ordinary,
+            .args = Span(TypedLocal).empty(),
+            .captures = Span(TypedLocal).empty(),
+            .body = .{ .roc = body },
+            .ret = ret_ty,
+        });
+    }
+    // A function reaching the app through another function reaches it too.
+    const outer_body = try program.addExpr(.{
         .ty = ret_ty,
-        .data = .{ .call_proc = .{ .callee = .{ .lifted = app_fn }, .args = Span(ExprId).empty() } },
+        .data = .{ .call_proc = .{ .callee = .{ .lifted = callers[1] }, .args = Span(ExprId).empty() } },
     });
-    const cold_fn = try program.addFn(.{
+    const outer = try program.addFn(.{
         .symbol = symbols.fresh(),
         .source = ordinary,
         .args = Span(TypedLocal).empty(),
         .captures = Span(TypedLocal).empty(),
-        .body = .{ .roc = body },
-        .ret = ret_ty,
-    });
-    var cached_source = ordinary;
-    cached_source.cached = .{
-        .identity = @as([32]u8, @splat(0)),
-        .rc_borrowed_params = 0,
-        .rc_ret_borrowed = false,
-        .rc_ret_lenders = 0,
-        .rc_read_only_params = 0,
-        .rc_ret_unique = false,
-        .rc_ret_unique_fields = 0,
-        .rc_ret_conditions = &.{},
-        .platform_requirement_relation = relation,
-    };
-    const cached_fn = try addSourceDigestFn(&program, &symbols, cached_source, ret_ty);
-    const caller_body = try program.addExpr(.{
-        .ty = ret_ty,
-        .data = .{ .call_proc = .{ .callee = .{ .lifted = cached_fn }, .args = Span(ExprId).empty() } },
-    });
-    const caller = try program.addFn(.{
-        .symbol = symbols.fresh(),
-        .source = ordinary,
-        .args = Span(TypedLocal).empty(),
-        .captures = Span(TypedLocal).empty(),
-        .body = .{ .roc = caller_body },
+        .body = .{ .roc = outer_body },
         .ret = ret_ty,
     });
     const independent = try addSourceDigestFn(&program, &symbols, ordinary, ret_ty);
-    try std.testing.expect(try program.fnReachesPlatformRequirement(cold_fn));
-    try std.testing.expect(try program.fnReachesPlatformRequirement(cached_fn));
-    try std.testing.expect(try program.fnReachesPlatformRequirement(caller));
-    try std.testing.expect(!(try program.fnReachesPlatformRequirement(app_fn)));
-    try std.testing.expect(!(try program.fnReachesPlatformRequirement(independent)));
-    const cold_digest = (try program.fnSourceDigest(cold_fn)).?;
-    const cached_digest = (try program.fnSourceDigest(cached_fn)).?;
-    try std.testing.expectEqualSlices(u8, &cold_digest, &cached_digest);
-    const independent_digest = (try program.fnSourceDigest(independent)).?;
-    try std.testing.expect(!std.mem.eql(u8, &cold_digest, &independent_digest));
+    for ([_]FnId{ callers[0], callers[1], outer }) |fn_id| try std.testing.expect(try program.fnReachesApp(fn_id));
+    for ([_]FnId{ app_fn, site_app_fn, independent }) |fn_id| try std.testing.expect(!(try program.fnReachesApp(fn_id)));
+
+    var reached = std.ArrayList(FnId).empty;
+    defer reached.deinit(std.testing.allocator);
+    try program.appCalleesReachedBy(outer, &reached, std.testing.allocator);
+    try std.testing.expectEqualSlices(FnId, &.{site_app_fn}, reached.items);
+
+    // A closed app function named by site contributes its own source
+    // identity, so a different app filling leaves its callers' digests
+    // unchanged; any other app function contributes the relation.
+    var before: [3][32]u8 = undefined;
+    for ([_]FnId{ callers[0], callers[1], outer }, 0..) |fn_id, index| before[index] = (try program.fnSourceDigest(fn_id)).?;
+    try std.testing.expect(!std.mem.eql(u8, &before[1], &(try program.fnSourceDigest(independent)).?));
+    program.app_dependencies.?.deinit(std.testing.allocator);
+    program.app_dependencies = null;
+    program.platform_requirement_filling.?.relation = @splat(18);
+    try std.testing.expect(!std.mem.eql(u8, &before[0], &(try program.fnSourceDigest(callers[0])).?));
+    try std.testing.expectEqualSlices(u8, &before[1], &(try program.fnSourceDigest(callers[1])).?);
+    try std.testing.expectEqualSlices(u8, &before[2], &(try program.fnSourceDigest(outer)).?);
 }
 
 test "a folded match resolves only a layout-resolved site to the branch its answer selects" {
@@ -2434,7 +2576,10 @@ test "monotype lifted declarations are referenced" {
     _ = @import("body_shard_test.zig");
 }
 
-fn writeFnDefDigest(hasher: *TypeDigestHasher, name_store: *const names.NameStore, fn_def: Mono.FnDef) void {
+/// `site_identity` names the function's template (its own or its nested
+/// owner's) in place of the template's module content key and ordinals
+/// (`Mono.FnTemplate.site_identity`).
+fn writeFnDefDigest(hasher: *TypeDigestHasher, name_store: *const names.NameStore, fn_def: Mono.FnDef, site_identity: ?names.TypeDigest) void {
     // Whether a template was requested from its own module or from an
     // importer changes nothing about the code it lowers to, so both spellings
     // digest alike; otherwise a package's pack and the apps that import it
@@ -2448,9 +2593,9 @@ fn writeFnDefDigest(hasher: *TypeDigestHasher, name_store: *const names.NameStor
         .encoder_for_runtime => "encoder_for_runtime",
     });
     switch (fn_def) {
-        .local_template, .imported_template, .checked_generated => |template| writeProcTemplateDigest(hasher, template),
+        .local_template, .imported_template, .checked_generated => |template| writeTemplateDigest(hasher, template, site_identity),
         .nested => |nested| {
-            writeProcTemplateDigest(hasher, nested.owner);
+            writeTemplateDigest(hasher, nested.owner, site_identity);
             writeIdentityU32(hasher, @backingInt(nested.site));
             if (nested.default_root) |root| {
                 writeIdentityBytes(hasher, "default-root");
@@ -2480,6 +2625,16 @@ fn writeFnDefDigest(hasher: *TypeDigestHasher, name_store: *const names.NameStor
             writeProcTemplateDigest(hasher, runtime.owner);
             writeIdentityU32(hasher, @backingInt(runtime.expr));
         },
+    }
+}
+
+fn writeTemplateDigest(hasher: *TypeDigestHasher, template: names.ProcTemplate, site_identity: ?names.TypeDigest) void {
+    if (site_identity) |site| {
+        writeIdentityBytes(hasher, "site");
+        hasher.update(&site.bytes);
+    } else {
+        writeIdentityBytes(hasher, "content");
+        writeProcTemplateDigest(hasher, template);
     }
 }
 

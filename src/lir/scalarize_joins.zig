@@ -688,7 +688,6 @@ const Pass = struct {
                     .expect_err,
                     .runtime_error,
                     .comptime_exhaustiveness_failed,
-                    .comptime_branch_taken,
                     .incref,
                     .decref,
                     .decref_if_initialized,
@@ -1849,7 +1848,6 @@ const Pass = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -1936,7 +1934,6 @@ const Pass = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -2213,7 +2210,7 @@ const Pass = struct {
                     try self.noteUse(rc.cond);
                     try self.noteUse(rc.value);
                 },
-                .join, .jump, .comptime_branch_taken, .runtime_error, .comptime_exhaustiveness_failed => {},
+                .join, .jump, .runtime_error, .comptime_exhaustiveness_failed => {},
             }
             try body_clone.appendSuccessorsInOrder(self.store, &self.stack, current, self.allocator, .{ .switch_edges = .arms_first });
         }

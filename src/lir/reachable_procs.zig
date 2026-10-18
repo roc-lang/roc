@@ -98,6 +98,33 @@ const Pass = struct {
     export_queue: std.ArrayList(LirProgram.StaticDataSymbolId),
     plan_stack: std.ArrayList(LirProgram.ConstPlanId),
     stmt_stack: std.ArrayList(LIR.CFStmtId),
+    /// The compile-time values this program's own roots produce, which a
+    /// program with completed values evaluates itself; built on first use.
+    own_values: ?std.AutoHashMapUnmanaged(OwnValue, void) = null,
+
+    const OwnValue = struct { module: [32]u8, tag: u8, index: u32 };
+
+    fn ownValue(module: @import("check").CheckedModule.ModuleId, producer: LIR.ComptimeProducer) OwnValue {
+        return switch (producer) {
+            .checked => |id| .{ .module = module.bytes, .tag = 0, .index = @backingInt(id) },
+            .literal => |id| .{ .module = module.bytes, .tag = 1, .index = @backingInt(id) },
+        };
+    }
+
+    /// Whether one of this program's own roots produces `root`'s value.
+    fn evaluatesItself(self: *Pass, module: @import("check").CheckedModule.ModuleId, producer: LIR.ComptimeProducer) Allocator.Error!bool {
+        if (self.own_values == null) {
+            var own = std.AutoHashMapUnmanaged(OwnValue, void).empty;
+            errdefer own.deinit(self.allocator);
+            for (self.result.const_roots.items) |root| {
+                const id = root.request.compile_time_root orelse continue;
+                try own.put(self.allocator, ownValue(self.result.lowering_modules.items[@backingInt(root.owner)], .{ .checked = id }), {});
+            }
+            for (self.result.literal_roots.items) |root| try own.put(self.allocator, ownValue(root.module, .{ .literal = root.id }), {});
+            self.own_values = own;
+        }
+        return self.own_values.?.contains(ownValue(module, producer));
+    }
 
     fn init(result: *LirProgram.Result, frozen: ?*LirProgram.FrozenStaticData) Allocator.Error!Pass {
         const allocator = result.store.allocator;
@@ -182,6 +209,7 @@ const Pass = struct {
     }
 
     fn deinit(self: *Pass) void {
+        if (self.own_values) |*own| own.deinit(self.allocator);
         self.allocator.free(self.static_data_exports);
         self.allocator.free(self.old_export_to_new);
         self.allocator.free(self.reachable_exports);
@@ -201,6 +229,9 @@ const Pass = struct {
 
     fn run(self: *Pass) Allocator.Error!void {
         for (self.result.root_procs.items) |proc| {
+            try self.markProc(proc);
+        }
+        for (self.result.retained_procs.items) |proc| {
             try self.markProc(proc);
         }
         for (self.result.const_roots.items) |root| {
@@ -362,7 +393,11 @@ const Pass = struct {
         } else if (self.result.static_data_values.items[index].initializer) |initializer| {
             try self.markProc(initializer);
         } else if (self.frozen != null) {
-            reachableProcInvariant("completed static data slot has no frozen export");
+            // A program lowered after some compile-time values completed
+            // evaluates the rest itself.
+            const root = self.result.static_data_values.items[index].compile_time_root orelse
+                reachableProcInvariant("completed static data slot has no frozen export");
+            if (!try self.evaluatesItself(root.module, root.root)) reachableProcInvariant("completed static data slot has no frozen export");
         } else if (self.result.static_data_values.items[index].compile_time_root == null) {
             reachableProcInvariant("static data slot has neither an initializer nor explicit compile-time ownership");
         }
@@ -465,6 +500,9 @@ const Pass = struct {
         for (self.result.root_procs.items) |*proc| {
             proc.* = self.remapProc(proc.*);
         }
+        for (self.result.retained_procs.items) |*proc| {
+            proc.* = self.remapProc(proc.*);
+        }
         // A specialization whose procedure was unreachable leaves the table.
         var kept: usize = 0;
         for (self.result.spec_procs.items) |spec_proc| {
@@ -495,7 +533,6 @@ const Pass = struct {
         for (self.result.static_data_values.items, 0..) |*value, index| {
             if (!self.reachable_static_data[index]) continue;
             if (value.initializer) |initializer| value.initializer = self.remapProc(initializer);
-            if (value.accessor) |accessor| value.accessor = self.maybeRemapProc(accessor);
             if (value.compile_time_root) |*root| {
                 if (root.role == .value) {
                     root.role.value.failure_slot = self.remapStaticData(root.role.value.failure_slot);
@@ -893,7 +930,6 @@ fn stmtRefs(stmt: *LIR.CFStmt) StmtRefs {
         .expect_err,
         .runtime_error,
         .comptime_exhaustiveness_failed,
-        .comptime_branch_taken,
         .incref,
         .decref,
         .decref_if_initialized,

@@ -275,6 +275,7 @@ pub const BuildArgs = struct {
     synthetic_root_original_source: ?[]const u8 = null, // internal: normalized original source for synthetic-root diagnostics
     synthetic_root_header_len: usize = 0, // internal: byte length of the header prepended to synthetic_root_original_source
     synthetic_root_header_lines: u32 = 0, // internal: newline count of that header, for diagnostic line remapping
+    tier2_objects: ?[]const u8 = null, // internal: compile the tier 2 entries this file requests with LLVM instead of building
 };
 
 /// Arguments for `roc test`
@@ -715,6 +716,9 @@ const target_flag: Flag = .{
         },
 };
 
+/// Internal: names the requests file of a dev build's tier 2 object build (`roc build` compiles those entries with LLVM instead of building).
+const tier2_objects_flag: Flag = .{ .name = "--tier2-objects", .form = .attached, .field = "tier2_objects" };
+
 /// Internal: names the file a watched command writes its input paths and byte states to.
 const watch_inputs_file_flag: Flag = .{ .name = "--watch-inputs-file", .form = .attached, .field = "watch_inputs_file" };
 
@@ -806,6 +810,7 @@ const commands = [_]Command{
             .{ .name = "--no-cache", .field = "no_cache", .help = "Disable compilation caching" },
             .{ .name = "--watch", .field = "watch", .help = "Rebuild when source inputs change" },
             watch_inputs_file_flag,
+            tier2_objects_flag,
             jobs_flag,
             .{ .name = "--wasm-memory", .form = .attached, .field = "wasm_memory", .value_name = "<bytes>", .valid = "positive integer (bytes)", .help = "Initial memory size for WASM targets in bytes (default: sized from data segments plus the stack)" },
             .{ .name = "--wasm-stack-size", .form = .attached, .field = "wasm_stack_size", .value_name = "<bytes>", .valid = "positive integer (bytes)", .help = std.fmt.comptimePrint("Stack size for WASM targets in bytes (default: {d} = {d}MB)", .{ linker.DEFAULT_WASM_STACK_SIZE, linker.DEFAULT_WASM_STACK_SIZE / bytes_per_mb }) },

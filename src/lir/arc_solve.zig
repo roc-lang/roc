@@ -1275,7 +1275,6 @@ pub fn findOutcomeRefinement(
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,
@@ -1706,7 +1705,7 @@ fn computeOutcomeRestitution(
                             bit_escape_present[stmt_index] = false;
                         }
                     },
-                    .assign_literal, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .debug, .expect, .comptime_branch_taken, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .join, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .crash => {},
+                    .assign_literal, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .debug, .expect, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .join, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .crash => {},
                 }
                 if (!valid) break;
                 // Every other statement continues along its flow edges with
@@ -2177,7 +2176,6 @@ fn liftProcStmtFacts(
         .expect_err,
         .runtime_error,
         .comptime_exhaustiveness_failed,
-        .comptime_branch_taken,
         .incref,
         .decref,
         .decref_if_initialized,
@@ -3127,7 +3125,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             try solver.unique_facts.append(allocator, .{ .consume = .{ .local = expect_err_stmt.message, .stmt = current } });
         },
         .expect => |expect_stmt| try solver.unique_facts.append(allocator, .{ .read = expect_stmt.condition }),
-        .comptime_branch_taken => {},
         .incref => |rc| try solver.unique_facts.append(allocator, .{ .destroy = rc.value }),
         .decref => {},
         .decref_if_initialized => |rc| {
@@ -3264,7 +3261,26 @@ fn lowLevelBorrowSource(
 
 fn computePins(solver: *Solver, roots: []const LIR.LirProcSpecId) SolveError!void {
     fillPinnedProcContracts(solver.store, roots, &solver.pinned);
-    solver.pinned.setUnion(solver.address_taken);
+    debugAssertAddressTakenPinned(solver.store, &solver.address_taken, &solver.pinned);
+}
+
+/// A procedure whose address a value holds is always an erased-callable
+/// specialization, a separate procedure from the one direct calls reach, so
+/// its fixed all-owned convention never constrains the signature direct
+/// callers see (design.md "Erased Callables Are Separate Specializations").
+fn debugAssertAddressTakenPinned(
+    store: *const LirStore,
+    address_taken: *const std.bit_set.DynamicBitSetUnmanaged,
+    pinned: *const std.bit_set.DynamicBitSetUnmanaged,
+) void {
+    if (@import("builtin").mode != .debug) return;
+    var iter = address_taken.iterator(.{});
+    while (iter.next()) |proc_index| {
+        if (!pinned.isSet(proc_index)) {
+            const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+            invariant("ARC invariant violated: proc {d} with ABI {s} has its address taken without an erased-callable ABI", .{ proc_index, @tagName(proc.abi) });
+        }
+    }
 }
 
 /// Computes the pinned-proc set over a freshly allocated bit set; the
@@ -3277,17 +3293,6 @@ pub fn computePinnedProcs(
     var pinned = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.procSpecCount());
     errdefer pinned.deinit(allocator);
     fillPinnedProcContracts(store, roots, &pinned);
-    var reachable = try reachableStatementSet(allocator, store, null);
-    defer reachable.deinit(allocator);
-    var iter = reachable.iterator(.{});
-    while (iter.next()) |stmt_index| {
-        const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-        if (stmt.* == .assign_literal and stmt.assign_literal.value == .proc_ref) {
-            pinned.set(@backingInt(stmt.assign_literal.value.proc_ref));
-        } else if (stmt.* == .assign_packed_erased_fn) {
-            pinned.set(@backingInt(stmt.assign_packed_erased_fn.proc));
-        }
-    }
     return pinned;
 }
 
@@ -3301,7 +3306,10 @@ fn fillPinnedProcContracts(
     }
     for (0..store.procSpecCount()) |proc_index| {
         const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
-        if (proc.body == null or proc.hosted != null or proc.abi == .erased_callable) {
+        // A procedure named by site keeps its identity when its body changes,
+        // so code compiled against an earlier body calls it; its signature is
+        // the one its types determine (`LIR.LirProcSpec.code_key`).
+        if (proc.body == null or proc.hosted != null or proc.abi == .erased_callable or proc.code_key != null) {
             pinned.set(proc_index);
         }
     }
@@ -3464,7 +3472,6 @@ fn computeVisibilityFromLift(
                     .expect_err,
                     .runtime_error,
                     .comptime_exhaustiveness_failed,
-                    .comptime_branch_taken,
                     .incref,
                     .decref,
                     .decref_if_initialized,
@@ -3724,7 +3731,6 @@ fn computeVisibilityFromLift(
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,
@@ -6113,7 +6119,6 @@ fn computeUniquenessDetailed(
             .expect_err => |expect_err_stmt| try marks.consumeAt(allocator, &consumes, expect_err_stmt.message, @intCast(stmt_index)),
             .expect => {},
             .init_uninitialized => {},
-            .comptime_branch_taken => {},
             .switch_stmt => {},
             .switch_initialized_payload => {},
             .decref_if_initialized => {},
@@ -6601,7 +6606,6 @@ fn computeUniquenessDetailed(
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,

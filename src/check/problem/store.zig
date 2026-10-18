@@ -178,24 +178,6 @@ pub const Store = struct {
         unreachable;
     }
 
-    /// Record that the compile-time root selected to execute this site failed
-    /// and left its code to runtime, so the diagnostic is decided statically.
-    pub fn markPendingStaticExhaustivenessStatic(self: *Self, site: CheckedExhaustivenessSiteId) void {
-        for (self.pending_static_exhaustiveness.items) |*pending| {
-            if (pending.site != null and pending.site.? == site) pending.mode = .static;
-        }
-    }
-
-    pub fn resolvePendingStaticExhaustiveness(self: *Self, site: CheckedExhaustivenessSiteId) void {
-        var write: usize = 0;
-        for (self.pending_static_exhaustiveness.items) |pending| {
-            if (pending.site != null and pending.site.? == site) continue;
-            self.pending_static_exhaustiveness.items[write] = pending;
-            write += 1;
-        }
-        self.pending_static_exhaustiveness.shrinkRetainingCapacity(write);
-    }
-
     pub fn discardPendingStaticExhaustiveness(self: *Self, site: CheckedExhaustivenessSiteId) void {
         var write: usize = 0;
         for (self.pending_static_exhaustiveness.items) |pending| {
@@ -287,7 +269,6 @@ pub const Store = struct {
                     .unmatchable_pattern,
                     .match_alt_binder_missing,
                     .discarded_var_update,
-                    .comptime_unused_branch,
                     .comptime_condition,
                     .derived_parser_error_row,
                     .derived_codec_open_record,

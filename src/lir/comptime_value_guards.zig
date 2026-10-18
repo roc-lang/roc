@@ -12,9 +12,11 @@ const Use = struct { proc: LIR.LirProcSpecId, stmt: LIR.CFStmtId, slot: LIR.Stat
 const Guard = struct { locals: [3]LIR.LocalId, success: LIR.CFStmtId, crash: LIR.CFStmtId, checked_crash: LIR.CFStmtId };
 
 /// Insert explicit failure checks before each compile-time value slot read.
-/// A program lowered after its compile-time roots completed passes their
-/// frozen image, which records each value's outcome: only reads of a value
-/// that failed are guarded, and every other read stays as lowered.
+/// A program lowered after compile-time roots completed passes their frozen
+/// image, which records each completed value's outcome: of those, only reads
+/// of a value that failed are guarded, and every other read stays as
+/// lowered. A value the image has no record of is one the program evaluates
+/// itself, so every read of it is guarded.
 pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed: ?*const Program.FrozenStaticData) std.mem.Allocator.Error!void {
     std.debug.assert(program.comptime_value_guards.items.len == 0);
     const has_value_slots = for (program.static_data_values.items) |slot| {
@@ -50,7 +52,7 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
             try Body.appendSuccessors(store, &work, stmt_id, allocator);
             const assign = switch (store.getCFStmtImmediate(stmt_id).*) {
                 .assign_literal => |a| a,
-                .init_uninitialized, .assign_ref, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => continue,
+                .init_uninitialized, .assign_ref, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => continue,
             };
             const slot = switch (assign.value) {
                 .static_data => |id| id,
@@ -85,8 +87,12 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
         var guard_origin = use_origin;
         guard_origin.kind = .comptime_value_guard;
         const success = try store.addCFStmt(store.getCFStmt(use.stmt), use_origin);
-        const crash = try store.addCFStmt(.{ .crash = .{ .msg = .{ .local = message } } }, guard_origin);
-        const checked_crash = try store.addCFStmt(.{ .crash = .{ .msg = .{ .local = message }, .checked_error = true } }, guard_origin);
+        const value: LIR.ComptimeValueRef = .{
+            .owner = program.loweringModuleId(root.module) orelse invariant("{s}", .{"compile-time value guard named a module its program does not lower"}),
+            .producer = root.root,
+        };
+        const crash = try store.addCFStmt(.{ .crash = .{ .msg = .{ .local = message }, .failed_value = value } }, guard_origin);
+        const checked_crash = try store.addCFStmt(.{ .crash = .{ .msg = .{ .local = message }, .checked_error = true, .failed_value = value } }, guard_origin);
         const load_message = try store.addCFStmt(.{ .assign_ref = .{
             .target = message,
             .op = .{ .field = .{ .source = record, .field_idx = @intCast(fields.message_field) } },
@@ -171,11 +177,12 @@ fn exportsBySlot(allocator: std.mem.Allocator, program: *const Program.Result, f
     return exports;
 }
 
-/// Whether the completed value owning `failure_slot` failed, read from the
-/// `failed` flag of its failure record in the frozen image.
+/// Whether the value owning `failure_slot` failed or is yet to be evaluated:
+/// the `failed` flag of its failure record in the frozen image, when the
+/// image has one.
 fn completedValueFailed(program: *const Program.Result, frozen: *const Program.FrozenStaticData, exports: []const ?u32, failure_slot: LIR.StaticDataId) bool {
     const fields = program.static_data_values.items[@backingInt(failure_slot)].compile_time_root.?.role.failure_message;
-    const index = exports[@backingInt(failure_slot)] orelse invariant("{s}", .{"completed program omitted a compile-time value's failure record"});
+    const index = exports[@backingInt(failure_slot)] orelse return true;
     const record = frozen.exports[index];
     return record.bytes[record.symbol_offset + fields.failed_offset] != 0;
 }
@@ -209,6 +216,7 @@ test "shared compile-time guard owner metadata allocation failure cleanup" {
 fn testSharedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     var program = try Program.Result.init(allocator, .u64);
     defer program.deinit();
+    _ = try program.appendLoweringModule(.{});
     const record_layout = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
     const struct_idx = program.layouts.getLayout(record_layout).getStruct().idx;
     const failure_slot: LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
@@ -291,6 +299,7 @@ test "completed compile-time value guards allocation failure cleanup" {
 fn testCompletedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     var program = try Program.Result.init(allocator, .u64);
     defer program.deinit();
+    _ = try program.appendLoweringModule(.{});
     const record_layout = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
     const struct_idx = program.layouts.getLayout(record_layout).getStruct().idx;
     const failed_offset = program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0);

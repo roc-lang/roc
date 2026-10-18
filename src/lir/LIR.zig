@@ -212,6 +212,11 @@ pub const InlineScope = extern struct {
     /// Identity of the inlined procedure, which names its debug subprogram
     /// the same way in every program.
     source_identity: ProcIdentity,
+    /// Whether the inlined procedure's identity names its template by site
+    /// (`LirProcSpec.code_key`), so the code this scope copied is not named
+    /// by the identity of the procedure it was copied into.
+    copies_site_code: bool,
+    _reserved: [3]u8 = @splat(0),
     source_name: StringLiteral.Idx,
     source_loc: base.SourceLoc,
     call_site: base.SourceLoc,
@@ -512,7 +517,6 @@ pub const ComptimeProducer = union(enum) {
 pub const ComptimeSiteKind = enum {
     match,
     destructure,
-    if_,
 };
 
 /// Metadata for one compile-time-observed control-flow site.
@@ -526,7 +530,6 @@ pub const ComptimeSite = struct {
     region: base.Region,
     checked_site: ?CheckedExhaustivenessSiteId = null,
     proc: LirProcSpecId,
-    branch_regions: []const base.Region = &.{},
 };
 
 /// Identifier of a join point targeted by `jump`.
@@ -1462,15 +1465,11 @@ pub const CFStmt = union(enum) {
     /// Compiler-generated impossible execution path. This is terminal.
     runtime_error: void,
     /// Pattern coverage failed during compile-time evaluation. This is
-    /// terminal and becomes a checking diagnostic while finalizing.
+    /// terminal: it crashes, and compile-time finalization reports the crash
+    /// as the empirical failure of `checked_site` in module `owner`.
     comptime_exhaustiveness_failed: struct {
-        site: ComptimeSiteId,
-    },
-    /// One compile-time-observed branch or match alternative was taken.
-    comptime_branch_taken: struct {
-        site: ComptimeSiteId,
-        branch_index: u32,
-        next: CFStmtId,
+        owner: LoweringModuleId,
+        checked_site: ?CheckedExhaustivenessSiteId,
     },
     incref: struct {
         value: LocalId,
@@ -1590,6 +1589,45 @@ pub const CFStmt = union(enum) {
         /// reported: compile-time evaluation that reaches it discards the
         /// result instead of reporting the problem a second time.
         checked_error: bool = false,
+        /// Set when this crash is the failure path of a read of a
+        /// compile-time value whose producer failed.
+        failed_value: ?ComptimeValueRef = null,
+    },
+};
+
+/// The crash message of a `comptime_exhaustiveness_failed` statement. Every
+/// backend and the interpreter crash with it, so a compile-time evaluation
+/// and a build of the same code fail identically; compile-time finalization
+/// reports the failure by its checked site instead.
+pub const comptime_exhaustiveness_failure_message = "non-exhaustive pattern match";
+
+/// One compile-time value: its producer and the module owning it.
+pub const ComptimeValueRef = struct {
+    owner: LoweringModuleId,
+    producer: ComptimeProducer,
+};
+
+/// What it means for generated code to fail at one statement, beyond
+/// crashing there. Every identity but a literal producer's stays meaningful in
+/// every compilation of the program (`LirStore.failureMeaning`).
+pub const FailureMeaning = union(enum) {
+    /// Code checking rejected and already reported.
+    checked_error,
+    /// A literal conversion rejecting the literal at `checked_expr`.
+    literal_rejection: struct {
+        module: [32]u8,
+        checked_expr: u32,
+        kind: LiteralRejectionKind,
+    },
+    /// An exhaustiveness failure at a checked site.
+    exhaustiveness: struct {
+        module: [32]u8,
+        checked_site: ?CheckedExhaustivenessSiteId,
+    },
+    /// A read of a compile-time value whose producer failed.
+    failed_value: struct {
+        module: [32]u8,
+        producer: ComptimeProducer,
     },
 };
 
@@ -1718,6 +1756,25 @@ pub const LirProcSpec = struct {
     /// body here, its `identity` names the cache entry, and its `rc_*`
     /// fields carry the ownership signature the entry was compiled with.
     external: bool = false,
+    /// For an `external` proc, the object-cache key its entry was served
+    /// under, which locates the entry's artifact. Its identity cannot: a
+    /// procedure named by site has one identity for every version of its
+    /// code.
+    cache_key: ?[32]u8 = null,
+    /// For a procedure whose identity names its template by site rather than
+    /// content (`Mono.FnTemplate.site_identity`): its identity together with
+    /// its module's content key, which names its code. Cached code of the
+    /// procedure is taken and placed only under an equal code key; a null key
+    /// means the identity names the code. Code compiled against an earlier
+    /// body of the procedure calls it by identity, so ARC pins its signature
+    /// to the one its types determine. Set only in a program using the
+    /// object cache.
+    code_key: ?[32]u8 = null,
+    /// The Monotype function this procedure lowers, which keys the producer's
+    /// summary of the compile-time roots its code reads
+    /// (`SpecComptimeReads.fnReads`); null for a procedure no Monotype
+    /// function names.
+    source_monotype_fn: ?u32 = null,
     /// Set on an `external` proc whose cache entry is a linked object rather
     /// than spliced code: callers reach it through its C-ABI entry
     /// (`ProcIdentity.writeCAbiEntryName`), classified from its argument and

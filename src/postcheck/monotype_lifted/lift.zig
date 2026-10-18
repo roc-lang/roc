@@ -740,7 +740,6 @@ const Lifter = struct {
             .return_ => |ret| try children.child(ret.value),
             .expect_err => |expect_err| try children.child(expect_err.msg),
             .literal_rejected => |rejected| try children.child(rejected.msg),
-            .comptime_branch_taken => |taken| try children.child(taken.body),
             .let_ => |let_| {
                 try children.child(let_.value);
                 try children.child(let_.rest);
@@ -1756,7 +1755,6 @@ fn CaptureWalk(comptime Visitor: type) type {
                 .return_ => |ret| try walk.child(ret.value, ctx),
                 .expect_err => |expect_err| try walk.child(expect_err.msg, ctx),
                 .literal_rejected => |rejected| try walk.child(rejected.msg, ctx),
-                .comptime_branch_taken => |taken| try walk.child(taken.body, ctx),
                 .let_ => |let_| {
                     try walk.child(let_.value, ctx);
                     try walk.push(.begin_scope);

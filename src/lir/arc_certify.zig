@@ -866,7 +866,6 @@ fn writeFailureContext(
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .crash,
             => {},
         }
@@ -3983,7 +3982,7 @@ const Certifier = struct {
                 },
                 .ret => |ret_stmt| try self.noteProcLocal(ret_stmt.value),
                 .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| try self.noteProcLocal(message),
-                .jump, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken => {},
+                .jump, .runtime_error, .comptime_exhaustiveness_failed => {},
             }
             // Every other statement's successors stay in its region.
             successors.clearRetainingCapacity();
@@ -4071,7 +4070,6 @@ const Certifier = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -4258,7 +4256,6 @@ const Certifier = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -4315,7 +4312,6 @@ const Certifier = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -4747,8 +4743,14 @@ const Certifier = struct {
     /// relevant state: dropping its carrier would cut the chain, so the
     /// selection could no longer reach the unit that pays for it. Each such
     /// carrier joins the relevant bound positions for this summary. A chain
-    /// that reaches no carried container gains no carriers: the selection
-    /// claims the stored unit before quotienting instead.
+    /// that reaches no carried container gains no carriers when the selection
+    /// holds no unit of its own: it claims the stored unit before quotienting
+    /// instead. A selection that holds its own unit (retained after a take)
+    /// cannot absorb the stored unit, so every carrier on its chain joins the
+    /// relevant bound positions too; otherwise the stored unit would cross
+    /// the join with no local naming it. At an entry jump such a carrier
+    /// lands in the frame or the summary domain by the same region rule as
+    /// every other relevant position.
     fn addProvenanceCarriers(self: *Certifier, state: *const State) Allocator.Error!void {
         self.provenance_carrier_scratch.clearRetainingCapacity();
         self.repr_scratch.clearRetainingCapacity();
@@ -4768,7 +4770,8 @@ const Certifier = struct {
                 }
                 break :reach false;
             };
-            if (!reaches_carried) continue;
+            const holds_unit = state.balanceOf(value) != 0 and !try self.claimsSpendUnit(state, value);
+            if (!reaches_carried and !holds_unit) continue;
             var link = self.values.items[value].payload_source;
             while (link != no_value and !self.carrier_scratch.contains(link)) : (link = self.values.items[link].payload_source) {
                 const carrier = self.repr_scratch.get(link) orelse continue;
@@ -5728,9 +5731,6 @@ const Certifier = struct {
                 .expect => |expect_stmt| {
                     _ = try self.requireLive(&state, expect_stmt.condition);
                     cursor = expect_stmt.next;
-                },
-                .comptime_branch_taken => |taken| {
-                    cursor = taken.next;
                 },
                 .incref => |rc| {
                     if (!self.isRc(rc.value)) {
@@ -8464,6 +8464,80 @@ test "certify rejects dismantling a payload view in a join after its only unit w
     try buildPayloadViewDismantledBeforeJoin(&f, false);
     try testing.expectError(error.Certification, f.certify());
     try testing.expect(std.mem.find(u8, f.diag.message(), "use of dead refcounted local") != null);
+}
+
+/// A payload taken from a tag borrows the tag's stored unit until it is
+/// consumed, and an incref gives it a unit of its own. An inner join whose
+/// region never names the payload enters with the payload in its frame, and
+/// the inner body jumps to an outer join whose body spends both units. The
+/// tag's stored unit is named only by the tag, which nothing reads again, so
+/// the frame must carry the tag along with the payload. Without
+/// `release_both` the outer body spends only one of the two units.
+fn buildTakenPayloadInInnerJoinFrame(f: *CertifyTest, release_both: bool) Allocator.Error!void {
+    const tag_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+        try f.layouts.ensureZstLayout(),
+        .str,
+    });
+    const text = try f.local(.str);
+    const tag_value = try f.local(tag_layout);
+    const payload = try f.local(.str);
+    const result = try f.local(.i64);
+
+    const outer_id = f.freshJoinPointId();
+    const inner_id = f.freshJoinPointId();
+    const ret = try f.ret(result);
+    const assign_result = try f.assignI64(result, ret);
+    const release_stored = try f.decrefStmt(payload, .str, assign_result);
+    const outer_body = if (release_both) try f.decrefStmt(payload, .str, release_stored) else release_stored;
+    const jump_outer = try f.store.addCFStmt(.{ .jump = .{ .target = outer_id } }, .test_fixture);
+    const jump_inner = try f.store.addCFStmt(.{ .jump = .{ .target = inner_id } }, .test_fixture);
+    const inner_join = try f.store.addCFStmt(.{ .join = .{
+        .id = inner_id,
+        .params = try f.store.addLocalSpan(&.{}),
+        .body = jump_outer,
+        .remainder = jump_inner,
+    } }, .test_fixture);
+    const outer_join = try f.store.addCFStmt(.{ .join = .{
+        .id = outer_id,
+        .params = try f.store.addLocalSpan(&.{}),
+        .body = outer_body,
+        .remainder = inner_join,
+    } }, .test_fixture);
+    const retain_payload = try f.increfStmt(payload, .str, outer_join);
+    const take = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = payload,
+        .op = .{ .tag_payload_struct = .{
+            .source = tag_value,
+            .variant_index = 1,
+            .tag_discriminant = 1,
+        } },
+        .take_kind = .take,
+        .next = retain_payload,
+    } }, .test_fixture);
+    const make_tag = try f.store.addCFStmt(.{ .assign_tag = .{
+        .target = tag_value,
+        .variant_index = 1,
+        .discriminant = 1,
+        .payload = text,
+        .next = take,
+    } }, .test_fixture);
+    const body = try f.assignStr(text, make_tag);
+    _ = try f.addProc(&.{}, body, .i64);
+}
+
+test "certify carries a taken payload's stored unit through an inner join's frame" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildTakenPayloadInInnerJoinFrame(&f, true);
+    try f.certify();
+}
+
+test "certify flags a leaked unit of a taken payload carried through an inner join's frame" {
+    var f = try CertifyTest.init(testing.allocator);
+    defer f.deinit();
+    try buildTakenPayloadInInnerJoinFrame(&f, false);
+    try testing.expectError(error.Certification, f.certify());
+    try testing.expect(std.mem.find(u8, f.diag.message(), "leaked") != null);
 }
 
 test "certify preserves an owned payload's dormant lender across a join" {

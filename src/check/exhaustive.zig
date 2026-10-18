@@ -551,12 +551,19 @@ pub const UnresolvedPattern = union(enum) {
 pub const UnresolvedRow = struct {
     /// The patterns for this row (usually just one, but could be more for multiple scrutinees)
     patterns: []const UnresolvedPattern,
-    /// The source region of this pattern
-    region: Region,
+    /// The source pattern this row checks: one `|` alternative of a branch
+    pattern: CirPattern.Idx,
     /// Whether this branch has a guard condition
     guard: Guard,
     /// Index of the branch this pattern came from (for tracking redundancy)
     branch_index: u32,
+};
+
+/// A branch alternative that can never match: covered by earlier patterns
+/// (redundant), or matching an uninhabited type (unmatchable).
+pub const UselessRow = struct {
+    branch_index: u32,
+    pattern: CirPattern.Idx,
 };
 
 /// Whether a branch has a guard condition
@@ -854,7 +861,6 @@ pub fn convertMatchBranches(
 
         for (branch_patterns) |bp_idx| {
             const bp = store.getMatchBranchPattern(bp_idx);
-            const pattern_region = store.getPatternRegion(bp.pattern);
 
             const converted = try convertPattern(allocator, store, numeral_keys, bp.pattern);
 
@@ -892,7 +898,7 @@ pub fn convertMatchBranches(
 
             rows[row_idx] = .{
                 .patterns = pattern_slice,
-                .region = pattern_region,
+                .pattern = bp.pattern,
                 .guard = if (has_guard) .has_guard else .no_guard,
                 .branch_index = @intCast(branch_i),
             };
@@ -2928,6 +2934,16 @@ fn missingRowWithHead(allocator: std.mem.Allocator, head: Pattern, rest: []const
     return row;
 }
 
+/// The patterns of a one-column matrix's missing rows.
+fn singleColumnMissingPatterns(allocator: std.mem.Allocator, rows: MissingRows) error{OutOfMemory}![]Pattern {
+    const patterns = try allocator.alloc(Pattern, rows.len);
+    for (rows, patterns) |row, *pattern| {
+        std.debug.assert(row.len == 1);
+        pattern.* = row[0];
+    }
+    return patterns;
+}
+
 /// The state every step of one exhaustiveness check shares.
 const ExhaustiveCtx = struct {
     allocator: std.mem.Allocator,
@@ -2960,6 +2976,8 @@ const ExhaustiveFrame = union(enum) {
 /// alternatives no row names.
 const ExhaustiveCtorsFrame = struct {
     mode: enum { all, missing },
+    /// Missing rows found so far, across every alternative checked.
+    found_rows: std.ArrayListUnmanaged([]const Pattern) = .empty,
     matrix: SketchedMatrix,
     column_types: ColumnTypes,
     alternatives: []const CtorInfo,
@@ -2977,6 +2995,8 @@ const ExhaustiveCtorsFrame = struct {
 /// List arities of the first column checked one at a time.
 const ExhaustiveListsFrame = struct {
     matrix: SketchedMatrix,
+    /// Missing rows found so far, across every arity checked.
+    found_rows: std.ArrayListUnmanaged([]const Pattern) = .empty,
     column_types: ColumnTypes,
     ctors_to_check: []const ListArity,
     elem_type: Var,
@@ -2987,14 +3007,29 @@ const ExhaustiveListsFrame = struct {
     specialized_types: ColumnTypes = undefined,
 };
 
+/// Every row of patterns no row of a matrix matches, one pattern per column.
+/// None means the matrix is exhaustive.
+const MissingRows = []const []const Pattern;
+
 const ExhaustiveStep = union(enum) {
-    done: []const Pattern,
+    done: MissingRows,
     call: ExhaustiveCall,
 };
 
+/// The single missing row of typed wildcards for `column_types`.
+fn wildcardRow(allocator: std.mem.Allocator, column_types: ColumnTypes) error{OutOfMemory}!MissingRows {
+    const row = try allocator.alloc(Pattern, column_types.types.len);
+    for (column_types.types, 0..) |col_type, i| {
+        row[i] = .{ .anything = col_type };
+    }
+    const rows = try allocator.alloc([]const Pattern, 1);
+    rows[0] = row;
+    return rows;
+}
+
 /// Check if a sketched pattern matrix is exhaustive.
 /// Resolves patterns on-demand when type information is needed.
-/// Returns missing patterns as resolved Pattern for error messages.
+/// Returns every missing row, as resolved patterns for error messages.
 ///
 /// Each specialization is a queued call and each check waiting on one is an
 /// explicit frame, so nesting depth never becomes native call depth.
@@ -3008,7 +3043,7 @@ pub fn checkExhaustiveSketched(
     ext_vars_to_keep_open: *std.ArrayList(Var),
     payload_vars_to_close: *std.ArrayList(Var),
     close_open_extension: bool,
-) PatternResolveError![]const Pattern {
+) PatternResolveError!MissingRows {
     const ctx: ExhaustiveCtx = .{
         .allocator = allocator,
         .type_store = type_store,
@@ -3022,7 +3057,7 @@ pub fn checkExhaustiveSketched(
 
     var call: ExhaustiveCall = .{ .matrix = matrix, .column_types = column_types, .close_open_extension = close_open_extension };
     next_call: while (true) {
-        var input: ?[]const Pattern = switch (try exhaustiveEnter(ctx, &frames, call)) {
+        var input: ?MissingRows = switch (try exhaustiveEnter(ctx, &frames, call)) {
             .done => |missing| missing,
             .call => |child| {
                 call = child;
@@ -3053,7 +3088,7 @@ fn exhaustiveEnter(
     ctx: ExhaustiveCtx,
     frames: *std.ArrayList(ExhaustiveFrame),
     call: ExhaustiveCall,
-) PatternResolveError!union(enum) { done: []const Pattern, call: ExhaustiveCall, pushed } {
+) PatternResolveError!union(enum) { done: MissingRows, call: ExhaustiveCall, pushed } {
     const allocator = ctx.allocator;
     const type_store = ctx.type_store;
     const builtin_idents = ctx.builtin_idents;
@@ -3062,22 +3097,12 @@ fn exhaustiveEnter(
     const close_open_extension = call.close_open_extension;
     const n = column_types.len();
 
-    // Base case: empty matrix with columns to fill = not exhaustive
-    if (matrix.isEmpty()) {
-        if (n == 0) {
-            return .{ .done = &[_]Pattern{} };
-        }
-        // Return typed wildcards as missing pattern
-        const missing = try allocator.alloc(Pattern, n);
-        for (column_types.types, 0..) |col_type, i| {
-            missing[i] = .{ .anything = col_type };
-        }
-        return .{ .done = missing };
-    }
+    // Base case: an empty matrix matches nothing, so the row of typed
+    // wildcards (with no columns, the empty row) is missing.
+    if (matrix.isEmpty()) return .{ .done = try wildcardRow(allocator, column_types) };
 
-    if (n == 0) {
-        return .{ .done = &[_]Pattern{} };
-    }
+    // Some row matches every value of no columns.
+    if (n == 0) return .{ .done = &.{} };
 
     // Column types must be available for exhaustiveness checking.
     // If this assertion fails, it indicates a compiler bug - likely incomplete type inference.
@@ -3192,11 +3217,7 @@ fn exhaustiveEnter(
         .literals => {
             // Literal domains are infinite, so a value outside the listed literals
             // reaches no row; every column of that value is unconstrained.
-            const missing = try allocator.alloc(Pattern, column_types.types.len);
-            for (column_types.types, 0..) |col_type, col_index| {
-                missing[col_index] = .{ .anything = col_type };
-            }
-            return .{ .done = missing };
+            return .{ .done = try wildcardRow(allocator, column_types) };
         },
     }
 }
@@ -3207,62 +3228,40 @@ fn exhaustiveEnter(
 fn exhaustiveResume(
     ctx: ExhaustiveCtx,
     frame: *ExhaustiveFrame,
-    input: ?[]const Pattern,
+    input: ?MissingRows,
 ) PatternResolveError!ExhaustiveStep {
     const allocator = ctx.allocator;
     const type_store = ctx.type_store;
     const builtin_idents = ctx.builtin_idents;
     switch (frame.*) {
         .prepend_anything => |first_type| {
-            const rest = input.?;
-            if (rest.len == 0) return .{ .done = &[_]Pattern{} };
-
-            const result = try allocator.alloc(Pattern, 1 + rest.len);
-            result[0] = .{ .anything = first_type };
-            @memcpy(result[1..], rest);
+            const rows = input.?;
+            const result = try allocator.alloc([]const Pattern, rows.len);
+            for (rows, result) |rest, *row| row.* = try missingRowWithHead(allocator, .{ .anything = first_type }, rest);
             return .{ .done = result };
         },
 
         .ctors => |*ctors| {
-            if (input) |missing| {
+            if (input) |rows| {
                 const alt = ctors.alt;
-                switch (ctors.mode) {
-                    .all => if (missing.len > 0) {
-                        const split = splitMissingRow(missing, alt.arity, ctors.column_types.len());
-                        const missing_pattern = Pattern{ .ctor = .{
-                            .union_info = ctors.union_info,
-                            .tag_id = alt.tag_id,
-                            .args = split.head_args,
-                        } };
-
-                        if (try missing_pattern.isInhabitedWithKnownEmpty(ctors.column_types.type_store, ctors.column_types.builtin_idents, ctx.payload_vars_to_close.items)) {
-                            return .{ .done = try missingRowWithHead(allocator, missing_pattern, split.rest) };
-                        }
-                    },
-                    .missing => {
-                        // For arity-0 constructors in the last column with no matching rows, the
-                        // specialized matrix is empty with 0 columns, which returns empty
-                        // inner_missing. But we still need to report the constructor as missing.
-                        // The #Open synthetic tag (arity-0 with no name) represents "possibly more
-                        // constructors". For flex extensions, it's skipped because the union will be
-                        // closed. For rigid extensions (from annotations), #Open represents real
-                        // unknown tags and must be reported as missing.
-                        const is_open_synthetic = alt.name.tag.isNone();
-                        const skip_open = is_open_synthetic and (ctors.union_info.has_flex_extension or ctors.close_open_extension);
-                        const is_missing = missing.len > 0 or (alt.arity == 0 and ctors.specialized.isEmpty() and !skip_open);
-                        if (is_missing) {
-                            const split = splitMissingRow(missing, alt.arity, ctors.column_types.len());
-                            const missing_pattern = Pattern{ .ctor = .{
-                                .union_info = ctors.union_info,
-                                .tag_id = alt.tag_id,
-                                .args = split.head_args,
-                            } };
-                            if (try missing_pattern.isInhabitedWithKnownEmpty(ctors.column_types.type_store, ctors.column_types.builtin_idents, ctx.payload_vars_to_close.items)) {
-                                return .{ .done = try missingRowWithHead(allocator, missing_pattern, split.rest) };
-                            }
-                        }
-                    },
-                }
+                // The #Open synthetic tag (arity 0, no name) represents
+                // "possibly more constructors". For flex extensions it is
+                // skipped because the union will be closed. For rigid
+                // extensions (from annotations), #Open represents real
+                // unknown tags and must be reported as missing.
+                const skip_open = ctors.mode == .missing and alt.name.tag.isNone() and
+                    (ctors.union_info.has_flex_extension or ctors.close_open_extension);
+                if (!skip_open) for (rows) |missing| {
+                    const split = splitMissingRow(missing, alt.arity, ctors.column_types.len());
+                    const missing_pattern = Pattern{ .ctor = .{
+                        .union_info = ctors.union_info,
+                        .tag_id = alt.tag_id,
+                        .args = split.head_args,
+                    } };
+                    if (try missing_pattern.isInhabitedWithKnownEmpty(ctors.column_types.type_store, ctors.column_types.builtin_idents, ctx.payload_vars_to_close.items)) {
+                        try ctors.found_rows.append(allocator, try missingRowWithHead(allocator, missing_pattern, split.rest));
+                    }
+                };
             }
 
             while (ctors.index < ctors.alternatives.len) {
@@ -3297,22 +3296,18 @@ fn exhaustiveResume(
                 ctors.specialized_types = specialized_types;
                 return .{ .call = .{ .matrix = specialized, .column_types = specialized_types, .close_open_extension = false } };
             }
-            return .{ .done = &[_]Pattern{} };
+            return .{ .done = ctors.found_rows.items };
         },
 
         .lists => |*lists| {
-            if (input) |missing| {
+            if (input) |rows| {
                 const min_len = lists.list_arity.minLen();
-                // For length-0 lists (empty list) in the last column with no matching rows,
-                // the specialized matrix is empty with 0 columns, which returns empty
-                // missing. But we still need to report the empty list as missing.
-                const is_missing = missing.len > 0 or (min_len == 0 and lists.specialized.isEmpty());
-                if (is_missing) {
+                for (rows) |missing| {
                     const split = splitMissingRow(missing, min_len, lists.column_types.len());
-                    return .{ .done = try missingRowWithHead(allocator, .{ .list = .{
+                    try lists.found_rows.append(allocator, try missingRowWithHead(allocator, .{ .list = .{
                         .arity = lists.list_arity,
                         .elements = split.head_args,
-                    } }, split.rest) };
+                    } }, split.rest));
                 }
             }
 
@@ -3331,7 +3326,7 @@ fn exhaustiveResume(
                 lists.specialized_types = try lists.column_types.specializeForList(allocator, lists.elem_type, min_len);
                 return .{ .call = .{ .matrix = lists.specialized, .column_types = lists.specialized_types, .close_open_extension = false } };
             }
-            return .{ .done = &[_]Pattern{} };
+            return .{ .done = lists.found_rows.items };
         },
     }
 }
@@ -3866,14 +3861,10 @@ fn usefulEnter(
 pub const RedundancyResultSketched = struct {
     /// Non-redundant rows (useful patterns)
     non_redundant_rows: []const []const UnresolvedPattern,
-    /// Indices of redundant branches (covered by previous patterns)
-    redundant_indices: []const u32,
-    /// Regions of redundant branches
-    redundant_regions: []const Region,
-    /// Indices of unmatchable branches (patterns on uninhabited types)
-    unmatchable_indices: []const u32,
-    /// Regions of unmatchable branches
-    unmatchable_regions: []const Region,
+    /// Redundant rows (covered by previous patterns), in source order
+    redundant_rows: []const UselessRow,
+    /// Unmatchable rows (patterns on uninhabited types), in source order
+    unmatchable_rows: []const UselessRow,
 };
 
 /// Process sketched pattern rows and identify redundant and unmatchable patterns.
@@ -3891,10 +3882,8 @@ pub fn checkRedundancySketched(
     close_open_extension: bool,
 ) PatternResolveError!RedundancyResultSketched {
     var non_redundant: std.ArrayList([]const UnresolvedPattern) = .empty;
-    var redundant_indices: std.ArrayList(u32) = .empty;
-    var redundant_regions: std.ArrayList(Region) = .empty;
-    var unmatchable_indices: std.ArrayList(u32) = .empty;
-    var unmatchable_regions: std.ArrayList(Region) = .empty;
+    var redundant_rows: std.ArrayList(UselessRow) = .empty;
+    var unmatchable_rows: std.ArrayList(UselessRow) = .empty;
 
     for (rows) |row| {
         // First check if the pattern is on an uninhabited type (unmatchable)
@@ -3909,8 +3898,7 @@ pub fn checkRedundancySketched(
 
         if (!is_inhabited) {
             // Pattern matches an uninhabited type - it's unmatchable
-            try unmatchable_indices.append(allocator, row.branch_index);
-            try unmatchable_regions.append(allocator, row.region);
+            try unmatchable_rows.append(allocator, .{ .branch_index = row.branch_index, .pattern = row.pattern });
             continue;
         }
 
@@ -3923,17 +3911,14 @@ pub fn checkRedundancySketched(
         if (is_useful) {
             try non_redundant.append(allocator, row.patterns);
         } else {
-            try redundant_indices.append(allocator, row.branch_index);
-            try redundant_regions.append(allocator, row.region);
+            try redundant_rows.append(allocator, .{ .branch_index = row.branch_index, .pattern = row.pattern });
         }
     }
 
     return .{
         .non_redundant_rows = try non_redundant.toOwnedSlice(allocator),
-        .redundant_indices = try redundant_indices.toOwnedSlice(allocator),
-        .redundant_regions = try redundant_regions.toOwnedSlice(allocator),
-        .unmatchable_indices = try unmatchable_indices.toOwnedSlice(allocator),
-        .unmatchable_regions = try unmatchable_regions.toOwnedSlice(allocator),
+        .redundant_rows = try redundant_rows.toOwnedSlice(allocator),
+        .unmatchable_rows = try unmatchable_rows.toOwnedSlice(allocator),
     };
 }
 
@@ -3950,14 +3935,10 @@ pub const CheckResult = struct {
     /// Diagnostic-only missing patterns. Analysis type
     /// metadata is detached before the reader ends; only formatting is valid.
     missing_patterns: []const Pattern,
-    /// Indices of redundant branches (covered by previous patterns)
-    redundant_indices: []const u32,
-    /// Regions of redundant branches
-    redundant_regions: []const Region,
-    /// Indices of unmatchable branches (patterns on uninhabited types)
-    unmatchable_indices: []const u32,
-    /// Regions of unmatchable branches
-    unmatchable_regions: []const Region,
+    /// Redundant rows (covered by previous patterns), in source order
+    redundant_rows: []const UselessRow,
+    /// Unmatchable rows (patterns on uninhabited types), in source order
+    unmatchable_rows: []const UselessRow,
     /// Flex ext vars to close via unification with empty_tag_union.
     /// These are tag union positions where all constructors were exhaustively
     /// covered without wildcards.
@@ -4066,14 +4047,13 @@ pub fn checkMatch(
 
     exportBlockers(type_store, &filtered_close);
     exportBlockers(type_store, &payload_vars_to_close);
-    for (@constCast(missing)) |*pattern| try pattern.detachAnalysisTypes(arena_alloc);
+    const missing_patterns = try singleColumnMissingPatterns(arena_alloc, missing);
+    for (missing_patterns) |*pattern| try pattern.detachAnalysisTypes(arena_alloc);
     return .{
         .is_exhaustive = missing.len == 0,
-        .missing_patterns = missing,
-        .redundant_indices = redundancy.redundant_indices,
-        .redundant_regions = redundancy.redundant_regions,
-        .unmatchable_indices = redundancy.unmatchable_indices,
-        .unmatchable_regions = redundancy.unmatchable_regions,
+        .missing_patterns = missing_patterns,
+        .redundant_rows = redundancy.redundant_rows,
+        .unmatchable_rows = redundancy.unmatchable_rows,
         .ext_vars_to_close = filtered_close.items,
         .payload_vars_to_close = payload_vars_to_close.items,
     };
@@ -4107,7 +4087,7 @@ pub fn checkDestructure(
     const rows = try arena_alloc.alloc(UnresolvedRow, 1);
     rows[0] = .{
         .patterns = pattern_slice,
-        .region = node_store.getPatternRegion(pattern_idx),
+        .pattern = pattern_idx,
         .guard = .no_guard,
         .branch_index = 0,
     };
@@ -4166,14 +4146,13 @@ pub fn checkDestructure(
 
     exportBlockers(type_store, &filtered_close);
     exportBlockers(type_store, &payload_vars_to_close);
-    for (@constCast(missing)) |*pattern| try pattern.detachAnalysisTypes(arena_alloc);
+    const missing_patterns = try singleColumnMissingPatterns(arena_alloc, missing);
+    for (missing_patterns) |*pattern| try pattern.detachAnalysisTypes(arena_alloc);
     return .{
         .is_exhaustive = missing.len == 0,
-        .missing_patterns = missing,
-        .redundant_indices = redundancy.redundant_indices,
-        .redundant_regions = redundancy.redundant_regions,
-        .unmatchable_indices = redundancy.unmatchable_indices,
-        .unmatchable_regions = redundancy.unmatchable_regions,
+        .missing_patterns = missing_patterns,
+        .redundant_rows = redundancy.redundant_rows,
+        .unmatchable_rows = redundancy.unmatchable_rows,
         .ext_vars_to_close = filtered_close.items,
         .payload_vars_to_close = payload_vars_to_close.items,
     };
@@ -4414,10 +4393,8 @@ fn resultAllocationFailureCase(gpa: Allocator) (Allocator.Error || Ident.Error |
     const result: CheckResult = .{
         .is_exhaustive = false,
         .missing_patterns = missing,
-        .redundant_indices = try arena_alloc.dupe(u32, &.{1}),
-        .redundant_regions = try arena_alloc.dupe(Region, &.{Region.zero()}),
-        .unmatchable_indices = try arena_alloc.dupe(u32, &.{2}),
-        .unmatchable_regions = try arena_alloc.dupe(Region, &.{Region.zero()}),
+        .redundant_rows = try arena_alloc.dupe(UselessRow, &.{.{ .branch_index = 1, .pattern = @fromBackingInt(1) }}),
+        .unmatchable_rows = try arena_alloc.dupe(UselessRow, &.{.{ .branch_index = 2, .pattern = @fromBackingInt(2) }}),
         .ext_vars_to_close = try arena_alloc.dupe(Var, &vars),
         .payload_vars_to_close = try arena_alloc.dupe(Var, &vars),
     };

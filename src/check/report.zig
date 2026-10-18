@@ -61,7 +61,6 @@ const RedundantPattern = problem_mod.RedundantPattern;
 const UnmatchablePattern = problem_mod.UnmatchablePattern;
 const MatchAltBinderMissing = problem_mod.MatchAltBinderMissing;
 const DiscardedVarUpdate = problem_mod.DiscardedVarUpdate;
-const ComptimeUnusedBranch = problem_mod.ComptimeUnusedBranch;
 const ComptimeCondition = problem_mod.ComptimeCondition;
 
 // Type declaration errors
@@ -1097,7 +1096,6 @@ pub const ReportBuilder = struct {
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
             .match_alt_binder_missing => |data| return self.buildMatchAltBinderMissingReport(data),
             .discarded_var_update => |data| return self.buildDiscardedVarUpdateReport(data),
-            .comptime_unused_branch => |data| return self.buildComptimeUnusedBranchReport(data),
             .comptime_condition => |data| return self.buildComptimeConditionReport(data),
         }
     }
@@ -5452,14 +5450,31 @@ pub const ReportBuilder = struct {
     /// another module, e.g. a `??` field default materialized per
     /// specialization) as `Module (line N, column M),` owned by the report.
     /// Shared by every comptime problem kind that carries provenance.
-    fn comptimeOriginLocation(self: *Self, report: *Report, origin: ComptimeOrigin) Allocator.Error![]const u8 {
-        const location = try std.fmt.allocPrint(self.gpa, "{s} (line {d}, column {d}),", .{
-            self.problems.getExtraString(origin.module_name),
-            origin.line,
-            origin.column,
-        });
-        defer self.gpa.free(location);
-        return try report.addOwnedString(location);
+    /// A foreign compile-time failure's module and position. A module
+    /// qualified by a package that has no shorthand starts with that
+    /// package's path, so the module name is shown as a path: the report
+    /// spells it the way reports spell every path, and a name that is not an
+    /// absolute path shows as written.
+    const OriginLocation = struct {
+        module_name: []const u8,
+        position: []const u8,
+    };
+
+    fn comptimeOriginLocation(self: *Self, report: *Report, origin: ComptimeOrigin) Allocator.Error!OriginLocation {
+        const position = try std.fmt.allocPrint(self.gpa, " (line {d}, column {d}),", .{ origin.line, origin.column });
+        defer self.gpa.free(position);
+        return .{
+            .module_name = try report.addOwnedString(self.problems.getExtraString(origin.module_name)),
+            .position = try report.addOwnedString(position),
+        };
+    }
+
+    /// The docs naming a foreign failure's location (`comptimeOriginLocation`).
+    fn originLocationDocs(location: OriginLocation) [2]D {
+        return .{
+            D.bytes(location.module_name).withAnnotation(.path),
+            D.bytes(location.position).withAnnotation(.emphasized).withNoPrecedingSpace(),
+        };
     }
 
     /// Build a report for compile-time crash
@@ -5480,10 +5495,11 @@ pub const ReportBuilder = struct {
         if (data.origin) |origin| {
             // The rejected literal was inlined from another module (see
             // ComptimeOrigin); name its declaring module and exact location.
-            const owned_origin_location = try self.comptimeOriginLocation(&report, origin);
+            const origin_docs = originLocationDocs(try self.comptimeOriginLocation(&report, origin));
             try D.renderSlice(&.{
                 D.bytes("The rejected literal is in the module"),
-                D.bytes(owned_origin_location).withAnnotation(.emphasized),
+                origin_docs[0],
+                origin_docs[1],
                 D.bytes("and the implementation returned this error message:"),
             }, self, &report);
         } else {
@@ -5516,10 +5532,11 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         if (data.origin) |origin| {
-            const owned_origin_location = try self.comptimeOriginLocation(&report, origin);
+            const origin_docs = originLocationDocs(try self.comptimeOriginLocation(&report, origin));
             try D.renderSlice(&.{
                 D.bytes("The rejected interpolation is in the module"),
-                D.bytes(owned_origin_location).withAnnotation(.emphasized),
+                origin_docs[0],
+                origin_docs[1],
                 D.bytes("and the implementation returned this error message:"),
             }, self, &report);
         } else {
@@ -5551,12 +5568,13 @@ pub const ReportBuilder = struct {
             // `??` field default materialized per specialization), so the
             // failing expression is not in this module's source; name its
             // declaring module and exact location instead.
-            const owned_origin_location = try self.comptimeOriginLocation(&report, origin);
+            const origin_docs = originLocationDocs(try self.comptimeOriginLocation(&report, origin));
             try D.renderSlice(&.{
                 D.bytes("The"),
                 D.bytes("crash").withAnnotation(.keyword),
                 D.bytes("happened in the module"),
-                D.bytes(owned_origin_location).withAnnotation(.emphasized),
+                origin_docs[0],
+                origin_docs[1],
                 D.bytes("with this message:"),
             }, self, &report);
             try report.document.addLineBreaks(2);
@@ -5592,12 +5610,13 @@ pub const ReportBuilder = struct {
             // `??` field default materialized per specialization), so the
             // failing statement is not in this module's source; name its
             // declaring module and exact location instead.
-            const owned_origin_location = try self.comptimeOriginLocation(&report, origin);
+            const origin_docs = originLocationDocs(try self.comptimeOriginLocation(&report, origin));
             try D.renderSlice(&.{
                 D.bytes("The"),
                 D.bytes("expect").withAnnotation(.keyword),
                 D.bytes("failed in the module"),
-                D.bytes(owned_origin_location).withAnnotation(.emphasized),
+                origin_docs[0],
+                origin_docs[1],
                 D.bytes("with this message:"),
             }, self, &report);
         } else {
@@ -5725,44 +5744,65 @@ pub const ReportBuilder = struct {
     }
 
     fn buildRedundantPatternReport(self: *Self, data: RedundantPattern) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Redundant Pattern", "", .warning);
-        errdefer report.deinit();
-        try D.renderSliceInto(&.{
-            D.bytes("The"),
-            D.num_ord(data.problem_branch_index + 1),
-            D.bytes("branch of this"),
-            D.bytes("match").withAnnotation(.keyword),
-            D.bytes("is redundant."),
-        }, self, &report, &report.headline);
-
-        // Cast Expr.Idx to Var (they're parallel arrays)
-        try self.addSourceHighlight(&report, regionIdxFrom(data.match_expr));
-        try report.document.addLineBreak();
-
-        try D.renderSlice(&.{
-            D.bytes("This pattern can never match because earlier patterns already cover all the values it would match."),
-        }, self, &report);
-
-        return report;
+        return self.buildUselessPatternReport("Redundant Pattern", data.match_expr, data.branch_index, data.part, "is redundant.", .{
+            .one = "This pattern can never match because earlier patterns already cover all the values it would match.",
+            .many = "These patterns can never match because earlier patterns already cover all the values they would match.",
+        });
     }
 
     fn buildUnmatchablePatternReport(self: *Self, data: UnmatchablePattern) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Unmatchable Pattern", "", .warning);
-        errdefer report.deinit();
-        try D.renderSliceInto(&.{
-            D.bytes("The"),
-            D.num_ord(data.problem_branch_index + 1),
-            D.bytes("branch of this"),
-            D.bytes("match").withAnnotation(.keyword),
-            D.bytes("can never match."),
-        }, self, &report, &report.headline);
+        return self.buildUselessPatternReport("Unmatchable Pattern", data.match_expr, data.branch_index, data.part, "can never match.", .{
+            .one = "This pattern matches a type that has no possible values (an uninhabited type), so no value can ever match it.",
+            .many = "Each of these patterns matches a type that has no possible values (an uninhabited type), so no value can ever match it.",
+        });
+    }
 
-        // Cast Expr.Idx to Var (they're parallel arrays)
-        try self.addSourceHighlight(&report, regionIdxFrom(data.match_expr));
+    /// A warning about a match branch, or one `|` alternative of it, that can
+    /// never match. It highlights exactly the patterns it is about.
+    fn buildUselessPatternReport(
+        self: *Self,
+        title: []const u8,
+        match_expr: CIR.Expr.Idx,
+        branch_index: u32,
+        part: problem_mod.MatchBranchPart,
+        verdict: []const u8,
+        explanation: struct { one: []const u8, many: []const u8 },
+    ) Allocator.Error!Report {
+        const store = &self.can_ir.store;
+        const match = store.getExpr(match_expr).e_match;
+        const branch = store.getMatchBranch(store.matchBranchSlice(match.branches)[branch_index]);
+        const branch_patterns = store.sliceMatchBranchPatterns(branch.patterns);
+
+        var report = try Report.init(self.gpa, title, "", .warning);
+        errdefer report.deinit();
+        if (part.alternativeIndex()) |alternative_index| {
+            try D.renderSliceInto(&.{
+                D.bytes("The"),
+                D.num_ord(alternative_index + 1),
+                D.bytes("pattern in the"),
+                D.num_ord(branch_index + 1),
+                D.bytes("branch of this"),
+                D.bytes("match").withAnnotation(.keyword),
+                D.bytes(verdict),
+            }, self, &report, &report.headline);
+            const pattern = store.getMatchBranchPattern(branch_patterns[alternative_index]).pattern;
+            try self.addSourceWarningRegion(&report, store.getPatternRegion(pattern));
+        } else {
+            try D.renderSliceInto(&.{
+                D.bytes("The"),
+                D.num_ord(branch_index + 1),
+                D.bytes("branch of this"),
+                D.bytes("match").withAnnotation(.keyword),
+                D.bytes(verdict),
+            }, self, &report, &report.headline);
+            const first = store.getPatternRegion(store.getMatchBranchPattern(branch_patterns[0]).pattern);
+            const last = store.getPatternRegion(store.getMatchBranchPattern(branch_patterns[branch_patterns.len - 1]).pattern);
+            try self.addSourceWarningRegion(&report, Region.from_raw_offsets(first.start.offset, last.end.offset));
+        }
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
-            D.bytes("This pattern matches a type that has no possible values (an uninhabited type), so no value can ever match it."),
+            D.bytes(if (part == .whole_branch and branch_patterns.len > 1) explanation.many else explanation.one),
         }, self, &report);
 
         return report;
@@ -5827,29 +5867,6 @@ pub const ReportBuilder = struct {
         });
         defer self.gpa.free(reassignment);
         try report.document.addCodeBlock(try report.addOwnedString(reassignment));
-
-        return report;
-    }
-
-    fn buildComptimeUnusedBranchReport(self: *Self, data: ComptimeUnusedBranch) Allocator.Error!Report {
-        const noun = switch (data.kind) {
-            .match => "match alternative",
-            .if_ => "if branch",
-        };
-        var report = try Report.init(self.gpa, "Unused Branch", "", .warning);
-        errdefer report.deinit();
-        try D.renderSliceInto(&.{
-            D.bytes("This"),
-            D.bytes(noun),
-            D.bytes("was not taken during compile-time evaluation."),
-        }, self, &report, &report.headline);
-
-        try self.addSourceRegionOf(&report.document, data.branch_region, .warning_highlight);
-        try report.document.addLineBreak();
-
-        try D.renderSlice(&.{
-            D.bytes("Note: This warning is empirical; it only describes the compile-time evaluation that ran for this definition."),
-        }, self, &report);
 
         return report;
     }

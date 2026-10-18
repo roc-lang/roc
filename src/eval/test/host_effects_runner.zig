@@ -350,7 +350,6 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
             runtime_env.noteCrash(interp.getCrashMessage());
             return runtime_env.snapshot(allocator);
         },
-        error.ComptimeExhaustiveness,
         error.DivisionByZero,
         error.ExpectErr,
         error.InvalidHostedFunctionSignature,

@@ -11,9 +11,11 @@
 //! placed into another program's buffer with `append`, then resolved after
 //! all required producers have landed. `assemble` performs both steps.
 //! Source-file indices are in the set's own file domain: `Set.source_files`
-//! names, by module content identity, only the files the set's lines use.
-//! Every append binds them to the receiving program's table, omitting the
-//! lines of module versions that program does not have.
+//! names each index by its module's content identity. A session's fragments
+//! carry no table: they all index the session's one source-file table, and
+//! session appends keep their indices as they are. `splice` binds a set's
+//! indices to the receiving program's table, omitting the lines of module
+//! versions that program does not have.
 //!
 //! `verifyRoundTrip` is the gate for the format: a program assembled from its
 //! own artifacts must produce the same bytes, relocations, and unwind records
@@ -54,6 +56,9 @@ pub const SymbolicReference = struct {
 /// Region-relative offsets, preserving producer order even at equal offsets.
 /// SourceLoc.file belongs to the originating LIR source-file table.
 pub const LineEntry = LirCodeGenMod.LineEntry;
+
+/// Region-relative failure sites (`LirCodeGen.FailureSite`).
+pub const FailureSite = LirCodeGenMod.FailureSite;
 
 /// A reference from an artifact's bytes to a location inside another artifact.
 pub const Reference = struct {
@@ -148,6 +153,7 @@ pub const Artifact = struct {
     refs: []const Reference,
     symbolic_refs: []const SymbolicReference = &.{},
     lines: []const LineEntry = &.{},
+    failure_sites: []const FailureSite = &.{},
     relocations: []const NamedRelocation,
     data: []const DataItem,
 };
@@ -158,7 +164,7 @@ pub const Set = struct {
     arena: collections.SingleThreadArena,
     artifacts: []const Artifact,
     /// The module content identity of each source-file index the artifacts'
-    /// lines use (`LirStore.sourceFileModuleIdentity`), and of no other file.
+    /// lines use (`LirStore.sourceFileModuleIdentity`).
     source_files: []const [32]u8 = &.{},
 
     pub fn deinit(self: *Set) void {
@@ -173,7 +179,7 @@ pub const Fragment = struct {
     context_dependencies: LirCodeGenMod.FragmentContextDependencies,
 
     pub fn clone(self: *const Fragment, allocator: Allocator) Allocator.Error!Fragment {
-        var set = try combine(allocator, &.{&self.set});
+        var set = try copySet(allocator, &self.set);
         errdefer set.deinit();
         const required_helpers = try set.arena.allocator().dupe(u64, self.required_helpers);
         return .{
@@ -286,7 +292,6 @@ pub fn combine(allocator: Allocator, sets: []const *const Set) Allocator.Error!S
     var artifacts = std.ArrayList(Artifact).empty;
     var source_files = std.ArrayList([32]u8).empty;
     for (sets) |set| {
-        const first: u32 = @intCast(artifacts.items.len);
         const file_map = try a.alloc(u32, set.source_files.len);
         for (set.source_files, file_map) |identity, *mapped| {
             mapped.* = for (source_files.items, 0..) |existing, index| {
@@ -296,36 +301,58 @@ pub fn combine(allocator: Allocator, sets: []const *const Set) Allocator.Error!S
                 break :index @intCast(source_files.items.len - 1);
             };
         }
-        for (set.artifacts) |source| {
-            var artifact = source;
-            artifact.kind = switch (source.kind) {
-                .rc_helper => |name| .{ .rc_helper = try a.dupe(u8, name) },
-                .proc, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => source.kind,
-            };
-            artifact.code = try a.dupe(u8, source.code);
-            const refs = try a.dupe(Reference, source.refs);
-            for (refs) |*ref| ref.target += first;
-            artifact.refs = refs;
-            const symbolic_refs = try a.dupe(SymbolicReference, source.symbolic_refs);
-            for (symbolic_refs) |*ref| switch (ref.target) {
-                .rc_helper => |name| ref.target = .{ .rc_helper = try a.dupe(u8, name) },
-                .proc, .boxy_thunk => {},
-            };
-            artifact.symbolic_refs = symbolic_refs;
-            const lines = try a.dupe(LineEntry, source.lines);
-            for (lines) |*line| line.loc = rebindLoc(line.loc, file_map);
-            artifact.lines = lines;
-            const relocations = try a.dupe(NamedRelocation, source.relocations);
-            for (relocations) |*relocation| relocation.name = try a.dupe(u8, relocation.name);
-            artifact.relocations = relocations;
-            const data = try a.alloc(DataItem, source.data.len);
-            for (source.data, data) |item, *owned| owned.* = try cloneData(a, item);
-            artifact.data = data;
-            try artifacts.append(a, artifact);
-        }
+        try copyArtifacts(a, &artifacts, set, file_map);
     }
     const owned = try artifacts.toOwnedSlice(a);
     return .{ .arena = arena, .artifacts = owned, .source_files = try source_files.toOwnedSlice(a) };
+}
+
+/// Deep-copy a set whose lines index a source-file table it does not carry
+/// (`extractPrepared`), keeping its file indices.
+fn copySet(allocator: Allocator, set: *const Set) Allocator.Error!Set {
+    std.debug.assert(set.source_files.len == 0);
+    var arena = collections.SingleThreadArena.init(allocator);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+    var artifacts = std.ArrayList(Artifact).empty;
+    try copyArtifacts(a, &artifacts, set, null);
+    return .{ .arena = arena, .artifacts = try artifacts.toOwnedSlice(a) };
+}
+
+/// Append deep copies of `set`'s artifacts, rebasing set-local references
+/// and, given a `file_map`, carrying line file indices through it.
+fn copyArtifacts(a: Allocator, artifacts: *std.ArrayList(Artifact), set: *const Set, file_map: ?[]const u32) Allocator.Error!void {
+    const first: u32 = @intCast(artifacts.items.len);
+    for (set.artifacts) |source| {
+        var artifact = source;
+        artifact.kind = switch (source.kind) {
+            .rc_helper => |name| .{ .rc_helper = try a.dupe(u8, name) },
+            .proc, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => source.kind,
+        };
+        artifact.code = try a.dupe(u8, source.code);
+        const refs = try a.dupe(Reference, source.refs);
+        for (refs) |*ref| ref.target += first;
+        artifact.refs = refs;
+        const symbolic_refs = try a.dupe(SymbolicReference, source.symbolic_refs);
+        for (symbolic_refs) |*ref| switch (ref.target) {
+            .rc_helper => |name| ref.target = .{ .rc_helper = try a.dupe(u8, name) },
+            .proc, .boxy_thunk => {},
+        };
+        artifact.symbolic_refs = symbolic_refs;
+        const lines = try a.dupe(LineEntry, source.lines);
+        if (file_map) |map| for (lines) |*line| {
+            line.loc = rebindLoc(line.loc, map);
+        };
+        artifact.lines = lines;
+        artifact.failure_sites = try a.dupe(FailureSite, source.failure_sites);
+        const relocations = try a.dupe(NamedRelocation, source.relocations);
+        for (relocations) |*relocation| relocation.name = try a.dupe(u8, relocation.name);
+        artifact.relocations = relocations;
+        const data = try a.alloc(DataItem, source.data.len);
+        for (source.data, data) |item, *owned| owned.* = try cloneData(a, item);
+        artifact.data = data;
+        try artifacts.append(a, artifact);
+    }
 }
 
 /// `loc` with its file index carried from one source-file domain to another
@@ -562,10 +589,17 @@ pub fn extract(
 ) ExtractError!Set {
     var prepared = try PreparedData.init(allocator, string_exports, constant_exports, spliced_data);
     defer prepared.deinit();
-    return extractPrepared(CG, allocator, codegen, proc_specs, layout_store, &prepared);
+    var set = try extractPrepared(CG, allocator, codegen, proc_specs, layout_store, &prepared);
+    errdefer set.deinit();
+    const source_files = try set.arena.allocator().alloc([32]u8, codegen.store.sourceFileCount());
+    for (source_files, 0..) |*identity, file| identity.* = codegen.store.sourceFileModuleIdentity(@intCast(file));
+    set.source_files = source_files;
+    return set;
 }
 
 /// Capture against a shared immutable catalog without scanning module exports.
+/// The set's lines index the code generator's own source-file table, which
+/// the set does not copy: a session's fragments all share that table.
 pub fn extractPrepared(
     comptime CG: type,
     allocator: Allocator,
@@ -629,7 +663,6 @@ pub fn extractPrepared(
     const relocations = try codegen.artifactRelocations(allocator);
     defer allocator.free(relocations);
     const refs = codegen.codeRefs();
-    const line_entries = codegen.getLineEntries();
     for (relocations) |relocation| switch (relocation) {
         .local_data, .jmp_to_return => return error.UnsupportedRelocation,
         .retired, .linked_function, .linked_data => {},
@@ -646,15 +679,13 @@ pub fn extractPrepared(
         if (regionHasArtifact(region.kind)) artifact_count += 1;
     }
 
-    // Each reference, relocation, and line belongs to the one region its
-    // offset falls in. Grouping them once keeps extraction linear in the
-    // program's size; within a region they keep their emission order.
+    // Each reference and relocation belongs to the one region its offset
+    // falls in. Grouping them once keeps extraction linear in the program's
+    // size; within a region they keep their emission order.
     var ref_groups = try RegionGroups.init(CG, allocator, regions, refs.len, refs, refSite);
     defer ref_groups.deinit(allocator);
     var relocation_groups = try RegionGroups.init(CG, allocator, regions, relocations.len, relocations, relocationOffset);
     defer relocation_groups.deinit(allocator);
-    var line_groups = try RegionGroups.init(CG, allocator, regions, line_entries.len, line_entries, lineOffset);
-    defer line_groups.deinit(allocator);
     var frame_of_entry = std.AutoHashMap(usize, usize).init(allocator);
     defer frame_of_entry.deinit();
     for (unwind, 0..) |function, index| {
@@ -663,13 +694,6 @@ pub fn extractPrepared(
     }
     var message_runs = try MessageRuns.init(CG, allocator, regions);
     defer message_runs.deinit(allocator);
-
-    // A set names only the source files its own lines use, so its table is
-    // as small as its code; lines index that table.
-    const local_file = try allocator.alloc(?u32, codegen.store.sourceFileCount());
-    defer allocator.free(local_file);
-    @memset(local_file, null);
-    var source_files = std.ArrayList([32]u8).empty;
 
     const artifacts = try arena_allocator.alloc(Artifact, artifact_count);
     for (regions, 0..) |region, region_index| {
@@ -698,12 +722,24 @@ pub fn extractPrepared(
             };
         } else null;
 
+        // Code whose identity names it reaches a procedure whose identity
+        // names its template by site (`LIR.LirProcSpec.code_key`) by that
+        // identity, never by a copy of its code: a program the artifact is
+        // spliced into calls its own code of the procedure.
+        const region_names_code = switch (region.kind) {
+            .proc => |proc_id| proc_specs[@backingInt(proc_id)].code_key == null,
+            .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island, .hosted_stub, .spliced_proc, .spliced_boxy_thunk, .spliced_helper => true,
+        };
         var region_refs = std.ArrayList(Reference).empty;
         var symbolic_refs = std.ArrayList(SymbolicReference).empty;
         for (ref_groups.of(region_index)) |ref_index| {
             const ref = refs[ref_index];
             const symbolic_target: ?@FieldType(SymbolicReference, "target") = switch (ref.target) {
-                .proc => |proc_id| if (codegen.compiledProcSymbol(proc_id) == null) .{ .proc = proc_specs[@backingInt(proc_id)].identity } else null,
+                .proc => |proc_id| if (codegen.compiledProcSymbol(proc_id) == null or
+                    (region_names_code and proc_specs[@backingInt(proc_id)].code_key != null))
+                    .{ .proc = proc_specs[@backingInt(proc_id)].identity }
+                else
+                    null,
                 .rc_helper => |key| if (codegen.compiledRcHelperOffset(key) == null) .{ .rc_helper = try LirCodeGenMod.compiledRcHelperSymbolName(arena_allocator, layout_store, key) } else null,
                 .boxy_thunk => |proc_id| if (codegen.boxyThunkOffset(proc_id) == null) .{ .boxy_thunk = proc_specs[@backingInt(proc_id)].identity } else null,
                 .message, .offset => null,
@@ -730,6 +766,25 @@ pub fn extractPrepared(
             };
             const target_region = regionContaining(CG, regions, target_offset) orelse return error.DanglingReference;
             const target_index = artifact_of_region[target_region] orelse return error.DanglingReference;
+            if (region_names_code) site: {
+                const target_proc = switch (regions[target_region].kind) {
+                    .proc => |proc_id| proc_id,
+                    .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island, .hosted_stub, .spliced_proc, .spliced_boxy_thunk, .spliced_helper => break :site,
+                };
+                if (proc_specs[@backingInt(target_proc)].code_key == null) break :site;
+                if (target_offset != regions[target_region].start + regions[target_region].entry) return error.DanglingReference;
+                try symbolic_refs.append(arena_allocator, .{
+                    .site = @intCast(ref.site - region.start),
+                    .form = switch (ref.form) {
+                        .call => .call,
+                        .inline_call => .inline_call,
+                        .addr => .addr,
+                    },
+                    .veneer = if (codegen.codeRefVeneer(ref.site)) |offset| if (offset >= region.start and offset < region.end) @intCast(offset - region.start) else null else null,
+                    .target = .{ .proc = proc_specs[@backingInt(target_proc)].identity },
+                });
+                continue;
+            }
             try region_refs.append(arena_allocator, .{
                 .site = @intCast(ref.site - region.start),
                 .form = switch (ref.form) {
@@ -768,20 +823,20 @@ pub fn extractPrepared(
         // an artifact carries the whole constant graph it points into.
         const region_data = try captureData(allocator, arena_allocator, region_relocations.items, &data_by_name, prepared);
 
-        const region_lines = line_groups.of(region_index);
-        const lines = try arena_allocator.alloc(LineEntry, region_lines.len);
-        for (region_lines, lines) |line_index, *out| {
-            const line = line_entries[line_index];
-            var loc = line.loc;
-            if (loc.hasLocation()) {
-                const slot = &local_file[loc.file];
-                if (slot.* == null) {
-                    slot.* = @intCast(source_files.items.len);
-                    try source_files.append(arena_allocator, codegen.store.sourceFileModuleIdentity(loc.file));
-                }
-                loc.file = slot.*.?;
-            }
-            out.* = .{ .offset = @intCast(line.offset - region.start), .loc = loc };
+        // Lines and failure sites are in code offset order, so each region's
+        // are one contiguous run found by search. A failing call's return
+        // address may be the region's end.
+        const all_lines = codegen.getLineEntries();
+        var lines = std.ArrayList(LineEntry).empty;
+        for (all_lines[firstAtOrAfter(LineEntry, all_lines, region.start)..]) |line| {
+            if (line.offset >= region.end) break;
+            try lines.append(arena_allocator, .{ .offset = @intCast(line.offset - region.start), .loc = line.loc, .region = line.region });
+        }
+        const all_failure_sites = codegen.getFailureSites();
+        var failure_sites = std.ArrayList(FailureSite).empty;
+        for (all_failure_sites[firstAtOrAfter(FailureSite, all_failure_sites, region.start + 1)..]) |site| {
+            if (site.offset > region.end) break;
+            try failure_sites.append(arena_allocator, .{ .offset = @intCast(site.offset - region.start), .meaning = site.meaning });
         }
         const artifact_code = try arena_allocator.dupe(u8, code[region.start..region.end]);
         codegen.normalizeArtifactCode(region.start, artifact_code);
@@ -792,13 +847,14 @@ pub fn extractPrepared(
             .frame = frame,
             .refs = try region_refs.toOwnedSlice(arena_allocator),
             .symbolic_refs = try symbolic_refs.toOwnedSlice(arena_allocator),
-            .lines = lines,
+            .lines = try lines.toOwnedSlice(arena_allocator),
+            .failure_sites = try failure_sites.toOwnedSlice(arena_allocator),
             .relocations = try region_relocations.toOwnedSlice(arena_allocator),
             .data = region_data,
         };
     }
 
-    return .{ .arena = arena, .artifacts = artifacts, .source_files = try source_files.toOwnedSlice(arena_allocator) };
+    return .{ .arena = arena, .artifacts = artifacts };
 }
 
 fn refSite(ref: anytype) ?usize {
@@ -811,10 +867,6 @@ fn relocationOffset(relocation: anytype) ?usize {
         .linked_function, .linked_data => relocation.getOffset(),
         .local_data, .jmp_to_return => unreachable,
     };
-}
-
-fn lineOffset(line: anytype) ?usize {
-    return line.offset;
 }
 
 /// The indices of a list's items grouped by the code region their offsets
@@ -925,6 +977,17 @@ const MessageRuns = struct {
         allocator.free(self.latest_region);
     }
 };
+
+/// Index of the first entry, in offset order, at or after `offset`.
+fn firstAtOrAfter(comptime T: type, items: []const T, offset: usize) usize {
+    var low: usize = 0;
+    var high: usize = items.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (items[mid].offset < offset) low = mid + 1 else high = mid;
+    }
+    return low;
+}
 
 fn captureData(
     allocator: Allocator,
@@ -1049,8 +1112,6 @@ pub fn appendPrepared(
 ) AssembleError!void {
     const starts = try allocator.alloc(usize, set.artifacts.len);
     defer allocator.free(starts);
-    const file_map = try destinationFileMap(CG, allocator, codegen, set);
-    defer allocator.free(file_map);
 
     for (set.artifacts, 0..) |artifact, index| {
         const kind: CG.CodeRegionKind = switch (artifact.kind) {
@@ -1062,7 +1123,7 @@ pub fn appendPrepared(
             .branch_island => .branch_island,
         };
         starts[index] = try codegen.appendAssembledRegion(artifact.code, kind, artifact.entry, artifact.frame);
-        try appendMetadata(CG, codegen, artifact, starts[index], file_map);
+        try appendMetadata(CG, codegen, artifact, starts[index], .same_domain);
         for (artifact.relocations) |relocation| {
             const symbol = try codegen.internSymbolName(relocation.name, relocation.scope);
             const offset: u64 = starts[index] + relocation.offset;
@@ -1098,25 +1159,15 @@ pub fn appendPrepared(
     }
 }
 
-/// Each of `set`'s source files' index in the receiving program's table, or
-/// null for a module version that program does not have. A line names a
-/// module version by its content identity; the receiving program has that
-/// version only when the module is unchanged since the set was extracted.
-fn destinationFileMap(comptime CG: type, allocator: Allocator, codegen: *CG, set: *const Set) Allocator.Error![]?u32 {
-    const file_map = try allocator.alloc(?u32, set.source_files.len);
-    for (set.source_files, file_map) |identity, *mapped| {
-        mapped.* = for (0..codegen.store.sourceFileCount()) |file| {
-            const candidate = codegen.store.sourceFileModuleIdentity(@intCast(file));
-            if (std.mem.eql(u8, &candidate, &identity)) break @intCast(file);
-        } else null;
-    }
-    return file_map;
-}
+/// How an appended artifact's lines reach the receiving program: in the same
+/// source-file domain, or carried through a file map, which omits the lines
+/// of files the receiving program does not have.
+const LineBinding = union(enum) {
+    same_domain,
+    file_map: []const ?u32,
+};
 
-/// Register an appended artifact's names, references, and lines. `file_map`
-/// binds the artifact's set-local source files to the receiving program's,
-/// omitting the lines of files that program does not have.
-fn appendMetadata(comptime CG: type, codegen: *CG, artifact: Artifact, start: usize, file_map: []const ?u32) Allocator.Error!void {
+fn appendMetadata(comptime CG: type, codegen: *CG, artifact: Artifact, start: usize, lines: LineBinding) Allocator.Error!void {
     switch (artifact.kind) {
         .proc => |identity| try codegen.registerAssembledProc(identity, start + artifact.entry),
         .rc_helper => |name| try codegen.registerSplicedHelper(name, start + artifact.entry),
@@ -1135,9 +1186,19 @@ fn appendMetadata(comptime CG: type, codegen: *CG, artifact: Artifact, start: us
         }
     }
     for (artifact.lines) |line| {
-        var loc = line.loc;
-        if (loc.hasLocation()) loc.file = file_map[loc.file] orelse continue;
-        try codegen.appendAssembledLineEntry(.{ .offset = @intCast(start + line.offset), .loc = loc });
+        const loc = switch (lines) {
+            .same_domain => line.loc,
+            .file_map => |file_map| loc: {
+                if (!line.loc.hasLocation()) break :loc line.loc;
+                var bound = line.loc;
+                bound.file = file_map[line.loc.file] orelse continue;
+                break :loc bound;
+            },
+        };
+        try codegen.appendAssembledLineEntry(.{ .offset = @intCast(start + line.offset), .loc = loc, .region = line.region });
+    }
+    for (artifact.failure_sites) |site| {
+        try codegen.appendAssembledFailureSite(.{ .offset = @intCast(start + site.offset), .meaning = site.meaning });
     }
 }
 
@@ -1301,10 +1362,18 @@ pub fn splice(
     defer stack.deinit(allocator);
     var seen = std.AutoHashMap(u32, void).init(allocator);
     defer seen.deinit();
-    // A line of a module version this program does not have describes
-    // source it cannot show, so it is not emitted.
-    const file_map = try destinationFileMap(CG, allocator, codegen, set);
+    // A line names a version of a module by its content identity. The
+    // receiving program's table has that version only when the module is
+    // unchanged since the pack was written; a line of any other version
+    // describes source this program does not have, so it is not emitted.
+    const file_map = try allocator.alloc(?u32, set.source_files.len);
     defer allocator.free(file_map);
+    for (set.source_files, file_map) |identity, *mapped| {
+        mapped.* = for (0..codegen.store.sourceFileCount()) |file| {
+            const candidate = codegen.store.sourceFileModuleIdentity(@intCast(file));
+            if (std.mem.eql(u8, &candidate, &identity)) break @intCast(file);
+        } else null;
+    }
     for (roots) |root| try stack.append(allocator, root);
     while (stack.pop()) |index| {
         if (placed.contains(index)) continue;
@@ -1333,6 +1402,13 @@ pub fn splice(
         // A pack may combine independent fragments. Stable references to
         // definitions in this pack participate in the same transitive closure.
         for (artifact.symbolic_refs) |ref| {
+            // A procedure of this program has its own code, compiled or
+            // spliced as an entry of its own under the key it was served by;
+            // a copy from this pack never stands in for it.
+            switch (ref.target) {
+                .proc => |identity| if (procs_by_identity.contains(identity)) continue,
+                .boxy_thunk, .rc_helper => {},
+            }
             for (set.artifacts, 0..) |candidate, candidate_index| {
                 const matches = switch (ref.target) {
                     .proc => |identity| candidate.kind == .proc and std.meta.eql(identity, candidate.kind.proc),
@@ -1358,7 +1434,7 @@ pub fn splice(
             .branch_island => .branch_island,
         };
         const start = try codegen.appendAssembledRegion(artifact.code, kind, artifact.entry, artifact.frame);
-        try appendMetadata(CG, codegen, artifact, start, file_map);
+        try appendMetadata(CG, codegen, artifact, start, .{ .file_map = file_map });
         switch (artifact.kind) {
             .rc_helper => |name| try codegen.registerSplicedHelper(name, start + artifact.entry),
             .proc => |identity| try codegen.registerSplicedProc(identity, start),
@@ -1560,6 +1636,7 @@ test "artifact metadata queues unresolved targets, preserves same-offset line or
             self.lines[self.lines_len] = line;
             self.lines_len += 1;
         }
+        pub fn appendAssembledFailureSite(_: *Self, _: FailureSite) Allocator.Error!void {}
     };
     var recorder = Recorder{};
     const artifact = Artifact{
@@ -1573,13 +1650,13 @@ test "artifact metadata queues unresolved targets, preserves same-offset line or
             .{ .site = 1, .form = .addr, .target = .{ .rc_helper = "unemitted" } },
         },
         .lines = &.{
-            .{ .offset = 0, .loc = .{ .file = 3, .line = 10, .column = 1 } },
-            .{ .offset = 0, .loc = .{ .file = 3, .line = 11, .column = 2 } },
+            .{ .offset = 0, .loc = .{ .file = 3, .line = 10, .column = 1 }, .region = base.Region.zero() },
+            .{ .offset = 0, .loc = .{ .file = 3, .line = 11, .column = 2 }, .region = base.Region.zero() },
         },
         .relocations = &.{},
         .data = &.{},
     };
-    try appendMetadata(Recorder, &recorder, artifact, 100, &.{ null, null, null, 3 });
+    try appendMetadata(Recorder, &recorder, artifact, 100, .same_domain);
     try std.testing.expectEqual(@as(usize, 101), recorder.proc_entry);
     try std.testing.expectEqual(@as(u32, 100), recorder.refs[0].site);
     try std.testing.expectEqual(@as(?u32, 103), recorder.refs[0].veneer);
@@ -1593,7 +1670,7 @@ test "artifact metadata queues unresolved targets, preserves same-offset line or
     }
     // A pack's file 3 is the receiving program's file 1.
     var persistent = Recorder{};
-    try appendMetadata(Recorder, &persistent, artifact, 100, &.{ null, null, null, 1 });
+    try appendMetadata(Recorder, &persistent, artifact, 100, .{ .file_map = &.{ null, null, null, 1 } });
     try std.testing.expectEqual(@as(usize, 2), persistent.lines_len);
     for (artifact.lines, persistent.lines[0..persistent.lines_len]) |original, rebound| {
         try std.testing.expectEqual(@as(u32, 1), rebound.loc.file);
@@ -1603,7 +1680,7 @@ test "artifact metadata queues unresolved targets, preserves same-offset line or
     try std.testing.expectEqual(@as(usize, 2), persistent.refs_len);
     // A file the receiving program does not have contributes no lines.
     var other_version = Recorder{};
-    try appendMetadata(Recorder, &other_version, artifact, 100, &.{ null, null, null, null });
+    try appendMetadata(Recorder, &other_version, artifact, 100, .{ .file_map = &.{ null, null, null, null } });
     try std.testing.expectEqual(@as(usize, 0), other_version.lines_len);
     try std.testing.expectEqual(@as(usize, 2), other_version.refs_len);
 }
@@ -1622,8 +1699,8 @@ fn testCombineOwnership(allocator: Allocator) (Allocator.Error || error{TestExpe
                 .{ .site = 2, .form = .addr, .target = .{ .proc = lir.ProcIdentity.forTest(4) } },
             },
             .lines = &.{
-                .{ .offset = 0, .loc = .{ .file = 0, .line = 3, .column = 2 } },
-                .{ .offset = 0, .loc = .{ .file = 0, .line = 4, .column = 5 } },
+                .{ .offset = 0, .loc = .{ .file = 0, .line = 3, .column = 2 }, .region = base.Region.zero() },
+                .{ .offset = 0, .loc = .{ .file = 0, .line = 4, .column = 5 }, .region = base.Region.zero() },
             },
             .relocations = &.{.{ .offset = 0, .name = "external", .scope = .shared, .kind = .function }},
             .data = &.{.{

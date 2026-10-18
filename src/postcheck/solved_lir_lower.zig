@@ -158,9 +158,17 @@ pub const RootManifest = struct {
     layout_requests: bool = true,
     /// Whether this consumer emits the producer's runtime value schemas.
     runtime_schema_requests: bool = true,
-    /// Whether this consumer lowers the producer's literal roots. Only a
+    /// Which of the producer's literal roots this consumer lowers. Only a
     /// consumer that evaluates compile-time roots runs them.
-    literal_roots: bool = true,
+    literal_roots: LiteralRootShare = .all,
+};
+
+/// The producer literal roots one consumer lowers.
+pub const LiteralRootShare = union(enum) {
+    all,
+    none,
+    /// These, by producer id, in ascending order.
+    only: []const Common.LiteralRootId,
 };
 
 /// Configuration for direct solved-to-LIR lowering.
@@ -499,8 +507,9 @@ const RootEntry = struct {
     request_index: u32,
 };
 
-/// A literal root this consumer lowers, at its producer position.
+/// A literal root this consumer lowers, with its producer id.
 const LiteralRootEntry = struct {
+    id: Common.LiteralRootId,
     fn_id: Type.FnId,
     module: check.CheckedModule.ModuleId,
     site: Common.LiteralRejectionSite,
@@ -761,6 +770,11 @@ const Lowerer = struct {
     keep_specialization_procs: bool,
     kept_spec_fns: std.ArrayList(Type.FnId),
     kept_spec_index: usize,
+    /// The lambda-set members of entries the object cache serves
+    /// (`queueCallableMembers`), which the program lowers and retains, and
+    /// how many are queued.
+    served_member_fns: std.ArrayList(Type.FnId) = .empty,
+    served_member_index: usize = 0,
     inline_plan: SolvedInline.Plan,
     inline_scope_rebases: std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId),
     inline_expects: InlineExpectMode,
@@ -1262,6 +1276,7 @@ const Lowerer = struct {
         if (self.layout_digests) |*digests| digests.deinit();
         self.fn_reach_queue.deinit(self.allocator);
         self.kept_spec_fns.deinit(self.allocator);
+        self.served_member_fns.deinit(self.allocator);
         self.fn_reachable.deinit(self.allocator);
         self.fn_written.deinit(self.allocator);
         self.fn_spec_map.deinit();
@@ -1371,16 +1386,22 @@ const Lowerer = struct {
                 });
             }
         }
-        if (self.lowersLiteralRoots()) {
-            const produced_literal_roots = self.solved.lifted.literalRootsView();
-            try self.literal_roots.ensureTotalCapacity(self.allocator, produced_literal_roots.len);
-            for (produced_literal_roots) |root| {
-                self.literal_roots.appendAssumeCapacity(.{
-                    .fn_id = try self.ensureOwnFnSpec(root.fn_id, .finite),
-                    .module = root.module,
-                    .site = root.site,
-                });
-            }
+        const produced_literal_roots = self.solved.lifted.literalRootsView();
+        switch (self.literalRootShare()) {
+            .none => {},
+            .all => {
+                try self.literal_roots.ensureTotalCapacity(self.allocator, produced_literal_roots.len);
+                for (produced_literal_roots, 0..) |root, index| {
+                    try self.appendLiteralRoot(@fromBackingInt(@intCast(index)), root);
+                }
+            },
+            .only => |ids| {
+                try self.literal_roots.ensureTotalCapacity(self.allocator, ids.len);
+                for (ids) |id| {
+                    if (@backingInt(id) >= produced_literal_roots.len) Common.invariant("consumer named a literal root outside the producer's literal roots");
+                    try self.appendLiteralRoot(id, produced_literal_roots[@backingInt(id)]);
+                }
+            },
         }
         // The compile-time roots' closure lowers first, so that a procedure
         // the evaluator runs is known as such when the object cache is
@@ -1415,10 +1436,19 @@ const Lowerer = struct {
         return manifest.runtime_schema_requests;
     }
 
-    /// Whether this consumer lowers the producer's literal roots.
-    fn lowersLiteralRoots(self: *const Lowerer) bool {
-        const manifest = self.root_manifest orelse return true;
+    /// Which of the producer's literal roots this consumer lowers.
+    fn literalRootShare(self: *const Lowerer) LiteralRootShare {
+        const manifest = self.root_manifest orelse return .all;
         return manifest.literal_roots;
+    }
+
+    fn appendLiteralRoot(self: *Lowerer, id: Common.LiteralRootId, root: Lifted.LiteralRoot) Common.LowerError!void {
+        self.literal_roots.appendAssumeCapacity(.{
+            .id = id,
+            .fn_id = try self.ensureOwnFnSpec(root.fn_id, .finite),
+            .module = root.module,
+            .site = root.site,
+        });
     }
 
     fn lowerLayoutRequests(self: *Lowerer) Common.LowerError!void {
@@ -1450,6 +1480,7 @@ const Lowerer = struct {
             const expected: LIR.InlineScopeId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             const actual = try self.result.store.addInlineScope(.{
                 .source_identity = self.inlineSourceIdentity(scope.source_symbol),
+                .copies_site_code = self.inlineSourceIsSite(scope.source_symbol),
                 .source_name = try self.lowerInlineScopeSourceName(scope.source_symbol),
                 .source_loc = scope.source_loc,
                 .call_site = scope.call_site,
@@ -1469,6 +1500,12 @@ const Lowerer = struct {
             Common.invariant("an inline scope named a lifted function without a checked source identity");
         hasher.update(&source);
         return .{ .bytes = hasher.finalResult() };
+    }
+
+    /// Whether an inline scope's lifted function names its template by site.
+    fn inlineSourceIsSite(self: *const Lowerer, source_symbol: Common.Symbol) bool {
+        const template = self.solved.lifted.getFn(self.sourceFnForSymbol(source_symbol)).source orelse return false;
+        return template.site_identity != null;
     }
 
     fn lowerInlineScopeSourceName(
@@ -1506,6 +1543,7 @@ const Lowerer = struct {
             const source_scope = self.solved.lifted.inlineScope(scope_id);
             rebased = try self.result.store.addInlineScope(.{
                 .source_identity = self.inlineSourceIdentity(source_scope.source_symbol),
+                .copies_site_code = self.inlineSourceIsSite(source_scope.source_symbol),
                 .source_name = try self.lowerInlineScopeSourceName(source_scope.source_symbol),
                 .source_loc = source_scope.source_loc,
                 .call_site = source_scope.call_site,
@@ -1524,6 +1562,7 @@ const Lowerer = struct {
     ) Common.LowerError!LIR.InlineScopeId {
         return try self.result.store.addInlineScope(.{
             .source_identity = self.inlineSourceIdentity(source_fn.symbol),
+            .copies_site_code = self.inlineSourceIsSite(source_fn.symbol),
             .source_name = try self.lowerInlineScopeSourceName(source_fn.symbol),
             .source_loc = self.solved.lifted.exprLoc(body_expr),
             .call_site = where.loc,
@@ -1805,8 +1844,15 @@ const Lowerer = struct {
         }
         while (fn_queue_index < self.fn_reach_queue.items.len or
             initializer_queue_index < self.static_initializer_queue.items.len or
-            self.kept_spec_index < self.kept_spec_fns.items.len)
+            self.kept_spec_index < self.kept_spec_fns.items.len or
+            self.served_member_index < self.served_member_fns.items.len)
         {
+            while (self.served_member_index < self.served_member_fns.items.len) {
+                const fn_id = self.served_member_fns.items[self.served_member_index];
+                self.served_member_index += 1;
+                const proc = try self.markReachableFn(fn_id);
+                try self.result.retained_procs.append(self.allocator, proc);
+            }
             // A kept specialization whose calls were all inlined is reached
             // here instead, between epochs, so the queue is never extended
             // while an epoch is being prepared.
@@ -2150,7 +2196,7 @@ const Lowerer = struct {
             const data = l.solved.lifted.getExpr(id).data;
             const view = l.solved.lifted.view();
             switch (data) {
-                .static_data_candidate, .comptime_value, .comptime_branch_taken, .comptime_exhaustiveness_failed => {
+                .static_data_candidate, .comptime_value, .comptime_exhaustiveness_failed => {
                     self.admissible = false;
                     return;
                 },
@@ -2883,15 +2929,18 @@ const Lowerer = struct {
 
         const identity = try self.procIdentity(spec, entry);
         const plain_spec = spec.abi == .finite and source_fn.spec_constr_pattern == null and self.captureSpan(spec.captures).len == 0 and !spec.return_reuse.enabled();
-        const relation = if (self.solved.lifted.platform_requirement_filling) |filling| filling.relation else null;
-        const dependency_relation = self.solved.lifted.fnPlatformRequirementRelation(spec.source);
+        // Code reaching the app is offered under its identity only
+        // (`Lifted.Program.fnReachesAppRecord`).
+        const keyed_offer = !self.solved.lifted.fnReachesAppRecord(spec.source);
         var cached: ?Common.SpecCacheHit = null;
+        // The object-cache key the hit came from, which locates the pack entry it splices.
+        var cached_key: ?[32]u8 = null;
         // Monotype completed a cached template's record without a body. That
         // record is the cached procedure only for its own lifted function:
         // a SpecConstr clone or a second lowering of the same template has a
         // body and lowers normally.
         if (source_fn.body == .hosted) if (source_fn.source) |template| if (template.cached) |monotype_hit| {
-            const hit = self.linkedEntryFor(template, monotype_hit, relation);
+            const hit = self.linkedEntryFor(template, monotype_hit);
             if (self.comptime_phase and !self.comptime_closure_hits) {
                 Common.invariant("early object cache hit reached CTFE without the checked-program eligibility proof");
             }
@@ -2900,6 +2949,7 @@ const Lowerer = struct {
                     Common.invariant("object cache entry identity disagrees with the identity lowered for its specialization key");
                 }
                 cached = hit;
+                cached_key = (template.spec_key orelse Common.invariant("object cache hit had no specialization key")).bytes;
             } else {
                 // A closed procedure has no captures and no erased result, so
                 // the only other specialization is the erased-callable ABI.
@@ -2915,8 +2965,11 @@ const Lowerer = struct {
             if (self.spec_cache) |cache| {
                 if (source_fn.source) |template| {
                     if (template.spec_key) |key| {
-                        if (cache.lookup(key.bytes, relation, self.spec_cache_accepts_linked)) |hit| {
-                            if (std.mem.eql(u8, &hit.identity, &identity.bytes)) cached = hit;
+                        if (cache.lookup(key.bytes, self.spec_cache_accepts_linked)) |hit| {
+                            if (std.mem.eql(u8, &hit.identity, &identity.bytes)) {
+                                cached = hit;
+                                cached_key = key.bytes;
+                            }
                             if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} {s}\n", .{ key.bytes[0..8], if (cached != null) "hit" else "identity-mismatch" });
                         } else if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} miss\n", .{key.bytes[0..8]});
                     }
@@ -2924,6 +2977,28 @@ const Lowerer = struct {
             }
         } else if (pack_trace_available and self.spec_cache != null and packTraceEnabled()) {
             if (source_fn.source) |template| if (template.spec_key) |key| std.debug.print("lookup direct-lir key={x} skipped comptime={} plain={} cached={}\n", .{ key.bytes[0..8], self.comptime_phase, plain_spec, cached != null });
+        }
+        // Only a program using the object cache separates a site-named
+        // procedure's code from its identity.
+        const code_key = if (self.spec_cache != null) procCodeKey(source_fn.source, identity) else null;
+        // Any other procedure a body lowered for is served by its identity,
+        // which names its code once Lambda Mono has decided it: its source,
+        // its solved types with their lambda sets, and its captures. A
+        // procedure whose identity names its template by site is served by
+        // its code key instead.
+        if (cached == null and source_fn.body == .roc and spec.abi == .finite and !spec.return_reuse.enabled() and
+            (!self.comptime_phase or self.comptime_closure_hits))
+        {
+            if (self.spec_cache) |cache| {
+                const key = Common.procIdentityCacheKey(if (code_key) |code| code else identity.bytes);
+                if (cache.lookup(key, self.spec_cache_accepts_linked)) |hit| {
+                    if (std.mem.eql(u8, &hit.identity, &identity.bytes)) {
+                        cached = hit;
+                        cached_key = key;
+                    }
+                }
+                if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup identity key={x} {s}\n", .{ key[0..8], if (cached != null) "hit" else "miss" });
+            }
         }
         if (self.procs_by_identity.get(identity)) |owner| {
             // Another specialization interned this procedure. Share its proc;
@@ -2933,12 +3008,8 @@ const Lowerer = struct {
                 Common.invariant("direct LIR proc identity owner had no proc");
             // The shared procedure is this specialization's procedure too, so
             // the object cache may serve it under this specialization's key.
-            if (plain_spec) if (source_fn.source) |template| if (template.spec_key) |key| {
-                try self.result.spec_procs.append(self.allocator, .{
-                    .key = key.bytes,
-                    .proc = existing,
-                    .platform_requirement_relation = dependency_relation,
-                });
+            if (plain_spec and keyed_offer) if (source_fn.source) |template| if (template.spec_key) |key| {
+                try self.result.spec_procs.append(self.allocator, .{ .key = key.bytes, .proc = existing });
             };
             entry.proc = existing;
             entry.proc_owner = owner;
@@ -3008,6 +3079,9 @@ const Lowerer = struct {
             .abi = if (spec.abi == .erased) .erased_callable else .roc,
             .hosted = try self.hostedProcForSource(source_fn.source),
             .external = cached != null,
+            .cache_key = cached_key,
+            .code_key = code_key,
+            .source_monotype_fn = if (source_fn.source) |template| if (template.frozen_fn) |mono_fn| @backingInt(mono_fn) else null else null,
             .c_abi_entry = if (cached) |hit| hit.c_abi_entry else false,
             .rc_borrowed_params = if (cached) |hit| hit.rc_borrowed_params else 0,
             .rc_ret_borrowed = if (cached) |hit| hit.rc_ret_borrowed else false,
@@ -3031,17 +3105,27 @@ const Lowerer = struct {
                 // one's body as a procedure, except a body its calls inline,
                 // which a program linking the pack would inline too.
                 const kept = self.keep_specialization_procs and self.inline_plan.kind(spec.source) == .none;
-                if (plain_spec and (kept or !self.keep_specialization_procs)) {
-                    try self.result.spec_procs.append(self.allocator, .{
-                        .key = key.bytes,
-                        .proc = proc,
-                        .platform_requirement_relation = dependency_relation,
-                    });
+                if (plain_spec and keyed_offer and (kept or !self.keep_specialization_procs)) {
+                    try self.result.spec_procs.append(self.allocator, .{ .key = key.bytes, .proc = proc });
                     if (kept) try self.kept_spec_fns.append(self.allocator, fn_id);
                 }
             }
         }
         entry.proc = proc;
+        if (cached != null) {
+            // Served code calls the app functions it reaches by identity,
+            // which names them by site; the program lowers their current
+            // bodies (`Lifted.Program.appCalleesReachedBy`).
+            {
+                var app_callees = std.ArrayList(Lifted.FnId).empty;
+                defer app_callees.deinit(self.allocator);
+                try self.solved.lifted.appCalleesReachedBy(spec.source, &app_callees, self.allocator);
+                for (app_callees.items) |callee| try self.served_member_fns.append(self.allocator, try self.ensureOwnFnSpec(callee, .finite));
+            }
+            for (0..arg_tys.len) |i| try self.queueCallableMembers(GuardedList.at(arg_tys, i));
+            if (entry.capture_arg_ty) |capture_arg_ty| try self.queueCallableMembers(capture_arg_ty);
+            try self.queueCallableMembers(entry.ret);
+        }
         entry.proc_owner = fn_id;
         self.fn_entries.items[index] = entry;
         return proc;
@@ -3425,7 +3509,6 @@ const Lowerer = struct {
                 .return_,
                 .crash,
                 .checked_error,
-                .comptime_branch_taken,
                 .comptime_exhaustiveness_failed,
                 .dbg,
                 .expect_err,
@@ -3507,7 +3590,6 @@ const Lowerer = struct {
             .return_,
             .crash,
             .checked_error,
-            .comptime_branch_taken,
             .comptime_exhaustiveness_failed,
             .dbg,
             .expect_err,
@@ -3754,7 +3836,7 @@ const Lowerer = struct {
                     try path.append(self.allocator, root);
                     root = access.tuple;
                 },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => break,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => break,
             }
         }
         var ty = known orelse try self.lowerExprTy(root);
@@ -3775,7 +3857,7 @@ const Lowerer = struct {
                     if (access.elem_index >= items.len) Common.invariant("tuple access index exceeded tuple type");
                     ty = GuardedList.at(items, @intCast(access.elem_index));
                 },
-                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
+                .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .comptime_value, .typed_boundary, .row_widen, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .lambda, .def_ref, .fn_def, .fn_ref, .call_value, .call_proc, .low_level, .structural_eq, .structural_hash, .match_, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .loop_, .break_, .continue_, .join_point, .jump, .return_, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => unreachable,
             }
             try self.expr_context_tys.put(path.items[index], ty);
         }
@@ -4385,6 +4467,14 @@ const Lowerer = struct {
         }
     }
 
+    /// The failure terminal of a compile-time site, naming the checked site
+    /// it fails.
+    fn comptimeExhaustivenessFailed(self: *Lowerer, site: Lifted.ComptimeSiteId) Common.LowerError!LIR.CFStmt {
+        _ = try self.lowerComptimeSite(site);
+        const source = self.solved.lifted.comptimeSite(site);
+        return .{ .comptime_exhaustiveness_failed = .{ .owner = source.owner, .checked_site = source.checked_site } };
+    }
+
     fn lowerComptimeSite(self: *Lowerer, site: Lifted.ComptimeSiteId) Common.LowerError!LIR.ComptimeSiteId {
         const index = @backingInt(site);
         if (self.comptime_site_map[index]) |existing| return existing;
@@ -4396,8 +4486,7 @@ const Lowerer = struct {
         const lowered = try self.result.addComptimeSite(switch (source.kind) {
             .match => .match,
             .destructure => .destructure,
-            .if_ => .if_,
-        }, source.owner, source.region, source.checked_site, proc, source.branch_regions);
+        }, source.owner, source.region, source.checked_site, proc);
         self.comptime_site_map[index] = lowered;
         return lowered;
     }
@@ -4484,12 +4573,12 @@ const Lowerer = struct {
             }
         }
 
-        // A literal root's position is its id, and its reads and its
+        // A literal root keeps its producer id, and its reads and its
         // evaluation meet in one slot.
-        for (self.literal_roots.items, 0..) |root, index| {
+        for (self.literal_roots.items) |root| {
             const entry = self.fn_entries.items[@backingInt(root.fn_id)];
             const ret_layout = try self.layoutOfType(entry.ret);
-            const id: Common.LiteralRootId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+            const id = root.id;
             try self.result.literal_roots.append(self.allocator, .{
                 .module = root.module,
                 .id = id,
@@ -5247,13 +5336,81 @@ const Lowerer = struct {
     /// in process; a consumer whose code is linked takes the linked entry of
     /// the same procedure when there is one, with that entry's ownership
     /// signature.
-    fn linkedEntryFor(self: *Lowerer, template: Mono.FnTemplate, monotype_hit: Common.SpecCacheHit, relation: ?[32]u8) Common.SpecCacheHit {
+    fn linkedEntryFor(self: *Lowerer, template: Mono.FnTemplate, monotype_hit: Common.SpecCacheHit) Common.SpecCacheHit {
         if (monotype_hit.c_abi_entry or !self.spec_cache_accepts_linked) return monotype_hit;
         const cache = self.spec_cache orelse return monotype_hit;
         const key = template.spec_key orelse return monotype_hit;
-        const linked = cache.lookup(key.bytes, relation, true) orelse return monotype_hit;
+        const linked = cache.lookup(key.bytes, true) orelse return monotype_hit;
         if (!linked.c_abi_entry or !std.mem.eql(u8, &linked.identity, &monotype_hit.identity)) return monotype_hit;
         return linked;
+    }
+
+    /// The code key of a procedure whose identity names its template by site
+    /// (`LIR.LirProcSpec.code_key`): the identity with the content key of
+    /// the template's module, which every body of the module the procedure
+    /// may contain is part of.
+    fn procCodeKey(source: ?Mono.FnTemplate, identity: LIR.ProcIdentity) ?[32]u8 {
+        const template = source orelse return null;
+        _ = template.site_identity orelse return null;
+        const module = switch (template.fn_def) {
+            .local_template, .imported_template => |owner| owner.artifact,
+            .nested => |nested| nested.owner.artifact,
+            .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => Common.invariant("a function with a site identity had no template"),
+        };
+        var hasher = base.TypeDigestHasher.init();
+        hasher.update("roc.proc.code-key.v1");
+        hasher.update(&identity.bytes);
+        hasher.update(&module.bytes);
+        return hasher.finalResult();
+    }
+
+    /// Queue every lambda-set member `root` mentions. A served entry's code
+    /// calls the members of the lambda sets in its signature by identity, and
+    /// a member whose identity names its template by site may have code the
+    /// entry's own copy predates; this program lowers each, so the splice
+    /// links the entry's calls to the program's current code.
+    fn queueCallableMembers(self: *Lowerer, root: Type.TypeId) Common.LowerError!void {
+        var visited = collections.DenseMap(Type.TypeId, void).init(self.allocator);
+        defer visited.deinit();
+        var stack = std.ArrayList(Type.TypeId).empty;
+        defer stack.deinit(self.allocator);
+        try stack.append(self.allocator, root);
+        while (stack.pop()) |ty| {
+            if ((try visited.getOrPut(ty)).found_existing) continue;
+            switch (self.types.get(ty)) {
+                .primitive, .zst, .erased_capture_ptr, .erased_fn => {},
+                .list, .box => |elem| try stack.append(self.allocator, elem),
+                .tuple => |span| try self.appendTypeSpan(&stack, span),
+                .record => |span| {
+                    const fields = self.types.fieldSpan(span);
+                    for (0..fields.len) |index| {
+                        const field = GuardedList.at(fields, index);
+                        try stack.append(self.allocator, field.ty);
+                        if (field.value_ty) |value_ty| try stack.append(self.allocator, value_ty);
+                    }
+                },
+                .capture_record => |span| {
+                    const fields = self.types.captureFieldSpan(span);
+                    for (0..fields.len) |index| try stack.append(self.allocator, GuardedList.at(fields, index).ty);
+                },
+                .tag_union => |span| {
+                    const tags = self.types.tagSpan(span);
+                    for (0..tags.len) |index| try self.appendTypeSpan(&stack, GuardedList.at(tags, index).payloads);
+                },
+                .callable => |span| {
+                    const variants = self.types.fnVariantSpan(span);
+                    for (0..variants.len) |index| {
+                        const variant = GuardedList.at(variants, index);
+                        try self.served_member_fns.append(self.allocator, variant.target);
+                        if (variant.capture_ty) |capture_ty| try stack.append(self.allocator, capture_ty);
+                    }
+                },
+                .named => |named| {
+                    try self.appendTypeSpan(&stack, named.args);
+                    if (named.backing) |backing| try stack.append(self.allocator, backing.ty);
+                },
+            }
+        }
     }
 
     /// Identity of a static-initializer procedure. These procedures exist only
@@ -5635,26 +5792,20 @@ const Lowerer = struct {
         }
         const proc_id = self.current_proc orelse Common.invariant("compile-time value lowering ran without a current procedure");
         const is_static_initializer = self.result.store.getProcSpecImmediate(proc_id).is_static_initializer;
-        const runtime_values = if (is_static_initializer) null else self.completed_scalar_values;
+        // Code is lowered only once every compile-time value it reads has
+        // been evaluated, so a read knows the value it reads: one that
+        // completed as a construction lowers as that construction, and any
+        // other reads its slot.
+        const runtime_values = if (is_static_initializer)
+            null
+        else
+            self.completed_scalar_values orelse Common.invariant("code reading compile-time values was lowered before evaluation completed them");
         if (runtime_values) |values| {
             if (values.constructionFor(root.module, root.root, layout_idx)) |construction| {
                 if (try self.lowerConstructionInto(where, target, construction, next)) |built| return built;
             }
         }
         const id = try self.comptimeValueSlot(root, ty, layout_idx);
-        // A program lowered before its roots are evaluated reads each root
-        // through an accessor, so the slot has one guarded read however many
-        // places read it, and the evaluation's slot demand is raised from one
-        // place. A program lowered after evaluation reads its slots directly.
-        if (!is_static_initializer and self.completed_scalar_values == null) {
-            const accessor = try self.comptimeRootAccessor(where, id, root, ty, layout_idx);
-            return try self.result.store.addCFStmt(.{ .assign_call = .{
-                .target = target,
-                .proc = accessor,
-                .args = LIR.LocalSpan.empty(),
-                .next = next,
-            } }, where.source());
-        }
         // A list of copies keeps its slot and also names its fresh form and
         // its item count.
         var fresh_alternative: ?LIR.LirProcSpecId = null;
@@ -5735,64 +5886,6 @@ const Lowerer = struct {
         return .{ .bytes = hasher.finalResult() };
     }
 
-    /// The procedure that reads compile-time value slot `id`, which holds
-    /// `root` at `ty`, created on its first use.
-    fn comptimeRootAccessor(self: *Lowerer, where: LowerSite, id: LIR.StaticDataId, root: Common.ComptimeValueRoot, ty: Type.TypeId, layout_idx: layout.Idx) Common.LowerError!LIR.LirProcSpecId {
-        if (self.result.static_data_values.items[@backingInt(id)].accessor) |accessor| return accessor;
-        const store = &self.result.store;
-        const value = try self.addLocalForLayout(layout_idx);
-        // The accessor is its own procedure: it carries the location of the
-        // read that requested it, outside that read's inline scopes.
-        const origin = LIR.StmtOrigin{
-            .loc = where.loc,
-            .region = where.region,
-            .inline_scope = .none,
-            .kind = .scaffold,
-        };
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, origin);
-        const read = try store.addCFStmt(.{ .assign_literal = .{
-            .target = value,
-            .value = .{ .static_data = id },
-            .next = ret,
-        } }, origin);
-        const frame_locals = try store.addLocalSpan(&[_]LIR.LocalId{value});
-        const accessor = try store.addProcSpec(.{
-            .name = lirSymbol(self.symbols.fresh()),
-            .identity = try self.comptimeRootAccessorIdentity(root, ty, layout_idx),
-            .args = LIR.LocalSpan.empty(),
-            .frame_locals = frame_locals,
-            .body = read,
-            .ret_layout = layout_idx,
-            .abi = .roc,
-        }, where.loc);
-        if (store.procNeedsStackProbe(&self.result.layouts, store.getProcSpec(accessor))) store.getProcSpecPtr(accessor).stack_probe = .required;
-        self.result.static_data_values.items[@backingInt(id)].accessor = accessor;
-        return accessor;
-    }
-
-    /// An accessor is emitted and carried in object-cache packs like any
-    /// procedure, and a spliced procedure takes the place of the program's
-    /// own procedure with its identity, so the identity names what the
-    /// accessor returns in every program: the root's module by content key,
-    /// the root within that module, and the representation the slot commits,
-    /// by a digest no program's numbering enters.
-    fn comptimeRootAccessorIdentity(self: *Lowerer, root: Common.ComptimeValueRoot, ty: Type.TypeId, layout_idx: layout.Idx) std.mem.Allocator.Error!LIR.ProcIdentity {
-        const representation = try self.types.contentDigest(&self.solved.lifted.names, ty, .{ .context = self, .identity = callableTargetIdentity });
-        var hasher = base.TypeDigestHasher.init();
-        hasher.update("roc.proc.comptime-root-accessor.v2");
-        hasher.update(&root.module.bytes);
-        // A literal root's id is program-local; the literal's checked
-        // expression names it within its module.
-        const tag: u8, const index: u32 = switch (root.root) {
-            .checked => |checked_root| .{ 0, @backingInt(checked_root) },
-            .literal => |literal| .{ 1, self.literal_roots.items[@backingInt(literal)].site.checked_expr },
-        };
-        hasher.update(&[_]u8{ tag, @truncate(index), @truncate(index >> 8), @truncate(index >> 16), @truncate(index >> 24) });
-        hasher.update(&representation.bytes);
-        hasher.update(&try self.result.layouts.contentDigest(layout_idx));
-        return .{ .bytes = hasher.finalResult() };
-    }
-
     /// The content identity of the specialization a callable variant targets.
     fn callableTargetIdentity(context: *anyopaque, target: Type.FnId) std.mem.Allocator.Error!proc_identity.Identity {
         const self: *Lowerer = @ptrCast(@alignCast(context));
@@ -5861,13 +5954,6 @@ const Lowerer = struct {
     const ScopedTask = struct {
         saved_return_target: ?LIR.LocalId,
         restored: bool = false,
-        child: ExprRequest,
-    };
-
-    const ComptimeBranchTask = struct {
-        where: LowerSite,
-        site: LIR.ComptimeSiteId,
-        branch_index: @FieldType(@FieldType(LIR.CFStmt, "comptime_branch_taken"), "branch_index"),
         child: ExprRequest,
     };
 
@@ -6155,7 +6241,6 @@ const Lowerer = struct {
         stmt: struct { parent: LowerSite, stmt: Lifted.StmtId, next: LIR.CFStmtId },
         chain: ChainTask,
         scoped: ScopedTask,
-        comptime_branch: ComptimeBranchTask,
         struct_exprs: StructExprsTask,
         record_update: RecordUpdateTask,
         tag_payload: TagPayloadTask,
@@ -6290,7 +6375,6 @@ const Lowerer = struct {
                     try pending.append(allocator, join_point.body);
                     try pending.append(allocator, join_point.remainder);
                 },
-                .comptime_branch_taken => |taken| try pending.append(allocator, taken.body),
                 .if_initialized_payload => |payload_switch| {
                     try pending.append(allocator, payload_switch.initialized);
                     try pending.append(allocator, payload_switch.uninitialized);
@@ -6504,7 +6588,6 @@ const Lowerer = struct {
             },
             .expr,
             .stmt,
-            .comptime_branch,
             .if_,
             .payload_switch,
             .try_sequence,
@@ -6526,17 +6609,6 @@ const Lowerer = struct {
                 self.current_return_target = task.saved_return_target;
                 task.restored = true;
                 return .{ .ret = input.? };
-            },
-            .comptime_branch => |*task| {
-                if (frame.cursor == 0) {
-                    frame.cursor = 1;
-                    return .{ .call = .{ .expr = task.child } };
-                }
-                return .{ .ret = try self.result.store.addCFStmt(.{ .comptime_branch_taken = .{
-                    .site = task.site,
-                    .branch_index = task.branch_index,
-                    .next = input.?,
-                } }, task.where.source()) };
             },
             .struct_exprs => |*task| self.stepStructExprs(frame, task, input),
             .record_update => |*task| self.stepRecordUpdate(frame, task, input),
@@ -6766,12 +6838,6 @@ const Lowerer = struct {
                 .next = next,
             } } },
             .join_point => |join_point| .{ .tail = .{ .join_point = .{ .where = where, .target = target, .result_ty = ty, .join_point = join_point, .next = next } } },
-            .comptime_branch_taken => |taken| .{ .tail = .{ .comptime_branch = .{
-                .where = where,
-                .site = try self.lowerComptimeSite(taken.site),
-                .branch_index = taken.branch_index,
-                .child = .{ .parent = where, .target = target, .expr = taken.body, .ty = ty, .next = next },
-            } } },
             .unit,
             .@"unreachable",
             .int_lit,
@@ -6933,15 +6999,7 @@ const Lowerer = struct {
                 .msg = .{ .literal = try self.result.store.insertString(self.stringLiteralText(msg)) },
                 .checked_error = true,
             } }, where.source()) },
-            .comptime_branch_taken => |taken| .{ .tail = .{ .comptime_branch = .{
-                .where = where,
-                .site = try self.lowerComptimeSite(taken.site),
-                .branch_index = taken.branch_index,
-                .child = .{ .parent = where, .target = target, .expr = taken.body, .ty = null, .next = next },
-            } } },
-            .comptime_exhaustiveness_failed => |site| .{ .ret = try self.result.store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{
-                .site = try self.lowerComptimeSite(site),
-            } }, where.source()) },
+            .comptime_exhaustiveness_failed => |site| .{ .ret = try self.result.store.addCFStmt(try self.comptimeExhaustivenessFailed(site), where.source()) },
             .dbg => |child| blk: {
                 const after_dbg = try self.assignZst(where, target, next);
                 const message = try self.addTemp(try self.lowerExprTy(child));
@@ -10572,7 +10630,7 @@ const Lowerer = struct {
 
         pub fn failTerminal(self: MatchTreeCtx) Common.LowerError!LIR.CFStmtId {
             if (self.comptime_site) |site| {
-                return try self.l.result.store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{ .site = try self.l.lowerComptimeSite(site) } }, self.where.glue());
+                return try self.l.result.store.addCFStmt(try self.l.comptimeExhaustivenessFailed(site), self.where.glue());
             }
             return try self.l.result.store.addCFStmt(.{ .runtime_error = {} }, self.where.glue());
         }
@@ -11459,18 +11517,10 @@ const Lowerer = struct {
 
         const miss = PatternMiss{ .join_id = self.freshJoinPointId() };
         const crash = if (comptime_site) |site|
-            try self.result.store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{ .site = try self.lowerComptimeSite(site) } }, where.glue())
+            try self.result.store.addCFStmt(try self.comptimeExhaustivenessFailed(site), where.glue())
         else
             try self.result.store.addCFStmt(.{ .runtime_error = {} }, where.glue());
-        const on_match = if (comptime_site) |site|
-            try self.result.store.addCFStmt(.{ .comptime_branch_taken = .{
-                .site = try self.lowerComptimeSite(site),
-                .branch_index = 0,
-                .next = next,
-            } }, where.glue())
-        else
-            next;
-        const matched = try self.lowerPatternThen(where, pat_id, source, on_match, miss, on_match);
+        const matched = try self.lowerPatternThen(where, pat_id, source, next, miss, next);
         return try self.result.store.addCFStmt(.{ .join = .{
             .id = miss.join_id,
             .params = LIR.LocalSpan.empty(),

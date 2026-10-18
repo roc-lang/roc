@@ -236,6 +236,20 @@ pub const FnTemplate = struct {
     /// when Monotype finalizes the program. Dev inline analysis decides
     /// single-use inlining by this flag, which is the same in every program.
     single_source_call: bool = false,
+    /// For a function of the root app module: the template it comes from (its
+    /// own, or its nested owner's) named by module name and definition name
+    /// rather than by the module's content key and template ordinals, so an
+    /// edit elsewhere in the module leaves the procedure identities derived
+    /// from it, and those of every specialization that receives it as a
+    /// function value, unchanged. The procedure's own code is keyed by its
+    /// `LIR.LirProcSpec.code_key`. Stamped when Monotype finalizes the
+    /// program.
+    site_identity: ?names.TypeDigest = null,
+    /// `evidence_digest` with the root app module's views and method
+    /// templates named by site (`fnEvidenceSiteDigest`), when the evidence
+    /// names any; seeds procedure identity in place of `evidence_digest`.
+    /// Stamped when Monotype finalizes the program.
+    evidence_site_digest: ?EvidenceDigest = null,
     /// The procedure was lowered only for discovery (design.md "Demand-Driven
     /// Compile-Time Specialization"): a never-run stub, or a body whose
     /// requests may name such stubs. It is part of the procedure's identity,
@@ -473,7 +487,36 @@ pub fn fnEvidenceDigest(
     head: ?u32,
 ) EvidenceDigest {
     var hasher = TypeDigestHasher.init();
-    writeFnEvidence(&hasher, evidence, frames, head);
+    writeFnEvidence(&hasher, evidence, frames, head, ContentEvidenceNames{});
+    return .{ .bytes = hasher.finalResult() };
+}
+
+/// Names evidence's modules and method templates by content.
+const ContentEvidenceNames = struct {
+    fn module(_: ContentEvidenceNames, _: *const [32]u8) ?void {
+        return null;
+    }
+
+    fn template(_: ContentEvidenceNames, _: names.ProcTemplate) ?names.TypeDigest {
+        return null;
+    }
+};
+
+/// The digest of retained function evidence with the root app module's
+/// views and method templates named by site (`FnTemplate.site_identity`)
+/// rather than content: `site_names.module(bytes)` is non-null for the app
+/// module's key, and `site_names.template(template)` is a method template's
+/// site identity. Seeds a procedure's identity, so a specialization that
+/// dispatches to an app method keeps its identity across edits that leave
+/// the method's declaration alone.
+pub fn fnEvidenceSiteDigest(
+    evidence: []const check.ConstStore.ConstFnEvidence,
+    frames: []const check.ConstStore.ConstFnEvidenceFrame,
+    head: ?u32,
+    site_names: anytype,
+) EvidenceDigest {
+    var hasher = TypeDigestHasher.init();
+    writeFnEvidence(&hasher, evidence, frames, head, site_names);
     return .{ .bytes = hasher.finalResult() };
 }
 
@@ -486,7 +529,7 @@ pub fn fnEvidenceBucket(
     head: ?u32,
 ) u64 {
     var hasher = std.hash.Wyhash.init(0);
-    writeFnEvidence(&hasher, evidence, frames, head);
+    writeFnEvidence(&hasher, evidence, frames, head, ContentEvidenceNames{});
     return hasher.final();
 }
 
@@ -495,6 +538,7 @@ fn writeFnEvidence(
     evidence: []const check.ConstStore.ConstFnEvidence,
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
+    site_names: anytype,
 ) void {
     writeBytes(hasher, "roc.monotype.fn_evidence.v7");
     writeU32(hasher, @intCast(evidence.len));
@@ -503,11 +547,11 @@ fn writeFnEvidence(
         switch (entry) {
             .target => |target| {
                 writeU32(hasher, target.callable_contracts);
-                writeBytes(hasher, &target.view.bytes);
-                writeMethodTarget(hasher, target.method, target.method_callable_key);
+                writeEvidenceModule(hasher, &target.view.bytes, site_names);
+                writeMethodTarget(hasher, target.method, target.method_callable_key, site_names);
                 if (target.instantiation) |instantiation| {
                     writeU8(hasher, 1);
-                    writeBytes(hasher, &instantiation.view.bytes);
+                    writeEvidenceModule(hasher, &instantiation.view.bytes, site_names);
                     writeBytes(hasher, &instantiation.callable_key.bytes);
                 } else writeU8(hasher, 0);
                 writeU8(hasher, @backingInt(target.nested));
@@ -529,7 +573,7 @@ fn writeFnEvidence(
                         writeBytes(hasher, &content.bytes);
                     } else {
                         writeU8(hasher, 0);
-                        writeBytes(hasher, &checked_structural.view.bytes);
+                        writeEvidenceModule(hasher, &checked_structural.view.bytes, site_names);
                     }
                     writeBytes(hasher, &checked_structural.dispatcher_key.bytes);
                     writeBytes(hasher, &checked_structural.callable_key.bytes);
@@ -664,11 +708,29 @@ fn methodTargetIdentityEql(
         keyBytesEql(left_callable_key, right_callable_key);
 }
 
+fn writeEvidenceModule(hasher: anytype, bytes: *const [32]u8, site_names: anytype) void {
+    if (site_names.module(bytes)) |_| {
+        writeBytes(hasher, "app-module");
+    } else {
+        writeBytes(hasher, bytes);
+    }
+}
+
 fn writeMethodTarget(
     hasher: anytype,
     target: static_dispatch.MethodTarget,
     callable_key: names.CanonicalTypeKey,
+    site_names: anytype,
 ) void {
+    // A method of the root app module is named by its declaration.
+    switch (target.kind) {
+        .procedure => |procedure| if (site_names.template(procedure.template)) |site| {
+            writeBytes(hasher, "site-method");
+            writeBytes(hasher, &site.bytes);
+            return;
+        },
+        .local_proc, .structural => {},
+    }
     writeU32(hasher, target.module_idx);
     writeU32(hasher, @backingInt(target.def_idx));
     writeU8(hasher, @backingInt(target.kind));
@@ -1109,7 +1171,6 @@ pub const JumpExpr = struct {
 pub const ComptimeSiteKind = enum(u8) {
     match,
     destructure,
-    if_,
 };
 
 /// Metadata for one compile-time-observed control-flow site.
@@ -1122,14 +1183,6 @@ pub const ComptimeSite = struct {
     owner: Common.LoweringModuleId,
     region: base.Region,
     checked_site: ?checked.CheckedExhaustivenessSiteId = null,
-    branch_regions: []const base.Region = &.{},
-};
-
-/// Expression wrapper that records a branch hit before evaluating `body`.
-pub const ComptimeBranchTaken = struct {
-    site: ComptimeSiteId,
-    branch_index: u32,
-    body: ExprId,
 };
 
 /// Typed Monotype expression.
@@ -1260,7 +1313,6 @@ pub const ExprData = union(enum(u8)) {
     /// message; compile-time evaluation that reaches it discards the result
     /// instead of reporting the problem a second time.
     checked_error: StringLiteralId,
-    comptime_branch_taken: ComptimeBranchTaken,
     comptime_exhaustiveness_failed: ComptimeSiteId,
     dbg: ExprId,
     expect_err: ExpectErrExpr,
@@ -1883,12 +1935,7 @@ pub const ProgramBuilder = struct {
             };
         }
         for (self.comptime_sites.unsafeRawItemsForView()) |site| {
-            var copied = site;
-            copied.branch_regions = try allocator.dupe(base.Region, site.branch_regions);
-            result.comptime_sites.append(allocator, copied) catch |err| {
-                allocator.free(copied.branch_regions);
-                return err;
-            };
+            try result.comptime_sites.append(allocator, site);
         }
         for (self.local_names.unsafeRawItemsForView()) |name| {
             const copied = try allocator.dupe(u8, name);
@@ -1917,9 +1964,6 @@ pub const ProgramBuilder = struct {
             self.allocator.free(file.qualified_name);
         }
         self.source_files.deinit(self.allocator);
-        for (self.comptime_sites.unsafeRawItemsForView()) |site| {
-            self.allocator.free(site.branch_regions);
-        }
         self.comptime_sites.deinit(self.allocator);
         self.lowering_modules.deinit(self.allocator);
         self.comptime_value_roots.deinit(self.allocator);
@@ -2210,17 +2254,13 @@ pub const ProgramBuilder = struct {
         owner: Common.LoweringModuleId,
         region: base.Region,
         checked_site: ?checked.CheckedExhaustivenessSiteId,
-        branch_regions: []const base.Region,
     ) std.mem.Allocator.Error!ComptimeSiteId {
-        const owned_branch_regions = try self.allocator.dupe(base.Region, branch_regions);
-        errdefer self.allocator.free(owned_branch_regions);
         const id: ComptimeSiteId = @fromBackingInt(@intCast(@as(u32, @intCast(self.comptime_sites.len()))));
         try self.comptime_sites.append(self.allocator, .{
             .kind = kind,
             .owner = owner,
             .region = region,
             .checked_site = checked_site,
-            .branch_regions = owned_branch_regions,
         });
         return id;
     }
@@ -3021,7 +3061,7 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     var owner_key = std.mem.zeroes(check.CheckedModule.ModuleId);
     owner_key.bytes[0] = 9;
     const owner = try source.addLoweringModule(owner_key);
-    const site = try source.addComptimeSite(.if_, owner, .zero(), null, &.{.zero()});
+    const site = try source.addComptimeSite(.match, owner, .zero(), null);
     const name = try source.names.internExportName("entry");
     try source.proc_debug_names.put(@fromBackingInt(@intCast(1)), name);
     const root_a: Common.ComptimeValueRoot = .{
@@ -3057,7 +3097,6 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     try std.testing.expectEqualStrings("value", copy.stringLiteralText(literal));
     try std.testing.expectEqualStrings("value", copy.localName(local));
     try std.testing.expectEqualStrings("app/App.roc", copy.view().source_files[file].qualified_name);
-    try std.testing.expectEqual(@as(usize, 1), copy.comptimeSite(site).branch_regions.len);
     try std.testing.expectEqual(owner, copy.comptimeSite(site).owner);
     try std.testing.expectEqualDeep(owner_key, copy.view().lowering_modules[@backingInt(owner)]);
     try std.testing.expectEqual(name, copy.proc_debug_names.get(@fromBackingInt(@intCast(1))).?);

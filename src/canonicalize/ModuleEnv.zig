@@ -1039,6 +1039,11 @@ evaluation_order: ?*DependencyGraph.EvaluationOrder,
 /// transient traversal aid.
 top_level_demand_dependencies: DependencyGraph.Dependency.SafeList,
 top_level_demand_dependencies_ready: bool,
+/// The top-level definitions whose calls can invoke a function value they do
+/// not name, in ascending order (design.md "Function Values In Strict
+/// Demand"): functions whose bodies can, and definitions holding values.
+/// Checking produces it with the strict-demand relation; importers read it.
+invoking_defs: collections.SafeList(CIR.Def.Idx),
 
 /// True only after `check.TypedCIR.prepareRuntimeEnv` has prepared this env for
 /// checked-artifact consumption. Serialized user modules intentionally do not
@@ -1467,6 +1472,7 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) Allocator.Error!void 
     self.evaluation_order = null; // Will be set after canonicalization completes
     self.top_level_demand_dependencies = .{};
     self.top_level_demand_dependencies_ready = false;
+    self.invoking_defs = .{};
     self.runtime_prepared = false;
 }
 
@@ -1518,6 +1524,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .evaluation_order = null, // Will be set after canonicalization completes
         .top_level_demand_dependencies = .{},
         .top_level_demand_dependencies_ready = false,
+        .invoking_defs = .{},
         .runtime_prepared = false,
         .idents = idents,
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
@@ -1582,6 +1589,7 @@ pub fn deinit(self: *Self) void {
     self.record_omitted_defaults.deinit(self.gpa);
     self.inspect_override_instances.deinit(self.gpa);
     self.top_level_demand_dependencies.deinit(self.gpa);
+    self.invoking_defs.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
 
@@ -1600,6 +1608,37 @@ pub fn setTopLevelDemandDependencies(
     self.top_level_demand_dependencies.deinit(self.gpa);
     self.top_level_demand_dependencies = dependencies;
     self.top_level_demand_dependencies_ready = true;
+}
+
+/// Replace the checked record of which top-level definitions' calls can
+/// invoke a function value they do not name. `defs` must be ascending.
+pub fn setInvokingDefs(self: *Self, defs: []const CIR.Def.Idx) std.mem.Allocator.Error!void {
+    var list = try collections.SafeList(CIR.Def.Idx).initCapacity(self.gpa, defs.len);
+    errdefer list.deinit(self.gpa);
+    for (defs) |def_idx| _ = try list.append(self.gpa, def_idx);
+    self.invoking_defs.deinit(self.gpa);
+    self.invoking_defs = list;
+}
+
+/// Whether calling top-level `def_idx` can invoke a function value it does
+/// not name.
+pub fn defInvokes(self: *const Self, def_idx: CIR.Def.Idx) bool {
+    const defs = self.invoking_defs.items.items;
+    const wanted: u32 = @backingInt(def_idx);
+    var low: usize = 0;
+    var high: usize = defs.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        const candidate: u32 = @backingInt(defs[mid]);
+        if (candidate < wanted) {
+            low = mid + 1;
+        } else if (candidate > wanted) {
+            high = mid;
+        } else {
+            return true;
+        }
+    }
+    return false;
 }
 
 /// Return the producer-authored low-level implementation for `def_idx`.
@@ -3931,6 +3970,7 @@ pub const Serialized = extern struct {
     store: NodeStore.Serialized,
     evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
     top_level_demand_dependencies: DependencyGraph.Dependency.SafeList.Serialized,
+    invoking_defs: collections.SafeList(CIR.Def.Idx).Serialized,
     top_level_demand_dependencies_ready: bool,
     runtime_prepared: bool,
     runtime_prepared_padding: [6]u8,
@@ -4035,6 +4075,7 @@ pub const Serialized = extern struct {
             allocator,
             writer,
         );
+        try self.invoking_defs.serialize(&env.invoking_defs, allocator, writer);
 
         // Set gpa, module_name, evaluation_order_reserved to zeros;
         // these are runtime-only and will be set during deserialization.
@@ -4136,6 +4177,7 @@ pub const Serialized = extern struct {
             .evaluation_order = null,
             .top_level_demand_dependencies = self.top_level_demand_dependencies.deserializeInto(base_addr),
             .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
+            .invoking_defs = self.invoking_defs.deserializeInto(base_addr),
             .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
@@ -4220,6 +4262,7 @@ pub const Serialized = extern struct {
             .evaluation_order = null,
             .top_level_demand_dependencies = self.top_level_demand_dependencies.deserializeInto(base_addr),
             .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
+            .invoking_defs = self.invoking_defs.deserializeInto(base_addr),
             .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
@@ -4316,6 +4359,7 @@ pub const Serialized = extern struct {
             .evaluation_order = null,
             .top_level_demand_dependencies = try self.top_level_demand_dependencies.deserializeWithCopy(base_addr, gpa),
             .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
+            .invoking_defs = try self.invoking_defs.deserializeWithCopy(base_addr, gpa),
             .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),

@@ -10857,7 +10857,6 @@ pub const CheckedExprData = union(enum) {
     if_: struct {
         branches: []const CheckedIfBranch,
         final_else: CheckedExprId,
-        warn_unused_branches: bool,
     },
     call: struct {
         func: CheckedExprId,
@@ -14841,7 +14840,6 @@ const CheckedBodyPayloadCopier = struct {
             .e_if => |if_| .{ .if_ = .{
                 .branches = try self.copyIfBranches(if_.branches),
                 .final_else = self.checkedExpr(if_.final_else),
-                .warn_unused_branches = if_.origin == .source,
             } },
             .e_call => |call| try self.copyCallData(expr_idx, call),
             .e_record => |record| .{ .record = .{
@@ -39056,7 +39054,6 @@ fn divergenceParityFixture(comptime kind: CheckedExprKind) CheckedExprData {
         .if_ => .{ .if_ = .{
             .branches = &.{.{ .cond = op, .body = op }},
             .final_else = op,
-            .warn_unused_branches = false,
         } },
         .call => .{ .call = .{ .func = op, .args = ops, .called_via = .apply, .source_fn_ty_payload = ty } },
         .record => .{ .record = .{
@@ -39311,8 +39308,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xA2, 0xF1, 0x4C, 0x45, 0xE4, 0xC3, 0x30, 0x4E, 0x5A, 0xCE, 0x55, 0xA2, 0xF7, 0xFB, 0x97, 0xAB,
-        0x9A, 0x57, 0xB0, 0xC1, 0x65, 0x28, 0x3D, 0x1D, 0x2F, 0xD5, 0xFE, 0xEA, 0xC9, 0x4A, 0xAC, 0xD2,
+        0x39, 0x42, 0xD9, 0x51, 0x7F, 0x5B, 0x0C, 0xBF, 0xD8, 0xFA, 0x81, 0x72, 0x23, 0x59, 0x2D, 0x65,
+        0x0A, 0x38, 0x55, 0x55, 0xFD, 0x01, 0xBE, 0xCC, 0x3C, 0x2B, 0x46, 0x25, 0xB4, 0xB6, 0x56, 0x00,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

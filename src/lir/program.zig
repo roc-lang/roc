@@ -576,13 +576,6 @@ pub const StaticDataValue = struct {
     /// Null when completed frozen data supplies this slot directly.
     initializer: ?LIR.LirProcSpecId,
     layout_idx: layout.Idx,
-    /// The procedure every read of a compile-time root goes through in a
-    /// program lowered before its roots were evaluated. Its body is the slot
-    /// read until the root completes; a root that completed as a
-    /// construction then rebuilds it there, without touching the callers.
-    accessor: ?LIR.LirProcSpecId = null,
-    /// Successful construction replacement is performed only once per accessor.
-    accessor_rebuilt: bool = false,
     /// An evaluated root owns this slot. Its initializer is representation
     /// evidence; materialization must consume the completed root value.
     compile_time_root: ?struct {
@@ -650,9 +643,6 @@ pub fn staticDataNodeSymbolName(allocator: Allocator, owner: u32, index: u32) Al
 pub const SpecProc = struct {
     key: [32]u8,
     proc: LIR.LirProcSpecId,
-    /// Producer-established app filling on which this procedure depends;
-    /// absent for code reusable independently of any platform requirement.
-    platform_requirement_relation: ?[32]u8 = null,
 };
 
 /// Everything one lowering produced: the procedure store, its layouts, the
@@ -661,6 +651,10 @@ pub const Result = struct {
     store: LirStore,
     layouts: layout.Store,
     root_procs: std.ArrayList(LIR.LirProcSpecId) = .empty,
+    /// Procedures this program keeps though nothing it compiles reaches
+    /// them: the lambda-set members an object-cache entry it takes calls by
+    /// identity, which the program supplies its own code for.
+    retained_procs: std.ArrayList(LIR.LirProcSpecId) = .empty,
     /// The procedure lowered for each template specialization, by the
     /// specialization's content key (`Monotype.Ast.specIdentityKey`). Only
     /// the specialization's own procedure is listed, never SpecConstr clones
@@ -724,9 +718,6 @@ pub const Result = struct {
 
     pub fn deinit(self: *Result) void {
         const allocator = self.store.allocator;
-        for (self.comptime_sites.items) |site| {
-            allocator.free(site.branch_regions);
-        }
         self.comptime_sites.deinit(allocator);
         self.lowering_modules.deinit(allocator);
         self.expect_site_ids.deinit(allocator);
@@ -763,6 +754,7 @@ pub const Result = struct {
         self.requested_layouts.deinit(allocator);
         self.root_metadata.deinit(allocator);
         self.root_procs.deinit(allocator);
+        self.retained_procs.deinit(allocator);
         self.spec_procs.deinit(allocator);
         self.layouts.deinit();
         self.store.deinit();
@@ -775,10 +767,7 @@ pub const Result = struct {
         region: base.Region,
         checked_site: ?LIR.CheckedExhaustivenessSiteId,
         proc: LIR.LirProcSpecId,
-        branch_regions: []const base.Region,
     ) Allocator.Error!LIR.ComptimeSiteId {
-        const owned_branch_regions = try self.store.allocator.dupe(base.Region, branch_regions);
-        errdefer self.store.allocator.free(owned_branch_regions);
         const id: LIR.ComptimeSiteId = @fromBackingInt(@intCast(@as(u32, @intCast(self.comptime_sites.items.len))));
         try self.comptime_sites.append(self.store.allocator, .{
             .kind = kind,
@@ -786,7 +775,6 @@ pub const Result = struct {
             .region = region,
             .checked_site = checked_site,
             .proc = proc,
-            .branch_regions = owned_branch_regions,
         });
         return id;
     }
@@ -795,7 +783,17 @@ pub const Result = struct {
     /// once, before any consumer resolves an owner out of it.
     pub fn setLoweringModules(self: *Result, modules: []const checked.ModuleId) Allocator.Error!void {
         self.lowering_modules.clearRetainingCapacity();
-        try self.lowering_modules.appendSlice(self.store.allocator, modules);
+        self.store.lowering_module_keys.clearRetainingCapacity();
+        for (modules) |module| _ = try self.appendLoweringModule(module);
+    }
+
+    /// Give a checked module the next dense lowering id.
+    pub fn appendLoweringModule(self: *Result, module: checked.ModuleId) Allocator.Error!LIR.LoweringModuleId {
+        const id: LIR.LoweringModuleId = @fromBackingInt(@intCast(self.lowering_modules.items.len));
+        try self.lowering_modules.ensureUnusedCapacity(self.store.allocator, 1);
+        try self.store.lowering_module_keys.append(self.store.allocator, module.bytes);
+        self.lowering_modules.appendAssumeCapacity(module);
+        return id;
     }
 
     /// The dense id this program gave a checked module, when the module was
@@ -1018,7 +1016,7 @@ test "lowering module table resolves checked module provenance both ways" {
 
     // A site keeps the owner its producer recorded, not the procedure's owner.
     const owner: LIR.LoweringModuleId = @fromBackingInt(@intCast(2));
-    const site = try result.addComptimeSite(.destructure, owner, base.Region.zero(), @fromBackingInt(@intCast(41)), .first, &.{});
+    const site = try result.addComptimeSite(.destructure, owner, base.Region.zero(), @fromBackingInt(@intCast(41)), .first);
     const stored = result.comptime_sites.items[@backingInt(site)];
     try std.testing.expectEqual(owner, stored.owner);
     try std.testing.expectEqual(@as(?LIR.CheckedExhaustivenessSiteId, @fromBackingInt(@intCast(41))), stored.checked_site);
