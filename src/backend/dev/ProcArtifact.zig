@@ -11,10 +11,11 @@
 //! placed into another program's buffer with `append`, then resolved after
 //! all required producers have landed. `assemble` performs both steps.
 //! Source-file indices are in the set's own file domain: `Set.source_files`
-//! names each index by its module's content identity. Session appends keep
-//! them as they are, since a session reuses fragments only within one
-//! source-file table; `splice` binds them to the receiving program's table,
-//! omitting the lines of module versions that program does not have.
+//! names each index by its module's content identity. A session's fragments
+//! carry no table: they all index the session's one source-file table, and
+//! session appends keep their indices as they are. `splice` binds a set's
+//! indices to the receiving program's table, omitting the lines of module
+//! versions that program does not have.
 //!
 //! `verifyRoundTrip` is the gate for the format: a program assembled from its
 //! own artifacts must produce the same bytes, relocations, and unwind records
@@ -178,7 +179,7 @@ pub const Fragment = struct {
     context_dependencies: LirCodeGenMod.FragmentContextDependencies,
 
     pub fn clone(self: *const Fragment, allocator: Allocator) Allocator.Error!Fragment {
-        var set = try combine(allocator, &.{&self.set});
+        var set = try copySet(allocator, &self.set);
         errdefer set.deinit();
         const required_helpers = try set.arena.allocator().dupe(u64, self.required_helpers);
         return .{
@@ -291,7 +292,6 @@ pub fn combine(allocator: Allocator, sets: []const *const Set) Allocator.Error!S
     var artifacts = std.ArrayList(Artifact).empty;
     var source_files = std.ArrayList([32]u8).empty;
     for (sets) |set| {
-        const first: u32 = @intCast(artifacts.items.len);
         const file_map = try a.alloc(u32, set.source_files.len);
         for (set.source_files, file_map) |identity, *mapped| {
             mapped.* = for (source_files.items, 0..) |existing, index| {
@@ -301,37 +301,58 @@ pub fn combine(allocator: Allocator, sets: []const *const Set) Allocator.Error!S
                 break :index @intCast(source_files.items.len - 1);
             };
         }
-        for (set.artifacts) |source| {
-            var artifact = source;
-            artifact.kind = switch (source.kind) {
-                .rc_helper => |name| .{ .rc_helper = try a.dupe(u8, name) },
-                .proc, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => source.kind,
-            };
-            artifact.code = try a.dupe(u8, source.code);
-            const refs = try a.dupe(Reference, source.refs);
-            for (refs) |*ref| ref.target += first;
-            artifact.refs = refs;
-            const symbolic_refs = try a.dupe(SymbolicReference, source.symbolic_refs);
-            for (symbolic_refs) |*ref| switch (ref.target) {
-                .rc_helper => |name| ref.target = .{ .rc_helper = try a.dupe(u8, name) },
-                .proc, .boxy_thunk => {},
-            };
-            artifact.symbolic_refs = symbolic_refs;
-            const lines = try a.dupe(LineEntry, source.lines);
-            for (lines) |*line| line.loc = rebindLoc(line.loc, file_map);
-            artifact.lines = lines;
-            artifact.failure_sites = try a.dupe(FailureSite, source.failure_sites);
-            const relocations = try a.dupe(NamedRelocation, source.relocations);
-            for (relocations) |*relocation| relocation.name = try a.dupe(u8, relocation.name);
-            artifact.relocations = relocations;
-            const data = try a.alloc(DataItem, source.data.len);
-            for (source.data, data) |item, *owned| owned.* = try cloneData(a, item);
-            artifact.data = data;
-            try artifacts.append(a, artifact);
-        }
+        try copyArtifacts(a, &artifacts, set, file_map);
     }
     const owned = try artifacts.toOwnedSlice(a);
     return .{ .arena = arena, .artifacts = owned, .source_files = try source_files.toOwnedSlice(a) };
+}
+
+/// Deep-copy a set whose lines index a source-file table it does not carry
+/// (`extractPrepared`), keeping its file indices.
+fn copySet(allocator: Allocator, set: *const Set) Allocator.Error!Set {
+    std.debug.assert(set.source_files.len == 0);
+    var arena = collections.SingleThreadArena.init(allocator);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+    var artifacts = std.ArrayList(Artifact).empty;
+    try copyArtifacts(a, &artifacts, set, null);
+    return .{ .arena = arena, .artifacts = try artifacts.toOwnedSlice(a) };
+}
+
+/// Append deep copies of `set`'s artifacts, rebasing set-local references
+/// and, given a `file_map`, carrying line file indices through it.
+fn copyArtifacts(a: Allocator, artifacts: *std.ArrayList(Artifact), set: *const Set, file_map: ?[]const u32) Allocator.Error!void {
+    const first: u32 = @intCast(artifacts.items.len);
+    for (set.artifacts) |source| {
+        var artifact = source;
+        artifact.kind = switch (source.kind) {
+            .rc_helper => |name| .{ .rc_helper = try a.dupe(u8, name) },
+            .proc, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => source.kind,
+        };
+        artifact.code = try a.dupe(u8, source.code);
+        const refs = try a.dupe(Reference, source.refs);
+        for (refs) |*ref| ref.target += first;
+        artifact.refs = refs;
+        const symbolic_refs = try a.dupe(SymbolicReference, source.symbolic_refs);
+        for (symbolic_refs) |*ref| switch (ref.target) {
+            .rc_helper => |name| ref.target = .{ .rc_helper = try a.dupe(u8, name) },
+            .proc, .boxy_thunk => {},
+        };
+        artifact.symbolic_refs = symbolic_refs;
+        const lines = try a.dupe(LineEntry, source.lines);
+        if (file_map) |map| for (lines) |*line| {
+            line.loc = rebindLoc(line.loc, map);
+        };
+        artifact.lines = lines;
+        artifact.failure_sites = try a.dupe(FailureSite, source.failure_sites);
+        const relocations = try a.dupe(NamedRelocation, source.relocations);
+        for (relocations) |*relocation| relocation.name = try a.dupe(u8, relocation.name);
+        artifact.relocations = relocations;
+        const data = try a.alloc(DataItem, source.data.len);
+        for (source.data, data) |item, *owned| owned.* = try cloneData(a, item);
+        artifact.data = data;
+        try artifacts.append(a, artifact);
+    }
 }
 
 /// `loc` with its file index carried from one source-file domain to another
@@ -568,10 +589,17 @@ pub fn extract(
 ) ExtractError!Set {
     var prepared = try PreparedData.init(allocator, string_exports, constant_exports, spliced_data);
     defer prepared.deinit();
-    return extractPrepared(CG, allocator, codegen, proc_specs, layout_store, &prepared);
+    var set = try extractPrepared(CG, allocator, codegen, proc_specs, layout_store, &prepared);
+    errdefer set.deinit();
+    const source_files = try set.arena.allocator().alloc([32]u8, codegen.store.sourceFileCount());
+    for (source_files, 0..) |*identity, file| identity.* = codegen.store.sourceFileModuleIdentity(@intCast(file));
+    set.source_files = source_files;
+    return set;
 }
 
 /// Capture against a shared immutable catalog without scanning module exports.
+/// The set's lines index the code generator's own source-file table, which
+/// the set does not copy: a session's fragments all share that table.
 pub fn extractPrepared(
     comptime CG: type,
     allocator: Allocator,
@@ -782,9 +810,7 @@ pub fn extractPrepared(
         };
     }
 
-    const source_files = try arena_allocator.alloc([32]u8, codegen.store.sourceFileCount());
-    for (source_files, 0..) |*identity, file| identity.* = codegen.store.sourceFileModuleIdentity(@intCast(file));
-    return .{ .arena = arena, .artifacts = artifacts, .source_files = source_files };
+    return .{ .arena = arena, .artifacts = artifacts };
 }
 
 /// Index of the first entry, in offset order, at or after `offset`.

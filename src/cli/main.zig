@@ -8132,7 +8132,7 @@ fn writePackObjects(
             };
             continue;
         }
-        var pack = try compileModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args, target);
+        var pack = try compileModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args, target, true);
         defer pack.deinit();
         backend.writeFileWindowsAvSafe(ctx.io.std_io, object_path, pack.compiled.object_bytes) catch {
             return error.NativeCompilationFailed;
@@ -8245,6 +8245,7 @@ fn compileModulePack(
     roots: []const check.CheckedArtifact.RootRequest,
     args: cli_args.BuildArgs,
     target: RocTarget,
+    emit_object: bool,
 ) CliMainError!ModulePack {
     const module_name = artifact.canonical_names.moduleNameText(artifact.module_identity.module_name);
     const pack = try lowerModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args.opt, args, target);
@@ -8256,6 +8257,7 @@ fn compileModulePack(
     var object_compiler = backend.ObjectFileCompiler.initForPack(ctx.gpa);
     object_compiler.post_check_executor = build_env.postCheckExecutor();
     object_compiler.enable_hot_reload = lowered.lir_result.erased_capture_prefix != 0;
+    object_compiler.emit_object = emit_object;
     const compiled = object_compiler.compileToObjectFile(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
@@ -8344,7 +8346,7 @@ fn writePacksToStore(
         if (devDiagnosticEnv("ROC_PACK_TRACE") != null) {
             std.debug.print("module pack {s}\n", .{artifact.canonical_names.moduleNameText(artifact.module_identity.module_name)});
         }
-        var pack = try compileModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args, target);
+        var pack = try compileModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args, target, false);
         defer pack.deinit();
         const set = &(pack.compiled.artifacts orelse continue);
         const bytes = try packFileBytes(ctx.gpa, set, &pack.lowered);
@@ -8560,6 +8562,7 @@ fn publishCompileTimePack(ctx: *CliCtx, build_env: *BuildEnv) (Allocator.Error |
     var object_compiler = backend.ObjectFileCompiler.initForPack(ctx.gpa);
     object_compiler.post_check_executor = build_env.postCheckExecutor();
     object_compiler.enable_hot_reload = host.lir_result.erased_capture_prefix != 0;
+    object_compiler.emit_object = false;
     // Procedures the evaluation spliced from packs are spliced here too.
     object_compiler.splice_source = cache.packs.spliceSource();
     const exports = if (host.frozen_static_data) |frozen| frozen.exports else &.{};
