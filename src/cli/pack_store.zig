@@ -1422,6 +1422,8 @@ pub const LoadedPacks = struct {
     candidates: std.AutoHashMapUnmanaged([32]u8, std.ArrayListUnmanaged(Candidate)) = .empty,
     /// The offers of each procedure identity, in load order.
     identity_candidates: std.AutoHashMapUnmanaged([32]u8, std.ArrayListUnmanaged(Candidate)) = .empty,
+    /// The serving-closure size of each candidate asked so far (`candidateClosureSize`).
+    closure_sizes: std.AutoHashMapUnmanaged(Candidate, u32) = .empty,
     /// Where the store carries each artifact, by content address: the first
     /// registered pack carrying it. Every pack naming the address places the
     /// same bytes, so one carrier serves them all.
@@ -1672,7 +1674,9 @@ pub const LoadedPacks = struct {
                 .identity => &self.identity_candidates,
             };
             const list = candidates.get(next.key) orelse continue;
-            for (list.items) |candidate| {
+            const ordered = try self.orderCandidatesByClosure(list.items);
+            defer self.allocator.free(ordered);
+            for (ordered) |candidate| {
                 const served = switch (next.kind) {
                     .key => self.specs.contains(.{ .key = next.key, .platform_requirement_relation = relation }),
                     .identity => self.artifacts.contains(.{ .bytes = next.key }),
@@ -1688,6 +1692,56 @@ pub const LoadedPacks = struct {
     }
 
     const PendingOffer = struct { kind: OfferKind, key: [32]u8 };
+
+    /// The candidates of one key, smallest serving closure first and
+    /// otherwise in load order. Packs offering one key differ in how much of
+    /// the key's callee graph they resolved when they were written, and the
+    /// closure admitted decides which compile-time roots the program must
+    /// provision, so the smallest closure is admitted first (design.md
+    /// "Identity Offers").
+    fn orderCandidatesByClosure(self: *LoadedPacks, list: []const Candidate) Allocator.Error![]Candidate {
+        const ordered = try self.allocator.dupe(Candidate, list);
+        errdefer self.allocator.free(ordered);
+        if (ordered.len < 2) return ordered;
+        const sizes = try self.allocator.alloc(u32, ordered.len);
+        defer self.allocator.free(sizes);
+        for (ordered, sizes) |candidate, *size| size.* = try self.candidateClosureSize(candidate);
+        // Insertion sort keeps load order among equal sizes.
+        for (1..ordered.len) |i| {
+            var j = i;
+            while (j > 0 and sizes[j - 1] > sizes[j]) : (j -= 1) {
+                std.mem.swap(u32, &sizes[j - 1], &sizes[j]);
+                std.mem.swap(Candidate, &ordered[j - 1], &ordered[j]);
+            }
+        }
+        return ordered;
+    }
+
+    /// The artifacts a candidate's closure spans: its root and every
+    /// artifact reachable over the edges of the packs carrying them, by
+    /// content address as admission walks them (`admitClosure`). An address
+    /// no loaded pack carries ends its branch; such a candidate is not
+    /// servable, and its size only orders it.
+    fn candidateClosureSize(self: *LoadedPacks, candidate: Candidate) Allocator.Error!u32 {
+        const entry = try self.closure_sizes.getOrPut(self.allocator, candidate);
+        if (entry.found_existing) return entry.value_ptr.*;
+        const view = &self.store_packs.items[candidate.pack].view;
+        var seen = std.AutoHashMapUnmanaged([32]u8, void).empty;
+        defer seen.deinit(self.allocator);
+        var stack = std.ArrayList([32]u8).empty;
+        defer stack.deinit(self.allocator);
+        try stack.append(self.allocator, view.contentAddress(view.specArtifact(candidate.spec)));
+        var count: u32 = 0;
+        while (stack.pop()) |address| {
+            if ((try seen.getOrPut(self.allocator, address)).found_existing) continue;
+            const carrier = self.carriers.get(address) orelse continue;
+            count += 1;
+            const carrier_view = &self.store_packs.items[carrier.pack].view;
+            for (carrier_view.edges(carrier.row)) |edge| try stack.append(self.allocator, carrier_view.contentAddress(edge));
+        }
+        entry.value_ptr.* = count;
+        return count;
+    }
 
     /// Admit the closure of one offer, if it is not admitted yet, into the
     /// store set: the artifacts the offer reaches that the set lacks are
@@ -2142,7 +2196,7 @@ pub const LoadedPacks = struct {
                     if (trace) std.debug.print("index-offer key={x} reason=facts-name-other-modules\n", .{spec.key[0..8]});
                     continue;
                 }
-                if (trace) std.debug.print("index-offer key={x} reason=accepted artifacts={d}\n", .{ spec.key[0..8], pack.set.artifacts.len });
+                if (trace) std.debug.print("index-offer key={x} reason=accepted artifacts={d} roots={d} reads={d} pack={d}\n", .{ spec.key[0..8], pack.set.artifacts.len, summaries[spec.artifact].checked_roots.len, demand.eager_reads.len, (@intFromPtr(state) - @intFromPtr(self.pack_states.items.ptr)) / @sizeOf(@TypeOf(state.*)) });
                 const hit: Common.SpecCacheHit = .{
                     .identity = identity.bytes,
                     .demand = demand,
@@ -3133,6 +3187,7 @@ pub const LoadedPacks = struct {
         var lists = self.candidates.valueIterator();
         while (lists.next()) |list| list.deinit(self.allocator);
         self.candidates.deinit(self.allocator);
+        self.closure_sizes.deinit(self.allocator);
         var identity_lists = self.identity_candidates.valueIterator();
         while (identity_lists.next()) |list| list.deinit(self.allocator);
         self.identity_candidates.deinit(self.allocator);

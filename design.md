@@ -699,7 +699,12 @@ a dependent entry names its exact relation and is admitted only for that
 relation. Cached functions seed the same transitive reachability computation
 as full bodies, so erasing a body cannot erase a code-identity input. Offer
 selection retains distinct relations rather than letting an incompatible
-first entry hide a compatible entry. Final procedure identity validation is
+first entry hide a compatible entry. When several packs offer one key or
+identity, admission tries the offer whose serving closure spans the fewest
+rows of its pack first, and otherwise keeps load order: the packs differ in
+how much of the callee graph they resolved when written, the admitted closure
+decides which compile-time roots the program provisions, and the smallest
+closure keeps that provisioning to what the served code itself reaches. Final procedure identity validation is
 unchanged. Old contracts use a different format and storage namespace and are
 declined before any body is skipped.
 

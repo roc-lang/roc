@@ -6922,6 +6922,13 @@ const Builder = struct {
     /// read by the body of a lambda it applies.
     fn declareCachedDemand(self: *Builder, demand: ?Common.CachedCtfeDemand, root_uses: []const Common.CheckedRootUse) Allocator.Error!void {
         const facts = demand orelse return;
+        if (pack_trace_available and packTraceEnabled()) {
+            var fresh: usize = 0;
+            for (root_uses) |use| {
+                if (!self.declared_cached_roots.contains(.{ .module = .{ .bytes = use.module }, .root = @fromBackingInt(@intCast(use.root)) })) fresh += 1;
+            }
+            std.debug.print("cached-demand eager={d} uses={d} fresh={d}\n", .{ facts.eager_reads.len, root_uses.len, fresh });
+        }
         if (!facts.permitsRetirement()) Common.invariant("cached storage declaration has incomplete demand facts");
         for (facts.eager_reads) |read| {
             try self.declareCachedRootReads(&.{.{ .module = read.module, .root = read.root }}, false);
