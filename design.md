@@ -1765,15 +1765,16 @@ zeroed work table is free in the file however large. A relocation would
 write a non-zero address into such bytes at link time, so anything relocated
 stays byte-backed, as does every root, whose slot addresses it.
 
-The guard pass also records each guard's crash statement identity. Failed root
-completion associates those statements with the original evaluated failure's
-source location and region. Recorded origins remain stable. A suspended
-invocation may demand another root, whose completion records additional origins
-before that invocation resumes. Native compile-time failure hooks receive the
-emitted statement ID; the host and interpreter consume the same origin table when a guard
-propagates a failure. They never reconstruct the original source from the
-value's use site or from checked bodies. The table is diagnostic session data,
-not part of the runtime frozen value representation.
+The guard pass also marks each guard's crash statement as the failure path of a
+read of its slot's value (`crash.failed_value`), naming the producer. Failed
+root completion records, per producer, the original evaluated failure's source
+location and region. Recorded origins remain stable. A suspended invocation may
+demand another root, whose completion records additional origins before that
+invocation resumes. Both evaluators classify a failure at a guard's crash by
+its meaning (see "Compile-Time Failure Sites") and report it at the producer's
+recorded origin. They never reconstruct the original source from the value's
+use site or from checked bodies. The origins are diagnostic session data, not
+part of the runtime frozen value representation.
 
 An expect never changes state outside its own body (see "Control Flow and Var
 Writes Inside `expect`"), so the shared Monotype lowers it as a plain `expect` statement whose
@@ -11872,9 +11873,8 @@ local—conversion roots live with their literal and each module
 finalizes its own roots—but wired through the same helper so a change
 cannot silently misrender). Both comptime engines carry the
 provenance—the interpreter via failed-statement and per-expect
-statement locs, the dev backend via failure-region hooks emitted
-before each crash and each expect-failed call, passing
-file/line/column alongside region offsets.
+statement locs, the dev backend via the line table and failure sites
+its generated code carries (see "Compile-Time Failure Sites").
 
 Monotype assigns source-file IDs once per program, deduplicating by checked
 module identity and ordering by qualified module name and checked module key.
@@ -21715,10 +21715,51 @@ completion in sorted request order.
 
 Each root job owns its compile-time host state: `RocOps`, a root-local arena for
 Roc allocations, allocation tracking needed by RocOps,
-expect/dbg/crash event lists, failure region state, a call-region stack, a crash
+expect/dbg/crash event lists, the point in generated code it failed at, a crash
 boundary, and its result buffer. Roc runtime allocations are arena allocations
 and are bulk-freed after the result has been copied into `ConstStore`. Host
 events and failure state stay root-local until deterministic replay.
+
+#### Compile-Time Failure Sites
+
+Code generated for compile-time evaluation calls nothing in the compiler to
+say where it is: a failure is located from where the machine left it. Every
+procedure's code carries two tables, kept with the code wherever it goes (into
+an object-cache pack and back into another program's image):
+
+- Its line table. Each entry is the offset where a statement's code begins,
+  with the statement's source location and checked region, so any code offset
+  belongs to the statement whose entry is the last at or before it in the
+  same procedure.
+- Its failure sites. Each is the return address of a crash call whose failure
+  means more than a crash at its statement (`LIR.FailureMeaning`): code
+  checking rejected, a literal conversion rejecting its literal, an
+  exhaustiveness failure at a checked site, or a read of a compile-time value
+  whose producer failed. Meanings name checked modules by artifact key and
+  checked ids, never program-local statement ids or numbering, so cached code
+  reports its failures exactly like freshly compiled code. `LirStore`
+  derives a failing statement's meaning (`failureMeaning`); code generation
+  records it at each crash call, and the interpreter applies it to the
+  statement it stopped at, so both evaluators classify failures from one
+  answer.
+
+The compile-time host records a failure's point when it happens. A crash or a
+failed `expect` reaches the host through a fixed runtime symbol, possibly from
+inside a builtin; the host walks frame pointers from its own frame and records
+every return address into generated code, innermost first. Generated code, the
+builtins the compiler links in-process, and the host's callbacks keep frame
+pointers, so the chain is intact, and the walk reads only stack between the
+failing frame and the frame that entered generated code. A stack overflow is
+caught by the guard-page handler, which records the faulting program counter,
+frame pointer, and stack pointer before escaping; the host records the counter
+when it is in generated code and walks the chain from the frame pointer.
+
+The evaluating program resolves the point: the meaning of the innermost call,
+and the source position of the innermost statement with a region among the
+faulting instruction's and the enclosing generated calls'. A return address
+belongs to the statement of the call instruction just before it. A failure
+whose meaning is an exhaustiveness failure is the empirical failure of that
+site; every other failure is reported as a crash at its position.
 
 A crash or empirical exhaustiveness failure in one root records that root's
 result and must not change the result of any other root in the same batch. Root

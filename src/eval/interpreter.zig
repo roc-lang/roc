@@ -426,7 +426,6 @@ pub const Interpreter = struct {
     /// region, and inline scope are read from the store when needed.
     active_stmt_id: ?CFStmtId = null,
     /// Source location captured when the current evaluation first failed.
-    failure_origins: []const ?LIR.ComptimeFailureOrigin = &.{},
     failed_stmt_loc: base.SourceLoc = base.SourceLoc.none,
     /// Checked source region captured when the current evaluation first failed.
     failed_stmt_region: base.Region = base.Region.zero(),
@@ -434,7 +433,6 @@ pub const Interpreter = struct {
     failed_stmt_inline_scope: InlineScopeId = InlineScopeId.none,
     /// The crash statement that ended the current evaluation, if one did.
     failed_crash_stmt: ?LIR.CFStmtId = null,
-    comptime_failed_site: ?LIR.ComptimeSiteId = null,
     /// Heap-pinned owner used by host-facing integrations whose erased
     /// callables can outlive the evaluation that created them.
     retained_owner: ?*Retained = null,
@@ -1127,10 +1125,6 @@ pub const Interpreter = struct {
         return null;
     }
 
-    pub fn getComptimeFailedSite(self: *const LirInterpreter) ?LIR.ComptimeSiteId {
-        return self.comptime_failed_site;
-    }
-
     fn recordFailedCallStackIfUnset(self: *LirInterpreter) Allocator.Error!void {
         if (self.failed_call_stack.items.len != 0) return;
         try self.failed_call_stack.appendSlice(self.allocator, self.call_stack.items);
@@ -1188,7 +1182,6 @@ pub const Interpreter = struct {
             error.RuntimeError,
             => self.recordCallerFailureLocForSourcelessCallee(call_loc, call_region, call_inline_scope),
             error.OutOfMemory,
-            error.ComptimeExhaustiveness,
             error.ExpectErr,
             error.UnsupportedHostedFunction,
             error.InvalidHostedFunctionSignature,
@@ -1208,11 +1201,6 @@ pub const Interpreter = struct {
         self.recordActiveFailureLocIfUnset();
         self.roc_env.runtime_error_message = message;
         return error.RuntimeError;
-    }
-
-    fn comptimeExhaustivenessFailed(self: *LirInterpreter, site: LIR.ComptimeSiteId) Error {
-        self.comptime_failed_site = site;
-        return error.ComptimeExhaustiveness;
     }
 
     fn triggerCrash(self: *LirInterpreter, message: []const u8) Error {
@@ -1274,7 +1262,6 @@ pub const Interpreter = struct {
         self.failed_stmt_region = base.Region.zero();
         self.failed_stmt_inline_scope = InlineScopeId.none;
         self.failed_crash_stmt = null;
-        self.comptime_failed_site = null;
         if (builtin.mode == .debug) self.inflight_zeroed_box_payloads.clearRetainingCapacity();
     }
 
@@ -1634,7 +1621,6 @@ pub const Interpreter = struct {
         self.failed_stmt_region = base.Region.zero();
         self.failed_stmt_inline_scope = InlineScopeId.none;
         self.failed_crash_stmt = null;
-        self.comptime_failed_site = null;
         if (builtin.mode == .debug) self.inflight_zeroed_box_payloads.clearRetainingCapacity();
         // The result is copied to scratch before the root's frame ends, so
         // every frame this evaluation pushes is released when it returns,
@@ -3331,8 +3317,9 @@ pub const Interpreter = struct {
                     }
                     return self.runtimeError("RuntimeError");
                 },
-                .comptime_exhaustiveness_failed => |failed| {
-                    return self.comptimeExhaustivenessFailed(failed.site);
+                .comptime_exhaustiveness_failed => {
+                    self.failed_crash_stmt = current;
+                    return self.triggerCrash(LIR.comptime_exhaustiveness_failure_message);
                 },
                 .incref => |inc| {
                     if (builtin.mode == .debug and !frame.isAssigned(inc.value)) {
@@ -3527,12 +3514,6 @@ pub const Interpreter = struct {
                 .ret => |ret_stmt| return .{ .returned = ret_stmt.value },
                 .crash => |crash_stmt| {
                     self.failed_crash_stmt = current;
-                    if (@backingInt(current) < self.failure_origins.len) {
-                        if (self.failure_origins[@backingInt(current)]) |origin| {
-                            self.failed_stmt_loc = origin.loc orelse base.SourceLoc.none;
-                            self.failed_stmt_region = origin.region orelse base.Region.zero();
-                        }
-                    }
                     switch (crash_stmt.msg) {
                         .literal => |literal| return self.triggerCrash(self.store.getString(literal)),
                         .local => |message_local| {
@@ -4075,7 +4056,6 @@ pub const Interpreter = struct {
             },
             error.OutOfMemory => prefix ++ "ran out of memory",
             error.RuntimeError => prefix ++ "hit runtime error",
-            error.ComptimeExhaustiveness => prefix ++ "hit compile-time exhaustiveness marker",
             error.DivisionByZero => prefix ++ "hit division by zero",
             error.UnsupportedHostedFunction => prefix ++ "reached an unsupported hosted function",
             error.InvalidHostedFunctionSignature => prefix ++ "reached an invalid hosted function signature",

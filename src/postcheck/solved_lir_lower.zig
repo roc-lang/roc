@@ -4383,6 +4383,14 @@ const Lowerer = struct {
         }
     }
 
+    /// The failure terminal of a compile-time site, naming the checked site
+    /// it fails.
+    fn comptimeExhaustivenessFailed(self: *Lowerer, site: Lifted.ComptimeSiteId) Common.LowerError!LIR.CFStmt {
+        _ = try self.lowerComptimeSite(site);
+        const source = self.solved.lifted.comptimeSite(site);
+        return .{ .comptime_exhaustiveness_failed = .{ .owner = source.owner, .checked_site = source.checked_site } };
+    }
+
     fn lowerComptimeSite(self: *Lowerer, site: Lifted.ComptimeSiteId) Common.LowerError!LIR.ComptimeSiteId {
         const index = @backingInt(site);
         if (self.comptime_site_map[index]) |existing| return existing;
@@ -6903,9 +6911,7 @@ const Lowerer = struct {
                 .msg = .{ .literal = try self.result.store.insertString(self.stringLiteralText(msg)) },
                 .checked_error = true,
             } }, where.source()) },
-            .comptime_exhaustiveness_failed => |site| .{ .ret = try self.result.store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{
-                .site = try self.lowerComptimeSite(site),
-            } }, where.source()) },
+            .comptime_exhaustiveness_failed => |site| .{ .ret = try self.result.store.addCFStmt(try self.comptimeExhaustivenessFailed(site), where.source()) },
             .dbg => |child| blk: {
                 const after_dbg = try self.assignZst(where, target, next);
                 const message = try self.addTemp(try self.lowerExprTy(child));
@@ -10536,7 +10542,7 @@ const Lowerer = struct {
 
         pub fn failTerminal(self: MatchTreeCtx) Common.LowerError!LIR.CFStmtId {
             if (self.comptime_site) |site| {
-                return try self.l.result.store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{ .site = try self.l.lowerComptimeSite(site) } }, self.where.glue());
+                return try self.l.result.store.addCFStmt(try self.l.comptimeExhaustivenessFailed(site), self.where.glue());
             }
             return try self.l.result.store.addCFStmt(.{ .runtime_error = {} }, self.where.glue());
         }
@@ -11423,7 +11429,7 @@ const Lowerer = struct {
 
         const miss = PatternMiss{ .join_id = self.freshJoinPointId() };
         const crash = if (comptime_site) |site|
-            try self.result.store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{ .site = try self.lowerComptimeSite(site) } }, where.glue())
+            try self.result.store.addCFStmt(try self.comptimeExhaustivenessFailed(site), where.glue())
         else
             try self.result.store.addCFStmt(.{ .runtime_error = {} }, where.glue());
         const matched = try self.lowerPatternThen(where, pat_id, source, next, miss, next);

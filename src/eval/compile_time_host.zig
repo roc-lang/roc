@@ -19,6 +19,7 @@ pub const SlotDemand = struct {
 };
 const sljmp = @import("sljmp");
 const crash_boundary_mod = @import("crash_boundary.zig");
+const signal_handler = base.signal_handler;
 
 const Allocator = std.mem.Allocator;
 const RocOps = builtins.host_abi.RocOps;
@@ -36,19 +37,29 @@ const Allocation = struct {
 pub const Termination = enum {
     returned,
     crashed,
-    comptime_exhaustiveness,
     host_oom,
     host_error,
 };
 
+/// Where in generated code a failure happened, as the machine left it. The
+/// evaluating program resolves it to the failing statement and its meaning
+/// through its line table and failure sites (design.md "Compile-Time Failure
+/// Sites").
+pub const FailurePoint = struct {
+    /// The program counter a fault stopped at, when it stopped in generated
+    /// code.
+    fault: ?usize = null,
+    /// The return addresses into generated code on the frame-pointer chain,
+    /// innermost first: the generated call the failure came out of, then each
+    /// generated call enclosing it.
+    calls: []const usize = &.{},
+};
+
 /// A failed inline `expect` observed during native compile-time evaluation,
-/// with the failing statement's checked region and resolved location (whose
-/// file entry names the declaring module) as emitted by the dev backend's
-/// failure-region hook immediately before the expect-failed call.
+/// with the point in generated code it was reported from.
 pub const ExpectFailedEvent = struct {
     message: []u8,
-    region: ?base.Region,
-    loc: ?base.SourceLoc,
+    point: FailurePoint,
 };
 
 /// Root-local host effects captured during native compile-time evaluation.
@@ -65,31 +76,19 @@ pub const HostEvent = union(enum) {
     }
 };
 
-/// A generated call frame's checked source region plus the resolved source
-/// location stamped on the calling LIR statement. The location's file entry
-/// carries the declaring module, so a failure region is never rendered
-/// against another module's source.
-pub const CallRegion = struct {
-    region: base.Region,
-    loc: base.SourceLoc,
-};
-
 arena: base.SingleThreadArena,
 host_arena: base.SingleThreadArena,
 allocations: std.AutoHashMapUnmanaged(usize, Allocation) = .empty,
 roc_ops: ?RocOps = null,
 events: std.ArrayListUnmanaged(HostEvent) = .empty,
-call_regions: std.ArrayListUnmanaged(CallRegion) = .empty,
-comptime_failed_site: ?lir.LIR.ComptimeSiteId = null,
-failed_region: ?base.Region = null,
-/// Resolved source location of the failing LIR statement (file entry names
-/// the declaring module), captured alongside `failed_region`.
-failed_loc: ?base.SourceLoc = null,
-/// Published producer origins, indexed by the emitted LIR statement.
-failure_origins: []const ?lir.LIR.ComptimeFailureOrigin = &.{},
-/// The LIR statement whose failure-region hook ran last: the failing
-/// statement once the run fails.
-failed_stmt: ?lir.LIR.CFStmtId = null,
+/// The address range of the generated code this host runs.
+code_start: usize = 0,
+code_end: usize = 0,
+/// The frame that called into generated code; every generated frame lies
+/// below it on the stack.
+entry_frame: usize = 0,
+/// Where the run failed, once it has.
+failure: ?FailurePoint = null,
 slot_demand: ?SlotDemand = null,
 operational_error: ?FinalizeError = null,
 timing_io: ?std.Io = null,
@@ -134,10 +133,7 @@ pub fn ops(self: *CompileTimeHost) *RocOps {
 pub fn resetForRun(self: *CompileTimeHost) void {
     self.clearHostState();
     _ = self.host_arena.reset(.free_all);
-    self.comptime_failed_site = null;
-    self.failed_region = null;
-    self.failed_loc = null;
-    self.failed_stmt = null;
+    self.failure = null;
     self.operational_error = null;
     self.suspended_ns = 0;
     _ = self.arena.reset(.free_all);
@@ -149,15 +145,51 @@ pub fn resetForRun(self: *CompileTimeHost) void {
 pub const CrashBoundary = crash_boundary_mod.CrashBoundary(CompileTimeHost, true);
 
 /// Record a caught stack overflow exactly the way a Roc `crash` is recorded,
-/// so the finalizer reports it as this root's compile-time crash.
+/// so the finalizer reports it as this root's compile-time crash: at the
+/// faulting instruction when it is generated code, otherwise at the generated
+/// call the fault happened inside of.
 pub fn noteStackOverflow(self: *CompileTimeHost) void {
-    if (self.failed_region == null and self.call_regions.items.len > 0) {
-        const frame = self.call_regions.items[self.call_regions.items.len - 1];
-        self.failed_region = frame.region;
-        self.failed_loc = frame.loc;
+    if (signal_handler.takeOverflowFrame()) |frame| {
+        self.failure = .{
+            .fault = if (self.inGeneratedCode(frame.pc)) frame.pc else null,
+            .calls = self.generatedCalls(frame.fp, frame.sp),
+        };
     }
     self.appendEvent(.crashed, crash_boundary_mod.STACK_OVERFLOW_MESSAGE);
     self.termination = .crashed;
+}
+
+/// Set the generated code this host runs, for locating its failures.
+pub fn setGeneratedCode(self: *CompileTimeHost, code: []const u8) void {
+    self.code_start = @intFromPtr(code.ptr);
+    self.code_end = self.code_start + code.len;
+}
+
+fn inGeneratedCode(self: *const CompileTimeHost, address: usize) bool {
+    return address >= self.code_start and address < self.code_end;
+}
+
+/// Every return address into generated code on the frame-pointer chain that
+/// starts at `frame`, innermost first. Generated code and the builtins and
+/// host functions between it and a failure keep frame pointers, so the chain
+/// is intact; every record read lies between `low` and the frame that called
+/// into generated code, which is live stack.
+fn generatedCalls(self: *CompileTimeHost, frame: usize, low: usize) []const usize {
+    var calls = std.ArrayListUnmanaged(usize).empty;
+    var fp = frame;
+    while (fp % @alignOf(usize) == 0 and fp >= low and fp + 2 * @sizeOf(usize) <= self.entry_frame) {
+        const record: *const [2]usize = @ptrFromInt(fp);
+        if (self.inGeneratedCode(record[1])) calls.append(self.host_arena.allocator(), record[1]) catch self.jump(.host_oom);
+        if (record[0] <= fp) break;
+        fp = record[0];
+    }
+    return calls.items;
+}
+
+/// Where in generated code the failure being reported from this host
+/// callback happened.
+fn currentFailurePoint(self: *CompileTimeHost, frame: usize) FailurePoint {
+    return .{ .calls = self.generatedCalls(frame, frame) };
 }
 
 /// Install a crash boundary before calling generated root code.
@@ -207,64 +239,14 @@ pub fn rocComptimeEnsureStaticValue(slot: u32) callconv(.c) void {
     };
 }
 
-/// Dev-backend hook called when empirical exhaustiveness fails.
-pub fn rocComptimeExhaustivenessFailed(site_raw: u32) callconv(.c) void {
-    const self = enteredHost();
-    self.comptime_failed_site = @fromBackingInt(@intCast(site_raw));
-    self.jump(.comptime_exhaustiveness);
-}
-
-/// Dev-backend hook recording the source region for an imminent failure,
-/// together with the failing statement's resolved location (whose file entry
-/// names the declaring module).
-pub fn rocComptimeFailureRegion(start_offset: u32, end_offset: u32, file: u32, line: u32, column: u32, stmt: u32) callconv(.c) void {
-    const self = enteredHost();
-    self.failed_stmt = @fromBackingInt(@intCast(stmt));
-    if (stmt < self.failure_origins.len) {
-        if (self.failure_origins[stmt]) |origin| {
-            self.failed_region = origin.region;
-            self.failed_loc = origin.loc;
-            return;
-        }
-    }
-    if (start_offset == end_offset) return;
-    self.failed_region = base.Region.from_raw_offsets(start_offset, end_offset);
-    self.failed_loc = .{ .file = file, .line = line, .column = column };
-}
-
-/// Dev-backend hook pushing a source region for a generated call frame.
-pub fn rocComptimeCallEnter(start_offset: u32, end_offset: u32, file: u32, line: u32, column: u32) callconv(.c) void {
-    const self = enteredHost();
-    self.call_regions.append(self.host_arena.allocator(), .{
-        .region = base.Region.from_raw_offsets(start_offset, end_offset),
-        .loc = .{ .file = file, .line = line, .column = column },
-    }) catch {
-        self.jump(.host_oom);
-    };
-}
-
-/// Dev-backend hook popping the source region for a generated call frame.
-pub fn rocComptimeCallExit() callconv(.c) void {
-    const self = enteredHost();
-    if (self.call_regions.items.len == 0) {
-        base.invariant("{s}", .{"compile-time call-region stack underflow"});
-    }
-    _ = self.call_regions.pop();
-}
-
-/// The ops of the evaluation this thread entered, which the hooks above are
+/// The ops of the evaluation this thread entered, which the hook above is
 /// only ever called from.
 fn enteredOps() *RocOps {
     return builtins.in_process_host.current() orelse base.invariant("{s}", .{"compile-time hook ran on a thread that entered no host"});
 }
 
-fn enteredHost() *CompileTimeHost {
-    return @ptrCast(@alignCast(enteredOps().env));
-}
-
 fn clearHostState(self: *CompileTimeHost) void {
     self.events = .empty;
-    self.call_regions = .empty;
     self.allocations = .empty;
 }
 
@@ -277,13 +259,12 @@ fn appendEvent(self: *CompileTimeHost, comptime tag: std.meta.Tag(HostEvent), by
     };
 }
 
-fn appendExpectFailedEvent(self: *CompileTimeHost, bytes: []const u8, region: ?base.Region, loc: ?base.SourceLoc) void {
+fn appendExpectFailedEvent(self: *CompileTimeHost, bytes: []const u8, point: FailurePoint) void {
     const owned = self.dupeEventBytes(bytes);
     const host_allocator = self.host_arena.allocator();
     self.events.append(host_allocator, .{ .expect_failed = .{
         .message = owned,
-        .region = region,
-        .loc = loc,
+        .point = point,
     } }) catch {
         self.jump(.host_oom);
         unreachable;
@@ -355,25 +336,12 @@ fn rocDbg(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
 
 fn rocExpectFailed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
-    // The dev backend emits a failure-region hook call immediately before an
-    // expect-failed call, exactly as for crashes. Consume that pending
-    // location into this event: evaluation continues after a failed expect,
-    // so leaving it set would misattribute a later crash to the expect.
-    const region = self.failed_region;
-    const loc = self.failed_loc;
-    self.failed_region = null;
-    self.failed_loc = null;
-    self.failed_stmt = null;
-    self.appendExpectFailedEvent(bytes[0..len], region, loc);
+    self.appendExpectFailedEvent(bytes[0..len], self.currentFailurePoint(@frameAddress()));
 }
 
 fn rocCrashed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
-    if (self.failed_region == null and self.call_regions.items.len > 0) {
-        const frame = self.call_regions.items[self.call_regions.items.len - 1];
-        self.failed_region = frame.region;
-        self.failed_loc = frame.loc;
-    }
+    self.failure = self.currentFailurePoint(@frameAddress());
     self.appendEvent(.crashed, bytes[0..len]);
     self.jump(.crashed);
 }

@@ -7427,11 +7427,7 @@ const ProcedureBuilder = struct {
             .ret_layout = ret_layout,
             .ret_desc = try self.staticDescRefForRepIfNeeded(initializer.rep),
         }, origin.loc);
-        const owner = self.result.loweringModuleId(module.key) orelse blk: {
-            const id: LIR.LoweringModuleId = @fromBackingInt(@intCast(self.result.lowering_modules.items.len));
-            try self.result.lowering_modules.append(self.allocator, module.key);
-            break :blk id;
-        };
+        const owner = self.result.loweringModuleId(module.key) orelse try self.result.appendLoweringModule(module.key);
         self.result.literal_roots.items[index] = .{
             .module = module.key,
             .id = @fromBackingInt(index),
@@ -20749,11 +20745,7 @@ const ProcBodyBuilder = struct {
     fn lowerLiteralRejection(self: *ProcBodyBuilder, source: LIR.LocalId, try_rep: Plan.TypeRepId, initializer_index: u32) Allocator.Error!LIR.CFStmtId {
         const initializer = self.parent.plan.literal_evidence.?.initializers.items[initializer_index];
         const site = self.parent.plan.literal_sites.items[initializer.site];
-        const owner = self.parent.result.loweringModuleId(site.source.module) orelse blk: {
-            const id: LIR.LoweringModuleId = @fromBackingInt(@intCast(self.parent.result.lowering_modules.items.len));
-            try self.parent.result.lowering_modules.append(self.parent.allocator, site.source.module);
-            break :blk id;
-        };
+        const owner = self.parent.result.loweringModuleId(site.source.module) orelse try self.parent.result.appendLoweringModule(site.source.module);
         const variants = self.parent.plan.tagVariantSlice(self.parent.plan.representations.items[@backingInt(try_rep)].tag_variants);
         const err_index = for (variants, 0..) |variant, index| {
             if (std.mem.eql(u8, self.tagVariantNameText(variant), "Err")) break index;

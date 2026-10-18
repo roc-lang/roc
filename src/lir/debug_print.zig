@@ -625,7 +625,7 @@ const Printer = struct {
                 },
                 .comptime_exhaustiveness_failed => |s| {
                     try writeIndent(indent, writer);
-                    try writer.print("comptime_exhaustiveness_failed site={d}\n", .{@backingInt(s.site)});
+                    try writer.print("comptime_exhaustiveness_failed owner={d} checked_site={?d}\n", .{ @backingInt(s.owner), if (s.checked_site) |site| @backingInt(site) else null });
                     return;
                 },
             }

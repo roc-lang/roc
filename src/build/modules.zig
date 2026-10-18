@@ -616,6 +616,11 @@ pub const RocModules = struct {
             @field(self, extra.name) = b.addModule(extra.name, .{ .root_source_file = b.path(extra.root) });
         }
         @field(self, generated_module) = createCompilerPlatformSourcesModule(b);
+        // Compile-time evaluation locates a failure inside a builtin by
+        // walking frame pointers out to the generated code that called it
+        // (design.md "Compile-Time Failure Sites"). Programs link their own
+        // builtins object, built separately.
+        self.builtins.omit_frame_pointer = false;
 
         self.fmt.addAnonymousImport("builtin_source", .{ .root_source_file = b.path("src/build/builtin_source.zig") });
 

@@ -312,24 +312,16 @@ const Binding = enum { compiler_function, image, process_data, unresolved };
 /// These private ABI names cannot be supplied by a platform or an artifact.
 const ComptimeHook = enum {
     ensure_static_value,
-    exhaustiveness_failed,
-    failure_region,
-    call_enter,
-    call_exit,
 
     fn fromName(name: []const u8) ?ComptimeHook {
         return std.StaticStringMap(ComptimeHook).initComptime(.{
             .{ "roc__comptime_ensure_static_value", .ensure_static_value },
-            .{ "roc__comptime_exhaustiveness_failed", .exhaustiveness_failed },
-            .{ "roc__comptime_failure_region", .failure_region },
-            .{ "roc__comptime_call_enter", .call_enter },
-            .{ "roc__comptime_call_exit", .call_exit },
         }).get(name);
     }
 
     fn address(self: ComptimeHook, hooks: LirCodeGenMod.ComptimeHooks) usize {
         return switch (self) {
-            inline .ensure_static_value, .exhaustiveness_failed, .failure_region, .call_enter, .call_exit => |hook| @intFromPtr(@field(hooks, @tagName(hook))),
+            inline .ensure_static_value => |hook| @intFromPtr(@field(hooks, @tagName(hook))),
         };
     }
 };
@@ -483,21 +475,13 @@ test "a stub jumps to its target" {
 
 test "comptime hook bindings are explicit for every private ABI symbol" {
     const Hooks = struct {
-        var exited: bool = false;
-        fn ensure(_: u32) callconv(.c) void {}
-        fn exhaustive(_: u32) callconv(.c) void {}
-        fn region(_: u32, _: u32, _: u32, _: u32, _: u32, _: u32) callconv(.c) void {}
-        fn enter(_: u32, _: u32, _: u32, _: u32, _: u32) callconv(.c) void {}
-        fn exit() callconv(.c) void {
-            exited = true;
+        var ensured: ?u32 = null;
+        fn ensure(slot: u32) callconv(.c) void {
+            ensured = slot;
         }
     };
     const hooks: LirCodeGenMod.ComptimeHooks = .{
         .ensure_static_value = &Hooks.ensure,
-        .exhaustiveness_failed = &Hooks.exhaustive,
-        .failure_region = &Hooks.region,
-        .call_enter = &Hooks.enter,
-        .call_exit = &Hooks.exit,
     };
     const allocator = std.testing.allocator;
     var splice = HostSplice.init(allocator);
@@ -533,7 +517,7 @@ test "comptime hook bindings are explicit for every private ABI symbol" {
         const index = targets.getIndex(target).?;
         try std.testing.expectEqual(@as(?usize, 4096 + 32 + index * stub_size), binder.address(name));
     }
-    try std.testing.expectEqual(null, ComptimeHook.fromName("roc__comptime_call_exit_extra"));
+    try std.testing.expectEqual(null, ComptimeHook.fromName("roc__comptime_ensure_static_value_extra"));
     try std.testing.expectEqual(null, ComptimeHook.fromName("roc__comptime_unknown"));
     try std.testing.expectEqual(Binding.unresolved, try binder.classify("roc__comptime_unknown"));
     // Ordinary compiler symbols retain precedence over image definitions.
@@ -552,10 +536,10 @@ test "comptime hook bindings are explicit for every private ABI symbol" {
             writeStub(executable.memory[index * stub_size ..][0..stub_size], target);
         }
         try executable.finishWrite();
-        const exit: @TypeOf(hooks.call_exit) = @ptrFromInt(binder.address("roc__comptime_call_exit").?);
-        Hooks.exited = false;
-        exit();
-        try std.testing.expect(Hooks.exited);
+        const ensure: @TypeOf(hooks.ensure_static_value) = @ptrFromInt(binder.address("roc__comptime_ensure_static_value").?);
+        Hooks.ensured = null;
+        ensure(7);
+        try std.testing.expectEqual(@as(?u32, 7), Hooks.ensured);
     }
     splice.setComptimeHooks(null);
     inline for (@typeInfo(ComptimeHook).@"enum".field_names) |field_name| {

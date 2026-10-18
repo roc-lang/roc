@@ -34,7 +34,6 @@ const is_freestanding = builtin.target.os.tag == .freestanding;
 pub const Error = error{
     OutOfMemory,
     RuntimeError,
-    ComptimeExhaustiveness,
     DivisionByZero,
     Crash,
     ExpectErr,

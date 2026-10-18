@@ -56,6 +56,9 @@ pub const SymbolicReference = struct {
 /// SourceLoc.file belongs to the originating LIR source-file table.
 pub const LineEntry = LirCodeGenMod.LineEntry;
 
+/// Region-relative failure sites (`LirCodeGen.FailureSite`).
+pub const FailureSite = LirCodeGenMod.FailureSite;
+
 /// A reference from an artifact's bytes to a location inside another artifact.
 pub const Reference = struct {
     /// Offset of the CALL/BL or ADR/LEA instruction within the artifact.
@@ -149,6 +152,7 @@ pub const Artifact = struct {
     refs: []const Reference,
     symbolic_refs: []const SymbolicReference = &.{},
     lines: []const LineEntry = &.{},
+    failure_sites: []const FailureSite = &.{},
     relocations: []const NamedRelocation,
     data: []const DataItem,
 };
@@ -316,6 +320,7 @@ pub fn combine(allocator: Allocator, sets: []const *const Set) Allocator.Error!S
             const lines = try a.dupe(LineEntry, source.lines);
             for (lines) |*line| line.loc = rebindLoc(line.loc, file_map);
             artifact.lines = lines;
+            artifact.failure_sites = try a.dupe(FailureSite, source.failure_sites);
             const relocations = try a.dupe(NamedRelocation, source.relocations);
             for (relocations) |*relocation| relocation.name = try a.dupe(u8, relocation.name);
             artifact.relocations = relocations;
@@ -746,10 +751,20 @@ pub fn extractPrepared(
         // an artifact carries the whole constant graph it points into.
         const region_data = try captureData(allocator, arena_allocator, region_relocations.items, &data_by_name, prepared);
 
+        // Lines and failure sites are in code offset order, so each region's
+        // are one contiguous run found by search. A failing call's return
+        // address may be the region's end.
+        const all_lines = codegen.getLineEntries();
         var lines = std.ArrayList(LineEntry).empty;
-        for (codegen.getLineEntries()) |line| {
-            if (line.offset < region.start or line.offset >= region.end) continue;
-            try lines.append(arena_allocator, .{ .offset = @intCast(line.offset - region.start), .loc = line.loc });
+        for (all_lines[firstAtOrAfter(LineEntry, all_lines, region.start)..]) |line| {
+            if (line.offset >= region.end) break;
+            try lines.append(arena_allocator, .{ .offset = @intCast(line.offset - region.start), .loc = line.loc, .region = line.region });
+        }
+        const all_failure_sites = codegen.getFailureSites();
+        var failure_sites = std.ArrayList(FailureSite).empty;
+        for (all_failure_sites[firstAtOrAfter(FailureSite, all_failure_sites, region.start + 1)..]) |site| {
+            if (site.offset > region.end) break;
+            try failure_sites.append(arena_allocator, .{ .offset = @intCast(site.offset - region.start), .meaning = site.meaning });
         }
         const artifact_code = try arena_allocator.dupe(u8, code[region.start..region.end]);
         codegen.normalizeArtifactCode(region.start, artifact_code);
@@ -761,6 +776,7 @@ pub fn extractPrepared(
             .refs = try region_refs.toOwnedSlice(arena_allocator),
             .symbolic_refs = try symbolic_refs.toOwnedSlice(arena_allocator),
             .lines = try lines.toOwnedSlice(arena_allocator),
+            .failure_sites = try failure_sites.toOwnedSlice(arena_allocator),
             .relocations = try region_relocations.toOwnedSlice(arena_allocator),
             .data = region_data,
         };
@@ -769,6 +785,17 @@ pub fn extractPrepared(
     const source_files = try arena_allocator.alloc([32]u8, codegen.store.sourceFileCount());
     for (source_files, 0..) |*identity, file| identity.* = codegen.store.sourceFileModuleIdentity(@intCast(file));
     return .{ .arena = arena, .artifacts = artifacts, .source_files = source_files };
+}
+
+/// Index of the first entry, in offset order, at or after `offset`.
+fn firstAtOrAfter(comptime T: type, items: []const T, offset: usize) usize {
+    var low: usize = 0;
+    var high: usize = items.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (items[mid].offset < offset) low = mid + 1 else high = mid;
+    }
+    return low;
 }
 
 fn captureData(
@@ -992,7 +1019,10 @@ fn appendMetadata(comptime CG: type, codegen: *CG, artifact: Artifact, start: us
                 break :loc bound;
             },
         };
-        try codegen.appendAssembledLineEntry(.{ .offset = @intCast(start + line.offset), .loc = loc });
+        try codegen.appendAssembledLineEntry(.{ .offset = @intCast(start + line.offset), .loc = loc, .region = line.region });
+    }
+    for (artifact.failure_sites) |site| {
+        try codegen.appendAssembledFailureSite(.{ .offset = @intCast(start + site.offset), .meaning = site.meaning });
     }
 }
 
@@ -1423,6 +1453,7 @@ test "artifact metadata queues unresolved targets, preserves same-offset line or
             self.lines[self.lines_len] = line;
             self.lines_len += 1;
         }
+        pub fn appendAssembledFailureSite(_: *Self, _: FailureSite) Allocator.Error!void {}
     };
     var recorder = Recorder{};
     const artifact = Artifact{
@@ -1436,8 +1467,8 @@ test "artifact metadata queues unresolved targets, preserves same-offset line or
             .{ .site = 1, .form = .addr, .target = .{ .rc_helper = "unemitted" } },
         },
         .lines = &.{
-            .{ .offset = 0, .loc = .{ .file = 3, .line = 10, .column = 1 } },
-            .{ .offset = 0, .loc = .{ .file = 3, .line = 11, .column = 2 } },
+            .{ .offset = 0, .loc = .{ .file = 3, .line = 10, .column = 1 }, .region = base.Region.zero() },
+            .{ .offset = 0, .loc = .{ .file = 3, .line = 11, .column = 2 }, .region = base.Region.zero() },
         },
         .relocations = &.{},
         .data = &.{},
@@ -1485,8 +1516,8 @@ fn testCombineOwnership(allocator: Allocator) (Allocator.Error || error{TestExpe
                 .{ .site = 2, .form = .addr, .target = .{ .proc = lir.ProcIdentity.forTest(4) } },
             },
             .lines = &.{
-                .{ .offset = 0, .loc = .{ .file = 0, .line = 3, .column = 2 } },
-                .{ .offset = 0, .loc = .{ .file = 0, .line = 4, .column = 5 } },
+                .{ .offset = 0, .loc = .{ .file = 0, .line = 3, .column = 2 }, .region = base.Region.zero() },
+                .{ .offset = 0, .loc = .{ .file = 0, .line = 4, .column = 5 }, .region = base.Region.zero() },
             },
             .relocations = &.{.{ .offset = 0, .name = "external", .scope = .shared, .kind = .function }},
             .data = &.{.{

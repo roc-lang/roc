@@ -4502,7 +4502,6 @@ fn isTypeCheckError(err: SnapshotError) bool {
         error.CacheVersionHashMismatch,
         error.Canceled,
         error.CompilationFailed,
-        error.ComptimeExhaustiveness,
         error.ConnectionResetByPeer,
         error.CorruptArtifact,
         error.CorruptBuiltinArtifact,

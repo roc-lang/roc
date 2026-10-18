@@ -50,7 +50,6 @@ pub const Error = Allocator.Error || lir.CheckedPipeline.LowerResourceError || s
     Crash,
     RuntimeError,
     DivisionByZero,
-    ComptimeExhaustiveness,
     ExpectErr,
     EvaluationFailed,
     EntrypointNotFound,
@@ -3056,7 +3055,7 @@ pub fn lirInterpreterStrWithStats(allocator: Allocator, lowered: *const LoweredP
 }
 
 /// Abort classification for a differential interpreter run.
-pub const InterpreterAbortKind = enum { crash, runtime_error, comptime_exhaustiveness, expect_err };
+pub const InterpreterAbortKind = enum { crash, runtime_error, expect_err };
 
 /// Abort record for a differential interpreter run.
 pub const InterpreterAbort = struct {
@@ -3136,7 +3135,6 @@ pub fn lirInterpreterTranscript(allocator: Allocator, lowered: *const LoweredPro
         error.Crash => outcome = .{ .aborted = .{ .kind = .crash, .message = try allocator.dupe(u8, interp.getCrashMessage()) } },
         error.DivisionByZero => outcome = .{ .aborted = .{ .kind = .crash, .message = null } },
         error.RuntimeError => outcome = .{ .aborted = .{ .kind = .runtime_error, .message = null } },
-        error.ComptimeExhaustiveness => outcome = .{ .aborted = .{ .kind = .comptime_exhaustiveness, .message = null } },
         error.ExpectErr => {
             const message: ?[]u8 = if (interp.getExpectErrMessage()) |msg|
                 try allocator.dupe(u8, msg)

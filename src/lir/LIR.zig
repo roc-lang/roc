@@ -1460,9 +1460,11 @@ pub const CFStmt = union(enum) {
     /// Compiler-generated impossible execution path. This is terminal.
     runtime_error: void,
     /// Pattern coverage failed during compile-time evaluation. This is
-    /// terminal and becomes a checking diagnostic while finalizing.
+    /// terminal: it crashes, and compile-time finalization reports the crash
+    /// as the empirical failure of `checked_site` in module `owner`.
     comptime_exhaustiveness_failed: struct {
-        site: ComptimeSiteId,
+        owner: LoweringModuleId,
+        checked_site: ?CheckedExhaustivenessSiteId,
     },
     incref: struct {
         value: LocalId,
@@ -1582,6 +1584,45 @@ pub const CFStmt = union(enum) {
         /// reported: compile-time evaluation that reaches it discards the
         /// result instead of reporting the problem a second time.
         checked_error: bool = false,
+        /// Set when this crash is the failure path of a read of a
+        /// compile-time value whose producer failed.
+        failed_value: ?ComptimeValueRef = null,
+    },
+};
+
+/// The crash message of a `comptime_exhaustiveness_failed` statement. Every
+/// backend and the interpreter crash with it, so a compile-time evaluation
+/// and a build of the same code fail identically; compile-time finalization
+/// reports the failure by its checked site instead.
+pub const comptime_exhaustiveness_failure_message = "non-exhaustive pattern match";
+
+/// One compile-time value: its producer and the module owning it.
+pub const ComptimeValueRef = struct {
+    owner: LoweringModuleId,
+    producer: ComptimeProducer,
+};
+
+/// What it means for generated code to fail at one statement, beyond
+/// crashing there. Every identity but a literal producer's stays meaningful in
+/// every compilation of the program (`LirStore.failureMeaning`).
+pub const FailureMeaning = union(enum) {
+    /// Code checking rejected and already reported.
+    checked_error,
+    /// A literal conversion rejecting the literal at `checked_expr`.
+    literal_rejection: struct {
+        module: [32]u8,
+        checked_expr: u32,
+        kind: LiteralRejectionKind,
+    },
+    /// An exhaustiveness failure at a checked site.
+    exhaustiveness: struct {
+        module: [32]u8,
+        checked_site: ?CheckedExhaustivenessSiteId,
+    },
+    /// A read of a compile-time value whose producer failed.
+    failed_value: struct {
+        module: [32]u8,
+        producer: ComptimeProducer,
     },
 };
 

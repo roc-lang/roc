@@ -110,14 +110,19 @@ pub const ResolvedDispatchTarget = struct {
     };
 };
 
+/// A lookup naming a definition of another module.
+pub const ForeignCallee = union(enum) {
+    external: @FieldType(CIR.Expr, "e_lookup_external"),
+    associated: @FieldType(CIR.Expr, "e_lookup_associated_resolved"),
+};
+
 /// What checking knows about functions defined in other modules.
 pub const ForeignCallees = struct {
     context: *const anyopaque,
-    /// Whether calling the foreign function an `e_lookup_external` or a
-    /// foreign `e_lookup_associated_resolved` names can invoke a function
-    /// value it does not name. A lookup that names a value rather than a
-    /// function is a call of whatever function that value holds.
-    invokes: *const fn (context: *const anyopaque, expr: CIR.Expr) std.mem.Allocator.Error!bool,
+    /// Whether calling the foreign function `callee` names can invoke a
+    /// function value it does not name. A lookup that names a value rather
+    /// than a function is a call of whatever function that value holds.
+    invokes: *const fn (context: *const anyopaque, callee: ForeignCallee) std.mem.Allocator.Error!bool,
 };
 
 /// The checked strict-demand relation, and the module's functions whose
@@ -789,9 +794,9 @@ const DemandAnalyzer = struct {
         if (self.foreign != null) current.invokes = true;
     }
 
-    fn noteForeignCall(self: *const DemandAnalyzer, current: *DemandSummary, expr: CIR.Expr) std.mem.Allocator.Error!void {
+    fn noteForeignCall(self: *const DemandAnalyzer, current: *DemandSummary, callee: ForeignCallee) std.mem.Allocator.Error!void {
         const foreign = self.foreign orelse return;
-        if (try foreign.invokes(foreign.context, expr)) current.invokes = true;
+        if (try foreign.invokes(foreign.context, callee)) current.invokes = true;
     }
 
     /// Whether calling `def_idx` can invoke a function value it does not
@@ -1143,9 +1148,9 @@ const DemandAnalyzer = struct {
                 }
                 return;
             }
-            try self.noteForeignCall(current, expr);
+            try self.noteForeignCall(current, .{ .associated = expr.e_lookup_associated_resolved });
         } else if (tag == .e_lookup_external) {
-            try self.noteForeignCall(current, expr);
+            try self.noteForeignCall(current, .{ .external = expr.e_lookup_external });
         } else if (tag == .e_hosted_lambda or tag == .e_runtime_error or tag == .e_crash) {
             // A hosted procedure never runs at compile time, and a checked
             // error or crash calls nothing.

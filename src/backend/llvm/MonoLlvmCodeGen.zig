@@ -3997,7 +3997,7 @@ pub const MonoLlvmCodeGen = struct {
                 try self.emitRuntimeError();
             },
             .comptime_exhaustiveness_failed => {
-                try self.emitCrashBytes("compile-time exhaustiveness failure reached runtime code");
+                try self.emitCrashBytes(lir.LIR.comptime_exhaustiveness_failure_message);
             },
             .incref => |inc| {
                 try self.emitExplicitRcStmt(inc.rc, .incref, inc.value, inc.count, inc.atomicity);

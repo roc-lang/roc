@@ -471,7 +471,6 @@ const CliMainError =
         BuiltinsExtractionFailed,
         CheckFailed,
         CompilationFailed,
-        ComptimeExhaustiveness,
         Crash,
         DivisionByZero,
         DepsFailed,
@@ -6452,7 +6451,6 @@ fn reportCliInterpreterError(ops: *echo_platform.host_abi.RocOps, interpreter: *
         error.OutOfMemory => "Roc interpreter ran out of memory",
         error.RuntimeError => interpreter.getRuntimeErrorMessage() orelse "Roc runtime error",
         error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse "Division by zero",
-        error.ComptimeExhaustiveness => "compile-time exhaustiveness failure reached runtime code",
         error.Crash => interpreter.getCrashMessage(),
         // expect_err statements only occur in top-level expect test roots,
         // never in program entrypoints.
@@ -6496,7 +6494,6 @@ fn evaluateLirImageEntrypoint(
         },
         error.OutOfMemory,
         error.RuntimeError,
-        error.ComptimeExhaustiveness,
         error.DivisionByZero,
         error.Crash,
         error.ExpectErr,
@@ -12748,7 +12745,6 @@ fn interpreterTestFailureMessage(
         error.OutOfMemory => return error.OutOfMemory,
         error.RuntimeError => interpreter.getRuntimeErrorMessage() orelse "Roc runtime error",
         error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse "Division by zero",
-        error.ComptimeExhaustiveness => "compile-time exhaustiveness failure reached runtime code",
         error.Crash => interpreter.getCrashMessage(),
         error.ExpectErr => interpreter.getExpectErrMessage() orelse
             "The `?` operator evaluated an `Err` inside an `expect`",
@@ -13015,8 +13011,7 @@ fn runInterpreterTestRoots(
             // The expect reached code checking rejected; that problem is
             // already reported, so the expect counts as a compiler error.
             const reached_checked_error = switch (err) {
-                error.Crash => eval.CompileTimeFinalization.failedAtCheckedError(&lowered.lir_result, interpreter.getFailedCrashStmt()),
-                error.ComptimeExhaustiveness,
+                error.Crash => eval.CompileTimeFinalization.failedAtCheckedError(if (interpreter.getFailedCrashStmt()) |stmt| lowered.lir_result.store.failureMeaning(stmt) else null),
                 error.DivisionByZero,
                 error.ExpectErr,
                 error.InvalidHostedFunctionSignature,
@@ -13041,7 +13036,6 @@ fn runInterpreterTestRoots(
             // source snippet at the `?` itself.
             const failure_region = switch (err) {
                 error.ExpectErr => interpreter.getExpectErrRegion() orelse run.region,
-                error.ComptimeExhaustiveness,
                 error.Crash,
                 error.DivisionByZero,
                 error.InvalidHostedFunctionSignature,
@@ -13064,7 +13058,6 @@ fn runInterpreterTestRoots(
                     message_owned = false;
                     break :blk null;
                 },
-                error.ComptimeExhaustiveness,
                 error.DivisionByZero,
                 error.ExpectErr,
                 error.InvalidHostedFunctionSignature,

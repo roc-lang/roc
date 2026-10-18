@@ -13,6 +13,7 @@
 //! splicing program binds them to its own table (`ProcArtifact.splice`).
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 const lir = @import("lir");
 const ProcArtifact = @import("ProcArtifact.zig");
@@ -22,7 +23,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 8;
+pub const format_version: u32 = 9;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// artifact holding its procedure, and the ownership signature and
@@ -167,6 +168,45 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
             try writer.word(ProcArtifact.rebindLoc(line.loc, file_map).file);
             try writer.word(line.loc.line);
             try writer.word(line.loc.column);
+            try writer.word(line.region.start.offset);
+            try writer.word(line.region.end.offset);
+        }
+        try writer.word(@intCast(artifact.failure_sites.len));
+        for (artifact.failure_sites) |site| {
+            try writer.word(site.offset);
+            switch (site.meaning) {
+                .checked_error => try writer.byte(0),
+                .literal_rejection => |literal| {
+                    try writer.byte(1);
+                    try writer.raw(&literal.module);
+                    try writer.word(literal.checked_expr);
+                    try writer.byte(@backingInt(literal.kind));
+                },
+                .exhaustiveness => |exhaustiveness| {
+                    try writer.byte(2);
+                    try writer.raw(&exhaustiveness.module);
+                    if (exhaustiveness.checked_site) |checked_site| {
+                        try writer.byte(1);
+                        try writer.word(@backingInt(checked_site));
+                    } else {
+                        try writer.byte(0);
+                    }
+                },
+                .failed_value => |value| {
+                    try writer.byte(3);
+                    try writer.raw(&value.module);
+                    switch (value.producer) {
+                        .checked => |root| {
+                            try writer.byte(0);
+                            try writer.word(@backingInt(root));
+                        },
+                        .literal => |root| {
+                            try writer.byte(1);
+                            try writer.word(@backingInt(root));
+                        },
+                    }
+                },
+            }
         }
         try writer.word(@intCast(artifact.relocations.len));
         for (artifact.relocations) |relocation| {
@@ -298,8 +338,39 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
             line.* = .{
                 .offset = try reader.word(),
                 .loc = .{ .file = try reader.word(), .line = try reader.word(), .column = try reader.word() },
+                .region = base.Region.from_raw_offsets(try reader.word(), try reader.word()),
             };
             if (line.loc.hasLocation() and line.loc.file >= source_files.len) return error.MalformedPack;
+        }
+        const failure_sites = try arena_allocator.alloc(ProcArtifact.FailureSite, try reader.word());
+        for (failure_sites) |*site| {
+            const offset = try reader.word();
+            const meaning: lir.LIR.FailureMeaning = switch (try reader.byte()) {
+                0 => .checked_error,
+                1 => .{ .literal_rejection = .{
+                    .module = (try reader.raw(32))[0..32].*,
+                    .checked_expr = try reader.word(),
+                    .kind = std.enums.fromInt(lir.LIR.LiteralRejectionKind, try reader.byte()) orelse return error.MalformedPack,
+                } },
+                2 => .{ .exhaustiveness = .{
+                    .module = (try reader.raw(32))[0..32].*,
+                    .checked_site = switch (try reader.byte()) {
+                        0 => null,
+                        1 => @fromBackingInt(try reader.word()),
+                        else => return error.MalformedPack,
+                    },
+                } },
+                3 => .{ .failed_value = .{
+                    .module = (try reader.raw(32))[0..32].*,
+                    .producer = switch (try reader.byte()) {
+                        0 => .{ .checked = @fromBackingInt(try reader.word()) },
+                        1 => .{ .literal = @fromBackingInt(try reader.word()) },
+                        else => return error.MalformedPack,
+                    },
+                } },
+                else => return error.MalformedPack,
+            };
+            site.* = .{ .offset = offset, .meaning = meaning };
         }
         const relocations = try arena_allocator.alloc(ProcArtifact.NamedRelocation, try reader.word());
         for (relocations) |*relocation| {
@@ -363,6 +434,7 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
             .refs = refs,
             .symbolic_refs = symbolic_refs,
             .lines = lines,
+            .failure_sites = failure_sites,
             .relocations = relocations,
             .data = data,
         };
@@ -571,7 +643,7 @@ fn testOwnedPack(allocator: Allocator) (ReadError || error{TestExpectedEqual})!v
             .frame = null,
             .refs = &.{.{ .site = 0, .form = .call, .target = 0, .delta = 0, .veneer = 3 }},
             .symbolic_refs = &.{.{ .site = 1, .form = .call, .target = .{ .rc_helper = "external" } }},
-            .lines = &.{.{ .offset = 0, .loc = .{ .file = 0, .line = 10, .column = 8 } }},
+            .lines = &.{.{ .offset = 0, .loc = .{ .file = 0, .line = 10, .column = 8 }, .region = base.Region.zero() }},
             .relocations = &.{.{ .offset = 0, .name = "builtin", .scope = .shared, .kind = .function }},
             .data = &.{.{
                 .name = "datum",
@@ -619,8 +691,8 @@ test "pack bytes round-trip every artifact field and spec entry" {
                 .{ .site = 2, .form = .addr, .target = .{ .boxy_thunk = lir.ProcIdentity.forTest(9) } },
             },
             .lines = &.{
-                .{ .offset = 0, .loc = .{ .file = 3, .line = 42, .column = 7 } },
-                .{ .offset = 0, .loc = .{ .file = 3, .line = 43, .column = 9 } },
+                .{ .offset = 0, .loc = .{ .file = 3, .line = 42, .column = 7 }, .region = base.Region.zero() },
+                .{ .offset = 0, .loc = .{ .file = 3, .line = 43, .column = 9 }, .region = base.Region.zero() },
             },
             .relocations = relocations,
             .data = try a.dupe(ProcArtifact.DataItem, &.{

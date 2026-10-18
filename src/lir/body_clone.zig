@@ -1784,9 +1784,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .region = s.region,
                 } }, origin),
                 .runtime_error => try self.store.addCFStmt(.runtime_error, origin),
-                .comptime_exhaustiveness_failed => |s| try self.store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{
-                    .site = s.site,
-                } }, origin),
+                .comptime_exhaustiveness_failed => |s| try self.store.addCFStmt(.{ .comptime_exhaustiveness_failed = s }, origin),
                 .jump => |s| try self.cloneJump(s, origin),
                 .ret => |s| if (@hasDecl(Rewriter, "cloneRet"))
                     try self.rewriter.cloneRet(self, s.value, origin)

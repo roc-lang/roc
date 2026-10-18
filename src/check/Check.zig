@@ -12458,11 +12458,11 @@ const ForeignCalleeIndex = struct {
         self.by_module.deinit(self.checker.gpa);
     }
 
-    fn invokes(context: *const anyopaque, expr: CIR.Expr) Allocator.Error!bool {
+    fn invokes(context: *const anyopaque, callee: DependencyGraph.ForeignCallee) Allocator.Error!bool {
         const self: *ForeignCalleeIndex = @ptrCast(@alignCast(@constCast(context)));
         const checker = self.checker;
-        switch (expr) {
-            .e_lookup_external => |external| {
+        switch (callee) {
+            .external => |external| {
                 const module = checker.hoistedImportedModule(checker.cir, external.module_idx) orelse
                     base.invariant("check invariant violated: an external lookup names an unresolved import", .{});
                 // A name bound by a destructure is a value, and calling a
@@ -12470,11 +12470,10 @@ const ForeignCalleeIndex = struct {
                 const def_idx = try self.defForNode(module, @fromBackingInt(@intCast(external.target_node_idx))) orelse return true;
                 return module.defInvokes(def_idx);
             },
-            .e_lookup_associated_resolved => |resolved| {
+            .associated => |resolved| {
                 const target = checker.moduleEnvForIdentity(checker.cir, resolved.module_identity);
                 return target.env.defInvokes(resolved.target_def_idx);
             },
-            else => base.invariant("check invariant violated: a foreign callee query named a local expression", .{}),
         }
     }
 
@@ -50620,7 +50619,7 @@ test "literal pattern strict demands flow through a called function summary" {
     try test_env.assertOneTypeError("Circular Value Definition");
 }
 
-fn expectCircularValues(comptime source: []const u8, count: usize) !void {
+fn expectCircularValues(comptime source: []const u8, count: usize) @import("test/TestEnv.zig").TestEnvError!void {
     const TestEnv = @import("test/TestEnv.zig");
     var test_env = try TestEnv.init("FunctionValueDemand", source);
     defer test_env.deinit();

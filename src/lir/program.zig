@@ -788,7 +788,17 @@ pub const Result = struct {
     /// once, before any consumer resolves an owner out of it.
     pub fn setLoweringModules(self: *Result, modules: []const checked.ModuleId) Allocator.Error!void {
         self.lowering_modules.clearRetainingCapacity();
-        try self.lowering_modules.appendSlice(self.store.allocator, modules);
+        self.store.lowering_module_keys.clearRetainingCapacity();
+        for (modules) |module| _ = try self.appendLoweringModule(module);
+    }
+
+    /// Give a checked module the next dense lowering id.
+    pub fn appendLoweringModule(self: *Result, module: checked.ModuleId) Allocator.Error!LIR.LoweringModuleId {
+        const id: LIR.LoweringModuleId = @fromBackingInt(@intCast(self.lowering_modules.items.len));
+        try self.lowering_modules.ensureUnusedCapacity(self.store.allocator, 1);
+        try self.store.lowering_module_keys.append(self.store.allocator, module.bytes);
+        self.lowering_modules.appendAssumeCapacity(module);
+        return id;
     }
 
     /// The dense id this program gave a checked module, when the module was

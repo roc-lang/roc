@@ -85,8 +85,12 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
         var guard_origin = use_origin;
         guard_origin.kind = .comptime_value_guard;
         const success = try store.addCFStmt(store.getCFStmt(use.stmt), use_origin);
-        const crash = try store.addCFStmt(.{ .crash = .{ .msg = .{ .local = message } } }, guard_origin);
-        const checked_crash = try store.addCFStmt(.{ .crash = .{ .msg = .{ .local = message }, .checked_error = true } }, guard_origin);
+        const value: LIR.ComptimeValueRef = .{
+            .owner = program.loweringModuleId(root.module) orelse invariant("{s}", .{"compile-time value guard named a module its program does not lower"}),
+            .producer = root.root,
+        };
+        const crash = try store.addCFStmt(.{ .crash = .{ .msg = .{ .local = message }, .failed_value = value } }, guard_origin);
+        const checked_crash = try store.addCFStmt(.{ .crash = .{ .msg = .{ .local = message }, .checked_error = true, .failed_value = value } }, guard_origin);
         const load_message = try store.addCFStmt(.{ .assign_ref = .{
             .target = message,
             .op = .{ .field = .{ .source = record, .field_idx = @intCast(fields.message_field) } },
@@ -209,6 +213,7 @@ test "shared compile-time guard owner metadata allocation failure cleanup" {
 fn testSharedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     var program = try Program.Result.init(allocator, .u64);
     defer program.deinit();
+    _ = try program.appendLoweringModule(.{});
     const record_layout = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
     const struct_idx = program.layouts.getLayout(record_layout).getStruct().idx;
     const failure_slot: LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
@@ -291,6 +296,7 @@ test "completed compile-time value guards allocation failure cleanup" {
 fn testCompletedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     var program = try Program.Result.init(allocator, .u64);
     defer program.deinit();
+    _ = try program.appendLoweringModule(.{});
     const record_layout = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
     const struct_idx = program.layouts.getLayout(record_layout).getStruct().idx;
     const failed_offset = program.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0);

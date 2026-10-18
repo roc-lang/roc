@@ -872,6 +872,11 @@ source_file_qualified_ends: GuardedList.List(u32, "LirStore.source_file_qualifie
 /// comparisons ("does this failed statement belong to the finalized
 /// module?") must use these, never names.
 source_file_identities: GuardedList.List([32]u8, "LirStore.source_file_identities"),
+/// Checked artifact key bytes of each `LoweringModuleId`, written only through
+/// `Program.Result`'s lowering-module table, so code generation can name a
+/// statement's owning module in identities that stay meaningful in every
+/// compilation.
+lowering_module_keys: GuardedList.List([32]u8, "LirStore.lowering_module_keys"),
 /// Source location per statement, parallel to `cf_stmts`. Reference-count
 /// statements always record `SourceLoc.none`; they have no source counterpart.
 cf_stmt_locs: GuardedList.List(base.SourceLoc, "LirStore.cf_stmt_locs"),
@@ -931,6 +936,7 @@ pub fn init(allocator: Allocator) Self {
         .source_file_qualified_bytes = .empty,
         .source_file_qualified_ends = .empty,
         .source_file_identities = .empty,
+        .lowering_module_keys = .empty,
         .cf_stmt_locs = .empty,
         .cf_stmt_regions = .empty,
         .cf_stmt_inline_scopes = .empty,
@@ -1022,6 +1028,7 @@ pub fn deinit(self: *Self) void {
     self.source_file_qualified_bytes.deinit(self.allocator);
     self.source_file_qualified_ends.deinit(self.allocator);
     self.source_file_identities.deinit(self.allocator);
+    self.lowering_module_keys.deinit(self.allocator);
     self.cf_stmt_locs.deinit(self.allocator);
     self.cf_stmt_regions.deinit(self.allocator);
     self.cf_stmt_inline_scopes.deinit(self.allocator);
@@ -1146,6 +1153,76 @@ pub fn sourceFileQualifiedName(self: *const Self, file: u32) []const u8 {
     const end = self.source_file_qualified_ends.get(file);
     const start = if (file == 0) 0 else self.source_file_qualified_ends.get(file - 1);
     return self.source_file_qualified_bytes.unsafeRawItemsForView()[start..end];
+}
+
+/// What generated code failing at `stmt` means beyond a crash there, or null
+/// for a plain crash. Code generation records it beside the failing call, and
+/// the interpreter reports the statement it stopped at, so both evaluators
+/// classify a failure from this one answer. Checked errors take precedence:
+/// they own their diagnostic wherever they surface.
+pub fn failureMeaning(self: *const Self, stmt: CFStmtId) ?lir_defs.FailureMeaning {
+    return switch (self.getCFStmt(stmt)) {
+        .crash => |crash| if (crash.checked_error)
+            .checked_error
+        else if (crash.failed_value) |value|
+            .{ .failed_value = .{ .module = self.loweringModuleKey(value.owner), .producer = value.producer } }
+        else if (crash.literal_rejection) |site|
+            .{ .literal_rejection = .{ .module = self.loweringModuleKey(site.owner), .checked_expr = site.checked_expr, .kind = site.kind } }
+        else
+            null,
+        .comptime_exhaustiveness_failed => |failed| .{ .exhaustiveness = .{
+            .module = self.loweringModuleKey(failed.owner),
+            .checked_site = failed.checked_site,
+        } },
+        .init_uninitialized,
+        .assign_ref,
+        .assign_literal,
+        .assign_call,
+        .assign_call_erased,
+        .assign_packed_erased_fn,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_record_update,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .boxy_tag_match,
+        .assign_call_dict,
+        .assign_low_level,
+        .assign_list,
+        .assign_struct,
+        .assign_tag,
+        .store_struct,
+        .store_tag,
+        .set_local,
+        .debug,
+        .expect,
+        .expect_err,
+        .runtime_error,
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        .switch_stmt,
+        .switch_initialized_payload,
+        .str_match,
+        .str_match_set,
+        .join,
+        .jump,
+        .ret,
+        => null,
+    };
+}
+
+/// Checked artifact key bytes of one lowering module.
+pub fn loweringModuleKey(self: *const Self, module: lir_defs.LoweringModuleId) [32]u8 {
+    if (self.body_coordinator) |coordinator| return coordinator.loweringModuleKey(module);
+    return self.lowering_module_keys.get(@backingInt(module));
 }
 
 /// Deep module content identity of one source file table entry. Use this

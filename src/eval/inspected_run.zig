@@ -128,7 +128,6 @@ pub const Result = struct {
 };
 
 const InterpreterError = Allocator.Error || error{
-    ComptimeExhaustiveness,
     Crash,
     DivisionByZero,
     ExpectErr,
@@ -322,7 +321,6 @@ fn runInterpreter(allocator: Allocator, program: Program, execution_host: Execut
         error.Crash => return crashResult(allocator, &runtime_env, interp.getCrashMessage()),
         error.RuntimeError => return crashResult(allocator, &runtime_env, interp.getRuntimeErrorMessage()),
         error.DivisionByZero => return crashResult(allocator, &runtime_env, "Division by zero"),
-        error.ComptimeExhaustiveness,
         error.ExpectErr,
         error.InvalidHostedFunctionSignature,
         error.OutOfMemory,

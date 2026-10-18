@@ -710,7 +710,6 @@ fn runLoweredWithHostEvents(
             runtime_env.noteCrash(interpreter.getCrashMessage());
             return runtime_env.snapshot(allocator);
         },
-        error.ComptimeExhaustiveness,
         error.DivisionByZero,
         error.ExpectErr,
         error.InvalidHostedFunctionSignature,
@@ -11556,7 +11555,6 @@ test "issue 10354 undefined identifier in expression does not panic monotype low
         error.BuiltinArtifactVersionMismatch,
         error.Canceled,
         error.CompilationFailed,
-        error.ComptimeExhaustiveness,
         error.ConnectionResetByPeer,
         error.CorruptArtifact,
         error.CorruptBuiltinArtifact,

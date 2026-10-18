@@ -294,6 +294,11 @@ pub const ExecutableMemory = struct {
         return self.memory.ptr;
     }
 
+    /// The generated code.
+    pub fn generatedCode(self: *const Self) []const u8 {
+        return self.memory[0..self.code_size];
+    }
+
     /// Get a pointer to the entry point (may differ from codePtr if entry_offset is non-zero)
     pub fn entryPtr(self: *const Self) [*]const u8 {
         return self.memory.ptr + self.entry_offset;
