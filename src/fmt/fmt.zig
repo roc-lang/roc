@@ -1485,10 +1485,8 @@ const Formatter = struct {
             Formatter.discardRegion(try formatter(fmt, entry.idx));
             fmt.curr_indent = item_indent;
             if (multiline) {
-                if (fmt.has_multiline_string) {
-                    try fmt.newlineIndent();
-                }
-                if (trailing_comma or i + 1 < entries.items.len) try fmt.push(',');
+                const last = i + 1 == entries.items.len;
+                if (trailing_comma or !last) try fmt.pushMultilineItemComma(fmt.has_multiline_string, last);
                 if (std.mem.findScalar(u8, fmt.ast.env.source[entry.before_separator.start..entry.before_separator.end], '#') != null) {
                     // The separator moves before these comments, so blank lines
                     // after them would not survive the next formatting.
@@ -1540,12 +1538,20 @@ const Formatter = struct {
         }
     }
 
+    /// Ends an item of a multiline collection. A `\\` line runs to the end of
+    /// the line, so a comma after one goes on the next line; the last item
+    /// needs no comma there, so it gets none.
+    fn pushMultilineItemComma(fmt: *Formatter, ends_with_multiline_string_line: bool, last: bool) error{WriteFailed}!void {
+        if (ends_with_multiline_string_line) {
+            if (last) return;
+            try fmt.newlineIndent();
+        }
+        try fmt.push(',');
+    }
+
     fn endCollectionItem(fmt: *Formatter, state: CollectionFormatting, last: bool) FormatAstError!void {
         if (state.multiline) {
-            if (fmt.has_multiline_string) {
-                try fmt.newlineIndent();
-            }
-            try fmt.push(',');
+            try fmt.pushMultilineItemComma(fmt.has_multiline_string, last);
         } else if (!last) {
             try fmt.pushAll(", ");
         }
@@ -2242,7 +2248,6 @@ const Formatter = struct {
                 try fmt.flushCommentsBeforeDiscard(if (qualifiers.len > 0) qualifiers[0] else suffix_path.final_token);
                 try fmt.newlineIndent();
                 try fmt.formatLiteralTypeSuffix(s.type_suffix);
-                fmt.has_multiline_string = true;
                 return fmt.finishExpr(f);
             },
             .single_quote => |s| {
@@ -2637,10 +2642,7 @@ const Formatter = struct {
                         const i = state.next;
                         const formatted_field = result;
                         if (state.multiline) {
-                            if (formatted_field.ends_with_multiline_string_line or fmt.has_multiline_string) {
-                                try fmt.newlineIndent();
-                            }
-                            try fmt.push(',');
+                            try fmt.pushMultilineItemComma(formatted_field.ends_with_multiline_string_line or fmt.has_multiline_string, i == fields.len - 1);
                             try fmt.flushItemComments(formatted_field.region.end);
                             if (i == fields.len - 1) {
                                 fmt.curr_indent -= 1;
@@ -3164,19 +3166,13 @@ const Formatter = struct {
                         const ends_with_multiline_string_line = formatted_field.ends_with_multiline_string_line or fmt.has_multiline_string;
 
                         if (i < fields.len - 1) {
-                            if (ends_with_multiline_string_line) {
-                                try fmt.newlineIndent();
-                            }
-                            try fmt.push(',');
+                            try fmt.pushMultilineItemComma(ends_with_multiline_string_line, false);
                             if (state.multiline) {
                                 try fmt.flushItemComments(formatted_field.region.end);
                                 try fmt.newlineIndent();
                             }
                         } else if (state.multiline) {
-                            if (ends_with_multiline_string_line) {
-                                try fmt.newlineIndent();
-                            }
-                            try fmt.push(',');
+                            try fmt.pushMultilineItemComma(ends_with_multiline_string_line, true);
                             try fmt.flushItemComments(formatted_field.region.end);
                             fmt.curr_indent -= 1;
                             try fmt.newlineIndent();
@@ -8306,7 +8302,7 @@ test "issue 11926: multiline string separator whitespace is emitted once" {
     const source = "r = {\n\tx: \\\\value\n\t,\n}\n";
     const result = try moduleFmtsStable(std.testing.allocator, source, false);
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings(source, result);
+    try std.testing.expectEqualStrings("r = {\n\tx: \\\\value\n}\n", result);
 }
 
 test "nested expressions, patterns, types, and statements format on a small native stack" {
@@ -9645,6 +9641,95 @@ test "multiline field access pipe target keeps its parentheses" {
     const result = try moduleFmtsStable(std.testing.allocator, "x = y |> (rec\n.func1)", false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("x = y\n\t|> (rec\n\t.func1)\n", result);
+}
+
+test "issue 12302: no lone comma after a multiline string as the last call argument" {
+    // Repro for https://github.com/roc-lang/roc/issues/12302
+    const input =
+        "main! = |_| {\n" ++
+        "\techo!(\n" ++
+        "\t\t\\\\Hello, World!\n" ++
+        "\t\t\\\\\n" ++
+        "\t)\n" ++
+        "\tOk({})\n" ++
+        "}\n";
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings(input, result);
+}
+
+test "issue 12302: last collection item ending on a multiline string line gets no comma" {
+    const Case = struct {
+        input: []const u8,
+        expected: []const u8,
+    };
+    const cases = [_]Case{
+        .{
+            .input = "x = [\n\t1,\n\t\\\\a\n]\n",
+            .expected = "x = [\n\t1,\n\t\\\\a\n]\n",
+        },
+        .{
+            .input = "x = f(\n\t\\\\a\n\t,\n\t1,\n)\n",
+            .expected = "x = f(\n\t\\\\a\n\t,\n\t1,\n)\n",
+        },
+        .{
+            .input = "x = f(\n\tg(\n\t\t\\\\a\n\t),\n)\n",
+            .expected = "x = f(\n\tg(\n\t\t\\\\a\n\t),\n)\n",
+        },
+        .{
+            .input = "x = A(\n\t\\\\a\n\t,\n)\n",
+            .expected = "x = A(\n\t\\\\a\n)\n",
+        },
+        .{
+            .input = "x = (1,\n\t\\\\a\n)\n",
+            .expected = "x = (\n\t1,\n\t\\\\a\n)\n",
+        },
+        .{
+            .input = "x = (\n\t\\\\a\n\t,\n)\n",
+            .expected = "x = (\n\t\\\\a\n)\n",
+        },
+        .{
+            .input = "x = { a: 1, b:\n\t\\\\a\n}\n",
+            .expected = "x = {\n\ta: 1,\n\tb: \\\\a\n}\n",
+        },
+        .{
+            .input = "x = { ..r, a:\n\t\\\\a\n}\n",
+            .expected = "x = {\n\t..r,\n\ta: \\\\a\n}\n",
+        },
+        .{
+            .input = "x = f(\n\t\\\\a\n\t# c\n)\n",
+            .expected = "x = f(\n\t\\\\a\n\t# c\n)\n",
+        },
+    };
+
+    for (cases) |case| {
+        const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(case.expected, result);
+    }
+}
+
+test "issue 12302: code after a typed multiline string's suffix continues on the suffix line" {
+    const Case = struct {
+        input: []const u8,
+        expected: []const u8,
+    };
+    const cases = [_]Case{
+        .{
+            .input = "x = f(\n\t\\\\a\n\t.U8, 1,\n)\n",
+            .expected = "x = f(\n\t\\\\a\n\t.U8,\n\t1,\n)\n",
+        },
+        .{
+            .input = "x = f(\n\t\\\\a\n\t.U8,\n)\n",
+            .expected = "x = f(\n\t\\\\a\n\t.U8,\n)\n",
+        },
+    };
+
+    for (cases) |case| {
+        const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(case.expected, result);
+    }
 }
 
 test "if condition is parenthesized unless the then branch is a block" {
