@@ -35,10 +35,12 @@ const min_class_log2: Class = std.math.log2_int_ceil(usize, large_threshold);
 /// Largest cached class; bigger blocks are mapped and unmapped directly.
 const max_class_log2: Class = 30; // 1 GiB
 const class_count = max_class_log2 - min_class_log2 + 1;
-/// Bytes retained per class beyond which a freed block is unmapped, so the
-/// cache bounds peak memory at a few times the live set rather than growing
-/// with every block the compiler ever freed.
-const max_cached_bytes_per_class: usize = 128 * 1024 * 1024;
+/// Default bound on the bytes of freed blocks kept for reuse, across every
+/// class together. Kept blocks stay resident, so this is memory the process
+/// holds without using it; a block freed past the bound is unmapped instead.
+/// One total bound keeps that idle memory small however many classes the
+/// compiler's allocation pattern touches.
+pub const default_max_cached_bytes: usize = 256 * 1024 * 1024;
 const huge_page_threshold: usize = 2 * 1024 * 1024;
 
 const FreeBlock = struct {
@@ -48,7 +50,6 @@ const FreeBlock = struct {
 const ClassCache = struct {
     mutex: std.atomic.Mutex = .unlocked,
     head: ?*FreeBlock = null,
-    count: usize = 0,
 
     /// Critical sections here are a few instructions, so spinning is cheaper
     /// than a blocking lock, and it keeps the allocator free of `std.Io`.
@@ -63,6 +64,10 @@ const ClassCache = struct {
 
 backing: Allocator,
 classes: [class_count]ClassCache = @splat(.{}),
+/// Bound on `cached_bytes`.
+max_cached_bytes: usize = default_max_cached_bytes,
+/// Bytes of freed blocks currently kept in `classes`.
+cached_bytes: std.atomic.Value(usize) = .init(0),
 
 /// A wrapper that sends small and over-aligned requests to `backing`.
 pub fn init(backing: Allocator) Self {
@@ -120,8 +125,8 @@ fn alloc(ctx: *anyopaque, len: usize, alignment: Alignment, ret_addr: usize) ?[*
     cache.lock();
     if (cache.head) |block| {
         cache.head = block.next;
-        cache.count -= 1;
         cache.unlock();
+        _ = self.cached_bytes.fetchSub(classCapacity(class), .monotonic);
         return @ptrCast(block);
     }
     cache.unlock();
@@ -160,9 +165,9 @@ fn remap(ctx: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, re
     const cached = cache.head;
     if (cached) |block| {
         cache.head = block.next;
-        cache.count -= 1;
     }
     cache.unlock();
+    if (cached != null) _ = self.cached_bytes.fetchSub(classCapacity(new_class), .monotonic);
     if (cached) |block| {
         const dst: [*]u8 = @ptrCast(block);
         @memcpy(dst[0..@min(memory.len, new_len)], memory.ptr[0..@min(memory.len, new_len)]);
@@ -183,15 +188,17 @@ fn free(ctx: *anyopaque, memory: []u8, alignment: Alignment, ret_addr: usize) vo
     const class = classOf(memory.len);
     if (class > max_class_log2) return unmapBlock(memory.ptr, memory.len);
     const cache = &self.classes[class - min_class_log2];
-    cache.lock();
-    if ((cache.count + 1) * classCapacity(class) > max_cached_bytes_per_class) {
-        cache.unlock();
-        return unmapBlock(memory.ptr, classCapacity(class));
+    // Count the block before keeping it, so concurrent frees never keep
+    // more than the bound between them.
+    const capacity = classCapacity(class);
+    if (self.cached_bytes.fetchAdd(capacity, .monotonic) + capacity > self.max_cached_bytes) {
+        _ = self.cached_bytes.fetchSub(capacity, .monotonic);
+        return unmapBlock(memory.ptr, capacity);
     }
+    cache.lock();
     const block: *FreeBlock = @ptrCast(@alignCast(memory.ptr));
     block.* = .{ .next = cache.head };
     cache.head = block;
-    cache.count += 1;
     cache.unlock();
 }
 
@@ -243,4 +250,23 @@ test "small requests pass through to the backing allocator" {
     a.free(grown);
     const back = try a.alloc(u8, 100);
     a.free(back);
+}
+
+test "freed blocks are kept only up to the total bound" {
+    var wrapper = Self.init(std.testing.allocator);
+    const one_block = classCapacity(min_class_log2);
+    wrapper.max_cached_bytes = one_block;
+    const a = wrapper.allocator();
+    const first = try a.alloc(u8, large_threshold);
+    const second = try a.alloc(u8, large_threshold);
+    const first_ptr = first.ptr;
+    a.free(first);
+    try std.testing.expectEqual(one_block, wrapper.cached_bytes.load(.monotonic));
+    // The bound is full, so this block is unmapped rather than kept.
+    a.free(second);
+    try std.testing.expectEqual(one_block, wrapper.cached_bytes.load(.monotonic));
+    const reused = try a.alloc(u8, large_threshold);
+    defer a.free(reused);
+    try std.testing.expectEqual(first_ptr, reused.ptr);
+    try std.testing.expectEqual(@as(usize, 0), wrapper.cached_bytes.load(.monotonic));
 }
