@@ -5621,12 +5621,13 @@ pub const SharedMemoryResult = struct {
 };
 
 fn renderSummaryHeaderLine(
+    gpa: Allocator,
     writer: anytype,
     error_count: usize,
     warning_count: usize,
     path: []const u8,
     config: reporting.ReportingConfig,
-) error{WriteFailed}!void {
+) (Allocator.Error || error{WriteFailed})!void {
     const palette = reporting.ColorUtils.getPaletteForConfig(config);
 
     const error_suffix = if (error_count == 1) "" else "s";
@@ -5641,8 +5642,9 @@ fn renderSummaryHeaderLine(
     const total_w = @min(config.getMaxLineWidth(), 120);
     const prefix_w = 3 + err_str.len + 5 + warn_str.len + 1;
 
-    const sanitised_path = reporting.sanitisePathForSnapshots(path);
-    const loc_w = if (sanitised_path.len > 0) 1 + reporting.source_region.displayWidth(sanitised_path) else 0;
+    const display_path = try reporting.displayPath(gpa, path, config.source_path_base);
+    defer gpa.free(display_path);
+    const loc_w = if (display_path.len > 0) 1 + reporting.source_region.displayWidth(display_path) else 0;
 
     const dashes = @max(total_w -| prefix_w -| loc_w, 1);
 
@@ -5657,10 +5659,10 @@ fn renderSummaryHeaderLine(
     try writer.writeAll(palette.secondary);
     try writer.writeByte(' ');
     try writer.splatBytesAll("─", dashes);
-    if (sanitised_path.len > 0) {
+    if (display_path.len > 0) {
         try writer.writeByte(' ');
         try writer.writeAll(palette.primary);
-        try base.bidi.writeVisible(writer, sanitised_path);
+        try base.bidi.writeVisible(writer, display_path);
     }
     try writer.writeAll(palette.reset);
     try writer.writeAll("\n\n");
@@ -5700,7 +5702,7 @@ test "diagnostic summary header has exact colors and bounded width" {
     var plain_config = reporting.ReportingConfig.initColorTerminal();
     plain_config.color_preference = .never;
     plain_config.max_line_width = 80;
-    try renderSummaryHeaderLine(&output.writer, 1, 1, "example.roc", plain_config);
+    try renderSummaryHeaderLine(std.testing.allocator, &output.writer, 1, 1, "example.roc", plain_config);
     try std.testing.expectEqualStrings(
         "── 1 error and 1 warning " ++ rule ++ " example.roc\n\n",
         output.written(),
@@ -5709,7 +5711,7 @@ test "diagnostic summary header has exact colors and bounded width" {
     output.clearRetainingCapacity();
     var color_config = reporting.ReportingConfig.initColorTerminal();
     color_config.max_line_width = 80;
-    try renderSummaryHeaderLine(&output.writer, 1, 1, "example.roc", color_config);
+    try renderSummaryHeaderLine(std.testing.allocator, &output.writer, 1, 1, "example.roc", color_config);
     try std.testing.expectEqualStrings(
         ansi_term.bright_black ++ "── " ++
             ansi_term.red ++ "1 error" ++ ansi_term.reset ++ " and " ++
@@ -5721,7 +5723,7 @@ test "diagnostic summary header has exact colors and bounded width" {
     inline for (.{ .{ 55, 55 }, .{ 200, 120 } }) |case| {
         output.clearRetainingCapacity();
         plain_config.max_line_width = case[0];
-        try renderSummaryHeaderLine(&output.writer, 1, 1, "example.roc", plain_config);
+        try renderSummaryHeaderLine(std.testing.allocator, &output.writer, 1, 1, "example.roc", plain_config);
         const first_newline = std.mem.findScalar(u8, output.written(), '\n') orelse unreachable;
         try std.testing.expectEqual(@as(usize, case[1]), reporting.source_region.displayWidth(output.written()[0..first_newline]));
     }
@@ -5784,7 +5786,7 @@ fn renderDrainedBuildEnvReports(ctx: *CliCtx, build_env: *BuildEnv, display_path
 
     if (counts.errors > 0 or counts.warnings > 0) {
         const stderr = ctx.io.stderr();
-        renderSummaryHeaderLine(stderr, counts.errors, counts.warnings, display_path, report_config) catch {};
+        renderSummaryHeaderLine(ctx.arena, stderr, counts.errors, counts.warnings, display_path, report_config) catch {};
     }
 
     ctx.io.flush();
@@ -6625,15 +6627,14 @@ fn discoverRunDependencies(
         _ = try renderDrainedBuildEnvReports(ctx, build_env, display_path);
         return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
-            error.FileNotFound => ctx.fail(.{ .file_not_found = .{
-                .path = roc_file_path,
-                .context = .source_file,
-            } }),
+            // Discovery has already reported each of these, a missing file
+            // included, so the drained reports above are the whole story.
             error.AccessDenied,
             error.BuiltinLowLevelAnnotationMustBeFunction,
             error.DownloadFailed,
             error.ExpectedPlatformString,
             error.FileError,
+            error.FileNotFound,
             error.Internal,
             error.InvalidDependency,
             error.InvalidNullByteInPath,
@@ -6709,7 +6710,7 @@ fn lowerDiscoveredLir(
         if (reporter) |r| r.fail();
         return error.TypeCheckingFailed;
     }
-    if (reporter) |r| finishFrontEndPhase(r, build_env.getTimingInfo());
+    if (reporter) |r| try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), r, build_env.getTimingInfo());
 
     const root_artifact = build_env.executableRootCheckedArtifact();
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
@@ -7742,7 +7743,7 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
     // No need to free when using arena allocator
 
     // Print results
-    try stdout.print("Created: {s}\n", .{display_path});
+    try stdout.print("Created: {s}\n", .{try ctx.displayPath(display_path)});
     try stdout.print("Compressed size: {} bytes\n", .{compressed_size});
     try stdout.print("Uncompressed size: {} bytes\n", .{uncompressed_size});
     try stdout.print("Compression ratio: {d:.2}:1\n", .{@as(f64, @floatFromInt(uncompressed_size)) / @as(f64, @floatFromInt(compressed_size))});
@@ -10422,7 +10423,7 @@ fn typeCheckBuildCommand(
         try renderDiagnostics(ctx, build_env);
         return err;
     };
-    finishFrontEndPhase(reporter, build_env.getTimingInfo());
+    try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), reporter, build_env.getTimingInfo());
 
     const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
     const total_warning_count = diag.warnings + try optimizedDbgWarningsForBuild(ctx, build_env, args.opt);
@@ -10523,10 +10524,9 @@ fn buildCommandStaticData(
 
 /// Reports that `--keep-temp` kept the temporary directory `dir`.
 fn reportKeptTempDir(ctx: *CliCtx, dir: []const u8) Allocator.Error!void {
-    const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-    const config = reporting.ReportingConfig.initColorTerminal();
-    const headline = try std.fmt.allocPrint(ctx.arena, "Kept temporary directory: {s}.", .{dir});
-    var report = try reporting.Report.init(ctx.arena, "Kept Temporary Directory", headline, .warning);
+    const config = ctx.reportConfig(.stderr);
+    const palette = reporting.ColorUtils.getPaletteForConfig(config);
+    var report = try reporting.Report.initWithPath(ctx.arena, "Kept Temporary Directory", "Kept temporary directory: ", dir, ".", .warning);
     defer report.deinit();
     reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
 }
@@ -14971,7 +14971,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         return err;
     };
     const diag = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
-    finishFrontEndPhase(&reporter, build_env.getTimingInfo());
+    try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), &reporter, build_env.getTimingInfo());
     reporter.begin("Test Planning");
     for (test_plan.modules) |*planned| {
         if (try loadCachedCliTestResults(
@@ -15900,7 +15900,9 @@ fn renderCliTestResultEntry(
             const region_info = source_env.calcRegionInfo(entry.result.region);
             const green = if (report_config.shouldUseColors()) ansi_term.green else "";
             const reset = if (report_config.shouldUseColors()) ansi_term.reset else "";
-            try stdout_body.print("{s}PASS{s}: {f}:{}\n", .{ green, reset, base.bidi.Display{ .bytes = source_path }, region_info.start_line_idx + 1 });
+            const display_path = try reporting.displayPath(allocator, source_path, report_config.source_path_base);
+            defer allocator.free(display_path);
+            try stdout_body.print("{s}PASS{s}: {f}:{}\n", .{ green, reset, base.bidi.Display{ .bytes = display_path }, region_info.start_line_idx + 1 });
         },
         .failed => {
             const region_info = source_env.calcRegionInfo(entry.result.region);
@@ -16362,7 +16364,7 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
     // compiler is a newer nightly than the one it names.
     var builtin_facts = fmt.BuiltinFacts{ .allocator = ctx.gpa };
     defer builtin_facts.deinit();
-    const format_options: fmt.Options = .{ .compiler_version = @import("compiler_version").compiler_version, .builtin_facts = &builtin_facts };
+    const format_options: fmt.Options = .{ .compiler_version = @import("compiler_version").compiler_version, .builtin_facts = &builtin_facts, .working_dir = ctx.reportConfig(.stderr).source_path_base };
     if (args.stdin) {
         fmt.formatStdin(ctx.gpa, format_options, ctx.io.std_io, std.Io.File.stdin(), std.Io.File.stdout(), stderr) catch |err| return err;
         return;
@@ -16395,7 +16397,7 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
         if (unformatted_files.items.len > 0) {
             try stdout.print("The following file(s) failed `roc fmt --check`:", .{});
             for (unformatted_files.items) |file_name| {
-                try stdout.print("    {f}\n", .{base.bidi.Display{ .bytes = file_name }});
+                try stdout.print("    {f}\n", .{base.bidi.Display{ .bytes = try ctx.displayPath(file_name) }});
             }
             try stdout.print("You can fix this with `roc fmt FILENAME.roc`.", .{});
             had_errors = true;
@@ -17195,12 +17197,18 @@ test "timings display every Monotype graph counter" {
 /// End the front-end phase. Whole-program finalization runs after every
 /// module is checked, inside the same call, so its wall time is reported as
 /// its own phase and excluded from Type Checking.
-fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
+/// Packages without a shorthand are labeled by their path, which is shown
+/// relative to `config`'s working directory.
+fn finishFrontEndPhase(gpa: Allocator, config: reporting.ReportingConfig, reporter: *progress.Reporter, timing: anytype) Allocator.Error!void {
     reporter.endWithBreakdownExcluding(&frontEndBreakdown(timing), timing.program_finalization_ns);
     const slowest = timing.slowest_type_checks.slice();
+    var names = std.heap.ArenaAllocator.init(gpa);
+    defer names.deinit();
     var slowest_rows: [compile.package.SlowestTypeChecks.capacity]progress.SubTiming = undefined;
     for (slowest, slowest_rows[0..slowest.len]) |*module, *row| {
-        row.* = .{ .name = module.name(), .ns = module.ns };
+        const package = try reporting.displayPath(names.allocator(), module.packageLabel(), config.source_path_base);
+        const name = try std.fmt.allocPrint(names.allocator(), "{s}.{s}", .{ package, module.moduleName() });
+        row.* = .{ .name = name, .ns = module.ns };
     }
     reporter.recordRankedTimings("Slowest Module Type Inference", slowest_rows[0..slowest.len]);
     const compile_time = timing.compile_time_evaluation;
@@ -17301,7 +17309,7 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
         reporter.begin("Type Checking");
         var slowest_type_checks: compile.package.SlowestTypeChecks = .{};
         slowest_type_checks.offer("pdf", "KernelFont", 7 * std.time.ns_per_ms);
-        finishFrontEndPhase(&reporter, .{
+        try finishFrontEndPhase(std.testing.allocator, reporting.ReportingConfig.initForTesting(), &reporter, .{
             .tokenize_parse_ns = @as(u64, 0),
             .canonicalize_ns = @as(u64, 0),
             .canonicalize_diagnostics_ns = @as(u64, 0),
@@ -17355,7 +17363,7 @@ fn printBuildSuccess(
     elapsed_ns: u64,
     verbose: bool,
     cache_stats: BuildEnv.BuildStats,
-) std.Io.Writer.Error!void {
+) (Allocator.Error || std.Io.Writer.Error)!void {
     const cache_percent = if (cache_stats.modules_total > 0)
         @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
     else
@@ -17375,7 +17383,7 @@ fn printBuildSuccess(
         error_color, error_count, reset, errors_word, warning_color, warning_count, reset, warnings_word,
     });
     try progress.writeDuration(stdout, elapsed_ns);
-    try stdout.print(" while successfully building:\n\n    {f}\n", .{base.bidi.Display{ .bytes = final_output_path }});
+    try stdout.print(" while successfully building:\n\n    {f}\n", .{base.bidi.Display{ .bytes = try ctx.displayPath(final_output_path) }});
 
     if (verbose) {
         try stdout.print("\n    Modules: {} total, {} cached, {} built\n", .{
@@ -17868,7 +17876,7 @@ fn finishRocCheck(
     ctx.io.flush();
 
     if (check_result.error_count > 0 or check_result.warning_count > 0) {
-        renderSummaryHeaderLine(stderr, check_result.error_count, check_result.warning_count, args.path, stderr_report_config) catch {};
+        renderSummaryHeaderLine(ctx.arena, stderr, check_result.error_count, check_result.warning_count, args.path, stderr_report_config) catch {};
 
         if (args.verbose) {
             printVerboseStats(stderr, check_result);
@@ -17885,7 +17893,8 @@ fn finishRocCheck(
         writeNoErrors(stdout, ctx.usesColor(.stdout)) catch {};
         stdout.writeAll(" found in ") catch {};
         formatElapsedTimeMs(stdout, elapsed) catch {};
-        stdout.print(" for {f}\n", .{base.bidi.Display{ .bytes = args.path }}) catch {};
+        const display_path = try ctx.displayPath(args.path);
+        stdout.print(" for {f}\n", .{base.bidi.Display{ .bytes = display_path }}) catch {};
 
         if (args.verbose) {
             printVerboseStats(stdout, check_result);
@@ -18075,7 +18084,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             if (builtin.target.cpu.arch == .wasm32) {
                 reporter.end();
             } else {
-                finishFrontEndPhase(&reporter, check_result.timing);
+                try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), &reporter, check_result.timing);
             }
             reporter.finish();
 
@@ -18108,7 +18117,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
         if (builtin.target.cpu.arch == .wasm32) {
             reporter.end();
         } else {
-            finishFrontEndPhase(&reporter, check_result.timing);
+            try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), &reporter, check_result.timing);
         }
         reporter.finish();
 
@@ -18145,7 +18154,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
     if (builtin.target.cpu.arch == .wasm32) {
         reporter.end();
     } else {
-        finishFrontEndPhase(&reporter, check_result.timing);
+        try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), &reporter, check_result.timing);
     }
     reporter.finish();
 
@@ -18448,7 +18457,7 @@ fn rocBump(ctx: *CliCtx, args_in: cli_args.BumpArgs) CliMainError!void {
     var result = try bump.diff.diff(ctx.gpa, &old_api, &new_api);
     defer result.deinit();
 
-    stdout.print("Comparing {s} (old, {f}) with {s} (new)...\n", .{ args.old, old_version_value, args.path }) catch {};
+    stdout.print("Comparing {s} (old, {f}) with {s} (new)...\n", .{ try ctx.displayPath(args.old), old_version_value, try ctx.displayPath(args.path) }) catch {};
 
     if (result.changes.len == 0) {
         stdout.print("\nNo API changes detected.\n", .{}) catch {};
@@ -18625,7 +18634,7 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
             .message = try std.fmt.allocPrint(
                 ctx.arena,
                 "roc bump compares package APIs, but the {s} module ({s}) has neither a package nor a platform header.",
-                .{ side, root_pkg.root_file },
+                .{ side, try ctx.displayPath(root_pkg.root_file) },
             ),
         } });
     }
@@ -19043,7 +19052,7 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
     }
 
     if (check_result.error_count > 0 or check_result.warning_count > 0) {
-        renderSummaryHeaderLine(stderr, check_result.error_count, check_result.warning_count, args.path, report_config) catch {};
+        renderSummaryHeaderLine(ctx.arena, stderr, check_result.error_count, check_result.warning_count, args.path, report_config) catch {};
 
         if (check_result.error_count > 0) {
             return error.DocsFailed;
@@ -19058,7 +19067,7 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
     // Generate documentation for all packages and modules
     try generateDocs(ctx, &result_with_env.build_env, args.path, args.output, args.with_lang_ref);
 
-    stdout.print("\nGenerated docs for {s}\n", .{args.path}) catch {};
+    stdout.print("\nGenerated docs for {s}\n", .{try ctx.displayPath(args.path)}) catch {};
 
     // Start HTTP server if --serve flag is enabled
     if (args.serve) {
@@ -19620,7 +19629,7 @@ test "bidi controls in diagnostic summary paths remain visible" {
     var output = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer output.deinit();
     for (base.bidi.controls) |control| {
-        try renderSummaryHeaderLine(&output.writer, 1, 0, control.utf8, reporting.ReportingConfig.initForTesting());
+        try renderSummaryHeaderLine(std.testing.allocator, &output.writer, 1, 0, control.utf8, reporting.ReportingConfig.initForTesting());
         try std.testing.expect(std.mem.find(u8, output.written(), control.visible) != null);
     }
     var iter = base.bidi.Iterator{ .bytes = output.written() };

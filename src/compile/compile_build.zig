@@ -1459,9 +1459,7 @@ pub const BuildEnv = struct {
         const source_read = self.readSourceFile(file_abs) catch |err| {
             const report = blk: switch (err) {
                 error.FileNotFound => {
-                    const headline = try std.fmt.allocPrint(self.gpa, "I could not find the file {s}.", .{file_abs});
-                    defer self.gpa.free(headline);
-                    var report = try Report.init(self.gpa, "File Not Found", headline, .fatal);
+                    var report = try Report.initWithPath(self.gpa, "File Not Found", "I could not find the file ", file_abs, ".", .fatal);
                     try report.document.addText("Make sure the file exists and you do not have any typos in its name or path.");
                     break :blk report;
                 },
@@ -1471,9 +1469,7 @@ pub const BuildEnv = struct {
                 error.OutOfMemory,
                 error.StreamTooLong,
                 => {
-                    const headline = try std.fmt.allocPrint(self.gpa, "I could not read the file {s}.", .{file_abs});
-                    defer self.gpa.free(headline);
-                    var other_report = try Report.init(self.gpa, "Could Not Read File", headline, .fatal);
+                    var other_report = try Report.initWithPath(self.gpa, "Could Not Read File", "I could not read the file ", file_abs, ".", .fatal);
                     try other_report.document.addText("I did get the following error: ");
                     try other_report.addErrorMessage(@errorName(err));
                     try other_report.document.addText("Make sure the file can be read.");
@@ -2048,7 +2044,7 @@ pub const BuildEnv = struct {
         );
         errdefer report.deinit();
         try report.document.addText("    ");
-        try report.document.addAnnotated(platform_spec, .path);
+        try report.document.addAnnotated(platform_spec, .inline_code);
         try report.document.addLineBreaks(2);
         try report.document.addText("Tip: Use a relative path like ");
         try report.document.addAnnotated("../path/to/platform", .emphasized);
