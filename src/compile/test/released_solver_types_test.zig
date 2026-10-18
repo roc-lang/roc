@@ -85,7 +85,10 @@ fn compileReleasingSolverTypes(
     };
 }
 
-fn countStagingFiles(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !usize {
+/// Errors of walking a directory tree.
+const WalkError = std.mem.Allocator.Error || @typeInfo(@typeInfo(@TypeOf(std.Io.Dir.Walker.next)).@"fn".return_type.?).error_union.error_set;
+
+fn countStagingFiles(gpa: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) WalkError!usize {
     var walker = try dir.walk(gpa);
     defer walker.deinit();
     var count: usize = 0;
