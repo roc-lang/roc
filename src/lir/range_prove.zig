@@ -484,12 +484,16 @@ test "range prove reads a static list of copies' stated item count as its length
             .args = try store.addLocalSpan(&.{list}),
             .next = set_last,
         } }, .test_fixture);
-        const body = try store.addCFStmt(.{ .assign_literal = .{
-            .target = list,
-            .value = .{ .static_data = @fromBackingInt(0) },
-            .list_len = list_len,
-            .next = measure,
-        } }, .test_fixture);
+        const body = try store.addCFStmt(.{
+            .assign_literal = .{
+                .target = list,
+                // The prover reads only the literal's stated length, never its
+                // static data.
+                .value = .{ .static_data = undefined },
+                .list_len = list_len,
+                .next = measure,
+            },
+        }, .test_fixture);
         const proc = try store.addProcSpec(.{
             .identity = LIR.ProcIdentity.forTest(0),
             .name = store.freshSyntheticSymbol(),
@@ -5033,7 +5037,7 @@ const Pass = struct {
         const known_len: ?u64 = switch (value) {
             .bytes_literal => |lit| lit.len,
             .static_data => list_len,
-            else => null,
+            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => null,
         };
         if (known_len) |len| {
             if (try self.unknownFor(self.localLayout(target))) |list_node| {
