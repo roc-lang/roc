@@ -433,6 +433,7 @@ const CustomCase = enum {
     boxed_closure_object_cache,
     spliced_procedure_debug_lines,
     linked_object_pack,
+    package_dev_packs,
     run_object_cache,
     tier2_object_cache,
     proc_identity_object_cache,
@@ -573,6 +574,7 @@ const forced_ice_skip: Skip = if (builtin.mode == .debug) .never else .{ .always
 /// honors the developer-diagnostic environment variables. Each case listed
 /// here sets one of them and checks what it changes or prints.
 const dev_diagnostics_cases = [_]CustomCase{
+    .package_dev_packs,
     .native_build_artifact_round_trip,
     .native_build_pack_objects,
     .native_build_pack_hits,
@@ -3036,6 +3038,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "object cache: editing an app module keeps package specializations at its own types cached unless the type changes", .timeout_ms = 600_000, .body = .{ .custom = .edited_nominal_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: editing an app lambda's body keeps the package specializations that receive it cached, calling the edited lambda", .timeout_ms = 600_000, .body = .{ .custom = .edited_lambda_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: an edited app is served higher-order specializations by their procedure identity", .timeout_ms = 600_000, .body = .{ .custom = .proc_identity_object_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12374: checking a URL package prepares reusable dev packs before the first app build", .timeout_ms = 600_000, .body = .{ .custom = .package_dev_packs } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: a dev build links a URL package's optimized object pack and behaves like the uncached build", .timeout_ms = 900_000, .body = .{ .custom = .linked_object_pack } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: roc run links URL package objects into its host executable and splices the app's dev packs", .timeout_ms = 900_000, .body = .{ .custom = .run_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: a dev build compiles its tier 2 entries with LLVM and an edited rebuild links them", .timeout_ms = 900_000, .body = .{ .custom = .tier2_object_cache } },
@@ -4967,6 +4970,7 @@ fn runCustomCase(
         .native_build_pack_store_thread_count_reproducible => customNativeBuildPackStoreThreadCountReproducible(io, allocator, &env, &timer, timeout_ms),
         .boxed_closure_object_cache => customBoxedClosureObjectCache(io, allocator, &env, &timer, timeout_ms),
         .spliced_procedure_debug_lines => customSplicedProcedureDebugLines(io, allocator, &env, &timer, timeout_ms),
+        .package_dev_packs => customPackageDevPacks(io, allocator, &env, &timer, timeout_ms),
         .linked_object_pack => customLinkedObjectPack(io, allocator, &env, &timer, timeout_ms),
         .run_object_cache => customRunObjectCache(io, allocator, &env, &timer, timeout_ms),
         .tier2_object_cache => customTier2ObjectCache(io, allocator, &env, &timer, timeout_ms),
@@ -8255,6 +8259,89 @@ fn seedLinkedObjectPackage(io: std.Io, allocator: Allocator, cache_root: []const
         const destination = try std.fs.path.join(allocator, &.{ package_dir, name });
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = destination, .data = bytes });
     }
+}
+
+/// Checking alone prepares the URL package's dev packs; an uncached check
+/// does not, and neither another check nor the first app build recompiles them.
+fn customPackageDevPacks(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const cache_root = std.fmt.allocPrint(allocator, "{s}/package_dev_pack_cache", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate cache root: {}", .{err});
+    seedLinkedObjectPackage(io, allocator, cache_root) catch |err|
+        return customInfraFailure(allocator, timer, "failed to seed the URL package: {}", .{err});
+    var trace_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone the environment: {}", .{err}),
+    };
+    defer trace_env.env_map.deinit();
+    for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+        trace_env.env_map.put(key, cache_root) catch |err|
+            return customInfraFailure(allocator, timer, "failed to set cache root: {}", .{err});
+    }
+    trace_env.env_map.put("ROC_PACK_TRACE", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable pack tracing: {}", .{err});
+    trace_env.env_map.put("ROC_BACKGROUND_OBJECTS", "off") catch |err|
+        return customInfraFailure(allocator, timer, "failed to disable background compilation: {}", .{err});
+    const roc_file = "test/cli/linked_object_pack/App.roc";
+    const exe = std.fmt.allocPrint(allocator, "{s}/prepared_package", .{env.dirs.work_dir}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+    const out_arg = outputArg(allocator, exe) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+    var prepared: PackStoreFiles = .{};
+    defer prepared.deinit(allocator);
+    const commands = [_][]const []const u8{
+        &.{ "check", "--no-cache" },
+        &.{"check"},
+        &.{"check"},
+        &.{ "build", "--opt=dev", out_arg },
+    };
+    for (commands, 0..) |args, index| {
+        const command_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a command");
+        const ran = runRocInEnv(io, allocator, &trace_env, args, roc_file, .relative, &.{}, null, command_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "command spawn error: {}", .{err});
+        if (!processSucceeded(ran.term) or std.mem.find(u8, ran.stderr, "panic") != null) {
+            return failureFromRun(allocator, timer, ran, "command did not succeed");
+        }
+        var files = PackStoreFiles.read(io, allocator, cache_root) catch |err|
+            return customInfraFailure(allocator, timer, "failed to read packs: {}", .{err});
+        defer files.deinit(allocator);
+        if (index == 0) {
+            if (files.paths.items.len != 0) return failureFromRun(allocator, timer, ran, "--no-cache check wrote an object pack");
+            continue;
+        }
+        if (index == 1) {
+            if (std.mem.find(u8, ran.stderr, "package dev pack Numeric") == null) {
+                return failureFromRun(allocator, timer, ran, "checking did not prepare the URL package's dev pack");
+            }
+            var package_packs: usize = 0;
+            for (files.paths.items) |path| {
+                if (std.mem.find(u8, path, "-dev") != null and std.mem.find(u8, path, std.fs.path.sep_str ++ "pkg" ++ std.fs.path.sep_str) != null) package_packs += 1;
+            }
+            if (package_packs == 0) return failureFromRun(allocator, timer, ran, "checking wrote no pkg dev packs");
+            prepared = files;
+            files = .{};
+            continue;
+        }
+        if (std.mem.find(u8, ran.stderr, "package dev pack ") != null or std.mem.find(u8, ran.stderr, "module pack Numeric") != null) {
+            return failureFromRun(allocator, timer, ran, "a later command recompiled the package's dev pack");
+        }
+        for (prepared.paths.items, prepared.contents.items) |path, bytes| {
+            const current = files.find(path) orelse
+                return failureFromRun(allocator, timer, ran, "a prepared dev pack disappeared");
+            if (!std.mem.eql(u8, bytes, current)) return failureFromRun(allocator, timer, ran, "a prepared dev pack changed");
+        }
+    }
+    return runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
+        .args = &.{},
+        .stdout_exact = "sum of squares to 10: 385\n506\n",
+    });
 }
 
 /// A dev build whose store lacks a URL package's optimized object pack

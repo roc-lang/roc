@@ -207,6 +207,52 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
     try std.testing.expect(malformed.spliceSource().find(malformed.spliceSource().context, key) == null);
 }
 
+test "object cache accepts new offers after indexing without moving served artifacts" {
+    const allocator = std.testing.allocator;
+    var packs = LoadedPacks.init(allocator);
+    defer packs.deinit();
+    try packs.indexPacks();
+    var first: ?backend.dev.LocatedArtifact = null;
+    for (0..32) |index| {
+        const identity = lir.ProcIdentity.forTest(@intCast(index));
+        const key = @as([32]u8, @splat(@intCast(index)));
+        const set = backend.dev.ProcArtifact.Set{
+            .arena = @import("base").SingleThreadArena.init(allocator),
+            .artifacts = &.{.{
+                .kind = .{ .proc = identity },
+                .code = "\xc3",
+                .entry = 0,
+                .frame = null,
+                .refs = &.{},
+                .relocations = &.{},
+                .data = &.{},
+            }},
+        };
+        const bytes = try PackFile.write(allocator, &set, &.{.{
+            .key = key,
+            .artifact = 0,
+            .rc_borrowed_params = 0,
+            .rc_ret_borrowed = false,
+            .rc_ret_lenders = 0,
+            .rc_read_only_params = 0,
+            .rc_ret_unique = false,
+            .rc_ret_unique_fields = 0,
+            .rc_ret_conditions = &.{},
+        }});
+        defer allocator.free(bytes);
+        try packs.offerPack(bytes);
+        const hit = packs.specCacheLookup().lookup(key, false) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqualSlices(u8, &identity.bytes, &hit.identity);
+        const splice = packs.spliceSource();
+        const located = splice.find(splice.context, key) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(identity, located.set.artifacts[located.index].kind.proc);
+        if (first) |served| {
+            try std.testing.expectEqual(&packs.packs.items[0].set, served.set);
+            try std.testing.expectEqual(lir.ProcIdentity.forTest(0), served.set.artifacts[served.index].kind.proc);
+        } else first = located;
+    }
+}
+
 test "object cache write failures preserve quiet behavior and report verbose causes" {
     const Capture = struct {
         stderr: std.ArrayList(u8) = .empty,
@@ -365,7 +411,7 @@ pub const LoadedPacks = struct {
     };
 
     allocator: Allocator,
-    packs: std.ArrayList(PackFile.Pack),
+    packs: std.ArrayList(*PackFile.Pack),
     specs: std.AutoHashMap([32]u8, Common.SpecCacheHit),
     /// The artifact of each entry `specs` holds, by the same key.
     artifacts: std.AutoHashMap([32]u8, backend.dev.LocatedArtifact),
@@ -514,15 +560,30 @@ pub const LoadedPacks = struct {
     }
 
     fn appendPack(self: *LoadedPacks, bytes: []const u8) LoadError!void {
-        var pack = try PackFile.read(self.allocator, bytes);
+        const pack = try self.allocator.create(PackFile.Pack);
+        errdefer self.allocator.destroy(pack);
+        pack.* = try PackFile.read(self.allocator, bytes);
         errdefer pack.deinit();
-        // After this succeeds, only LoadedPacks owns the decoded arena,
-        // including errors in subsequent files or indexing.
         try self.packs.append(self.allocator, pack);
     }
 
-    /// Index every loaded pack. The artifact index points into the packs
-    /// list, which must not grow afterwards.
+    /// Offer a pack prepared after checking to the same command's runtime
+    /// lowering. Decoded packs keep stable addresses, including artifacts
+    /// already handed to the compile-time evaluator.
+    pub fn offerPack(self: *LoadedPacks, bytes: []const u8) LoadError!void {
+        self.ensureLoaded();
+        if (self.state == .unavailable) return self.failure.?;
+        self.appendPack(bytes) catch |err| {
+            self.unavailable(err);
+            return err;
+        };
+        if (self.state == .ready) self.indexPack(self.packs.items[self.packs.items.len - 1]) catch |err| {
+            self.unavailable(err);
+            return err;
+        };
+    }
+
+    /// Index every loaded pack. Each decoded pack owns its stable storage.
     pub fn indexPacks(self: *LoadedPacks) LoadError!void {
         if (self.state == .unavailable) return self.failure.?;
         std.debug.assert(self.state == .pending);
@@ -534,31 +595,33 @@ pub const LoadedPacks = struct {
     }
 
     fn indexPacksUnrecorded(self: *LoadedPacks) LoadError!void {
-        for (self.packs.items) |*pack| {
-            for (pack.specs) |spec| {
-                const root = pack.set.artifacts[spec.artifact];
-                const identity = switch (root.kind) {
-                    .proc => |identity| identity,
-                    .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => return error.MalformedPack,
-                };
-                if (self.specs.contains(spec.key)) continue;
-                try self.artifacts.ensureUnusedCapacity(1);
-                try self.specs.ensureUnusedCapacity(1);
-                self.artifacts.putAssumeCapacityNoClobber(spec.key, .{ .set = &pack.set, .index = spec.artifact });
-                self.specs.putAssumeCapacityNoClobber(spec.key, .{
-                    .identity = identity.bytes,
-                    .comptime_root_reads = spec.comptime_root_reads,
-                    .rc_borrowed_params = spec.rc_borrowed_params,
-                    .rc_ret_borrowed = spec.rc_ret_borrowed,
-                    .rc_ret_lenders = spec.rc_ret_lenders,
-                    .rc_read_only_params = spec.rc_read_only_params,
-                    .rc_ret_unique = spec.rc_ret_unique,
-                    .rc_ret_unique_fields = spec.rc_ret_unique_fields,
-                    .rc_ret_conditions = spec.rc_ret_conditions,
-                });
-            }
-        }
+        for (self.packs.items) |pack| try self.indexPack(pack);
         self.state = .ready;
+    }
+
+    fn indexPack(self: *LoadedPacks, pack: *const PackFile.Pack) LoadError!void {
+        for (pack.specs) |spec| {
+            const root = pack.set.artifacts[spec.artifact];
+            const identity = switch (root.kind) {
+                .proc => |identity| identity,
+                .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => return error.MalformedPack,
+            };
+            if (self.specs.contains(spec.key)) continue;
+            try self.artifacts.ensureUnusedCapacity(1);
+            try self.specs.ensureUnusedCapacity(1);
+            self.artifacts.putAssumeCapacityNoClobber(spec.key, .{ .set = &pack.set, .index = spec.artifact });
+            self.specs.putAssumeCapacityNoClobber(spec.key, .{
+                .identity = identity.bytes,
+                .comptime_root_reads = spec.comptime_root_reads,
+                .rc_borrowed_params = spec.rc_borrowed_params,
+                .rc_ret_borrowed = spec.rc_ret_borrowed,
+                .rc_ret_lenders = spec.rc_ret_lenders,
+                .rc_read_only_params = spec.rc_read_only_params,
+                .rc_ret_unique = spec.rc_ret_unique,
+                .rc_ret_unique_fields = spec.rc_ret_unique_fields,
+                .rc_ret_conditions = spec.rc_ret_conditions,
+            });
+        }
     }
 
     /// Index every loaded object pack.
@@ -674,7 +737,10 @@ pub const LoadedPacks = struct {
         self.object_packs_used.deinit(self.allocator);
         self.artifacts.deinit();
         self.specs.deinit();
-        for (self.packs.items) |*pack| pack.deinit();
+        for (self.packs.items) |pack| {
+            pack.deinit();
+            self.allocator.destroy(pack);
+        }
         self.packs.deinit(self.allocator);
     }
 

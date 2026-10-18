@@ -634,6 +634,20 @@ dev code never needs an object it did not ask for. A build whose store lacks
 a URL-package module's object pack builds it once the module is checked and
 before the program lowers, so that build already links it.
 
+After version resolution selects the final package versions and checking
+publishes their constants, caching check, run, and build commands prepare the URL
+packages' host dev packs under `<host>-dev/pkg/`. This includes `roc check`,
+so a package checked when downloaded already has its dev packs when its first
+app build starts. Preparation compiles each module's closed exports with the
+ordinary dev pack policy; it neither writes local-module packs nor starts
+background optimization. Existing packs are left alone, and missing or evicted
+packs are rebuilt from the checked modules. A command with errors or
+`--no-cache` prepares none.
+New packs are also offered directly to the command's cache providers, so
+runtime lowering can use them even if compile-time evaluation already loaded
+the store. Decoded packs retain stable addresses as new offers arrive; artifacts
+already handed to evaluation remain valid.
+
 `roc run --opt=dev` links every object pack of its URL packages into the
 cached host program, beside a table of their C-ABI entries that the
 generated platform shim defines (`roc_shim_package_names`), and its image,
