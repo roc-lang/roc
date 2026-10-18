@@ -60,6 +60,24 @@ pub const SpliceSource = backend.dev.SpliceSource;
 pub const CompileTimeObjectCache = struct {
     spec_cache: lir.CheckedPipeline.SpecCacheLookup,
     splice_source: SpliceSource,
+    /// Receives each level's program once the level has run, while its code
+    /// still exists, so a cache that publishes the evaluation's code can take
+    /// that level's share before the code is released.
+    stage_sink: ?StageSink = null,
+};
+
+/// Takes one evaluation level's program, with the procedure fragments the
+/// evaluator compiled for it (none when the level ran in the interpreter)
+/// and the specializations' compile-time reads. Everything it keeps must be
+/// its own: the level's code is released when it returns.
+pub const StageSink = struct {
+    context: *anyopaque,
+    accept: *const fn (
+        context: *anyopaque,
+        stage: *const lir.CheckedPipeline.LoweredProgram,
+        compiled: ?*const NativeProcCompiler.Retained,
+        comptime_reads: *const lir.CheckedPipeline.SpecComptimeReads,
+    ) Allocator.Error!void,
 };
 /// Runtime options for compile-time finalization.
 pub const Options = struct {
@@ -452,10 +470,6 @@ pub const ProgramSession = struct {
         if (lowered.lir_result.root_procs.items.len != self.runtime_positions.len)
             finalizationInvariant("runtime consumer lowering changed the requested root count");
         try lir.CheckedPipeline.adoptReachableCompletedComptimeValues(&lowered);
-        // The stages' procedures have no reader left: the runtime program has
-        // its own, and only their completed values and representation
-        // metadata are still consulted.
-        source.releaseCode();
         return lowered;
     }
 };
@@ -512,7 +526,9 @@ pub const CompletedStages = struct {
         self.* = undefined;
     }
 
-    /// The stages' programs, in evaluation order.
+    /// The stages' programs, in evaluation order. Each one's code was
+    /// released when its level finished; its completed values and their
+    /// representation metadata remain.
     pub fn programs(self: *const CompletedStages) []const *const lir.CheckedPipeline.LoweredProgram {
         return self.stages.items;
     }
@@ -521,12 +537,6 @@ pub const CompletedStages = struct {
     /// Solved program has no later consumer to hand them to.
     pub fn specComptimeReads(self: *const CompletedStages) ?*const lir.CheckedPipeline.SpecComptimeReads {
         return if (self.spec_comptime_reads) |*reads| reads else null;
-    }
-
-    /// Release every stage's code: only completed values and their
-    /// representation metadata are still consulted.
-    fn releaseCode(self: *CompletedStages) void {
-        for (self.stages.items) |stage| stage.releaseCode();
     }
 
     /// Lower the next stage: the producers `stage_producers` name, reading
@@ -1404,6 +1414,12 @@ fn EvaluationProgram(comptime ProgramPtr: type) type {
             return if (ProgramPtr == *DevProgram) &self.storage else self.storage;
         }
 
+        /// The procedure fragments the evaluator compiled for the program.
+        fn compiled(self: *const @This()) ?*const NativeProcCompiler.Retained {
+            if (ProgramPtr != *DevProgram) return null;
+            return if (self.storage.artifacts) |*artifacts| artifacts else null;
+        }
+
         fn deinit(self: *@This()) void {
             if (ProgramPtr == *DevProgram) self.storage.deinit() else self.storage.deinit();
         }
@@ -1541,6 +1557,12 @@ fn evaluateStaged(
         if (stage.frozen_static_data) |*read| read.deinit();
         stage.frozen_static_data = frozen;
         try completed.finishStage();
+        if (options.object_cache) |cache| if (cache.stage_sink) |sink| if (prepared.spec_comptime_reads) |*reads| {
+            try sink.accept(sink.context, stage, program_storage.compiled(), reads);
+        };
+        // Later levels and a runtime consumer read only the level's completed
+        // values and their representation metadata, never its procedures.
+        stage.releaseCode();
     }
     try evaluation.finish();
     return completed;
