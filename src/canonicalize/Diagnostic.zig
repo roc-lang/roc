@@ -281,6 +281,12 @@ pub const Diagnostic = union(enum) {
         module_name: Ident.Idx,
         region: Region,
     },
+    /// A package import names a public type its package header exposes,
+    /// but the module the header selects it from defines no such type.
+    public_type_not_defined: struct {
+        import_name: Ident.Idx,
+        region: Region,
+    },
     nested_type_not_found: struct {
         parent_name: Ident.Idx,
         nested_name: Ident.Idx,
@@ -555,6 +561,7 @@ pub const Diagnostic = union(enum) {
             .private_type_in_exposed_field => |d| d.region,
             .type_from_missing_module => |d| d.region,
             .module_not_imported => |d| d.region,
+            .public_type_not_defined => |d| d.region,
             .nested_type_not_found => |d| d.region,
             .internal_builtin_type => |d| d.region,
             .nested_value_not_found => |d| d.region,

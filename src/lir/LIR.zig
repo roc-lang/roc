@@ -66,6 +66,22 @@ pub const ProcIdentity = extern struct {
     /// Bytes that every procedure symbol name begins with.
     pub const symbol_name_prefix = "roc__p";
 
+    /// Bytes that every C-ABI entry symbol name begins with: the entry a
+    /// linked object-cache object exports for a procedure, which callers
+    /// compiled by any backend reach through the platform C ABI.
+    pub const c_abi_entry_name_prefix = "roc__c";
+
+    comptime {
+        std.debug.assert(c_abi_entry_name_prefix.len == symbol_name_prefix.len);
+    }
+
+    /// Write this procedure's C-ABI entry symbol into caller-owned storage.
+    pub fn writeCAbiEntryName(self: ProcIdentity, buffer: *[symbol_name_len]u8) []u8 {
+        @memcpy(buffer[0..c_abi_entry_name_prefix.len], c_abi_entry_name_prefix);
+        buffer[c_abi_entry_name_prefix.len..].* = self.symbolHex();
+        return buffer;
+    }
+
     /// Length of a procedure symbol name. The identity encoding fixes it: the
     /// prefix plus the hex of the leading 128 bits.
     pub const symbol_name_len = symbol_name_prefix.len + 32;
@@ -1698,6 +1714,11 @@ pub const LirProcSpec = struct {
     /// body here, its `identity` names the cache entry, and its `rc_*`
     /// fields carry the ownership signature the entry was compiled with.
     external: bool = false,
+    /// Set on an `external` proc whose cache entry is a linked object rather
+    /// than spliced code: callers reach it through its C-ABI entry
+    /// (`ProcIdentity.writeCAbiEntryName`), classified from its argument and
+    /// return layouts by `layout.abi`.
+    c_abi_entry: bool = false,
     /// Exact self-tail sites produced by LIR construction, consumed by TRMC/TCE.
     tail_calls: ?TailCalls = null,
     /// Set by the tail-drive pass on an erased-callable procedure with an
