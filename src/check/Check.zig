@@ -12419,8 +12419,7 @@ fn finalizeTopLevelDemandDependencies(self: *Self, env: *Env) Allocator.Error!vo
         });
     }
 
-    var foreign = ForeignCalleeIndex{ .checker = self };
-    defer foreign.deinit();
+    const foreign = ForeignCalleeIndex{ .checker = self };
     var demand = try DependencyGraph.buildCheckedDependencyGraph(
         self.cir,
         self.cir.all_defs,
@@ -12447,50 +12446,30 @@ fn finalizeTopLevelDemandDependencies(self: *Self, env: *Env) Allocator.Error!vo
 }
 
 /// Resolves the foreign functions a module's lookups name to their owners'
-/// invoking records, remembering each imported module's definitions by node.
+/// invoking records.
 const ForeignCalleeIndex = struct {
     checker: *Self,
-    by_module: std.AutoHashMapUnmanaged(*const ModuleEnv, std.AutoHashMapUnmanaged(CIR.Node.Idx, CIR.Def.Idx)) = .empty,
-
-    fn deinit(self: *ForeignCalleeIndex) void {
-        var modules = self.by_module.valueIterator();
-        while (modules.next()) |defs| defs.deinit(self.checker.gpa);
-        self.by_module.deinit(self.checker.gpa);
-    }
 
     fn invokes(context: *const anyopaque, callee: DependencyGraph.ForeignCallee) Allocator.Error!bool {
-        const self: *ForeignCalleeIndex = @ptrCast(@alignCast(@constCast(context)));
+        const self: *const ForeignCalleeIndex = @ptrCast(@alignCast(context));
         const checker = self.checker;
         switch (callee) {
             .external => |external| {
                 const module = checker.hoistedImportedModule(checker.cir, external.module_idx) orelse
                     base.invariant("check invariant violated: an external lookup names an unresolved import", .{});
-                // A name bound by a destructure is a value, and calling a
-                // value invokes whatever function it holds.
-                const def_idx = try self.defForNode(module, @fromBackingInt(@intCast(external.target_node_idx))) orelse return true;
-                return module.defInvokes(def_idx);
+                // An imported value is exposed by its definition's node, or,
+                // for a name a destructure binds, by its binder's: such a
+                // name is a value, and calling a value invokes whatever
+                // function it holds.
+                const node: CIR.Node.Idx = @fromBackingInt(@intCast(external.target_node_idx));
+                if (module.store.nodes.get(node).tag != .def) return true;
+                return module.defInvokes(@fromBackingInt(@intCast(external.target_node_idx)));
             },
             .associated => |resolved| {
                 const target = checker.moduleEnvForIdentity(checker.cir, resolved.module_identity);
                 return target.env.defInvokes(resolved.target_def_idx);
             },
         }
-    }
-
-    /// The top-level definition an imported node names directly.
-    fn defForNode(self: *ForeignCalleeIndex, module: *const ModuleEnv, node: CIR.Node.Idx) Allocator.Error!?CIR.Def.Idx {
-        const gpa = self.checker.gpa;
-        const entry = try self.by_module.getOrPut(gpa, module);
-        if (!entry.found_existing) {
-            entry.value_ptr.* = .empty;
-            for (module.store.sliceDefs(module.global_value_defs)) |def_idx| {
-                const def = module.store.getDef(def_idx);
-                try entry.value_ptr.put(gpa, ModuleEnv.nodeIdxFrom(def_idx), def_idx);
-                try entry.value_ptr.put(gpa, ModuleEnv.nodeIdxFrom(def.expr), def_idx);
-                if (module.store.getPattern(def.pattern) == .assign) try entry.value_ptr.put(gpa, ModuleEnv.nodeIdxFrom(def.pattern), def_idx);
-            }
-        }
-        return entry.value_ptr.get(node);
     }
 };
 
