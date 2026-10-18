@@ -126,6 +126,7 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "syntax checker skips rebuild when content unchanged", .run = syntaxCheckerSkipsRebuildWhenContentUnchanged },
     .{ .name = "syntax checker rebuilds when content changes", .run = syntaxCheckerRebuildsWhenContentChanges },
     .{ .name = "syntax checker reports diagnostics for invalid source", .run = syntaxCheckerReportsDiagnosticsForInvalidSource },
+    .{ .name = "syntax checker publishes diagnostics under the client's URI", .run = syntaxCheckerPublishesDiagnosticsUnderClientUri },
     .{ .name = "getDocumentSymbols returns symbols for valid app file", .run = getDocumentSymbolsReturnsSymbolsForValidAppFile },
     .{ .name = "getDocumentSymbols returns type declarations for type-only module", .run = getDocumentSymbolsReturnsTypeDeclarationsForTypeOnlyModule },
     .{ .name = "getCompletionsAtPosition returns basic completions", .run = getCompletionsAtPositionReturnsBasicCompletions },
@@ -258,6 +259,35 @@ pub fn syntaxCheckerReportsDiagnosticsForInvalidSource() integration_spec.SpecEr
         total_diags += set.diagnostics.len;
     }
     try std.testing.expect(total_diags > 0);
+}
+
+/// Clients may encode a URI differently than the server would, e.g. VS Code sends `C:` as `c%3A`.
+/// The checked document's diagnostics must be published under the URI the client sent,
+/// or the empty publish for that URI clears them.
+pub fn syntaxCheckerPublishesDiagnosticsUnderClientUri() integration_spec.SpecError!void {
+    var h = try TestHarness.init();
+    defer h.deinit();
+
+    h.tmp.dir.createDirPath(test_env.io, "a+b") catch return error.TestUnexpectedResult;
+    try h.writeFile("a+b/Bad.roc",
+        \\Bad := [].{
+        \\    greeting : Str
+        \\    greeting = 42
+        \\}
+        \\
+    );
+    const client_uri = try std.mem.replaceOwned(u8, h.allocator, h.uri.?, "a+b", "a%2Bb");
+    defer h.allocator.free(client_uri);
+
+    const publish_sets = try h.checker.check(client_uri, null, null);
+    defer {
+        for (publish_sets) |*set| set.deinit(h.allocator);
+        h.allocator.free(publish_sets);
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), publish_sets.len);
+    try std.testing.expectEqualStrings(client_uri, publish_sets[0].uri);
+    try std.testing.expect(publish_sets[0].diagnostics.len > 0);
 }
 
 /// Verifies document symbols are returned for a valid app file.

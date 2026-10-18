@@ -568,7 +568,13 @@ pub const SyntaxChecker = struct {
             }
             for (drained_reports) |entry| {
                 const mapped_path = if (entry.abs_path.len == 0) session.absolute_path else entry.abs_path;
-                const module_uri = try uri_util.pathToUri(self.allocator, mapped_path);
+                // Publish the checked document under the client's own URI. Clients may encode it
+                // differently (VS Code sends `C:` as `c%3A`), and `finishDiagnosticPublishes`
+                // would otherwise clear it with an empty publish for the client's URI.
+                const module_uri = if (std.mem.eql(u8, mapped_path, session.absolute_path))
+                    try self.allocator.dupe(u8, uri)
+                else
+                    try uri_util.pathToUri(self.allocator, mapped_path);
 
                 var diags: std.ArrayList(Diagnostics.Diagnostic) = .empty;
                 errdefer {
