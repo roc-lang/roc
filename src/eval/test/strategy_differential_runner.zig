@@ -27,7 +27,6 @@
 //! sequential in-process execution for debugging.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const eval = @import("eval");
 const base = @import("base");
 const collections = @import("collections");
@@ -449,7 +448,7 @@ const Report = struct {
             state.seen = true;
             if (gapStatesStatus(state.gap.status, result.status)) {
                 self.totals.known_gap += 1;
-                self.gap_counts[@intFromEnum(state.gap.reason)] += 1;
+                self.gap_counts[@backingInt(state.gap.reason)] += 1;
                 logVerbose("KNOWN-GAP  {s}: {s}\n", .{ case.name, state.gap.reason.text() });
                 return;
             }
@@ -769,7 +768,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
         std.debug.print("\nknown strategy gaps (counted, not skipped):\n", .{});
         for (report.gap_counts, 0..) |count, index| {
             if (count == 0) continue;
-            const reason: known_gaps.Reason = @enumFromInt(index);
+            const reason: known_gaps.Reason = @fromBackingInt(@intCast(index));
             std.debug.print("  {d:>5}  {s}\n", .{ count, reason.text() });
         }
     }

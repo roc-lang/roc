@@ -1829,4 +1829,3 @@ test "value semantics have one definition site" {
     try expectContains(structural, "fn beginEq(");
     try expectContains(structural, "fn beginHash(");
 }
-

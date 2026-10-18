@@ -5402,35 +5402,37 @@ pub const BoxyRuntime = struct {
                             );
                         }
                         const scalar = layout_val.getScalar();
-                        return .{ .done = switch (scalar.tag) {
-                            .str => blk: {
-                                const bytes = readRocStr(value);
-                                break :blk builtins.hash.hasher_write_bytes(hasher, @backingInt(builtins.hash.HasherDomain.str), bytes.ptr, bytes.len);
+                        return .{
+                            .done = switch (scalar.tag) {
+                                .str => blk: {
+                                    const bytes = readRocStr(value);
+                                    break :blk builtins.hash.hasher_write_bytes(hasher, @backingInt(builtins.hash.HasherDomain.str), bytes.ptr, bytes.len);
+                                },
+                                .int => switch (scalar.getInt()) {
+                                    .u8 => hashU64(hasher, .u8, value.read(u8), 1),
+                                    .i8 => hashU64(hasher, .i8, @as(u8, @bitCast(value.read(i8))), 1),
+                                    .u16 => hashU64(hasher, .u16, value.read(u16), 2),
+                                    .i16 => hashU64(hasher, .i16, @as(u16, @bitCast(value.read(i16))), 2),
+                                    .u32 => hashU64(hasher, .u32, value.read(u32), 4),
+                                    .i32 => hashU64(hasher, .i32, @as(u32, @bitCast(value.read(i32))), 4),
+                                    .u64 => hashU64(hasher, .u64, value.read(u64), 8),
+                                    .i64 => hashU64(hasher, .i64, @bitCast(value.read(i64)), 8),
+                                    .u128 => hashU128(hasher, .u128, value.read(u128)),
+                                    .i128 => hashU128(hasher, .i128, @bitCast(value.read(i128))),
+                                },
+                                .frac => switch (scalar.getFrac()) {
+                                    .f32 => builtins.hash.hasher_write_f32_bits(hasher, @bitCast(value.read(f32))),
+                                    .f64 => builtins.hash.hasher_write_f64_bits(hasher, @bitCast(value.read(f64))),
+                                    .dec => hashU128(hasher, .dec, @bitCast(value.read(i128))),
+                                },
+                                // A SIMD value hashes its 128 bits.
+                                .vector => hashU128(hasher, .u128, value.read(u128)),
+                                .opaque_ptr => return self.invariantFailedError(
+                                    "LIR/interpreter invariant violated: boxy hash reached an opaque pointer for layout {d}",
+                                    .{@backingInt(layout_idx)},
+                                ),
                             },
-                            .int => switch (scalar.getInt()) {
-                                .u8 => hashU64(hasher, .u8, value.read(u8), 1),
-                                .i8 => hashU64(hasher, .i8, @as(u8, @bitCast(value.read(i8))), 1),
-                                .u16 => hashU64(hasher, .u16, value.read(u16), 2),
-                                .i16 => hashU64(hasher, .i16, @as(u16, @bitCast(value.read(i16))), 2),
-                                .u32 => hashU64(hasher, .u32, value.read(u32), 4),
-                                .i32 => hashU64(hasher, .i32, @as(u32, @bitCast(value.read(i32))), 4),
-                                .u64 => hashU64(hasher, .u64, value.read(u64), 8),
-                                .i64 => hashU64(hasher, .i64, @bitCast(value.read(i64)), 8),
-                                .u128 => hashU128(hasher, .u128, value.read(u128)),
-                                .i128 => hashU128(hasher, .i128, @bitCast(value.read(i128))),
-                            },
-                            .frac => switch (scalar.getFrac()) {
-                                .f32 => builtins.hash.hasher_write_f32_bits(hasher, @bitCast(value.read(f32))),
-                                .f64 => builtins.hash.hasher_write_f64_bits(hasher, @bitCast(value.read(f64))),
-                                .dec => hashU128(hasher, .dec, @bitCast(value.read(i128))),
-                            },
-                            // A SIMD value hashes its 128 bits.
-                            .vector => hashU128(hasher, .u128, value.read(u128)),
-                            .opaque_ptr => return self.invariantFailedError(
-                                "LIR/interpreter invariant violated: boxy hash reached an opaque pointer for layout {d}",
-                                .{@backingInt(layout_idx)},
-                            ),
-                        } };
+                        };
                     },
                     .record, .tuple => return .{ .components = .{
                         .lhs = value,
@@ -5902,6 +5904,8 @@ pub const BoxyRuntime = struct {
             out: *std.ArrayList(u8),
             aggregate: InspectStruct,
 
+            pub const PartsError = Error;
+
             pub fn literal(sink: *@This(), bytes: []const u8) Error!void {
                 try sink.out.appendSlice(sink.runtime.eval_arena, bytes);
             }
@@ -5935,6 +5939,8 @@ pub const BoxyRuntime = struct {
             variant: LirProgram.BoxyTagVariant,
             payload_value: Value,
             payload_layout: layout_mod.Idx,
+
+            pub const PartsError = Error;
 
             pub fn literal(sink: *@This(), bytes: []const u8) Error!void {
                 try sink.out.appendSlice(sink.runtime.eval_arena, bytes);

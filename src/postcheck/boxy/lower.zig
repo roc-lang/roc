@@ -19377,7 +19377,7 @@ const ProcBodyBuilder = struct {
                     break :variant variant.index;
                 },
                 .dynamic => break :tested try BoxyMatchCtx.emitTagNameTest(self, value, value_rep, name, on_match, on_miss),
-                else => boxyLowerInvariant("payload-free tag equality operand did not have a tag representation"),
+                .in_progress, .primitive, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => boxyLowerInvariant("payload-free tag equality operand did not have a tag representation"),
             };
             if (self.isZstLocal(value)) break :tested on_match;
             const disc = try self.addFrameLocal(.u32);
@@ -28905,7 +28905,8 @@ const ProcBodyBuilder = struct {
                     .dec => .dec_lit,
                     .f32 => .frac_f32_lit,
                     .f64 => .frac_f64_lit,
-                    else => .int_lit,
+                    .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => .int_lit,
+                    _ => .int_lit,
                 },
                 .str_literal => |literal| if (literal.guard != null) .guarded_lit else .str_lit,
                 .str_interpolation => .str_pattern,
@@ -29037,7 +29038,7 @@ const ProcBodyBuilder = struct {
             const rep = ctx.b.parent.plan.representations.items[@backingInt(tag_rep)];
             return switch (rep.kind) {
                 .bool_tag_union => ctx.b.boolVariantIndex(name),
-                else => ctx.b.tagVariant(rep, name).index,
+                .in_progress, .dynamic, .primitive, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => ctx.b.tagVariant(rep, name).index,
             };
         }
 
@@ -29106,7 +29107,7 @@ const ProcBodyBuilder = struct {
                     .bool_tag_union => 2,
                     // A value of an open row can hold a tag its known
                     // variants do not name.
-                    else => if (b.tagDomainHasOpenExtension(tag_rep)) null else @intCast(b.parent.plan.tagVariantSlice(rep.tag_variants).len),
+                    .in_progress, .dynamic, .primitive, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => if (b.tagDomainHasOpenExtension(tag_rep)) null else @intCast(b.parent.plan.tagVariantSlice(rep.tag_variants).len),
                 };
             }
             // A closed union with exactly one variant cannot miss, whatever
@@ -29220,7 +29221,9 @@ const ProcBodyBuilder = struct {
                 },
                 .dec => @bitCast((try exact_numeral.decBits(ctx.state.arena, exact)) orelse
                     boxyLowerInvariant("decimal numeral pattern had no decimal value")),
-                else => @bitCast(exactIntBitsForLayout(exact, numeral_layout) orelse
+                .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => @bitCast(exactIntBitsForLayout(exact, numeral_layout) orelse
+                    boxyLowerInvariant("integer numeral pattern did not fit its type")),
+                _ => @bitCast(exactIntBitsForLayout(exact, numeral_layout) orelse
                     boxyLowerInvariant("integer numeral pattern did not fit its type")),
             };
         }
@@ -29257,7 +29260,8 @@ const ProcBodyBuilder = struct {
                 .i8 => if (value < 0 or value > std.math.maxInt(i8)) return null else 8,
                 .i16 => if (value < 0 or value > std.math.maxInt(i16)) return null else 16,
                 .i32 => if (value < 0 or value > std.math.maxInt(i32)) return null else 32,
-                else => return null,
+                .bool, .str, .u128, .i128, .f32, .f64, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return null,
+                _ => return null,
             };
             const bits: u128 = @bitCast(value);
             const mask: u128 = if (width == 64) std.math.maxInt(u64) else (@as(u128, 1) << @intCast(width)) - 1;
@@ -29273,7 +29277,7 @@ const ProcBodyBuilder = struct {
         pub fn strCaptureCount(ctx: BoxyMatchCtx, pat: checked.CheckedPatternId) u32 {
             return switch (ctx.pattern(pat).data) {
                 .str_interpolation => |str| @intCast(str.steps.len),
-                else => 0,
+                .pending, .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .underscore, .runtime_error => 0,
             };
         }
 
@@ -29394,7 +29398,7 @@ const ProcBodyBuilder = struct {
             // A list's rest is a slice of the list, at the list's type.
             var ty = occ_ty;
             if (step == .list_rest) ty.read = .list_rest;
-            const parent_rep = ctx.parentRep(parent_local, ty);
+            const parent_rep = ctx.parentRep(ty);
             const scopes = try ctx.scopesInside(parent_local, parent_rep);
             var entered = try ctx.enterScopes(scopes);
             errdefer ctx.dropScopes(&entered);
@@ -29435,7 +29439,7 @@ const ProcBodyBuilder = struct {
                     const source_layout = b.parent.result.store.getLocal(parent_local).layout_idx;
                     const rest_local = try b.addFrameLocal(source_layout);
                     const front_dropped = try b.addFrameLocal(source_layout);
-                    const list_rep = ctx.parentRep(parent_local, ty);
+                    const list_rep = ctx.parentRep(ty);
                     try b.recordDescriptorPreservingListResult(front_dropped, parent_local, list_rep);
                     try b.recordDescriptorPreservingListResult(rest_local, front_dropped, list_rep);
                     local_state.front_dropped = front_dropped;
@@ -29454,8 +29458,7 @@ const ProcBodyBuilder = struct {
         }
 
         /// The representation a child's parent stores its value as.
-        fn parentRep(ctx: BoxyMatchCtx, parent_local: LIR.LocalId, child: MatchOcc) Plan.TypeRepId {
-            _ = parent_local;
+        fn parentRep(ctx: BoxyMatchCtx, child: MatchOcc) Plan.TypeRepId {
             return switch (child.read) {
                 .tag_payload => |payload| payload.source_rep,
                 .tuple_elem => |elem| elem.tuple_rep,
@@ -29538,7 +29541,7 @@ const ProcBodyBuilder = struct {
                     next,
                 }),
                 .tuple_elem => |elem| try ctx.scopedRead(target, ProcBodyBuilder.lowerTupleFieldReadInto, .{ ctx.b, target, source, elem.tuple_rep, index, next }),
-                else => boxyLowerInvariant("boxy field occurrence was neither a record field nor a tuple element"),
+                .root, .nominal_same, .nominal_boundary, .tag_payload, .list_elem, .list_rest, .record_rest, .narrow, .record_unbox => boxyLowerInvariant("boxy field occurrence was neither a record field nor a tuple element"),
             };
         }
 
@@ -29624,7 +29627,7 @@ const ProcBodyBuilder = struct {
             return switch (backing_ty.read) {
                 .nominal_same => next,
                 .nominal_boundary => |nominal| try ctx.scopedRead(target, ProcBodyBuilder.assignRepresentationBoundary, .{ ctx.b, target, source, backing_ty.rep, nominal.nominal_rep, next }),
-                else => boxyLowerInvariant("boxy nominal backing occurrence had a non-nominal read"),
+                .root, .record_field, .tuple_elem, .tag_payload, .list_elem, .list_rest, .record_rest, .narrow, .record_unbox => boxyLowerInvariant("boxy nominal backing occurrence had a non-nominal read"),
             };
         }
 
@@ -29646,7 +29649,7 @@ const ProcBodyBuilder = struct {
             return switch (ty.read) {
                 .narrow => try ctx.scopedRead(target, ProcBodyBuilder.assignRepresentationBoundary, .{ ctx.b, target, source, ty.rep, source_ty.rep, next }),
                 .record_unbox => try ctx.scopedRead(target, ProcBodyBuilder.prependRecordFieldReadSource, .{ ctx.b, ctx.localState(target).field_read.?, next }),
-                else => boxyLowerInvariant("boxy retyped occurrence had a structural read"),
+                .root, .record_field, .tuple_elem, .nominal_same, .nominal_boundary, .tag_payload, .list_elem, .list_rest, .record_rest => boxyLowerInvariant("boxy retyped occurrence had a structural read"),
             };
         }
 
@@ -29680,7 +29683,7 @@ const ProcBodyBuilder = struct {
             return switch (pattern_data.data) {
                 .numeral_literal => |literal| try b.assignCheckedNumeralLiteral(literal_local, pattern_data.ty, literal.literal, compare),
                 .str_literal => |literal| try b.assignStringLiteral(literal_local, literal.literal, compare),
-                else => boxyLowerInvariant("equality arm requested for a non-literal pattern"),
+                .pending, .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .str_interpolation, .underscore, .runtime_error => boxyLowerInvariant("equality arm requested for a non-literal pattern"),
             };
         }
 
@@ -29688,7 +29691,7 @@ const ProcBodyBuilder = struct {
             const str = switch (ctx.pattern(pat).data) {
                 .str_literal => return &.{},
                 .str_interpolation => |str| str,
-                else => boxyLowerInvariant("string arm requested for a non-string pattern"),
+                .pending, .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .underscore, .runtime_error => boxyLowerInvariant("string arm requested for a non-string pattern"),
             };
             const locals = try ctx.state.arena.alloc(?LIR.LocalId, str.steps.len);
             for (locals, str.steps) |*out, step| {
@@ -29724,7 +29727,7 @@ const ProcBodyBuilder = struct {
                         .on_match = on_match,
                     };
                 },
-                else => boxyLowerInvariant("string arm requested for a non-string pattern"),
+                .pending, .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .underscore, .runtime_error => boxyLowerInvariant("string arm requested for a non-string pattern"),
             }
         }
 
@@ -29927,7 +29930,7 @@ const ProcBodyBuilder = struct {
                     const literal_guard = switch (self.module.checked_bodies.pattern(guard.pat).data) {
                         .numeral_literal => |literal| literal.guard,
                         .str_literal => |literal| literal.guard,
-                        else => null,
+                        .pending, .assign, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .str_interpolation, .underscore, .runtime_error => null,
                     } orelse boxyLowerInvariant("boxy guarded literal pattern had no checked guard");
                     return .{ .child = .{ .expr = .{ .target = guard.cond, .expr_id = literal_guard, .next = guard.next } } };
                 },
@@ -34662,6 +34665,8 @@ const ProcBodyBuilder = struct {
             variant: u32,
         },
 
+        pub const PartsError = Allocator.Error;
+
         pub fn literal(sink: *InspectPartSink, bytes: []const u8) Allocator.Error!void {
             try sink.parts.append(sink.builder.parent.allocator, .{ .literal = bytes });
         }
@@ -35143,17 +35148,6 @@ const ProcBodyBuilder = struct {
                 } }, self.derivedOrigin()));
             },
         }
-    }
-
-    fn lowerToInspectMethodInto(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        rep_id: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!?LIR.CFStmtId {
-        const worker_id = self.parent.inspectOverrideWorkerForRep(rep_id) orelse return null;
-        return try self.lowerToInspectWorkerInto(target, source, worker_id, next);
     }
 
     fn lowerToInspectWorkerInto(
@@ -46321,7 +46315,7 @@ const TestReachable = struct {
                 },
                 .join => |stmt| try work.appendSlice(gpa, &.{ stmt.body, stmt.remainder }),
                 .runtime_error, .comptime_exhaustiveness_failed, .expect_err, .jump, .ret, .crash => {},
-                inline else => |stmt| try work.append(gpa, stmt.next),
+                inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| try work.append(gpa, stmt.next),
             }
         }
         return .{ .store = store, .ids = ids };

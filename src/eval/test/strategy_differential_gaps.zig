@@ -4,6 +4,7 @@
 //! agrees (its entry must go) or names no case, so the list only shrinks.
 //! A failure a case does not list here fails the run.
 
+/// How a listed case's `.boxy` executions fail to agree with `.lss`.
 pub const Status = enum {
     /// The executions disagree.
     diverged,
@@ -11,6 +12,7 @@ pub const Status = enum {
     child_failed,
 };
 
+/// Why a listed case fails, so the runner can count gaps by cause.
 pub const Reason = enum {
     arc_missing_frame_local,
     callable_dictionary_two_dispatchers,
@@ -45,12 +47,14 @@ pub const Reason = enum {
     }
 };
 
+/// One listed case, with how and why it fails.
 pub const Gap = struct {
     case: []const u8,
     status: Status,
     reason: Reason,
 };
 
+/// Every case whose `.boxy` executions do not yet agree with `.lss`.
 pub const gaps = [_]Gap{
     .{ .case = "low_level - prefetched returns its list unchanged", .status = .child_failed, .reason = .arc_missing_frame_local },
     .{ .case = "rc balance: Dict update and escaped refcounted field are fully released", .status = .child_failed, .reason = .callable_dictionary_two_dispatchers },

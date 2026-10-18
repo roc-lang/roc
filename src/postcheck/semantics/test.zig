@@ -59,15 +59,17 @@ const MockInspect = struct {
 const TextSink = struct {
     out: std.ArrayList(u8) = .empty,
 
-    pub fn literal(self: *TextSink, bytes: []const u8) !void {
+    pub const PartsError = std.mem.Allocator.Error;
+
+    pub fn literal(self: *TextSink, bytes: []const u8) PartsError!void {
         try self.out.appendSlice(testing.allocator, bytes);
     }
 
-    pub fn label(self: *TextSink, bytes: []const u8) !void {
+    pub fn label(self: *TextSink, bytes: []const u8) PartsError!void {
         try self.out.appendSlice(testing.allocator, bytes);
     }
 
-    pub fn child(self: *TextSink, id: u32) !void {
+    pub fn child(self: *TextSink, id: u32) PartsError!void {
         try self.out.print(testing.allocator, "#{d}", .{id});
     }
 };

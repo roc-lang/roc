@@ -12,6 +12,12 @@
 
 const ShapeKind = @import("shape.zig").ShapeKind;
 
+/// The error set of a parts sink: a pointer to a type that declares the
+/// `PartsError` its `literal`, `label`, and `child` return.
+fn SinkError(comptime SinkPtr: type) type {
+    return @typeInfo(SinkPtr).pointer.child.PartsError;
+}
+
 /// Every literal inspection renders.
 pub const text = struct {
     pub const record_open = "{ ";
@@ -187,7 +193,7 @@ pub fn InspectSpec(comptime Ctx: type) type {
         }
 
         /// A record's rendering: `{ label: value, ... }`, padding skipped.
-        pub fn recordParts(ctx: Ctx, record: Ctx.Record, sink: anytype) !void {
+        pub fn recordParts(ctx: Ctx, record: Ctx.Record, sink: anytype) SinkError(@TypeOf(sink))!void {
             try sink.literal(text.record_open);
             var written: u32 = 0;
             var slot: u32 = 0;
@@ -203,7 +209,7 @@ pub fn InspectSpec(comptime Ctx: type) type {
         }
 
         /// A tuple's rendering: `(value, ...)`.
-        pub fn tupleParts(ctx: Ctx, tuple: Ctx.Tuple, sink: anytype) !void {
+        pub fn tupleParts(ctx: Ctx, tuple: Ctx.Tuple, sink: anytype) SinkError(@TypeOf(sink))!void {
             try sink.literal(text.tuple_open);
             var index: u32 = 0;
             while (index < ctx.tupleElemCount(tuple)) : (index += 1) {
@@ -215,7 +221,7 @@ pub fn InspectSpec(comptime Ctx: type) type {
 
         /// One variant's rendering: its name, then `(payload, ...)` when it
         /// carries payloads.
-        pub fn variantParts(ctx: Ctx, tag_union: Ctx.TagUnion, variant: u32, sink: anytype) !void {
+        pub fn variantParts(ctx: Ctx, tag_union: Ctx.TagUnion, variant: u32, sink: anytype) SinkError(@TypeOf(sink))!void {
             try sink.label(ctx.variantName(tag_union, variant));
             const count = ctx.payloadCount(tag_union, variant);
             if (count == 0) return;

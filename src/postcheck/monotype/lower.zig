@@ -23901,6 +23901,8 @@ const BodyContext = struct {
         allocator: Allocator,
         parts: std.ArrayList(InspectPart) = .empty,
 
+        pub const PartsError = Allocator.Error;
+
         pub fn literal(list: *InspectPartList, bytes: []const u8) Allocator.Error!void {
             try list.parts.append(list.allocator, .{ .literal = bytes });
         }

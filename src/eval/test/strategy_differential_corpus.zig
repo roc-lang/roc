@@ -20,6 +20,7 @@ const helpers = @import("eval").test_helpers;
 
 const ShapeKind = value_semantics.ShapeKind;
 
+/// One corpus program, run under both strategies on both backends.
 pub const Case = struct {
     name: []const u8,
     source: []const u8,
@@ -37,16 +38,19 @@ pub const Exemption = struct {
     reason: []const u8,
 };
 
+/// Shapes the equality cases need not cover.
 pub const equality_exemptions = [_]Exemption{
     .{ .kind = .function, .reason = "functions have no is_eq; the checker rejects comparing them" },
     .{ .kind = .box, .reason = "Box has no is_eq; the checker rejects comparing boxes" },
 };
 
+/// Shapes the hash cases need not cover.
 pub const hash_exemptions = [_]Exemption{
     .{ .kind = .function, .reason = "functions have no to_hash; the checker rejects hashing them" },
     .{ .kind = .box, .reason = "Box has no to_hash; the checker rejects hashing boxes" },
 };
 
+/// The corpus the differential runner adds to the eval and host-effects cases.
 pub const cases = [_]Case{
     // `to_inspect` override selection, pinned under both strategies.
     .{
