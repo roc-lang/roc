@@ -9480,7 +9480,10 @@ fn selectOwnerOffers(
         }
         if (filter.generated_roots) |generated| requested = requested and generated[@backingInt(spec_proc.proc)];
         const demand = spec_proc.demand orelse unreachable;
-        if (!demand.permitsRetirement()) continue;
+        if (!demand.permitsRetirement()) {
+            if (trace) std.debug.print("withhold key={x} proc={d} reason=incomplete-demand name={s}\n", .{ &spec_proc.key, @backingInt(spec_proc.proc), lowered.lir_result.store.procDebugName(spec_proc.proc) orelse "" });
+            continue;
+        }
         const proc = procs[@backingInt(spec_proc.proc)];
         const artifact = plan.artifact_by_proc.get(spec_proc.proc) orelse {
             if (trace) std.debug.print("withhold key={x} proc={d} reason=missing-producer-declaration name={s}\n", .{

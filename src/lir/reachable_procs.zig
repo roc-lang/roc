@@ -17,6 +17,10 @@ const LirStore = core.LirStore;
 const GuardedList = collections.GuardedList;
 const BodyClone = @import("body_clone.zig");
 
+/// Builds without libc (the playground) never read the environment and
+/// compile no trace output.
+const pack_trace_available = @import("builtin").link_libc;
+
 /// Remove proc specs unreachable from roots, closed static initializers, and
 /// explicit constant callable plans, then rewrite every retained proc reference
 /// to the compact id space.
@@ -479,9 +483,11 @@ const Pass = struct {
             proc.* = self.remapProc(proc.*);
         }
         // A specialization whose procedure was unreachable leaves the table.
+        const trace = pack_trace_available and std.c.getenv("ROC_PACK_TRACE") != null;
         var kept: usize = 0;
         for (self.result.spec_procs.items) |spec_proc| {
             const new_proc = self.old_to_new[@backingInt(spec_proc.proc)] orelse {
+                if (trace) std.debug.print("drop-spec key={x} name={s}\n", .{ spec_proc.key[0..8], self.result.store.procDebugName(spec_proc.proc) orelse "" });
                 if (spec_proc.demand) |demand| demand.deinit(self.result.store.allocator);
                 continue;
             };
@@ -504,6 +510,7 @@ const Pass = struct {
             var remapped = offer;
             remapped.proc = if (offer.proc) |proc| self.old_to_new[@backingInt(proc)] else null;
             if (remapped.proc == null and !derived_bases.contains(offer.identity.bytes)) {
+                if (trace) if (offer.proc) |proc| std.debug.print("drop-identity {s} name={s}\n", .{ &offer.identity.symbolHex(), self.result.store.procDebugName(proc) orelse "" });
                 if (offer.demand) |demand| demand.deinit(self.result.store.allocator);
                 continue;
             }

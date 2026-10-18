@@ -3257,6 +3257,12 @@ const Lowerer = struct {
                         .demand = try self.cachedDemand(spec.source),
                     });
                     if (kept) try self.kept_spec_fns.append(self.allocator, fn_id);
+                } else if (pack_trace_available and packTraceEnabled()) {
+                    std.debug.print("skip-spec key={x} reason={s} name={s}\n", .{
+                        key.bytes[0..8],
+                        if (!plain_spec) "not-plain" else @tagName(self.inline_plan.kind(spec.source)),
+                        self.result.store.procDebugName(proc) orelse "",
+                    });
                 }
             }
         }
