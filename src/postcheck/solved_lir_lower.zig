@@ -5656,15 +5656,21 @@ const Lowerer = struct {
                 .next = next,
             } }, where.source());
         }
-        // A list of copies keeps its slot and also names its fresh form.
-        const fresh_alternative = if (runtime_values) |values| blk: {
-            const uniform = values.uniformListFor(root.module, root.root) orelse break :blk null;
-            break :blk try self.uniformListConstructor(where, uniform, layout_idx);
-        } else null;
+        // A list of copies keeps its slot and also names its fresh form and
+        // its item count.
+        var fresh_alternative: ?LIR.LirProcSpecId = null;
+        var list_len: ?u64 = null;
+        if (runtime_values) |values| {
+            if (values.uniformListFor(root.module, root.root)) |uniform| {
+                fresh_alternative = try self.uniformListConstructor(where, uniform, layout_idx);
+                if (fresh_alternative != null) list_len = uniform.count;
+            }
+        }
         return try self.result.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
             .value = .{ .static_data = id },
             .fresh_alternative = fresh_alternative,
+            .list_len = list_len,
             .next = next,
         } }, where.source());
     }
@@ -7010,17 +7016,21 @@ const Lowerer = struct {
         if (try self.lowerConstructionExprInto(where, target, candidate.runtime_expr, ty, next)) |built| return .{ .ret = built };
         if (candidate.storage.needsTargetStorage(self.result.layouts.targetUsize()) and self.layoutNeedsStaticData(layout_idx)) {
             const id = try self.lirStaticDataFor(candidate, ty, layout_idx);
-            // A list of copies keeps its slot and also names its fresh form.
+            // A list of copies keeps its slot and also names its fresh form
+            // and its item count.
             var arena = base.SingleThreadArena.init(self.allocator);
             defer arena.deinit();
-            const fresh_alternative = if (try self.uniformListOfExpr(arena.allocator(), candidate.runtime_expr, ty, layout_idx)) |uniform|
-                try self.uniformListConstructor(where, uniform, layout_idx)
-            else
-                null;
+            var fresh_alternative: ?LIR.LirProcSpecId = null;
+            var list_len: ?u64 = null;
+            if (try self.uniformListOfExpr(arena.allocator(), candidate.runtime_expr, ty, layout_idx)) |uniform| {
+                fresh_alternative = try self.uniformListConstructor(where, uniform, layout_idx);
+                if (fresh_alternative != null) list_len = uniform.count;
+            }
             return .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
                 .value = .{ .static_data = id },
                 .fresh_alternative = fresh_alternative,
+                .list_len = list_len,
                 .next = next,
             } }, where.source()) };
         }

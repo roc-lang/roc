@@ -433,6 +433,99 @@ test "range prove folds a threaded Bool join site that wrote the parameter as a 
     try testing.expectEqual(one, chosen.ret.value);
 }
 
+test "range prove reads a static list of copies' stated item count as its length" {
+    const testing = std.testing;
+    // `list = static s0; n = list_len(list); switch 512 < n { 1 => ret one, _ => ret zero }`:
+    // the test folds when the read states the item count, and stays when it does not.
+    for ([_]?u64{ 513, null }) |list_len| {
+        var store = LirStore.init(testing.allocator);
+        defer store.deinit();
+        var layouts = try layout_mod.Store.init(testing.allocator, .u64);
+        defer layouts.deinit();
+        const list = try store.addLocal(.{ .layout_idx = try layouts.insertList(.u32) });
+        const len = try store.addLocal(.{ .layout_idx = .u64 });
+        const last = try store.addLocal(.{ .layout_idx = .u64 });
+        const in_range = try store.addLocal(.{ .layout_idx = .bool });
+        const one = try store.addLocal(.{ .layout_idx = .u64 });
+        const zero = try store.addLocal(.{ .layout_idx = .u64 });
+        const ret_one = try store.addCFStmt(.{ .ret = .{ .value = one } }, .test_fixture);
+        const ret_zero = try store.addCFStmt(.{ .ret = .{ .value = zero } }, .test_fixture);
+        const test_switch = try store.addCFStmt(.{ .switch_stmt = .{
+            .cond = in_range,
+            .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = ret_one }}),
+            .default_branch = ret_zero,
+        } }, .test_fixture);
+        const compare = try store.addCFStmt(.{ .assign_low_level = .{
+            .target = in_range,
+            .op = .num_is_lt,
+            .rc_effect = .none(),
+            .args = try store.addLocalSpan(&.{ last, len }),
+            .next = test_switch,
+        } }, .test_fixture);
+        const set_zero = try store.addCFStmt(.{ .assign_literal = .{
+            .target = zero,
+            .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
+            .next = compare,
+        } }, .test_fixture);
+        const set_one = try store.addCFStmt(.{ .assign_literal = .{
+            .target = one,
+            .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+            .next = set_zero,
+        } }, .test_fixture);
+        const set_last = try store.addCFStmt(.{ .assign_literal = .{
+            .target = last,
+            .value = .{ .i64_literal = .{ .value = 512, .layout_idx = .u64 } },
+            .next = set_one,
+        } }, .test_fixture);
+        const measure = try store.addCFStmt(.{ .assign_low_level = .{
+            .target = len,
+            .op = .list_len,
+            .rc_effect = LIR.LowLevel.list_len.rcEffect(),
+            .args = try store.addLocalSpan(&.{list}),
+            .next = set_last,
+        } }, .test_fixture);
+        const body = try store.addCFStmt(.{
+            .assign_literal = .{
+                .target = list,
+                // The prover reads only the literal's stated length, never its
+                // static data.
+                .value = .{ .static_data = undefined },
+                .list_len = list_len,
+                .next = measure,
+            },
+        }, .test_fixture);
+        const proc = try store.addProcSpec(.{
+            .identity = LIR.ProcIdentity.forTest(0),
+            .name = store.freshSyntheticSymbol(),
+            .args = try store.addLocalSpan(&.{}),
+            .body = body,
+            .ret_layout = .u64,
+        }, .none);
+
+        var scratch = collections.SingleThreadArena.init(testing.allocator);
+        defer scratch.deinit();
+        try runProc(&store, &layouts, proc, scratch.allocator());
+
+        var switches: usize = 0;
+        var rets = std.ArrayList(LocalId).empty;
+        defer rets.deinit(testing.allocator);
+        var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpecImmediate(proc).body.?, testing.allocator);
+        defer walk.deinit();
+        while (try walk.next()) |stmt| {
+            const cf = store.getCFStmt(stmt);
+            if (cf == .switch_stmt) switches += 1;
+            if (cf == .ret) try rets.append(testing.allocator, cf.ret.value);
+        }
+        if (list_len != null) {
+            try testing.expectEqual(@as(usize, 0), switches);
+            try testing.expectEqualSlices(LocalId, &.{one}, rets.items);
+        } else {
+            try testing.expectEqual(@as(usize, 1), switches);
+            try testing.expectEqual(@as(usize, 2), rets.items.len);
+        }
+    }
+}
+
 /// One symbolic value. A node is either a root (its own `root`, carrying
 /// inclusive unsigned bounds in `lo`/`hi`) or a bounded affine offset from a
 /// root: control reaching the defining statement guarantees
@@ -4658,7 +4751,7 @@ const Pass = struct {
                     },
                     .assign_literal => |s| {
                         try self.visited.put(current, {});
-                        try self.modelLiteral(s.target, s.value);
+                        try self.modelLiteral(s.target, s.value, s.list_len);
                         current = s.next;
                     },
                     .assign_tag => |s| {
@@ -4935,7 +5028,37 @@ const Pass = struct {
 
     // Statement value modeling and check rewrites
 
-    fn modelLiteral(self: *Pass, target: LocalId, value: LIR.LiteralValue) ResourceError!void {
+    fn modelLiteral(self: *Pass, target: LocalId, value: LIR.LiteralValue, list_len: ?u64) ResourceError!void {
+        // A list literal's item count is known where it is read: a bytes
+        // literal carries it, and lowering states it for a static list of
+        // copies. The value is a fresh list whose length term equals that
+        // count, stated as the two orderings a guard on the length would
+        // assert, so loop meets carry it as a length bound like any other.
+        const known_len: ?u64 = switch (value) {
+            .bytes_literal => |lit| lit.len,
+            .static_data => list_len,
+            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => null,
+        };
+        if (known_len) |len| {
+            if (try self.unknownFor(self.localLayout(target))) |list_node| {
+                if (try self.freshRoot(0, std.math.maxInt(i64))) |len_node| {
+                    if (try self.constNode(len)) |count| {
+                        try self.addFact(.{ .a = count, .b = len_node, .c = 0, .origin = .meet });
+                        try self.addFact(.{ .a = len_node, .b = count, .c = 0, .origin = .meet });
+                        try self.len_terms.put(list_node, len_node);
+                        if (self.isSingleAssign(target)) {
+                            try self.len_roots.put(len_node, self.stableLocalOf(target));
+                        } else {
+                            try self.path_len_roots.put(len_node, target);
+                        }
+                        try self.bind(target, .{ .node = list_node });
+                        return;
+                    }
+                }
+            }
+            try self.bindFresh(target);
+            return;
+        }
         const literal: ?i128 = switch (value) {
             inline .i64_literal, .i128_literal => |lit| if (lit.value >= 0) lit.value else null,
             .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => null,
