@@ -1422,8 +1422,10 @@ pub const LoadedPacks = struct {
     candidates: std.AutoHashMapUnmanaged([32]u8, std.ArrayListUnmanaged(Candidate)) = .empty,
     /// The offers of each procedure identity, in load order.
     identity_candidates: std.AutoHashMapUnmanaged([32]u8, std.ArrayListUnmanaged(Candidate)) = .empty,
-    /// The serving-closure size of each candidate asked so far (`candidateClosureSize`).
-    closure_sizes: std.AutoHashMapUnmanaged(Candidate, u32) = .empty,
+    /// The serving-closure size of each offer root asked so far, by content
+    /// address (`candidateClosureSize`), and the visited set its walk reuses.
+    closure_sizes: std.AutoHashMapUnmanaged([32]u8, u32) = .empty,
+    closure_scratch: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
     /// Where the store carries each artifact, by content address: the first
     /// registered pack carrying it. Every pack naming the address places the
     /// same bytes, so one carrier serves them all.
@@ -1703,6 +1705,12 @@ pub const LoadedPacks = struct {
         const ordered = try self.allocator.dupe(Candidate, list);
         errdefer self.allocator.free(ordered);
         if (ordered.len < 2) return ordered;
+        // Copies of one artifact have one closure; only distinct roots are sized.
+        const first = self.candidateRootAddress(ordered[0]);
+        const distinct = for (ordered[1..]) |candidate| {
+            if (!std.mem.eql(u8, &self.candidateRootAddress(candidate), &first)) break true;
+        } else false;
+        if (!distinct) return ordered;
         const sizes = try self.allocator.alloc(u32, ordered.len);
         defer self.allocator.free(sizes);
         for (ordered, sizes) |candidate, *size| size.* = try self.candidateClosureSize(candidate);
@@ -1722,15 +1730,20 @@ pub const LoadedPacks = struct {
     /// content address as admission walks them (`admitClosure`). An address
     /// no loaded pack carries ends its branch; such a candidate is not
     /// servable, and its size only orders it.
-    fn candidateClosureSize(self: *LoadedPacks, candidate: Candidate) Allocator.Error!u32 {
-        const entry = try self.closure_sizes.getOrPut(self.allocator, candidate);
-        if (entry.found_existing) return entry.value_ptr.*;
+    fn candidateRootAddress(self: *const LoadedPacks, candidate: Candidate) [32]u8 {
         const view = &self.store_packs.items[candidate.pack].view;
-        var seen = std.AutoHashMapUnmanaged([32]u8, void).empty;
-        defer seen.deinit(self.allocator);
+        return view.contentAddress(view.specArtifact(candidate.spec));
+    }
+
+    fn candidateClosureSize(self: *LoadedPacks, candidate: Candidate) Allocator.Error!u32 {
+        const root = self.candidateRootAddress(candidate);
+        const entry = try self.closure_sizes.getOrPut(self.allocator, root);
+        if (entry.found_existing) return entry.value_ptr.*;
+        const seen = &self.closure_scratch;
+        seen.clearRetainingCapacity();
         var stack = std.ArrayList([32]u8).empty;
         defer stack.deinit(self.allocator);
-        try stack.append(self.allocator, view.contentAddress(view.specArtifact(candidate.spec)));
+        try stack.append(self.allocator, root);
         var count: u32 = 0;
         while (stack.pop()) |address| {
             if ((try seen.getOrPut(self.allocator, address)).found_existing) continue;
@@ -3188,6 +3201,7 @@ pub const LoadedPacks = struct {
         while (lists.next()) |list| list.deinit(self.allocator);
         self.candidates.deinit(self.allocator);
         self.closure_sizes.deinit(self.allocator);
+        self.closure_scratch.deinit(self.allocator);
         var identity_lists = self.identity_candidates.valueIterator();
         while (identity_lists.next()) |list| list.deinit(self.allocator);
         self.identity_candidates.deinit(self.allocator);
