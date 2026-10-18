@@ -4585,8 +4585,7 @@ pub const Coordinator = struct {
         // cache key names, so they never prevent reuse. A stored entry is one
         // whose checking and evaluation reported nothing further.
         mod.pre_check_report_count = mod.reports.items.len;
-        if (self.tryLoadCachedCheckedModule(pkg, mod, imported_envs, imported_artifacts, platform_requirement_context, explicit_roots))
-        {
+        if (self.tryLoadCachedCheckedModule(pkg, mod, imported_envs, imported_artifacts, platform_requirement_context, explicit_roots)) {
             task_payload_alloc.free(imported_envs);
             task_payload_alloc.free(imported_artifacts);
             task_payload_alloc.free(available_artifacts);
