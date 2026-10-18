@@ -22241,6 +22241,20 @@ from the explicit checked template and stored const captures, so the later
 lifting and lambda-set solving stages see the same kind of ordinary callable
 flow they would have seen if the value had been local source.
 
+A restored stored function's body reads nothing from the site restoring it.
+Its stored captures fill its capture slots by checked capture identity, a
+`recursive_binding` capture fills none, and a read of a top-level constant in
+its body, including the constant whose value holds the function, is that
+constant's own top-level read, exactly as compile-time evaluation lowered it.
+The body therefore does not see the active constant bindings of the
+materialization that reached it. Its specialization belongs to the outermost
+owner of the body draft rather than to the restoring site, so every restore of
+that stored function at one type in the draft, including the one that a read of
+its own constant performs inside its body, reuses one specialization. A
+constant whose closure reads the constant materializes without a cycle, and its
+stable static-data representation is decided by its `ConstStore` nodes alone,
+the same as for any other constant.
+
 When `.boxy` runtime lowering restores a cached non-function const, it does not
 create Monotype expressions. It reads the stored `ConstStore` node, interprets
 it under the checked type attached to the `ConstUseTemplate`, and emits ordinary
