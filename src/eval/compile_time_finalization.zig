@@ -4828,8 +4828,8 @@ fn evaluationDemand(
     var demand_roots = std.ArrayList(lir.LIR.LirProcSpecId).empty;
     defer demand_roots.deinit(allocator);
     try demand_roots.appendSlice(allocator, roots);
-    var added = std.AutoHashMapUnmanaged(lir.LIR.LirProcSpecId, void).empty;
-    defer added.deinit(allocator);
+    var added = collections.DenseMap(lir.LIR.LirProcSpecId, void).init(allocator);
+    defer added.deinit();
     var visited = std.AutoHashMapUnmanaged(struct { set: *const backend.dev.ProcArtifact.Set, index: u32 }, void).empty;
     defer visited.deinit(allocator);
     var stack = std.ArrayList(backend.dev.LocatedArtifact).empty;
@@ -4853,7 +4853,7 @@ fn evaluationDemand(
             for (artifact.materializations) |dependency| {
                 const id = headers.index(dependency.materialization);
                 const accessor = headers.procs[id];
-                if ((try added.getOrPut(allocator, accessor)).found_existing) continue;
+                if ((try added.getOrPut(accessor)).found_existing) continue;
                 try demand_roots.append(allocator, accessor);
                 grew = true;
             }
@@ -4862,7 +4862,9 @@ fn evaluationDemand(
                 const target = relocation.code_target orelse continue;
                 switch (target) {
                     .local => |index| try stack.append(allocator, .{ .set = located.set, .index = index }),
-                    else => {},
+                    // A symbolic target is resolved by the receiving image's
+                    // own definitions; an image offset is session-only.
+                    .symbolic, .image_offset => {},
                 }
             };
         }
