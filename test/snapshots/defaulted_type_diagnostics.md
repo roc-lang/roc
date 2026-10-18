@@ -354,7 +354,7 @@ literal_method = (35).foo()
 
 literal_signature = (35).plus("s")
 
-shared_literals = if True 1 else "s"
+shared_literals = if (True) 1 else "s"
 
 string_compare = "apple" > "banana"
 

@@ -496,6 +496,7 @@ const copied_diagnostic_shapes = [_]DiagnosticShape{
     .{ .cir = "private_type_in_exposed_field", .tag = .diag_private_type_in_exposed_field, .payload = "diag_three_idents", .names = &.{ "exposed_type", "field_name", "private_type" } },
     .{ .cir = "type_from_missing_module", .tag = .diag_type_from_missing_module, .payload = "diag_two_idents", .names = &.{ "module_name", "type_name" } },
     .{ .cir = "module_not_imported", .tag = .diag_module_not_imported, .payload = "diag_single_ident", .names = &.{"module_name"} },
+    .{ .cir = "public_type_not_defined", .tag = .diag_public_type_not_defined, .payload = "diag_single_ident", .names = &.{"import_name"} },
     .{ .cir = "nested_type_not_found", .tag = .diag_nested_type_not_found, .payload = "diag_two_idents", .names = &.{ "parent_name", "nested_name" } },
     .{ .cir = "internal_builtin_type", .tag = .diag_internal_builtin_type, .payload = "diag_internal_builtin_type", .names = &.{ "parent_name", "nested_name", "kind" } },
     .{ .cir = "nested_value_not_found", .tag = .diag_nested_value_not_found, .payload = "diag_two_idents", .names = &.{ "parent_name", "nested_name" } },
@@ -706,6 +707,7 @@ const DiagnosticNodeTag = enum {
     diag_private_type_in_exposed_field,
     diag_type_from_missing_module,
     diag_module_not_imported,
+    diag_public_type_not_defined,
     diag_nested_type_not_found,
     diag_internal_builtin_type,
     diag_nested_value_not_found,
@@ -1230,7 +1232,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 94;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 95;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
@@ -5274,6 +5276,7 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         .private_type_in_exposed_field,
         .type_from_missing_module,
         .module_not_imported,
+        .public_type_not_defined,
         .nested_type_not_found,
         .internal_builtin_type,
         .nested_value_not_found,
@@ -5440,6 +5443,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_private_type_in_exposed_field,
         .diag_type_from_missing_module,
         .diag_module_not_imported,
+        .diag_public_type_not_defined,
         .diag_nested_type_not_found,
         .diag_internal_builtin_type,
         .diag_nested_value_not_found,

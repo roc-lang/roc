@@ -42,8 +42,17 @@ pub const RocList = extern struct {
     /// bit stays free for the seamless-slice tag.
     pub const capacity_shift = 1;
 
+    /// Byte offset of `field` in a RocList laid out for a target whose words
+    /// are `target_word_size` bytes.
+    pub fn targetFieldOffset(comptime field: std.meta.FieldEnum(RocList), target_word_size: u32) u32 {
+        return utils.targetWordOffset(@offsetOf(RocList, @tagName(field)), target_word_size);
+    }
+
     comptime {
         std.debug.assert(word_count * @sizeOf(usize) == @sizeOf(RocList));
+        std.debug.assert(targetFieldOffset(.bytes, @sizeOf(usize)) == @offsetOf(RocList, "bytes"));
+        std.debug.assert(targetFieldOffset(.length, @sizeOf(usize)) == @offsetOf(RocList, "length"));
+        std.debug.assert(targetFieldOffset(.capacity_or_alloc_ptr, @sizeOf(usize)) == @offsetOf(RocList, "capacity_or_alloc_ptr"));
     }
 
     fn encodeCapacityGeneric(comptime T: type, capacity: T) T {

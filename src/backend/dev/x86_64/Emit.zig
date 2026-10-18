@@ -11,6 +11,8 @@ const Allocator = std.mem.Allocator;
 const RocTarget = @import("roc_target").RocTarget;
 const Registers = @import("Registers.zig");
 const RegisterWidth = Registers.RegisterWidth;
+const SystemV = @import("SystemV.zig");
+const WindowsFastcall = @import("WindowsFastcall.zig");
 
 const Relocation = @import("../Relocation.zig").IndexedRelocation;
 
@@ -35,14 +37,14 @@ pub fn Emit(comptime target: RocTarget) type {
         /// Calling convention constants derived from target
         pub const CC = struct {
             pub const PARAM_REGS = if (target.isWindows())
-                [_]Registers.GeneralReg{ .RCX, .RDX, .R8, .R9 }
+                WindowsFastcall.GENERAL_PARAM_REGS
             else
-                [_]Registers.GeneralReg{ .RDI, .RSI, .RDX, .RCX, .R8, .R9 };
+                SystemV.GENERAL_PARAM_REGS;
 
             pub const FLOAT_PARAM_REGS = if (target.isWindows())
-                [_]Registers.FloatReg{ .XMM0, .XMM1, .XMM2, .XMM3 }
+                WindowsFastcall.FLOAT_PARAM_REGS
             else
-                [_]Registers.FloatReg{ .XMM0, .XMM1, .XMM2, .XMM3, .XMM4, .XMM5, .XMM6, .XMM7 };
+                SystemV.FLOAT_PARAM_REGS;
 
             pub const RETURN_REGS = if (target.isWindows())
                 [_]Registers.GeneralReg{.RAX}

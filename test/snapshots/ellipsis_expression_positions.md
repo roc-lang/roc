@@ -746,9 +746,9 @@ tag_payload = |_| Ok(...)
 
 interpolation = |_| "a ${...} b"
 
-if_branches = |a| if a ... else ...
+if_branches = |a| if (a) ... else ...
 
-if_condition = |_| if ... 1 else 2
+if_condition = |_| if (...) 1 else 2
 
 match_scrutinee = |_| match ... {
 	_ => 1

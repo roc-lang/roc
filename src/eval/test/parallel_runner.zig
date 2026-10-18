@@ -1794,6 +1794,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .module_not_found,
         .value_not_exposed,
         .type_not_exposed,
+        .public_type_not_defined,
         .private_type_in_exposed_type,
         .private_type_in_exposed_field,
         .type_from_missing_module,
