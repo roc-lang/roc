@@ -1263,6 +1263,21 @@ fn startBackgroundCacheCleanup(gpa: Allocator, arena: Allocator, std_io: std.Io)
     }
 }
 
+/// Explains a dash-prefixed argument that names none of the command's flags,
+/// and how to write it when it was meant for the app or as a file name.
+fn printUnknownFlag(writer: *std.Io.Writer, details: @FieldType(cli_args.ArgProblem, "unknown_flag")) std.Io.Writer.Error!void {
+    const space = if (details.cmd.len > 0) " " else "";
+    const flag = details.arg[0 .. std.mem.findScalar(u8, details.arg, '=') orelse details.arg.len];
+    try writer.print("Error: roc{s}{s} does not have a `{s}` flag.\n", .{ space, details.cmd, flag });
+    if (details.suggestion) |suggestion| try writer.print("\nDid you mean `{s}`?\n", .{suggestion});
+    try writer.writeAll("\n");
+    if (details.passes_args_to_app) {
+        try writer.print("To pass `{s}` to the app, write it after `--`, as in `roc{s}{s} app.roc -- {s}`.\n", .{ details.arg, space, details.cmd, details.arg });
+    }
+    try writer.print("To use a file named `{s}`, write it as `./{s}`.\n", .{ details.arg, details.arg });
+    try writer.print("Run `roc{s}{s} --help` to see the flags it accepts.\n", .{ space, details.cmd });
+}
+
 fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: std.Io) CliMainError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -1379,6 +1394,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
             try switch (problem) {
                 .missing_flag_value => |details| ctx.io.stderr().print("Error: no value was supplied for {s}\n", .{details.flag}),
                 .unexpected_argument => |details| ctx.io.stderr().print("Error: roc {s} received an unexpected argument: `{s}`\n", .{ details.cmd, details.arg }),
+                .unknown_flag => |details| printUnknownFlag(ctx.io.stderr(), details),
                 .invalid_flag_value => |details| ctx.io.stderr().print("Error: `{s}` is not a valid value for {s}. The valid options are {s}\n", .{ details.value, details.flag, details.valid_options }),
                 .shorthand_requires_run => |details| ctx.io.stderr().print(
                     "Error: `{s}` looks like an installed shorthand, and running one requires the `run` subcommand: `roc run {s}`\nIf you meant a local file named `{s}`, write it as `./{s}` instead.\n",
