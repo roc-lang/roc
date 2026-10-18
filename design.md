@@ -21810,11 +21810,15 @@ work queue. The finalizer still commits stored values, diagnostics, coverage
 updates, and root completion in sorted request order.
 
 Each root job owns its compile-time host state: `RocOps`, a root-local arena for
-Roc allocations, allocation tracking needed by RocOps, branch-hit records,
-expect/dbg/crash event lists, failure region state, a call-region stack, a crash
-boundary, and its result buffer. Roc runtime allocations are arena allocations
-and are bulk-freed after the result has been copied into `ConstStore`. Host
-events and failure state stay root-local until deterministic replay.
+Roc allocations, branch-hit records, expect/dbg/crash event lists, failure
+region state, a call-region stack, a crash boundary, and its result buffer. Roc
+runtime allocations are arena allocations and are bulk-freed after the result
+has been copied into `ConstStore`. Each allocation carries its length in a
+fixed-size header before the bytes handed to Roc, so reallocation reads the old
+length from the header and deallocation is free; the host keeps no per-pointer
+table, whose cost would grow with the allocations a root has ever held rather
+than with the ones it holds. Host events and failure state stay root-local
+until deterministic replay.
 
 A crash or empirical exhaustiveness failure in one root records that root's
 result and must not change the result of any other root in the same batch. Root
