@@ -588,11 +588,11 @@ fn devDiagnosticsSkip(custom: CustomCase) ?[]const u8 {
     }
     return null;
 }
-/// How a forced-ICE report spells the module paths of test/cli/ice_context.
-/// The runner joins its working directory to the test's forward-slash path,
-/// and the compiler joins an imported module's file name with the host's
-/// separator.
-const ice_main_path_tail = "(test" ++ std.fs.path.sep_str ++ "cli" ++ std.fs.path.sep_str ++ "ice_context" ++ std.fs.path.sep_str ++ "Main.roc)";
+/// How a forced-ICE report spells the module paths of test/cli/ice_context,
+/// relative to the working directory. The root module's path is the test's
+/// forward-slash path as written on the command line, and the compiler joins
+/// an imported module's file name with the host's separator.
+const ice_main_path_tail = "(test/cli/ice_context/Main.roc)";
 const ice_helper_path_tail = "ice_context" ++ std.fs.path.sep_str ++ "Helper.roc)";
 
 /// A single CLI test operation—one matrix cell of work.
