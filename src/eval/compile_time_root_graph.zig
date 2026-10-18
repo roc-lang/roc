@@ -329,11 +329,16 @@ const TestProcs = struct {
     }
 };
 
+/// The static-data slot at `index` of a test's `slot_producers`.
+fn testSlot(index: u32) LIR.StaticDataId {
+    return @fromBackingInt(index);
+}
+
 test "a root depends on the producers of every slot the procedures it calls read" {
     const allocator = std.testing.allocator;
     var procs = try TestProcs.init(allocator);
     defer procs.store.deinit();
-    const read = try procs.store.addCFStmt(.{ .assign_literal = .{ .target = procs.unit, .value = .{ .static_data = @fromBackingInt(0) }, .next = try procs.ret() } }, .test_fixture);
+    const read = try procs.store.addCFStmt(.{ .assign_literal = .{ .target = procs.unit, .value = .{ .static_data = testSlot(0) }, .next = try procs.ret() } }, .test_fixture);
     const reader = try procs.proc(read);
     const call = try procs.store.addCFStmt(.{ .assign_call = .{ .target = procs.unit, .proc = reader, .args = LIR.LocalSpan.empty(), .next = try procs.ret() } }, .test_fixture);
     const caller = try procs.proc(call);
@@ -348,7 +353,7 @@ test "a packed callable's reads join only an evaluation that makes an erased cal
     const allocator = std.testing.allocator;
     var procs = try TestProcs.init(allocator);
     defer procs.store.deinit();
-    const read = try procs.store.addCFStmt(.{ .assign_literal = .{ .target = procs.unit, .value = .{ .static_data = @fromBackingInt(0) }, .next = try procs.ret() } }, .test_fixture);
+    const read = try procs.store.addCFStmt(.{ .assign_literal = .{ .target = procs.unit, .value = .{ .static_data = testSlot(0) }, .next = try procs.ret() } }, .test_fixture);
     const callable = try procs.proc(read);
     const pack = try procs.store.addCFStmt(.{ .assign_packed_erased_fn = .{ .target = procs.unit, .proc = callable, .capture = null, .capture_layout = null, .on_drop = .none, .reuse = null, .next = try procs.ret() } }, .test_fixture);
     const packer = try procs.proc(pack);
