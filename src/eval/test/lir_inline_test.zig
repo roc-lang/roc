@@ -2830,10 +2830,12 @@ test "issue 9802 growing-structural map2 specialization counters are bounded" {
         .max_specialization_type_digest_cache_misses = 360,
         .max_specialization_type_digest_nodes_visited = 360,
         .exact_type_checks = 0,
-        // Each template miss also instantiates the template's root once for
-        // its interface relations' summarized expansion.
+        // A template's interface relations' summarized expansion
+        // instantiates its root once per summary, and summaries are keyed by
+        // template and method scope rather than by each call site's spelling
+        // of the callee's type.
         .nominal_backing_reuses = 31,
-        .nominal_backing_instantiations = 71,
+        .nominal_backing_instantiations = 58,
     });
 }
 
