@@ -517,9 +517,6 @@ test "canonicalized module cache header decodes bodies and rejects corrupt envel
     try std.testing.expect(decodeCanonicalizedModuleCacheEntry(key, scratch[0 .. total_len + 1]) == null);
 }
 
-/// Maximum scratch arena capacity retained by a worker after each task.
-const worker_scratch_retain_limit = 64 * 1024 * 1024;
-
 /// Allocators for a worker thread. Each worker has its own instance.
 /// This ensures thread-safe allocations without contention.
 ///
@@ -555,10 +552,12 @@ pub const WorkerAllocators = struct {
         self.arena_impl.deinit();
     }
 
-    /// Reset arena between tasks, retaining ordinary task capacity but trimming
-    /// unusually large scratch spikes so one wide module does not pin worker RSS.
+    /// Release a finished task's scratch. The worker keeps none of it: the
+    /// backing allocator decides how much freed memory stays ready for reuse,
+    /// so idle capacity is bounded in one place for every worker together
+    /// rather than once per worker.
     pub fn resetArena(self: *WorkerAllocators) void {
-        _ = self.arena_impl.reset(.{ .retain_with_limit = worker_scratch_retain_limit });
+        _ = self.arena_impl.reset(.free_all);
     }
 
     pub fn taskAllocators(self: *WorkerAllocators) WorkerTaskAllocators {
