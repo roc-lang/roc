@@ -3527,13 +3527,13 @@ const Unifier = struct {
         in_both: TwoStaticDispatchConstraints.SafeList.Range,
     };
 
-    fn retainDefaultingStaticDispatchConstraint(
+    fn retainFixedLiteralStaticDispatchConstraint(
         self: *const Self,
         retained_group_start: usize,
         constraint: StaticDispatchConstraint,
     ) Error!void {
         for (self.scratch.only_in_a_static_dispatch_constraints.items.items[retained_group_start..]) |*existing| {
-            if (!sameDefaultingOriginClass(existing.origin, constraint.origin)) continue;
+            if (!sameFixedLiteralClass(existing.origin, constraint.origin)) continue;
             existing.* = mergeStaticDispatchConstraintMetadata(constraint, existing.*);
             try self.types_store.static_dispatch_relation_merges.append(self.types_store.gpa, .{
                 .dropped_fn_var = constraint.fn_var,
@@ -3547,16 +3547,18 @@ const Unifier = struct {
         );
     }
 
-    /// Match relations that deliberately share one callable type while leaving
-    /// independent same-name requirements separate. When a same-name group
-    /// contains any defaulting relation (literal or operator), the whole group
-    /// unifies through one representative defaulting relation. A group of dot
-    /// calls and instantiated where-clause requirements alone stays separate,
-    /// so each one can instantiate the selected rank-1 method scheme at its
-    /// own type once the receiver resolves: a receiver whose `parser_for` one
-    /// callee requires at `Json` and another at `Tiny` holds both requirements
-    /// until then. Generalization relates a receiver's same-name requirements
-    /// into one (`deduplicateGeneralizedDispatchRequirements`).
+    /// Match relations that share one callable type while leaving independent
+    /// same-name requirements separate. A number or string literal's
+    /// conversion has one callable type for every literal of its kind, so a
+    /// same-name group containing one unifies through one representative
+    /// literal relation; relating them can neither fail nor bind anything
+    /// else. Every other group stays separate, so each requirement can
+    /// instantiate the selected rank-1 method scheme at its own type once the
+    /// receiver resolves: a receiver whose `parser_for` one callee requires at
+    /// `Json` and another at `Tiny`, or whose `+` one use applies to a `U8` and
+    /// another to a `Str`, holds both requirements until then. Generalization
+    /// relates a receiver's same-name requirements into one
+    /// (`relateSameMethodRequirementsAtBoundary`).
     fn partitionStaticDispatchConstraints(
         self: *const Self,
         a_constraints_range: StaticDispatchConstraint.SafeList.Range,
@@ -3596,11 +3598,11 @@ const Unifier = struct {
                     );
                 }
 
-                // Put defaulting relations before independent relations so
-                // each same-name group can be matched with a linear scan.
-                const a_is_defaulting = isDefaultingOrigin(a.origin);
-                const b_is_defaulting = isDefaultingOrigin(b.origin);
-                if (a_is_defaulting != b_is_defaulting) return a_is_defaulting;
+                // Put literal relations before independent relations so each
+                // same-name group can be matched with a linear scan.
+                const a_is_literal = isFixedLiteralOrigin(a.origin);
+                const b_is_literal = isFixedLiteralOrigin(b.origin);
+                if (a_is_literal != b_is_literal) return a_is_literal;
 
                 // Preserve producer order within each semantic class.
                 return a_index < b_index;
@@ -3706,72 +3708,70 @@ const Unifier = struct {
                 }
             }
 
-            var a_defaulting_end = a_group_start;
-            while (a_defaulting_end < a_group_end and
-                isDefaultingOrigin(a_constraints[a_indices[a_defaulting_end]].origin))
+            var a_literal_end = a_group_start;
+            while (a_literal_end < a_group_end and
+                isFixedLiteralOrigin(a_constraints[a_indices[a_literal_end]].origin))
             {
-                a_defaulting_end += 1;
+                a_literal_end += 1;
             }
-            var b_defaulting_end = b_group_start;
-            while (b_defaulting_end < b_group_end and
-                isDefaultingOrigin(b_constraints[b_indices[b_defaulting_end]].origin))
+            var b_literal_end = b_group_start;
+            while (b_literal_end < b_group_end and
+                isFixedLiteralOrigin(b_constraints[b_indices[b_literal_end]].origin))
             {
-                b_defaulting_end += 1;
+                b_literal_end += 1;
             }
 
-            const a_has_defaulting = a_defaulting_end > a_group_start;
-            const b_has_defaulting = b_defaulting_end > b_group_start;
-            if (a_has_defaulting or b_has_defaulting) {
-                // An operator or literal conversion is one numeric/defaulting
-                // relation per method identity, so every same-name defaulting
-                // relation must agree on a single callable type and every
-                // independent requirement on either side must satisfy it.
-                // Retain one metadata-bearing relation per semantic origin,
-                // then validate every callable against one representative.
-                // Independent entries are subsumed by that relation; their
-                // function vars remain unified with it.
-                const representative = if (a_has_defaulting)
+            const a_has_literal = a_literal_end > a_group_start;
+            const b_has_literal = b_literal_end > b_group_start;
+            if (a_has_literal or b_has_literal) {
+                // A literal conversion has one callable type per literal kind,
+                // so every same-name relation agrees with it. Retain one
+                // metadata-bearing relation per literal kind, then validate
+                // every callable against one representative. Independent
+                // entries are subsumed by that relation; their function vars
+                // remain unified with it.
+                const representative = if (a_has_literal)
                     a_constraints[a_indices[a_group_start]]
                 else
                     b_constraints[b_indices[b_group_start]];
                 const retained_group_start: usize = @intCast(
                     scratch.only_in_a_static_dispatch_constraints.len(),
                 );
-                var a_defaulting = a_group_start;
-                while (a_defaulting < a_defaulting_end) : (a_defaulting += 1) {
-                    try self.retainDefaultingStaticDispatchConstraint(
+                var a_literal = a_group_start;
+                while (a_literal < a_literal_end) : (a_literal += 1) {
+                    try self.retainFixedLiteralStaticDispatchConstraint(
                         retained_group_start,
-                        a_constraints[a_indices[a_defaulting]],
+                        a_constraints[a_indices[a_literal]],
                     );
                 }
-                var b_defaulting = b_group_start;
-                while (b_defaulting < b_defaulting_end) : (b_defaulting += 1) {
-                    try self.retainDefaultingStaticDispatchConstraint(
+                var b_literal = b_group_start;
+                while (b_literal < b_literal_end) : (b_literal += 1) {
+                    try self.retainFixedLiteralStaticDispatchConstraint(
                         retained_group_start,
-                        b_constraints[b_indices[b_defaulting]],
+                        b_constraints[b_indices[b_literal]],
                     );
                 }
-                var a_index = if (a_has_defaulting) a_group_start + 1 else a_group_start;
+                var a_index = if (a_has_literal) a_group_start + 1 else a_group_start;
                 while (a_index < a_group_end) : (a_index += 1) {
                     _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, .{
                         .a = representative,
                         .b = a_constraints[a_indices[a_index]],
                     });
                 }
-                var b_index = if (a_has_defaulting) b_group_start else b_group_start + 1;
+                var b_index = if (a_has_literal) b_group_start else b_group_start + 1;
                 while (b_index < b_group_end) : (b_index += 1) {
                     _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, .{
                         .a = representative,
                         .b = b_constraints[b_indices[b_index]],
                     });
                 }
-                for (a_indices[a_defaulting_end..a_group_end]) |constraint_index| {
+                for (a_indices[a_literal_end..a_group_end]) |constraint_index| {
                     try self.types_store.static_dispatch_relation_merges.append(self.types_store.gpa, .{
                         .dropped_fn_var = a_constraints[constraint_index].fn_var,
                         .retained_fn_var = representative.fn_var,
                     });
                 }
-                for (b_indices[b_defaulting_end..b_group_end]) |constraint_index| {
+                for (b_indices[b_literal_end..b_group_end]) |constraint_index| {
                     try self.types_store.static_dispatch_relation_merges.append(self.types_store.gpa, .{
                         .dropped_fn_var = b_constraints[constraint_index].fn_var,
                         .retained_fn_var = representative.fn_var,
@@ -3857,34 +3857,27 @@ const Unifier = struct {
     }
 };
 
-/// Operators and literal conversions are defaulting relations: a receiver no
-/// use determines takes the default owner of its one relation per method
-/// identity. Dot calls and instantiated where-clause requirements are
-/// independent uses of a rank-1 method scheme.
-fn isDefaultingOrigin(origin: StaticDispatchConstraint.Origin) bool {
+/// A number or string literal's conversion, whose callable type is the same
+/// for every literal of its kind. Operators, interpolations, dot calls, and
+/// instantiated where-clause requirements are independent uses of a rank-1
+/// method scheme: an interpolation's callable mentions its parts' types.
+fn isFixedLiteralOrigin(origin: StaticDispatchConstraint.Origin) bool {
     return switch (origin) {
-        .desugared_binop, .desugared_unaryop, .from_literal => true,
-        .method_call, .where_clause => false,
+        .from_literal => |literal| switch (literal) {
+            .numeral, .quote => true,
+            .interpolation => false,
+        },
+        .desugared_binop, .desugared_unaryop, .method_call, .where_clause => false,
     };
 }
 
-fn sameDefaultingOriginClass(
+fn sameFixedLiteralClass(
     a: StaticDispatchConstraint.Origin,
     b: StaticDispatchConstraint.Origin,
 ) bool {
-    return switch (a) {
-        .method_call, .where_clause => false,
-        .desugared_unaryop => b == .desugared_unaryop,
-        .desugared_binop => |a_binop| b == .desugared_binop and
-            a_binop.negated == b.desugared_binop.negated,
-        .from_literal => |a_literal| b == .from_literal and switch (a_literal) {
-            // Each interpolation carries its own part vars and source regions;
-            // sharing one callable relation must not discard those checks.
-            .interpolation => false,
-            .numeral, .quote => std.meta.activeTag(a_literal) ==
-                std.meta.activeTag(b.from_literal),
-        },
-    };
+    const a_literal = a.literalKind() orelse return false;
+    const b_literal = b.literalKind() orelse return false;
+    return a_literal == b_literal;
 }
 
 fn mergeStaticDispatchConstraintMetadata(

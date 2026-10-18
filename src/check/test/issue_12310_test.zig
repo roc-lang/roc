@@ -168,3 +168,50 @@ test "issue 12310: a literal forced onto a type by relating two same-method requ
         \\
     );
 }
+
+const generic_plus =
+    \\Foo := [F].{
+    \\    plus : Foo, a -> Foo
+    \\    plus = |foo, _| foo
+    \\}
+    \\
+    \\need_foo : Foo -> {}
+    \\need_foo = |_| {}
+    \\
+;
+
+test "issue 12310: operator requirements are checked against the type they resolve to, whatever the order" {
+    var known_first = try TestEnv.init("Test", generic_plus ++
+        \\k = |y| {
+        \\    need_foo(y)
+        \\    _a = y + 1.U8
+        \\    _b = y + "s"
+        \\    "ok"
+        \\}
+    );
+    defer known_first.deinit();
+    try known_first.assertDefType("k", "Foo -> b where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]");
+
+    var known_last = try TestEnv.init("Test", generic_plus ++
+        \\k = |y| {
+        \\    _a = y + 1.U8
+        \\    _b = y + "s"
+        \\    need_foo(y)
+        \\    "ok"
+        \\}
+    );
+    defer known_last.deinit();
+    try known_last.assertDefType("k", "Foo -> b where [b.from_quote : Str -> Try(b, [BadQuotedBytes(Str)])]");
+}
+
+test "issue 12310: operator requirements on a generalized type at incompatible types are one method conflict" {
+    var env = try TestEnv.init("Test", generic_plus ++
+        \\k = |y| {
+        \\    _a = y + 1.U8
+        \\    _b = y + "s"
+        \\    "ok"
+        \\}
+    );
+    defer env.deinit();
+    try env.assertOneTypeError("Type Mismatch");
+}

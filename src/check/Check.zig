@@ -2157,6 +2157,9 @@ const BoundaryRoot = struct {
     /// The root's annotation, whose predeclared scheme uses this boundary
     /// relates to the scheme it publishes.
     annotation: ?CIR.Annotation.Idx = null,
+    /// The pattern that binds the root, where a diagnostic about the
+    /// definition as a whole is reported.
+    binding: ?Var = null,
 };
 
 /// One dispatch-constrained receiver var awaiting the local ambiguity
@@ -18897,6 +18900,7 @@ fn stepGroup(self: *Self, state: *GroupActivity, env: *Env) std.mem.Allocator.Er
                     .owner = ModuleEnv.varFrom(member_def.expr),
                     .interface = ModuleEnv.varFrom(member_def.expr),
                     .annotation = member_def.annotation,
+                    .binding = ModuleEnv.varFrom(member_def.pattern),
                 };
             }
 
@@ -26033,7 +26037,11 @@ const ExprCheckFrame = struct {
             // ranks BEFORE they are promoted to generalized. Pending dispatch
             // obligations (pinned at the group's boundary rank) escape this
             // frame and stay live for the group boundary.
-            try checker.defaultLiteralsAtGeneralizationBoundary(.{ .owner = self.expr_var_raw, .interface = self.expr_var }, env);
+            try checker.defaultLiteralsAtGeneralizationBoundary(.{
+                .owner = self.expr_var_raw,
+                .interface = self.expr_var,
+                .binding = if (self.binding_pattern) |pattern_idx| ModuleEnv.varFrom(pattern_idx) else null,
+            }, env);
             const roots = [_]BoundaryRoot{.{ .owner = self.expr_var_raw, .interface = self.expr_var, .annotation = self.annotation }};
             _ = try checker.relateBoundaryPredeclaredUses(&roots, env);
             try self.generalize();
@@ -26426,6 +26434,7 @@ fn finishExprFrame(self: *Self, state: *ExprKernelActivity, frame: *ExprCheckFra
                 .owner = state.finishing.?.frame.expr_var_raw,
                 .interface = state.finishing.?.frame.expr_var,
                 .annotation = state.finishing.?.frame.annotation,
+                .binding = if (state.finishing.?.frame.binding_pattern) |pattern_idx| ModuleEnv.varFrom(pattern_idx) else null,
             };
             return .{ .push = .{ .boundary = .{ .roots = (&state.boundary_root)[0..1] } } };
         },
@@ -28714,7 +28723,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 // recursive top-level group's boundary does.
                 try self.checkStaticDispatchConstraints(env, false);
                 try self.judgeRecordDestructBinds(env);
-                try self.defaultLiteralsAtGeneralizationBoundary(.{ .owner = decl_pattern_var, .interface = decl_pattern_var }, env);
+                try self.defaultLiteralsAtGeneralizationBoundary(.{ .owner = decl_pattern_var, .interface = decl_pattern_var, .binding = decl_pattern_var }, env);
                 try self.judgePendingAccessesAtBoundary(env);
                 self.unify_scratch.clearPersistentOpenings();
                 try self.linkDeferredUsesFrom(env.rank());
@@ -38562,6 +38571,13 @@ const GeneralizedSchemeRequirementKey = struct {
     callable_shape: [32]u8,
 };
 
+const GeneralizedAttachedConstraintKey = struct {
+    fn_name: Ident.Idx,
+    origin_tag: std.meta.Tag(StaticDispatchConstraint.Origin),
+    origin_flag: bool,
+    callable_shape: [32]u8,
+};
+
 fn generalizedCallableShape(
     self: *Self,
     anchors: *const collections.DenseMap(Var, void),
@@ -38592,15 +38608,13 @@ fn dispatchConstraintOriginFlag(origin: StaticDispatchConstraint.Origin) bool {
     };
 }
 
-/// Make each generalized type's requirements of one method a single
-/// relation. A type has one method of each name, so every dot call and
-/// where-clause requirement of that method on the type relates to one callable
-/// type; requirements that cannot are a method conflict
-/// (`relateGeneralizedSameMethodRequirements`). Side-table requirements, whose
-/// receivers need not be generalized types, collapse only when they ask for
-/// the same target with the same finalized callable shape: variables exposed
-/// through the enclosing scheme remain fixed anchors there, and only
-/// requirement-private generalized variables may be renamed.
+/// Collapse requirements that ask for the same target with the same finalized
+/// callable shape. Variables exposed through the enclosing scheme remain fixed
+/// anchors; only requirement-private generalized variables may be renamed.
+/// The boundary has already related each generalized type's same-name
+/// requirements into one relation (`relateSameMethodRequirementsAtBoundary`),
+/// so a receiver's same-name callables share a class here; this keeps repeated
+/// helper uses compact.
 ///
 /// Two same-shape requirements are one relation, so their callables are
 /// unified before the duplicate is dropped: the union-find then records which
@@ -38743,8 +38757,8 @@ fn deduplicateGeneralizedDispatchRequirements(
     defer snapshot.deinit(self.gpa);
     var retained_constraints: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty;
     defer retained_constraints.deinit(self.gpa);
-    var retained_by_name = std.AutoHashMap(Ident.Idx, Var).init(self.gpa);
-    defer retained_by_name.deinit();
+    var retained_by_key = std.AutoHashMap(GeneralizedAttachedConstraintKey, Var).init(self.gpa);
+    defer retained_by_key.deinit();
 
     while (pending_receivers.pop()) |receiver_var| {
         // Unifying two callables appends merged constraint ranges to the
@@ -38759,29 +38773,27 @@ fn deduplicateGeneralizedDispatchRequirements(
             try snapshot.appendSlice(self.gpa, constraints);
         }
 
-        // A type has one method of each name, so a generalized type's
-        // requirements of one method are one relation: they become its
-        // scheme's single requirement of that method.
-        retained_by_name.clearRetainingCapacity();
-        const conflicted = for (snapshot.items) |constraint| {
+        retained_by_key.clearRetainingCapacity();
+        for (snapshot.items) |constraint| {
             // Literal metadata is aggregated by the literal-specific path.
             if (constraint.origin == .from_literal) continue;
-            const entry = try retained_by_name.getOrPut(constraint.fn_name);
+            const key = GeneralizedAttachedConstraintKey{
+                .fn_name = constraint.fn_name,
+                .origin_tag = std.meta.activeTag(constraint.origin),
+                .origin_flag = dispatchConstraintOriginFlag(constraint.origin),
+                .callable_shape = try self.generalizedCallableShape(&anchors, &callable_shapes, constraint.fn_var, value, env),
+            };
+            const entry = try retained_by_key.getOrPut(key);
             if (!entry.found_existing) {
                 entry.value_ptr.* = constraint.fn_var;
                 continue;
             }
-            if (self.types.resolveVar(entry.value_ptr.*).var_ == self.types.resolveVar(constraint.fn_var).var_) continue;
-            const relation = try self.relateGeneralizedSameMethodRequirements(entry.value_ptr.*, constraint, receiver_var, scheme_var, value, env);
+            const merged = try self.unifyEquivalentGeneralizedCallables(entry.value_ptr.*, constraint.fn_var, env);
             self.canonical_key_writer.invalidateAnchoredKeys();
-            switch (relation) {
-                .merged => try self.appendGeneralizedIdentityVars(entry.value_ptr.*, &pending_receivers, value, env),
-                .erroneous => {},
-                .conflict => break true,
+            if (merged) {
+                try self.appendGeneralizedIdentityVars(entry.value_ptr.*, &pending_receivers, value, env);
             }
-        } else false;
-        // The conflict poisoned the receiver, which holds no requirements.
-        if (conflicted) continue;
+        }
 
         const resolved = self.types.resolveVar(receiver_var);
         const constraints_range = contentConstraintRange(resolved.desc.content) orelse continue;
@@ -39025,6 +39037,14 @@ test "issue 11350 singleton dispatch requirements need no deduplication scratch"
 /// Establish two same-shape generalized callables as one relation. Returns
 /// false, leaving the store untouched, when the unifier cannot prove them
 /// equal (the shape digest was a collision).
+fn isFixedLiteralConversion(origin: StaticDispatchConstraint.Origin) bool {
+    const literal = origin.literalKind() orelse return false;
+    return switch (literal) {
+        .numeral, .quote => true,
+        .interpolation => false,
+    };
+}
+
 fn isMethodUseOrigin(origin: StaticDispatchConstraint.Origin) bool {
     return switch (origin) {
         .method_call, .where_clause => true,
@@ -39034,21 +39054,75 @@ fn isMethodUseOrigin(origin: StaticDispatchConstraint.Origin) bool {
 
 const SameMethodRelation = enum { merged, conflict, erroneous };
 
-/// Relate two requirements of one method on a generalized type. When they
-/// cannot be one relation, the uses that introduced them require the type to
-/// have two different methods of that name, which no type can: that is
-/// reported as a method conflict, and the type is poisoned so it reports
-/// nothing further. The report points at the use that introduced the second
-/// requirement when that use is part of `scheme_var`, the definition being
-/// generalized; a requirement another definition introduced is reported at
-/// the definition (`value` when it names one).
-fn relateGeneralizedSameMethodRequirements(
+/// A type has one method of each name, so a type about to be generalized
+/// holds one requirement of each method: relate every type in this boundary's
+/// pool that holds two. Requirements stay separate while the definition is
+/// checked, so each is discharged against the type its receiver resolves to;
+/// only a receiver that is still a type variable here becomes one requirement.
+/// Relating two callables can bring other receivers' requirements together,
+/// so the pool is revisited until a pass relates nothing.
+fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRoot, env: *Env) Allocator.Error!void {
+    const rank = env.rank();
+    var snapshot: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty;
+    defer snapshot.deinit(self.gpa);
+    var retained_by_name = std.AutoHashMap(Ident.Idx, Var).init(self.gpa);
+    defer retained_by_name.deinit();
+    var visited = std.AutoHashMap(Var, void).init(self.gpa);
+    defer visited.deinit();
+
+    var related_any = true;
+    while (related_any) {
+        related_any = false;
+        visited.clearRetainingCapacity();
+        // Relating appends fresh vars to the pool, so it is re-read by index.
+        var index: usize = 0;
+        while (index < env.var_pool.getVarsForRank(rank).len) : (index += 1) {
+            const resolved = self.types.resolveVar(env.var_pool.getVarsForRank(rank)[index]);
+            if (resolved.desc.rank != rank) continue;
+            const flex = switch (resolved.desc.content) {
+                .flex => |flex| flex,
+                .rigid, .alias, .structure, .field_presence, .err => continue,
+            };
+            if (flex.constraints.len() <= 1) continue;
+            if ((try visited.getOrPut(resolved.var_)).found_existing) continue;
+
+            // Relating appends merged constraint ranges to the store, so the
+            // receiver's list is iterated from a private copy.
+            snapshot.clearRetainingCapacity();
+            try snapshot.appendSlice(self.gpa, self.types.sliceStaticDispatchConstraints(flex.constraints));
+            retained_by_name.clearRetainingCapacity();
+            for (snapshot.items) |constraint| {
+                // A number or string literal's conversions are already one
+                // relation: they have one callable type per literal kind.
+                if (isFixedLiteralConversion(constraint.origin)) continue;
+                const entry = try retained_by_name.getOrPut(constraint.fn_name);
+                if (!entry.found_existing) {
+                    entry.value_ptr.* = constraint.fn_var;
+                    continue;
+                }
+                if (self.types.resolveVar(entry.value_ptr.*).var_ == self.types.resolveVar(constraint.fn_var).var_) continue;
+                switch (try self.relateSameMethodRequirements(entry.value_ptr.*, constraint, resolved.var_, roots, env)) {
+                    .merged => related_any = true,
+                    .erroneous => {},
+                    // The conflict poisoned the receiver.
+                    .conflict => break,
+                }
+            }
+        }
+    }
+}
+
+/// Relate two requirements of one method on a type about to be generalized.
+/// When they cannot be one relation, the uses that introduced them require
+/// the type to have two different methods of that name, which no type can:
+/// that is reported as a method conflict, and the type is poisoned so it
+/// reports nothing further.
+fn relateSameMethodRequirements(
     self: *Self,
     retained_fn_var: Var,
     duplicate: StaticDispatchConstraint,
     receiver_var: Var,
-    scheme_var: Var,
-    value: ?Var,
+    roots: []const BoundaryRoot,
     env: *Env,
 ) Allocator.Error!SameMethodRelation {
     const deferred_start = env.deferred_static_dispatch_constraints.len();
@@ -39067,8 +39141,8 @@ fn relateGeneralizedSameMethodRequirements(
         const merged: MergedMethodObligation = .{
             .conflict = try self.methodConflict(retained_fn_var, duplicate, receiver_var),
             .first_fn_var = retained_fn_var,
-            .use_var = self.methodConflictUseVar(duplicate, scheme_var, value),
-            .definition_var = scheme_var,
+            .use_var = self.methodConflictUseVar(duplicate, roots),
+            .definition_var = roots[0].owner,
         };
         var redo = try self.beginCommitProbe(env);
         const redo_result = try redo.unify(retained_fn_var, duplicate.fn_var);
@@ -39090,8 +39164,8 @@ fn relateGeneralizedSameMethodRequirements(
     try self.appendMethodConflict(.{
         .conflict = try self.methodConflict(retained_fn_var, duplicate, receiver_var),
         .first_fn_var = retained_fn_var,
-        .use_var = self.methodConflictUseVar(duplicate, scheme_var, value),
-        .definition_var = scheme_var,
+        .use_var = self.methodConflictUseVar(duplicate, roots),
+        .definition_var = roots[0].owner,
     }, duplicate.fn_var);
     self.types.assertNoSavepointActive();
     try self.types.poisonOnMismatch(receiver_var, receiver_var);
@@ -39128,13 +39202,19 @@ fn appendMethodConflict(self: *Self, merged: MergedMethodObligation, second_fn_v
     } });
 }
 
-fn methodConflictUseVar(self: *Self, duplicate: StaticDispatchConstraint, scheme_var: Var, value: ?Var) Var {
+/// Where a method conflict is reported: at the use that introduced the second
+/// requirement when that use is part of a definition this boundary
+/// generalizes, and otherwise, when another definition introduced it, at the
+/// definition.
+fn methodConflictUseVar(self: *Self, duplicate: StaticDispatchConstraint, roots: []const BoundaryRoot) Var {
     const intro_var = if (constraintIntroExpr(duplicate)) |expr| ModuleEnv.varFrom(expr) else duplicate.fn_var;
-    const definition_region = self.getRegionAt(scheme_var);
     const intro_region = self.getRegionAt(intro_var);
-    const within = intro_region.start.offset >= definition_region.start.offset and
-        intro_region.end.offset <= definition_region.end.offset;
-    return if (within) intro_var else value orelse scheme_var;
+    for (roots) |root| {
+        const definition_region = self.getRegionAt(root.owner);
+        if (intro_region.start.offset >= definition_region.start.offset and
+            intro_region.end.offset <= definition_region.end.offset) return intro_var;
+    }
+    return roots[0].binding orelse roots[0].owner;
 }
 
 fn unifyEquivalentGeneralizedCallables(self: *Self, retained_fn_var: Var, duplicate_fn_var: Var, env: *Env) Allocator.Error!bool {
@@ -39962,6 +40042,7 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
     var boundary_codecs = std.ArrayList(FinalCodecDispatchConstraint).empty;
     defer boundary_codecs.deinit(self.gpa);
 
+    try self.relateSameMethodRequirementsAtBoundary(roots, env);
     try self.relateUndischargedInterpolationParts(env);
 
     try self.closeBoundaryLocalDerivedCodecRecordRows(roots, env);

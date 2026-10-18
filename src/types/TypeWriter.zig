@@ -544,10 +544,27 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_le
         StaticDispatchTmp.sort,
     );
 
+    // Requirements that print identically show once: a type still being
+    // checked can hold several uses of one method at the same type.
+    var kept: usize = 0;
+    for (self.static_dispatch_constraints_tmp.items) |constraint| {
+        const text = self.buf_tmp.items[constraint.start..][0..constraint.len];
+        const repeated = for (self.static_dispatch_constraints_tmp.items[0..kept]) |earlier| {
+            if (std.mem.eql(u8, text, self.buf_tmp.items[earlier.start..][0..earlier.len])) break true;
+        } else false;
+        if (repeated) {
+            total_constraint_len -= constraint.len;
+            continue;
+        }
+        self.static_dispatch_constraints_tmp.items[kept] = constraint;
+        kept += 1;
+    }
+    self.static_dispatch_constraints_tmp.shrinkRetainingCapacity(kept);
+
     // Calculate line lengths for different formatting options
 
     // Length of all ", " between constraints
-    const separator_len = (self.static_dispatch_constraints.items.len - 1) * 2; // ", " between each
+    const separator_len = (self.static_dispatch_constraints_tmp.items.len - 1) * 2; // ", " between each
 
     // Length of all constraints, separators, plus open/closing brackets
     const constraints_len_if_on_same_line = total_constraint_len + separator_len + 2; // extra two the open/closing []

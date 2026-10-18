@@ -12311,17 +12311,22 @@ Other solved-graph mutations:
   the original type. Only successful ordinary unification with the aggregate
   skeleton commits the expected-shape relation; the owning relation still checks the actual
   value against the complete expected type.
+- `relateSameMethodRequirementsAtBoundary` (`relateSameMethodRequirements`
+  committed probe)—policy: one requirement per method on a type about to be
+  generalized, as declared in Static Dispatch At The Checked Boundary
+  ("Evidence params"). Each same-name callable pair on a receiver still flex
+  at the boundary's rank is related through an ordinary committed probe; a
+  probe that cannot establish the pair rolls back, reports the method
+  conflict, and poisons the receiver. A relation that defers obligations is
+  redone after recording the two method types, so an obligation that later
+  fails reports the method conflict and poisons the definition.
 - `deduplicateGeneralizedDispatchRequirements` (`setVarContent` of a retained
-  constraint list, `relateGeneralizedSameMethodRequirements` and
-  `unifyEquivalentGeneralizedCallables` committed probes)—policy: one
-  requirement per method on a generalized type, and evidence-param collapse of
-  same-shape side-table requirements, as declared in Static Dispatch At The
-  Checked Boundary ("Evidence params"). A generalized receiver's same-name
-  callables are unified through an ordinary committed probe before the
-  receiver's constraint list is rewritten without the duplicate; a probe that
-  cannot establish the pair rolls back, reports the method conflict, and
-  poisons the receiver. A side-table duplicate whose probe cannot establish
-  the pair rolls back and keeps both. Deciding whether a
+  constraint list, `unifyEquivalentGeneralizedCallables` committed probe)—
+  policy: evidence-param collapse of same-shape requirements as declared in
+  Static Dispatch At The Checked Boundary ("Evidence params"). The duplicate
+  callable is unified with the retained one through an ordinary committed
+  probe before the receiver's constraint list is rewritten without it; a probe
+  that cannot establish the pair rolls back and keeps both. Deciding whether a
   scheme has anything to deduplicate is mechanism: the walk skips classes the
   type store records as settled (`TypeStore.markSettled`), which hold no
   identity with more than one constraint and no row, and when nothing can merge
@@ -15383,16 +15388,21 @@ list is the shared identity between a plan's `constraint(k)` resolution and
 the k-th evidence entry a call edge supplies. The definition's module and any
 importing module enumerate identical lists from their structural copies of the
 scheme. A where clause's own repeated requirements of one method share one
-callable type. While a definition is checked, dot-method calls and requirements
-instantiated from a callee's where clause are pending uses of the receiver's
-method: they retain separate callable relations, and when the receiver becomes
-concrete each is discharged against that type's one method, whose rank-1
-scheme each use may instantiate differently (one `U64.parser_for` serves a use
-at `Json` and another at a second format). Operators and literal conversions
-retain one numeric/defaulting relation per method identity, which every
-same-name relation on that receiver must satisfy. A type has one method of
-each name, so when a receiver is generalized instead, its requirements of one
-method become one requirement: generalization relates their callables, and an
+callable type. While a definition is checked, dot-method calls, operators,
+interpolations, and requirements instantiated from a callee's where clause are
+pending uses of the receiver's method: they retain separate callable
+relations, and when the receiver becomes concrete each is discharged against
+that type's one method, whose rank-1 scheme each use may instantiate
+differently (one `U64.parser_for` serves a use at `Json` and another at a
+second format, and one `plus` generic in its other argument serves `+ 1.U8`
+and `+ "s"`). Whether a program checks therefore does not depend on whether
+the receiver became concrete before or after its uses. A number or string
+literal's conversion has one callable type for every literal of its kind, so
+those share one relation per literal kind from the start; relating them can
+neither fail nor bind anything else. A type has one method of each name, so
+when a receiver is still a type variable at its definition's generalization
+boundary, its requirements of one method become one requirement: the boundary
+relates their callables before it defaults literals and generalizes, and an
 inferred scheme never holds two requirements of one method on one type.
 Requirements that cannot be one are a type mismatch. The report says the use
 requires the type to have two different methods of that name and shows both
@@ -15409,11 +15419,9 @@ dispatch-target record. It never matches records by union-find root, because
 unrelated dispatches whose callables later unify would then share a record.
 Same-name relations must agree on fixed outer function properties:
 rank-1 instantiation can vary types but cannot vary a declaration's argument
-count or known effect mode. Once a scheme's public type is fixed, a generalized
-receiver's same-name requirements are related into one (above). Side-table
-requirements, whose receivers need not be generalized types, collapse only
-when their only differences are private generalized variables; public type
-variables remain identity anchors there. Collapsing unifies the duplicate's
+count or known effect mode. Once a scheme's public type is fixed, equivalent
+requirements whose only differences are private generalized variables collapse;
+public type variables remain identity anchors. Collapsing unifies the duplicate's
 callable with the retained one before dropping it, so the union-find records
 which retained private variable each dropped variable stands for: scheme-use
 pairs, nested evidence keys, and body expressions typed by the dropped callable
