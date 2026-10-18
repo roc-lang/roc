@@ -5365,18 +5365,49 @@ roots, the sorted request stream, stored `ConstStore` payloads, and sparse
 lookup indexes.
 
 Canonicalization outputs the initial exact strict-demand edges between top-level
-definitions. Literal conversions remain leaves in that initial relation because
-their method target does not exist until static dispatch resolves. At the checked
-boundary, checking supplies the exact literal-constraint-function-variable to
-local-method-target relation and reruns the same demand analysis once. Demand
-summaries retain an unresolved literal requirement while it is polymorphic;
-when a callable is demanded, the checker-produced `SchemeUseRecord` pairs map
-that requirement through each concrete instantiation until its selected target
-is exact. A resolved conversion is an eager call, so the selected callable
-body's top-level demands flow into its caller exactly like those of any other
-statically known call. The resulting relation replaces the initial one, and
-checking applies the ordinary SCC non-function-cycle rule before constructing
-the CheckedModule.
+definitions. Literal conversions and method dispatches remain leaves in that
+initial relation because their method targets do not exist until static
+dispatch resolves. At the checked boundary, checking supplies every selected
+dispatch target (literal conversions, method calls, operators, interpolation,
+`for` loop iteration, and the component dispatches derived for a derived
+method, structural comparison, or hash) and reruns the same demand analysis
+once. Demand summaries retain an unresolved dispatch requirement while it is
+polymorphic; when a callable is demanded, the checker-produced
+`SchemeUseRecord` pairs map that requirement through each concrete
+instantiation until its selected target is exact, so a `where`-clause method
+demands only the body its own instantiation selects. A resolved dispatch is an
+eager call, so the selected callable body's top-level demands flow into its
+caller exactly like those of any other statically known call. The resulting
+relation replaces the initial one, and checking applies the ordinary SCC
+non-function-cycle rule before constructing the CheckedModule.
+
+### Function Values In Strict Demand
+
+A cycle among compile-time values is a reference cycle: a value that can reach
+itself through the code its evaluation can run is a "circular value
+definition", even when the reference sits in a branch that never runs. The
+compiler has no notion of an execution cycle. Function values are part of that
+code once something can call them. A value's evaluation can call a function
+value it does not name when it calls a computed value, calls through a binder
+that no call site's argument resolves, or calls a function that can itself do
+so. Whenever it can, every function value its evaluation references joins its
+demand: each lambda, closure, or function definition it uses as a value, and
+every function value held by a value it reads. Their bodies' demands flow into
+the value exactly as a direct call's do. A value whose evaluation cannot call
+an unnamed function value only stores the function values it builds, so a
+constant may hold a closure that reads that constant
+(`handlers = [Box.box(|k| List.len(handlers) + k)]`).
+
+Whether calling a top-level definition can invoke a function value it does not
+name is durable checked data (`ModuleEnv.invoking_defs`): a function whose
+body can, and every definition holding a value, whose call invokes whatever
+function it holds. An importer reads it for each imported function it calls,
+including a method dispatch that selects a foreign target. Imports are
+acyclic, so an imported function's body can never demand the importer's
+values, and the record is the only thing an importer needs from it.
+Canonicalization's initial relation has no knowledge of imported functions,
+so it leaves function values out; the checked relation alone applies this
+rule.
 
 The finalized edges are durable `ModuleEnv` data, serialized independently of
 the transient SCC evaluation order, because `RootRequestTable` scheduling and
