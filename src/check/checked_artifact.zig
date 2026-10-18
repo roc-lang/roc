@@ -36235,6 +36235,7 @@ fn scanLoweringVisibleNames(module_env: *const ModuleEnv, visitor: anytype) Allo
             .diag_private_type_in_exposed_field,
             .diag_type_from_missing_module,
             .diag_module_not_imported,
+            .diag_public_type_not_defined,
             .diag_nested_type_not_found,
             .diag_internal_builtin_type,
             .diag_nested_value_not_found,

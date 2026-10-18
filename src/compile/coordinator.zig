@@ -869,6 +869,9 @@ pub const PublicModuleTarget = struct {
         unresolved_nested_type,
         /// Stable exact declaration selected from the completed source CIR.
         type_decl: CIR.Statement.Idx,
+        /// The completed source module defines no exposed type by this name.
+        /// The header that selected it and every import of it report that.
+        missing_nested_type,
     };
 
     pub fn logicalModule(self: PublicModuleTarget) []const u8 {
@@ -1471,6 +1474,7 @@ pub const Coordinator = struct {
                     .type_check => |t| {
                         payload_alloc.free(t.imported_envs);
                         payload_alloc.free(t.deferred_imports);
+                        payload_alloc.free(t.missing_public_types);
                         payload_alloc.free(t.imported_artifacts);
                         payload_alloc.free(t.available_artifacts);
                         payload_alloc.free(t.explicit_roots);
@@ -3797,12 +3801,10 @@ pub const Coordinator = struct {
             if (!std.mem.eql(u8, target.logicalModule(), mod.name)) break;
             switch (target.selection) {
                 .unresolved_nested_type => {
-                    const nested_type = target.unresolvedNestedType() orelse unreachable;
-                    const statement = compile_package.resolveSelectedType(env, target.source_target) orelse
-                        coordinatorInvariant(
-                            "public nested type '{s}.{s}' had no exposed declaration",
-                            .{ mod.name, nested_type },
-                        );
+                    const statement = compile_package.resolveSelectedType(env, target.source_target) orelse {
+                        target.selection = .missing_nested_type;
+                        continue;
+                    };
                     target.source_target = try self.gpa.realloc(target.source_target, target.logical_module_len);
                     target.selection = .{ .type_decl = statement };
                 },
@@ -3811,7 +3813,7 @@ pub const Coordinator = struct {
                         target.selection = .{ .type_decl = statement };
                     }
                 },
-                .type_decl => {},
+                .type_decl, .missing_nested_type => {},
             }
         }
     }
@@ -4596,6 +4598,11 @@ pub const Coordinator = struct {
 
         const deferred_imports = try self.buildCanonicalizeImports(pkg, mod, task_payload_alloc);
         errdefer task_payload_alloc.free(deferred_imports);
+        const missing_public_types = if (pkg.root_module_id == module_id)
+            try buildMissingPublicTypes(pkg, task_payload_alloc)
+        else
+            &.{};
+        errdefer task_payload_alloc.free(missing_public_types);
 
         mod.phase = .TypeCheck;
         try self.enqueueTask(.{
@@ -4607,6 +4614,7 @@ pub const Coordinator = struct {
                 .module_env = mod.moduleEnv().?,
                 .imported_envs = imported_envs,
                 .deferred_imports = deferred_imports,
+                .missing_public_types = missing_public_types,
                 .imported_artifacts = imported_artifacts,
                 .available_artifacts = available_artifacts,
                 .platform_requirements = platform_surface,
@@ -4614,6 +4622,26 @@ pub const Coordinator = struct {
                 .validation = mod.validation,
             },
         });
+    }
+
+    /// The public names a package root's header exposes whose selected nested
+    /// type its module does not define. Every module a header exposure selects
+    /// from is one of the root's imports, so each selection is settled here.
+    fn buildMissingPublicTypes(
+        pkg: *const PackageState,
+        allocator: Allocator,
+    ) Allocator.Error![]const []const u8 {
+        var missing = std.ArrayList([]const u8).empty;
+        errdefer missing.deinit(allocator);
+
+        var target_it = pkg.public_module_targets.iterator();
+        while (target_it.next()) |entry| {
+            switch (entry.value_ptr.selection) {
+                .missing_nested_type => try missing.append(allocator, entry.key_ptr.*),
+                .whole_module, .type_decl, .unresolved_nested_type => {},
+            }
+        }
+        return missing.toOwnedSlice(allocator);
     }
 
     fn buildExplicitRootRequests(
@@ -4817,18 +4845,26 @@ pub const Coordinator = struct {
                         coordinatorInvariant("successful external import '{s}' had no module environment", .{ext_name});
                     const public_target = self.getExternalPublicTarget(pkg.name, ext_name) orelse
                         coordinatorInvariant("successful external import '{s}' had no public target", .{ext_name});
+                    const selected_type_decl: ?CIR.Statement.Idx = switch (public_target.selection) {
+                        .type_decl => |statement| statement,
+                        .whole_module => null,
+                        .missing_nested_type => {
+                            try imports.append(allocator, .{
+                                .import_name = ext_name,
+                                .resolution = .missing_public_type,
+                            });
+                            continue;
+                        },
+                        .unresolved_nested_type => coordinatorInvariant(
+                            "successful external import '{s}' had an unresolved public nested type",
+                            .{ext_name},
+                        ),
+                    };
                     try imports.append(allocator, .{
                         .import_name = ext_name,
                         .resolution = .{ .available = .{
                             .module_env = ext_env,
-                            .selected_type_decl = switch (public_target.selection) {
-                                .type_decl => |statement| statement,
-                                .whole_module => null,
-                                .unresolved_nested_type => coordinatorInvariant(
-                                    "successful external import '{s}' had an unresolved public nested type",
-                                    .{ext_name},
-                                ),
-                            },
+                            .selected_type_decl = selected_type_decl,
                         } },
                     });
                 },
@@ -5971,6 +6007,7 @@ pub const Coordinator = struct {
         const env = task.module_env;
         defer task_allocs.result.free(task.imported_envs);
         defer task_allocs.result.free(task.deferred_imports);
+        defer task_allocs.result.free(task.missing_public_types);
         defer task_allocs.result.free(task.imported_artifacts);
         defer task_allocs.result.free(task.available_artifacts);
         defer if (task.platform_requirements) |surface| {
@@ -6005,6 +6042,7 @@ pub const Coordinator = struct {
             task.validation,
             ctfe_options,
             .{ .explicit = task.deferred_imports },
+            task.missing_public_types,
         );
         defer typecheck_output.deinit();
         // On error the coordinator still owns the input environment. Transfer

@@ -1220,6 +1220,13 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .public_type_not_defined = .{
+            .import_name = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .nested_type_not_found = .{
             .parent_name = rand_ident_idx(),
             .nested_name = rand_ident_idx(),
