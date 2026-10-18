@@ -22,7 +22,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 8;
+pub const format_version: u32 = 9;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// artifact holding its procedure, and the ownership signature and
@@ -31,8 +31,6 @@ pub const format_version: u32 = 8;
 pub const SpecEntry = struct {
     key: [32]u8,
     artifact: u32,
-    /// Null is an authoritative independent summary, not missing metadata.
-    platform_requirement_relation: ?[32]u8 = null,
     /// The compile-time roots the procedure's code reads, which a linking
     /// program demands (`Common.SpecCacheHit.comptime_root_reads`).
     comptime_root_reads: []const lir.CheckedPipeline.ComptimeRootRead = &.{},
@@ -438,8 +436,6 @@ fn writeSpecs(writer: *Writer, specs: []const SpecEntry) Allocator.Error!void {
     for (specs) |spec| {
         try writer.raw(&spec.key);
         try writer.word(spec.artifact);
-        try writer.byte(@intFromBool(spec.platform_requirement_relation != null));
-        if (spec.platform_requirement_relation) |relation| try writer.raw(&relation);
         try writer.word(@intCast(spec.comptime_root_reads.len));
         for (spec.comptime_root_reads) |root_read| {
             try writer.raw(&root_read.module);
@@ -464,11 +460,6 @@ fn readSpecs(reader: *Reader, arena_allocator: Allocator, count: u32, artifact_c
         spec.* = .{
             .key = (try reader.raw(32))[0..32].*,
             .artifact = try reader.word(),
-            .platform_requirement_relation = switch (try reader.byte()) {
-                0 => null,
-                1 => (try reader.raw(32))[0..32].*,
-                else => return error.MalformedPack,
-            },
             .comptime_root_reads = reads: {
                 const reads = try arena_allocator.alloc(lir.CheckedPipeline.ComptimeRootRead, try reader.word());
                 for (reads) |*root_read| root_read.* = .{ .module = (try reader.raw(32))[0..32].*, .root = try reader.word() };
@@ -733,9 +724,9 @@ test "pack bytes round-trip every artifact field and spec entry" {
     try testing.expectError(error.MalformedPack, read(testing.allocator, bytes[0 .. bytes.len - 1]));
 }
 
-test "pack preserves independent and relation-dependent semantic summaries" {
+test "pack round-trips spec summaries and declines a previous format" {
     const Attempt = struct {
-        fn run(allocator: Allocator, relation: ?[32]u8) (ReadError || error{ TestExpectedEqual, TestExpectedError, TestUnexpectedError })!void {
+        fn run(allocator: Allocator) (ReadError || error{ TestExpectedEqual, TestExpectedError, TestUnexpectedError })!void {
             const set = ProcArtifact.Set{
                 .arena = collections.SingleThreadArena.init(allocator),
                 .artifacts = &.{.{
@@ -751,7 +742,6 @@ test "pack preserves independent and relation-dependent semantic summaries" {
             const bytes = try write(allocator, &set, &.{.{
                 .key = @as([32]u8, @splat(7)),
                 .artifact = 0,
-                .platform_requirement_relation = relation,
                 .rc_borrowed_params = 1,
                 .rc_ret_borrowed = true,
                 .rc_ret_lenders = 1,
@@ -763,7 +753,7 @@ test "pack preserves independent and relation-dependent semantic summaries" {
             defer allocator.free(bytes);
             var pack = try read(allocator, bytes);
             defer pack.deinit();
-            try std.testing.expectEqualDeep(relation, pack.specs[0].platform_requirement_relation);
+            try std.testing.expectEqual(@as(u64, 1), pack.specs[0].rc_borrowed_params);
             const rewritten = try write(allocator, &pack.set, pack.specs);
             defer allocator.free(rewritten);
             try std.testing.expectEqualSlices(u8, bytes, rewritten);
@@ -774,9 +764,7 @@ test "pack preserves independent and relation-dependent semantic summaries" {
             try std.testing.expectError(error.UnsupportedPackVersion, read(allocator, old));
         }
     };
-    for ([_]?[32]u8{ null, @as([32]u8, @splat(0)), @as([32]u8, @splat(9)) }) |relation| {
-        try std.testing.checkAllAllocationFailures(std.testing.allocator, Attempt.run, .{relation});
-    }
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Attempt.run, .{});
 }
 
 test "pack writes program-local constants and every reference to them under content names" {

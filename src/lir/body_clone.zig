@@ -1829,6 +1829,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .target = try self.mapLocal(s.target),
                     .value = s.value,
                     .fresh_alternative = s.fresh_alternative,
+                    .list_len = s.list_len,
                     .next = s.next,
                 } },
                 .assign_call => |s| .{ .assign_call = .{
@@ -2464,6 +2465,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 const source = self.store.inlineScope(scope);
                 const mapped = try self.store.addInlineScope(.{
                     .source_identity = source.source_identity,
+                    .copies_site_code = source.copies_site_code,
                     .source_name = source.source_name,
                     .source_loc = source.source_loc,
                     .call_site = source.call_site,
@@ -2783,6 +2785,7 @@ test "body_clone scratch is bounded by reachable locals and scopes" {
     defer store.deinit();
     const scope: LIR.InlineScope = .{
         .source_identity = LIR.ProcIdentity.forTest(1),
+        .copies_site_code = false,
         .source_name = .none,
         .source_loc = .none,
         .call_site = .none,

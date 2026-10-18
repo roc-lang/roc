@@ -5798,44 +5798,65 @@ pub const ReportBuilder = struct {
     }
 
     fn buildRedundantPatternReport(self: *Self, data: RedundantPattern) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Redundant Pattern", "", .warning);
-        errdefer report.deinit();
-        try D.renderSliceInto(&.{
-            D.bytes("The"),
-            D.num_ord(data.problem_branch_index + 1),
-            D.bytes("branch of this"),
-            D.bytes("match").withAnnotation(.keyword),
-            D.bytes("is redundant."),
-        }, self, &report, &report.headline);
-
-        // Cast Expr.Idx to Var (they're parallel arrays)
-        try self.addSourceHighlight(&report, regionIdxFrom(data.match_expr));
-        try report.document.addLineBreak();
-
-        try D.renderSlice(&.{
-            D.bytes("This pattern can never match because earlier patterns already cover all the values it would match."),
-        }, self, &report);
-
-        return report;
+        return self.buildUselessPatternReport("Redundant Pattern", data.match_expr, data.branch_index, data.part, "is redundant.", .{
+            .one = "This pattern can never match because earlier patterns already cover all the values it would match.",
+            .many = "These patterns can never match because earlier patterns already cover all the values they would match.",
+        });
     }
 
     fn buildUnmatchablePatternReport(self: *Self, data: UnmatchablePattern) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Unmatchable Pattern", "", .warning);
-        errdefer report.deinit();
-        try D.renderSliceInto(&.{
-            D.bytes("The"),
-            D.num_ord(data.problem_branch_index + 1),
-            D.bytes("branch of this"),
-            D.bytes("match").withAnnotation(.keyword),
-            D.bytes("can never match."),
-        }, self, &report, &report.headline);
+        return self.buildUselessPatternReport("Unmatchable Pattern", data.match_expr, data.branch_index, data.part, "can never match.", .{
+            .one = "This pattern matches a type that has no possible values (an uninhabited type), so no value can ever match it.",
+            .many = "Each of these patterns matches a type that has no possible values (an uninhabited type), so no value can ever match it.",
+        });
+    }
 
-        // Cast Expr.Idx to Var (they're parallel arrays)
-        try self.addSourceHighlight(&report, regionIdxFrom(data.match_expr));
+    /// A warning about a match branch, or one `|` alternative of it, that can
+    /// never match. It highlights exactly the patterns it is about.
+    fn buildUselessPatternReport(
+        self: *Self,
+        title: []const u8,
+        match_expr: CIR.Expr.Idx,
+        branch_index: u32,
+        part: problem_mod.MatchBranchPart,
+        verdict: []const u8,
+        explanation: struct { one: []const u8, many: []const u8 },
+    ) Allocator.Error!Report {
+        const store = &self.can_ir.store;
+        const match = store.getExpr(match_expr).e_match;
+        const branch = store.getMatchBranch(store.matchBranchSlice(match.branches)[branch_index]);
+        const branch_patterns = store.sliceMatchBranchPatterns(branch.patterns);
+
+        var report = try Report.init(self.gpa, title, "", .warning);
+        errdefer report.deinit();
+        if (part.alternativeIndex()) |alternative_index| {
+            try D.renderSliceInto(&.{
+                D.bytes("The"),
+                D.num_ord(alternative_index + 1),
+                D.bytes("pattern in the"),
+                D.num_ord(branch_index + 1),
+                D.bytes("branch of this"),
+                D.bytes("match").withAnnotation(.keyword),
+                D.bytes(verdict),
+            }, self, &report, &report.headline);
+            const pattern = store.getMatchBranchPattern(branch_patterns[alternative_index]).pattern;
+            try self.addSourceWarningRegion(&report, store.getPatternRegion(pattern));
+        } else {
+            try D.renderSliceInto(&.{
+                D.bytes("The"),
+                D.num_ord(branch_index + 1),
+                D.bytes("branch of this"),
+                D.bytes("match").withAnnotation(.keyword),
+                D.bytes(verdict),
+            }, self, &report, &report.headline);
+            const first = store.getPatternRegion(store.getMatchBranchPattern(branch_patterns[0]).pattern);
+            const last = store.getPatternRegion(store.getMatchBranchPattern(branch_patterns[branch_patterns.len - 1]).pattern);
+            try self.addSourceWarningRegion(&report, Region.from_raw_offsets(first.start.offset, last.end.offset));
+        }
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
-            D.bytes("This pattern matches a type that has no possible values (an uninhabited type), so no value can ever match it."),
+            D.bytes(if (part == .whole_branch and branch_patterns.len > 1) explanation.many else explanation.one),
         }, self, &report);
 
         return report;

@@ -650,9 +650,6 @@ pub fn staticDataNodeSymbolName(allocator: Allocator, owner: u32, index: u32) Al
 pub const SpecProc = struct {
     key: [32]u8,
     proc: LIR.LirProcSpecId,
-    /// Producer-established app filling on which this procedure depends;
-    /// absent for code reusable independently of any platform requirement.
-    platform_requirement_relation: ?[32]u8 = null,
 };
 
 /// Everything one lowering produced: the procedure store, its layouts, the
@@ -661,6 +658,10 @@ pub const Result = struct {
     store: LirStore,
     layouts: layout.Store,
     root_procs: std.ArrayList(LIR.LirProcSpecId) = .empty,
+    /// Procedures this program keeps though nothing it compiles reaches
+    /// them: the lambda-set members an object-cache entry it takes calls by
+    /// identity, which the program supplies its own code for.
+    retained_procs: std.ArrayList(LIR.LirProcSpecId) = .empty,
     /// The procedure lowered for each template specialization, by the
     /// specialization's content key (`Monotype.Ast.specIdentityKey`). Only
     /// the specialization's own procedure is listed, never SpecConstr clones
@@ -763,6 +764,7 @@ pub const Result = struct {
         self.requested_layouts.deinit(allocator);
         self.root_metadata.deinit(allocator);
         self.root_procs.deinit(allocator);
+        self.retained_procs.deinit(allocator);
         self.spec_procs.deinit(allocator);
         self.layouts.deinit();
         self.store.deinit();
