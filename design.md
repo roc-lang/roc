@@ -611,11 +611,19 @@ A URL-package module also gets an optimized object pack, filed in the same
 layout under `<target>-speed/pkg/`: its closed exports lowered under the
 optimized LIR policy and compiled by LLVM into one object, with the same spec
 table naming each entry's procedure. The object defines everything its code
-needs (procedures, constants, refcount helpers, builtins) as internal symbols
-and exports, for each entry it offers, a weak C-ABI entry
-`roc__c{hash}`, the procedure's arguments and result classified by
-`layout.abi` exactly as for a hosted call. Two such objects may export one
-entry; the link keeps one. An entry whose code makes an erased call or builds
+needs: procedures, refcount helpers, and builtins as internal symbols, and
+each constant as weak readonly data under its `roc__h` content name, so two
+objects carrying one constant share a single copy in the link. It exports,
+for each entry it offers, a weak C-ABI entry `roc__c{hash}`, the procedure's
+arguments and result classified by `layout.abi` exactly as for a hosted
+call. Two such objects may export one entry; the link keeps one. Not every
+object format can place a weak symbol inside a datum, so a constant's symbol
+in an object pack marks its first byte: a constant whose symbol sits some
+bytes into its data is named as the datum anchored at its first byte, with
+that offset folded into every reference to it
+(`ContentNames.initObjectData`). A code pointer in a constant (an erased
+callable's procedure or capture drop helper) names the function the object
+defines. An entry whose code makes an erased call or builds
 an erased callable is not offered, since the erased-call runtime is passed the
 program's own layout indices, and a module whose object needs the runtime at
 all gets no object pack.

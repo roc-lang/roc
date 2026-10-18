@@ -8272,7 +8272,7 @@ fn customLinkedObjectPack(
         return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "optimized object packs link on ELF and Mach-O hosts" };
     }
     const roc_file = "test/cli/linked_object_pack/App.roc";
-    const expected = "sum of squares to 10: 385\n506\n";
+    const expected = "sum of squares to 10: 385\n506\n29\n";
     var stores: [2][]const u8 = undefined;
     for (&stores, 0..) |*store_root, store_index| {
         const cache_root = std.fmt.allocPrint(allocator, "{s}/linked_pack_cache_{d}", .{ env.dirs.work_dir, store_index }) catch |err|
@@ -8386,9 +8386,9 @@ fn customRunObjectCache(
         return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
     const Step = struct { roc_file: []const u8, args: []const []const u8, stdout: []const u8, counter: ?[]const u8 };
     const steps = [_]Step{
-        .{ .roc_file = "test/cli/linked_object_pack/App.roc", .args = &.{ "run", "--no-cache", "--opt=dev" }, .stdout = "sum of squares to 10: 385\n506\n", .counter = null },
-        .{ .roc_file = "test/cli/linked_object_pack/App.roc", .args = &.{ "run", "--opt=dev" }, .stdout = "sum of squares to 10: 385\n506\n", .counter = "linked procs: " },
-        .{ .roc_file = "test/cli/linked_object_pack/App.roc", .args = &.{ "run", "--opt=dev" }, .stdout = "sum of squares to 10: 385\n506\n", .counter = "linked procs: " },
+        .{ .roc_file = "test/cli/linked_object_pack/App.roc", .args = &.{ "run", "--no-cache", "--opt=dev" }, .stdout = "sum of squares to 10: 385\n506\n29\n", .counter = null },
+        .{ .roc_file = "test/cli/linked_object_pack/App.roc", .args = &.{ "run", "--opt=dev" }, .stdout = "sum of squares to 10: 385\n506\n29\n", .counter = "linked procs: " },
+        .{ .roc_file = "test/cli/linked_object_pack/App.roc", .args = &.{ "run", "--opt=dev" }, .stdout = "sum of squares to 10: 385\n506\n29\n", .counter = "linked procs: " },
         // A build writes the app's dev packs; a run is served from them.
         .{ .roc_file = "test/cli/proc_identity_object_cache/Method.roc", .args = &.{ "build", "--opt=dev", method_out }, .stdout = "", .counter = null },
         .{ .roc_file = "test/cli/proc_identity_object_cache/Method.roc", .args = &.{ "run", "--opt=dev" }, .stdout = "total 15\n", .counter = "external procs: " },
