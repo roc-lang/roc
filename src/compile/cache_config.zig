@@ -333,7 +333,10 @@ pub const Constants = struct {
     ///      resolution selected for them.
     /// 152: a nested procedure site records whether its module's source
     ///      calls it at exactly one site.
-    pub const CACHE_VERSION = 152;
+    /// 153: a package or platform header's qualified exposures record a
+    ///      deferred reference, and canonical diagnostics gain
+    ///      `public_type_not_defined`.
+    pub const CACHE_VERSION = 153;
 };
 
 /// Configuration for the Roc cache system.

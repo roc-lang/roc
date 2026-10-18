@@ -2505,19 +2505,19 @@ zeroed unused bytes. Longer literals use the allocating runtime constructor.
 This is representation lowering of explicit LIR literal bytes; it introduces no
 ownership decisions and leaves all explicit LIR ARC statements intact.
 
-The physical runtime representation of values is defined once, by the structs
+The runtime encoding of values is defined once, by the structs
 and constants in `src/builtins`: `RocStr` and `RocList` field order and word
 count, the small-string flag and length mask, the seamless-slice tag, the
 capacity shift, the refcount word's position, data-pointer tag bits, and the
 static-data refcount sentinel, and `RocDec`'s scale. Every backend and
-`layout.Store` derives these facts from those definitions, scaling field
+`layout.Store` derives these constants from those definitions, scaling field
 offsets to the target word size with the builtins' target-width helpers, and
 never re-spells them as literals. Where emitted code depends on a particular
 value (for example a signed test of the length word standing in for the
 small-string flag, or `i32.eqz` standing in for the static sentinel), the
 emitting helper comptime-asserts that dependency. Copies that cannot import
 `builtins`, such as the freestanding default-platform views and the Python
-debugger scripts, are locked to the canonical definitions by tests. Likewise,
+debugger scripts, are locked to the definitions in `src/builtins` by tests. Likewise,
 each platform C ABI's argument-register counts are declared once in
 `layout.abi`, and the dev backend's register lists comptime-assert their
 lengths against them.
@@ -2664,6 +2664,11 @@ A package target consists of a lowercase package alias, one `.`, and its public
 module name; any later dotted segments are nested types. Package consumers
 cannot name the package's internal source path. A package header may bind a
 public module name to one exact internal target with an explicit local import.
+A header entry such as `Util.Inner` selects a nested type; whether `Util`
+defines it is settled once, when `Util` completes, as either the selected
+declaration or an explicit missing outcome. That missing outcome is user-facing:
+the header's own import resolution reports it at the entry, and each package
+import of that public name reports it at the import.
 
 Resolution normalizes local targets to one package-root-relative logical path
 before graph insertion. That logical path is the module identity, so distinct
@@ -13798,14 +13803,34 @@ it actually reaches. A request that lowers the callee body in the caller's own
 draft (a caller-owned lexical specialization or an eager iterator completion)
 still replays them, because that replay is the body's own relation production.
 
-Repeated dependency requests are memoized by the complete procedure family
-(template, method scope, and checked source-function key), exact evidence
-topology, and the complete open input interface. Inputs include the function
+Repeated dependency requests are memoized by the procedure family (template
+and method scope), exact evidence topology, and the complete open input
+interface. The checked source-function key through which a call site reached
+the template is not part of a summary's identity: it names how that site
+spelled the callee's type, and the request's input already carries everything
+the instantiation constrains. Inputs include the function
 request and the scheme substitution cells, with their sharing and checked-error
 slots. An input identity is captured when its dependency is consumed, after the
 preceding explicit relations. Applying defaults is never part of cache identity.
 Digests select buckets; exact input constraints and evidence are the collision
 authorities.
+
+A request's input omits the finished-type witness of every open class. The
+witness records how the requesting graph reached a class, not what the request
+constrains: a body lowered at its sealed request imports every cell of its root
+from a finished Monotype, while the expansion that reached the same callee
+inside that body's caller related live cells of identical structure. Requests
+that differ only in witnesses therefore share one input identity and one
+summary, and expansion runs on detached inputs that carry none. Relating a
+summary back leaves each request cell's own witness in place, so replay and
+fresh expansion agree. A witness that expansion itself attaches to a class is
+part of its output constraints and is replayed like any other. Keying on input
+witnesses would make every body on a call chain re-expand the transitive
+interfaces its caller's expansion already summarized, and a witness on
+structure enclosing a parametric hole would carry the hole's contents into the
+identity. The pins are the monotype capture test "interface request identity
+omits finished witnesses of open classes" and the compile test "interface
+summary replay into a body's finished request lowers like a fresh expansion".
 
 A Roc template without evidence parameters cannot dispatch on its quantified
 variables, so its interface relates a quantified variable only by unification
@@ -13951,12 +13976,17 @@ recursive entries remain graph-local. Replay must agree with fresh checked
 relation expansion, including unresolved state and relationships between roots.
 Agreement is judged up to what a producing graph chooses arbitrarily: local
 numbering, the order in which a row's members were joined, a named-instance
-group with a single member inside the interface, and whether a class that
-finished as a settled type and carries no other evidence was captured as open
-structure or as its settled leaf. Recursive-slot and forced-dynamic membership
-decide only iterator representations, so they are no evidence on a class that
-finished as a type containing no iterator interface. An unchanged summary
-stands for its input.
+group with a single member inside the interface, whether a class whose content
+is settled and carries no other evidence was captured as open structure or as
+its settled leaf, and whether an open class carries a finished-type witness.
+A witness is no evidence: replaying an unchanged summary relates nothing back,
+while a fresh expansion relates witnessed copies of its settled leaves, so
+whether a class acquired one records which history reached it (pinned by the
+monotype test "interface agreement ignores finished witnesses of open
+classes"). Recursive-slot
+and forced-dynamic membership decide only iterator representations, so they
+are no evidence on a class that settles as a type containing no iterator
+interface. An unchanged summary stands for its input.
 
 Digest discovery encodes each uncached node's scalar bytes once and retains
 ordered child offsets. Acyclic resolution and cyclic-group reduction replay
@@ -20224,12 +20254,12 @@ A container qualifies for dismantling when all of the following hold:
   or join-carried by `set_local`
 
 A container's take domain is its ownership slots, not its top-level fields.
-A struct holding refcounted data numbers its fields by semantic index, and a
+A struct holding refcounted data numbers its fields by field index, and a
 field that is itself a struct holding refcounted data expands in place into
-that struct's own slots: a field's first slot is its semantic index plus the
+that struct's own slots: a field's first slot is its field index plus the
 extra slots of the expanded fields before it
 (`layout.Store.ownershipSlotCount`). A flat record's slots are therefore its
-semantic field indices, and a record nested in a field covers a contiguous
+field indices, and a record nested in a field covers a contiguous
 slot range. A take names the slots its result carries away, residual masks
 and residual shells name slots, and a container dismantles only when every
 slot fits one mask word.
@@ -20367,7 +20397,7 @@ ownership places. The place graph is solved to a fixpoint, so a nested read
 chain such as tag payload to struct field keeps the root aggregate's unit key.
 A take binding, unconditional or owned-only, holds the field unit its take
 consumed, so it starts an ownership place of its own: its aliases and
-projections take the take binding's unit key, never the root's, and moving
+field and payload reads take the take binding's unit key, never the root's, and moving
 one of them into a call moves the unit the take binding holds. In an emission
 whose owned-only take does not apply, that binding holds no unit, and a move
 through it retains exactly as a move through the binding itself would.
@@ -22294,6 +22324,20 @@ from the explicit checked template and stored const captures, so the later
 lifting and lambda-set solving stages see the same kind of ordinary callable
 flow they would have seen if the value had been local source.
 
+A restored stored function's body reads nothing from the site restoring it.
+Its stored captures fill its capture slots by checked capture identity, a
+`recursive_binding` capture fills none, and a read of a top-level constant in
+its body, including the constant whose value holds the function, is that
+constant's own top-level read, exactly as compile-time evaluation lowered it.
+The body therefore does not see the active constant bindings of the
+materialization that reached it. Its specialization belongs to the outermost
+owner of the body draft rather than to the restoring site, so every restore of
+that stored function at one type in the draft, including the one that a read of
+its own constant performs inside its body, reuses one specialization. A
+constant whose closure reads the constant materializes without a cycle, and its
+stable static-data representation is decided by its `ConstStore` nodes alone,
+the same as for any other constant.
+
 When `.boxy` runtime lowering restores a cached non-function const, it does not
 create Monotype expressions. It reads the stored `ConstStore` node, interprets
 it under the checked type attached to the `ConstUseTemplate`, and emits ordinary
@@ -23441,14 +23485,14 @@ each phase's report.
 
 The compiler's developer-only environment variables (`ROC_LIR_DUMP`,
 `ROC_SPEC_CENSUS`, `ROC_PACK_TRACE`, `ROC_PACK_STATS`, `ROC_CTFE_DEMAND_TRACE`,
-`ROC_DEV_PACK_OBJECTS`, `ROC_DEV_PACK_HITS`, `ROC_DEV_ARTIFACT_ROUNDTRIP` and
-`ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE`) are honored only by a compiler for
-which `build_options.dev_diagnostics` is true: every Debug compiler, and any
+`ROC_DEV_PACK_OBJECTS`, `ROC_DEV_PACK_HITS`, the object-compile round-trip
+variable and `ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE`) are honored only by a
+compiler for which `build_options.dev_diagnostics` is true: every Debug compiler, and any
 other build made with `-Ddev-diagnostics`. Every site tests that constant at
 compile time, so a release compiler neither reads these variables nor
 carries the code they enable, and an end user's environment cannot change
-what it does. The constant reads each executable's own optimize mode, since
-the release executable shares its modules with the development one. CLI
+what it does. The constant reads each compiler binary's own optimize mode,
+since the release compiler binary shares its modules with the development one. CLI
 cases that set one of these variables skip against a compiler without them.
 Performance work that needs them on an optimized compiler builds it with
 `zig build roc -Doptimize=ReleaseFast -Ddev-diagnostics`.

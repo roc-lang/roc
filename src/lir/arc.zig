@@ -2248,6 +2248,7 @@ const Inserter = struct {
                 try self.store.addCFStmt(.{ .assign_literal = .{
                     .target = assign.target,
                     .value = assign.value,
+                    .list_len = assign.list_len,
                     .next = next,
                 } }, origin),
             .assign_call => |assign| blk: {
