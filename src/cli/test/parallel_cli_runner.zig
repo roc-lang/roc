@@ -4708,6 +4708,15 @@ fn glueArgsContainOpt(args: []const []const u8) bool {
     return false;
 }
 
+/// The checks for a run of an external tool (a disassembler or debug-info
+/// dumper) a case inspects a build with: it finished and succeeded. Its output
+/// is the tool's own, which names files however the tool does, so the report
+/// rules `checkCommandExpectation` applies to compiler output do not apply.
+fn checkToolRun(allocator: Allocator, result: std.process.RunResult) ?[]const u8 {
+    if (processTimedOut(result.stderr)) return "child command timed out";
+    return checkExitExpectation(allocator, result, .success);
+}
+
 fn checkCommandExpectation(
     allocator: Allocator,
     result: std.process.RunResult,
@@ -7187,7 +7196,7 @@ fn customDefaultPlatformLinuxDisassembly(
     if (objdump_result == null) {
         return .{ .status = .skip, .phase = .run, .duration_ns = timer.read(), .run_ns = timer.read(), .message = "llvm-objdump unavailable on this Linux runner" };
     }
-    if (checkCommandExpectation(allocator, objdump_result.?, .{ .args = &.{} })) |message| {
+    if (checkToolRun(allocator, objdump_result.?)) |message| {
         return failureFromRun(allocator, timer, objdump_result.?, message);
     }
 
@@ -8145,7 +8154,7 @@ fn customSplicedProcedureDebugLines(
             return customInfraFailure(allocator, timer, "objdump spawn error: {}", .{err});
         const decoded = dumped orelse
             return .{ .status = .skip, .phase = .run, .duration_ns = timer.read(), .run_ns = timer.read(), .message = "objdump unavailable on this Linux runner" };
-        if (checkCommandExpectation(allocator, decoded, .{ .args = &.{} })) |message| {
+        if (checkToolRun(allocator, decoded)) |message| {
             return failureFromRun(allocator, timer, decoded, message);
         }
         lines[index] = decodedSourceLines(allocator, decoded.stdout, "Elem") catch |err|
