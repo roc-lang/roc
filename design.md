@@ -2096,7 +2096,11 @@ its keyed closed specializations, under the same withholding rules as a
 runtime pack: an entry whose closure names a program-local symbol it does not
 carry, or still converts a literal, is not offered. A completed value the
 code reads is carried, named by its content, so an entry reading one is
-offered with the value it read. The pack is filed beside the root module's
+offered with the value it read. Each stage's offers, with everything about
+its procedures they depend on, are gathered as soon as the stage has run, and
+the stage's code is then released: later stages and a runtime consumer read
+only its completed values and their representation metadata, so the levels'
+code never accumulates. The pack is filed beside the root module's
 dev packs under a key derived from the root module's code-generation key,
 which covers every module the program's code comes from and no runtime pack
 uses, so an edited program files a new pack beside the old one. Evaluation
