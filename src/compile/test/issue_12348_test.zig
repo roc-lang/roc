@@ -9,6 +9,10 @@ const roc_target = @import("roc_target");
 const compile_build = @import("../compile_build.zig");
 const BuildEnv = compile_build.BuildEnv;
 
+const BuildTestError = compile_build.InitError || std.mem.Allocator.Error ||
+    std.Io.Dir.WriteFileError || std.Io.Dir.RealPathFileAllocError ||
+    error{TestExpectedEqual};
+
 const SourceFile = struct {
     path: []const u8,
     source: []const u8,
@@ -28,7 +32,7 @@ const app_importing_helper =
     \\
 ;
 
-fn expectBuildErrors(files: []const SourceFile, expected: []const ExpectedError) !void {
+fn expectBuildErrors(files: []const SourceFile, expected: []const ExpectedError) BuildTestError!void {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
 
