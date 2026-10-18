@@ -269,10 +269,18 @@ pub fn lower(
     };
 }
 
-const sysv_gp_registers: u8 = 6;
-const aarch64_gp_registers: u8 = 8;
-const simd_argument_registers: u8 = 8;
-const win64_argument_registers: u8 = 4;
+// Argument-register file sizes of each platform C ABI. Classification here and
+// the dev backend's argument-register lists both consume these counts; each
+// register list comptime-asserts its length against them.
+
+/// System V x86-64 general-purpose argument registers.
+pub const sysv_gp_registers: u8 = 6;
+/// AAPCS64 general-purpose argument registers.
+pub const aarch64_gp_registers: u8 = 8;
+/// SSE (System V) and SIMD/FP (AAPCS64) argument registers.
+pub const simd_argument_registers: u8 = 8;
+/// Windows x64 argument positions, shared between general and SSE registers.
+pub const win64_argument_registers: u8 = 4;
 
 /// Marks each argument of `lowered` that the target's argument registers
 /// cannot hold, for a parameter list that ends with `trailing_pointers`

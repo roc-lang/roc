@@ -271,6 +271,14 @@ pub const SpecLookupAddress = struct {
     }
 };
 
+/// A request that a record served through its solved view: the request's
+/// type is less specific than the record's own request, and equals the type
+/// the record's body solved to.
+pub const SolvedViewHit = struct {
+    spec: Ast.SpecId,
+    identity: Ast.SpecIdentity,
+};
+
 /// Track creation-time identities in debug builds so the validator can prove
 /// no record's identity was rewritten after `reserve` and that every lookup
 /// entry belongs to some record's request or solved view.
@@ -294,6 +302,12 @@ pub const SpecBuilder = struct {
     /// equal to.
     owned_evidence_by_program_span: std.AutoHashMap(ProgramEvidenceSpan, u32),
     lookup: std.AutoHashMap(SpecLookupAddress, std.ArrayList(Ast.SpecId)),
+    /// Every request a record served through its solved view, in the order
+    /// requests arrived. Together with the records' own request identities,
+    /// these are every identity that resolved to a record, which does not
+    /// depend on the order requests arrived in: one order serves a request
+    /// through another record's solved view, the other reserves it first.
+    solved_view_hits: std.ArrayList(SolvedViewHit),
     counters: ?*Counters,
     reserved_identities: if (identity_shadow_enabled) std.ArrayList(Ast.SpecIdentity) else void,
 
@@ -313,6 +327,7 @@ pub const SpecBuilder = struct {
             .owned_evidence_by_digest = std.AutoHashMap(Ast.EvidenceDigest, std.ArrayList(u32)).init(allocator),
             .owned_evidence_by_program_span = std.AutoHashMap(ProgramEvidenceSpan, u32).init(allocator),
             .lookup = std.AutoHashMap(SpecLookupAddress, std.ArrayList(Ast.SpecId)).init(allocator),
+            .solved_view_hits = .empty,
             .counters = null,
             .reserved_identities = if (identity_shadow_enabled) .empty else {},
         };
@@ -325,6 +340,7 @@ pub const SpecBuilder = struct {
         var lists = self.lookup.valueIterator();
         while (lists.next()) |list| list.deinit(self.allocator);
         self.lookup.deinit();
+        self.solved_view_hits.deinit(self.allocator);
         self.local_evidence.deinit(self.allocator);
         for (self.owned_evidence.items) |evidence| evidence.deinit(self.allocator);
         self.owned_evidence.deinit(self.allocator);
@@ -435,6 +451,7 @@ pub const SpecBuilder = struct {
             if (!self.localEvidenceEql(local_spec, evidence, known)) continue;
             if (!try self.localCodecContractMatches(record.identity, identity)) continue;
             if (!try self.localViewMatches(record.solved_fn_ty, record.solved_fn_ty_digest, identity)) continue;
+            try self.solved_view_hits.append(self.allocator, .{ .spec = local_spec, .identity = identity });
             return localResult(local_spec, record, record.solved_fn_ty);
         }
         return null;
@@ -483,6 +500,11 @@ pub const SpecBuilder = struct {
         if (view_ty == identity.request_fn_ty) return true;
         self.countExactTypeCheck();
         return try self.types.typeEql(self.names, view_ty, identity.request_fn_ty);
+    }
+
+    /// See `solved_view_hits`.
+    pub fn solvedViewHits(self: *const SpecBuilder) []const SolvedViewHit {
+        return self.solved_view_hits.items;
     }
 
     /// Current lifecycle status of a record. The scheduler consults this at
@@ -867,6 +889,87 @@ test "monotype spec builder keeps identity immutable and aliases the solved type
     try std.testing.expectEqual(@as(?Ast.SpecId, spec), repeated.spec);
     try std.testing.expectEqual(@as(usize, 1), records.len());
     builder.validateLookupIntegrity();
+}
+
+/// Every object-cache key that resolved to some record of `builder`: each
+/// record's own request key and each request it served through its solved
+/// view, sorted and without duplicates.
+fn testResolvedKeys(allocator: std.mem.Allocator, builder: *const SpecBuilder) std.mem.Allocator.Error![]names.TypeDigest {
+    var keys: std.ArrayList(names.TypeDigest) = .empty;
+    errdefer keys.deinit(allocator);
+    for (0..builder.records.len()) |index| {
+        try keys.append(allocator, Ast.specIdentityKey(builder.records.get(index).identity));
+    }
+    for (builder.solvedViewHits()) |hit| try keys.append(allocator, Ast.specIdentityKey(hit.identity));
+    std.mem.sort(names.TypeDigest, keys.items, {}, struct {
+        fn lessThan(_: void, left: names.TypeDigest, right: names.TypeDigest) bool {
+            return std.mem.order(u8, &left.bytes, &right.bytes) == .lt;
+        }
+    }.lessThan);
+    var kept: usize = 0;
+    for (keys.items) |key| {
+        if (kept != 0 and std.meta.eql(keys.items[kept - 1], key)) continue;
+        keys.items[kept] = key;
+        kept += 1;
+    }
+    keys.shrinkRetainingCapacity(kept);
+    return try keys.toOwnedSlice(allocator);
+}
+
+test "monotype spec builder resolves the same keys whichever of a request and its solution arrives first" {
+    const allocator = std.testing.allocator;
+    var name_store = names.NameStore.init(allocator);
+    defer name_store.deinit();
+    var type_store = Type.Store.init(allocator);
+    defer type_store.deinit();
+
+    // `request_ty` is less specific than the type its body solves to.
+    const request_ty = try type_store.add(.zst);
+    const solved_ty = try type_store.add(.{ .primitive = .str });
+    const request_identity = testSpecIdentity(request_ty, digestWithFirstByte(2));
+    const solved_identity = testSpecIdentity(solved_ty, digestWithFirstByte(3));
+
+    // The request first: the solution is served through the request's
+    // record, as an alias of its solved view.
+    var request_first_records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
+    defer request_first_records.deinit(allocator);
+    var request_first = SpecBuilder.init(allocator, &name_store, &type_store, &request_first_records);
+    defer request_first.deinit();
+    {
+        const reserved = try request_first.reserve(request_identity, testEvidenceView(), @fromBackingInt(@intCast(1)));
+        request_first.markLowering(reserved.spec.?);
+        try request_first.markReady(reserved.spec.?, solved_ty, solved_identity.request_fn_ty_digest);
+        const reused = try request_first.reserve(solved_identity, testEvidenceView(), @fromBackingInt(@intCast(2)));
+        try std.testing.expect(!reused.created);
+        try std.testing.expectEqual(reserved.spec, reused.spec);
+        try std.testing.expectEqual(@as(usize, 1), request_first.solvedViewHits().len);
+        request_first.validateLookupIntegrity();
+    }
+
+    // The solution first: the request finds no record of its own type and
+    // reserves one, whose body solves to the first record's type.
+    var solution_first_records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
+    defer solution_first_records.deinit(allocator);
+    var solution_first = SpecBuilder.init(allocator, &name_store, &type_store, &solution_first_records);
+    defer solution_first.deinit();
+    {
+        const solution = try solution_first.reserve(solved_identity, testEvidenceView(), @fromBackingInt(@intCast(1)));
+        solution_first.markLowering(solution.spec.?);
+        try solution_first.markReady(solution.spec.?, solved_ty, solved_identity.request_fn_ty_digest);
+        const request = try solution_first.reserve(request_identity, testEvidenceView(), @fromBackingInt(@intCast(2)));
+        try std.testing.expect(request.created);
+        solution_first.markLowering(request.spec.?);
+        try solution_first.markReady(request.spec.?, solved_ty, solved_identity.request_fn_ty_digest);
+        try std.testing.expectEqual(@as(usize, 0), solution_first.solvedViewHits().len);
+        solution_first.validateLookupIntegrity();
+    }
+
+    const request_first_keys = try testResolvedKeys(allocator, &request_first);
+    defer allocator.free(request_first_keys);
+    const solution_first_keys = try testResolvedKeys(allocator, &solution_first);
+    defer allocator.free(solution_first_keys);
+    try std.testing.expectEqual(@as(usize, 2), request_first_keys.len);
+    try std.testing.expectEqualSlices(names.TypeDigest, request_first_keys, solution_first_keys);
 }
 
 test "monotype spec builder keeps checked module boundary in callable identity" {

@@ -301,12 +301,16 @@ const CompileTimeObjectCache = struct {
     /// build for the host shares this provider with its runtime program,
     /// which must be served only runtime-policy code.
     offers_compile_time_packs: bool = true,
+    /// The optimized object packs a linked dev build for the host offers its
+    /// runtime program (`pack_store.Pending.linked_store`).
+    linked_store: ?*const pack_store.Store = null,
 
     fn bind(context: *anyopaque, build_env: *BuildEnv) void {
         const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
         self.packs.pending = .{
             .store = &self.store,
             .compile_time_store = if (self.offers_compile_time_packs) &self.compile_time_store else null,
+            .linked_store = self.linked_store,
             .io = self.io,
             .build_env = build_env,
         };
@@ -1243,12 +1247,14 @@ fn startBackgroundCacheCleanup(gpa: Allocator, arena: Allocator, std_io: std.Io)
     // artifacts are written. The background thread itself is CoreCtx-free and
     // allocation-free; it only borrows this path (copied in by value).
     const cleanup_ctx = CoreCtx.default(gpa, arena, std_io);
-    const cache_base: []const u8 = blk: {
-        const cfg = cache_config_mod.CacheConfig{ .roc_ctx = cleanup_ctx };
-        break :blk cfg.getEffectiveCacheDir(arena) catch "";
-    };
+    const cfg = cache_config_mod.CacheConfig{ .roc_ctx = cleanup_ctx };
+    const cache_base: []const u8 = cfg.getEffectiveCacheDir(arena) catch "";
     if (cache_base.len != 0) {
-        if (compile.CacheCleanup.startBackgroundCleanup(cache_base, std_io)) |_| {
+        const limits: compile.CacheCleanup.Limits = .{
+            .object_pack_format_version = backend.dev.PackFile.format_version,
+            .max_size_bytes = @as(u64, cfg.max_size_mb) * 1024 * 1024,
+        };
+        if (compile.CacheCleanup.startBackgroundCleanup(cache_base, std_io, limits)) |_| {
             // Thread started successfully, will run in background.
         } else |_| {
             // Non-fatal: cleanup failure shouldn't prevent compilation.
@@ -8071,6 +8077,15 @@ fn defaultBuildTarget(args: cli_args.BuildArgs) RocTarget {
     return RocTarget.detectNative().defaultCpuTarget();
 }
 
+/// Read one of the developer-diagnostic environment variables. A compiler
+/// built without developer diagnostics (see `build_options.dev_diagnostics`)
+/// reads none of them: every call is a compile-time null, so the code it
+/// guards is not compiled in.
+inline fn devDiagnosticEnv(comptime name: [:0]const u8) ?[*:0]u8 {
+    if (comptime !build_options.dev_diagnostics) return null;
+    return std.c.getenv(name);
+}
+
 /// Build using the dev backend to generate native machine code.
 /// This produces truly compiled executables without an interpreter.
 /// `ROC_DEV_PACK_OBJECTS` makes a native dev build also lower every visible
@@ -8089,7 +8104,7 @@ fn writePackObjects(
     target: RocTarget,
     final_output_path: []const u8,
 ) CliMainError!void {
-    if (std.c.getenv("ROC_DEV_PACK_OBJECTS") == null) return;
+    if (devDiagnosticEnv("ROC_DEV_PACK_OBJECTS") == null) return;
     {
         // The app program's own procedures, in the same shape as a pack
         // manifest, so identities can be compared across the two lowerings.
@@ -8157,9 +8172,15 @@ const ModulePack = struct {
     }
 };
 
-/// Lower `artifact`'s closed exports as a pack program and compile them in
-/// pack mode, with the program's whole module set in view.
-fn compileModulePack(
+/// A module's pack program lowered, with its static data.
+const LoweredModulePack = struct {
+    lowered: lir.CheckedPipeline.LoweredProgram,
+    static_data_exports: []compile.static_data_exports.StaticDataExport,
+};
+
+/// Lower `artifact`'s closed exports as a pack program under the LIR policy
+/// of `opt`, with the program's whole module set in view.
+fn lowerModulePack(
     ctx: *CliCtx,
     build_env: *BuildEnv,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
@@ -8167,12 +8188,12 @@ fn compileModulePack(
     app_relations: []const check.CheckedArtifact.ImportedModuleView,
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     roots: []const check.CheckedArtifact.RootRequest,
+    opt: cli_args.OptLevel,
     args: cli_args.BuildArgs,
     target: RocTarget,
-) CliMainError!ModulePack {
+) CliMainError!LoweredModulePack {
     const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
     const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
-    const module_name = artifact.canonical_names.moduleNameText(artifact.module_identity.module_name);
     const own_imports = try build_env.collectImportedArtifactViews(ctx.gpa, artifact);
     defer ctx.gpa.free(own_imports);
     // A platform's internal modules bind their hosted functions through the
@@ -8197,7 +8218,7 @@ fn compileModulePack(
     const relations = try build_env.collectRelationArtifactViews(ctx.gpa, artifact);
     defer ctx.gpa.free(relations);
 
-    var config = checkedRuntimeLoweringConfig(.linked_output, args.opt, specialization_strategy, target_usize, true);
+    var config = checkedRuntimeLoweringConfig(.linked_output, opt, specialization_strategy, target_usize, true);
     config.target.post_check_executor = build_env.postCheckExecutor();
     config.target.spec_comptime_reads = true;
     var lowered = try lir.PackProgram.lowerPackProgram(ctx.gpa, artifact, imports.items, relations, roots, config.target);
@@ -8213,6 +8234,27 @@ fn compileModulePack(
         target,
         .{},
     );
+    return .{ .lowered = lowered, .static_data_exports = static_data_exports };
+}
+
+/// Lower `artifact`'s closed exports as a pack program and compile them in
+/// pack mode, with the program's whole module set in view.
+fn compileModulePack(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    app_imports: []const check.CheckedArtifact.ImportedModuleView,
+    app_relations: []const check.CheckedArtifact.ImportedModuleView,
+    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    roots: []const check.CheckedArtifact.RootRequest,
+    args: cli_args.BuildArgs,
+    target: RocTarget,
+) CliMainError!ModulePack {
+    const module_name = artifact.canonical_names.moduleNameText(artifact.module_identity.module_name);
+    const pack = try lowerModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args.opt, args, target);
+    var lowered = pack.lowered;
+    errdefer lowered.deinit();
+    const static_data_exports = pack.static_data_exports;
     errdefer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
 
     var object_compiler = backend.ObjectFileCompiler.initForPack(ctx.gpa);
@@ -8253,7 +8295,7 @@ fn writePacksToStore(
     args: cli_args.BuildArgs,
     target: RocTarget,
 ) CliMainError!void {
-    if (std.c.getenv("ROC_PACK_TRACE") != null) {
+    if (devDiagnosticEnv("ROC_PACK_TRACE") != null) {
         // What this program lowered from source: every procedure by identity,
         // for comparison with another build of the same source, and every
         // specialization by the key a pack serves it by, for comparison with
@@ -8302,7 +8344,7 @@ fn writePacksToStore(
         const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
         defer ctx.gpa.free(roots);
         if (roots.len == 0) continue;
-        if (std.c.getenv("ROC_PACK_TRACE") != null) {
+        if (devDiagnosticEnv("ROC_PACK_TRACE") != null) {
             std.debug.print("module pack {s}\n", .{artifact.canonical_names.moduleNameText(artifact.module_identity.module_name)});
         }
         var pack = try compileModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args, target);
@@ -8314,6 +8356,188 @@ fn writePacksToStore(
             std.log.warn("object cache could not store a module's pack: {}", .{err});
         };
     }
+}
+
+/// The store directory name, in place of an optimization level, of the
+/// LLVM-optimized object packs a dev build links for URL-package modules.
+const linked_pack_policy = "speed";
+
+/// Write an optimized object pack for every URL-package module in view whose
+/// pack is not in the store yet. A dev build links these in place of
+/// compiling the package's code itself.
+fn writeLinkedPacksToStore(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    store: *const pack_store.Store,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    app_imports: []const check.CheckedArtifact.ImportedModuleView,
+    app_relations: []const check.CheckedArtifact.ImportedModuleView,
+    args: cli_args.BuildArgs,
+    target: RocTarget,
+) CliMainError!void {
+    const artifacts = try build_env.collectVisibleArtifacts(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(artifacts);
+    for (artifacts) |artifact| {
+        const placement = build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
+        if (placement.origin != .pkg) continue;
+        if (try store.has(placement.origin, placement.identity, artifact.codeGenerationKey().bytes)) continue;
+        const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
+        defer ctx.gpa.free(roots);
+        if (roots.len == 0) continue;
+        const bytes = (try compileModuleObjectPack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args, target)) orelse continue;
+        defer ctx.gpa.free(bytes);
+        store.write(placement.origin, placement.identity, artifact.codeGenerationKey().bytes, bytes) catch |err| {
+            std.log.warn("object cache could not store a module's optimized pack: {}", .{err});
+        };
+    }
+}
+
+/// Lower `artifact`'s closed exports under the optimized LIR policy and
+/// compile them with LLVM into one object that defines everything its code
+/// needs and exports a weak C-ABI entry for each specialization it offers
+/// (design.md "Object Cache Store"). Null when the module's code cannot be a
+/// linked object: it uses the erased-call runtime, whose calls name this
+/// program's layouts, or a constant has no link-time image.
+fn compileModuleObjectPack(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    app_imports: []const check.CheckedArtifact.ImportedModuleView,
+    app_relations: []const check.CheckedArtifact.ImportedModuleView,
+    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    roots: []const check.CheckedArtifact.RootRequest,
+    args: cli_args.BuildArgs,
+    target: RocTarget,
+) CliMainError!?[]u8 {
+    if (comptime !llvm_available) return null;
+    const pack = try lowerModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, .speed, args, target);
+    var lowered = pack.lowered;
+    defer lowered.deinit();
+    defer compile.static_data_exports.deinitStaticData(ctx.gpa, pack.static_data_exports);
+    const store = &lowered.lir_result.store;
+    const procs = store.getProcSpecs();
+
+    // The specializations an object can offer, by the rules a dev pack
+    // follows, and the entries the object exports for them.
+    const converting = try lir.PackProgram.literalConvertingProcs(ctx.gpa, store);
+    defer ctx.gpa.free(converting);
+    const erased = try lir.PackProgram.erasedCallingProcs(ctx.gpa, store);
+    defer ctx.gpa.free(erased);
+    const comptime_reads = if (lowered.spec_comptime_reads) |*reads| reads else return null;
+    var specs = std.ArrayList(backend.dev.PackFile.SpecEntry).empty;
+    defer specs.deinit(ctx.gpa);
+    var identities = std.ArrayList(lir.ProcIdentity).empty;
+    defer identities.deinit(ctx.gpa);
+    var entrypoints = std.ArrayList(llvm_codegen.MonoLlvmCodeGen.Entrypoint).empty;
+    defer entrypoints.deinit(ctx.gpa);
+    var arena_state = base.SingleThreadArena.init(ctx.gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    for (lowered.lir_result.spec_procs.items) |spec_proc| {
+        const proc = procs[@backingInt(spec_proc.proc)];
+        if (proc.body == null or proc.abi != .roc or proc.hosted != null) continue;
+        const reads = comptime_reads.get(spec_proc.key);
+        if (!reads.offerable) continue;
+        if (proc.rc_variant_demandable or proc.inlined_at_calls or proc.tail_group != null) continue;
+        const closure = try lir.PackProgram.procCallClosure(ctx.gpa, store, spec_proc.proc);
+        defer ctx.gpa.free(closure);
+        var excluded = false;
+        for (closure, converting, erased) |reached, converts, uses_erased| {
+            if (reached and (converts or uses_erased)) excluded = true;
+        }
+        if (excluded) continue;
+
+        const identity_index: u32 = identity: {
+            for (identities.items, 0..) |existing, index| {
+                if (std.meta.eql(existing, proc.identity)) break :identity @intCast(index);
+            }
+            try identities.append(ctx.gpa, proc.identity);
+            const symbol = try arena.alloc(u8, lir.ProcIdentity.symbol_name_len);
+            _ = proc.identity.writeCAbiEntryName(symbol[0..lir.ProcIdentity.symbol_name_len]);
+            const params = store.getLocalSpan(proc.args);
+            const arg_layouts = try arena.alloc(layout.Idx, params.len);
+            for (arg_layouts, 0..) |*arg_layout, index| arg_layout.* = store.getLocal(lir.LirStore.GuardedList.at(params, index)).layout_idx;
+            try entrypoints.append(ctx.gpa, .{ .symbol_name = symbol, .proc = spec_proc.proc, .arg_layouts = arg_layouts, .ret_layout = proc.ret_layout });
+            break :identity @intCast(identities.items.len - 1);
+        };
+        try specs.append(ctx.gpa, .{
+            .key = spec_proc.key,
+            .artifact = identity_index,
+            .platform_requirement_relation = spec_proc.platform_requirement_relation,
+            .comptime_root_reads = reads.reads,
+            .rc_borrowed_params = proc.rc_borrowed_params,
+            .rc_ret_borrowed = proc.rc_ret_borrowed,
+            .rc_ret_lenders = proc.rc_ret_lenders,
+            .rc_read_only_params = proc.rc_read_only_params,
+            .rc_ret_unique = proc.rc_ret_unique,
+            .rc_ret_unique_fields = proc.rc_ret_unique_fields,
+            .rc_ret_conditions = try GuardedList.dupe(arena, u32, store.getU32Span(proc.rc_ret_conditions)),
+        });
+    }
+    if (specs.items.len == 0) return null;
+
+    const std_target = try stdTargetForLlvmBuild(ctx, target);
+    var bitcode = generate: {
+        var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(
+            ctx.gpa,
+            store,
+            lowered.lir_result.boxy_erased_arg_desc_offsets.items,
+            lowered.lir_result.boxy_erased_arg_desc_params.items,
+            lowered.lir_result.boxy_worker_procs.items,
+            std_target,
+        );
+        defer codegen.deinit();
+        codegen.layout_store = &lowered.lir_result.layouts;
+        codegen.object_cache_pack = true;
+        try codegen.setStaticDataExports(pack.static_data_exports);
+        const generated = codegen.generateEntrypointModule("roc_pack", entrypoints.items) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            // A constant without a link-time image.
+            else => return null,
+        };
+        // The erased-call runtime is initialized with this program's sidecar.
+        if (codegen.boxy_runtime_used) {
+            var unused = generated;
+            unused.deinit();
+            return null;
+        }
+        break :generate generated;
+    };
+    defer bitcode.deinit();
+
+    const scratch_dir = try createUniqueTempDir(ctx);
+    defer compile.CacheCleanup.deleteTempDir(ctx.io.std_io, scratch_dir);
+    const bitcode_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, "pack.bc" });
+    const object_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, "pack.o" });
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, bitcode_path, std.mem.sliceAsBytes(bitcode.bitcode)) catch |err| {
+        std.log.err("Failed to write LLVM bitcode {s}: {}", .{ bitcode_path, err });
+        return err;
+    };
+    const success = try builder.compileBitcodeToObject(ctx.gpa, ctx.io.std_io, .{
+        .input_path = bitcode_path,
+        .output_path = object_path,
+        .optimization = llvmOptimizationLevel(.speed),
+        .target = target,
+        .report_config = ctx.reportConfig(.stderr),
+        .cpu = llvmCpuNameForTarget(std_target),
+        .features = try llvmFeatureStringForTarget(ctx.arena, std_target),
+        .debug = false,
+        .fuzz = false,
+        .link_builtins = .{
+            .host_call_extern = true,
+            .sha256_rounds = Sha256Rounds.forCpu(std_target.cpu),
+        },
+        // Any program, an executable or a shared library, may link the pack.
+        .pic = true,
+        .no_target_libcalls = noTargetLibcallsForLlvmBuild(target),
+    });
+    if (!success) return null;
+    const object = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, object_path, ctx.gpa, .limited(1024 * 1024 * 1024)) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return null,
+    };
+    defer ctx.gpa.free(object);
+    return try backend.dev.PackFile.writeObject(ctx.gpa, object, identities.items, specs.items);
 }
 
 /// Publish the code compile-time evaluation compiled for this program, so a
@@ -8359,10 +8583,21 @@ fn publishCompileTimePack(ctx: *CliCtx, build_env: *BuildEnv) (Allocator.Error |
     const set = &(compiled.artifacts orelse return);
     const bytes = try packFileBytes(ctx.gpa, set, host);
     defer ctx.gpa.free(bytes);
-    if (std.c.getenv("ROC_PACK_TRACE") != null) std.debug.print("compile-time pack {d} bytes\n", .{bytes.len});
+    if (devDiagnosticEnv("ROC_PACK_TRACE") != null) std.debug.print("compile-time pack {d} bytes\n", .{bytes.len});
     store.write(placement.origin, placement.identity, key, bytes) catch |err| {
         std.log.warn("object cache could not store the compile-time pack: {}", .{err});
     };
+}
+
+/// Whether `root`'s code reaches a procedure a linked object-cache object
+/// provides (`LIR.LirProcSpec.c_abi_entry`).
+fn procReachesLinkedEntry(allocator: Allocator, store: *const lir.LirStore, root: lir.LIR.LirProcSpecId) Allocator.Error!bool {
+    const closure = try lir.PackProgram.procCallClosure(allocator, store, root);
+    defer allocator.free(closure);
+    for (closure, store.getProcSpecs()) |reached, proc| {
+        if (reached and proc.c_abi_entry) return true;
+    }
+    return false;
 }
 
 /// Encode a pack program's artifacts with its spec table: every keyed
@@ -8385,7 +8620,7 @@ fn packFileBytes(
     defer specs.deinit(allocator);
     var conditions_arena = base.SingleThreadArena.init(allocator);
     defer conditions_arena.deinit();
-    const trace = std.c.getenv("ROC_PACK_TRACE") != null;
+    const trace = devDiagnosticEnv("ROC_PACK_TRACE") != null;
     var withheld: usize = 0;
     const procs = lowered.lir_result.store.getProcSpecs();
     const converting = try lir.PackProgram.literalConvertingProcs(allocator, &lowered.lir_result.store);
@@ -8418,6 +8653,13 @@ fn packFileBytes(
         // emit the ownership variants its callers would demand from the
         // body, so an entry that admits such demands is not offered.
         if (proc.rc_variant_demandable) {
+            withheld += 1;
+            continue;
+        }
+        // An entry whose code calls a linked object-cache entry depends on
+        // that object being linked too; the program that splices it calls
+        // the linked entry itself instead, by taking the entry's key.
+        if (try procReachesLinkedEntry(allocator, &lowered.lir_result.store, spec_proc.proc)) {
             withheld += 1;
             continue;
         }
@@ -10586,7 +10828,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     var own_packs: ?pack_store.LoadedPacks = null;
     defer if (own_packs) |*packs| packs.deinit();
     var loaded_packs: ?*pack_store.LoadedPacks = null;
-    if (std.c.getenv("ROC_DEV_PACK_HITS")) |dir_z| {
+    if (devDiagnosticEnv("ROC_DEV_PACK_HITS")) |dir_z| {
         own_packs = pack_store.LoadedPacks.loadDir(ctx.gpa, ctx.io.std_io, std.mem.span(dir_z)) catch |err| {
             std.log.err("failed to load packs from {s}: {}", .{ std.mem.span(dir_z), err });
             return error.NativeCompilationFailed;
@@ -10602,10 +10844,22 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     var own_store: ?pack_store.Store = null;
     defer if (own_store) |*store| store.deinit();
     var object_store: ?*pack_store.Store = null;
+    // The optimized object packs of URL-package modules, which this build
+    // links in place of compiling the packages' code itself.
+    var linked_store: ?pack_store.Store = null;
+    defer if (linked_store) |*store| store.deinit();
+    if (object_cache_enabled and target_arch != .wasm32 and llvm_available) {
+        const store_config = CacheConfig{ .enabled = true, .verbose = args.verbose, .roc_ctx = ctx.coreCtx() };
+        linked_store = pack_store.Store.init(ctx.gpa, store_config, target, linked_pack_policy) catch |err| {
+            std.log.warn("object cache unavailable: {}", .{err});
+            return error.NativeCompilationFailed;
+        };
+    }
     if (object_cache_enabled) {
         if (sharedCompileTimeObjectCache(&build_env, target, args.opt)) |shared| {
             object_store = &shared.store;
             loaded_packs = &shared.packs;
+            shared.linked_store = if (linked_store) |*store| store else null;
         } else {
             const store_config = CacheConfig{ .enabled = true, .verbose = args.verbose, .roc_ctx = ctx.coreCtx() };
             own_store = pack_store.Store.init(ctx.gpa, store_config, target, @tagName(args.opt)) catch |err| {
@@ -10614,7 +10868,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             };
             object_store = &own_store.?;
             own_packs = pack_store.LoadedPacks.init(ctx.gpa);
-            own_packs.?.pending = .{ .store = object_store.?, .io = ctx.io.std_io, .build_env = &build_env };
+            own_packs.?.pending = .{
+                .store = object_store.?,
+                .linked_store = if (linked_store) |*store| store else null,
+                .io = ctx.io.std_io,
+                .build_env = &build_env,
+            };
             loaded_packs = &own_packs.?;
         }
     }
@@ -10628,9 +10887,9 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     if (loaded_packs) |packs| {
         runtime_lowering.target.spec_cache = packs.specCacheLookup();
     }
-    runtime_lowering.target.code_provision = nativeObjectCodeProvision(target, args.opt, loaded_packs != null);
+    runtime_lowering.target.code_provision = nativeObjectCodeProvision(target, args.opt, loaded_packs != null, linked_store != null);
     // This program's specializations go into packs.
-    runtime_lowering.target.spec_comptime_reads = object_store != null or std.c.getenv("ROC_DEV_PACK_OBJECTS") != null;
+    runtime_lowering.target.spec_comptime_reads = object_store != null or devDiagnosticEnv("ROC_DEV_PACK_OBJECTS") != null;
     build_env.setRuntimeLowering(runtime_lowering);
     build_env.setValidateTargetFilesForSelectedTarget(true);
     build_env.setDetailedLoweringTiming(args.timings);
@@ -10642,11 +10901,16 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
 
-    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, if (loaded_packs) |packs| packs.specCacheLookup() else null, nativeObjectCodeProvision(target, args.opt, loaded_packs != null));
+    // A URL package's optimized pack is built once its modules are checked
+    // and before this program lowers, so this build already links it.
+    if (linked_store) |*store| {
+        if (diag.errors == 0) try writeLinkedPacksToStore(ctx, &build_env, store, root_artifact, imported_artifacts, relation_artifacts, args, target);
+    }
+    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, if (loaded_packs) |packs| packs.specCacheLookup() else null, nativeObjectCodeProvision(target, args.opt, loaded_packs != null, linked_store != null));
     defer lowered.deinit();
     // Cache statistics are diagnostic output. Ordinary successful builds must
     // leave stderr empty so build runners do not report false warnings.
-    if (loaded_packs != null and std.c.getenv("ROC_PACK_STATS") != null) {
+    if (loaded_packs != null and devDiagnosticEnv("ROC_PACK_STATS") != null) {
         const packs = loaded_packs.?.*;
         var external_procs: usize = 0;
         for (lowered.lir_result.store.getProcSpecs()) |proc| {
@@ -10654,7 +10918,11 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         }
         // The compile-time evaluator has already spliced its entries; the
         // object compiler asks for the runtime program's afterwards.
-        std.debug.print("pack hits: {d} external procs: {d} evaluator artifacts: {d} packs loaded: {d} keys: {d}\n", .{ packs.hits, external_procs, packs.artifacts_served, packs.packs.items.len, packs.specs.count() });
+        var linked_procs: usize = 0;
+        for (lowered.lir_result.store.getProcSpecs()) |proc| {
+            if (proc.c_abi_entry) linked_procs += 1;
+        }
+        std.debug.print("pack hits: {d} external procs: {d} linked procs: {d} evaluator artifacts: {d} packs loaded: {d} keys: {d}\n", .{ packs.hits, external_procs, linked_procs, packs.artifacts_served, packs.packs.items.len, packs.specs.count() });
     }
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
@@ -10747,6 +11015,16 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     var object_files = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 4);
     try object_files.append(obj_path);
     try object_files.append(builtins_path);
+    // The optimized object packs that served this program's specializations.
+    if (loaded_packs) |packs| {
+        for (try packs.linkedObjects(ctx.arena), 0..) |object, index| {
+            const object_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, try std.fmt.allocPrint(ctx.arena, "roc_pack_{d}.o", .{index}) });
+            backend.writeFileWindowsAvSafe(ctx.io.std_io, object_path, object) catch {
+                return error.NativeCompilationFailed;
+            };
+            try object_files.append(object_path);
+        }
+    }
     if (args.synthetic_default_platform) {
         try appendDefaultPlatformLinkInputs(ctx, &object_files, build_scratch_dir, target);
     }
@@ -12261,21 +12539,26 @@ fn checkedRuntimeLoweringConfig(
 
 /// Native builds promise object provision only when their emitter has a
 /// splice source. Foreign objects cannot replace CTFE's host-domain bodies.
-fn nativeObjectCodeProvision(target: RocTarget, opt: cli_args.OptLevel, has_splice_source: bool) lir.CheckedPipeline.CodeProvision {
+fn nativeObjectCodeProvision(target: RocTarget, opt: cli_args.OptLevel, has_splice_source: bool, links_objects: bool) lir.CheckedPipeline.CodeProvision {
     if (!has_splice_source or opt != .dev) return .source_bodies;
-    return if (target == RocTarget.detectNative()) .host_dev_objects else .target_dev_objects;
+    const host = target == RocTarget.detectNative();
+    if (links_objects) return if (host) .host_linked_dev_objects else .target_linked_dev_objects;
+    return if (host) .host_dev_objects else .target_dev_objects;
 }
 
 test "native code provision names the emitter target and splice capability" {
     const native = RocTarget.detectNative();
     for (std.enums.values(cli_args.OptLevel)) |opt| {
-        try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.source_bodies, nativeObjectCodeProvision(native, opt, false));
+        try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.source_bodies, nativeObjectCodeProvision(native, opt, false, false));
         const expected: lir.CheckedPipeline.CodeProvision = if (opt == .dev) .host_dev_objects else .source_bodies;
-        try std.testing.expectEqual(expected, nativeObjectCodeProvision(native, opt, true));
+        try std.testing.expectEqual(expected, nativeObjectCodeProvision(native, opt, true, false));
+        const linked: lir.CheckedPipeline.CodeProvision = if (opt == .dev) .host_linked_dev_objects else .source_bodies;
+        try std.testing.expectEqual(linked, nativeObjectCodeProvision(native, opt, true, true));
     }
     for (std.enums.values(RocTarget)) |target| {
         if (target == native) continue;
-        try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.target_dev_objects, nativeObjectCodeProvision(target, .dev, true));
+        try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.target_dev_objects, nativeObjectCodeProvision(target, .dev, true, false));
+        try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.target_linked_dev_objects, nativeObjectCodeProvision(target, .dev, true, true));
     }
 }
 

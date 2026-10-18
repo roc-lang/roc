@@ -401,6 +401,9 @@ pub const ComptimeRootRead = extern struct {
 /// entry adopts as fixed.
 pub const SpecCacheHit = struct {
     identity: [32]u8,
+    /// The entry is a linked object reached through its C-ABI entry rather
+    /// than spliced code (`LIR.LirProcSpec.c_abi_entry`).
+    c_abi_entry: bool = false,
     /// Producer-owned demand summary: the compile-time roots the procedure's
     /// code reads, through every procedure it reaches. A program that takes
     /// the hit demands them as if it had lowered the body (design.md
@@ -424,7 +427,9 @@ pub const SpecCacheHit = struct {
 /// owns the cache supplies the context and the lookup.
 pub const SpecCacheLookup = struct {
     context: *anyopaque,
-    find: *const fn (context: *anyopaque, key: [32]u8, current_relation: ?[32]u8) ?SpecCacheHit,
+    /// `accept_linked`: whether the asking consumer's code is linked, so a
+    /// linked-object entry (`SpecCacheHit.c_abi_entry`) can serve it.
+    find: *const fn (context: *anyopaque, key: [32]u8, current_relation: ?[32]u8, accept_linked: bool) ?SpecCacheHit,
 
     /// Session capability identity, not a persistent cache key. Equal providers
     /// expose the same immutable offer and artifact collection to both readers.
@@ -432,7 +437,7 @@ pub const SpecCacheLookup = struct {
         return self.context == other.context and self.find == other.find;
     }
 
-    pub fn lookup(self: SpecCacheLookup, key: [32]u8, current_relation: ?[32]u8) ?SpecCacheHit {
-        return self.find(self.context, key, current_relation);
+    pub fn lookup(self: SpecCacheLookup, key: [32]u8, current_relation: ?[32]u8, accept_linked: bool) ?SpecCacheHit {
+        return self.find(self.context, key, current_relation, accept_linked);
     }
 };
