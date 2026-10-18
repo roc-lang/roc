@@ -104,6 +104,61 @@ test "dev keeps a function its source also uses as a value" {
     ));
 }
 
+// Each lambda below captures `n` and loops, so it is not a wrapper.
+test "dev inlines a capturing lambda its source calls where it is written" {
+    try std.testing.expectEqual(@as(usize, 0), try procsDevKeeps(
+        \\main! = |args| {
+        \\    n = args.len()
+        \\    total = 0 |> (|start| {
+        \\        var $acc = start
+        \\        var $i = 0
+        \\        while $i < n {
+        \\            $acc = $acc + $i
+        \\            $i = $i + 1
+        \\        }
+        \\        $acc
+        \\    })
+        \\    if total == 0 { Err(Exit(1)) } else { Ok({}) }
+        \\}
+    ));
+}
+
+test "dev inlines a named capturing local function its source calls once" {
+    try std.testing.expectEqual(@as(usize, 0), try procsDevKeeps(
+        \\main! = |args| {
+        \\    n = args.len()
+        \\    sum_from = |start| {
+        \\        var $acc = start
+        \\        var $i = 0
+        \\        while $i < n {
+        \\            $acc = $acc + $i
+        \\            $i = $i + 1
+        \\        }
+        \\        $acc
+        \\    }
+        \\    if sum_from(0) == 0 { Err(Exit(1)) } else { Ok({}) }
+        \\}
+    ));
+}
+
+test "dev keeps a capturing local function its source calls twice" {
+    try std.testing.expectEqual(@as(usize, 1), try procsDevKeeps(
+        \\main! = |args| {
+        \\    n = args.len()
+        \\    sum_from = |start| {
+        \\        var $acc = start
+        \\        var $i = 0
+        \\        while $i < n {
+        \\            $acc = $acc + $i
+        \\            $i = $i + 1
+        \\        }
+        \\        $acc
+        \\    }
+        \\    if sum_from(0) + sum_from(1) == 0 { Err(Exit(1)) } else { Ok({}) }
+        \\}
+    ));
+}
+
 fn expectInlinedProcedureMarked(store: *const lir.LirStore, _: *const @import("layout").Store) harness.LowerToLirHarnessError!void {
     var marked: usize = 0;
     for (store.getProcSpecs()) |proc| {

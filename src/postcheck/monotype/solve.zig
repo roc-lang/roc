@@ -2805,32 +2805,16 @@ pub const InstGraph = struct {
     /// runtime slot: an optional field's `ty` is the compiler-reserved tagged
     /// presence slot, while its codec operates on the explicit `value_ty`.
     pub fn codecFieldValueNode(self: *InstGraph, field: InstField) NodeId {
-        const value = switch (field.kind) {
-            .required => blk: {
-                if (field.value_ty != null or field.default != null) {
-                    Common.invariant("required codec field carried optional or defaulted metadata");
-                }
-                break :blk field.ty;
+        switch (field.kind) {
+            .required, .optional, .undetermined => if (field.default != null) {
+                Common.invariant("non-defaulted codec field carried a default identity");
             },
-            .optional => blk: {
-                if (field.default != null) Common.invariant("optional codec field carried a default identity");
-                break :blk field.value_ty orelse
-                    Common.invariant("optional codec field carried no source value node");
-            },
-            .defaulted => |default| blk: {
-                if (field.value_ty != null or field.default == null or !std.meta.eql(field.default.?, default)) {
-                    Common.invariant("defaulted codec field metadata disagreed with its field kind");
-                }
-                break :blk field.ty;
-            },
-            .undetermined => blk: {
-                if (field.default != null) Common.invariant("undetermined codec field carried a default identity");
-                break :blk field.value_ty orelse
-                    Common.invariant("undetermined codec field carried no source value node");
+            .defaulted => |default| if (field.default == null or !std.meta.eql(field.default.?, default)) {
+                Common.invariant("defaulted codec field metadata disagreed with its field kind");
             },
             .sealed => Common.invariant("sealed record field reached graph-native codec planning"),
-        };
-        return self.find(value);
+        }
+        return self.fieldValueNode(field);
     }
 
     /// Return the explicit field kind seen by generated-codec planning. An
@@ -6377,7 +6361,14 @@ pub const InstGraph = struct {
     /// Evidence paths address this source value even while the runtime slot
     /// remains unresolved or carries an optional field's presence tag.
     pub fn recordFieldValueNode(self: *InstGraph, raw_record: NodeId, name: names.RecordFieldNameId) Allocator.Error!NodeId {
-        const field = try self.recordFieldWithAccess(raw_record, name, .inspectable, "record field access");
+        return self.fieldValueNode(try self.recordFieldWithAccess(raw_record, name, .inspectable, "record field access"));
+    }
+
+    /// The explicit source-value cell of one record field. An undetermined
+    /// field's runtime slot is a placeholder until relation freeze commits its
+    /// kind, and an optional field's slot only wraps this value in a presence
+    /// tag, so every walk over a field's component types reads this cell.
+    pub fn fieldValueNode(self: *InstGraph, field: InstField) NodeId {
         const value = switch (field.kind) {
             .required, .defaulted => blk: {
                 if (field.value_ty != null) Common.invariant("inline record field carried a separate source value node");

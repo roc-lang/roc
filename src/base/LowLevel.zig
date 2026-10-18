@@ -84,6 +84,7 @@ pub const LowLevel = enum(u16) {
     list_append_range_within_unsafe,
     list_append_sublist,
     list_append_le_bytes,
+    list_append_le_bytes_unsafe,
     list_slack_unique,
     list_owned_unique,
     list_set_in_place_unsafe,
@@ -1112,6 +1113,10 @@ pub const LowLevel = enum(u16) {
         .list_copy_range_within = byLayout(.runtimeUniqueness(arg_0)),
         .list_append_sublist = byLayout(.runtimeUniqueness(arg_0)),
         .list_append_le_bytes = byType(.runtimeUniqueness(arg_0)),
+        // Like `list_append_unsafe`: stores a word into a list the
+        // loop-append promotion pass proved uniquely owned with a word of
+        // spare capacity, so there is nothing to check at runtime.
+        .list_append_le_bytes_unsafe = byType(.consumesArgsReturningConsumedArgsRetainingArgs(arg_0, 0)),
 
         .list_get_unsafe = byLayout(.retainsResultBorrowingArgs(arg_0)),
 

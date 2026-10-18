@@ -22,6 +22,50 @@ const layout = @import("layout");
 /// Dec's scaling factor (10^18) as an i64, sourced from the canonical Dec type.
 const dec_one_i64: i64 = @intCast(builtins.dec.RocDec.one_point_zero_i128);
 
+const RocStr = builtins.str.RocStr;
+const RocList = builtins.list.RocList;
+
+/// wasm32's word (pointer) width in bytes. Every RocStr/RocList/refcount fact
+/// below is the canonical builtins definition laid out at this width.
+const wasm_word_size: u32 = base.target.TargetUsize.u32.size();
+
+const roc_str_size: u32 = RocStr.word_count * wasm_word_size;
+const str_bytes_offset: u32 = RocStr.targetFieldOffset(.bytes, wasm_word_size);
+const str_capacity_offset: u32 = RocStr.targetFieldOffset(.capacity_or_alloc_ptr, wasm_word_size);
+const str_len_offset: u32 = RocStr.targetFieldOffset(.length, wasm_word_size);
+/// Byte offset of a RocStr's final byte, which holds the small-string flag and
+/// a small string's length.
+const str_flag_byte_offset: u32 = RocStr.targetFlagByteOffset(wasm_word_size);
+/// The longest string stored inline: every byte before the flag byte.
+const small_str_max_len: u32 = str_flag_byte_offset;
+const small_str_flag: i32 = RocStr.small_str_flag;
+const small_str_len_mask: i32 = RocStr.small_str_len_mask;
+
+const roc_list_size: u32 = RocList.word_count * wasm_word_size;
+const list_bytes_offset: u32 = RocList.targetFieldOffset(.bytes, wasm_word_size);
+const list_len_offset: u32 = RocList.targetFieldOffset(.length, wasm_word_size);
+const list_capacity_offset: u32 = RocList.targetFieldOffset(.capacity_or_alloc_ptr, wasm_word_size);
+
+/// The encoded-capacity shift shared by RocStr and RocList: capacity is stored
+/// shifted left so the low bit stays free for the seamless-slice tag.
+const capacity_shift = RocList.capacity_shift;
+/// The seamless-slice tag in an encoded capacity, and the i32 mask that clears it.
+const seamless_slice_tag: i32 = @intCast(builtins.list.SEAMLESS_SLICE_TAG);
+const seamless_slice_untag_mask: i32 = ~seamless_slice_tag;
+
+/// The i32 mask that clears a data pointer's tag bits before its refcount is located.
+const data_ptr_untag_mask: i32 = ~@as(i32, @intCast(builtins.utils.targetDataPtrTagMask(wasm_word_size)));
+/// Byte offset of the refcount word from the untagged data pointer it guards.
+const refcount_offset: i32 = builtins.utils.targetRefcountOffset(wasm_word_size);
+/// Byte offset, from the data pointer, of the element count that an allocation
+/// of refcounted elements keeps in the word before its refcount.
+const alloc_elem_count_offset: i32 = refcount_offset - @as(i32, wasm_word_size);
+
+comptime {
+    std.debug.assert(RocStr.capacity_shift == RocList.capacity_shift);
+    std.debug.assert(@as(u32, @bitCast(seamless_slice_untag_mask)) == @as(u32, @truncate(~builtins.list.SEAMLESS_SLICE_TAG)));
+}
+
 const lir = @import("lir");
 const CheckedArithmetic = lir.CheckedArithmetic;
 const OverflowFusion = lir.OverflowFusion;
@@ -182,7 +226,7 @@ const RcAllocationLayout = struct {
 };
 
 fn rcAllocationLayout(element_alignment: u32, elements_refcounted: bool) RcAllocationLayout {
-    const ptr_width: u32 = 4;
+    const ptr_width: u32 = wasm_word_size;
     const required_space: u32 = if (elements_refcounted) 2 * ptr_width else ptr_width;
     return .{
         .data_offset = @max(required_space, element_alignment),
@@ -615,13 +659,13 @@ fn loadRocListFields(self: *Self, list_ptr: u32) Allocator.Error!RocListFields {
         .cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory,
     };
 
-    try self.emitLoadAt(list_ptr, .i32, 0);
+    try self.emitLoadAt(list_ptr, .i32, list_bytes_offset);
     try self.emitLocalSet(fields.bytes);
 
-    try self.emitLoadAt(list_ptr, .i32, 4);
+    try self.emitLoadAt(list_ptr, .i32, list_len_offset);
     try self.emitLocalSet(fields.len);
 
-    try self.emitLoadAt(list_ptr, .i32, 8);
+    try self.emitLoadAt(list_ptr, .i32, list_capacity_offset);
     try self.emitLocalSet(fields.cap);
 
     return fields;
@@ -638,13 +682,13 @@ fn loadRocStrFields(self: *Self, str_ptr: u32) Allocator.Error!RocStrFields {
         .cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory,
     };
 
-    try self.emitLoadAt(str_ptr, .i32, 0);
+    try self.emitLoadAt(str_ptr, .i32, str_bytes_offset);
     try self.emitLocalSet(fields.bytes);
 
-    try self.emitLoadAt(str_ptr, .i32, 8);
+    try self.emitLoadAt(str_ptr, .i32, str_len_offset);
     try self.emitLocalSet(fields.len);
 
-    try self.emitLoadAt(str_ptr, .i32, 4);
+    try self.emitLoadAt(str_ptr, .i32, str_capacity_offset);
     try self.emitLocalSet(fields.cap);
 
     return fields;
@@ -694,7 +738,7 @@ fn emitStrUnaryLowLevel(
     kind: BuiltinKind,
 ) Allocator.Error!void {
     const input = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_str_size, wasm_word_size);
     try self.emitStrUnaryResultCall(input, result_offset, kind, updateModeImmForArg(unique_args, 0));
     try self.emitFpOffset(result_offset);
 }
@@ -719,7 +763,7 @@ fn emitStrBinaryResultCall(
 fn emitStrDropLowLevel(self: *Self, args: anytype, kind: BuiltinKind) Allocator.Error!void {
     const a = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
     const b = try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32);
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_str_size, wasm_word_size);
     try self.emitStrBinaryResultCall(a, b, result_offset, kind, null);
     try self.emitFpOffset(result_offset);
 }
@@ -727,7 +771,7 @@ fn emitStrDropLowLevel(self: *Self, args: anytype, kind: BuiltinKind) Allocator.
 fn emitStrConcatLowLevel(self: *Self, args: anytype, unique_args: u64) Allocator.Error!void {
     const lhs = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
     const rhs = try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32);
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_str_size, wasm_word_size);
     try self.emitStrBinaryResultCall(
         lhs,
         rhs,
@@ -772,7 +816,7 @@ fn emitStrCountedLowLevel(
 ) Allocator.Error!void {
     const str_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
     const int_local = try self.emitU64ArgToNewLocal(GuardedList.at(args, 1));
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_str_size, wasm_word_size);
     try self.emitStrCountedResultCall(str_local, int_local, result_offset, kind, update_mode);
     try self.emitFpOffset(result_offset);
 }
@@ -1030,7 +1074,7 @@ fn emitCryptoLowLevel(self: *Self, op: CryptoLowLevel, args: anytype) Allocator.
         .crypto_blake3_hasher_finish => .{ .arity = .one, .kind = BuiltinSignatures.kindOf(comptime LowLevelBuiltins.cryptoOp(.crypto_blake3_hasher_finish)) },
     };
 
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
     switch (call.arity) {
         .zero => {
             try self.emitFpOffset(result_offset);
@@ -2133,10 +2177,10 @@ fn emitExplicitRcHelperCallForValuePtr(
 }
 
 fn emitDecodeListAllocPtr(self: *Self, list_ptr_local: u32, out_alloc_ptr: u32, out_is_slice: u32) Allocator.Error!void {
-    const cap_local = try self.emitLoadAtToNewLocal(list_ptr_local, .i32, 8);
+    const cap_local = try self.emitLoadAtToNewLocal(list_ptr_local, .i32, list_capacity_offset);
 
     try self.emitLocalGet(cap_local);
-    try self.emitI32Const(1);
+    try self.emitI32Const(seamless_slice_tag);
     self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
     try self.emitLocalSet(out_is_slice);
 
@@ -2144,21 +2188,36 @@ fn emitDecodeListAllocPtr(self: *Self, list_ptr_local: u32, out_alloc_ptr: u32, 
     self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
     self.currentCode().append(self.allocator, @backingInt(ValType.i32)) catch return error.OutOfMemory;
     try self.emitLocalGet(cap_local);
-    try self.emitI32Const(-2);
+    try self.emitI32Const(seamless_slice_untag_mask);
     try self.emitOps(.{ Op.i32_and, Op.@"else" });
-    try self.emitLoadAt(list_ptr_local, .i32, 0);
+    try self.emitLoadAt(list_ptr_local, .i32, list_bytes_offset);
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
     try self.emitLocalSet(out_alloc_ptr);
 }
 
-fn emitDecodeStrAllocPtr(self: *Self, str_ptr_local: u32, out_alloc_ptr: u32, out_is_small: u32) Allocator.Error!void {
-    const cap_local = try self.emitLoadAtToNewLocal(str_ptr_local, .i32, 4);
-
-    const len_local = try self.emitLoadAtToNewLocal(str_ptr_local, .i32, 8);
-
-    try self.emitLocalGet(len_local);
+/// Consume a RocStr length word from the stack and push whether it marks a
+/// small string. At wasm32 width the small-string flag is the length word's
+/// sign bit, so the test is a signed comparison against zero.
+fn emitIsSmallStrLenWord(self: *Self) Allocator.Error!void {
+    comptime std.debug.assert(RocStr.targetSmallStrBit(wasm_word_size) == @as(u32, @bitCast(@as(i32, std.math.minInt(i32)))));
     try self.emitI32Const(0);
     self.currentCode().append(self.allocator, Op.i32_lt_s) catch return error.OutOfMemory;
+}
+
+/// Consume a loaded refcount from the stack and push whether it is the
+/// static-data sentinel, which marks an allocation that is never counted or freed.
+fn emitIsStaticRefcount(self: *Self) Allocator.Error!void {
+    comptime std.debug.assert(builtins.utils.REFCOUNT_STATIC_DATA == 0);
+    self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+}
+
+fn emitDecodeStrAllocPtr(self: *Self, str_ptr_local: u32, out_alloc_ptr: u32, out_is_small: u32) Allocator.Error!void {
+    const cap_local = try self.emitLoadAtToNewLocal(str_ptr_local, .i32, str_capacity_offset);
+
+    const len_local = try self.emitLoadAtToNewLocal(str_ptr_local, .i32, str_len_offset);
+
+    try self.emitLocalGet(len_local);
+    try self.emitIsSmallStrLenWord();
     try self.emitLocalSet(out_is_small);
 
     try self.emitSetI32Local(out_alloc_ptr, 0);
@@ -2169,7 +2228,7 @@ fn emitDecodeStrAllocPtr(self: *Self, str_ptr_local: u32, out_alloc_ptr: u32, ou
 
     const is_slice = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalGet(cap_local);
-    try self.emitI32Const(1);
+    try self.emitI32Const(seamless_slice_tag);
     self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
     try self.emitLocalSet(is_slice);
 
@@ -2177,9 +2236,9 @@ fn emitDecodeStrAllocPtr(self: *Self, str_ptr_local: u32, out_alloc_ptr: u32, ou
     self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
     self.currentCode().append(self.allocator, @backingInt(ValType.i32)) catch return error.OutOfMemory;
     try self.emitLocalGet(cap_local);
-    try self.emitI32Const(-2);
+    try self.emitI32Const(seamless_slice_untag_mask);
     try self.emitOps(.{ Op.i32_and, Op.@"else" });
-    try self.emitLoadAt(str_ptr_local, .i32, 0);
+    try self.emitLoadAt(str_ptr_local, .i32, str_bytes_offset);
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
     try self.emitLocalSet(out_alloc_ptr);
 
@@ -2216,21 +2275,21 @@ fn emitPrepareListSliceMetadata(self: *Self, list_ptr_local: u32, elements_refco
         try self.emitLocalGet(source_is_slice);
         try self.emitBrIf(0);
 
-        try self.emitLoadI32AtPtrOffset(source_alloc_ptr, -4, rc_val);
+        try self.emitLoadI32AtPtrOffset(source_alloc_ptr, refcount_offset, rc_val);
         try self.emitLocalGet(rc_val);
         try self.emitI32Const(1);
         self.currentCode().append(self.allocator, Op.i32_ne) catch return error.OutOfMemory;
         try self.emitBrIf(0);
 
-        try self.emitPtrWithOffset(source_alloc_ptr, -8);
-        try self.emitLoadAt(list_ptr_local, .i32, 4);
+        try self.emitPtrWithOffset(source_alloc_ptr, alloc_elem_count_offset);
+        try self.emitLoadAt(list_ptr_local, .i32, list_len_offset);
         try self.emitStoreOp(.i32, 0);
 
         self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
     }
 
     try self.emitLocalGet(source_alloc_ptr);
-    try self.emitI32Const(1);
+    try self.emitI32Const(seamless_slice_tag);
     self.currentCode().append(self.allocator, Op.i32_or) catch return error.OutOfMemory;
     try self.emitLocalSet(out_encoded_cap);
 }
@@ -2253,7 +2312,7 @@ fn emitCallRocDealloc(self: *Self, ptr_local: u32, alignment: u32) Allocator.Err
 }
 
 fn emitBuiltinInternalFreeRcPtr(self: *Self, rc_ptr_local: u32, element_alignment: u32, elements_refcounted: bool) Allocator.Error!void {
-    const ptr_width: u32 = 4;
+    const ptr_width: u32 = wasm_word_size;
     const required_space: u32 = if (elements_refcounted) 2 * ptr_width else ptr_width;
     const extra_bytes: u32 = if (element_alignment > required_space) element_alignment else required_space;
     const alloc_alignment: u32 = if (element_alignment > ptr_width) element_alignment else ptr_width;
@@ -2279,7 +2338,7 @@ fn emitDataPtrIncrefByLocal(self: *Self, data_ptr_local: u32, amount_local: u32)
 }
 
 /// Add `amount` to the refcount of the allocation `data_ptr_local` points
-/// into, unless the pointer is null or the stored refcount is zero.
+/// into, unless the pointer is null or the stored refcount is the static-data sentinel.
 fn emitDataPtrIncrefBy(self: *Self, data_ptr_local: u32, amount: union(enum) { imm: u32, local: u32 }) Allocator.Error!void {
     const masked_ptr, const rc_ptr, const rc_val = try self.allocAnonymousLocals(.i32, 3);
 
@@ -2290,18 +2349,18 @@ fn emitDataPtrIncrefBy(self: *Self, data_ptr_local: u32, amount: union(enum) { i
     try self.emitBrIf(0);
 
     try self.emitLocalGet(data_ptr_local);
-    try self.emitI32Const(-4);
+    try self.emitI32Const(data_ptr_untag_mask);
     self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
     try self.emitLocalSet(masked_ptr);
 
     try self.emitLocalGet(masked_ptr);
-    try self.emitI32Const(-4);
+    try self.emitI32Const(refcount_offset);
     self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
     try self.emitLocalSet(rc_ptr);
 
     try self.emitLoadI32AtPtrOffset(rc_ptr, 0, rc_val);
     try self.emitLocalGet(rc_val);
-    self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+    try self.emitIsStaticRefcount();
     try self.emitBrIf(0);
 
     try self.emitLocalGets(.{ rc_ptr, rc_val });
@@ -2325,18 +2384,18 @@ fn emitDataPtrDecref(self: *Self, data_ptr_local: u32, alignment: u32, elements_
     try self.emitBrIf(0);
 
     try self.emitLocalGet(data_ptr_local);
-    try self.emitI32Const(-4);
+    try self.emitI32Const(data_ptr_untag_mask);
     self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
     try self.emitLocalSet(masked_ptr);
 
     try self.emitLocalGet(masked_ptr);
-    try self.emitI32Const(-4);
+    try self.emitI32Const(refcount_offset);
     self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
     try self.emitLocalSet(rc_ptr);
 
     try self.emitLoadI32AtPtrOffset(rc_ptr, 0, rc_val);
     try self.emitLocalGet(rc_val);
-    self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+    try self.emitIsStaticRefcount();
     try self.emitBrIf(0);
 
     try self.emitLocalGet(rc_val);
@@ -2364,12 +2423,12 @@ fn emitDataPtrFree(self: *Self, data_ptr_local: u32, alignment: u32, elements_re
     try self.emitBrIf(0);
 
     try self.emitLocalGet(data_ptr_local);
-    try self.emitI32Const(-4);
+    try self.emitI32Const(data_ptr_untag_mask);
     self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
     try self.emitLocalSet(masked_ptr);
 
     try self.emitLocalGet(masked_ptr);
-    try self.emitI32Const(-4);
+    try self.emitI32Const(refcount_offset);
     self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
     try self.emitLocalSet(rc_ptr);
     try self.emitBuiltinInternalFreeRcPtr(rc_ptr, alignment, elements_refcounted);
@@ -2397,7 +2456,7 @@ fn emitBuiltinInternalListElementDecrefsIfUnique(
     self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
     try self.emitBrIf(0);
 
-    try self.emitLoadI32AtPtrOffset(alloc_ptr_local, -4, rc_val);
+    try self.emitLoadI32AtPtrOffset(alloc_ptr_local, refcount_offset, rc_val);
     try self.emitLocalGet(rc_val);
     try self.emitI32Const(1);
     self.currentCode().append(self.allocator, Op.i32_ne) catch return error.OutOfMemory;
@@ -2405,9 +2464,9 @@ fn emitBuiltinInternalListElementDecrefsIfUnique(
 
     try self.emitLocalGet(is_slice_local);
     try self.emitVoidIf();
-    try self.emitLoadI32AtPtrOffset(alloc_ptr_local, -8, count_local);
+    try self.emitLoadI32AtPtrOffset(alloc_ptr_local, alloc_elem_count_offset, count_local);
     self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
-    try self.emitLoadAt(list_ptr_local, .i32, 4);
+    try self.emitLoadAt(list_ptr_local, .i32, list_len_offset);
     try self.emitLocalSet(count_local);
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 
@@ -2517,10 +2576,10 @@ fn emitBuiltinInternalListIncrefByLocal(
         try self.emitBrIf(0);
 
         try self.emitLocalGet(alloc_ptr_local);
-        try self.emitI32Const(8);
+        try self.emitI32Const(-alloc_elem_count_offset);
         self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
 
-        try self.emitLoadAt(list_ptr_local, .i32, 4);
+        try self.emitLoadAt(list_ptr_local, .i32, list_len_offset);
         try self.emitStoreOp(.i32, 0);
 
         self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
@@ -2622,7 +2681,7 @@ fn emitIfUniqueBlockStart(self: *Self, ptr_local: u32) Allocator.Error!void {
     self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
     try self.emitBrIf(0);
 
-    try self.emitLoadI32AtPtrOffset(ptr_local, -4, rc_val);
+    try self.emitLoadI32AtPtrOffset(ptr_local, refcount_offset, rc_val);
     try self.emitLocalGet(rc_val);
     try self.emitI32Const(1);
     self.currentCode().append(self.allocator, Op.i32_ne) catch return error.OutOfMemory;
@@ -5532,9 +5591,10 @@ fn emitHeapAllocWithRefcount(self: *Self, data_size_local: u32, element_alignmen
     try self.emitHeapAlloc(total_size_local, rc_layout.allocation_alignment);
     const raw_ptr_local = try self.emitSetNewLocal(.i32);
 
+    const refcount_word_offset: i32 = @as(i32, @intCast(rc_layout.data_offset)) + refcount_offset;
     try self.emitLocalGet(raw_ptr_local);
-    if (rc_layout.data_offset > 4) {
-        try self.emitI32Const(@intCast(rc_layout.data_offset - 4));
+    if (refcount_word_offset > 0) {
+        try self.emitI32Const(refcount_word_offset);
         self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
     }
     try self.emitI32Const(1);
@@ -8798,7 +8858,7 @@ fn layoutStorageByteSize(self: *const Self, layout_idx: layout.Idx) Allocator.Er
     return switch (l.tag) {
         .zst => 0,
         .scalar => switch (l.getScalar().tag) {
-            .str => 12,
+            .str => roc_str_size,
             .opaque_ptr => 4,
             .int => switch (l.getScalar().getInt()) {
                 .u8, .i8 => 1,
@@ -8814,7 +8874,7 @@ fn layoutStorageByteSize(self: *const Self, layout_idx: layout.Idx) Allocator.Er
             },
             .vector => 16,
         },
-        .list, .list_of_zst => 12,
+        .list, .list_of_zst => roc_list_size,
         .box, .box_of_zst, .erased_box => 4,
         .tag_union => (try WasmLayout.tagUnionLayoutWithStore(l.getTagUnion().idx, ls)).size,
         .struct_ => try WasmLayout.structSizeWithStore(l.getStruct().idx, ls),
@@ -9392,11 +9452,11 @@ fn generateStoreAggregateValue(self: *Self, dest: ProcLocalId, value_layout: lay
 /// and it carries nothing but the length held in `len_local`. Leaves a pointer
 /// to the list value on the operand stack.
 fn emitZstListWithLen(self: *Self, len_local: u32) Allocator.Error!void {
-    const offset = try self.allocStackMemory(12, 4);
+    const offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
     const list_base = try self.emitFpOffsetToNewLocal(offset);
-    try self.emitZeroInit(list_base, 12);
+    try self.emitZeroInit(list_base, roc_list_size);
     try self.emitLocalGet(len_local);
-    try self.emitStoreToMem(list_base, 4, .i32);
+    try self.emitStoreToMem(list_base, list_len_offset, .i32);
     try self.emitLocalGet(list_base);
 }
 
@@ -9409,7 +9469,7 @@ fn emitZstListFromStackLen(self: *Self) Allocator.Error!void {
 
 /// Read the length out of the list value pointed to by `list_local`.
 fn emitListLenLocal(self: *Self, list_local: u32) Allocator.Error!u32 {
-    const len_local = try self.emitLoadAtToNewLocal(list_local, .i32, 4);
+    const len_local = try self.emitLoadAtToNewLocal(list_local, .i32, list_len_offset);
     return len_local;
 }
 
@@ -9425,9 +9485,9 @@ fn generateList(self: *Self, l: anytype) Allocator.Error!void {
 
     if (elems.len == 0) {
         // Empty list—same as empty_list
-        const base_offset = try self.allocStackMemory(12, 4);
+        const base_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
         const base_local = try self.emitFpOffsetToNewLocal(base_offset);
-        try self.emitZeroInit(base_local, 12);
+        try self.emitZeroInit(base_local, roc_list_size);
         try self.emitLocalGet(base_local);
         return;
     }
@@ -9473,23 +9533,23 @@ fn generateList(self: *Self, l: anytype) Allocator.Error!void {
         }
     }
 
-    // Construct the 12-byte RocList struct on the stack frame
-    const list_offset = try self.allocStackMemory(12, 4);
+    // Construct the RocList struct on the stack frame
+    const list_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
     const list_base = try self.emitFpOffsetToNewLocal(list_offset);
 
-    // Store elements pointer (offset 0)
+    // Store elements pointer
     try self.emitLocalGet(data_base);
-    try self.emitStoreToMem(list_base, 0, .i32);
+    try self.emitStoreToMem(list_base, list_bytes_offset, .i32);
 
-    // Store length (offset 4)
+    // Store length
     try self.emitI32Const(@intCast(elems.len));
-    try self.emitStoreToMem(list_base, 4, .i32);
+    try self.emitStoreToMem(list_base, list_len_offset, .i32);
 
-    // Store encoded capacity (offset 8). A list of zero-sized elements holds no
+    // Store encoded capacity. A list of zero-sized elements holds no
     // allocation, so its stored capacity is zero however many elements it carries.
-    const encoded_capacity: u32 = if (elem_size == 0) 0 else @as(u32, @intCast(elems.len)) << 1;
+    const encoded_capacity: u32 = if (elem_size == 0) 0 else @as(u32, @intCast(elems.len)) << capacity_shift;
     try self.emitI32Const(@intCast(encoded_capacity));
-    try self.emitStoreToMem(list_base, 8, .i32);
+    try self.emitStoreToMem(list_base, list_capacity_offset, .i32);
 
     // Push pointer to the RocList struct
     try self.emitLocalGet(list_base);
@@ -9997,9 +10057,9 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitI32Const(0);
         },
         .list_len => {
-            // Load length from RocList struct (offset 4)
+            // Load length from RocList struct
             try self.emitProcLocal(GuardedList.at(args, 0));
-            try self.emitLoadOp(.i32, 4);
+            try self.emitLoadOp(.i32, list_len_offset);
             // list_len returns U64 in Roc, but we store it as i32 on wasm32
             // If ret_layout expects i64, extend
             const ret_vt = try self.resolveValType(ll.ret_layout);
@@ -10012,18 +10072,18 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // Seamless slices tag the low bit and report length as capacity.
             const list_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
 
-            const len_local = try self.emitLoadAtToNewLocal(list_local, .i32, 4);
+            const len_local = try self.emitLoadAtToNewLocal(list_local, .i32, list_len_offset);
 
-            const cap_local = try self.emitLoadAtToNewLocal(list_local, .i32, 8);
+            const cap_local = try self.emitLoadAtToNewLocal(list_local, .i32, list_capacity_offset);
 
             try self.emitLocalGet(cap_local);
-            try self.emitI32Const(1);
+            try self.emitI32Const(seamless_slice_tag);
             try self.emitOps(.{ Op.i32_and, Op.@"if" });
             self.currentCode().append(self.allocator, @backingInt(ValType.i32)) catch return error.OutOfMemory;
             try self.emitLocalGet(len_local);
             self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
             try self.emitLocalGet(cap_local);
-            try self.emitI32Const(1);
+            try self.emitI32Const(capacity_shift);
             try self.emitOps(.{ Op.i32_shr_u, Op.end });
 
             const ret_vt = try self.resolveValType(ll.ret_layout);
@@ -10048,7 +10108,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitProcLocalAsI32(GuardedList.at(args, 1));
             try self.emitLocalSet(index_local);
 
-            try self.emitLoadAt(list_local, .i32, 0);
+            try self.emitLoadAt(list_local, .i32, list_bytes_offset);
             try self.emitLocalGet(index_local);
             try self.emitI32Const(@intCast(elem_size));
             try self.emitOps(.{ Op.i32_mul, Op.i32_add });
@@ -10086,25 +10146,25 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             // single-threaded, so a plain refcount load suffices.
             const list_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
 
-            const cap_local = try self.emitLoadAtToNewLocal(list_local, .i32, 8);
+            const cap_local = try self.emitLoadAtToNewLocal(list_local, .i32, list_capacity_offset);
 
             // Seamless slices tag the low bit of the capacity field.
             try self.emitLocalGet(cap_local);
-            try self.emitI32Const(1);
+            try self.emitI32Const(seamless_slice_tag);
             try self.emitOps(.{ Op.i32_and, Op.@"if" });
             self.currentCode().append(self.allocator, @backingInt(ValType.i32)) catch return error.OutOfMemory;
             try self.emitI32Const(0);
             self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
             // Zero capacity has no heap refcount and counts as unique.
             try self.emitLocalGet(cap_local);
-            try self.emitI32Const(1);
+            try self.emitI32Const(capacity_shift);
             try self.emitOps(.{ Op.i32_shr_u, Op.i32_eqz, Op.@"if" });
             self.currentCode().append(self.allocator, @backingInt(ValType.i32)) catch return error.OutOfMemory;
             try self.emitI32Const(1);
             self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
             // The refcount lives one usize before the data pointer.
-            try self.emitLoadAt(list_local, .i32, 0);
-            try self.emitI32Const(4);
+            try self.emitLoadAt(list_local, .i32, list_bytes_offset);
+            try self.emitI32Const(-refcount_offset);
             self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
             try self.emitLoadOp(.i32, 0);
             try self.emitI32Const(1);
@@ -10112,11 +10172,11 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
 
         .list_map_cast_unsafe => {
-            // Same bits, new element type: copy the 12-byte list struct.
+            // Same bits, new element type: copy the list struct.
             const src_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-            const dst_offset = try self.allocStackMemory(12, 4);
+            const dst_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
             const dst_local = try self.emitFpOffsetToNewLocal(dst_offset);
-            try self.emitMemCopy(dst_local, 0, src_local, 12);
+            try self.emitMemCopy(dst_local, 0, src_local, roc_list_size);
             try self.emitLocalGet(dst_local);
         },
 
@@ -10148,7 +10208,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitProcLocalAsI32(GuardedList.at(args, 1));
             try self.emitLocalSet(index_local);
 
-            try self.emitLoadAt(list_local, .i32, 0);
+            try self.emitLoadAt(list_local, .i32, list_bytes_offset);
             try self.emitLocalGet(index_local);
             try self.emitI32Const(@intCast(elem_size));
             try self.emitOps(.{ Op.i32_mul, Op.i32_add });
@@ -10178,9 +10238,9 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
             if (elem_size == 0) {
                 // ZST element: nothing to store; pass the list through.
-                const zst_result_offset = try self.allocStackMemory(12, 4);
+                const zst_result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
                 const zst_result_local = try self.emitFpOffsetToNewLocal(zst_result_offset);
-                try self.emitMemCopy(zst_result_local, 0, list_local, 12);
+                try self.emitMemCopy(zst_result_local, 0, list_local, roc_list_size);
                 try self.emitLocalGet(zst_result_local);
                 return;
             }
@@ -10190,7 +10250,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitLocalSet(index_local);
 
             const dst_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitLoadAt(list_local, .i32, 0);
+            try self.emitLoadAt(list_local, .i32, list_bytes_offset);
             try self.emitLocalGet(index_local);
             try self.emitI32Const(@intCast(elem_size));
             try self.emitOps(.{ Op.i32_mul, Op.i32_add });
@@ -10207,9 +10267,9 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 try self.emitStoreOpSized(elem_vt, elem_size, 0);
             }
 
-            const result_offset = try self.allocStackMemory(12, 4);
+            const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
             const result_local = try self.emitFpOffsetToNewLocal(result_offset);
-            try self.emitMemCopy(result_local, 0, list_local, 12);
+            try self.emitMemCopy(result_local, 0, list_local, roc_list_size);
             try self.emitLocalGet(result_local);
         },
 
@@ -10260,27 +10320,27 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
                 }
             }
 
-            const result_offset = try self.allocStackMemory(12, 4);
+            const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
             const result_local = try self.emitFpOffsetToNewLocal(result_offset);
 
             // Same elements_ptr
             try self.emitLocalGet(result_local);
-            try self.emitLoadAt(list_local, .i32, 0);
-            try self.emitStoreOp(.i32, 0);
+            try self.emitLoadAt(list_local, .i32, list_bytes_offset);
+            try self.emitStoreOp(.i32, list_bytes_offset);
 
             // new_len = min(count, old_len) using select
             // Stack: count, old_len, count <= old_len
             try self.emitLocalGets(.{ result_local, count_local });
-            try self.emitLoadAt(list_local, .i32, 4);
+            try self.emitLoadAt(list_local, .i32, list_len_offset);
             try self.emitLocalGet(count_local);
-            try self.emitLoadAt(list_local, .i32, 4);
+            try self.emitLoadAt(list_local, .i32, list_len_offset);
             try self.emitOps(.{ Op.i32_le_u, Op.select });
-            try self.emitStoreOp(.i32, 4);
+            try self.emitStoreOp(.i32, list_len_offset);
 
             // Same capacity
             try self.emitLocalGet(result_local);
-            try self.emitLoadAt(list_local, .i32, 8);
-            try self.emitStoreOp(.i32, 8);
+            try self.emitLoadAt(list_local, .i32, list_capacity_offset);
+            try self.emitStoreOp(.i32, list_capacity_offset);
 
             try self.emitLocalGet(result_local);
         },
@@ -10294,7 +10354,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const count_local = try self.emitSetNewLocal(.i32);
 
             // Load length
-            try self.emitLoadAt(list_local, .i32, 4);
+            try self.emitLoadAt(list_local, .i32, list_len_offset);
             const len_local = try self.emitSetNewLocal(.i32);
 
             // actual_count = min(count, len)
@@ -10302,7 +10362,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitOps(.{ Op.i32_le_u, Op.select });
             const actual_count = try self.emitSetNewLocal(.i32);
 
-            const result_offset = try self.allocStackMemory(12, 4);
+            const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
             const result_local = try self.emitFpOffsetToNewLocal(result_offset);
 
             const list_abi = self.builtinInternalListAbi("wasm.list_take_last.builtin_list_abi", ll.ret_layout);
@@ -10318,23 +10378,23 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
             // new_ptr = old_ptr + (len - actual_count) * elem_size
             try self.emitLocalGet(result_local);
-            try self.emitLoadAt(list_local, .i32, 0);
+            try self.emitLoadAt(list_local, .i32, list_bytes_offset);
             try self.emitLocalGets(.{ len_local, actual_count });
             self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
             try self.emitI32Const(@intCast(elem_size));
             try self.emitOps(.{ Op.i32_mul, Op.i32_add });
-            try self.emitStoreOp(.i32, 0);
+            try self.emitStoreOp(.i32, list_bytes_offset);
 
             // new_len = actual_count
             try self.emitLocalGets(.{ result_local, actual_count });
-            try self.emitStoreOp(.i32, 4);
+            try self.emitStoreOp(.i32, list_len_offset);
 
             // Encode seamless-slice cap from the source allocation pointer.
             const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             try self.emitPrepareListSliceMetadata(list_local, list_abi.elements_refcounted, encoded_cap);
 
             try self.emitLocalGets(.{ result_local, encoded_cap });
-            try self.emitStoreOp(.i32, 8);
+            try self.emitStoreOp(.i32, list_capacity_offset);
 
             try self.emitLocalGet(result_local);
         },
@@ -10377,7 +10437,13 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         },
         .list_append_le_bytes => {
             // list_append_le_bytes(list, value, count) -> extended list
-            try self.generateLLListAppendLeBytes(args, ll.unique_args);
+            try self.generateLLListAppendLeBytes(args, ll.unique_args & 1 != 0);
+        },
+        .list_append_le_bytes_unsafe => {
+            // list_append_le_bytes_unsafe(list, value, count) -> extended list;
+            // the list is already proven unique with the spare word, so the
+            // builtin runs in place.
+            try self.generateLLListAppendLeBytes(args, true);
         },
         .list_reverse => {
             // list_reverse(list) -> reversed list
@@ -10465,7 +10531,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             {
                 const fields = try self.loadRocListFields(list_local);
                 const callbacks = try self.listElementCallbacks(clear_abi);
-                const result_offset = try self.allocStackMemory(12, 4);
+                const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
                 try self.emitFpOffset(result_offset);
                 try self.emitRocListFields(fields);
                 try self.emitI32Const(@intCast(clear_abi.elem_align));
@@ -10494,31 +10560,31 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .str_count_utf8_bytes => {
             // Returns the length of the string in UTF-8 bytes
             try self.emitProcLocal(GuardedList.at(args, 0));
-            // For SSO (byte 11 high bit set): length = byte 11 & 0x7F
-            // For heap: length at offset 8
-            // We use the simplified approach: load byte 11, check SSO bit
+            // For SSO (flag byte's small-string flag set): length = flag byte & length mask
+            // For heap: length from the length field
+            // We use the simplified approach: load the flag byte, check SSO bit
             const str_local = try self.emitSetNewLocal(.i32);
 
-            // Load byte 11 (SSO tag byte)
+            // Load the SSO flag byte
             try self.emitLocalGet(str_local);
-            try self.emitLoadOpSized(.i32, 1, 11);
+            try self.emitLoadOpSized(.i32, 1, str_flag_byte_offset);
             const tag_byte = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
             self.currentCode().append(self.allocator, Op.local_tee) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, self.currentCode(), tag_byte) catch return error.OutOfMemory;
 
-            // Check if SSO: high bit set
-            try self.emitI32Const(0x80);
+            // Check if SSO: small-string flag set
+            try self.emitI32Const(small_str_flag);
             self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
 
-            // if SSO: len = tag_byte & 0x7F; else: len = load i32 from offset 8
+            // if SSO: len = tag_byte & length mask; else: len = load the length field
             self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
             self.currentCode().append(self.allocator, @backingInt(ValType.i32)) catch return error.OutOfMemory;
             // SSO path
             try self.emitLocalGet(tag_byte);
-            try self.emitI32Const(0x7F);
+            try self.emitI32Const(small_str_len_mask);
             try self.emitOps(.{ Op.i32_and, Op.@"else" });
             // Heap path
-            try self.emitLoadAt(str_local, .i32, 8);
+            try self.emitLoadAt(str_local, .i32, str_len_offset);
             self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
 
             // Result is length as i32. If ret_layout expects i64, extend.
@@ -10666,7 +10732,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .str_split_on => {
             const a = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
             const b = try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32);
-            const result_offset = try self.allocStackMemory(12, 4);
+            const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
             const a_fields = try self.loadRocStrFields(a);
             const b_fields = try self.loadRocStrFields(b);
             try self.emitFpOffset(result_offset);
@@ -10678,7 +10744,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .str_join_with => {
             const a = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
             const b = try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32);
-            const result_offset = try self.allocStackMemory(12, 4);
+            const result_offset = try self.allocStackMemory(roc_str_size, wasm_word_size);
             const list_fields = try self.loadRocListFields(a);
             const sep_fields = try self.loadRocStrFields(b);
             try self.emitFpOffset(result_offset);
@@ -10691,7 +10757,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .str_reserve => try self.emitStrCountedLowLevel(args, BuiltinSignatures.kindOf(comptime LowLevelBuiltins.strOp(.str_reserve)), updateModeImmForArg(ll.unique_args, 0)),
         .str_with_capacity => {
             const int_local = try self.emitU64ArgToNewLocal(GuardedList.at(args, 0));
-            const result_offset = try self.allocStackMemory(12, 4);
+            const result_offset = try self.allocStackMemory(roc_str_size, wasm_word_size);
             try self.emitFpOffset(result_offset);
             try self.emitLocalGet(int_local);
             try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.strOp(.str_with_capacity)));
@@ -11098,11 +11164,11 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
                         const masked_ptr, const rc_ptr, const rc_val = try self.allocAnonymousLocals(.i32, 3);
                         try self.emitLocalGet(box_ptr);
-                        try self.emitI32Const(-4);
+                        try self.emitI32Const(data_ptr_untag_mask);
                         self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
                         try self.emitLocalSet(masked_ptr);
                         try self.emitLocalGet(masked_ptr);
-                        try self.emitI32Const(-4);
+                        try self.emitI32Const(refcount_offset);
                         self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
                         try self.emitLocalSet(rc_ptr);
                         try self.emitLoadI32AtPtrOffset(rc_ptr, 0, rc_val);
@@ -12467,27 +12533,27 @@ fn emitNumericLowLevel(self: *Self, op: LIR.LowLevel, args: anytype, ret_layout:
 }
 
 /// Generate a RocStr for a string literal.
-/// On wasm32, RocStr is 12 bytes: { ptr/bytes[0..3], encoded cap/bytes[4..7], len/bytes[8..11] }.
-/// Small strings (≤11 bytes) use SSO: bytes inline, byte 11 = len | 0x80.
-/// Large strings (>11 bytes) use a data segment in linear memory.
+/// Small strings (at most `small_str_max_len` bytes) use SSO: bytes inline, and
+/// the final byte holds the length with the small-string flag set.
+/// Larger strings use a data segment in linear memory.
 fn generateStrLiteral(self: *Self, literal: LIR.StrLiteral) Allocator.Error!void {
     const str_bytes = self.store.getStringLiteral(literal);
     const backing_bytes = self.store.getStringLiteralBacking(literal);
     const whole_backing = literal.offset == 0 and @as(usize, literal.len) == backing_bytes.len;
     const len = str_bytes.len;
 
-    // Allocate 12 bytes on stack frame for the RocStr struct
-    const base_offset = try self.allocStackMemory(12, 4);
+    // Allocate the RocStr struct on the stack frame
+    const base_offset = try self.allocStackMemory(roc_str_size, wasm_word_size);
     const base_local = self.fp_local;
 
-    if (backing_bytes.len <= 11 and len <= 11) {
+    if (backing_bytes.len <= small_str_max_len and len <= small_str_max_len) {
         // Small string optimization (SSO)
-        // Store string bytes inline in the 12-byte struct
-        // First, zero out the 12 bytes (3 × i32.store)
-        for (0..3) |i| {
+        // Store string bytes inline in the struct
+        // First, zero out the struct one word at a time
+        for (0..RocStr.word_count) |i| {
             try self.emitLocalGet(base_local);
             try self.emitI32Const(0);
-            try self.emitStoreOp(.i32, base_offset + @as(u32, @intCast(i)) * 4);
+            try self.emitStoreOp(.i32, base_offset + @as(u32, @intCast(i)) * wasm_word_size);
         }
 
         // Store string bytes one at a time
@@ -12501,31 +12567,32 @@ fn generateStrLiteral(self: *Self, literal: LIR.StrLiteral) Allocator.Error!void
             WasmModule.leb128WriteU32(self.allocator, self.currentCode(), base_offset + @as(u32, @intCast(i))) catch return error.OutOfMemory;
         }
 
-        // Store SSO marker: byte 11 = len | 0x80
+        // Store SSO marker: flag byte = len | small-string flag
         try self.emitLocalGet(base_local);
-        try self.emitI32Const(@as(i32, @intCast(len)) | @as(i32, 0x80));
-        try self.emitMemOp(Op.i32_store8, 0, base_offset + 11);
+        try self.emitI32Const(@as(i32, @intCast(len)) | small_str_flag);
+        try self.emitMemOp(Op.i32_store8, 0, base_offset + str_flag_byte_offset);
     } else {
         const data_address = try self.staticStrDataOffset(literal.backing);
 
-        // Store ptr (offset 0)
+        // Store ptr
         try self.emitLocalGet(base_local);
         try self.emitDataAddressConst(data_address, @intCast(literal.offset));
-        try self.emitStoreOp(.i32, base_offset);
+        try self.emitStoreOp(.i32, base_offset + str_bytes_offset);
 
-        // Store encoded capacity (offset 4)
+        // Store encoded capacity: the capacity of the whole backing, or the
+        // seamless-slice-tagged backing address for a slice of it
         try self.emitLocalGet(base_local);
         if (whole_backing) {
-            try self.emitI32Const(@intCast(len << 1));
+            try self.emitI32Const(@intCast(len << capacity_shift));
         } else {
-            try self.emitDataAddressConst(data_address, 1);
+            try self.emitDataAddressConst(data_address, seamless_slice_tag);
         }
-        try self.emitStoreOp(.i32, base_offset + 4);
+        try self.emitStoreOp(.i32, base_offset + str_capacity_offset);
 
-        // Store len (offset 8)
+        // Store len
         try self.emitLocalGet(base_local);
         try self.emitI32Const(@intCast(len));
-        try self.emitStoreOp(.i32, base_offset + 8);
+        try self.emitStoreOp(.i32, base_offset + str_len_offset);
     }
 
     // Push pointer to the RocStr on the stack
@@ -12537,39 +12604,43 @@ fn generateStrLiteral(self: *Self, literal: LIR.StrLiteral) Allocator.Error!void
 }
 
 /// Generate a flat scalar RocList for a byte-backed list literal.
-/// On wasm32, RocList is 12 bytes: { ptr/bytes[0..3], len/bytes[4..7], encoded cap/bytes[8..11] }.
 fn generateBytesLiteral(self: *Self, literal: LIR.ListLiteral) Allocator.Error!void {
     const bytes = self.store.getStringLiteral(literal.bytes);
     const backing_bytes = self.store.getStringLiteralBacking(literal.bytes);
     const whole_backing = literal.bytes.offset == 0 and @as(usize, literal.bytes.len) == backing_bytes.len;
 
-    const base_offset = try self.allocStackMemory(12, 4);
+    const base_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
     const base_local = self.fp_local;
 
     if (bytes.len == 0) {
-        for ([_]u32{ 0, literal.len, literal.len << 1 }, 0..) |word, i| {
+        const fields = [_]struct { offset: u32, value: u32 }{
+            .{ .offset = list_bytes_offset, .value = 0 },
+            .{ .offset = list_len_offset, .value = literal.len },
+            .{ .offset = list_capacity_offset, .value = literal.len << capacity_shift },
+        };
+        for (fields) |field| {
             try self.emitLocalGet(base_local);
-            try self.emitI32Const(@bitCast(word));
-            try self.emitStoreOp(.i32, base_offset + @as(u32, @intCast(i)) * 4);
+            try self.emitI32Const(@bitCast(field.value));
+            try self.emitStoreOp(.i32, base_offset + field.offset);
         }
     } else {
         const data_address = try self.staticStrDataOffset(literal.bytes.backing);
 
         try self.emitLocalGet(base_local);
         try self.emitDataAddressConst(data_address, @intCast(literal.bytes.offset));
-        try self.emitStoreOp(.i32, base_offset);
+        try self.emitStoreOp(.i32, base_offset + list_bytes_offset);
 
         try self.emitLocalGet(base_local);
         try self.emitI32Const(@intCast(literal.len));
-        try self.emitStoreOp(.i32, base_offset + 4);
+        try self.emitStoreOp(.i32, base_offset + list_len_offset);
 
         try self.emitLocalGet(base_local);
         if (whole_backing) {
-            try self.emitI32Const(@intCast(literal.len << 1));
+            try self.emitI32Const(@intCast(literal.len << capacity_shift));
         } else {
-            try self.emitDataAddressConst(data_address, 1);
+            try self.emitDataAddressConst(data_address, seamless_slice_tag);
         }
-        try self.emitStoreOp(.i32, base_offset + 8);
+        try self.emitStoreOp(.i32, base_offset + list_capacity_offset);
     }
 
     try self.emitLocalGet(base_local);
@@ -12605,26 +12676,26 @@ fn staticStrDataOffset(self: *Self, backing_idx: base.StringLiteral.Idx) Allocat
 }
 
 /// Generate code for str_concat: concatenate multiple RocStr values into one.
-/// Each sub-expression produces a RocStr pointer (12 bytes: ptr/bytes, encoded cap/bytes, len/bytes).
+/// Each sub-expression produces a RocStr pointer.
 fn emitExtractStrPtrLen(self: *Self, str_local: u32, ptr_local: u32, len_local: u32) Allocator.Error!void {
-    // Load byte 11 to check SSO bit
+    // Load the flag byte to check the SSO bit
     try self.emitLocalGet(str_local);
-    try self.emitMemOp(Op.i32_load8_u, 0, 11);
+    try self.emitMemOp(Op.i32_load8_u, 0, str_flag_byte_offset);
 
     const sso_marker = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     self.currentCode().append(self.allocator, Op.local_tee) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), sso_marker) catch return error.OutOfMemory;
 
-    // Check if SSO: bit 7 set
-    try self.emitI32Const(0x80);
+    // Check if SSO: small-string flag set
+    try self.emitI32Const(small_str_flag);
     self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
 
     // if (is_sso)
     try self.emitVoidIf();
 
-    // SSO path: len = sso_marker & 0x7F, ptr = str_local (bytes inline)
+    // SSO path: len = sso_marker & length mask, ptr = str_local (bytes inline)
     try self.emitLocalGet(sso_marker);
-    try self.emitI32Const(0x7F);
+    try self.emitI32Const(small_str_len_mask);
     self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
     try self.emitLocalSet(len_local);
 
@@ -12634,12 +12705,12 @@ fn emitExtractStrPtrLen(self: *Self, str_local: u32, ptr_local: u32, len_local: 
     // else—heap path
     self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
 
-    // len = *(str_local + 8)
-    try self.emitLoadAt(str_local, .i32, 8);
+    // len = str_local.length
+    try self.emitLoadAt(str_local, .i32, str_len_offset);
     try self.emitLocalSet(len_local);
 
-    // ptr = *(str_local + 0)
-    try self.emitLoadAt(str_local, .i32, 0);
+    // ptr = str_local.bytes
+    try self.emitLoadAt(str_local, .i32, str_bytes_offset);
     try self.emitLocalSet(ptr_local);
 
     // end if
@@ -12792,7 +12863,7 @@ fn emitNormalizedIntParts(
 fn emitIntToStr(self: *Self, value: ProcLocalId, int_width_bytes: u8, is_signed: bool) Allocator.Error!void {
     const parts = try self.emitNormalizedIntParts(value, int_width_bytes, is_signed);
 
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_str_size, wasm_word_size);
     const result_local = try self.emitFpOffsetToNewLocal(result_offset);
 
     try self.emitLocalGets(.{ result_local, parts.low, parts.high });
@@ -12805,7 +12876,7 @@ fn emitIntToStr(self: *Self, value: ProcLocalId, int_width_bytes: u8, is_signed:
 fn emitDecToStr(self: *Self, value: ProcLocalId) Allocator.Error!void {
     const dec_ptr = try self.emitProcLocalToNewLocal(value, .i32);
 
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_str_size, wasm_word_size);
     const result_local = try self.emitFpOffsetToNewLocal(result_offset);
 
     try self.emitLocalGet(result_local);
@@ -12828,7 +12899,7 @@ fn emitFloatToStr(self: *Self, value: ProcLocalId, is_f32: bool) Allocator.Error
 
     const bits_local = try self.emitSetNewLocal(.i64);
 
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_str_size, wasm_word_size);
     const result_local = try self.emitFpOffsetToNewLocal(result_offset);
 
     try self.emitLocalGets(.{ result_local, bits_local });
@@ -12881,7 +12952,7 @@ fn emitFloatUnaryMath(self: *Self, arg: ProcLocalId, ret_layout: layout.Idx, op:
 fn emitStrEscapeAndQuote(self: *Self, value: ProcLocalId) Allocator.Error!void {
     const str_ptr = try self.emitProcLocalToNewLocal(value, .i32);
 
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_str_size, wasm_word_size);
     const fields = try self.loadRocStrFields(str_ptr);
     try self.emitFpOffset(result_offset);
     try self.emitRocStrFields(fields);
@@ -12915,7 +12986,7 @@ fn emitStrSubstringUnsafe(self: *Self, args: anytype) Allocator.Error!void {
     const data_ptr, const source_len = try self.allocAnonymousLocals(.i32, 2);
     try self.emitExtractStrPtrLen(str_ptr, data_ptr, source_len);
 
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_str_size, wasm_word_size);
     const result_ptr = try self.emitFpOffsetToNewLocal(result_offset);
 
     const is_small, const allocation_ptr = try self.allocAnonymousLocals(.i32, 2);
@@ -12924,7 +12995,7 @@ fn emitStrSubstringUnsafe(self: *Self, args: anytype) Allocator.Error!void {
     try self.emitLocalGet(is_small);
     try self.emitVoidIf();
     {
-        try self.emitZeroInit(result_ptr, 12);
+        try self.emitZeroInit(result_ptr, roc_str_size);
         const source = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
         try self.emitLocalGets(.{ data_ptr, start });
         self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
@@ -12933,23 +13004,23 @@ fn emitStrSubstringUnsafe(self: *Self, args: anytype) Allocator.Error!void {
         try self.emitMemCopyLoop(result_ptr, zero, source, length);
 
         try self.emitLocalGets(.{ result_ptr, length });
-        try self.emitI32Const(0x80);
+        try self.emitI32Const(small_str_flag);
         self.currentCode().append(self.allocator, Op.i32_or) catch return error.OutOfMemory;
-        try self.emitMemOp(Op.i32_store8, 0, 11);
+        try self.emitMemOp(Op.i32_store8, 0, str_flag_byte_offset);
     }
     self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
     {
         try self.emitLocalGets(.{ result_ptr, data_ptr, start });
         self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-        try self.emitStoreOp(.i32, 0);
+        try self.emitStoreOp(.i32, str_bytes_offset);
 
         try self.emitLocalGets(.{ result_ptr, allocation_ptr });
-        try self.emitI32Const(1);
+        try self.emitI32Const(seamless_slice_tag);
         self.currentCode().append(self.allocator, Op.i32_or) catch return error.OutOfMemory;
-        try self.emitStoreOp(.i32, 4);
+        try self.emitStoreOp(.i32, str_capacity_offset);
 
         try self.emitLocalGets(.{ result_ptr, length });
-        try self.emitStoreOp(.i32, 8);
+        try self.emitStoreOp(.i32, str_len_offset);
     }
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
     try self.emitLocalGet(result_ptr);
@@ -12960,29 +13031,29 @@ fn emitStrSubstringUnsafe(self: *Self, args: anytype) Allocator.Error!void {
 /// Non-SSO strings are converted field-by-field because RocStr stores encoded
 /// capacity before length, while RocList stores length before encoded capacity.
 fn emitStrToUtf8(self: *Self, str_arg: ProcLocalId) Allocator.Error!void {
-    // Generate the string expression (produces i32 pointer to 12-byte RocStr)
+    // Generate the string expression (produces i32 pointer to a RocStr)
     const str_ptr = try self.emitProcLocalToNewLocal(str_arg, .i32);
 
-    // Allocate result memory (12 bytes for RocList(U8))
-    const result_offset = try self.allocStackMemory(12, 4);
+    // Allocate result memory for the RocList(U8)
+    const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
     const result_ptr = try self.emitFpOffsetToNewLocal(result_offset);
 
-    // Read byte 11 to check SSO flag
+    // Read the flag byte to check SSO flag
     try self.emitLocalGet(str_ptr);
-    try self.emitMemOp(Op.i32_load8_u, 0, 11);
+    try self.emitMemOp(Op.i32_load8_u, 0, str_flag_byte_offset);
     const last_byte = try self.emitSetNewLocal(.i32);
 
-    // Check SSO flag: last_byte & 0x80
+    // Check SSO flag: last_byte & small-string flag
     try self.emitLocalGet(last_byte);
-    try self.emitI32Const(0x80);
+    try self.emitI32Const(small_str_flag);
     self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
 
     // if (is_sso)
     try self.emitVoidIf();
     {
-        // SSO case: extract len = last_byte & 0x7F
+        // SSO case: extract len = last_byte & length mask
         try self.emitLocalGet(last_byte);
-        try self.emitI32Const(0x7F);
+        try self.emitI32Const(small_str_len_mask);
         self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
         const sso_len = try self.emitSetNewLocal(.i32);
 
@@ -12994,31 +13065,31 @@ fn emitStrToUtf8(self: *Self, str_arg: ProcLocalId) Allocator.Error!void {
         const zero = try self.emitI32ConstToNewLocal(0);
         try self.emitMemCopyLoop(heap_ptr, zero, str_ptr, sso_len);
 
-        // Write RocList {heap_ptr, sso_len, sso_len << 1} to result_ptr
-        // ptr (offset 0)
+        // Write RocList {heap_ptr, sso_len, sso_len << capacity_shift} to result_ptr
+        // ptr
         try self.emitLocalGets(.{ result_ptr, heap_ptr });
-        try self.emitStoreOp(.i32, 0);
-        // len (offset 4)
+        try self.emitStoreOp(.i32, list_bytes_offset);
+        // len
         try self.emitLocalGets(.{ result_ptr, sso_len });
-        try self.emitStoreOp(.i32, 4);
-        // cap (offset 8)
+        try self.emitStoreOp(.i32, list_len_offset);
+        // cap
         try self.emitLocalGets(.{ result_ptr, sso_len });
-        try self.emitI32Const(1);
+        try self.emitI32Const(capacity_shift);
         self.currentCode().append(self.allocator, Op.i32_shl) catch return error.OutOfMemory;
-        try self.emitStoreOp(.i32, 8);
+        try self.emitStoreOp(.i32, list_capacity_offset);
     }
     // else (non-SSO)
     self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
     {
         const str_data, const str_len, const str_cap = try self.allocAnonymousLocals(.i32, 3);
 
-        try self.emitLoadAt(str_ptr, .i32, 0);
+        try self.emitLoadAt(str_ptr, .i32, str_bytes_offset);
         try self.emitLocalSet(str_data);
 
-        try self.emitLoadAt(str_ptr, .i32, 8);
+        try self.emitLoadAt(str_ptr, .i32, str_len_offset);
         try self.emitLocalSet(str_len);
 
-        try self.emitLoadAt(str_ptr, .i32, 4);
+        try self.emitLoadAt(str_ptr, .i32, str_capacity_offset);
         try self.emitLocalSet(str_cap);
 
         // Non-SSO Str.to_utf8 returns a List(U8) that aliases the string bytes.
@@ -13029,13 +13100,13 @@ fn emitStrToUtf8(self: *Self, str_arg: ProcLocalId) Allocator.Error!void {
         try self.emitDataPtrIncref(alloc_ptr, 1);
 
         try self.emitLocalGets(.{ result_ptr, str_data });
-        try self.emitStoreOp(.i32, 0);
+        try self.emitStoreOp(.i32, list_bytes_offset);
 
         try self.emitLocalGets(.{ result_ptr, str_len });
-        try self.emitStoreOp(.i32, 4);
+        try self.emitStoreOp(.i32, list_len_offset);
 
         try self.emitLocalGets(.{ result_ptr, str_cap });
-        try self.emitStoreOp(.i32, 8);
+        try self.emitStoreOp(.i32, list_capacity_offset);
     }
     // end if
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
@@ -13045,52 +13116,52 @@ fn emitStrToUtf8(self: *Self, str_arg: ProcLocalId) Allocator.Error!void {
 }
 
 /// Generate str_from_utf8_lossy: convert RocList(U8) to RocStr.
-/// Short lists (len <= 11) produce SSO strings.
+/// Short lists (len <= small_str_max_len) produce SSO strings.
 /// Longer lists are converted field-by-field because RocList stores length
 /// before encoded capacity, while RocStr stores encoded capacity before length.
 fn emitStrFromUtf8Lossy(self: *Self, list_arg: ProcLocalId) Allocator.Error!void {
-    // Generate the list expression (produces i32 pointer to 12-byte RocList)
+    // Generate the list expression (produces i32 pointer to a RocList)
     const list_ptr = try self.emitProcLocalToNewLocal(list_arg, .i32);
 
-    // Allocate result memory (12 bytes for RocStr)
-    const result_offset = try self.allocStackMemory(12, 4);
+    // Allocate result memory for the RocStr
+    const result_offset = try self.allocStackMemory(roc_str_size, wasm_word_size);
     const result_ptr = try self.emitFpOffsetToNewLocal(result_offset);
 
-    // Read len from list struct (offset 4)
-    try self.emitLoadAt(list_ptr, .i32, 4);
+    // Read len from list struct
+    try self.emitLoadAt(list_ptr, .i32, list_len_offset);
     const len = try self.emitSetNewLocal(.i32);
 
-    // Check if len <= 11 (fits in SSO)
+    // Check if len <= small_str_max_len (fits in SSO)
     try self.emitLocalGet(len);
-    try self.emitI32Const(12);
+    try self.emitI32Const(small_str_max_len + 1);
     self.currentCode().append(self.allocator, Op.i32_lt_u) catch return error.OutOfMemory;
 
-    // if (len < 12)—SSO
+    // if (len <= small_str_max_len)—SSO
     try self.emitVoidIf();
     {
-        // Zero-initialize the 12-byte result (so unused SSO bytes are 0)
-        try self.emitZeroInit(result_ptr, 12);
+        // Zero-initialize the result (so unused SSO bytes are 0)
+        try self.emitZeroInit(result_ptr, roc_str_size);
 
-        // Read data_ptr from list struct (offset 0)
-        try self.emitLoadAt(list_ptr, .i32, 0);
+        // Read data_ptr from list struct
+        try self.emitLoadAt(list_ptr, .i32, list_bytes_offset);
         const data_ptr = try self.emitSetNewLocal(.i32);
 
         // Copy len bytes from data_ptr to result_ptr: memcpy(result_ptr+0, data_ptr, len)
         const zero = try self.emitI32ConstToNewLocal(0);
         try self.emitMemCopyLoop(result_ptr, zero, data_ptr, len);
 
-        // Set byte 11 = len | 0x80 (SSO marker)
+        // Set flag byte = len | small-string flag (SSO marker)
         try self.emitLocalGets(.{ result_ptr, len });
-        try self.emitI32Const(0x80);
+        try self.emitI32Const(small_str_flag);
         self.currentCode().append(self.allocator, Op.i32_or) catch return error.OutOfMemory;
-        try self.emitMemOp(Op.i32_store8, 0, 11);
+        try self.emitMemOp(Op.i32_store8, 0, str_flag_byte_offset);
     }
     // else (non-SSO)
     self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
     {
         const data_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
 
-        try self.emitLoadAt(list_ptr, .i32, 0);
+        try self.emitLoadAt(list_ptr, .i32, list_bytes_offset);
         try self.emitLocalSet(data_ptr);
 
         // This lowering copies the borrowed input into an owned result.
@@ -13103,15 +13174,15 @@ fn emitStrFromUtf8Lossy(self: *Self, list_arg: ProcLocalId) Allocator.Error!void
         try self.emitMemCopyLoop(result_data, zero, data_ptr, len);
 
         try self.emitLocalGets(.{ result_ptr, result_data });
-        try self.emitStoreOp(.i32, 0);
+        try self.emitStoreOp(.i32, str_bytes_offset);
 
         try self.emitLocalGets(.{ result_ptr, len });
-        try self.emitI32Const(1);
+        try self.emitI32Const(capacity_shift);
         self.currentCode().append(self.allocator, Op.i32_shl) catch return error.OutOfMemory;
-        try self.emitStoreOp(.i32, 4);
+        try self.emitStoreOp(.i32, str_capacity_offset);
 
         try self.emitLocalGets(.{ result_ptr, len });
-        try self.emitStoreOp(.i32, 8);
+        try self.emitStoreOp(.i32, str_len_offset);
     }
     // end if
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
@@ -14093,7 +14164,7 @@ fn emitSimdConcatShift(self: *Self, args: anytype) Allocator.Error!void {
 
 fn emitSimdLoad16(self: *Self, args: anytype) Allocator.Error!void {
     const list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-    try self.emitLoadAt(list_ptr, .i32, 0);
+    try self.emitLoadAt(list_ptr, .i32, list_bytes_offset);
     try self.emitProcLocal(GuardedList.at(args, 1));
     try self.emitConversion(try self.procLocalValType(GuardedList.at(args, 1)), .i32);
     const abi = self.getLayoutStore().builtinListAbi(self.procLocalLayoutIdx(GuardedList.at(args, 0)));
@@ -14131,7 +14202,7 @@ fn emitNumFromLeBytes(self: *Self, ll: anytype, args: anytype) Allocator.Error!v
 
     // Address of the bytes: the list's data pointer plus the byte index.
     const list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-    try self.emitLoadAt(list_ptr, .i32, 0);
+    try self.emitLoadAt(list_ptr, .i32, list_bytes_offset);
     try self.emitProcLocal(GuardedList.at(args, 1));
     try self.emitConversion(try self.procLocalValType(GuardedList.at(args, 1)), .i32);
     self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
@@ -14340,7 +14411,7 @@ fn emitSimdStore16(self: *Self, args: anytype, unique_args: u64) Allocator.Error
     try self.emitProcLocal(GuardedList.at(args, 2));
     try self.emitConversion(try self.procLocalValType(GuardedList.at(args, 2)), .i64);
     const index = try self.emitSetNewLocal(.i64);
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
     try self.emitFpOffset(result_offset);
     try self.emitLocalGets(.{ halves.low, halves.high });
     try self.emitRocListFields(fields);
@@ -14354,7 +14425,7 @@ fn emitSimdAppend16(self: *Self, args: anytype, unique_args: u64) Allocator.Erro
     const halves = try self.emitSimdVectorHalves(GuardedList.at(args, 0));
     const list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32);
     const fields = try self.loadRocListFields(list_ptr);
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
     try self.emitFpOffset(result_offset);
     try self.emitLocalGets(.{ halves.low, halves.high });
     try self.emitRocListFields(fields);
@@ -14650,8 +14721,8 @@ fn emitStrMatchSourceShape(self: *Self, source: ProcLocalId) Allocator.Error!Str
     try self.emitExtractStrPtrLen(shape.str, shape.bytes, shape.len);
 
     try self.emitLocalGet(shape.str);
-    try self.emitMemOp(Op.i32_load8_u, 0, 11);
-    try self.emitI32Const(0x80);
+    try self.emitMemOp(Op.i32_load8_u, 0, str_flag_byte_offset);
+    try self.emitI32Const(small_str_flag);
     self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
     try self.emitI32Const(0);
     self.currentCode().append(self.allocator, Op.i32_ne) catch return error.OutOfMemory;
@@ -14662,10 +14733,10 @@ fn emitStrMatchSourceShape(self: *Self, source: ProcLocalId) Allocator.Error!Str
     self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
     try self.emitVoidIf();
     {
-        const cap = try self.emitLoadAtToNewLocal(shape.str, .i32, 4);
+        const cap = try self.emitLoadAtToNewLocal(shape.str, .i32, str_capacity_offset);
 
         try self.emitLocalGet(cap);
-        try self.emitI32Const(1);
+        try self.emitI32Const(seamless_slice_tag);
         self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
         try self.emitVoidIf();
         {
@@ -14675,7 +14746,7 @@ fn emitStrMatchSourceShape(self: *Self, source: ProcLocalId) Allocator.Error!Str
         self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
         {
             try self.emitLocalGet(shape.bytes);
-            try self.emitI32Const(1);
+            try self.emitI32Const(seamless_slice_tag);
             self.currentCode().append(self.allocator, Op.i32_or) catch return error.OutOfMemory;
             try self.emitLocalSet(shape.allocation);
         }
@@ -14891,7 +14962,7 @@ fn emitStoreSmallStrMatchCapture(
     capture_start: u32,
     capture_len: u32,
 ) Allocator.Error!void {
-    try self.emitZeroInit(result_ptr, 12);
+    try self.emitZeroInit(result_ptr, roc_str_size);
 
     const src_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalGets(.{ source_bytes, capture_start });
@@ -14903,9 +14974,9 @@ fn emitStoreSmallStrMatchCapture(
     try self.emitMemCopyLoop(result_ptr, dst_offset, src_ptr, capture_len);
 
     try self.emitLocalGets(.{ result_ptr, capture_len });
-    try self.emitI32Const(0x80);
+    try self.emitI32Const(small_str_flag);
     self.currentCode().append(self.allocator, Op.i32_or) catch return error.OutOfMemory;
-    try self.emitMemOp(Op.i32_store8, 0, 11);
+    try self.emitMemOp(Op.i32_store8, 0, str_flag_byte_offset);
 }
 
 fn emitStoreHeapStrMatchCapture(
@@ -14918,13 +14989,13 @@ fn emitStoreHeapStrMatchCapture(
 ) Allocator.Error!void {
     try self.emitLocalGets(.{ result_ptr, source_bytes, capture_start });
     self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-    try self.emitStoreOp(.i32, 0);
+    try self.emitStoreOp(.i32, str_bytes_offset);
 
     try self.emitLocalGets(.{ result_ptr, source_allocation });
-    try self.emitStoreOp(.i32, 4);
+    try self.emitStoreOp(.i32, str_capacity_offset);
 
     try self.emitLocalGets(.{ result_ptr, capture_len });
-    try self.emitStoreOp(.i32, 8);
+    try self.emitStoreOp(.i32, str_len_offset);
 }
 
 fn emitStrMatchCapture(
@@ -14942,7 +15013,7 @@ fn emitStrMatchCapture(
             self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
             try self.emitLocalSet(capture_len);
 
-            const result_offset = try self.allocStackMemory(12, 4);
+            const result_offset = try self.allocStackMemory(roc_str_size, wasm_word_size);
             const result_ptr = try self.emitFpOffsetToNewLocal(result_offset);
 
             try self.emitLocalGet(source.is_small);
@@ -15088,9 +15159,9 @@ fn generateLLListAppend(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
     try self.emitLocalGet(list_ptr);
     self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
     try self.emitVoidIf();
-    const empty_list_offset = try self.allocStackMemory(12, 4);
+    const empty_list_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
     const empty_list_ptr = try self.emitFpOffsetToNewLocal(empty_list_offset);
-    try self.emitZeroInit(empty_list_ptr, 12);
+    try self.emitZeroInit(empty_list_ptr, roc_list_size);
     try self.emitLocalGet(empty_list_ptr);
     try self.emitLocalSet(list_ptr);
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
@@ -15121,7 +15192,7 @@ fn generateLLListAppend(self: *Self, args: anytype, ret_layout: layout.Idx) Allo
         }
     }
 
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
     self.requireBuiltinCalls("list_append_unsafe");
     const fields = try self.loadRocListFields(list_ptr);
     try self.emitFpOffset(result_offset);
@@ -15153,7 +15224,7 @@ fn generateLLListPrepend(self: *Self, args: anytype, ret_layout: layout.Idx, tar
 
     const elem_layout_idx = list_abi.elem_layout_idx orelse unreachable;
     const elem_ptr = try self.materializeElementPtr(GuardedList.at(args, 1), elem_layout_idx, elem_size, elem_align);
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
     self.requireBuiltinCalls("list_prepend");
     const fields = try self.loadRocListFields(list_ptr);
     const list_local = GuardedList.at(args, 0);
@@ -15181,7 +15252,7 @@ fn generateLLListAppendRangeWithin(self: *Self, args: anytype, ret_layout: layou
     const start_local = try self.materializeListIndex(GuardedList.at(args, 1));
     const count_local = try self.materializeListIndex(GuardedList.at(args, 2));
 
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
 
     // Zero-width elements: only the length grows.
     if (elem_size == 0) return self.emitZstListGrownBy(list_ptr, count_local);
@@ -15219,7 +15290,7 @@ fn generateLLListCopyRangeWithin(self: *Self, args: anytype, ret_layout: layout.
         return;
     }
 
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
 
     self.requireBuiltinCalls("list_copy_range_within");
     const fields = try self.loadRocListFields(list_ptr);
@@ -15246,7 +15317,7 @@ fn generateLLListAppendRangeWithinUnsafe(self: *Self, args: anytype, ret_layout:
     const start_local = try self.materializeListIndex(GuardedList.at(args, 1));
     const count_local = try self.materializeListIndex(GuardedList.at(args, 2));
 
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
 
     // Zero-width elements: only the length grows.
     if (elem_size == 0) return self.emitZstListGrownBy(list_ptr, count_local);
@@ -15289,13 +15360,13 @@ fn generateLLListOwnedUnique(self: *Self, args: anytype, unique_args: u64) Alloc
 }
 
 /// Generate LowLevel list_append_le_bytes: append a value's low bytes.
-fn generateLLListAppendLeBytes(self: *Self, args: anytype, unique_args: u64) Allocator.Error!void {
+fn generateLLListAppendLeBytes(self: *Self, args: anytype, in_place: bool) Allocator.Error!void {
     const list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
 
     const value_local = try self.materializeListIndex(GuardedList.at(args, 1));
     const count_local = try self.materializeListIndex(GuardedList.at(args, 2));
 
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
 
     self.requireBuiltinCalls("list_append_le_bytes");
     const fields = try self.loadRocListFields(list_ptr);
@@ -15303,7 +15374,7 @@ fn generateLLListAppendLeBytes(self: *Self, args: anytype, unique_args: u64) All
     try self.emitRocListFields(fields);
     try self.emitLocalGets(.{ value_local, count_local });
     try self.emitI32Const(1);
-    try self.emitI32Const(@intCast(unique_args & 1));
+    try self.emitI32Const(@intFromBool(in_place));
     try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listOp(.list_append_le_bytes)));
     try self.emitFpOffset(result_offset);
 }
@@ -15320,7 +15391,7 @@ fn generateLLListAppendSublist(self: *Self, args: anytype, ret_layout: layout.Id
     const start_local = try self.materializeListIndex(GuardedList.at(args, 2));
     const len_local = try self.materializeListIndex(GuardedList.at(args, 3));
 
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
 
     // Zero-width elements: only the length grows.
     if (elem_size == 0) return self.emitZstListGrownBy(list_ptr, len_local);
@@ -15350,9 +15421,9 @@ fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx, targ
         const a_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
         const b_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32);
 
-        const a_len = try self.emitLoadAtToNewLocal(a_ptr, .i32, 4);
+        const a_len = try self.emitLoadAtToNewLocal(a_ptr, .i32, list_len_offset);
 
-        const b_len = try self.emitLoadAtToNewLocal(b_ptr, .i32, 4);
+        const b_len = try self.emitLoadAtToNewLocal(b_ptr, .i32, list_len_offset);
 
         const new_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
         try self.emitLocalGets(.{ a_len, b_len });
@@ -15370,7 +15441,7 @@ fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx, targ
     const a_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
     const b_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32);
 
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
     self.requireBuiltinCalls("list_concat");
     const a_fields = try self.loadRocListFields(a_ptr);
     const b_fields = try self.loadRocListFields(b_ptr);
@@ -15412,7 +15483,7 @@ fn generateLLListDropAt(self: *Self, args: anytype, ret_layout: layout.Idx, targ
         return;
     }
 
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
     self.requireBuiltinCalls("list_drop_at");
     const fields = try self.loadRocListFields(list_ptr);
     const list_local = GuardedList.at(args, 0);
@@ -15441,7 +15512,7 @@ fn generateLLListReverse(self: *Self, args: anytype, ret_layout: layout.Idx, tar
 
     const list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
 
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
     self.requireBuiltinCalls("list_reverse");
     const fields = try self.loadRocListFields(list_ptr);
     const list_local = GuardedList.at(args, 0);
@@ -15460,7 +15531,7 @@ fn generateLLListReverse(self: *Self, args: anytype, ret_layout: layout.Idx, tar
 /// length plus the i64 `count_local`.
 fn emitZstListGrownBy(self: *Self, list_ptr: u32, count_local: u32) Allocator.Error!void {
     const len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLoadAt(list_ptr, .i32, 4);
+    try self.emitLoadAt(list_ptr, .i32, list_len_offset);
     try self.emitLocalGet(count_local);
     try self.emitOps(.{ Op.i32_wrap_i64, Op.i32_add });
     try self.emitLocalSet(len);
@@ -15470,22 +15541,22 @@ fn emitZstListGrownBy(self: *Self, list_ptr: u32, count_local: u32) Allocator.Er
 
 /// Build a RocList struct with separate capacity value.
 fn buildRocListWithCap(self: *Self, data_local: u32, len_local: u32, cap_local: u32) Allocator.Error!void {
-    const list_offset = try self.allocStackMemory(12, 4);
+    const list_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
     const list_base = try self.emitFpOffsetToNewLocal(list_offset);
 
-    // ptr (offset 0)
+    // ptr
     try self.emitLocalGet(data_local);
-    try self.emitStoreToMem(list_base, 0, .i32);
+    try self.emitStoreToMem(list_base, list_bytes_offset, .i32);
 
-    // len (offset 4)
+    // len
     try self.emitLocalGet(len_local);
-    try self.emitStoreToMem(list_base, 4, .i32);
+    try self.emitStoreToMem(list_base, list_len_offset, .i32);
 
-    // encoded cap (offset 8)
+    // encoded cap
     try self.emitLocalGet(cap_local);
-    try self.emitI32Const(1);
+    try self.emitI32Const(capacity_shift);
     self.currentCode().append(self.allocator, Op.i32_shl) catch return error.OutOfMemory;
-    try self.emitStoreToMem(list_base, 8, .i32);
+    try self.emitStoreToMem(list_base, list_capacity_offset, .i32);
 
     // Push pointer
     try self.emitLocalGet(list_base);
@@ -15598,13 +15669,13 @@ fn generateLLListSet(self: *Self, args: anytype, ret_layout: layout.Idx, target:
 
     const list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
 
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
 
     // ZST elements: the element write is a no-op, so list_set returns the input
     // list unchanged. (listReplace would dereference a null element pointer.)
     if (elem_size == 0) {
         const result_ptr = try self.emitFpOffsetToNewLocal(result_offset);
-        try self.emitMemCopy(result_ptr, 0, list_ptr, 12);
+        try self.emitMemCopy(result_ptr, 0, list_ptr, roc_list_size);
         try self.emitFpOffset(result_offset);
         return;
     }
@@ -15643,7 +15714,7 @@ fn generateLLListReplaceUnsafe(self: *Self, args: anytype, ret_layout: layout.Id
     // zero-sized, so just copy the input list into the record's list field.
     if (elem_size == 0) {
         const list_field_ptr = try self.emitFpOffsetToNewLocal(result_offset + pair.list_offset);
-        try self.emitMemCopy(list_field_ptr, 0, list_ptr, 12);
+        try self.emitMemCopy(list_field_ptr, 0, list_ptr, roc_list_size);
         try self.emitFpOffset(result_offset);
         return;
     }
@@ -15675,12 +15746,12 @@ fn generateLLListSwap(self: *Self, args: anytype, ret_layout: layout.Idx, target
 
     const list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
 
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
 
     // ZST elements: swapping is a no-op on the payload.
     if (elem_size == 0) {
         const result_ptr = try self.emitFpOffsetToNewLocal(result_offset);
-        try self.emitMemCopy(result_ptr, 0, list_ptr, 12);
+        try self.emitMemCopy(result_ptr, 0, list_ptr, roc_list_size);
         try self.emitFpOffset(result_offset);
         return;
     }
@@ -15725,7 +15796,7 @@ fn generateLLListReserve(self: *Self, kind: BuiltinKind, boxy_fn: boxy_call_plan
     try self.emitConversion(try self.procLocalValType(GuardedList.at(args, 1)), .i64);
     const spare_local = try self.emitSetNewLocal(.i64);
 
-    const result_offset = try self.allocStackMemory(12, 4);
+    const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
     self.requireBuiltinCalls("list_reserve");
     const fields = try self.loadRocListFields(list_ptr);
     const list_local = GuardedList.at(args, 0);
@@ -15791,7 +15862,7 @@ fn generateListSublistLocals(self: *Self, list_local: u32, rec_local: u32, len_f
         const start_local = try self.emitLoadAtToNewLocal(rec_local, .i64, start_field_off);
 
         const fields = try self.loadRocListFields(list_local);
-        const result_offset = try self.allocStackMemory(12, 4);
+        const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
         try self.emitFpOffset(result_offset);
         try self.emitRocListFields(fields);
         try self.emitI32Const(@intCast(boxy_list_abi.elem_align));
@@ -15807,8 +15878,8 @@ fn generateListSublistLocals(self: *Self, list_local: u32, rec_local: u32, len_f
         const actual_start = window.start;
         const actual_len = window.len;
 
-        // Allocate result RocList (12 bytes)
-        const result_offset = try self.allocStackMemory(12, 4);
+        // Allocate result RocList
+        const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
         const result_local = try self.emitFpOffsetToNewLocal(result_offset);
 
         const list_abi = self.builtinInternalListAbi("wasm.list_sublist.builtin_list_abi", ret_layout);
@@ -15816,22 +15887,22 @@ fn generateListSublistLocals(self: *Self, list_local: u32, rec_local: u32, len_f
 
         // new_ptr = old_ptr + actual_start * elem_size
         try self.emitLocalGet(result_local);
-        try self.emitLoadAt(list_local, .i32, 0);
+        try self.emitLoadAt(list_local, .i32, list_bytes_offset);
         try self.emitLocalGet(actual_start);
         try self.emitI32Const(@intCast(elem_size));
         try self.emitOps(.{ Op.i32_mul, Op.i32_add });
-        try self.emitStoreOp(.i32, 0);
+        try self.emitStoreOp(.i32, list_bytes_offset);
 
         // new_len = actual_len
         try self.emitLocalGets(.{ result_local, actual_len });
-        try self.emitStoreOp(.i32, 4);
+        try self.emitStoreOp(.i32, list_len_offset);
 
         // Encode seamless-slice cap from the source allocation pointer.
         const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
         try self.emitPrepareListSliceMetadata(list_local, list_abi.elements_refcounted, encoded_cap);
 
         try self.emitLocalGets(.{ result_local, encoded_cap });
-        try self.emitStoreOp(.i32, 8);
+        try self.emitStoreOp(.i32, list_capacity_offset);
 
         // Push result pointer
         try self.emitLocalGet(result_local);
@@ -15859,7 +15930,7 @@ fn generateLLListReleaseExcessCapacity(self: *Self, args: anytype, ret_layout: l
     if (self.external_calls == .builtin_relocs) {
         if (self.boxyListElementDescForLocals(list_abi, &.{list_local}, target)) |boxy_elem| {
             const fields = try self.loadRocListFields(list_ptr);
-            const result_offset = try self.allocStackMemory(12, 4);
+            const result_offset = try self.allocStackMemory(roc_list_size, wasm_word_size);
             try self.emitFpOffset(result_offset);
             try self.emitRocListFields(fields);
             try self.emitI32Const(@intCast(elem_align));
@@ -15874,9 +15945,9 @@ fn generateLLListReleaseExcessCapacity(self: *Self, args: anytype, ret_layout: l
     }
 
     // Load list fields
-    const old_data = try self.emitLoadAtToNewLocal(list_ptr, .i32, 0);
+    const old_data = try self.emitLoadAtToNewLocal(list_ptr, .i32, list_bytes_offset);
 
-    const old_len = try self.emitLoadAtToNewLocal(list_ptr, .i32, 4);
+    const old_len = try self.emitLoadAtToNewLocal(list_ptr, .i32, list_len_offset);
 
     // Allocate new_len * elem_size bytes
     const total_size = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -16905,7 +16976,7 @@ fn expectListWindowLength(element: layout.Idx, start: u64, len: u64, expected: i
             try codegen.generateLLListDropAt(&[_]ProcLocalId{ list_arg, index_arg }, list_layout, null, 0);
         },
     }
-    try codegen.emitLoadOp(.i32, 4);
+    try codegen.emitLoadOp(.i32, list_len_offset);
     try codegen.emitOps(.{Op.end});
     try codegen.encodeLocalsDecl(&codegen.currentBody().preamble, 2);
     codegen.endFunction();
@@ -16926,9 +16997,9 @@ fn expectListWindowLength(element: layout.Idx, start: u64, len: u64, expected: i
     try instance.instantiate(.{ .stack_size = 65536 });
     const memory = instance.store.getMemory(0).buffer();
     // A three-element list at 256 and a { len, start } record at 512.
-    std.mem.writeInt(u32, memory[256..260], if (element == .zst) 0 else 1024, .little);
-    std.mem.writeInt(u32, memory[260..264], 3, .little);
-    std.mem.writeInt(u32, memory[264..268], if (element == .zst) 0 else 6, .little);
+    std.mem.writeInt(u32, memory[256 + list_bytes_offset ..][0..4], if (element == .zst) 0 else 1024, .little);
+    std.mem.writeInt(u32, memory[256 + list_len_offset ..][0..4], 3, .little);
+    std.mem.writeInt(u32, memory[256 + list_capacity_offset ..][0..4], if (element == .zst) 0 else 3 << capacity_shift, .little);
     std.mem.writeInt(u64, memory[512..520], len, .little);
     std.mem.writeInt(u64, memory[520..528], start, .little);
     @memcpy(memory[1024..1027], &[_]u8{ 1, 2, 3 });

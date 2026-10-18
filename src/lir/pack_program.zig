@@ -53,11 +53,15 @@ pub fn closedExportRoots(
     return try roots.toOwnedSlice(allocator);
 }
 
-/// Whether a checked type mentions no type variable, no function type, and
-/// no record field of undetermined kind anywhere, including through aliases,
-/// nominal arguments, and nominal backings. A closed procedure type
-/// instantiates identically in every program, which is what lets its
-/// specialization be shared.
+/// Whether a checked type mentions no type variable, no function type
+/// outside a `Box`, and no record field of undetermined kind anywhere,
+/// including through aliases, nominal arguments, and nominal backings. A
+/// closed procedure type instantiates identically in every program, which is
+/// what lets its specialization be shared. Every function a `Box` holds is an
+/// erased callable (design.md "Erased Callable Requirements"): one
+/// pointer-sized value called through one convention whichever closure the
+/// program puts in it, so it does not tie the procedure's code to the
+/// program's lambda sets. A type variable inside a box still does.
 ///
 /// A nominal's backing is its declaration's template, written over the
 /// declaration's formal parameters. Those parameters stand for the nominal's
@@ -68,18 +72,27 @@ pub fn checkedTypeIsClosed(
     types: checked.CheckedTypeStoreView,
     root: checked.CheckedTypeId,
 ) Allocator.Error!bool {
+    const Item = struct { ty: checked.CheckedTypeId, boxed: bool };
+    // A type met both inside and outside a box is walked once in each.
     var visited = collections.DenseMap(checked.CheckedTypeId, void).init(allocator);
     defer visited.deinit();
+    var visited_boxed = collections.DenseMap(checked.CheckedTypeId, void).init(allocator);
+    defer visited_boxed.deinit();
     var bound_formals = collections.DenseMap(checked.CheckedTypeId, void).init(allocator);
     defer bound_formals.deinit();
-    var stack = std.ArrayList(checked.CheckedTypeId).empty;
+    var stack = std.ArrayList(Item).empty;
     defer stack.deinit(allocator);
+    const push = struct {
+        fn many(gpa: Allocator, items: *std.ArrayList(Item), tys: []const checked.CheckedTypeId, boxed: bool) Allocator.Error!void {
+            for (tys) |ty| try items.append(gpa, .{ .ty = ty, .boxed = boxed });
+        }
+    }.many;
     // The root is the procedure's own function type; only function types
     // inside its arguments and result make the procedure open.
     switch (types.payload(root)) {
         .function => |func| {
-            try stack.appendSlice(allocator, func.args);
-            try stack.append(allocator, func.ret);
+            try push(allocator, &stack, func.args, false);
+            try stack.append(allocator, .{ .ty = func.ret, .boxed = false });
         },
         .pending,
         .err,
@@ -92,18 +105,25 @@ pub fn checkedTypeIsClosed(
         .tuple,
         .nominal,
         .tag_union,
-        => try stack.append(allocator, root),
+        => try stack.append(allocator, .{ .ty = root, .boxed = false }),
     }
-    while (stack.pop()) |ty| {
-        const gop = try visited.getOrPut(ty);
+    while (stack.pop()) |item| {
+        const ty = item.ty;
+        const boxed = item.boxed;
+        const gop = try (if (boxed) &visited_boxed else &visited).getOrPut(ty);
         if (gop.found_existing) continue;
         switch (types.payload(ty)) {
             .pending, .err, .empty_record, .empty_tag_union => {},
-            .flex, .function => return false,
+            .flex => return false,
+            .function => |func| {
+                if (!boxed) return false;
+                try push(allocator, &stack, func.args, true);
+                try stack.append(allocator, .{ .ty = func.ret, .boxed = true });
+            },
             .rigid => if (!bound_formals.contains(ty)) return false,
             .alias => |alias| {
-                try stack.append(allocator, alias.backing);
-                try stack.appendSlice(allocator, alias.args);
+                try stack.append(allocator, .{ .ty = alias.backing, .boxed = boxed });
+                try push(allocator, &stack, alias.args, boxed);
             },
             .record => |record| {
                 for (record.fields) |field| {
@@ -112,26 +132,26 @@ pub fn checkedTypeIsClosed(
                         .required, .optional, .defaulted => {},
                         .undetermined, .err => return false,
                     }
-                    try stack.append(allocator, field.ty);
+                    try stack.append(allocator, .{ .ty = field.ty, .boxed = boxed });
                 }
-                try stack.append(allocator, record.ext);
+                try stack.append(allocator, .{ .ty = record.ext, .boxed = boxed });
             },
-            .tuple => |elems| try stack.appendSlice(allocator, elems),
+            .tuple => |elems| try push(allocator, &stack, elems, boxed),
             .nominal => |nominal| {
-                try stack.appendSlice(allocator, nominal.args);
+                try push(allocator, &stack, nominal.args, boxed or nominal.builtin == .box);
                 // Declared fields name backing record fields or index into
                 // `padding_field_types`; the backing below covers the named ones.
-                try stack.appendSlice(allocator, nominal.padding_field_types);
+                try push(allocator, &stack, nominal.padding_field_types, boxed);
                 if (types.nominalBackingTemplateForPayload(nominal)) |backing| {
                     // A backing template exists only for a declared nominal.
                     const declaration = types.nominalDeclarationForPayload(nominal) orelse unreachable;
                     for (declaration.formalArgs(types)) |formal| try bound_formals.put(formal, {});
-                    try stack.append(allocator, backing);
+                    try stack.append(allocator, .{ .ty = backing, .boxed = boxed });
                 }
             },
             .tag_union => |tag_union| {
-                for (tag_union.tags) |tag| try stack.appendSlice(allocator, tag.argsSlice(types));
-                try stack.append(allocator, tag_union.ext);
+                for (tag_union.tags) |tag| try push(allocator, &stack, tag.argsSlice(types), boxed);
+                try stack.append(allocator, .{ .ty = tag_union.ext, .boxed = boxed });
             },
         }
     }
@@ -299,6 +319,224 @@ test "closed export types bind a nominal backing's formal parameters to its argu
     try std.testing.expect(try checkedTypeIsClosed(allocator, types, wrap_unit));
     try std.testing.expect(!try checkedTypeIsClosed(allocator, types, wrap_free));
     try std.testing.expect(!try checkedTypeIsClosed(allocator, types, backing));
+}
+
+test "closed export types admit functions inside a box but not type variables" {
+    const allocator = std.testing.allocator;
+    // `unit`, a function `unit -> unit`, `Box(unit -> unit)`, a bare
+    // function in a record, a free rigid `b`, and `Box(b)`.
+    const unit = testTypeId(0);
+    const func = testTypeId(1);
+    const boxed_func = testTypeId(2);
+    const record_with_func = testTypeId(3);
+    const free_rigid = testTypeId(4);
+    const boxed_rigid = testTypeId(5);
+    const nominal_key = check.CanonicalNames.NominalTypeKey{ .module = testModuleIdentity(0), .source_decl = 0 };
+    const box_nominal = checked.StoredNominal{
+        .name = testTypeName(0),
+        .origin_module = nominal_key.module,
+        .owner_module = .{},
+        .source_decl = nominal_key.source_decl,
+        .builtin = .box,
+        .is_opaque = true,
+        .representation = .{ .builtin = .box },
+        .args = .{ .start = 1, .len = 1 },
+    };
+    var box_rigid_nominal = box_nominal;
+    box_rigid_nominal.args = .{ .start = 2, .len = 1 };
+    const payloads = [_]checked.StoredCheckedTypePayload{
+        .empty_record,
+        .{ .function = .{ .kind = .pure, .args = .{ .start = 0, .len = 1 }, .ret = unit } },
+        .{ .nominal = box_nominal },
+        .{ .record = .{ .fields = .{ .start = 0, .len = 1 }, .ext = unit } },
+        .{ .rigid = .{} },
+        .{ .nominal = box_rigid_nominal },
+    };
+    // Pool slots: [0] the function's argument, [1] the boxed function, [2]
+    // the boxed rigid.
+    const type_id_pool = [_]checked.CheckedTypeId{ unit, func, free_rigid };
+    var names = check.CanonicalNames.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    const label = try names.internRecordFieldLabel("f");
+    const fields = [_]checked.CheckedRecordField{.{ .name = label, .ty = func, .kind = .required }};
+    const types = checked.CheckedTypeStoreView{
+        .stored_payloads = &payloads,
+        .type_id_pool = &type_id_pool,
+        .record_field_pool = &fields,
+    };
+
+    try std.testing.expect(try checkedTypeIsClosed(allocator, types, boxed_func));
+    try std.testing.expect(!try checkedTypeIsClosed(allocator, types, record_with_func));
+    try std.testing.expect(!try checkedTypeIsClosed(allocator, types, boxed_rigid));
+}
+
+/// Which procedures make an erased call or build an erased callable, by
+/// procedure id. The erased-call runtime those use is passed this program's
+/// layout indices, so a linked object-cache object cannot offer an entry
+/// whose code reaches one. Caller owns the result.
+pub fn erasedCallingProcs(allocator: Allocator, store: *const LirStore) Allocator.Error![]bool {
+    const erased = try allocator.alloc(bool, store.procSpecCount());
+    errdefer allocator.free(erased);
+    @memset(erased, false);
+    const seen = try allocator.alloc(bool, store.cfStmtCount());
+    defer allocator.free(seen);
+    var visited = std.ArrayList(LIR.CFStmtId).empty;
+    defer visited.deinit(allocator);
+    var work = std.ArrayList(LIR.CFStmtId).empty;
+    defer work.deinit(allocator);
+    @memset(seen, false);
+    for (erased, 0..) |*result, index| {
+        for (visited.items) |stmt_id| seen[@backingInt(stmt_id)] = false;
+        visited.clearRetainingCapacity();
+        work.clearRetainingCapacity();
+        const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(index)));
+        if (proc.abi == .erased_callable) {
+            result.* = true;
+            continue;
+        }
+        const body = proc.body orelse continue;
+        try work.append(allocator, body);
+        while (work.pop()) |stmt_id| {
+            if (seen[@backingInt(stmt_id)]) continue;
+            seen[@backingInt(stmt_id)] = true;
+            try visited.append(allocator, stmt_id);
+            const uses_runtime = switch (store.getCFStmtImmediate(stmt_id).*) {
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                => true,
+                .init_uninitialized,
+                .assign_ref,
+                .assign_literal,
+                .assign_call,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => false,
+            };
+            if (uses_runtime) {
+                result.* = true;
+                break;
+            }
+            try BodyClone.appendSuccessors(store, &work, stmt_id, allocator);
+        }
+    }
+    return erased;
+}
+
+/// The procedures `root`'s code reaches through direct calls, `root`
+/// included, as a set over `store`'s procedures. Caller owns the result.
+pub fn procCallClosure(allocator: Allocator, store: *const LirStore, root: LIR.LirProcSpecId) Allocator.Error![]bool {
+    const reached = try allocator.alloc(bool, store.procSpecCount());
+    errdefer allocator.free(reached);
+    @memset(reached, false);
+    const seen = try allocator.alloc(bool, store.cfStmtCount());
+    defer allocator.free(seen);
+    @memset(seen, false);
+    var procs = std.ArrayList(LIR.LirProcSpecId).empty;
+    defer procs.deinit(allocator);
+    var work = std.ArrayList(LIR.CFStmtId).empty;
+    defer work.deinit(allocator);
+    try procs.append(allocator, root);
+    reached[@backingInt(root)] = true;
+    while (procs.pop()) |proc_id| {
+        const body = store.getProcSpecImmediate(proc_id).body orelse continue;
+        try work.append(allocator, body);
+        while (work.pop()) |stmt_id| {
+            if (seen[@backingInt(stmt_id)]) continue;
+            seen[@backingInt(stmt_id)] = true;
+            const callee: ?LIR.LirProcSpecId = switch (store.getCFStmtImmediate(stmt_id).*) {
+                .assign_call => |call| call.proc,
+                .assign_packed_erased_fn => |packed_fn| packed_fn.proc,
+                .assign_literal => |literal| literal.fresh_alternative,
+                .init_uninitialized,
+                .assign_ref,
+                .assign_call_erased,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .store_struct,
+                .store_tag,
+                .set_local,
+                .debug,
+                .expect,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .comptime_branch_taken,
+                .incref,
+                .decref,
+                .decref_if_initialized,
+                .free,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => null,
+            };
+            if (callee) |reached_callee| {
+                const callee_id = reached_callee;
+                if (!reached[@backingInt(callee_id)]) {
+                    reached[@backingInt(callee_id)] = true;
+                    try procs.append(allocator, callee_id);
+                }
+            }
+            try BodyClone.appendSuccessors(store, &work, stmt_id, allocator);
+        }
+    }
+    return reached;
 }
 
 /// Which procedures convert a specialized custom literal when they run, by
