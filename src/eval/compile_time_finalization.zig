@@ -3763,6 +3763,10 @@ const InterpreterProgram = struct {
         return self.shared_slots orelse &self.slots;
     }
 
+    fn freezeCompleted(self: *InterpreterProgram) Allocator.Error!LirProgram.FrozenStaticData {
+        return self.slotEnvironment().freezeCompleted();
+    }
+
     /// A fork keeps its own frames, host events, and temporary values while
     /// sharing the root program's slots.
     fn fork(self: *InterpreterProgram, lowered: *lir.CheckedPipeline.LoweredProgram) FinalizeError!*InterpreterProgram {
