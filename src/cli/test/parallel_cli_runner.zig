@@ -8356,8 +8356,9 @@ fn customLinkedObjectPack(
 /// it with `--opt=size` once the package is checked and composes it into the
 /// app's object, and so does every later build; each module must return
 /// exactly what a module built without the store returns and leave the same
-/// allocations outstanding. Two independent stores must write byte-identical
-/// object packs.
+/// allocations outstanding. One entry takes and returns a vector, which
+/// `wasm32v1` passes by lane. Two independent stores must write
+/// byte-identical object packs.
 fn customWasmLinkedObjectPack(
     io: std.Io,
     allocator: Allocator,
@@ -8366,11 +8367,37 @@ fn customWasmLinkedObjectPack(
     timeout_ms: u64,
 ) ?TestResult {
     const roc_file = "test/wasm/linked_object_pack/App.roc";
-    const expected = "sum of squares to 10: 385\n506";
+    const expected = "sum of squares to 10: 385\n506\n65535";
+    // `describe`, `shift_lanes`, and `sum_squares_from`, which the
+    // one-line `sum_squares` inlines into the app.
+    const package_entries = 3;
+    for ([_][]const u8{ "wasm32", "wasm32v1" }) |target_name| {
+        if (wasmLinkedObjectPackForTarget(io, allocator, env, timer, timeout_ms, roc_file, expected, package_entries, target_name)) |failure| return failure;
+    }
+    return null;
+}
+
+fn wasmLinkedObjectPackForTarget(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    roc_file: []const u8,
+    expected: []const u8,
+    package_entries: usize,
+    target_name: []const u8,
+) ?TestResult {
+    const target_arg = std.fmt.allocPrint(allocator, "--target={s}", .{target_name}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate target argument: {}", .{err});
+    const size_namespace = std.fmt.allocPrint(allocator, "{s}-size", .{target_name}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate store namespace: {}", .{err});
+    const dev_namespace = std.fmt.allocPrint(allocator, "{s}-dev", .{target_name}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate store namespace: {}", .{err});
     var stores: [2][]const u8 = undefined;
     var uncached_outstanding: ?i64 = null;
     for (&stores, 0..) |*store_root, store_index| {
-        const cache_root = std.fmt.allocPrint(allocator, "{s}/wasm_linked_pack_cache_{d}", .{ env.dirs.work_dir, store_index }) catch |err|
+        const cache_root = std.fmt.allocPrint(allocator, "{s}/wasm_linked_pack_cache_{s}_{d}", .{ env.dirs.work_dir, target_name, store_index }) catch |err|
             return customInfraFailure(allocator, timer, "failed to allocate cache root: {}", .{err});
         seedLinkedObjectPackage(io, allocator, cache_root) catch |err|
             return customInfraFailure(allocator, timer, "failed to seed the URL package: {}", .{err});
@@ -8393,16 +8420,16 @@ fn customWasmLinkedObjectPack(
             .{ .name = "warm", .cache = true },
         };
         for (builds) |build| {
-            const output_path = std.fmt.allocPrint(allocator, "{s}/wasm_linked_pack_{d}_{s}.wasm", .{ env.dirs.work_dir, store_index, build.name }) catch |err|
+            const output_path = std.fmt.allocPrint(allocator, "{s}/wasm_linked_pack_{s}_{d}_{s}.wasm", .{ env.dirs.work_dir, target_name, store_index, build.name }) catch |err|
                 return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
             const out_arg = outputArg(allocator, output_path) catch |err|
                 return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
             const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
                 return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
             const args: []const []const u8 = if (build.cache)
-                &.{ "build", "--target=wasm32", "--opt=dev", out_arg }
+                &.{ "build", target_arg, "--opt=dev", out_arg }
             else
-                &.{ "build", "--target=wasm32", "--no-cache", "--opt=dev", out_arg };
+                &.{ "build", target_arg, "--no-cache", "--opt=dev", out_arg };
             const built = runRocInEnv(io, allocator, &store_env, args, roc_file, .relative, &.{}, null, build_timeout) catch |err|
                 return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
             if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
@@ -8412,25 +8439,25 @@ fn customWasmLinkedObjectPack(
                 const marker = "linked procs: ";
                 const at = std.mem.find(u8, built.stderr, marker) orelse
                     return failureFromRun(allocator, timer, built, "the cached build did not report pack statistics");
-                if (countAfterMarker(built.stderr[at + marker.len ..]) == 0) {
-                    return failureFromRun(allocator, timer, built, "the cached build did not compose the URL package's object pack");
+                if (countAfterMarker(built.stderr[at + marker.len ..]) != package_entries) {
+                    return failureFromRun(allocator, timer, built, "the cached build did not serve every package export from the URL package's object pack");
                 }
             }
             if (validateWasmOutput(io, allocator, timer, output_path)) |failure| return failure;
 
             var wasm = setupGlueRuntimeWasm(io, allocator, output_path) catch |err|
-                return customFailure(allocator, timer, "failed to load the {s} wasm module: {}", .{ build.name, err });
+                return customFailure(allocator, timer, "failed to load the {s} {s} module: {}", .{ target_name, build.name, err });
             defer wasm.deinit();
             const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
-                return customFailure(allocator, timer, "the {s} wasm module failed: {}", .{ build.name, err });
+                return customFailure(allocator, timer, "the {s} {s} module failed: {}", .{ target_name, build.name, err });
             if (!std.mem.eql(u8, result, expected)) {
-                return customFailure(allocator, timer, "the {s} wasm module returned \"{s}\"", .{ build.name, result });
+                return customFailure(allocator, timer, "the {s} {s} module returned \"{s}\"", .{ target_name, build.name, result });
             }
             const outstanding = wasmOutstandingAllocations(&wasm) catch |err|
-                return customFailure(allocator, timer, "failed to read the {s} wasm module's allocation counts: {}", .{ build.name, err });
+                return customFailure(allocator, timer, "failed to read the {s} {s} module's allocation counts: {}", .{ target_name, build.name, err });
             if (uncached_outstanding) |reference| {
                 if (outstanding != reference) {
-                    return customFailure(allocator, timer, "the {s} wasm module left {d} allocations outstanding, the uncached one {d}", .{ build.name, outstanding, reference });
+                    return customFailure(allocator, timer, "the {s} {s} module left {d} allocations outstanding, the uncached one {d}", .{ target_name, build.name, outstanding, reference });
                 }
             } else uncached_outstanding = outstanding;
         }
@@ -8443,11 +8470,11 @@ fn customWasmLinkedObjectPack(
     defer second.deinit(allocator);
     var object_packs: usize = 0;
     for (first.paths.items, first.contents.items) |path, bytes| {
-        if (std.mem.find(u8, path, "wasm32-size") == null) continue;
+        if (std.mem.find(u8, path, size_namespace) == null) continue;
         object_packs += 1;
         const key_name = std.fs.path.basename(path);
         const other = for (second.paths.items, second.contents.items) |other_path, other_bytes| {
-            if (std.mem.find(u8, other_path, "wasm32-size") != null and std.mem.eql(u8, std.fs.path.basename(other_path), key_name)) break other_bytes;
+            if (std.mem.find(u8, other_path, size_namespace) != null and std.mem.eql(u8, std.fs.path.basename(other_path), key_name)) break other_bytes;
         } else return customFailure(allocator, timer, "size-optimized pack {s} was written by one store and not the other", .{key_name});
         if (!std.mem.eql(u8, bytes, other)) {
             return customFailure(allocator, timer, "size-optimized pack {s} differs between two stores", .{key_name});
@@ -8455,7 +8482,7 @@ fn customWasmLinkedObjectPack(
     }
     if (object_packs == 0) return customFailure(allocator, timer, "no size-optimized object pack was written", .{});
     for (first.paths.items) |path| {
-        if (std.mem.find(u8, path, "wasm32-dev") != null) {
+        if (std.mem.find(u8, path, dev_namespace) != null) {
             return customFailure(allocator, timer, "a wasm32 build wrote dev pack {s}, which no wasm32 build can splice", .{path});
         }
     }

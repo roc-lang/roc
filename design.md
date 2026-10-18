@@ -645,7 +645,9 @@ earlier object already defines, becomes local under a name in a namespace
 of that object's own, so no name the program's code or its static data
 resolves can bind to an object's internal copy of a procedure, constant, or
 builtin. A `c_abi_entry` procedure's body forwards to its entry through the
-wasm C ABI exactly as a hosted procedure's forwards to the host, and the
+wasm C ABI exactly as a hosted procedure's forwards to the host (both
+backends classify a target without simd128 as `layout.abi.Target.wasm32v1`,
+which passes vectors by lane), and the
 object's imports, the runtime and hosted functions its code calls, are
 allowed undefined in the sealed object beside the program's own.
 
