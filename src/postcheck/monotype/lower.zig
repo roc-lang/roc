@@ -11785,11 +11785,15 @@ const Builder = struct {
             const leaf: ?bool = switch (self.view.const_store.get(node)) {
                 .pending => Common.invariant("pending ConstStore node reached static data eligibility"),
                 // Static data emits an erased callable as one allocation naming
-                // its procedure through a relocation, so a capture-free function
-                // value is fully decided by the ConstStore. A capture record is
-                // not: its slots carry their own evidence, which this walk has no
-                // ConstStore node to answer for.
-                .fn_value => |fn_id| self.view.const_store.getFn(fn_id).captures.len == 0,
+                // its procedure through a relocation, with its capture record
+                // written at the capture offset, so a function value is stable
+                // when each capture slot's stored value is.
+                .fn_value => |fn_id| blk: {
+                    for (self.view.const_store.getFn(fn_id).captures) |capture| {
+                        if (constCaptureFillsSlot(capture)) try items.add(capture.value);
+                    }
+                    break :blk null;
+                },
                 .zst,
                 .scalar,
                 .str,
@@ -14960,7 +14964,7 @@ const Builder = struct {
     ) Allocator.Error!std.ArrayList(RestoredConstSourceCapture) {
         var capture_count: usize = 0;
         for (fn_value.captures) |capture| {
-            if (capture.id.isCanonical()) capture_count += 1;
+            if (capture.id.isCanonical() and constCaptureFillsSlot(capture)) capture_count += 1;
         }
 
         var out = std.ArrayList(RestoredConstSourceCapture).empty;
@@ -14968,7 +14972,7 @@ const Builder = struct {
         try out.ensureTotalCapacity(self.allocator, capture_count);
 
         for (fn_value.captures) |capture| {
-            if (!capture.id.isCanonical()) continue;
+            if (!capture.id.isCanonical() or !constCaptureFillsSlot(capture)) continue;
             const binder = capture.id.binder();
             const lowered_ty = try fn_ctx.lowerConstCaptureType(store_view, capture.ty);
             const node: ?NodeId = if (at_graph_nodes) try fn_ctx.graph.importMono(lowered_ty) else null;
@@ -14993,7 +14997,7 @@ const Builder = struct {
 
         var out_index: usize = 0;
         for (fn_value.captures) |capture| {
-            if (!capture.id.isCanonical()) continue;
+            if (!capture.id.isCanonical() or !constCaptureFillsSlot(capture)) continue;
             const out_capture = &out.items[out_index];
             const checked_type = checkedBinderType(fn_view, capture.id.binder());
             out_capture.value = if (out_capture.node) |node|
@@ -19282,6 +19286,26 @@ const BodyDraftStore = struct {
             switch (cursor) {
                 .root => return false,
                 .reserved_fn => |fn_id| return fn_id == ancestor,
+                .draft_fn => |fn_id| {
+                    const raw = @backingInt(fn_id);
+                    if (raw >= self.fns.items.len) {
+                        Common.invariant("draft owner ancestry referenced an unknown function");
+                    }
+                    cursor = self.fns.items[raw].parent_owner;
+                },
+            }
+        }
+        Common.invariant("draft function ownership ancestry contained a cycle");
+    }
+
+    /// The owner every draft function under `owner` descends from: the
+    /// draft's root or the globally reserved function whose body it lowers.
+    fn outermostOwner(self: *const BodyDraftStore, owner: DraftOwner) DraftOwner {
+        var cursor = owner;
+        var remaining = self.fns.items.len + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            switch (cursor) {
+                .root, .reserved_fn => return cursor,
                 .draft_fn => |fn_id| {
                     const raw = @backingInt(fn_id);
                     if (raw >= self.fns.items.len) {
@@ -44766,6 +44790,19 @@ const BodyContext = struct {
         };
     }
 
+    /// Enter the owner a restored stored function's specialization belongs
+    /// to. Its body reads nothing from the restoring site: its stored
+    /// captures are slots keyed by checked capture identity, and a read of a
+    /// top-level constant, its own included, is that constant's top-level
+    /// read, as it was when compile-time evaluation produced the value. So
+    /// the specialization is owned by the outermost owner of the draft, and
+    /// every restore of the same stored function in the draft reuses it,
+    /// including the restore inside its own body that a read of the constant
+    /// holding it performs.
+    fn enterRestoredConstFnOwner(self: *BodyContext) Allocator.Error!BodyDraftStore.OwnerScope {
+        return try self.draft.enterOwner(self.draft.outermostOwner(self.draft.current_owner));
+    }
+
     fn inheritActiveConstBinding(self: *BodyContext, parent: *BodyContext) Allocator.Error!void {
         try self.inheritActiveConstBindingId(parent.active_const_binding);
     }
@@ -47033,14 +47070,15 @@ const BodyContext = struct {
                 fn_ctx.evidence = retained_evidence;
                 fn_ctx.inheritFrozenEmissionContext(self);
                 defer fn_ctx.deinit();
-                try fn_ctx.inheritActiveConstBinding(self);
                 try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
                 fn_ctx.current_fn_key = nested.context_fn_key;
                 const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(nested, nested.context_fn_key);
                 defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
+                const restored_owner_scope = try fn_ctx.enterRestoredConstFnOwner();
+                defer restored_owner_scope.leave();
                 return try self.builder.lowerDraftNestedFromContext(
                     &fn_ctx,
-                    fn_ctx.draft.current_owner,
+                    restored_owner_scope.previous,
                     checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def),
                     nested,
                     source_fn_ty,
@@ -47091,7 +47129,6 @@ const BodyContext = struct {
         fn_ctx.evidence = retained_evidence;
         fn_ctx.inheritFrozenEmissionContext(self);
         defer fn_ctx.deinit();
-        try fn_ctx.inheritActiveConstBinding(self);
         try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
         const capture_nested = switch (fn_def) {
             .nested => |nested| nested,
@@ -47138,21 +47175,25 @@ const BodyContext = struct {
         for (captures, capture_entry_guards) |capture, *node|
             node.* = capture.node orelse try fn_ctx.activeNodeFromType(capture.ty);
         const restored_fn_id = switch (lambda_expr.data) {
-            .lambda => try self.builder.lowerDraftNestedFromContext(
-                &fn_ctx,
-                fn_ctx.draft.current_owner,
-                lambda_expr_id,
-                capture_nested,
-                fn_value.source_fn_ty,
-                fn_value.source_fn_key,
-                request_fn_node,
-                capture_entry_guards,
-                fn_ctx.evidence,
-                null,
-                false,
-                .exact_graph,
-                .inherit,
-            ),
+            .lambda => restored: {
+                const restored_owner_scope = try fn_ctx.enterRestoredConstFnOwner();
+                defer restored_owner_scope.leave();
+                break :restored try self.builder.lowerDraftNestedFromContext(
+                    &fn_ctx,
+                    restored_owner_scope.previous,
+                    lambda_expr_id,
+                    capture_nested,
+                    fn_value.source_fn_ty,
+                    fn_value.source_fn_key,
+                    request_fn_node,
+                    capture_entry_guards,
+                    fn_ctx.evidence,
+                    null,
+                    false,
+                    .exact_graph,
+                    .inherit,
+                );
+            },
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored capturing function did not reference a checked lambda"),
         };
 
@@ -68032,6 +68073,16 @@ fn checkedCaptureBinder(view: ModuleView, pattern: checked.CheckedPatternId) che
     if (raw >= view.bodies.pattern_binder_by_pattern.len) Common.invariant("checked closure capture pattern was outside the binder index");
     return view.bodies.pattern_binder_by_pattern[raw] orelse
         Common.invariant("checked closure capture pattern had no binder");
+}
+
+/// Whether a stored capture fills a slot of the restored function's capture
+/// record. A recursive-binding capture fills none: the restored worker reads
+/// that root through its own top-level reference.
+fn constCaptureFillsSlot(capture: check.ConstStore.ConstCapture) bool {
+    return switch (capture.kind) {
+        .lexical => true,
+        .recursive_binding => false,
+    };
 }
 
 fn constCaptureBinder(id: check.ConstStore.CaptureId) checked.PatternBinderId {
