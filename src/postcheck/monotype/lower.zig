@@ -1,6 +1,7 @@
 //! Checked modules to Monotype IR.
 
 const std = @import("std");
+const build_options = @import("build_options");
 const TypeDigestHasher = @import("base").TypeDigestHasher;
 const check = @import("check");
 const can = @import("can");
@@ -286,6 +287,9 @@ pub const Options = struct {
     proc_debug_names: bool = false,
     /// The object cache to ask for closed specializations at reservation.
     spec_cache: ?Common.SpecCacheLookup = null,
+    /// Whether this program's code is linked, so the cache may serve it a
+    /// linked-object entry (`Common.SpecCacheHit.c_abi_entry`).
+    spec_cache_accepts_linked: bool = false,
     /// Optional deterministic counters for specialization-shape tests.
     specialization_counters: ?*SpecializationCounters = null,
     /// Optional deterministic workload diagnostics. The checked pipeline
@@ -312,6 +316,9 @@ pub const Options = struct {
     /// compile-time evaluation, for a program whose specializations may be
     /// written to the object cache.
     spec_comptime_reads_out: ?*SpecComptimeReads = null,
+    /// Receives every object-cache key that resolved to another key's
+    /// specialization (`SpecKeyAliases`).
+    spec_key_aliases_out: ?*SpecKeyAliases = null,
     /// Turn each specialized custom literal's conversion into a literal root
     /// whose completed value the specialization reads. The consumer that
     /// asks for this evaluates every literal root the program registers.
@@ -890,6 +897,45 @@ pub const SpecComptimeReads = struct {
     }
 };
 
+/// Object-cache keys that resolved to the specialization of another key.
+///
+/// A request whose type is less specific than its own solution reuses an
+/// existing record through that record's solved type (`SpecBuilder`), so the
+/// record's procedure is the procedure of the reusing request's key too. Each
+/// alias names such a key and the key the record was reserved under. A
+/// program offers its procedures under both, so the keys a build offers are
+/// the keys of its requests, whichever of two requests reached the record
+/// first.
+pub const SpecKeyAliases = struct {
+    pub const Alias = struct {
+        alias: [32]u8,
+        target: [32]u8,
+
+        fn lessThan(_: void, left: Alias, right: Alias) bool {
+            return switch (std.mem.order(u8, &left.alias, &right.alias)) {
+                .lt => true,
+                .gt => false,
+                .eq => std.mem.order(u8, &left.target, &right.target) == .lt,
+            };
+        }
+    };
+
+    allocator: Allocator,
+    /// Sorted by alias, then target, without duplicates.
+    items: std.ArrayList(Alias) = .empty,
+
+    pub fn clone(self: *const SpecKeyAliases, allocator: Allocator) Allocator.Error!SpecKeyAliases {
+        var result: SpecKeyAliases = .{ .allocator = allocator };
+        try result.items.appendSlice(allocator, self.items.items);
+        return result;
+    }
+
+    pub fn deinit(self: *SpecKeyAliases) void {
+        self.items.deinit(self.allocator);
+        self.* = .{ .allocator = self.allocator };
+    }
+};
+
 /// A compile-time root declared before any body lowers: its entry template
 /// is reserved, so every read binds the root's real function id. With
 /// `Options.demand_driven_comptime_roots` its body waits until the program
@@ -1345,7 +1391,9 @@ pub fn run(
         try builder.completeParkedSpecJobsAsStubs();
         // Every body is lowered, so the program's demand is known.
         try builder.orderComptimeRoots();
+        try builder.collectSpecKeyAliases();
         try builder.recordSpecComptimeReads();
+        try builder.outputSpecKeyAliases();
     }
     if (options.demand_counters_out) |out| out.* = builder.demand_counters;
 
@@ -4892,6 +4940,7 @@ const Builder = struct {
     field_kind_scope_pool: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind)) = .empty,
     /// The object cache consulted for closed specializations, if any.
     spec_cache: ?Common.SpecCacheLookup,
+    spec_cache_accepts_linked: bool,
     counters: ?*SpecializationCounters,
     diagnostics: ?*Diagnostics,
     /// Result-owned sink while one ordinary specialization shard is lowering or
@@ -4907,6 +4956,10 @@ const Builder = struct {
     demand_driven_comptime_roots: bool,
     comptime_demand_out: ?*ComptimeDemand,
     spec_comptime_reads_out: ?*SpecComptimeReads,
+    spec_key_aliases_out: ?*SpecKeyAliases,
+    /// Every object-cache key that resolved to another key's specialization,
+    /// sorted; see `SpecKeyAliases`. Filled once every body is lowered.
+    spec_key_aliases: std.ArrayList(SpecKeyAliases.Alias) = .empty,
     /// Every declared compile-time root, in request order.
     declared_roots: std.ArrayList(DeclaredRoot) = .empty,
     /// Reserved compile-time root bodies the program has not demanded yet,
@@ -5185,6 +5238,7 @@ const Builder = struct {
             .current_region = program.current_region,
             .proc_debug_names = options.proc_debug_names,
             .spec_cache = options.spec_cache,
+            .spec_cache_accepts_linked = options.spec_cache_accepts_linked,
             .counters = counters,
             .diagnostics = options.diagnostics,
             .active_spec_job_diagnostics = null,
@@ -5197,6 +5251,7 @@ const Builder = struct {
             .demand_driven_comptime_roots = options.demand_driven_comptime_roots,
             .comptime_demand_out = options.comptime_demand_out,
             .spec_comptime_reads_out = options.spec_comptime_reads_out,
+            .spec_key_aliases_out = options.spec_key_aliases_out,
             .post_check_executor = options.post_check_executor,
             .timing = options.timing,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
@@ -5440,6 +5495,7 @@ const Builder = struct {
         self.deferred_roots.deinit(self.allocator);
         self.root_value_reads.deinit(self.allocator);
         self.cached_fn_reads.deinit(self.allocator);
+        self.spec_key_aliases.deinit(self.allocator);
         self.comptime_demand.deinit(self.allocator);
         self.module_index.deinit();
         self.spec_job_task_buffers.deinit(self.allocator);
@@ -6121,6 +6177,37 @@ const Builder = struct {
         if (self.comptime_demand_out) |out| out.* = output else output.deinit();
     }
 
+    /// Every key of a request a record served through its solved view, when
+    /// it differs from the key the record was reserved under. Only a request
+    /// the object cache could key has a key: one whose type mentions no
+    /// function, served by a record that has a key itself.
+    fn collectSpecKeyAliases(self: *Builder) Allocator.Error!void {
+        for (self.spec_store.solvedViewHits()) |hit| {
+            const record = self.program.specs.get(@backingInt(hit.spec));
+            const target = self.program.getFn(record.fn_id).source.spec_key orelse continue;
+            const alias = Ast.specIdentityKey(hit.identity);
+            if (std.mem.eql(u8, &alias.bytes, &target.bytes)) continue;
+            if (try self.monoFnTypeMentionsFunction(hit.identity.request_fn_ty)) continue;
+            try self.spec_key_aliases.append(self.allocator, .{ .alias = alias.bytes, .target = target.bytes });
+        }
+        const items = self.spec_key_aliases.items;
+        std.mem.sort(SpecKeyAliases.Alias, items, {}, SpecKeyAliases.Alias.lessThan);
+        var kept: usize = 0;
+        for (items) |item| {
+            if (kept != 0 and std.meta.eql(items[kept - 1], item)) continue;
+            items[kept] = item;
+            kept += 1;
+        }
+        self.spec_key_aliases.shrinkRetainingCapacity(kept);
+    }
+
+    fn outputSpecKeyAliases(self: *Builder) Allocator.Error!void {
+        const out = self.spec_key_aliases_out orelse return;
+        var result: SpecKeyAliases = .{ .allocator = self.allocator };
+        try result.items.appendSlice(self.allocator, self.spec_key_aliases.items);
+        out.* = result;
+    }
+
     /// What each object-cache specialization's code reads of compile-time
     /// evaluation (`SpecComptimeReads`). Only code that reaches a read needs a
     /// closure, so the definitions that reach one are found first by walking
@@ -6195,6 +6282,14 @@ const Builder = struct {
                 try result.reads.append(self.allocator, .{ .module = root.module.bytes, .root = @backingInt(root.root) });
             }
             entry.value_ptr.* = .{ .start = @intCast(start), .len = @intCast(result.reads.items.len - start), .local = state.closure_local };
+        }
+        // A key that resolved to another key's specialization reads what
+        // that specialization reads.
+        for (self.spec_key_aliases.items) |alias| {
+            const row = result.rows.get(alias.target) orelse continue;
+            const entry = try result.rows.getOrPut(self.allocator, alias.alias);
+            if (entry.found_existing) continue;
+            entry.value_ptr.* = row;
         }
         out.* = result;
     }
@@ -7766,8 +7861,8 @@ const Builder = struct {
         var fn_template = self.fnDefForTemplate(view, template_ref, source_fn_ty, source_fn_key, lower_fn_ty);
         fn_template.evidence_digest = evidence_digest;
         // Only a closed request names a specialization the object cache can
-        // hold: a function type in its arguments or result makes the body
-        // depend on the program's lambda sets. The request's outer arrow does
+        // hold: a function type in its arguments or result outside a `Box`
+        // makes the body depend on the program's lambda sets. The request's outer arrow does
         // not: procedure identity selects its source and captures explicitly,
         // independently of the callable set its value joins in the caller.
         // A hosted template has no procedure of its own to cache: callers
@@ -7783,7 +7878,7 @@ const Builder = struct {
             }
             if (self.spec_cache) |cache| {
                 const relation = if (self.program.platform_requirement_filling) |filling| filling.relation else null;
-                if (cache.lookup(key.bytes, relation)) |hit| {
+                if (cache.lookup(key.bytes, relation, self.spec_cache_accepts_linked)) |hit| {
                     fn_template.cached = hit;
                     self.count("spec_cache_hits");
                     if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup monotype key={x} hit\n", .{key.bytes[0..8]});
@@ -7927,8 +8022,13 @@ const Builder = struct {
     /// identity, ids, and seed are already reserved. Runs immediately for
     /// direct callers and from the scheduler's wave drain for queued symbolic
     /// requests.
-    /// Whether a function type's arguments or result mention a function or
-    /// erased callable anywhere, nominal backings included.
+    /// Whether a function type's arguments or result mention a function
+    /// anywhere outside a `Box`, nominal backings included. Every function
+    /// reachable from a `Box` is an erased callable (design.md "Erased
+    /// Callable Requirements"), as is an `erased` type: one pointer-sized
+    /// value called through one calling convention whichever closure it
+    /// holds, so it does not tie a procedure's code to the program's lambda
+    /// sets.
     fn monoFnTypeMentionsFunction(self: *Builder, fn_ty: Type.TypeId) Allocator.Error!bool {
         const types = self.program.types.view();
         switch (types.get(fn_ty)) {
@@ -7940,7 +8040,8 @@ const Builder = struct {
         }
     }
 
-    /// Whether a `func` or `erased` type is reachable from `root`. Answers
+    /// Whether a `func` type is reachable from `root` without passing through
+    /// a `box`. Answers
     /// persist in `function_mentions` across requests, so a later scan stops
     /// at every type an earlier one answered instead of walking the same
     /// nested types again.
@@ -8036,8 +8137,8 @@ const Builder = struct {
 
     fn functionContent(content: Type.Content) bool {
         return switch (content) {
-            .erased, .func => true,
-            .primitive, .zst, .named, .record, .tuple, .tag_union, .list, .box => false,
+            .func => true,
+            .primitive, .zst, .erased, .named, .record, .tuple, .tag_union, .list, .box => false,
         };
     }
 
@@ -8053,7 +8154,8 @@ const Builder = struct {
         try on_path.put(ty, {});
         const start = children.items.len;
         switch (types.get(ty)) {
-            .primitive, .zst, .erased, .func => {},
+            // Everything a box holds is erased.
+            .primitive, .zst, .erased, .func, .box => {},
             .named => |named| {
                 try children.appendSlice(self.allocator, types.span(named.args));
                 if (named.backing) |backing| try children.append(self.allocator, backing.ty);
@@ -8061,7 +8163,7 @@ const Builder = struct {
             .record => |span| for (types.fieldSpan(span)) |field| try children.append(self.allocator, field.ty),
             .tuple => |span| try children.appendSlice(self.allocator, types.span(span)),
             .tag_union => |span| for (types.tagSpan(span)) |tag| try children.appendSlice(self.allocator, types.span(tag.payloads)),
-            .list, .box => |elem| try children.append(self.allocator, elem),
+            .list => |elem| try children.append(self.allocator, elem),
         }
         try frames.append(self.allocator, .{ .ty = ty, .start = start, .next = start, .end = children.items.len });
     }
@@ -10166,7 +10268,6 @@ const Builder = struct {
                         template_ref,
                         view,
                         template,
-                        family,
                         stored_evidence,
                         edge,
                         request_fn_node,
@@ -11258,7 +11359,12 @@ const Builder = struct {
     fn singleSourceCall(self: *Builder, template: Ast.FnTemplate) bool {
         const checked_template = switch (template.fn_def) {
             .local_template, .imported_template => |checked_template| checked_template,
-            .nested, .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => return false,
+            .nested => |nested| {
+                if (nested.default_root != null) return false;
+                const view = self.moduleForDigest(names.procTemplateModuleDigest(nested.owner));
+                return view.nested_proc_sites.sites[@backingInt(nested.site)].single_source_call;
+            },
+            .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => return false,
         };
         const view = self.moduleForDigest(names.procTemplateModuleDigest(checked_template));
         return view.templates.templateHasSingleSourceCall(checked_template.template);
@@ -11678,11 +11784,15 @@ const Builder = struct {
             const leaf: ?bool = switch (self.view.const_store.get(node)) {
                 .pending => Common.invariant("pending ConstStore node reached static data eligibility"),
                 // Static data emits an erased callable as one allocation naming
-                // its procedure through a relocation, so a capture-free function
-                // value is fully decided by the ConstStore. A capture record is
-                // not: its slots carry their own evidence, which this walk has no
-                // ConstStore node to answer for.
-                .fn_value => |fn_id| self.view.const_store.getFn(fn_id).captures.len == 0,
+                // its procedure through a relocation, with its capture record
+                // written at the capture offset, so a function value is stable
+                // when each capture slot's stored value is.
+                .fn_value => |fn_id| blk: {
+                    for (self.view.const_store.getFn(fn_id).captures) |capture| {
+                        if (constCaptureFillsSlot(capture)) try items.add(capture.value);
+                    }
+                    break :blk null;
+                },
                 .zst,
                 .scalar,
                 .str,
@@ -14853,7 +14963,7 @@ const Builder = struct {
     ) Allocator.Error!std.ArrayList(RestoredConstSourceCapture) {
         var capture_count: usize = 0;
         for (fn_value.captures) |capture| {
-            if (capture.id.isCanonical()) capture_count += 1;
+            if (capture.id.isCanonical() and constCaptureFillsSlot(capture)) capture_count += 1;
         }
 
         var out = std.ArrayList(RestoredConstSourceCapture).empty;
@@ -14861,7 +14971,7 @@ const Builder = struct {
         try out.ensureTotalCapacity(self.allocator, capture_count);
 
         for (fn_value.captures) |capture| {
-            if (!capture.id.isCanonical()) continue;
+            if (!capture.id.isCanonical() or !constCaptureFillsSlot(capture)) continue;
             const binder = capture.id.binder();
             const lowered_ty = try fn_ctx.lowerConstCaptureType(store_view, capture.ty);
             const node: ?NodeId = if (at_graph_nodes) try fn_ctx.graph.importMono(lowered_ty) else null;
@@ -14886,7 +14996,7 @@ const Builder = struct {
 
         var out_index: usize = 0;
         for (fn_value.captures) |capture| {
-            if (!capture.id.isCanonical()) continue;
+            if (!capture.id.isCanonical() or !constCaptureFillsSlot(capture)) continue;
             const out_capture = &out.items[out_index];
             const checked_type = checkedBinderType(fn_view, capture.id.binder());
             out_capture.value = if (out_capture.node) |node|
@@ -16917,6 +17027,14 @@ const DraftTemplateFamilyAddress = struct {
             .method_scope = method_scope.bytes,
             .source_fn_key = source_fn_key.bytes,
         };
+    }
+
+    /// The family a procedure's interface summaries are keyed by. A request's
+    /// input carries everything its instantiation constrains; a checked
+    /// source-function key only names how one call site spelled the callee's
+    /// type, so it does not split summaries.
+    fn interfaceSummary(template_ref: names.ProcTemplate, method_scope: checked.ModuleId) DraftTemplateFamilyAddress {
+        return init(template_ref, method_scope, .{ .bytes = @splat(0) });
     }
 
     /// Recursive references may instantiate the same checked procedure
@@ -19175,6 +19293,26 @@ const BodyDraftStore = struct {
             switch (cursor) {
                 .root => return false,
                 .reserved_fn => |fn_id| return fn_id == ancestor,
+                .draft_fn => |fn_id| {
+                    const raw = @backingInt(fn_id);
+                    if (raw >= self.fns.items.len) {
+                        Common.invariant("draft owner ancestry referenced an unknown function");
+                    }
+                    cursor = self.fns.items[raw].parent_owner;
+                },
+            }
+        }
+        Common.invariant("draft function ownership ancestry contained a cycle");
+    }
+
+    /// The owner every draft function under `owner` descends from: the
+    /// draft's root or the globally reserved function whose body it lowers.
+    fn outermostOwner(self: *const BodyDraftStore, owner: DraftOwner) DraftOwner {
+        var cursor = owner;
+        var remaining = self.fns.items.len + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            switch (cursor) {
+                .root, .reserved_fn => return cursor,
                 .draft_fn => |fn_id| {
                     const raw = @backingInt(fn_id);
                     if (raw >= self.fns.items.len) {
@@ -24208,7 +24346,7 @@ const BodyContext = struct {
                 },
                 .list, .box => |child| try pending.append(self.allocator, child),
                 .tuple => |items| try pending.appendSlice(self.allocator, items),
-                .record => |record| for (record.fields) |field| try pending.append(self.allocator, field.ty),
+                .record => |record| for (record.fields) |field| try pending.append(self.allocator, self.graph.fieldValueNode(field)),
                 .tag_union => |tag_union| for (tag_union.tags) |tag| try pending.appendSlice(self.allocator, tag.payloads),
                 .redirect, .leaf => unreachable,
                 .unresolved,
@@ -26810,7 +26948,6 @@ const BodyContext = struct {
 
     const InterfacePendingDependency = struct {
         target: checked.ResolvedValueId,
-        source_fn_ty: checked.CheckedTypeId,
         request_fn_node: NodeId,
     };
 
@@ -26953,7 +27090,6 @@ const BodyContext = struct {
                     if (call.direct_target) |target| {
                         try frame.pending.append(self.allocator, .{
                             .target = target,
-                            .source_fn_ty = source_fn_ty,
                             .request_fn_node = fn_node,
                         });
                     }
@@ -27041,7 +27177,6 @@ const BodyContext = struct {
             frame.next_dependency += 1;
             if (try self.beginDirectCalleeInterface(
                 pending.target,
-                pending.source_fn_ty,
                 pending.request_fn_node,
                 frame.replay_state,
             )) |expansion| return .{ .callee = expansion };
@@ -27239,7 +27374,6 @@ const BodyContext = struct {
     fn beginDirectCalleeInterface(
         self: *BodyContext,
         target: checked.ResolvedValueId,
-        source_fn_ty: checked.CheckedTypeId,
         request_fn_node: NodeId,
         replay_state: *InterfaceReplayState,
     ) Allocator.Error!?*DirectCalleeExpansion {
@@ -27293,7 +27427,6 @@ const BodyContext = struct {
             template_ref,
             callee_view,
             template,
-            DraftTemplateFamilyAddress.init(template_ref, self.method_scope.key, self.view.types.rootKey(source_fn_ty)),
             try self.builder.constFnEvidence(rootEvidence(template_ref, edge.vector)),
             edge,
             request_fn_node,
@@ -27313,7 +27446,6 @@ const BodyContext = struct {
         template_ref: names.ProcTemplate,
         callee_view: ModuleView,
         template: checked.CheckedProcedureTemplate,
-        family: DraftTemplateFamilyAddress,
         stored_evidence: StoredConstFnEvidence,
         request_edge: EdgeEvidence,
         request_fn_node: NodeId,
@@ -27337,7 +27469,7 @@ const BodyContext = struct {
         const input_arena = &expansion.input_arena;
         const holes = try self.parametricRequestHoles(input_arena.allocator(), template_ref, callee_view, &template, edge.subst);
         const hole_classes = try input_arena.allocator().alloc(?NodeId, holes.nodes.len);
-        const input = try InterfaceConstraints.captureWithHoles(self.graph, input_arena.allocator(), request_roots.items, holes.nodes, hole_classes);
+        const input = try InterfaceConstraints.captureRequestWithHoles(self.graph, input_arena.allocator(), request_roots.items, holes.nodes, hole_classes);
         for (hole_classes) |hole_class| if (hole_class != null) {
             self.builder.count("interface_parametric_requests");
             break;
@@ -27348,7 +27480,7 @@ const BodyContext = struct {
         for (edge.subst, request_bytes[shape.bytes.len..]) |slot, *byte| byte.* = if (slot == .checked_error) 1 else 0;
         const request: InterfaceConstraints.Identity = .{ .bytes = request_bytes, .leaves = shape.leaves };
         const address = InterfaceReplayAddress{
-            .family = family,
+            .family = DraftTemplateFamilyAddress.interfaceSummary(template_ref, self.method_scope.key),
             .evidence_digest = evidence_digest.bytes,
             .input_digest = interfaceRequestBucket(request.bytes),
         };
@@ -44659,6 +44791,19 @@ const BodyContext = struct {
         };
     }
 
+    /// Enter the owner a restored stored function's specialization belongs
+    /// to. Its body reads nothing from the restoring site: its stored
+    /// captures are slots keyed by checked capture identity, and a read of a
+    /// top-level constant, its own included, is that constant's top-level
+    /// read, as it was when compile-time evaluation produced the value. So
+    /// the specialization is owned by the outermost owner of the draft, and
+    /// every restore of the same stored function in the draft reuses it,
+    /// including the restore inside its own body that a read of the constant
+    /// holding it performs.
+    fn enterRestoredConstFnOwner(self: *BodyContext) Allocator.Error!BodyDraftStore.OwnerScope {
+        return try self.draft.enterOwner(self.draft.outermostOwner(self.draft.current_owner));
+    }
+
     fn inheritActiveConstBinding(self: *BodyContext, parent: *BodyContext) Allocator.Error!void {
         try self.inheritActiveConstBindingId(parent.active_const_binding);
     }
@@ -46926,14 +47071,15 @@ const BodyContext = struct {
                 fn_ctx.evidence = retained_evidence;
                 fn_ctx.inheritFrozenEmissionContext(self);
                 defer fn_ctx.deinit();
-                try fn_ctx.inheritActiveConstBinding(self);
                 try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
                 fn_ctx.current_fn_key = nested.context_fn_key;
                 const restored_local_proc_entries = try fn_ctx.enterRestoredLocalProcScope(nested, nested.context_fn_key);
                 defer if (restored_local_proc_entries) |entries| fn_ctx.allocator.free(entries);
+                const restored_owner_scope = try fn_ctx.enterRestoredConstFnOwner();
+                defer restored_owner_scope.leave();
                 return try self.builder.lowerDraftNestedFromContext(
                     &fn_ctx,
-                    fn_ctx.draft.current_owner,
+                    restored_owner_scope.previous,
                     checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def),
                     nested,
                     source_fn_ty,
@@ -46984,7 +47130,6 @@ const BodyContext = struct {
         fn_ctx.evidence = retained_evidence;
         fn_ctx.inheritFrozenEmissionContext(self);
         defer fn_ctx.deinit();
-        try fn_ctx.inheritActiveConstBinding(self);
         try fn_ctx.replayStoredEvidenceRelations(fn_ctx.evidence);
         const capture_nested = switch (fn_def) {
             .nested => |nested| nested,
@@ -47031,21 +47176,25 @@ const BodyContext = struct {
         for (captures, capture_entry_guards) |capture, *node|
             node.* = capture.node orelse try fn_ctx.activeNodeFromType(capture.ty);
         const restored_fn_id = switch (lambda_expr.data) {
-            .lambda => try self.builder.lowerDraftNestedFromContext(
-                &fn_ctx,
-                fn_ctx.draft.current_owner,
-                lambda_expr_id,
-                capture_nested,
-                fn_value.source_fn_ty,
-                fn_value.source_fn_key,
-                request_fn_node,
-                capture_entry_guards,
-                fn_ctx.evidence,
-                null,
-                false,
-                .exact_graph,
-                .inherit,
-            ),
+            .lambda => restored: {
+                const restored_owner_scope = try fn_ctx.enterRestoredConstFnOwner();
+                defer restored_owner_scope.leave();
+                break :restored try self.builder.lowerDraftNestedFromContext(
+                    &fn_ctx,
+                    restored_owner_scope.previous,
+                    lambda_expr_id,
+                    capture_nested,
+                    fn_value.source_fn_ty,
+                    fn_value.source_fn_key,
+                    request_fn_node,
+                    capture_entry_guards,
+                    fn_ctx.evidence,
+                    null,
+                    false,
+                    .exact_graph,
+                    .inherit,
+                );
+            },
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .row_coerce, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored capturing function did not reference a checked lambda"),
         };
 
@@ -52188,7 +52337,7 @@ const BodyContext = struct {
 
         var scratch = self.graph.acquireArena();
         defer self.graph.releaseArena(scratch);
-        const input = try InterfaceConstraints.capture(self.graph, scratch.allocator(), roots.items);
+        const input = try InterfaceConstraints.captureRequest(self.graph, scratch.allocator(), roots.items);
         const shape = try input.identityInto(self.graph, scratch.allocator());
         const request_bytes = try scratch.allocator().alloc(u8, shape.bytes.len + subst.len);
         @memcpy(request_bytes[0..shape.bytes.len], shape.bytes);
@@ -52311,7 +52460,7 @@ const BodyContext = struct {
             },
             .checked_error => {},
         };
-        const input = try InterfaceConstraints.capture(self.graph, scratch.allocator(), input_roots);
+        const input = try InterfaceConstraints.captureRequest(self.graph, scratch.allocator(), input_roots);
         const request = try input.identityInto(self.graph, scratch.allocator());
         // This relation consumes only the selected checked signature, not its
         // nested dispatch evidence. Its source identity, substitution, and
@@ -59932,7 +60081,7 @@ const BodyContext = struct {
                 },
                 .tuple => try pending.appendSlice(self.allocator, try self.graph.tupleItemNodes(raw_node)),
                 .record => {
-                    for ((try self.graph.recordNodes(raw_node)).fields) |field| try pending.append(self.allocator, field.ty);
+                    for ((try self.graph.recordNodes(raw_node)).fields) |field| try pending.append(self.allocator, self.graph.fieldValueNode(field));
                 },
                 .tag_union => {
                     for ((try self.graph.tagRowNodes(raw_node)).tags) |tag| try pending.appendSlice(self.allocator, tag.payloads);
@@ -67927,6 +68076,16 @@ fn checkedCaptureBinder(view: ModuleView, pattern: checked.CheckedPatternId) che
         Common.invariant("checked closure capture pattern had no binder");
 }
 
+/// Whether a stored capture fills a slot of the restored function's capture
+/// record. A recursive-binding capture fills none: the restored worker reads
+/// that root through its own top-level reference.
+fn constCaptureFillsSlot(capture: check.ConstStore.ConstCapture) bool {
+    return switch (capture.kind) {
+        .lexical => true,
+        .recursive_binding => false,
+    };
+}
+
 fn constCaptureBinder(id: check.ConstStore.CaptureId) checked.PatternBinderId {
     if (!id.isCanonical()) Common.invariant("generated capture reached source lambda restore");
     return id.binder();
@@ -67998,9 +68157,10 @@ fn dispatchPlanIdForRuntimeExpr(view: ModuleView, expr_id: checked.CheckedExprId
     return plan_id;
 }
 
-/// Builds without libc (the playground) never read the environment and
-/// compile no trace output.
-const pack_trace_available = @import("builtin").link_libc;
+/// Builds without libc (the playground) and compilers built without
+/// developer diagnostics never read the environment and compile no trace
+/// output.
+const pack_trace_available = @import("builtin").link_libc and build_options.dev_diagnostics;
 
 /// `ROC_PACK_TRACE` is set: print every object cache lookup.
 fn packTraceEnabled() bool {

@@ -10,8 +10,11 @@
 //! (`ProcIdentity`, `roc__rc_*`), so an artifact set from one program can be
 //! placed into another program's buffer with `append`, then resolved after
 //! all required producers have landed. `assemble` performs both steps.
-//! Source-file indices remain in the originating LIR domain; session caches
-//! must not reuse line tables across unrelated source-file tables.
+//! Source-file indices are in the set's own file domain: `Set.source_files`
+//! names each index by its module's content identity. Session appends keep
+//! them as they are, since a session reuses fragments only within one
+//! source-file table; `splice` binds them to the receiving program's table,
+//! omitting the lines of module versions that program does not have.
 //!
 //! `verifyRoundTrip` is the gate for the format: a program assembled from its
 //! own artifacts must produce the same bytes, relocations, and unwind records
@@ -19,7 +22,8 @@
 
 const std = @import("std");
 const collections = @import("collections");
-const Sha256 = @import("base").Sha256;
+const base = @import("base");
+const Sha256 = base.Sha256;
 const lir = @import("lir");
 const layout = @import("layout");
 const RelocationMod = @import("Relocation.zig");
@@ -154,6 +158,9 @@ pub const Artifact = struct {
 pub const Set = struct {
     arena: collections.SingleThreadArena,
     artifacts: []const Artifact,
+    /// The module content identity of each source-file index the artifacts'
+    /// lines use (`LirStore.sourceFileModuleIdentity`).
+    source_files: []const [32]u8 = &.{},
 
     pub fn deinit(self: *Set) void {
         self.arena.deinit();
@@ -278,8 +285,18 @@ pub fn combine(allocator: Allocator, sets: []const *const Set) Allocator.Error!S
     errdefer arena.deinit();
     const a = arena.allocator();
     var artifacts = std.ArrayList(Artifact).empty;
+    var source_files = std.ArrayList([32]u8).empty;
     for (sets) |set| {
-        const base: u32 = @intCast(artifacts.items.len);
+        const first: u32 = @intCast(artifacts.items.len);
+        const file_map = try a.alloc(u32, set.source_files.len);
+        for (set.source_files, file_map) |identity, *mapped| {
+            mapped.* = for (source_files.items, 0..) |existing, index| {
+                if (std.mem.eql(u8, &existing, &identity)) break @intCast(index);
+            } else index: {
+                try source_files.append(a, identity);
+                break :index @intCast(source_files.items.len - 1);
+            };
+        }
         for (set.artifacts) |source| {
             var artifact = source;
             artifact.kind = switch (source.kind) {
@@ -288,7 +305,7 @@ pub fn combine(allocator: Allocator, sets: []const *const Set) Allocator.Error!S
             };
             artifact.code = try a.dupe(u8, source.code);
             const refs = try a.dupe(Reference, source.refs);
-            for (refs) |*ref| ref.target += base;
+            for (refs) |*ref| ref.target += first;
             artifact.refs = refs;
             const symbolic_refs = try a.dupe(SymbolicReference, source.symbolic_refs);
             for (symbolic_refs) |*ref| switch (ref.target) {
@@ -296,7 +313,9 @@ pub fn combine(allocator: Allocator, sets: []const *const Set) Allocator.Error!S
                 .proc, .boxy_thunk => {},
             };
             artifact.symbolic_refs = symbolic_refs;
-            artifact.lines = try a.dupe(LineEntry, source.lines);
+            const lines = try a.dupe(LineEntry, source.lines);
+            for (lines) |*line| line.loc = rebindLoc(line.loc, file_map);
+            artifact.lines = lines;
             const relocations = try a.dupe(NamedRelocation, source.relocations);
             for (relocations) |*relocation| relocation.name = try a.dupe(u8, relocation.name);
             artifact.relocations = relocations;
@@ -307,7 +326,16 @@ pub fn combine(allocator: Allocator, sets: []const *const Set) Allocator.Error!S
         }
     }
     const owned = try artifacts.toOwnedSlice(a);
-    return .{ .arena = arena, .artifacts = owned };
+    return .{ .arena = arena, .artifacts = owned, .source_files = try source_files.toOwnedSlice(a) };
+}
+
+/// `loc` with its file index carried from one source-file domain to another
+/// through `file_map`, indexed by the source domain's file index.
+pub fn rebindLoc(loc: base.SourceLoc, file_map: []const u32) base.SourceLoc {
+    if (!loc.hasLocation()) return loc;
+    var rebound = loc;
+    rebound.file = file_map[loc.file];
+    return rebound;
 }
 
 /// Why a code buffer could not be lifted into artifacts.
@@ -738,7 +766,9 @@ pub fn extractPrepared(
         };
     }
 
-    return .{ .arena = arena, .artifacts = artifacts };
+    const source_files = try arena_allocator.alloc([32]u8, codegen.store.sourceFileCount());
+    for (source_files, 0..) |*identity, file| identity.* = codegen.store.sourceFileModuleIdentity(@intCast(file));
+    return .{ .arena = arena, .artifacts = artifacts, .source_files = source_files };
 }
 
 fn captureData(
@@ -890,7 +920,7 @@ pub fn appendPrepared(
             .branch_island => .branch_island,
         };
         starts[index] = try codegen.appendAssembledRegion(artifact.code, kind, artifact.entry, artifact.frame);
-        try appendMetadata(CG, codegen, artifact, starts[index], true);
+        try appendMetadata(CG, codegen, artifact, starts[index], .same_domain);
         for (artifact.relocations) |relocation| {
             const symbol = try codegen.internSymbolName(relocation.name, relocation.scope);
             const offset: u64 = starts[index] + relocation.offset;
@@ -926,7 +956,15 @@ pub fn appendPrepared(
     }
 }
 
-fn appendMetadata(comptime CG: type, codegen: *CG, artifact: Artifact, start: usize, include_lines: bool) Allocator.Error!void {
+/// How an appended artifact's lines reach the receiving program: in the same
+/// source-file domain, or carried through a file map, which omits the lines
+/// of files the receiving program does not have.
+const LineBinding = union(enum) {
+    same_domain,
+    file_map: []const ?u32,
+};
+
+fn appendMetadata(comptime CG: type, codegen: *CG, artifact: Artifact, start: usize, lines: LineBinding) Allocator.Error!void {
     switch (artifact.kind) {
         .proc => |identity| try codegen.registerAssembledProc(identity, start + artifact.entry),
         .rc_helper => |name| try codegen.registerSplicedHelper(name, start + artifact.entry),
@@ -944,10 +982,17 @@ fn appendMetadata(comptime CG: type, codegen: *CG, artifact: Artifact, start: us
             try codegen.registerAssembledRefVeneer(start + ref.site, if (ref.veneer) |veneer| start + veneer else null);
         }
     }
-    if (include_lines) {
-        for (artifact.lines) |line| {
-            try codegen.appendAssembledLineEntry(.{ .offset = @intCast(start + line.offset), .loc = line.loc });
-        }
+    for (artifact.lines) |line| {
+        const loc = switch (lines) {
+            .same_domain => line.loc,
+            .file_map => |file_map| loc: {
+                if (!line.loc.hasLocation()) break :loc line.loc;
+                var bound = line.loc;
+                bound.file = file_map[line.loc.file] orelse continue;
+                break :loc bound;
+            },
+        };
+        try codegen.appendAssembledLineEntry(.{ .offset = @intCast(start + line.offset), .loc = loc });
     }
 }
 
@@ -1111,6 +1156,18 @@ pub fn splice(
     defer stack.deinit(allocator);
     var seen = std.AutoHashMap(u32, void).init(allocator);
     defer seen.deinit();
+    // A line names a version of a module by its content identity. The
+    // receiving program's table has that version only when the module is
+    // unchanged since the pack was written; a line of any other version
+    // describes source this program does not have, so it is not emitted.
+    const file_map = try allocator.alloc(?u32, set.source_files.len);
+    defer allocator.free(file_map);
+    for (set.source_files, file_map) |identity, *mapped| {
+        mapped.* = for (0..codegen.store.sourceFileCount()) |file| {
+            const candidate = codegen.store.sourceFileModuleIdentity(@intCast(file));
+            if (std.mem.eql(u8, &candidate, &identity)) break @intCast(file);
+        } else null;
+    }
     for (roots) |root| try stack.append(allocator, root);
     while (stack.pop()) |index| {
         if (placed.contains(index)) continue;
@@ -1164,10 +1221,7 @@ pub fn splice(
             .branch_island => .branch_island,
         };
         const start = try codegen.appendAssembledRegion(artifact.code, kind, artifact.entry, artifact.frame);
-        // Persistent packs do not carry a source-file domain binding. Keep
-        // their exact stored lines, but do not misinterpret their file indices
-        // as belonging to this program. Session append does preserve lines.
-        try appendMetadata(CG, codegen, artifact, start, false);
+        try appendMetadata(CG, codegen, artifact, start, .{ .file_map = file_map });
         switch (artifact.kind) {
             .rc_helper => |name| try codegen.registerSplicedHelper(name, start + artifact.entry),
             .proc => |identity| try codegen.registerSplicedProc(identity, start),
@@ -1341,7 +1395,7 @@ fn testPreparedData(allocator: Allocator) (ExtractError || error{ TestExpectedEq
     try std.testing.expectEqualStrings("literal", refs[0].name);
 }
 
-test "artifact metadata queues unresolved targets and preserves same-offset line order" {
+test "artifact metadata queues unresolved targets, preserves same-offset line order, and binds file domains" {
     const Recorder = struct {
         const Self = @This();
         refs: [2]SymbolicReference = undefined,
@@ -1388,7 +1442,7 @@ test "artifact metadata queues unresolved targets and preserves same-offset line
         .relocations = &.{},
         .data = &.{},
     };
-    try appendMetadata(Recorder, &recorder, artifact, 100, true);
+    try appendMetadata(Recorder, &recorder, artifact, 100, .same_domain);
     try std.testing.expectEqual(@as(usize, 101), recorder.proc_entry);
     try std.testing.expectEqual(@as(u32, 100), recorder.refs[0].site);
     try std.testing.expectEqual(@as(?u32, 103), recorder.refs[0].veneer);
@@ -1400,10 +1454,21 @@ test "artifact metadata queues unresolved targets and preserves same-offset line
         try std.testing.expectEqual(@as(u32, 100), rebased.offset);
         try std.testing.expectEqualDeep(original.loc, rebased.loc);
     }
+    // A pack's file 3 is the receiving program's file 1.
     var persistent = Recorder{};
-    try appendMetadata(Recorder, &persistent, artifact, 100, false);
-    try std.testing.expectEqual(@as(usize, 0), persistent.lines_len);
+    try appendMetadata(Recorder, &persistent, artifact, 100, .{ .file_map = &.{ null, null, null, 1 } });
+    try std.testing.expectEqual(@as(usize, 2), persistent.lines_len);
+    for (artifact.lines, persistent.lines[0..persistent.lines_len]) |original, rebound| {
+        try std.testing.expectEqual(@as(u32, 1), rebound.loc.file);
+        try std.testing.expectEqual(original.loc.line, rebound.loc.line);
+        try std.testing.expectEqual(original.loc.column, rebound.loc.column);
+    }
     try std.testing.expectEqual(@as(usize, 2), persistent.refs_len);
+    // A file the receiving program does not have contributes no lines.
+    var other_version = Recorder{};
+    try appendMetadata(Recorder, &other_version, artifact, 100, .{ .file_map = &.{ null, null, null, null } });
+    try std.testing.expectEqual(@as(usize, 0), other_version.lines_len);
+    try std.testing.expectEqual(@as(usize, 2), other_version.refs_len);
 }
 
 fn testCombineOwnership(allocator: Allocator) (Allocator.Error || error{TestExpectedEqual})!void {
@@ -1420,8 +1485,8 @@ fn testCombineOwnership(allocator: Allocator) (Allocator.Error || error{TestExpe
                 .{ .site = 2, .form = .addr, .target = .{ .proc = lir.ProcIdentity.forTest(4) } },
             },
             .lines = &.{
-                .{ .offset = 0, .loc = .{ .file = 7, .line = 3, .column = 2 } },
-                .{ .offset = 0, .loc = .{ .file = 7, .line = 4, .column = 5 } },
+                .{ .offset = 0, .loc = .{ .file = 0, .line = 3, .column = 2 } },
+                .{ .offset = 0, .loc = .{ .file = 0, .line = 4, .column = 5 } },
             },
             .relocations = &.{.{ .offset = 0, .name = "external", .scope = .shared, .kind = .function }},
             .data = &.{.{
@@ -1432,6 +1497,7 @@ fn testCombineOwnership(allocator: Allocator) (Allocator.Error || error{TestExpe
                 .relocations = &.{.{ .offset = 0, .name = "pointer", .addend = 2, .function = true }},
             }},
         }},
+        .source_files = &.{@as([32]u8, @splat(7))},
     };
     var copy = try combine(allocator, &.{&source});
     var copy_live = true;
@@ -1445,6 +1511,7 @@ fn testCombineOwnership(allocator: Allocator) (Allocator.Error || error{TestExpe
     try std.testing.expectEqualDeep(source.artifacts[0].symbolic_refs, combined.artifacts[1].symbolic_refs);
     try std.testing.expectEqualDeep(source.artifacts[0].lines, combined.artifacts[1].lines);
     try std.testing.expectEqualDeep(source.artifacts[0].data, combined.artifacts[1].data);
+    try std.testing.expectEqualDeep(source.source_files, combined.source_files);
 }
 
 fn testExport(name: []const u8, bytes: []const u8, relocations: []const lir.Program.StaticDataRelocation, is_exported: bool) lir.Program.StaticDataExport {

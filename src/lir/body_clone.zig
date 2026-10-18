@@ -1316,15 +1316,25 @@ pub const CallVariantSpec = struct {
 };
 
 /// Identity of a call variant of `source`. The variant is determined by the
-/// source procedure and the shape of the variant specification; the return
-/// layout index is program-local, so a fused variant's identity is stable
-/// only within one program until fusion output carries content identities.
-fn callVariantIdentity(source: LIR.ProcIdentity, spec: CallVariantSpec) LIR.ProcIdentity {
-    var key: [12]u8 = undefined;
-    std.mem.writeInt(u32, key[0..4], @intCast(spec.leading_args.len), .little);
-    std.mem.writeInt(u32, key[4..8], @intCast(spec.extra_frame_locals.len), .little);
-    std.mem.writeInt(u32, key[8..12], @backingInt(spec.ret_layout), .little);
-    return source.derived("call-variant", &key);
+/// source procedure, the shape of the variant specification, and the layouts
+/// of its leading arguments and return, which are digested by content so the
+/// identity names the same variant in every program.
+fn callVariantIdentity(
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    source: LIR.ProcIdentity,
+    spec: CallVariantSpec,
+) Allocator.Error!LIR.ProcIdentity {
+    var hasher = base.TypeDigestHasher.init();
+    var counts: [8]u8 = undefined;
+    std.mem.writeInt(u32, counts[0..4], @intCast(spec.leading_args.len), .little);
+    std.mem.writeInt(u32, counts[4..8], @intCast(spec.extra_frame_locals.len), .little);
+    hasher.update(&counts);
+    for (spec.leading_args) |arg| {
+        hasher.update(&try layouts.contentDigest(store.getLocal(arg).layout_idx));
+    }
+    hasher.update(&try layouts.contentDigest(spec.ret_layout));
+    return source.derived("call-variant", &hasher.finalResult());
 }
 
 /// Clone `source` into an internal variant whose returns are rewritten by
@@ -1334,6 +1344,7 @@ fn callVariantIdentity(source: LIR.ProcIdentity, spec: CallVariantSpec) LIR.Proc
 pub fn cloneCallVariant(
     comptime Rewriter: type,
     store: *LirStore,
+    layouts: *const layout_mod.Store,
     source: LIR.LirProcSpecId,
     rewriter: Rewriter,
     spec: CallVariantSpec,
@@ -1386,7 +1397,7 @@ pub fn cloneCallVariant(
 
     const variant = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
-        .identity = callVariantIdentity(source_spec.identity, spec),
+        .identity = try callVariantIdentity(store, layouts, source_spec.identity, spec),
         .args = try store.addLocalSpan(variant_args.items),
         .erased_reuse_arg = erased_reuse_arg,
         .frame_locals = try store.addLocalSpan(frame_locals.items[0..unique_len]),
@@ -1818,6 +1829,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .target = try self.mapLocal(s.target),
                     .value = s.value,
                     .fresh_alternative = s.fresh_alternative,
+                    .list_len = s.list_len,
                     .next = s.next,
                 } },
                 .assign_call => |s| .{ .assign_call = .{
@@ -2452,7 +2464,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             while (chain.pop()) |scope| {
                 const source = self.store.inlineScope(scope);
                 const mapped = try self.store.addInlineScope(.{
-                    .source_symbol = source.source_symbol,
+                    .source_identity = source.source_identity,
                     .source_name = source.source_name,
                     .source_loc = source.source_loc,
                     .call_site = source.call_site,
@@ -2713,6 +2725,34 @@ test "rewritableProcBody refuses procs whose body is not the compiler's to clone
     try std.testing.expect(rewritableProcBody(&store, erased) == null);
 }
 
+test "call variant identity digests layouts by content, not by index" {
+    const allocator = std.testing.allocator;
+    const native = base.target.TargetUsize.native;
+    var first_layouts = try layout_mod.Store.init(allocator, native);
+    defer first_layouts.deinit();
+    var second_layouts = try layout_mod.Store.init(allocator, native);
+    defer second_layouts.deinit();
+    _ = try first_layouts.insertPtr(.u8);
+    const first_ptr = try first_layouts.insertPtr(.u64);
+    const second_ptr = try second_layouts.insertPtr(.u64);
+    try std.testing.expect(first_ptr != second_ptr);
+
+    var first_store = LirStore.init(allocator);
+    defer first_store.deinit();
+    var second_store = LirStore.init(allocator);
+    defer second_store.deinit();
+    const first_arg = try first_store.addLocal(.{ .layout_idx = first_ptr });
+    const second_arg = try second_store.addLocal(.{ .layout_idx = second_ptr });
+
+    const source = LIR.ProcIdentity.forTest(1);
+    const first = try callVariantIdentity(&first_store, &first_layouts, source, .{ .leading_args = &.{first_arg}, .ret_layout = first_ptr });
+    const second = try callVariantIdentity(&second_store, &second_layouts, source, .{ .leading_args = &.{second_arg}, .ret_layout = second_ptr });
+    try std.testing.expectEqual(first.bytes, second.bytes);
+
+    const other = try callVariantIdentity(&second_store, &second_layouts, source, .{ .leading_args = &.{second_arg}, .ret_layout = .u64 });
+    try std.testing.expect(!std.mem.eql(u8, &first.bytes, &other.bytes));
+}
+
 test "call-result fusion machinery has one definition" {
     // `return_slot` and `str_append` are the same pass with different consumer
     // matches. The walk, the liveness guard, and the variant clone live here so
@@ -2743,7 +2783,7 @@ test "body_clone scratch is bounded by reachable locals and scopes" {
     var store = LirStore.init(testing.allocator);
     defer store.deinit();
     const scope: LIR.InlineScope = .{
-        .source_symbol = store.freshSyntheticSymbol(),
+        .source_identity = LIR.ProcIdentity.forTest(1),
         .source_name = .none,
         .source_loc = .none,
         .call_site = .none,

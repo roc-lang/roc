@@ -343,6 +343,189 @@ test "range prove gives threaded Bool joins identities unused by joins in unreac
     try testing.expect(join_ids.contains(nested_join));
 }
 
+// A short-circuit condition's constant arm writes its Bool as a literal
+// when the constant comes back from compile-time evaluation, and as a tag
+// when it is lowered in place. Either form is the discriminant, so the
+// threaded jump site that wrote a literal folds to a direct jump, and the
+// arm it chose is the one control reaches.
+test "range prove folds a threaded Bool join site that wrote the parameter as a literal" {
+    const testing = std.testing;
+    var store = LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout_mod.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+    const flag = try store.addLocal(.{ .layout_idx = .bool });
+    const written = try store.addLocal(.{ .layout_idx = .bool });
+    const one = try store.addLocal(.{ .layout_idx = .u64 });
+    const zero = try store.addLocal(.{ .layout_idx = .u64 });
+    var fixture_join_ids = BodyClone.JoinParamIndex.init(testing.allocator);
+    defer fixture_join_ids.deinit();
+    const bool_join = fixture_join_ids.freshJoinPoint();
+
+    // join 0(flag) = switch flag { 1 => ret one, _ => ret zero }
+    const ret_true = try store.addCFStmt(.{ .ret = .{ .value = one } }, .test_fixture);
+    const ret_false = try store.addCFStmt(.{ .ret = .{ .value = zero } }, .test_fixture);
+    const bool_body = try store.addCFStmt(.{ .switch_stmt = .{
+        .cond = flag,
+        .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = ret_true }}),
+        .default_branch = ret_false,
+    } }, .test_fixture);
+    // written = literal 1 : Bool; flag := written; jump 0
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = bool_join } }, .test_fixture);
+    const set_flag = try store.addCFStmt(.{ .set_local = .{
+        .target = flag,
+        .value = written,
+        .mode = .initialize_join_param,
+        .next = jump,
+    } }, .test_fixture);
+    const set_written = try store.addCFStmt(.{ .assign_literal = .{
+        .target = written,
+        .value = .{ .i128_literal = .{ .value = 1, .layout_idx = .bool } },
+        .next = set_flag,
+    } }, .test_fixture);
+    const set_zero = try store.addCFStmt(.{ .assign_literal = .{
+        .target = zero,
+        .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
+        .next = set_written,
+    } }, .test_fixture);
+    const set_one = try store.addCFStmt(.{ .assign_literal = .{
+        .target = one,
+        .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+        .next = set_zero,
+    } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .join = .{
+        .id = bool_join,
+        .params = try store.addLocalSpan(&.{flag}),
+        .body = bool_body,
+        .remainder = set_one,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .identity = LIR.ProcIdentity.forTest(0),
+        .name = store.freshSyntheticSymbol(),
+        .args = try store.addLocalSpan(&.{}),
+        .body = body,
+        .ret_layout = .u64,
+    }, .none);
+
+    var scratch = collections.SingleThreadArena.init(testing.allocator);
+    defer scratch.deinit();
+    try runProc(&store, &layouts, proc, scratch.allocator());
+
+    // No switch survives, and the one jump left is the threaded site's,
+    // targeting the join whose body is the true arm.
+    var switches: usize = 0;
+    var jump_targets = std.ArrayList(LIR.JoinPointId).empty;
+    defer jump_targets.deinit(testing.allocator);
+    var join_bodies = collections.DenseMap(LIR.JoinPointId, CFStmtId).init(testing.allocator);
+    defer join_bodies.deinit();
+    var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpecImmediate(proc).body.?, testing.allocator);
+    defer walk.deinit();
+    while (try walk.next()) |stmt| {
+        const cf = store.getCFStmt(stmt);
+        if (cf == .switch_stmt) switches += 1;
+        if (cf == .jump) try jump_targets.append(testing.allocator, cf.jump.target);
+        if (cf == .join) try join_bodies.put(cf.join.id, cf.join.body);
+    }
+    try testing.expectEqual(@as(usize, 0), switches);
+    try testing.expectEqual(@as(usize, 1), jump_targets.items.len);
+    const chosen = store.getCFStmt(join_bodies.get(jump_targets.items[0]).?);
+    try testing.expect(chosen == .ret);
+    try testing.expectEqual(one, chosen.ret.value);
+}
+
+test "range prove reads a static list of copies' stated item count as its length" {
+    const testing = std.testing;
+    // `list = static s0; n = list_len(list); switch 512 < n { 1 => ret one, _ => ret zero }`:
+    // the test folds when the read states the item count, and stays when it does not.
+    for ([_]?u64{ 513, null }) |list_len| {
+        var store = LirStore.init(testing.allocator);
+        defer store.deinit();
+        var layouts = try layout_mod.Store.init(testing.allocator, .u64);
+        defer layouts.deinit();
+        const list = try store.addLocal(.{ .layout_idx = try layouts.insertList(.u32) });
+        const len = try store.addLocal(.{ .layout_idx = .u64 });
+        const last = try store.addLocal(.{ .layout_idx = .u64 });
+        const in_range = try store.addLocal(.{ .layout_idx = .bool });
+        const one = try store.addLocal(.{ .layout_idx = .u64 });
+        const zero = try store.addLocal(.{ .layout_idx = .u64 });
+        const ret_one = try store.addCFStmt(.{ .ret = .{ .value = one } }, .test_fixture);
+        const ret_zero = try store.addCFStmt(.{ .ret = .{ .value = zero } }, .test_fixture);
+        const test_switch = try store.addCFStmt(.{ .switch_stmt = .{
+            .cond = in_range,
+            .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = ret_one }}),
+            .default_branch = ret_zero,
+        } }, .test_fixture);
+        const compare = try store.addCFStmt(.{ .assign_low_level = .{
+            .target = in_range,
+            .op = .num_is_lt,
+            .rc_effect = .none(),
+            .args = try store.addLocalSpan(&.{ last, len }),
+            .next = test_switch,
+        } }, .test_fixture);
+        const set_zero = try store.addCFStmt(.{ .assign_literal = .{
+            .target = zero,
+            .value = .{ .i64_literal = .{ .value = 0, .layout_idx = .u64 } },
+            .next = compare,
+        } }, .test_fixture);
+        const set_one = try store.addCFStmt(.{ .assign_literal = .{
+            .target = one,
+            .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+            .next = set_zero,
+        } }, .test_fixture);
+        const set_last = try store.addCFStmt(.{ .assign_literal = .{
+            .target = last,
+            .value = .{ .i64_literal = .{ .value = 512, .layout_idx = .u64 } },
+            .next = set_one,
+        } }, .test_fixture);
+        const measure = try store.addCFStmt(.{ .assign_low_level = .{
+            .target = len,
+            .op = .list_len,
+            .rc_effect = LIR.LowLevel.list_len.rcEffect(),
+            .args = try store.addLocalSpan(&.{list}),
+            .next = set_last,
+        } }, .test_fixture);
+        const body = try store.addCFStmt(.{
+            .assign_literal = .{
+                .target = list,
+                // The prover reads only the literal's stated length, never its
+                // static data.
+                .value = .{ .static_data = undefined },
+                .list_len = list_len,
+                .next = measure,
+            },
+        }, .test_fixture);
+        const proc = try store.addProcSpec(.{
+            .identity = LIR.ProcIdentity.forTest(0),
+            .name = store.freshSyntheticSymbol(),
+            .args = try store.addLocalSpan(&.{}),
+            .body = body,
+            .ret_layout = .u64,
+        }, .none);
+
+        var scratch = collections.SingleThreadArena.init(testing.allocator);
+        defer scratch.deinit();
+        try runProc(&store, &layouts, proc, scratch.allocator());
+
+        var switches: usize = 0;
+        var rets = std.ArrayList(LocalId).empty;
+        defer rets.deinit(testing.allocator);
+        var walk = try BodyClone.ReachableStmts.initWithAllocator(&store, store.getProcSpecImmediate(proc).body.?, testing.allocator);
+        defer walk.deinit();
+        while (try walk.next()) |stmt| {
+            const cf = store.getCFStmt(stmt);
+            if (cf == .switch_stmt) switches += 1;
+            if (cf == .ret) try rets.append(testing.allocator, cf.ret.value);
+        }
+        if (list_len != null) {
+            try testing.expectEqual(@as(usize, 0), switches);
+            try testing.expectEqualSlices(LocalId, &.{one}, rets.items);
+        } else {
+            try testing.expectEqual(@as(usize, 1), switches);
+            try testing.expectEqual(@as(usize, 2), rets.items.len);
+        }
+    }
+}
+
 /// One symbolic value. A node is either a root (its own `root`, carrying
 /// inclusive unsigned bounds in `lo`/`hi`) or a bounded affine offset from a
 /// root: control reaching the defining statement guarantees
@@ -4568,7 +4751,7 @@ const Pass = struct {
                     },
                     .assign_literal => |s| {
                         try self.visited.put(current, {});
-                        try self.modelLiteral(s.target, s.value);
+                        try self.modelLiteral(s.target, s.value, s.list_len);
                         current = s.next;
                     },
                     .assign_tag => |s| {
@@ -4845,7 +5028,37 @@ const Pass = struct {
 
     // Statement value modeling and check rewrites
 
-    fn modelLiteral(self: *Pass, target: LocalId, value: LIR.LiteralValue) ResourceError!void {
+    fn modelLiteral(self: *Pass, target: LocalId, value: LIR.LiteralValue, list_len: ?u64) ResourceError!void {
+        // A list literal's item count is known where it is read: a bytes
+        // literal carries it, and lowering states it for a static list of
+        // copies. The value is a fresh list whose length term equals that
+        // count, stated as the two orderings a guard on the length would
+        // assert, so loop meets carry it as a length bound like any other.
+        const known_len: ?u64 = switch (value) {
+            .bytes_literal => |lit| lit.len,
+            .static_data => list_len,
+            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => null,
+        };
+        if (known_len) |len| {
+            if (try self.unknownFor(self.localLayout(target))) |list_node| {
+                if (try self.freshRoot(0, std.math.maxInt(i64))) |len_node| {
+                    if (try self.constNode(len)) |count| {
+                        try self.addFact(.{ .a = count, .b = len_node, .c = 0, .origin = .meet });
+                        try self.addFact(.{ .a = len_node, .b = count, .c = 0, .origin = .meet });
+                        try self.len_terms.put(list_node, len_node);
+                        if (self.isSingleAssign(target)) {
+                            try self.len_roots.put(len_node, self.stableLocalOf(target));
+                        } else {
+                            try self.path_len_roots.put(len_node, target);
+                        }
+                        try self.bind(target, .{ .node = list_node });
+                        return;
+                    }
+                }
+            }
+            try self.bindFresh(target);
+            return;
+        }
         const literal: ?i128 = switch (value) {
             inline .i64_literal, .i128_literal => |lit| if (lit.value >= 0) lit.value else null,
             .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => null,
@@ -4854,9 +5067,12 @@ const Pass = struct {
             // A non-negative literal is the same number whatever its type,
             // so a signed literal binds too: as a mask it bounds a masked
             // signed value, which the wrap rules can then carry into the
-            // unsigned world.
+            // unsigned world. A Bool is a payload-free two-variant union
+            // whose discriminant is its byte, so a Bool literal is the
+            // discriminant a constant tag would carry, and the switch on a
+            // join parameter it feeds folds the same way.
             const layout_idx = self.localLayout(target);
-            if (trackedIntMax(layout_idx) != null or isSignedInt(layout_idx)) {
+            if (trackedIntMax(layout_idx) != null or isSignedInt(layout_idx) or (layout_idx == .bool and v <= 1)) {
                 if (try self.constNode(v)) |node| {
                     try self.bind(target, .{ .node = node });
                     return;
@@ -5249,6 +5465,7 @@ const Pass = struct {
             .list_append_range_within_unsafe,
             .list_append_sublist,
             .list_append_le_bytes,
+            .list_append_le_bytes_unsafe,
             .list_slack_unique,
             .list_owned_unique,
             .list_drop_at,

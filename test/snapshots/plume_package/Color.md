@@ -777,7 +777,7 @@ hex = |str| {
 					and e.is_char_in_hex_range()
 					and f.is_char_in_hex_range()
 
-			if is_valid Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
+			if (is_valid) Ok(Color.Hex(str)) else Err(InvalidHex("Expected Hex to be in the range 0-9, a-f, A-F, got ${str}"))
 		}
 		_ => Err(InvalidHex("Expected Hex must start with # and be 7 characters long, got ${str}"))
 	}
@@ -797,7 +797,7 @@ expect hex("#ff00ff").map_ok(to_str) == Ok("#ff00ff")
 
 named : Str -> Try(Color, [UnknownColor(Str)])
 named = |str|
-	if str.is_named_color()
+	if (str.is_named_color())
 		Ok(Color.Named(str))
 	else
 		Err(UnknownColor("Unknown color ${str}"))

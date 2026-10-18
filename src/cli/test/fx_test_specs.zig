@@ -56,12 +56,30 @@ pub const branch_entry_release_test = TestSpec{
     .description = "Regression test: a value a branch never reads is released at the branch entry",
 };
 
+/// A loop whose only operation on its list is `append_le_bytes_to`: the
+/// promoter guards each append with a word of slack and runs it unchecked,
+/// so the bytes must match a byte-at-a-time construction across growth.
+pub const le_bytes_append_loop_test = TestSpec{
+    .roc_file = "test/fx/le_bytes_append_loop.roc",
+    .io_spec = "1>count 1: len 300 same|1>count 2: len 600 same|1>count 3: len 900 same|1>count 4: len 1200 same|1>count 5: len 1500 same|1>count 6: len 1800 same|1>count 7: len 2100 same|1>count 8: len 2400 same",
+    .description = "A promoted byte-append loop matches a byte-at-a-time construction",
+};
+
 /// Repro for https://github.com/roc-lang/roc/issues/12196: a list literal and
 /// `List.with_capacity` built on cold paths in different functions.
 pub const issue_12196_cold_list_builds_test = TestSpec{
     .roc_file = "test/fx/issue_12196_cold_list_builds.roc",
     .io_spec = "0<abcde|1>2 0",
     .description = "Regression test: cold-path list literal and List.with_capacity share a builtin",
+};
+
+/// Repro for https://github.com/roc-lang/roc/issues/12328: a field taken out of
+/// a dying record and passed to a function's owned variant, which takes a
+/// field out of its argument in turn, is released exactly once.
+pub const take_binding_alias_owned_variant_test = TestSpec{
+    .roc_file = "test/fx/take_binding_alias_owned_variant.roc",
+    .io_spec = "0<abcdef|1>once: 197|1>looped: 603",
+    .description = "Regression test: a taken field passed to an owned variant is released exactly once",
 };
 
 /// The slow arms of the LLVM backend's inline list fast paths: a byte append

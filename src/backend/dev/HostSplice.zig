@@ -118,7 +118,11 @@ pub const HostSplice = struct {
         var external = std.ArrayList(lir.LIR.LirProcSpecId).empty;
         defer external.deinit(self.allocator);
         for (demand) |proc_id| {
-            if (codegen.store.getProcSpecImmediate(proc_id).external) try external.append(self.allocator, proc_id);
+            const proc = codegen.store.getProcSpecImmediate(proc_id);
+            if (!proc.external) continue;
+            // In-process code splices; it never links object-cache objects.
+            if (builtin.mode == .debug and proc.c_abi_entry) @import("base").invariant("{s}", .{"in-process code reached a linked object-cache entry"});
+            try external.append(self.allocator, proc_id);
         }
         if (external.items.len == 0) return;
         var carried = std.ArrayList(ProcArtifact.DataItem).empty;

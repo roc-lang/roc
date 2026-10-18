@@ -7,6 +7,7 @@ const std = @import("std");
 const Registers = @import("Registers.zig");
 const GeneralReg = Registers.GeneralReg;
 const FloatReg = Registers.FloatReg;
+const abi = @import("layout").abi;
 
 /// Windows x64 calling convention
 pub const WindowsFastcall = @This();
@@ -44,6 +45,11 @@ pub const FLOAT_PARAM_REGS = [_]FloatReg{
 pub const FLOAT_RETURN_REGS = [_]FloatReg{
     .XMM0,
 };
+
+comptime {
+    std.debug.assert(GENERAL_PARAM_REGS.len == abi.win64_argument_registers);
+    std.debug.assert(FLOAT_PARAM_REGS.len == abi.win64_argument_registers);
+}
 
 /// Caller-saved (volatile) general registers
 pub const CALLER_SAVED_GENERAL = [_]GeneralReg{

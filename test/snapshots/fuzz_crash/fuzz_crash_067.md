@@ -29,7 +29,18 @@ TYPE MISMATCH - fuzz_crash_067.md:2:11:2:12
 			(annotation-start code-block)
 			(indent 1)
 			(text "Str")
-			(annotation-end))))
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Write the number in quotes to make it a")
+			(reflow " ")
+			(annotated code "Str")
+			(reflow ", or convert it with")
+			(reflow " ")
+			(annotated code ".to_str()")
+			(reflow "."))))
 ~~~
 # TOKENS
 ~~~zig
