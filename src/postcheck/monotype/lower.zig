@@ -40034,7 +40034,7 @@ const BodyContext = struct {
         ret_ty: Type.TypeId,
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftExprId {
-        // A nominal opaque with a scalar backing and no custom parser (e.g. `Username := Str`)
+        // A derived parser for a nominal with a scalar backing (`Username := Str.{ parser_for : _ }`)
         // parses its backing scalar, then rewraps the value in the nominal.
         if (self.nominalExprBackingType(shape_ty)) |backing_ty| {
             if (self.scalarCodecMethodName(backing_ty, "parse_") != null) {
@@ -55703,7 +55703,7 @@ const BodyContext = struct {
         if (self.scalarCodecMethodName(shape_ty, "encode_")) |method_name| {
             return encodeExpr(try self.lowerEncodeFormatMethod(method_name, &.{ value.value_expr, value.state_expr }, &.{ shape_ty, value.state_ty }, shape_ty, value.ret_ty));
         }
-        // A nominal opaque with a scalar backing and no custom encoder (e.g. `Username := Str`)
+        // A derived encoder for a nominal with a scalar backing (`Username := Str.{ encoder_for : _ }`)
         // encodes as its backing: unwrap one nominal layer and encode the scalar.
         if (self.nominalExprBackingType(shape_ty)) |backing_ty| {
             if (self.scalarCodecMethodName(backing_ty, "encode_") != null) {
@@ -59480,8 +59480,8 @@ const BodyContext = struct {
             );
         }
 
-        // A nominal opaque with a scalar backing (e.g. `Username := Str`) prepares the codec for
-        // its backing scalar; the encoder/parser reaches it after unwrapping the nominal.
+        // A derived codec for a nominal with a scalar backing (`Username := Str.{ encoder_for : _ }`)
+        // prepares the codec for its backing scalar; the encoder/parser reaches it after unwrapping the nominal.
         switch ((try self.graph.content(shape_node))) {
             .named => |named| if (named.backing) |backing| {
                 const backing_is_scalar = if (kind == .parser)
