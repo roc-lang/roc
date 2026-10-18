@@ -33,13 +33,20 @@ pub const cleanup = if (!threading_mod.is_freestanding) @import("cache_cleanup.z
         temp_dirs_deleted: u32 = 0,
         temp_files_deleted: u32 = 0,
         cache_files_deleted: u32 = 0,
+        stale_namespaces_deleted: u32 = 0,
+        evicted_files_deleted: u32 = 0,
         empty_dirs_deleted: u32 = 0,
         errors: u32 = 0,
     };
 
     pub const CleanupThread = struct {};
 
-    pub fn startBackgroundCleanup(_: []const u8, _: std.Io) Allocator.Error!?CleanupThread {
+    pub const Limits = struct {
+        object_pack_format_version: u32,
+        max_size_bytes: u64,
+    };
+
+    pub fn startBackgroundCleanup(_: []const u8, _: std.Io, _: Limits) Allocator.Error!?CleanupThread {
         return null;
     }
 
@@ -269,6 +276,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_11560_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11305_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11698_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11886_test.zig"));
     std.testing.refAllDecls(@import("test/representation_capacity_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11732_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12230_test.zig"));

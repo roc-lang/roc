@@ -234,6 +234,18 @@ const EdgeKind = enum {
     range_append,
     /// A matched element overwrite: `target = list_set(source, index, elem)`.
     set_op,
+    /// `target = list_append_le_bytes(source, value, count)`: an append of
+    /// up to one word, which takes a slack-guarded diamond with a spare of
+    /// one word and runs its unchecked variant on the hot path.
+    le_bytes_append,
+    /// A reserve whose spare is a literal of at least one:
+    /// `target = list_reserve_for_append(source, spare)` or the exact
+    /// `list_reserve`. It is the growth step of an unchecked append written
+    /// out in place, and takes the same slack-guarded diamond.
+    reserve_op,
+    /// `target = list_append_unsafe(source, elem)`: the length it bumps is
+    /// the fill cursor, so the limit and the owned flag pass through.
+    unsafe_append,
     /// `set param := source` with initialize-join-param mode.
     param_write,
 };
@@ -713,6 +725,10 @@ const Pass = struct {
         tracked_uses: collections.DenseMap(LocalId, u32),
         /// Owning join statement of every join parameter.
         param_join: collections.DenseMap(LocalId, CFStmtId),
+        /// Non-negative integer literals and the scalar aliases that carry
+        /// them, so a reserve's spare can be read at its site.
+        literals: collections.DenseMap(LocalId, u64),
+        scalar_aliases: collections.DenseMap(LocalId, LocalId),
         joins: std.ArrayList(JoinInfo) = .empty,
         max_join_id: u32 = 0,
         /// Exact structural work for regression tests, independent of wall time.
@@ -737,6 +753,8 @@ const Pass = struct {
             self.total_uses.clearRetainingCapacity();
             self.tracked_uses.clearRetainingCapacity();
             self.param_join.clearRetainingCapacity();
+            self.literals.clearRetainingCapacity();
+            self.scalar_aliases.clearRetainingCapacity();
             self.joins.clearRetainingCapacity();
             self.max_join_id = 0;
             self.statement_visits = 0;
@@ -745,11 +763,29 @@ const Pass = struct {
             self.assigned_targets.clearRetainingCapacity();
         }
 
+        /// The literal a scalar operand carries, read through aliases. Only
+        /// locals with exactly one plain definition count: a join parameter
+        /// or a local a set-local writes may hold other values on other
+        /// paths.
+        fn literalOf(self: *const Scan, local: LocalId) ?u64 {
+            var cursor = local;
+            var hops: u32 = 0;
+            while (hops < 16) : (hops += 1) {
+                if ((self.assigned_targets.get(cursor) orelse 0) != 1) return null;
+                if (self.param_join.contains(cursor) or self.dirty_targets.contains(cursor)) return null;
+                if (self.literals.get(cursor)) |value| return value;
+                cursor = self.scalar_aliases.get(cursor) orelse return null;
+            }
+            return null;
+        }
+
         fn deinit(self: *Scan, allocator: Allocator) void {
             self.edges.deinit(allocator);
             self.total_uses.deinit();
             self.tracked_uses.deinit();
             self.param_join.deinit();
+            self.literals.deinit();
+            self.scalar_aliases.deinit();
             self.joins.deinit(allocator);
             self.dirty_targets.deinit();
             self.assigned_targets.deinit();
@@ -803,6 +839,7 @@ const Pass = struct {
                                 try scan.edges.append(allocator, .{ .kind = .alias, .stmt = current, .source = src, .target = assign.target });
                                 try noteUse(scan, src, true);
                             } else {
+                                if (!self.isListLocal(src) and !self.isListLocal(assign.target)) try scan.scalar_aliases.put(assign.target, src);
                                 try noteUse(scan, src, false);
                             }
                         },
@@ -855,6 +892,12 @@ const Pass = struct {
                             .range_append
                         else if (assign.op == .list_set)
                             .set_op
+                        else if (assign.op == .list_append_le_bytes)
+                            .le_bytes_append
+                        else if (assign.op == .list_reserve_for_append or assign.op == .list_reserve)
+                            .reserve_op
+                        else if (assign.op == .list_append_unsafe)
+                            .unsafe_append
                         else
                             .refresh_op;
                         try scan.edges.append(allocator, .{
@@ -925,8 +968,17 @@ const Pass = struct {
                         if (active) |index| scan.joins.items[index].has_back_edge = true;
                     }
                 },
+                .assign_literal => |assign| {
+                    try bumpUse(&scan.assigned_targets, assign.target);
+                    const literal: ?u64 = switch (assign.value) {
+                        .i64_literal => |lit| if (lit.value >= 0) @intCast(lit.value) else null,
+                        .i128_literal => |lit| if (lit.value >= 0 and lit.value <= std.math.maxInt(u64)) @intCast(lit.value) else null,
+                        .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => null,
+                    };
+                    if (literal) |value| try scan.literals.put(assign.target, value);
+                    try stack.append(allocator, assign.next);
+                },
                 .init_uninitialized,
-                .assign_literal,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
                 .assign_boxy_desc_ref,
@@ -1127,6 +1179,8 @@ const Pass = struct {
             .total_uses = collections.DenseMap(LocalId, u32).init(allocator),
             .tracked_uses = collections.DenseMap(LocalId, u32).init(allocator),
             .param_join = collections.DenseMap(LocalId, CFStmtId).init(allocator),
+            .literals = collections.DenseMap(LocalId, u64).init(allocator),
+            .scalar_aliases = collections.DenseMap(LocalId, LocalId).init(allocator),
             .dirty_targets = collections.DenseMap(LocalId, void).init(allocator),
             .assigned_targets = collections.DenseMap(LocalId, u32).init(allocator),
         };
@@ -1198,6 +1252,14 @@ const Pass = struct {
         defer chain_params.deinit();
         try chain_params.put(list_param, loop_stmt);
 
+        // A reserve is a growth step only when its spare is a known positive
+        // literal; any other spare keeps the checked call and re-measures.
+        for (scan.edges.items) |*edge| {
+            if (edge.kind != .reserve_op) continue;
+            const args = self.store.getLocalSpan(self.store.getCFStmtImmediate(edge.stmt).assign_low_level.args);
+            if ((scan.literalOf(GuardedList.at(args, 1)) orelse 0) == 0) edge.kind = .refresh_op;
+        }
+
         for (scan.edges.items) |*edge| {
             edge.flow = if (!carriers.contains(edge.target)) .outside else if (carriers.contains(edge.source) and edge.preserves_metadata) .carried else .entry;
             if (edge.flow != .outside and edge.kind == .param_write) {
@@ -1206,12 +1268,12 @@ const Pass = struct {
             }
             if (edge.flow != .carried) continue;
             switch (edge.kind) {
-                .append_call, .range_append => rewrite_site_count += 1,
+                .append_call, .range_append, .le_bytes_append, .reserve_op => rewrite_site_count += 1,
                 .set_op => {
                     rewrite_site_count += 1;
                     has_sets = true;
                 },
-                .param_write, .alias, .refresh_op => {},
+                .param_write, .alias, .refresh_op, .unsafe_append => {},
             }
         }
         if (rewrite_site_count == 0) return false;
@@ -1436,7 +1498,7 @@ const Pass = struct {
                     const next = switch (edge.kind) {
                         .alias => stmt.assign_ref.next,
                         .append_call => stmt.assign_call.next,
-                        .refresh_op, .range_append, .set_op => stmt.assign_low_level.next,
+                        .refresh_op, .range_append, .set_op, .le_bytes_append, .reserve_op, .unsafe_append => stmt.assign_low_level.next,
                         .param_write => unreachable,
                     };
                     const seed = try self.seedMetadata(edge.target, limit, owned, next, new_locals, origin);
@@ -1452,7 +1514,7 @@ const Pass = struct {
                             .next = seed,
                         } }, origin),
                         .append_call => self.store.getCFStmtPtr(edge.stmt).assign_call.next = seed,
-                        .refresh_op, .range_append, .set_op => self.store.getCFStmtPtr(edge.stmt).assign_low_level.next = seed,
+                        .refresh_op, .range_append, .set_op, .le_bytes_append, .reserve_op, .unsafe_append => self.store.getCFStmtPtr(edge.stmt).assign_low_level.next = seed,
                         .param_write => unreachable,
                     }
                     try slack_of.put(edge.target, limit);
@@ -1502,6 +1564,16 @@ const Pass = struct {
                         if (owned_out) |flag| try owned_of.put(edge.target, flag);
                         resolving = true;
                     },
+                    .le_bytes_append => {
+                        const slack_in = slack_of.get(edge.source) orelse continue;
+                        try rewritten.put(edge.stmt, {});
+                        const slack_out = shared_slack.get(edge.target) orelse try self.freshLocal(.u64, new_locals);
+                        const owned_out = try self.ownedOutFor(edge.target, has_sets, &shared_owned, new_locals);
+                        try self.rewriteLeBytesAppendSite(edge, slack_in, slack_out, owned_out, max_join_id, new_locals);
+                        try slack_of.put(edge.target, slack_out);
+                        if (owned_out) |flag| try owned_of.put(edge.target, flag);
+                        resolving = true;
+                    },
                     .range_append => {
                         const slack_in = slack_of.get(edge.source) orelse continue;
                         try rewritten.put(edge.stmt, {});
@@ -1510,6 +1582,46 @@ const Pass = struct {
                         try self.rewriteRangeAppendSite(edge, slack_in, slack_out, owned_out, max_join_id, new_locals);
                         try slack_of.put(edge.target, slack_out);
                         if (owned_out) |flag| try owned_of.put(edge.target, flag);
+                        resolving = true;
+                    },
+                    .reserve_op => {
+                        const slack_in = slack_of.get(edge.source) orelse continue;
+                        try rewritten.put(edge.stmt, {});
+                        const slack_out = shared_slack.get(edge.target) orelse try self.freshLocal(.u64, new_locals);
+                        const owned_out = try self.ownedOutFor(edge.target, has_sets, &shared_owned, new_locals);
+                        try self.rewriteReserveSite(edge, slack_in, slack_out, owned_out, max_join_id, new_locals);
+                        try slack_of.put(edge.target, slack_out);
+                        if (owned_out) |flag| try owned_of.put(edge.target, flag);
+                        resolving = true;
+                    },
+                    .unsafe_append => {
+                        const source_slack = slack_of.get(edge.source) orelse continue;
+                        const source_owned = if (has_sets) owned_of.get(edge.source) orelse continue else undefined;
+                        try rewritten.put(edge.stmt, {});
+                        if (shared_slack.get(edge.target)) |sx| {
+                            // Materialize this definition's contribution to
+                            // the shared slack right after the append.
+                            const assign = self.store.getCFStmtImmediate(edge.stmt).assign_low_level;
+                            var next = assign.next;
+                            if (has_sets) {
+                                const flag = shared_owned.get(edge.target).?;
+                                try self.noteOwnedDef(flag, .{ .local = source_owned });
+                                next = try self.store.addCFStmt(.{ .assign_ref = .{
+                                    .target = flag,
+                                    .op = .{ .local = source_owned },
+                                    .next = next,
+                                } }, origin);
+                            }
+                            const copy = try self.store.addCFStmt(.{ .assign_ref = .{
+                                .target = sx,
+                                .op = .{ .local = source_slack },
+                                .next = next,
+                            } }, origin);
+                            self.store.getCFStmtPtr(edge.stmt).assign_low_level.next = copy;
+                        } else {
+                            try slack_of.put(edge.target, source_slack);
+                            if (has_sets) try owned_of.put(edge.target, source_owned);
+                        }
                         resolving = true;
                     },
                     .set_op => {
@@ -1837,6 +1949,246 @@ const Pass = struct {
         });
     }
 
+    /// Rewrite `target = list_append_le_bytes(list, value, count); next`
+    /// into a slack-guarded diamond. The unchecked variant stores a whole
+    /// word at the length and bumps it by `count`, so the hot path runs it
+    /// while a word still fits under the limit, which is exactly when the
+    /// checked append takes its own in-place path; the cold path keeps the
+    /// checked call (which uniquifies and grows) and measures the slack
+    /// fresh. The limit names the capacity rather than the spare, so it
+    /// passes through the hot path unchanged, and a word under the limit
+    /// means the list was uniquely owned and not a slice when measured, so
+    /// the owned flag is one on both sides.
+    fn rewriteLeBytesAppendSite(
+        self: *Pass,
+        edge: Edge,
+        slack_in: LocalId,
+        slack_out: LocalId,
+        owned_out: ?LocalId,
+        max_join_id: *u32,
+        new_locals: *std.ArrayList(LocalId),
+    ) ResourceError!void {
+        const origin = promoteOrigin(self.store.stmtOrigin(edge.stmt));
+        const append = self.store.getCFStmtImmediate(edge.stmt).assign_low_level;
+        const args = self.store.getLocalSpan(append.args);
+        const list_arg = GuardedList.at(args, 0);
+        const value_arg = GuardedList.at(args, 1);
+        const count_arg = GuardedList.at(args, 2);
+        const list_layout = self.store.getLocal(list_arg).layout_idx;
+
+        const merged_list = try self.freshLocal(list_layout, new_locals);
+        const merged_slack = try self.freshLocal(.u64, new_locals);
+        const word_spare = try self.freshLocal(.u64, new_locals);
+        const cur_len = try self.freshLocal(.u64, new_locals);
+        const remaining = try self.freshLocal(.u64, new_locals);
+        const fits = try self.freshLocal(.bool, new_locals);
+        const stored = try self.freshLocal(list_layout, new_locals);
+        const grown = try self.freshLocal(list_layout, new_locals);
+        const grown_slack = try self.freshLocal(.u64, new_locals);
+
+        const join_id: LIR.JoinPointId = @fromBackingInt(@intCast(max_join_id.*));
+        max_join_id.* += 1;
+
+        // Join body: the append's result is whichever list arrived, with the
+        // limit that vouches for it.
+        const forward_limit = try self.store.addCFStmt(.{ .assign_ref = .{
+            .target = slack_out,
+            .op = .{ .local = merged_slack },
+            .next = append.next,
+        } }, origin);
+        const forward_list = try self.store.addCFStmt(.{ .assign_ref = .{
+            .target = append.target,
+            .op = .{ .local = merged_list },
+            .next = forward_limit,
+        } }, origin);
+
+        // Fast path: the unchecked store, under the limit that still holds.
+        const fast_jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } }, origin);
+        const fast_set_slack = try self.store.addCFStmt(.{ .set_local = .{
+            .target = merged_slack,
+            .value = slack_in,
+            .mode = .initialize_join_param,
+            .next = fast_jump,
+        } }, origin);
+        const fast_set_list = try self.store.addCFStmt(.{ .set_local = .{
+            .target = merged_list,
+            .value = stored,
+            .mode = .initialize_join_param,
+            .next = fast_set_slack,
+        } }, origin);
+        const fast_append = try self.store.addLowLevelStmt(stored, .list_append_le_bytes_unsafe, &.{ list_arg, value_arg, count_arg }, fast_set_list, origin);
+
+        // Grow path: the checked append uniquifies and grows, then the slack
+        // is measured fresh.
+        const grow_jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } }, origin);
+        const grow_set_slack = try self.store.addCFStmt(.{ .set_local = .{
+            .target = merged_slack,
+            .value = grown_slack,
+            .mode = .initialize_join_param,
+            .next = grow_jump,
+        } }, origin);
+        const grow_set_list = try self.store.addCFStmt(.{ .set_local = .{
+            .target = merged_list,
+            .value = grown,
+            .mode = .initialize_join_param,
+            .next = grow_set_slack,
+        } }, origin);
+        const grow_measure = try self.seedLimit(grown, grown_slack, grow_set_list, new_locals, origin);
+        const grow_append = try self.store.addLowLevelStmt(grown, append.op, &.{ list_arg, value_arg, count_arg }, grow_measure, origin);
+
+        // Dispatch: a word fits when eight is no more than the limit's
+        // distance from the length. The limit never sits below the length,
+        // so the subtraction cannot wrap.
+        const branches = try self.store.addCFSwitchBranches(&.{.{ .value = 1, .body = fast_append }});
+        const dispatch = try self.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = fits,
+            .branches = branches,
+            .default_branch = grow_append,
+            .default_is_cold = true,
+            .continuation = null,
+        } }, origin);
+        const compare = try self.store.addLowLevelStmt(fits, .num_is_lte, &.{ word_spare, remaining }, dispatch, origin);
+        const distance = try self.store.addLowLevelStmt(remaining, .num_int_sub_wrap, &.{ slack_in, cur_len }, compare, origin);
+        const measure_len = try self.store.addLowLevelStmt(cur_len, .list_len, &.{list_arg}, distance, origin);
+        const spare_literal = try self.store.addCFStmt(.{ .assign_literal = .{
+            .target = word_spare,
+            .value = .{ .i64_literal = .{ .value = 8, .layout_idx = .u64 } },
+            .next = measure_len,
+        } }, origin);
+
+        var body = forward_list;
+        if (owned_out) |flag| {
+            try self.noteOwnedDef(flag, .one);
+            body = try self.store.addCFStmt(.{ .assign_literal = .{
+                .target = flag,
+                .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+                .next = body,
+            } }, origin);
+        }
+        try self.store.replaceCFStmt(edge.stmt, .{ .join = .{
+            .id = join_id,
+            .params = try self.store.addLocalSpan(&.{ merged_list, merged_slack }),
+            .body = body,
+            .remainder = spare_literal,
+        } }, origin);
+    }
+
+    /// Rewrite `target = list_reserve_for_append(list, spare); next` (or the
+    /// exact `list_reserve`), `spare` a literal of at least one, into a
+    /// slack-guarded diamond. The hot path hands the list on untouched while
+    /// the spare still fits under the limit, which is exactly when the
+    /// checked reserve would leave it alone; the cold path keeps the checked
+    /// call (which uniquifies and grows) and measures the slack fresh. An
+    /// unchecked append that follows runs on a list the limit vouches for,
+    /// as after a checked append's own growth step. A positive spare under
+    /// the limit means the measured spare was positive, so the list was
+    /// uniquely owned and not a slice when measured, and the owned flag is
+    /// one on both sides.
+    fn rewriteReserveSite(
+        self: *Pass,
+        edge: Edge,
+        slack_in: LocalId,
+        slack_out: LocalId,
+        owned_out: ?LocalId,
+        max_join_id: *u32,
+        new_locals: *std.ArrayList(LocalId),
+    ) ResourceError!void {
+        const origin = promoteOrigin(self.store.stmtOrigin(edge.stmt));
+        const reserve = self.store.getCFStmtImmediate(edge.stmt).assign_low_level;
+        const args = self.store.getLocalSpan(reserve.args);
+        const list_arg = GuardedList.at(args, 0);
+        const spare_arg = GuardedList.at(args, 1);
+        const list_layout = self.store.getLocal(list_arg).layout_idx;
+
+        const merged_list = try self.freshLocal(list_layout, new_locals);
+        const merged_slack = try self.freshLocal(.u64, new_locals);
+        const cur_len = try self.freshLocal(.u64, new_locals);
+        const remaining = try self.freshLocal(.u64, new_locals);
+        const fits = try self.freshLocal(.bool, new_locals);
+        const grown = try self.freshLocal(list_layout, new_locals);
+        const grown_slack = try self.freshLocal(.u64, new_locals);
+
+        const join_id: LIR.JoinPointId = @fromBackingInt(@intCast(max_join_id.*));
+        max_join_id.* += 1;
+
+        // Join body: the reserve's result is whichever list arrived, with
+        // the limit that vouches for it.
+        const forward_limit = try self.store.addCFStmt(.{ .assign_ref = .{
+            .target = slack_out,
+            .op = .{ .local = merged_slack },
+            .next = reserve.next,
+        } }, origin);
+        const forward_list = try self.store.addCFStmt(.{ .assign_ref = .{
+            .target = reserve.target,
+            .op = .{ .local = merged_list },
+            .next = forward_limit,
+        } }, origin);
+
+        // Fast path: the list and its limit pass straight through.
+        const fast_jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } }, origin);
+        const fast_set_slack = try self.store.addCFStmt(.{ .set_local = .{
+            .target = merged_slack,
+            .value = slack_in,
+            .mode = .initialize_join_param,
+            .next = fast_jump,
+        } }, origin);
+        const fast_set_list = try self.store.addCFStmt(.{ .set_local = .{
+            .target = merged_list,
+            .value = list_arg,
+            .mode = .initialize_join_param,
+            .next = fast_set_slack,
+        } }, origin);
+
+        // Grow path: the checked reserve uniquifies and grows, then the slack
+        // is measured fresh.
+        const grow_jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } }, origin);
+        const grow_set_slack = try self.store.addCFStmt(.{ .set_local = .{
+            .target = merged_slack,
+            .value = grown_slack,
+            .mode = .initialize_join_param,
+            .next = grow_jump,
+        } }, origin);
+        const grow_set_list = try self.store.addCFStmt(.{ .set_local = .{
+            .target = merged_list,
+            .value = grown,
+            .mode = .initialize_join_param,
+            .next = grow_set_slack,
+        } }, origin);
+        const grow_measure = try self.seedLimit(grown, grown_slack, grow_set_list, new_locals, origin);
+        const grow_reserve = try self.store.addLowLevelStmt(grown, reserve.op, &.{ list_arg, spare_arg }, grow_measure, origin);
+
+        // Dispatch: the spare fits when it is no more than the limit's
+        // distance from the length. The limit never sits below the length,
+        // so the subtraction cannot wrap.
+        const branches = try self.store.addCFSwitchBranches(&.{.{ .value = 1, .body = fast_set_list }});
+        const dispatch = try self.store.addCFStmt(.{ .switch_stmt = .{
+            .cond = fits,
+            .branches = branches,
+            .default_branch = grow_reserve,
+            .default_is_cold = true,
+            .continuation = null,
+        } }, origin);
+        const compare = try self.store.addLowLevelStmt(fits, .num_is_lte, &.{ spare_arg, remaining }, dispatch, origin);
+        const distance = try self.store.addLowLevelStmt(remaining, .num_int_sub_wrap, &.{ slack_in, cur_len }, compare, origin);
+        const measure_len = try self.store.addLowLevelStmt(cur_len, .list_len, &.{list_arg}, distance, origin);
+
+        var body = forward_list;
+        if (owned_out) |flag| {
+            try self.noteOwnedDef(flag, .one);
+            body = try self.store.addCFStmt(.{ .assign_literal = .{
+                .target = flag,
+                .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+                .next = body,
+            } }, origin);
+        }
+        try self.store.replaceCFStmt(edge.stmt, .{ .join = .{
+            .id = join_id,
+            .params = try self.store.addLocalSpan(&.{ merged_list, merged_slack }),
+            .body = body,
+            .remainder = measure_len,
+        } }, origin);
+    }
+
     /// Rewrite `target = list_append_range_within(list, start, count); next`
     /// into a slack-guarded diamond. The hot path runs the unchecked variant
     /// and pays a subtraction; the cold path keeps the checked call (which
@@ -2118,7 +2470,7 @@ const Pass = struct {
                     } else {
                         loop.unbounded = true;
                     },
-                    .range_append, .set_op, .refresh_op => loop.unbounded = true,
+                    .range_append, .set_op, .refresh_op, .le_bytes_append, .reserve_op, .unsafe_append => loop.unbounded = true,
                     .alias, .param_write => if (edge.flow == .entry) {
                         loop.unbounded = true;
                     },
@@ -3162,6 +3514,8 @@ fn expectLoopScan(f: *PromoteTest, body: CFStmtId, statements: usize, jumps: usi
         .total_uses = collections.DenseMap(LocalId, u32).init(testing.allocator),
         .tracked_uses = collections.DenseMap(LocalId, u32).init(testing.allocator),
         .param_join = collections.DenseMap(LocalId, CFStmtId).init(testing.allocator),
+        .literals = collections.DenseMap(LocalId, u64).init(testing.allocator),
+        .scalar_aliases = collections.DenseMap(LocalId, LocalId).init(testing.allocator),
         .dirty_targets = collections.DenseMap(LocalId, void).init(testing.allocator),
         .assigned_targets = collections.DenseMap(LocalId, u32).init(testing.allocator),
     };
@@ -3564,6 +3918,8 @@ fn testMetadataTransfer(f: *PromoteTest, proc: LIR.LirProcSpecId, site_entry: CF
         .total_uses = collections.DenseMap(LocalId, u32).init(allocator),
         .tracked_uses = collections.DenseMap(LocalId, u32).init(allocator),
         .param_join = collections.DenseMap(LocalId, CFStmtId).init(allocator),
+        .literals = collections.DenseMap(LocalId, u64).init(allocator),
+        .scalar_aliases = collections.DenseMap(LocalId, LocalId).init(allocator),
         .dirty_targets = collections.DenseMap(LocalId, void).init(allocator),
         .assigned_targets = collections.DenseMap(LocalId, u32).init(allocator),
     };
@@ -3892,6 +4248,326 @@ test "promote threads slack through an append-only loop" {
         }
     }
     try testing.expect(found_switch);
+}
+
+test "promote guards a byte append with a word of slack and runs it unchecked" {
+    var f = try PromoteTest.init(testing.allocator);
+    defer f.deinit();
+    const store = &f.store;
+
+    // loop J(out):
+    //   body: a = ref out; v = 0x0102; n = 2; r = list_append_le_bytes(a, v, n)
+    //         c = ref r; set out := c; jump J
+    //   remainder: set out := init; jump J
+    const out = try store.addLocal(.{ .layout_idx = f.list });
+    const init_list = try store.addLocal(.{ .layout_idx = f.list });
+    const value = try store.addLocal(.{ .layout_idx = .u64 });
+    const count = try store.addLocal(.{ .layout_idx = .u64 });
+    const a = try store.addLocal(.{ .layout_idx = f.list });
+    const r = try store.addLocal(.{ .layout_idx = f.list });
+    const c = try store.addLocal(.{ .layout_idx = f.list });
+    const join_id = f.freshJoinPointId();
+
+    const back_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const back_set = try store.addCFStmt(.{ .set_local = .{
+        .target = out,
+        .value = c,
+        .mode = .initialize_join_param,
+        .next = back_jump,
+    } }, .test_fixture);
+    const alias_c = try store.addCFStmt(.{ .assign_ref = .{
+        .target = c,
+        .op = .{ .local = r },
+        .next = back_set,
+    } }, .test_fixture);
+    const append = try store.addLowLevelStmt(r, .list_append_le_bytes, &.{ a, value, count }, alias_c, .test_fixture);
+    const lit_count = try store.addCFStmt(.{ .assign_literal = .{
+        .target = count,
+        .value = .{ .i64_literal = .{ .value = 2, .layout_idx = .u64 } },
+        .next = append,
+    } }, .test_fixture);
+    const lit_value = try store.addCFStmt(.{ .assign_literal = .{
+        .target = value,
+        .value = .{ .i64_literal = .{ .value = 0x0102, .layout_idx = .u64 } },
+        .next = lit_count,
+    } }, .test_fixture);
+    const alias_a = try store.addCFStmt(.{ .assign_ref = .{
+        .target = a,
+        .op = .{ .local = out },
+        .next = lit_value,
+    } }, .test_fixture);
+
+    const entry_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const entry_set = try store.addCFStmt(.{ .set_local = .{
+        .target = out,
+        .value = init_list,
+        .mode = .initialize_join_param,
+        .next = entry_jump,
+    } }, .test_fixture);
+    const loop = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try store.addLocalSpan(&.{out}),
+        .body = alias_a,
+        .remainder = entry_set,
+    } }, .test_fixture);
+    const proc_id = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(8),
+        .args = LIR.LocalSpan.empty(),
+        .body = loop,
+        .ret_layout = f.list,
+    }, .none);
+
+    {
+        var scratch = collections.SingleThreadArena.init(testing.allocator);
+        defer scratch.deinit();
+        try runProc(store, &f.layouts, proc_id, scratch.allocator());
+    }
+
+    // The loop gained a slack parameter, seeded at the entry edge.
+    const new_loop = store.getCFStmtImmediate(loop).join;
+    const params = store.getLocalSpan(new_loop.params);
+    try testing.expectEqual(@as(usize, 2), params.len);
+    try testing.expectEqual(out, GuardedList.at(params, 0));
+    const slack_param = GuardedList.at(params, 1);
+    const entry_prepare = store.getCFStmtImmediate(entry_set).assign_low_level;
+    try testing.expectEqual(LowLevelOp.list_map_prepare_reuse, entry_prepare.op);
+    try testing.expectEqual(LowLevelOp.list_slack_unique, store.getCFStmtImmediate(entry_prepare.next).assign_low_level.op);
+
+    // The append became a diamond whose join body hands the arriving list
+    // to the append's own result local and passes the limit on.
+    const site = store.getCFStmtImmediate(append).join;
+    const site_params = store.getLocalSpan(site.params);
+    try testing.expectEqual(@as(usize, 2), site_params.len);
+    const forward_list = store.getCFStmtImmediate(site.body).assign_ref;
+    try testing.expectEqual(r, forward_list.target);
+    try testing.expectEqual(GuardedList.at(site_params, 0), forward_list.op.local);
+    const forward_limit = store.getCFStmtImmediate(forward_list.next).assign_ref;
+    try testing.expectEqual(GuardedList.at(site_params, 1), forward_limit.op.local);
+    try testing.expectEqual(alias_c, forward_limit.next);
+
+    // The dispatch asks for a whole word under the limit: literal eight,
+    // the length, the limit's distance from it, and the comparison.
+    const spare = store.getCFStmtImmediate(site.remainder).assign_literal;
+    try testing.expectEqual(@as(i128, 8), spare.value.i64_literal.value);
+    const measure_len = store.getCFStmtImmediate(spare.next).assign_low_level;
+    try testing.expectEqual(LowLevelOp.list_len, measure_len.op);
+    try testing.expectEqual(a, GuardedList.at(store.getLocalSpan(measure_len.args), 0));
+    const distance = store.getCFStmtImmediate(measure_len.next).assign_low_level;
+    try testing.expectEqual(LowLevelOp.num_int_sub_wrap, distance.op);
+    try testing.expectEqual(slack_param, GuardedList.at(store.getLocalSpan(distance.args), 0));
+    try testing.expectEqual(measure_len.target, GuardedList.at(store.getLocalSpan(distance.args), 1));
+    const compare = store.getCFStmtImmediate(distance.next).assign_low_level;
+    try testing.expectEqual(LowLevelOp.num_is_lte, compare.op);
+    try testing.expectEqual(spare.target, GuardedList.at(store.getLocalSpan(compare.args), 0));
+    try testing.expectEqual(distance.target, GuardedList.at(store.getLocalSpan(compare.args), 1));
+    const dispatch = store.getCFStmtImmediate(compare.next).switch_stmt;
+    try testing.expect(dispatch.default_is_cold);
+    try testing.expectEqual(compare.target, dispatch.cond);
+
+    // The hot arm runs the unchecked store on the original operands and
+    // forwards the limit unchanged.
+    const branches = store.getCFSwitchBranches(dispatch.branches);
+    try testing.expectEqual(@as(usize, 1), branches.len);
+    const fast = store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_low_level;
+    try testing.expectEqual(LowLevelOp.list_append_le_bytes_unsafe, fast.op);
+    const fast_args = store.getLocalSpan(fast.args);
+    try testing.expectEqual(a, GuardedList.at(fast_args, 0));
+    try testing.expectEqual(value, GuardedList.at(fast_args, 1));
+    try testing.expectEqual(count, GuardedList.at(fast_args, 2));
+    const fast_set_list = store.getCFStmtImmediate(fast.next).set_local;
+    try testing.expectEqual(fast.target, fast_set_list.value);
+    const fast_set_slack = store.getCFStmtImmediate(fast_set_list.next).set_local;
+    try testing.expectEqual(slack_param, fast_set_slack.value);
+    try testing.expect(store.getCFStmt(fast_set_slack.next) == .jump);
+
+    // The cold arm keeps the checked append and re-measures.
+    var grow = dispatch.default_branch;
+    var saw_checked = false;
+    var saw_measure = false;
+    var grow_steps: u32 = 0;
+    while (grow_steps < 12) : (grow_steps += 1) {
+        const stmt = store.getCFStmt(grow);
+        if (stmt == .assign_low_level) {
+            if (stmt.assign_low_level.op == .list_append_le_bytes) {
+                saw_checked = true;
+                try testing.expectEqual(a, GuardedList.at(store.getLocalSpan(stmt.assign_low_level.args), 0));
+            }
+            if (stmt.assign_low_level.op == .list_slack_unique) saw_measure = true;
+            grow = stmt.assign_low_level.next;
+        } else if (stmt == .set_local) {
+            grow = stmt.set_local.next;
+        } else {
+            try testing.expect(stmt == .jump);
+            break;
+        }
+    }
+    try testing.expect(saw_checked);
+    try testing.expect(saw_measure);
+
+    // The back edge hands the forwarded limit to the loop parameter.
+    const back_limit_write = store.getCFStmtImmediate(back_set).set_local;
+    try testing.expectEqual(slack_param, back_limit_write.target);
+    try testing.expectEqual(forward_limit.target, back_limit_write.value);
+    const back_list_write = store.getCFStmtImmediate(back_limit_write.next).set_local;
+    try testing.expectEqual(out, back_list_write.target);
+    try testing.expectEqual(c, back_list_write.value);
+    try testing.expectEqual(back_jump, back_list_write.next);
+}
+
+test "promote threads slack through an inline reserve and unchecked append pair" {
+    var f = try PromoteTest.init(testing.allocator);
+    defer f.deinit();
+    const store = &f.store;
+
+    // loop J(out):
+    //   body: a = ref out; one = 1; r = list_reserve_for_append(a, one)
+    //         b = ref r; appended = list_append_unsafe(b, elem); c = ref appended
+    //         set out := c; jump J
+    //   remainder: set out := init; jump J
+    const out = try store.addLocal(.{ .layout_idx = f.list });
+    const init_list = try store.addLocal(.{ .layout_idx = f.list });
+    const elem = try store.addLocal(.{ .layout_idx = .u8 });
+    const one = try store.addLocal(.{ .layout_idx = .u64 });
+    const a = try store.addLocal(.{ .layout_idx = f.list });
+    const r = try store.addLocal(.{ .layout_idx = f.list });
+    const b = try store.addLocal(.{ .layout_idx = f.list });
+    const appended = try store.addLocal(.{ .layout_idx = f.list });
+    const c = try store.addLocal(.{ .layout_idx = f.list });
+    const join_id = f.freshJoinPointId();
+
+    const back_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const back_set = try store.addCFStmt(.{ .set_local = .{
+        .target = out,
+        .value = c,
+        .mode = .initialize_join_param,
+        .next = back_jump,
+    } }, .test_fixture);
+    const alias_c = try store.addCFStmt(.{ .assign_ref = .{
+        .target = c,
+        .op = .{ .local = appended },
+        .next = back_set,
+    } }, .test_fixture);
+    const unsafe_append = try store.addLowLevelStmt(appended, .list_append_unsafe, &.{ b, elem }, alias_c, .test_fixture);
+    const alias_b = try store.addCFStmt(.{ .assign_ref = .{
+        .target = b,
+        .op = .{ .local = r },
+        .next = unsafe_append,
+    } }, .test_fixture);
+    const reserve = try store.addLowLevelStmt(r, .list_reserve_for_append, &.{ a, one }, alias_b, .test_fixture);
+    const lit_one = try store.addCFStmt(.{ .assign_literal = .{
+        .target = one,
+        .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
+        .next = reserve,
+    } }, .test_fixture);
+    const alias_a = try store.addCFStmt(.{ .assign_ref = .{
+        .target = a,
+        .op = .{ .local = out },
+        .next = lit_one,
+    } }, .test_fixture);
+
+    const entry_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const entry_set = try store.addCFStmt(.{ .set_local = .{
+        .target = out,
+        .value = init_list,
+        .mode = .initialize_join_param,
+        .next = entry_jump,
+    } }, .test_fixture);
+    const loop = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try store.addLocalSpan(&.{out}),
+        .body = alias_a,
+        .remainder = entry_set,
+    } }, .test_fixture);
+    const proc_id = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(7),
+        .args = LIR.LocalSpan.empty(),
+        .body = loop,
+        .ret_layout = f.list,
+    }, .none);
+
+    {
+        var scratch = collections.SingleThreadArena.init(testing.allocator);
+        defer scratch.deinit();
+        try runProc(store, &f.layouts, proc_id, scratch.allocator());
+    }
+
+    // The loop gained a slack parameter, seeded at the entry edge.
+    const new_loop = store.getCFStmtImmediate(loop).join;
+    const params = store.getLocalSpan(new_loop.params);
+    try testing.expectEqual(@as(usize, 2), params.len);
+    try testing.expectEqual(out, GuardedList.at(params, 0));
+    const slack_param = GuardedList.at(params, 1);
+    const entry_prepare = store.getCFStmtImmediate(entry_set).assign_low_level;
+    try testing.expectEqual(LowLevelOp.list_map_prepare_reuse, entry_prepare.op);
+    try testing.expectEqual(LowLevelOp.list_slack_unique, store.getCFStmtImmediate(entry_prepare.next).assign_low_level.op);
+
+    // The reserve became the limit diamond: its join body hands the arriving
+    // list to the reserve's own result local and passes the limit on.
+    const site = store.getCFStmtImmediate(reserve).join;
+    const site_params = store.getLocalSpan(site.params);
+    try testing.expectEqual(@as(usize, 2), site_params.len);
+    const forward_list = store.getCFStmtImmediate(site.body).assign_ref;
+    try testing.expectEqual(r, forward_list.target);
+    try testing.expectEqual(GuardedList.at(site_params, 0), forward_list.op.local);
+    const forward_limit = store.getCFStmtImmediate(forward_list.next).assign_ref;
+    try testing.expectEqual(GuardedList.at(site_params, 1), forward_limit.op.local);
+    try testing.expectEqual(alias_b, forward_limit.next);
+
+    // The dispatch measures the length, takes the limit's distance from it,
+    // and compares the spare against that; the cold default keeps the checked
+    // reserve and re-measures.
+    const measure_len = store.getCFStmtImmediate(site.remainder).assign_low_level;
+    try testing.expectEqual(LowLevelOp.list_len, measure_len.op);
+    try testing.expectEqual(a, GuardedList.at(store.getLocalSpan(measure_len.args), 0));
+    const distance = store.getCFStmtImmediate(measure_len.next).assign_low_level;
+    try testing.expectEqual(LowLevelOp.num_int_sub_wrap, distance.op);
+    try testing.expectEqual(slack_param, GuardedList.at(store.getLocalSpan(distance.args), 0));
+    try testing.expectEqual(measure_len.target, GuardedList.at(store.getLocalSpan(distance.args), 1));
+    const compare = store.getCFStmtImmediate(distance.next).assign_low_level;
+    try testing.expectEqual(LowLevelOp.num_is_lte, compare.op);
+    try testing.expectEqual(one, GuardedList.at(store.getLocalSpan(compare.args), 0));
+    try testing.expectEqual(distance.target, GuardedList.at(store.getLocalSpan(compare.args), 1));
+    const dispatch = store.getCFStmtImmediate(compare.next).switch_stmt;
+    try testing.expect(dispatch.default_is_cold);
+    try testing.expectEqual(compare.target, dispatch.cond);
+    var grow = dispatch.default_branch;
+    var saw_reserve = false;
+    var saw_measure = false;
+    var grow_steps: u32 = 0;
+    while (grow_steps < 12) : (grow_steps += 1) {
+        const stmt = store.getCFStmt(grow);
+        if (stmt == .assign_low_level) {
+            if (stmt.assign_low_level.op == .list_reserve_for_append) {
+                saw_reserve = true;
+                try testing.expectEqual(a, GuardedList.at(store.getLocalSpan(stmt.assign_low_level.args), 0));
+                try testing.expectEqual(one, GuardedList.at(store.getLocalSpan(stmt.assign_low_level.args), 1));
+            }
+            if (stmt.assign_low_level.op == .list_slack_unique) saw_measure = true;
+            grow = stmt.assign_low_level.next;
+        } else if (stmt == .set_local) {
+            grow = stmt.set_local.next;
+        } else {
+            try testing.expect(stmt == .jump);
+            break;
+        }
+    }
+    try testing.expect(saw_reserve);
+    try testing.expect(saw_measure);
+
+    // The unchecked append is untouched and nothing re-measures after it:
+    // the back edge hands the forwarded limit to the loop parameter.
+    const kept_append = store.getCFStmtImmediate(unsafe_append).assign_low_level;
+    try testing.expectEqual(LowLevelOp.list_append_unsafe, kept_append.op);
+    try testing.expectEqual(alias_c, kept_append.next);
+    const back_limit_write = store.getCFStmtImmediate(back_set).set_local;
+    try testing.expectEqual(slack_param, back_limit_write.target);
+    try testing.expectEqual(forward_limit.target, back_limit_write.value);
+    const back_list_write = store.getCFStmtImmediate(back_limit_write.next).set_local;
+    try testing.expectEqual(out, back_list_write.target);
+    try testing.expectEqual(c, back_list_write.value);
+    try testing.expectEqual(back_jump, back_list_write.next);
 }
 
 /// A counted append loop for the slack-versioning tests:

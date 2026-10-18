@@ -14,6 +14,7 @@ const Allocator = std.mem.Allocator;
 const RocTarget = @import("roc_target").RocTarget;
 const Registers = @import("Registers.zig");
 const RegisterWidth = Registers.RegisterWidth;
+const Call = @import("Call.zig");
 
 const Relocation = @import("../Relocation.zig").Relocation;
 
@@ -38,13 +39,9 @@ pub fn Emit(comptime target: RocTarget) type {
         /// Calling convention constants derived from target (AAPCS64)
         /// Note: aarch64 uses AAPCS64 for all targets, including Windows.
         pub const CC = struct {
-            pub const PARAM_REGS = [_]Registers.GeneralReg{
-                .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7,
-            };
+            pub const PARAM_REGS = Call.GENERAL_PARAM_REGS;
 
-            pub const FLOAT_PARAM_REGS = [_]Registers.FloatReg{
-                .V0, .V1, .V2, .V3, .V4, .V5, .V6, .V7,
-            };
+            pub const FLOAT_PARAM_REGS = Call.FLOAT_PARAM_REGS;
 
             pub const RETURN_REGS = [_]Registers.GeneralReg{ .X0, .X1 };
 

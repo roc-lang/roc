@@ -168,7 +168,22 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+parse : Str -> Try(U64, [BadInput])
+parse = |s| if (s == "") Err(BadInput) else Ok(1)
+
+first_use : Str -> Str
+first_use = |s| {
+	n : Str
+	n = parse(s)
+	n
+}
+
+second_use : Str -> Str
+second_use = |s| {
+	m : Str
+	m = parse(s)
+	m
+}
 ~~~
 # CANONICALIZE
 ~~~clojure

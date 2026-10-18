@@ -266,6 +266,31 @@ pub const Dec = fn (?[*]u8) callconv(.c) void;
 /// - It's safe since normal refcounts should never reach 0 while still being referenced
 pub const REFCOUNT_STATIC_DATA: isize = 0;
 
+/// Low bits of a refcounted data pointer that may carry tag bits (for example a
+/// recursive tag union's tag id). They are cleared before locating the refcount.
+pub const DATA_PTR_TAG_MASK: usize = targetDataPtrTagMask(@sizeOf(usize));
+
+/// `DATA_PTR_TAG_MASK` for a target whose words are `target_word_size` bytes:
+/// the bits below the word alignment of the data pointer.
+pub fn targetDataPtrTagMask(target_word_size: u32) u64 {
+    return target_word_size - 1;
+}
+
+/// Byte offset of the refcount word from the (untagged) data pointer it
+/// guards, on a target whose words are `target_word_size` bytes. The refcount
+/// is the word immediately before the data.
+pub fn targetRefcountOffset(target_word_size: u32) i32 {
+    return -@as(i32, @intCast(target_word_size));
+}
+
+/// Scale the native byte offset of a word-sized field of an all-word extern
+/// struct (such as `RocStr` or `RocList`) to a target whose words are
+/// `target_word_size` bytes.
+pub fn targetWordOffset(comptime native_offset: usize, target_word_size: u32) u32 {
+    comptime std.debug.assert(native_offset % @sizeOf(usize) == 0);
+    return @intCast(native_offset / @sizeOf(usize) * target_word_size);
+}
+
 /// Sentinel value written to freed refcount slots to detect use-after-free.
 /// When memory is freed in debug mode, the refcount slot is poisoned with this value.
 /// Any subsequent attempt to incref/decref this memory will trigger a panic.
@@ -383,11 +408,10 @@ pub fn decrefDataPtr(
     roc_ops: *RocOps,
 ) void {
     const bytes = bytes_or_null orelse return;
-    const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
 
     const data_ptr = @intFromPtr(bytes);
 
-    const unmasked_ptr = data_ptr & ~tag_mask;
+    const unmasked_ptr = data_ptr & ~DATA_PTR_TAG_MASK;
     if (unmasked_ptr == 0) return;
 
     // Verify alignment before @ptrFromInt
@@ -441,8 +465,7 @@ pub fn increfDataPtr(
     const ptr = @intFromPtr(bytes);
 
     // Strip tag bits from the pointer - recursive tag unions may store tag IDs in low bits
-    const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
-    const masked_ptr = ptr & ~tag_mask;
+    const masked_ptr = ptr & ~DATA_PTR_TAG_MASK;
     if (masked_ptr == 0) return;
     const rc_addr = masked_ptr - @sizeOf(usize);
 
@@ -491,8 +514,7 @@ pub fn freeDataPtrC(
     const bytes = bytes_or_null orelse return;
 
     const ptr = @intFromPtr(bytes);
-    const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
-    const masked_ptr = ptr & ~tag_mask;
+    const masked_ptr = ptr & ~DATA_PTR_TAG_MASK;
     if (masked_ptr == 0) return;
 
     const isizes: [*]isize = @as([*]isize, @ptrFromInt(masked_ptr));
@@ -632,8 +654,7 @@ pub fn isUnique(
     const bytes = bytes_or_null orelse return true;
 
     const ptr = @intFromPtr(bytes);
-    const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
-    const masked_ptr = ptr & ~tag_mask;
+    const masked_ptr = ptr & ~DATA_PTR_TAG_MASK;
     if (masked_ptr == 0) return true;
 
     const isizes: [*]isize = @as([*]isize, @ptrFromInt(masked_ptr));

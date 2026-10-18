@@ -226,7 +226,7 @@ function which computes a factorial:
 
 ```roc
 factorial : U64 -> U64
-factorial = |n| if n <= 1 1 else n * factorial(n - 1)
+factorial = |n| if (n <= 1) 1 else n * factorial(n - 1)
 ```
 
 The recursive call `factorial(n - 1)` is _not_ a tail call, because after it returns, there's still
@@ -242,7 +242,7 @@ factorial : U64 -> U64
 factorial = |n| factorial_help(n, 1)
 
 factorial_help : U64, U64 -> U64
-factorial_help = |n, acc| if n <= 1 acc else factorial_help(n - 1, n * acc)
+factorial_help = |n, acc| if (n <= 1) acc else factorial_help(n - 1, n * acc)
 ```
 
 Now the recursive call `factorial_help(n - 1, n * acc)` is the last thing the function does, so it's
@@ -307,10 +307,10 @@ itself (so, recursing)—just with the other function being involved in the midd
 
 ```roc
 is_even : U64 -> Bool
-is_even = |n| if n == 0 True else is_odd(n - 1)
+is_even = |n| if (n == 0) True else is_odd(n - 1)
 
 is_odd : U64 -> Bool
-is_odd = |n| if n == 0 False else is_even(n - 1)
+is_odd = |n| if (n == 0) False else is_even(n - 1)
 ```
 
 Both `is_odd(n - 1)` and `is_even(n - 1)` are [tail calls](#tail-calls), so calling
@@ -357,7 +357,7 @@ captured an `amount`:
 double = |n| n * 2
 
 pick : Bool -> (U64 -> U64)
-pick = |should_double| if should_double double else make_adder(10)
+pick = |should_double| if (should_double) double else make_adder(10)
 ```
 
 So `pick`'s return value is stored as if it were a tag union like
