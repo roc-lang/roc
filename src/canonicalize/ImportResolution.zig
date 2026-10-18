@@ -41,6 +41,11 @@ pub const ResolvedImport = struct {
         /// Import resolution rejected this import: it names no module at all.
         /// Every use of it is checked-error data.
         rejected,
+        /// The import names a public type its package's header exposes, but
+        /// the module that header selects it from defines no such type. The
+        /// import statement reports it, and every use of it is checked-error
+        /// data.
+        missing_public_type,
     };
 
     /// An accepted import target.
@@ -85,6 +90,10 @@ pub const Inputs = struct {
     /// which the draining module need not import itself; the checker receives
     /// those same modules as owner modules.
     reachable_envs: []const *const ModuleEnv = &.{},
+    /// The public names this package or platform root's header exposes whose
+    /// selected nested type its module does not define. Every other header
+    /// exposure names a type that exists, or is no public module target.
+    missing_public_types: []const []const u8 = &.{},
 };
 
 /// Read the `import "path" as name` file imports on the module's deferred
@@ -256,7 +265,7 @@ const Resolver = struct {
                 try self.outcomes.put(import.import_name, import.resolution);
                 switch (import.resolution) {
                     .available => |available| try self.registerEnv(available.module_env),
-                    .rejected => {},
+                    .rejected, .missing_public_type => {},
                 }
             },
             .resolved_store => |envs| {
@@ -324,7 +333,7 @@ const Resolver = struct {
             const outcome = self.outcomeFor(import_idx) orelse continue;
             const available = switch (outcome) {
                 .available => |available| available,
-                .rejected => continue,
+                .rejected, .missing_public_type => continue,
             };
             const hash = available.module_env.contentIdentityHash() orelse continue;
             const display = try self.env.insertIdent(Ident.for_text(available.module_env.module_name));
@@ -620,10 +629,20 @@ const Resolver = struct {
         if (entry.kind == .receiver_method_owner) {
             return self.resolveReceiverMethodOwner(entry);
         }
+        if (entry.kind == .header_exposure) {
+            return self.resolveHeaderExposure(entry);
+        }
 
         const outcome = self.outcomeFor(entryImport(entry));
 
         if (entry.kind == .import_statement) {
+            if (outcome) |resolved| if (resolved == .missing_public_type) {
+                try self.env.pushDiagnostic(.{ .public_type_not_defined = .{
+                    .import_name = entry.moduleName(),
+                    .region = self.regionOf(entry),
+                } });
+                return;
+            };
             // Import resolution reports its own rejections, and only the
             // workspace resolver can judge a package-qualified name, so this
             // statement reports only a plain name that denotes no module.
@@ -638,7 +657,7 @@ const Resolver = struct {
 
         const available = switch (outcome orelse return self.failMissingModule(entry)) {
             .available => |available| available,
-            .rejected => return self.failMissingModule(entry),
+            .rejected, .missing_public_type => return self.failMissingModule(entry),
         };
 
         const prefix = importPrefix(available);
@@ -666,7 +685,7 @@ const Resolver = struct {
 
         switch (entry.kind) {
             .expr_value => try self.resolveValueEntry(entry, available, prefix, path_text),
-            .receiver_method_owner, .file_import => unreachable, // handled above
+            .receiver_method_owner, .file_import, .header_exposure => unreachable, // handled above
             .numeric_suffix,
             .type_anno_lookup,
             .type_anno_apply,
@@ -910,6 +929,7 @@ const Resolver = struct {
             .import_statement,
             .hosted_entry,
             .file_import,
+            .header_exposure,
             => unreachable, // handled by the caller
         }
     }
@@ -954,6 +974,7 @@ const Resolver = struct {
             .import_statement,
             .hosted_entry,
             .file_import,
+            .header_exposure,
             => unreachable, // only nominal kinds reach here
         }
     }
@@ -1120,6 +1141,20 @@ const Resolver = struct {
             } });
     }
 
+    /// Report a header exposure whose module does not define the nested type
+    /// it names. The coordinator settled that once, when the module completed.
+    fn resolveHeaderExposure(self: *Resolver, entry: DeferredImportRef) std.mem.Allocator.Error!void {
+        for (self.inputs.missing_public_types) |missing| {
+            const missing_ident = self.env.common.findIdent(missing) orelse continue;
+            if (!missing_ident.eql(entry.itemName())) continue;
+            return self.env.pushDiagnostic(.{ .type_not_exposed = .{
+                .module_name = entry.moduleName(),
+                .type_name = entry.path(),
+                .region = self.regionOf(entry),
+            } });
+        }
+    }
+
     /// Register a receiver-extension method on an imported receiver type. The
     /// owner's identity is only known once the receiver type reference has
     /// resolved, which is why the registration waits here for it: the
@@ -1216,7 +1251,7 @@ const Resolver = struct {
             },
             // The import statement owns the diagnostic for a name that denotes
             // no module, so its exposed items do not restate it.
-            .exposed_item, .import_statement => {},
+            .exposed_item, .import_statement, .header_exposure => {},
             .expr_value,
             .expr_nominal,
             .pattern_nominal,
@@ -1302,7 +1337,7 @@ const Resolver = struct {
             // A method registration has no node of its own: the receiver type
             // reference it waits on carries the diagnostic. An import
             // statement's own diagnostic is pushed directly.
-            .receiver_method_owner, .import_statement, .exposed_item, .hosted_entry, .file_import => {},
+            .receiver_method_owner, .import_statement, .exposed_item, .hosted_entry, .file_import, .header_exposure => {},
         }
     }
 

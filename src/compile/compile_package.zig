@@ -476,6 +476,7 @@ pub fn typeCheckModule(
     validation: Can.Validation,
     ctfe_options: eval.CompileTimeFinalization.Options,
     deferred_imports: can.ImportResolution.Imports,
+    missing_public_types: []const []const u8,
 ) TypeCheckModuleError!TypeCheckOutput {
     const builtin_indices = compiled_builtins.builtinIndices(can.CIR);
 
@@ -506,6 +507,7 @@ pub fn typeCheckModule(
     try can.resolveDeferredImports(env, .{
         .imports = deferred_imports,
         .reachable_envs = owner_envs,
+        .missing_public_types = missing_public_types,
     });
 
     var checker = try Check.initWithOwnerModules(
