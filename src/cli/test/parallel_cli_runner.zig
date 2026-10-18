@@ -8888,13 +8888,13 @@ fn customIssue12241CachedConstantInsert(
     return null;
 }
 
-// Repro for https://github.com/roc-lang/roc/issues/12294: the app reads two
-// top-level lists of boxed closures that capture a local, one a `U64` and one
-// a `Str`. The cold dev build fills the checked-module cache, and the warm dev
-// and speed builds of the unchanged source restore both constants from it
-// instead of evaluating them; the `--no-cache` builds compile everything
-// themselves. Every build must read both constants from static data, with no
-// allocation.
+// Repro for https://github.com/roc-lang/roc/issues/12294: the app reads three
+// top-level lists of boxed closures that capture a local: a `U64`, a `Str`,
+// and a `U64` in a closure that also reads the list holding it. The cold dev
+// build fills the checked-module cache, and the warm dev and speed builds of
+// the unchanged source restore the constants from it instead of evaluating
+// them; the `--no-cache` builds compile everything themselves. Every build must
+// read each constant from static data, with no allocation.
 fn customIssue12294CachedCapturingClosures(
     io: std.Io,
     allocator: Allocator,
@@ -8902,7 +8902,7 @@ fn customIssue12294CachedCapturingClosures(
     timer: *harness.Timer,
     timeout_ms: u64,
 ) ?TestResult {
-    const expected = "handlers: 1, allocations: 0, greeters: 1, allocations: 0\n";
+    const expected = "handlers: 1, allocations: 0, greeters: 1, allocations: 0, counters: 1, allocations: 0, counted: 6\n";
     const builds = [_]struct { name: []const u8, opt: []const u8, cache: bool }{
         .{ .name = "cold_dev", .opt = "--opt=dev", .cache = true },
         .{ .name = "warm_dev", .opt = "--opt=dev", .cache = true },

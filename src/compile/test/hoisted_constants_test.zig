@@ -761,6 +761,46 @@ test "issue 12294: a restored list of boxed capturing closures is static data, n
     }.inspect);
 }
 
+fn expectRestoredSelfReadingClosuresStatic(result: *lir.Program.Result) HoistedConstantsTestError!usize {
+    // The closure reads `handlers` as a top-level constant, the way its
+    // compile-time evaluation did, so the list it sits in stays static data.
+    try expectLowLevelAbsent(result, .list_with_capacity);
+    try expectLowLevelAbsent(result, .list_append_unsafe);
+    try std.testing.expect(result.static_data_values.items.len > 0);
+    return 0;
+}
+
+test "a restored list of boxed closures that read their own constant is static data" {
+    _ = try lowerEchoApp(
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\handlers : List(Box((U64 -> U64)))
+        \\handlers = [Box.box(|k| List.len(handlers) + k)]
+        \\main! = |args| {
+        \\    kept = List.drop_first(handlers, List.len(args) - List.len(args))
+        \\    Echo.line!(List.len(kept).to_str())
+        \\    Ok({})
+        \\}
+    , expectRestoredSelfReadingClosuresStatic);
+}
+
+test "a restored list of boxed capturing closures that read their own constant is static data" {
+    _ = try lowerEchoApp(
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\handlers : List(Box((U64 -> U64)))
+        \\handlers = {
+        \\    n = 42
+        \\    [Box.box(|k| if k == 0 n else List.len(handlers) + k)]
+        \\}
+        \\main! = |args| {
+        \\    kept = List.drop_first(handlers, List.len(args) - List.len(args))
+        \\    Echo.line!(List.len(kept).to_str())
+        \\    Ok({})
+        \\}
+    , expectRestoredSelfReadingClosuresStatic);
+}
+
 test "an empty compile-time list rebuilds with the capacity it was evaluated with" {
     _ = try lowerEchoApp(
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
