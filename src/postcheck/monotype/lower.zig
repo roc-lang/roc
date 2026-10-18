@@ -10268,7 +10268,6 @@ const Builder = struct {
                         template_ref,
                         view,
                         template,
-                        family,
                         stored_evidence,
                         edge,
                         request_fn_node,
@@ -17028,6 +17027,14 @@ const DraftTemplateFamilyAddress = struct {
             .method_scope = method_scope.bytes,
             .source_fn_key = source_fn_key.bytes,
         };
+    }
+
+    /// The family a procedure's interface summaries are keyed by. A request's
+    /// input carries everything its instantiation constrains; a checked
+    /// source-function key only names how one call site spelled the callee's
+    /// type, so it does not split summaries.
+    fn interfaceSummary(template_ref: names.ProcTemplate, method_scope: checked.ModuleId) DraftTemplateFamilyAddress {
+        return init(template_ref, method_scope, .{ .bytes = @splat(0) });
     }
 
     /// Recursive references may instantiate the same checked procedure
@@ -26941,7 +26948,6 @@ const BodyContext = struct {
 
     const InterfacePendingDependency = struct {
         target: checked.ResolvedValueId,
-        source_fn_ty: checked.CheckedTypeId,
         request_fn_node: NodeId,
     };
 
@@ -27084,7 +27090,6 @@ const BodyContext = struct {
                     if (call.direct_target) |target| {
                         try frame.pending.append(self.allocator, .{
                             .target = target,
-                            .source_fn_ty = source_fn_ty,
                             .request_fn_node = fn_node,
                         });
                     }
@@ -27172,7 +27177,6 @@ const BodyContext = struct {
             frame.next_dependency += 1;
             if (try self.beginDirectCalleeInterface(
                 pending.target,
-                pending.source_fn_ty,
                 pending.request_fn_node,
                 frame.replay_state,
             )) |expansion| return .{ .callee = expansion };
@@ -27370,7 +27374,6 @@ const BodyContext = struct {
     fn beginDirectCalleeInterface(
         self: *BodyContext,
         target: checked.ResolvedValueId,
-        source_fn_ty: checked.CheckedTypeId,
         request_fn_node: NodeId,
         replay_state: *InterfaceReplayState,
     ) Allocator.Error!?*DirectCalleeExpansion {
@@ -27424,7 +27427,6 @@ const BodyContext = struct {
             template_ref,
             callee_view,
             template,
-            DraftTemplateFamilyAddress.init(template_ref, self.method_scope.key, self.view.types.rootKey(source_fn_ty)),
             try self.builder.constFnEvidence(rootEvidence(template_ref, edge.vector)),
             edge,
             request_fn_node,
@@ -27444,7 +27446,6 @@ const BodyContext = struct {
         template_ref: names.ProcTemplate,
         callee_view: ModuleView,
         template: checked.CheckedProcedureTemplate,
-        family: DraftTemplateFamilyAddress,
         stored_evidence: StoredConstFnEvidence,
         request_edge: EdgeEvidence,
         request_fn_node: NodeId,
@@ -27468,7 +27469,7 @@ const BodyContext = struct {
         const input_arena = &expansion.input_arena;
         const holes = try self.parametricRequestHoles(input_arena.allocator(), template_ref, callee_view, &template, edge.subst);
         const hole_classes = try input_arena.allocator().alloc(?NodeId, holes.nodes.len);
-        const input = try InterfaceConstraints.captureWithHoles(self.graph, input_arena.allocator(), request_roots.items, holes.nodes, hole_classes);
+        const input = try InterfaceConstraints.captureRequestWithHoles(self.graph, input_arena.allocator(), request_roots.items, holes.nodes, hole_classes);
         for (hole_classes) |hole_class| if (hole_class != null) {
             self.builder.count("interface_parametric_requests");
             break;
@@ -27479,7 +27480,7 @@ const BodyContext = struct {
         for (edge.subst, request_bytes[shape.bytes.len..]) |slot, *byte| byte.* = if (slot == .checked_error) 1 else 0;
         const request: InterfaceConstraints.Identity = .{ .bytes = request_bytes, .leaves = shape.leaves };
         const address = InterfaceReplayAddress{
-            .family = family,
+            .family = DraftTemplateFamilyAddress.interfaceSummary(template_ref, self.method_scope.key),
             .evidence_digest = evidence_digest.bytes,
             .input_digest = interfaceRequestBucket(request.bytes),
         };
@@ -52336,7 +52337,7 @@ const BodyContext = struct {
 
         var scratch = self.graph.acquireArena();
         defer self.graph.releaseArena(scratch);
-        const input = try InterfaceConstraints.capture(self.graph, scratch.allocator(), roots.items);
+        const input = try InterfaceConstraints.captureRequest(self.graph, scratch.allocator(), roots.items);
         const shape = try input.identityInto(self.graph, scratch.allocator());
         const request_bytes = try scratch.allocator().alloc(u8, shape.bytes.len + subst.len);
         @memcpy(request_bytes[0..shape.bytes.len], shape.bytes);
@@ -52459,7 +52460,7 @@ const BodyContext = struct {
             },
             .checked_error => {},
         };
-        const input = try InterfaceConstraints.capture(self.graph, scratch.allocator(), input_roots);
+        const input = try InterfaceConstraints.captureRequest(self.graph, scratch.allocator(), input_roots);
         const request = try input.identityInto(self.graph, scratch.allocator());
         // This relation consumes only the selected checked signature, not its
         // nested dispatch evidence. Its source identity, substitution, and
