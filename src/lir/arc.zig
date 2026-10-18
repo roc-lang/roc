@@ -615,6 +615,10 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
             spec.rc_ret_borrowed = job.sig.ret_mode == .borrowed;
             spec.rc_ret_lenders = job.sig.ret_lenders;
             if (sources[@backingInt(job.source)].body == null) continue;
+            // A static initializer is construction-only LIR that the static
+            // data materializer evaluates symbolically and no backend ever
+            // emits, so reference counts in it would never run.
+            if (spec.is_static_initializer) continue;
             owners[count] = .{
                 .inserter = inserter,
                 .source = &sources[@backingInt(job.source)],
