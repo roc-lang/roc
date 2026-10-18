@@ -371,6 +371,7 @@ pub const LayoutStoreImage = extern struct {
             .scratch_intern_key = .empty,
             .interned_recursive_graphs = layout_mod.Store.RecursiveGraphMap.init(allocator),
             .recursive_unfoldings = .empty,
+            .recursive_groups = .{},
             .target_usize = target_usize,
             .digest_cache = try layout_mod.DigestCache.create(allocator),
         };
@@ -717,6 +718,7 @@ fn serializeSidecarInto(
         .scratch_intern_key = .empty,
         .interned_recursive_graphs = layout_mod.Store.RecursiveGraphMap.init(gpa),
         .recursive_unfoldings = .empty,
+        .recursive_groups = .{},
         .target_usize = lowered.layouts.target_usize,
         // `BoxySidecar.fromStores` reads only the array-backed fields.
         .digest_cache = undefined,
@@ -803,7 +805,7 @@ comptime {
     // null or empty in views. The layout store's `digest_cache` is a memo
     // each view starts empty.
     std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 36);
-    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 17);
+    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 18);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".field_names.len == 1);
 
     // The header is authored field by field in image storage and is part of a
@@ -1714,6 +1716,7 @@ test "LIR image copies and round-trips every populated store field" {
         .scratch_intern_key = undefined,
         .interned_recursive_graphs = undefined,
         .recursive_unfoldings = undefined,
+        .recursive_groups = undefined,
         .target_usize = target_usize,
         .digest_cache = undefined,
     };
