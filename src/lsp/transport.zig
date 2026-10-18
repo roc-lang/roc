@@ -124,14 +124,15 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
             return buffer.items;
         }
 
+        /// A `std.Io.Writer` write may return 0 without reaching the end of the stream, e.g. when it
+        /// only drained its buffer, which `std.Io.File.Writer` does on Windows. `writeAll` retries.
         fn writeAll(self: *Self, bytes: []const u8) WriteMessageError!void {
-            var offset: usize = 0;
-            while (offset < bytes.len) {
-                const written = try self.writeSome(bytes[offset..]);
-                if (written == 0) {
-                    std.debug.panic("writer returned 0 bytes without error", .{});
-                }
-                offset += written;
+            if (@hasDecl(WriterType, "writeAll")) {
+                self.writer.writeAll(bytes) catch return error.WriteFailed;
+            } else if (@hasField(WriterType, "interface")) {
+                (&self.writer.interface).writeAll(bytes) catch return error.WriteFailed;
+            } else {
+                @compileError("WriterType must provide either a writeAll method or expose an interface field");
             }
         }
 
@@ -144,16 +145,6 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
                 return (&self.reader.interface).readSliceShort(buffer) catch return error.EndOfStream;
             } else {
                 @compileError("ReaderType must provide either a read method, readSliceShort, or expose an interface field");
-            }
-        }
-
-        fn writeSome(self: *Self, bytes: []const u8) WriteMessageError!usize {
-            if (@hasDecl(WriterType, "write")) {
-                return self.writer.write(bytes) catch return error.WriteFailed;
-            } else if (@hasField(WriterType, "interface")) {
-                return (&self.writer.interface).write(bytes) catch return error.WriteFailed;
-            } else {
-                @compileError("WriterType must provide either a write method or expose an interface field");
             }
         }
 

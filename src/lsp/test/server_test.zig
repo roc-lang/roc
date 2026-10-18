@@ -27,7 +27,7 @@ const InitialServerState = enum {
 };
 
 const FailingWriter = struct {
-    pub fn write(_: *@This(), _: []const u8) error{InjectedFailure}!usize {
+    pub fn writeAll(_: *@This(), _: []const u8) error{InjectedFailure}!void {
         return error.InjectedFailure;
     }
 };
