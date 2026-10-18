@@ -1,9 +1,11 @@
 //! In-process readonly-data image for native dev-backend execution.
 //!
-//! The image owns target-aligned copies of explicit `StaticDataExport` records.
-//! Data-to-data relocations are resolved when the image is built; function
-//! relocations are resolved after generated code has its final executable
-//! address. Backends consume only the resulting symbol addresses.
+//! The image holds target-aligned copies of explicit `StaticDataExport`
+//! records, in memory it allocates or in memory its caller placed it in
+//! (`Layout.place`). Data-to-data relocations are resolved when the image is
+//! built; function relocations are resolved after generated code has its
+//! final executable address. Backends consume only the resulting symbol
+//! addresses.
 
 const std = @import("std");
 
@@ -32,6 +34,9 @@ pub const StaticDataImage = struct {
     allocator: Allocator,
     allocation: []u8,
     alignment: std.mem.Alignment,
+    /// Whether the image allocated `allocation`, rather than being placed in
+    /// memory its caller owns.
+    owns_allocation: bool = true,
     symbols: []Symbol,
     symbol_indices: std.StringHashMapUnmanaged(usize),
 
@@ -56,75 +61,120 @@ pub const StaticDataImage = struct {
     }
 
     pub fn initWithOptions(allocator: Allocator, exports: []const StaticDataExport, options: Options) Error!StaticDataImage {
-        const symbols = try allocator.alloc(Symbol, exports.len);
-        var symbols_owned = true;
-        errdefer if (symbols_owned) allocator.free(symbols);
-        var symbol_indices: std.StringHashMapUnmanaged(usize) = .{};
-        var symbol_indices_owned = true;
-        errdefer if (symbol_indices_owned) symbol_indices.deinit(allocator);
-
-        var allocation_len: usize = 0;
-        var allocation_alignment: usize = 1;
-        for (exports, 0..) |*static_export, index| {
-            if (static_export.alignment == 0 or !std.math.isPowerOfTwo(static_export.alignment)) {
-                return error.InvalidStaticDataAlignment;
-            }
-            if (static_export.symbol_offset > static_export.bytes.len) {
-                return error.InvalidStaticDataRelocation;
-            }
-            const gop = try symbol_indices.getOrPut(allocator, static_export.symbol_name);
-            if (gop.found_existing) return error.DuplicateStaticDataSymbol;
-            gop.value_ptr.* = index;
-
-            const alignment: usize = static_export.alignment;
-            allocation_alignment = @max(allocation_alignment, alignment);
-            if (options.callable_header_size != 0 and exportHoldsCallable(static_export)) {
-                allocation_len = std.math.add(usize, allocation_len, options.callable_header_size) catch
-                    return error.InvalidStaticDataAlignment;
-            }
-            allocation_len = alignForwardChecked(allocation_len, alignment) orelse
-                return error.InvalidStaticDataAlignment;
-
-            symbols[index] = .{
-                .data_export = static_export,
-                .allocation_offset = allocation_len,
-            };
-            allocation_len = std.math.add(usize, allocation_len, @max(static_export.bytes.len, 1)) catch
-                return error.InvalidStaticDataAlignment;
-        }
-
-        const alignment = std.mem.Alignment.fromByteUnits(allocation_alignment);
-        const allocation_ptr = allocator.rawAlloc(@max(allocation_len, 1), alignment, @returnAddress()) orelse
+        var planned = try Layout.plan(allocator, exports, options);
+        const alignment = planned.alignment;
+        const allocation_ptr = allocator.rawAlloc(planned.size, alignment, @returnAddress()) orelse {
+            planned.deinit(allocator);
             return error.OutOfMemory;
-        const allocation = allocation_ptr[0..@max(allocation_len, 1)];
-        var allocation_owned = true;
-        errdefer if (allocation_owned) allocator.rawFree(allocation, alignment, @returnAddress());
-        @memset(allocation, 0);
-        for (symbols) |symbol| {
-            @memcpy(
-                allocation[symbol.allocation_offset..][0..symbol.data_export.bytes.len],
-                symbol.data_export.bytes,
-            );
-        }
-
-        var image = StaticDataImage{
-            .allocator = allocator,
-            .allocation = allocation,
-            .alignment = alignment,
-            .symbols = symbols,
-            .symbol_indices = symbol_indices,
         };
-        symbols_owned = false;
-        symbol_indices_owned = false;
-        allocation_owned = false;
-        errdefer image.deinit();
-        try image.resolveDataRelocations();
+        const allocation = allocation_ptr[0..planned.size];
+        // Placing takes the layout's tables, and releases them if it fails.
+        var image = planned.place(allocator, allocation) catch |err| {
+            allocator.rawFree(allocation, alignment, @returnAddress());
+            return err;
+        };
+        image.owns_allocation = true;
         return image;
     }
 
+    /// Where every export of a graph goes in one image, before any memory
+    /// for it exists.
+    pub const Layout = struct {
+        symbols: []Symbol,
+        symbol_indices: std.StringHashMapUnmanaged(usize),
+        /// Bytes the image occupies, at least one.
+        size: usize,
+        alignment: std.mem.Alignment,
+
+        pub fn plan(allocator: Allocator, exports: []const StaticDataExport, options: Options) Error!Layout {
+            const symbols = try allocator.alloc(Symbol, exports.len);
+            errdefer allocator.free(symbols);
+            var symbol_indices: std.StringHashMapUnmanaged(usize) = .{};
+            errdefer symbol_indices.deinit(allocator);
+
+            var allocation_len: usize = 0;
+            var allocation_alignment: usize = 1;
+            for (exports, 0..) |*static_export, index| {
+                if (static_export.alignment == 0 or !std.math.isPowerOfTwo(static_export.alignment)) {
+                    return error.InvalidStaticDataAlignment;
+                }
+                if (static_export.symbol_offset > static_export.bytes.len) {
+                    return error.InvalidStaticDataRelocation;
+                }
+                const gop = try symbol_indices.getOrPut(allocator, static_export.symbol_name);
+                if (gop.found_existing) return error.DuplicateStaticDataSymbol;
+                gop.value_ptr.* = index;
+
+                const alignment: usize = static_export.alignment;
+                allocation_alignment = @max(allocation_alignment, alignment);
+                if (options.callable_header_size != 0 and exportHoldsCallable(static_export)) {
+                    allocation_len = std.math.add(usize, allocation_len, options.callable_header_size) catch
+                        return error.InvalidStaticDataAlignment;
+                }
+                allocation_len = alignForwardChecked(allocation_len, alignment) orelse
+                    return error.InvalidStaticDataAlignment;
+
+                symbols[index] = .{
+                    .data_export = static_export,
+                    .allocation_offset = allocation_len,
+                };
+                allocation_len = std.math.add(usize, allocation_len, @max(static_export.bytes.len, 1)) catch
+                    return error.InvalidStaticDataAlignment;
+            }
+            return .{
+                .symbols = symbols,
+                .symbol_indices = symbol_indices,
+                .size = @max(allocation_len, 1),
+                .alignment = std.mem.Alignment.fromByteUnits(allocation_alignment),
+            };
+        }
+
+        /// The offset in the image of the symbol `name`.
+        pub fn symbolOffset(self: *const Layout, name: []const u8) ?usize {
+            const index = self.symbol_indices.get(name) orelse return null;
+            const symbol = self.symbols[index];
+            return symbol.allocation_offset + symbol.data_export.symbol_offset;
+        }
+
+        /// Build the image in `memory`, which must be `size` bytes at
+        /// `alignment` and outlive the image. The layout's tables move into
+        /// the image.
+        pub fn place(self: *Layout, allocator: Allocator, memory: []u8) Error!StaticDataImage {
+            std.debug.assert(memory.len == self.size and self.alignment.check(@intFromPtr(memory.ptr)));
+            @memset(memory, 0);
+            for (self.symbols) |symbol| {
+                @memcpy(
+                    memory[symbol.allocation_offset..][0..symbol.data_export.bytes.len],
+                    symbol.data_export.bytes,
+                );
+            }
+            var image = StaticDataImage{
+                .allocator = allocator,
+                .allocation = memory,
+                .alignment = self.alignment,
+                .owns_allocation = false,
+                .symbols = self.symbols,
+                .symbol_indices = self.symbol_indices,
+            };
+            self.* = undefined;
+            errdefer {
+                image.symbol_indices.deinit(allocator);
+                allocator.free(image.symbols);
+            }
+            try image.resolveDataRelocations();
+            return image;
+        }
+
+        pub fn deinit(self: *Layout, allocator: Allocator) void {
+            self.symbol_indices.deinit(allocator);
+            allocator.free(self.symbols);
+            self.* = undefined;
+        }
+    };
+
     pub fn deinit(self: *StaticDataImage) void {
         self.symbol_indices.deinit(self.allocator);
-        self.allocator.rawFree(self.allocation, self.alignment, @returnAddress());
+        if (self.owns_allocation) self.allocator.rawFree(self.allocation, self.alignment, @returnAddress());
         self.allocator.free(self.symbols);
         self.* = undefined;
     }

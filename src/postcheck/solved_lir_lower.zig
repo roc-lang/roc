@@ -178,11 +178,6 @@ pub const Options = struct {
     /// Whether this program's code is linked, so the cache may serve it a
     /// linked-object entry (`Common.SpecCacheHit.c_abi_entry`).
     spec_cache_accepts_linked: bool = false,
-    /// Whether the cache may also serve specializations the compile-time
-    /// roots reach. The evaluator splices those entries into its own image,
-    /// which is only faithful when no compile-time-only exhaustiveness site
-    /// waits for the evaluation to reach it (`CheckedPipeline` decides).
-    comptime_closure_hits: bool = false,
     inline_plan: SolvedInline.Plan = .{},
     /// Lower every keyed specialization's procedure body, even one whose every
     /// call was inlined, so a pack program can offer it.
@@ -785,14 +780,8 @@ const Lowerer = struct {
     proc_debug_names: bool,
     spec_cache: ?Common.SpecCacheLookup,
     spec_cache_accepts_linked: bool,
-    comptime_closure_hits: bool,
     /// This consumer's explicit share of the producer's roots and requests.
     root_manifest: ?RootManifest,
-    /// True while the closure of the compile-time roots is being lowered.
-    /// Those procedures run in the compile-time evaluator, which takes
-    /// object-cache entries only under `comptime_closure_hits`; procedures
-    /// first reached afterwards may always be served.
-    comptime_phase: bool,
     /// Drain positions, kept across calls so a second drain resumes.
     fn_queue_index: usize,
     initializer_queue_index: usize,
@@ -1086,9 +1075,7 @@ const Lowerer = struct {
             .proc_debug_names = options.proc_debug_names,
             .spec_cache = options.spec_cache,
             .spec_cache_accepts_linked = options.spec_cache_accepts_linked,
-            .comptime_closure_hits = options.comptime_closure_hits,
             .root_manifest = options.root_manifest,
-            .comptime_phase = true,
             .fn_queue_index = 0,
             .initializer_queue_index = 0,
             .layout_request_const_plans = options.layout_request_const_plans,
@@ -1403,21 +1390,8 @@ const Lowerer = struct {
                 }
             },
         }
-        // The compile-time roots' closure lowers first, so that a procedure
-        // the evaluator runs is known as such when the object cache is
-        // asked for it: the evaluator takes hits only under its own rules
-        // (`comptime_closure_hits`), a runtime-only procedure takes any.
-        for (self.roots.items) |root| {
-            if (!rootRunsAtCompileTime(root.request)) continue;
-            _ = try self.markReachableFn(root.fn_id);
-        }
+        for (self.roots.items) |root| _ = try self.markReachableFn(root.fn_id);
         for (self.literal_roots.items) |root| _ = try self.markReachableFn(root.fn_id);
-        try self.lowerReachableFns();
-        self.comptime_phase = false;
-        for (self.roots.items) |root| {
-            if (rootRunsAtCompileTime(root.request)) continue;
-            _ = try self.markReachableFn(root.fn_id);
-        }
 
         if (self.lowersLayoutRequests()) try self.lowerLayoutRequests();
         if (self.lowersRuntimeSchemaRequests()) try self.lowerRuntimeSchemaRequests();
@@ -2941,9 +2915,6 @@ const Lowerer = struct {
         // body and lowers normally.
         if (source_fn.body == .hosted) if (source_fn.source) |template| if (template.cached) |monotype_hit| {
             const hit = self.linkedEntryFor(template, monotype_hit);
-            if (self.comptime_phase and !self.comptime_closure_hits) {
-                Common.invariant("early object cache hit reached CTFE without the checked-program eligibility proof");
-            }
             if (plain_spec) {
                 if (!std.mem.eql(u8, &hit.identity, &identity.bytes)) {
                     Common.invariant("object cache entry identity disagrees with the identity lowered for its specialization key");
@@ -2961,7 +2932,7 @@ const Lowerer = struct {
                 entry.forwards_to = try self.ensureOwnFnSpec(spec.source, .finite);
             }
         };
-        if (cached == null and plain_spec and (!self.comptime_phase or self.comptime_closure_hits)) {
+        if (cached == null and plain_spec) {
             if (self.spec_cache) |cache| {
                 if (source_fn.source) |template| {
                     if (template.spec_key) |key| {
@@ -2976,7 +2947,7 @@ const Lowerer = struct {
                 }
             }
         } else if (pack_trace_available and self.spec_cache != null and packTraceEnabled()) {
-            if (source_fn.source) |template| if (template.spec_key) |key| std.debug.print("lookup direct-lir key={x} skipped comptime={} plain={} cached={}\n", .{ key.bytes[0..8], self.comptime_phase, plain_spec, cached != null });
+            if (source_fn.source) |template| if (template.spec_key) |key| std.debug.print("lookup direct-lir key={x} skipped plain={} cached={}\n", .{ key.bytes[0..8], plain_spec, cached != null });
         }
         // Only a program using the object cache separates a site-named
         // procedure's code from its identity.
@@ -2986,9 +2957,7 @@ const Lowerer = struct {
         // its solved types with their lambda sets, and its captures. A
         // procedure whose identity names its template by site is served by
         // its code key instead.
-        if (cached == null and source_fn.body == .roc and spec.abi == .finite and !spec.return_reuse.enabled() and
-            (!self.comptime_phase or self.comptime_closure_hits))
-        {
+        if (cached == null and source_fn.body == .roc and spec.abi == .finite and !spec.return_reuse.enabled()) {
             if (self.spec_cache) |cache| {
                 const key = Common.procIdentityCacheKey(if (code_key) |code| code else identity.bytes);
                 if (cache.lookup(key, self.spec_cache_accepts_linked)) |hit| {
@@ -5884,12 +5853,6 @@ const Lowerer = struct {
         const slot: u32 = @backingInt(id);
         hasher.update(&[_]u8{ @truncate(slot), @truncate(slot >> 8), @truncate(slot >> 16), @truncate(slot >> 24) });
         return .{ .bytes = hasher.finalResult() };
-    }
-
-    /// The content identity of the specialization a callable variant targets.
-    fn callableTargetIdentity(context: *anyopaque, target: Type.FnId) std.mem.Allocator.Error!proc_identity.Identity {
-        const self: *Lowerer = @ptrCast(@alignCast(context));
-        return (try self.specIdentity(self.fn_specs.items[@backingInt(target)])).bytes;
     }
 
     fn noteWorkerExpr(self: *Lowerer, data: Lifted.ExprData) void {
@@ -15587,13 +15550,6 @@ const pack_trace_available = @import("builtin").link_libc and build_options.dev_
 /// `ROC_PACK_TRACE` is set: print every object cache lookup.
 fn packTraceEnabled() bool {
     return std.c.getenv("ROC_PACK_TRACE") != null;
-}
-
-fn rootRunsAtCompileTime(request: check.CheckedModule.RootRequest) bool {
-    return switch (request.kind) {
-        .compile_time_constant, .compile_time_callable => true,
-        .runtime_entrypoint, .provided_export, .platform_required_binding, .hosted_export, .test_expect, .repl_expr, .dev_expr => false,
-    };
 }
 
 test "value encoding preserves tag identities but excludes finite call targets" {

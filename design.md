@@ -521,7 +521,6 @@ reads that distinction, or anything else, back out of the spelling:
 | --- | --- | --- |
 | `roc__d{N}` | the value owner `N` holds | program |
 | `roc__d{N}_{k}` | the `k`th further node (from 1) of owner `N`'s value | program |
-| `roc__b{N}` | the compile-time evaluator's cell holding the address of slot `N`'s value | program |
 | `roc__h{hash}` | a datum named by content: a string literal's backing, or a constant an object-cache pack carries | shared |
 | `roc__p{hash}` | a procedure, by its `ProcIdentity` | shared |
 
@@ -546,7 +545,7 @@ A symbol's scope says whether its name means the same thing in every program,
 which decides whether code referring to it can be cached and linked into
 another program. Code generation declares the scope of every symbol it refers
 to when it interns it (`SymbolTable.Scope`): `shared` for procedures, refcount
-helpers, builtins, host and hosted functions, and content-named data; `program` for slot values and binding cells, and for the
+helpers, builtins, host and hosted functions, and content-named data; `program` for slot values, and for the
 Boxy runtime, whose calls index this program's descriptor sidecar. Symbols
 only object emission names declare no scope, and reading the scope of a
 relocation target no reference declared is an invariant violation. Relocations
@@ -596,6 +595,15 @@ thirty, by last use (`max(atime, mtime)`), and then deletes the least
 recently used persistent cache files of every family until the cache fits
 `CacheConfig.max_size_mb`. Eviction only deletes files; it never changes what
 a build writes.
+
+A pack entry's code is a function of the procedure alone: every reference
+from it into code placed with it, and every reference by identity to code
+placed elsewhere, holds no displacement in the stored bytes
+(`LirCodeGen.normalizeArtifactRefSite`), since placement patches each again.
+Two programs that compile one procedure therefore store the same bytes for it
+however their buffers were laid out, which is what lets a dev build take
+compile-time evaluation's code for a procedure as its own (tested by
+`ctfe_code_identity_test`).
 
 A pack's line entries index the pack's own source-file table, which names
 each file by its module's content identity in the order the lines first use
@@ -804,13 +812,11 @@ instead, where its body is still lowered. Final procedure identity validation
 is unchanged. Old contracts use a different format and storage namespace and
 are declined before any body is skipped.
 
-Monotype reservation may consume an offered
-closed object specialization during checking finalization under the same proof
-that permits Direct LIR to splice it: no checked module or relation in the
-program has a `compile_time_only` exhaustiveness site whose verdict requires
-observing evaluator branches. The proof is computed before Monotype and carried
-unchanged to Direct LIR. A hosted placeholder created by an early cache hit
-must not bypass this proof when reached by compile-time evaluation.
+Monotype reservation may consume an offered closed object specialization
+during checking finalization, as Direct LIR may splice it: spliced code
+classifies its crashes from the failure sites it carries exactly as compiled
+code does ("Compile-Time Failure Sites"), so evaluation reports the same
+failures whichever it runs.
 
 This changes when an eligible body is skipped, not which entries a pack may
 offer. The producer still excludes the transitive closure of specialized
@@ -1883,10 +1889,11 @@ programs: optimized builds keep the runtime seed, and dev builds and
 compile-time evaluation compile the same code. Every command also gives evaluation the same
 object cache (`CompileTimeObjectCache`): the host's dev-policy packs, whose
 procedures run expects. The evaluator's program takes a hit for a procedure
-it runs (under `comptime_closure_hits`) only when the entry names that
-procedure's own identity, and splices its cached code in place of compiling
-it; a cache entry is the procedure its key names, so the cache too changes
-only what evaluation compiles. `roc check` and `roc build` therefore
+it runs only when the entry names that procedure's own identity, and splices
+its cached code in place of compiling it; a cache entry is the procedure its
+key names, and carries the failure sites that classify its crashes
+("Compile-Time Failure Sites"), so the cache too changes only what
+evaluation compiles. `roc check` and `roc build` therefore
 compute the same value for every root both evaluate: a build cannot report an
 error in the program that checking did not, checking reports the errors of
 roots no build demands, and `--opt` never moves a computation between compile
@@ -2080,25 +2087,23 @@ parked, unparked, and upgraded requests, and never-run stubs.
 
 #### Compile-Time Object Packs
 
-A runtime build fills the object cache with packs of runtime-policy code;
-compile-time evaluation reads them. A command that only checks fills it too:
-once checking completes with no error, the CLI compiles the compile-time
-evaluation program's LIR again for the object cache (no compile-time hooks,
-ordinary relocatable code) and stores its keyed closed specializations as
-one pack, under the same withholding rules as a runtime pack: an entry whose
-closure reads a compile-time value slot, names another program-local symbol,
-or still converts a literal is not offered. The pack is filed beside the root
-module's packs in a separate compile-time store (`<target>-comptime`) under a
-key derived from the root module's code-generation key, which no runtime pack
-uses, so it never stands in for, removes, or completes a runtime pack, and an
-edited root files a new pack beside the old one. Every compile-time
-evaluation provider loads the compile-time store after the runtime store, so
-an entry both offer is served by the runtime pack. The provider a dev build
-for the host shares with its runtime program does not load it: that program
-must be served runtime-policy code only. Evaluation serves a compile-time
-pack's entries exactly as it serves runtime packs' (see "Early Compile-Time
-Object Reuse"), so a later check whose roots must be evaluated again splices
-the code instead of lowering and compiling it.
+A runtime build fills the object cache with packs of dev code; compile-time
+evaluation reads them. A command that only checks fills it too: compile-time
+evaluation runs a dev build's code, so once checking completes with no error,
+the CLI files the code evaluation ran, lifted from each stage's image
+(`CompletedStages.artifacts`) with one copy of each procedure, as one pack of
+its keyed closed specializations, under the same withholding rules as a
+runtime pack: an entry whose closure names a program-local symbol it does not
+carry, or still converts a literal, is not offered. A completed value the
+code reads is carried, named by its content, so an entry reading one is
+offered with the value it read. The pack is filed beside the root module's
+dev packs under a key derived from the root module's code-generation key,
+which covers every module the program's code comes from and no runtime pack
+uses, so an edited program files a new pack beside the old one. Evaluation
+and a dev build for the host serve its entries exactly as they serve runtime
+packs' (see "Early Compile-Time Object Reuse"), so a later check whose roots
+must be evaluated again, or a build of the checked program, splices the code
+instead of lowering and compiling it.
 
 Native compile-time instruction generation consumes an explicit, read-only LIR
 demand closure seeded by compile-time root procedures and materialized callable
@@ -2127,10 +2132,14 @@ reuse across execution policies. Rejected native procedure code is emitted
 from the consumer's explicit LIR; no body hashing or reconstruction proves reuse.
 
 Native procedure code contains no process-local callback or slot addresses,
-and compile-time code calls nothing in the compiler. Mutable root bindings use producer-declared pointer
-cells with external relocations; JIT image linking supplies the original slot
-address without copying its mutable storage. Immutable carried data is captured
-only from referenced export closure using one prepared catalog. Native procedure code ownership
+and compile-time code calls nothing in the compiler. Compile-time evaluation
+compiles its procedures as a dev build's object code, so a procedure's code
+in evaluation is the code a build links, and links that code into its own
+image (`HostSplice`): the program's static data, the slots evaluation
+publishes completed values into included, is placed in a writable region at
+the end of the image, where object code's PC-relative data references reach
+it. Immutable carried data is captured only from referenced export closure
+using one prepared catalog. Native procedure code ownership
 includes code, referenced data, names, and metadata, so image teardown and worker
 scratch reset cannot invalidate a later consumer. Source lines remain tied to
 their producer source-file domain; persistent cross-program packs must not

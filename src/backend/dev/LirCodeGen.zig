@@ -322,13 +322,6 @@ pub const SymbolicReference = struct {
     veneer: ?u32 = null,
 };
 
-/// One same-image pointer cell. Its zero bytes and absolute symbolic target are
-/// carried by the artifact; only an execution-image finalizer binds an address.
-pub const BindingDataCell = struct {
-    name: []const u8,
-    target_name: []const u8,
-};
-
 /// How native execution finds a hosted function's address: the in-process
 /// host that will run the code resolves each hosted symbol by name, exactly
 /// as a linker resolves it for an object file. A host that provides no
@@ -870,7 +863,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         borrowed_static_data_symbols: ?*const Self = null,
         assembled_symbolic_refs: std.ArrayList(SymbolicReference) = .empty,
         assembled_thunks: std.AutoHashMapUnmanaged(lir.ProcIdentity, usize) = .{},
-        binding_data_cells: std.ArrayList(BindingDataCell) = .empty,
         owned_symbol_names: std.ArrayList([]u8) = .empty,
 
         /// Scratch buffer for argument locations during lambda body inlining
@@ -1339,7 +1331,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.compiled_rc_helpers.deinit();
             self.assembled_symbolic_refs.deinit(self.allocator);
             self.assembled_thunks.deinit(self.allocator);
-            self.binding_data_cells.deinit(self.allocator);
             for (self.owned_symbol_names.items) |name| self.allocator.free(name);
             self.owned_symbol_names.deinit(self.allocator);
             self.unwind_functions.deinit(self.allocator);
@@ -1396,7 +1387,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.fragment_context = .{};
             self.assembled_symbolic_refs.clearRetainingCapacity();
             self.assembled_thunks.clearRetainingCapacity();
-            self.binding_data_cells.clearRetainingCapacity();
             for (self.owned_symbol_names.items) |name| self.allocator.free(name);
             self.owned_symbol_names.clearRetainingCapacity();
             self.unwind_functions.clearRetainingCapacity();
@@ -16418,29 +16408,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (builtin.mode == .debug) base.invariant("Dev/codegen invariant violated: static value {d} has no producer declaration", .{@backingInt(id)});
                 unreachable;
             };
-            if (self.fragment_mode and self.fragment_source_mode != .object_file) {
-                if (entry.symbol == null) {
-                    const name = try std.fmt.allocPrint(self.allocator, "roc__b{d}", .{@backingInt(id)});
-                    defer self.allocator.free(name);
-                    const owned_cell_symbol = try self.internSymbolName(name, .program);
-                    const cell_symbol = try self.codegen.symbols.internInternal(self.allocator, self.symbolName(owned_cell_symbol), .program);
-                    const target_symbol = try self.internSymbolName(entry.name, .program);
-                    try self.binding_data_cells.append(self.allocator, .{
-                        .name = self.symbolName(cell_symbol),
-                        .target_name = self.symbolName(target_symbol),
-                    });
-                    entry.symbol = cell_symbol;
-                }
-                try self.codegen.emitLoadDataAddress(dst_reg, entry.symbol.?);
-                try self.emitLoad(.w64, dst_reg, dst_reg, 0);
-                return;
-            }
             if (entry.symbol == null) entry.symbol = try self.codegen.symbols.internInternal(self.allocator, entry.name, .program);
             try self.codegen.emitLoadDataAddress(dst_reg, entry.symbol.?);
-        }
-
-        pub fn bindingDataCells(self: *const Self) []const BindingDataCell {
-            return self.binding_data_cells.items;
         }
 
         fn builtinSymbol(self: *Self, function: BuiltinFn) Allocator.Error!SymbolTable.Id {
@@ -23231,6 +23200,47 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Remove placement-specific stub displacements using producer records.
+        /// Clear the placement-specific displacement of a reference at
+        /// `site` in an artifact's `bytes`, and of the in-body veneer it
+        /// goes through, as if it named itself. Placement patches every
+        /// reference again, so an artifact's bytes are then the same however
+        /// the buffer it was lifted from was laid out.
+        pub fn normalizeArtifactRefSite(bytes: []u8, site: usize, form: CodeRefForm, veneer: ?usize) void {
+            if (comptime target.toCpuArch() == .aarch64) {
+                const EmitT = aarch64.Emit(target);
+                switch (form) {
+                    .call, .inline_call => {
+                        const word = std.mem.readInt(u32, bytes[site..][0..4], .little);
+                        std.mem.writeInt(u32, bytes[site..][0..4], word & 0xFC000000, .little);
+                    },
+                    .addr => {
+                        const adr_existing = std.mem.readInt(u32, bytes[site..][0..4], .little);
+                        const movz_existing = std.mem.readInt(u32, bytes[site + 4 ..][0..4], .little);
+                        const dst: GeneralReg = @fromBackingInt(@intCast(@as(u5, @truncate(adr_existing & 0x1F))));
+                        const scratch: GeneralReg = @fromBackingInt(@intCast(@as(u5, @truncate(movz_existing & 0x1F))));
+                        writePcRelSelf(bytes, site, EmitT, dst, scratch);
+                    },
+                }
+                if (veneer) |offset| writePcRelSelf(bytes, offset, EmitT, .IP0, .IP1);
+            } else {
+                switch (form) {
+                    .call => @memset(bytes[site + 1 ..][0..4], 0),
+                    .addr => @memset(bytes[site + 3 ..][0..4], 0),
+                    .inline_call => unreachable,
+                }
+            }
+        }
+
+        fn writePcRelSelf(bytes: []u8, loc: usize, comptime EmitT: type, dst: GeneralReg, scratch: GeneralReg) void {
+            const words = [4]u32{
+                EmitT.encodeAdrZero(dst),
+                EmitT.encodeMovz64(scratch, 0, 0),
+                EmitT.encodeMovk64(scratch, 0, 1),
+                EmitT.encodeAddSubRegRegReg64(dst, dst, scratch, false),
+            };
+            for (words, 0..) |word, i| std.mem.writeInt(u32, bytes[loc + i * 4 ..][0..4], word, .little);
+        }
+
         pub fn normalizeArtifactCode(self: *const Self, start: usize, bytes: []u8) void {
             if (comptime target.toCpuArch() == .aarch64) {
                 for (self.codegen.extern_stubs.items) |stub| {
@@ -26084,22 +26094,25 @@ test "independent fragments record their static data use" {
     try cg.emitProcFragment(data_proc);
     try std.testing.expect(cg.getFragmentContextDependencies().static_data);
     try std.testing.expectEqual(@as(usize, 0), source.getSymbolNames().len);
-    try std.testing.expectEqual(@as(usize, 1), cg.bindingDataCells().len);
-    try std.testing.expectEqualStrings("roc__b8", cg.bindingDataCells()[0].name);
-    try std.testing.expectEqualStrings("fragment_static_value", cg.bindingDataCells()[0].target_name);
+    // The read names the value's own symbol.
+    var reads_value = false;
     for (cg.getRelocations()) |reloc| {
         switch (reloc) {
             .local_data => return error.NativePointerInFragment,
-            .linked_function, .linked_data, .jmp_to_return, .retired => {},
+            .linked_data => |data| {
+                if (std.mem.eql(u8, cg.getSymbolNames()[@backingInt(data.symbol)], "fragment_static_value")) reads_value = true;
+            },
+            .linked_function, .jmp_to_return, .retired => {},
         }
     }
+    try std.testing.expect(reads_value);
     try std.testing.checkAllAllocationFailures(allocator, struct {
-        fn run(a: Allocator, owner: *const HostLirCodeGen, id: LIR.LirProcSpecId) (Allocator.Error || error{TestExpectedEqual})!void {
+        fn run(a: Allocator, owner: *const HostLirCodeGen, id: LIR.LirProcSpecId) (Allocator.Error || error{TestUnexpectedResult})!void {
             var lane = try HostLirCodeGen.init(a, owner.store, owner.layout_store, .{}, &.{}, .default);
             defer lane.deinit();
             lane.borrowStaticDataSymbolsFrom(owner);
             try lane.emitProcFragment(id);
-            try std.testing.expectEqual(@as(usize, 1), lane.bindingDataCells().len);
+            try std.testing.expect(lane.getFragmentContextDependencies().static_data);
         }
     }.run, .{ &source, data_proc });
 }

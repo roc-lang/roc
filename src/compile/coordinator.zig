@@ -1255,6 +1255,10 @@ pub const Coordinator = struct {
     checked_program: bool = false,
     runtime_lowering: ?compile_build.RuntimeLoweringConfig = null,
     compile_time_object_cache: ?eval.CompileTimeFinalization.CompileTimeObjectCache = null,
+    /// Keep the code compile-time evaluation ran as artifacts even without
+    /// an object cache to publish it to, so a test can compare it with a
+    /// build's code.
+    keep_compile_time_artifacts: bool = false,
     /// The checked modules whose `expect`s are the developer's own tests, in
     /// the order their test roots join compile-time evaluation. Every command
     /// that checks the program evaluates the same tests' compile-time work.
@@ -2864,6 +2868,7 @@ pub const Coordinator = struct {
         var options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, &self.ctfe_timing);
         options.post_check_executor = self.postCheckExecutor();
         options.object_cache = self.compile_time_object_cache;
+        options.keep_artifacts = self.compile_time_object_cache != null or self.keep_compile_time_artifacts;
         options.cached_debug_modules = cached_debug_modules.items;
         options.defer_debug_replay = !replay_cached_debug;
         var runtime_target: ?lir.CheckedPipeline.TargetConfig = if (self.runtime_lowering) |config| config.target else null;

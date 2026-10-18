@@ -293,14 +293,10 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
 const CompileTimeObjectCache = struct {
     allocator: Allocator,
     io: std.Io,
+    /// The host's dev packs, which compile-time evaluation publishes its own
+    /// programs' code into too.
     store: pack_store.Store,
-    /// The packs compile-time evaluation publishes from its own programs.
-    compile_time_store: pack_store.Store,
     packs: pack_store.LoadedPacks,
-    /// Whether the provider offers the compile-time store's packs. A dev
-    /// build for the host shares this provider with its runtime program,
-    /// which must be served only runtime-policy code.
-    offers_compile_time_packs: bool = true,
     /// The optimized object packs a linked dev build for the host offers its
     /// runtime program (`pack_store.Pending.linked_store`).
     linked_store: ?*const pack_store.Store = null,
@@ -309,7 +305,6 @@ const CompileTimeObjectCache = struct {
         const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
         self.packs.pending = .{
             .store = &self.store,
-            .compile_time_store = if (self.offers_compile_time_packs) &self.compile_time_store else null,
             .linked_store = self.linked_store,
             .io = self.io,
             .build_env = build_env,
@@ -319,16 +314,10 @@ const CompileTimeObjectCache = struct {
     fn deinit(context: *anyopaque) void {
         const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
         self.packs.deinit();
-        self.compile_time_store.deinit();
         self.store.deinit();
         self.allocator.destroy(self);
     }
 };
-
-/// The store directory name of the packs compile-time evaluation publishes,
-/// in place of an optimization level: their code is lowered under the
-/// compile-time LIR policy, which no runtime build uses.
-const compile_time_pack_policy = "comptime";
 
 /// The compile-time object cache, when a build's own runtime packs are the
 /// same store: a dev build for the host.
@@ -336,8 +325,6 @@ fn sharedCompileTimeObjectCache(build_env: *BuildEnv, target: RocTarget, opt: cl
     if (opt != .dev or target != RocTarget.detectNative()) return null;
     const owner = build_env.compile_time_object_cache_owner orelse return null;
     const cache: *CompileTimeObjectCache = @ptrCast(@alignCast(owner.context));
-    // The runtime program reads these offers too.
-    cache.offers_compile_time_packs = false;
     return cache;
 }
 
@@ -349,20 +336,11 @@ fn attachCompileTimeObjectCache(ctx: *CliCtx, build_env: *BuildEnv, verbose: boo
         error.NoHomeDirectory => return,
     };
     errdefer store.deinit();
-    var compile_time_store = pack_store.Store.init(ctx.gpa, store_config, RocTarget.detectNative(), compile_time_pack_policy) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.NoHomeDirectory => {
-            store.deinit();
-            return;
-        },
-    };
-    errdefer compile_time_store.deinit();
     const cache = try ctx.gpa.create(CompileTimeObjectCache);
     cache.* = .{
         .allocator = ctx.gpa,
         .io = ctx.io.std_io,
         .store = store,
-        .compile_time_store = compile_time_store,
         .packs = pack_store.LoadedPacks.init(ctx.gpa),
     };
     // One heap-owned collection supplies both lookup offers and splice artifacts.
@@ -9005,14 +8983,14 @@ fn objectPackBytes(
     return try backend.dev.PackFile.writeObject(ctx.gpa, object, identities.items, specs.items);
 }
 
-/// Publish the code compile-time evaluation compiled for this program, so a
-/// later compatible evaluation splices it instead of compiling it again
-/// (design.md "Compile-Time Object Packs"). The pack holds the keyed closed
-/// specializations of the evaluation's program under the same withholding
-/// rules as a runtime pack, filed beside the root module's packs in the
-/// compile-time store under a key no runtime pack uses. A program whose
-/// evaluation reported an error publishes nothing.
-fn publishCompileTimePack(ctx: *CliCtx, build_env: *BuildEnv) (Allocator.Error || error{NativeCompilationFailed})!void {
+/// Publish the code compile-time evaluation ran for this program, so a later
+/// compatible evaluation splices it instead of compiling it again (design.md
+/// "Compile-Time Object Packs"). The pack holds the keyed closed
+/// specializations of the evaluation's programs under the same withholding
+/// rules as a runtime pack, filed beside the root module's dev packs under a
+/// key no runtime pack uses. A program whose evaluation reported an error
+/// publishes nothing.
+fn publishCompileTimePack(ctx: *CliCtx, build_env: *BuildEnv) Allocator.Error!void {
     if (comptime !backend.host_lir_codegen_available) return;
     const owner = build_env.compile_time_object_cache_owner orelse return;
     const cache: *CompileTimeObjectCache = @ptrCast(@alignCast(owner.context));
@@ -9026,47 +9004,12 @@ fn publishCompileTimePack(ctx: *CliCtx, build_env: *BuildEnv) (Allocator.Error |
     const root_artifact = root_semantic.checked_artifact orelse return;
     const placement = build_env.packPlacementForArtifactKey(root_artifact.key) orelse return;
     const key = pack_store.compileTimePackKey(root_artifact.codeGenerationKey().bytes);
-    const store = &cache.compile_time_store;
+    const store = &cache.store;
     if (try store.has(placement.origin, placement.identity, key)) return;
 
-    // Each stage of the evaluation is its own program; the pack offers the
-    // procedures of all of them.
-    var sets = std.ArrayList(backend.dev.ProcArtifact.Set).empty;
-    defer {
-        for (sets.items) |*set| set.deinit();
-        sets.deinit(ctx.gpa);
-    }
-    for (stages) |host| {
-        var object_compiler = backend.ObjectFileCompiler.initForPack(ctx.gpa);
-        object_compiler.post_check_executor = build_env.postCheckExecutor();
-        object_compiler.enable_hot_reload = host.lir_result.erased_capture_prefix != 0;
-        object_compiler.emit_object = false;
-        // Procedures the evaluation spliced from packs are spliced here too.
-        object_compiler.splice_source = cache.packs.spliceSource();
-        const exports = if (host.frozen_static_data) |frozen| frozen.exports else &.{};
-        var compiled = object_compiler.compileToObjectFile(
-            &host.lir_result.store,
-            &host.lir_result.layouts,
-            &.{},
-            exports,
-            host.lir_result.store.getProcSpecs(),
-            host.lir_result.boxy_erased_arg_desc_offsets.items,
-            host.lir_result.boxy_erased_arg_desc_params.items,
-            host.lir_result.boxy_worker_procs.items,
-            RocTarget.detectNative(),
-        ) catch |err| {
-            std.log.err("Compile-time pack compilation failed: {}", .{err});
-            return error.NativeCompilationFailed;
-        };
-        defer compiled.deinit();
-        const set = compiled.artifacts orelse continue;
-        compiled.artifacts = null;
-        try sets.append(ctx.gpa, set);
-    }
-    const set_ptrs = try ctx.gpa.alloc(*const backend.dev.ProcArtifact.Set, sets.items.len);
-    defer ctx.gpa.free(set_ptrs);
-    for (sets.items, set_ptrs) |*set, *ptr| ptr.* = set;
-    var combined = try backend.dev.ProcArtifact.combine(ctx.gpa, set_ptrs);
+    // The pack holds the code evaluation ran: each stage of the evaluation is
+    // its own program, and the pack offers the procedures of all of them.
+    var combined = try completed.combinedArtifacts(ctx.gpa);
     defer combined.deinit();
     const comptime_reads = completed.specComptimeReads() orelse {
         if (builtin.mode == .debug) std.debug.panic("a program written to the object cache recorded no compile-time reads", .{});
