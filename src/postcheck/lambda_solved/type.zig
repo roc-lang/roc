@@ -181,7 +181,7 @@ fn slotContent(slots: []const Slot, named: []const NamedPayload, erased: []const
     return switch (slots[@backingInt(id)]) {
         .named => |index| .{ .named = named[index] },
         .erased => |index| .{ .erased = erased[index] },
-        inline else => |payload, tag| @unionInit(Content, @tagName(tag), payload),
+        inline .link, .unbound, .forall, .primitive, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .zst, .mono => |payload, tag| @unionInit(Content, @tagName(tag), payload),
     };
 }
 
@@ -265,7 +265,7 @@ pub const Store = struct {
         return switch (content) {
             .named => |payload| .{ .named = try storePayload(NamedPayload, self.allocator, &self.named_payloads, if (previous) |slot| if (slot == .named) slot.named else null else null, payload) },
             .erased => |payload| .{ .erased = try storePayload(ErasedPayload, self.allocator, &self.erased_payloads, if (previous) |slot| if (slot == .erased) slot.erased else null else null, payload) },
-            inline else => |payload, tag| @unionInit(Slot, @tagName(tag), payload),
+            inline .link, .unbound, .forall, .primitive, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .zst, .mono => |payload, tag| @unionInit(Slot, @tagName(tag), payload),
         };
     }
 
@@ -296,7 +296,7 @@ pub const Store = struct {
     fn isLink(self: *const Store, id: TypeVarId) ?TypeVarId {
         return switch (self.vars.items[@backingInt(id)]) {
             .link => |target| target,
-            else => null,
+            .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .mono => null,
         };
     }
 
@@ -434,7 +434,7 @@ pub const Store = struct {
             var current = id;
             while (true) switch (self.vars[@backingInt(current)]) {
                 .link => |target| current = target,
-                else => return current,
+                .unbound, .forall, .primitive, .named, .record, .tuple, .tag_union, .list, .box, .func, .lambda_set, .erased, .zst, .mono => return current,
             };
         }
 
