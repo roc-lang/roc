@@ -1109,7 +1109,6 @@ pub const JumpExpr = struct {
 pub const ComptimeSiteKind = enum(u8) {
     match,
     destructure,
-    if_,
 };
 
 /// Metadata for one compile-time-observed control-flow site.
@@ -1122,14 +1121,6 @@ pub const ComptimeSite = struct {
     owner: Common.LoweringModuleId,
     region: base.Region,
     checked_site: ?checked.CheckedExhaustivenessSiteId = null,
-    branch_regions: []const base.Region = &.{},
-};
-
-/// Expression wrapper that records a branch hit before evaluating `body`.
-pub const ComptimeBranchTaken = struct {
-    site: ComptimeSiteId,
-    branch_index: u32,
-    body: ExprId,
 };
 
 /// Typed Monotype expression.
@@ -1260,7 +1251,6 @@ pub const ExprData = union(enum(u8)) {
     /// message; compile-time evaluation that reaches it discards the result
     /// instead of reporting the problem a second time.
     checked_error: StringLiteralId,
-    comptime_branch_taken: ComptimeBranchTaken,
     comptime_exhaustiveness_failed: ComptimeSiteId,
     dbg: ExprId,
     expect_err: ExpectErrExpr,
@@ -1883,12 +1873,7 @@ pub const ProgramBuilder = struct {
             };
         }
         for (self.comptime_sites.unsafeRawItemsForView()) |site| {
-            var copied = site;
-            copied.branch_regions = try allocator.dupe(base.Region, site.branch_regions);
-            result.comptime_sites.append(allocator, copied) catch |err| {
-                allocator.free(copied.branch_regions);
-                return err;
-            };
+            try result.comptime_sites.append(allocator, site);
         }
         for (self.local_names.unsafeRawItemsForView()) |name| {
             const copied = try allocator.dupe(u8, name);
@@ -1917,9 +1902,6 @@ pub const ProgramBuilder = struct {
             self.allocator.free(file.qualified_name);
         }
         self.source_files.deinit(self.allocator);
-        for (self.comptime_sites.unsafeRawItemsForView()) |site| {
-            self.allocator.free(site.branch_regions);
-        }
         self.comptime_sites.deinit(self.allocator);
         self.lowering_modules.deinit(self.allocator);
         self.comptime_value_roots.deinit(self.allocator);
@@ -2210,17 +2192,13 @@ pub const ProgramBuilder = struct {
         owner: Common.LoweringModuleId,
         region: base.Region,
         checked_site: ?checked.CheckedExhaustivenessSiteId,
-        branch_regions: []const base.Region,
     ) std.mem.Allocator.Error!ComptimeSiteId {
-        const owned_branch_regions = try self.allocator.dupe(base.Region, branch_regions);
-        errdefer self.allocator.free(owned_branch_regions);
         const id: ComptimeSiteId = @fromBackingInt(@intCast(@as(u32, @intCast(self.comptime_sites.len()))));
         try self.comptime_sites.append(self.allocator, .{
             .kind = kind,
             .owner = owner,
             .region = region,
             .checked_site = checked_site,
-            .branch_regions = owned_branch_regions,
         });
         return id;
     }
@@ -3021,7 +2999,7 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     var owner_key = std.mem.zeroes(check.CheckedModule.ModuleId);
     owner_key.bytes[0] = 9;
     const owner = try source.addLoweringModule(owner_key);
-    const site = try source.addComptimeSite(.if_, owner, .zero(), null, &.{.zero()});
+    const site = try source.addComptimeSite(.match, owner, .zero(), null);
     const name = try source.names.internExportName("entry");
     try source.proc_debug_names.put(@fromBackingInt(@intCast(1)), name);
     const root_a: Common.ComptimeValueRoot = .{
@@ -3057,7 +3035,6 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     try std.testing.expectEqualStrings("value", copy.stringLiteralText(literal));
     try std.testing.expectEqualStrings("value", copy.localName(local));
     try std.testing.expectEqualStrings("app/App.roc", copy.view().source_files[file].qualified_name);
-    try std.testing.expectEqual(@as(usize, 1), copy.comptimeSite(site).branch_regions.len);
     try std.testing.expectEqual(owner, copy.comptimeSite(site).owner);
     try std.testing.expectEqualDeep(owner_key, copy.view().lowering_modules[@backingInt(owner)]);
     try std.testing.expectEqual(name, copy.proc_debug_names.get(@fromBackingInt(@intCast(1))).?);

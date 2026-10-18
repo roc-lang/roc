@@ -217,7 +217,6 @@ pub const Inventory = struct {
                         .break_,
                         .continue_,
                         .return_,
-                        .comptime_branch_taken,
                         .expect_err,
                         .literal_rejected,
                         .try_sequence,

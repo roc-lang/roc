@@ -61,7 +61,6 @@ const RedundantPattern = problem_mod.RedundantPattern;
 const UnmatchablePattern = problem_mod.UnmatchablePattern;
 const MatchAltBinderMissing = problem_mod.MatchAltBinderMissing;
 const DiscardedVarUpdate = problem_mod.DiscardedVarUpdate;
-const ComptimeUnusedBranch = problem_mod.ComptimeUnusedBranch;
 const ComptimeCondition = problem_mod.ComptimeCondition;
 
 // Type declaration errors
@@ -1097,7 +1096,6 @@ pub const ReportBuilder = struct {
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
             .match_alt_binder_missing => |data| return self.buildMatchAltBinderMissingReport(data),
             .discarded_var_update => |data| return self.buildDiscardedVarUpdateReport(data),
-            .comptime_unused_branch => |data| return self.buildComptimeUnusedBranchReport(data),
             .comptime_condition => |data| return self.buildComptimeConditionReport(data),
         }
     }
@@ -5827,29 +5825,6 @@ pub const ReportBuilder = struct {
         });
         defer self.gpa.free(reassignment);
         try report.document.addCodeBlock(try report.addOwnedString(reassignment));
-
-        return report;
-    }
-
-    fn buildComptimeUnusedBranchReport(self: *Self, data: ComptimeUnusedBranch) Allocator.Error!Report {
-        const noun = switch (data.kind) {
-            .match => "match alternative",
-            .if_ => "if branch",
-        };
-        var report = try Report.init(self.gpa, "Unused Branch", "", .warning);
-        errdefer report.deinit();
-        try D.renderSliceInto(&.{
-            D.bytes("This"),
-            D.bytes(noun),
-            D.bytes("was not taken during compile-time evaluation."),
-        }, self, &report, &report.headline);
-
-        try self.addSourceRegionOf(&report.document, data.branch_region, .warning_highlight);
-        try report.document.addLineBreak();
-
-        try D.renderSlice(&.{
-            D.bytes("Note: This warning is empirical; it only describes the compile-time evaluation that ran for this definition."),
-        }, self, &report);
 
         return report;
     }

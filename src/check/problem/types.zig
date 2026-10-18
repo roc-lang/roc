@@ -134,7 +134,6 @@ pub const Problem = union(enum) {
     unmatchable_pattern: UnmatchablePattern,
     match_alt_binder_missing: MatchAltBinderMissing,
     discarded_var_update: DiscardedVarUpdate,
-    comptime_unused_branch: ComptimeUnusedBranch,
     comptime_condition: ComptimeCondition,
     derived_parser_error_row: DerivedParserErrorRow,
     derived_codec_open_record: DerivedCodecOpenRecord,
@@ -722,16 +721,6 @@ pub const NonExhaustiveDestructure = struct {
     missing_patterns: MissingPatternsRange,
     /// This was discovered by compile-time evaluation taking the generated miss branch.
     empirical: bool = false,
-};
-
-/// A compile-time-only branch or match alternative was not taken by compile-time evaluation.
-pub const ComptimeUnusedBranch = struct {
-    kind: enum {
-        match,
-        if_,
-    },
-    site_region: base.Region,
-    branch_region: base.Region,
 };
 
 /// A conditional expression was known while checking, so it will always make the same choice.

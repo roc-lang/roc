@@ -71,7 +71,6 @@ fn retainReachesPrepare(
             .store_tag,
             .debug,
             .expect,
-            .comptime_branch_taken,
             .incref,
             => |stmt| current = stmt.next,
             .expect_err,

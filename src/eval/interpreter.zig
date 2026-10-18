@@ -434,7 +434,6 @@ pub const Interpreter = struct {
     failed_stmt_inline_scope: InlineScopeId = InlineScopeId.none,
     /// The crash statement that ended the current evaluation, if one did.
     failed_crash_stmt: ?LIR.CFStmtId = null,
-    comptime_branch_hits: std.ArrayList(ComptimeBranchHit),
     comptime_failed_site: ?LIR.ComptimeSiteId = null,
     /// Heap-pinned owner used by host-facing integrations whose erased
     /// callables can outlive the evaluation that created them.
@@ -467,11 +466,6 @@ pub const Interpreter = struct {
     pub const HostedCallHandler = struct {
         context: *anyopaque,
         dispatch: *const fn (*anyopaque, HostedCall) Error!void,
-    };
-
-    pub const ComptimeBranchHit = struct {
-        site: LIR.ComptimeSiteId,
-        branch_index: u32,
     };
 
     /// Runs the static erased callables of one interpreter static-data image.
@@ -997,12 +991,10 @@ pub const Interpreter = struct {
             },
             .call_stack = .empty,
             .failed_call_stack = .empty,
-            .comptime_branch_hits = .empty,
         };
     }
 
     pub fn deinit(self: *LirInterpreter) void {
-        self.comptime_branch_hits.deinit(self.allocator);
         self.failed_call_stack.deinit(self.allocator);
         self.call_stack.deinit(self.allocator);
         self.pending_erased_storage.deinit(self.allocator);
@@ -1139,10 +1131,6 @@ pub const Interpreter = struct {
         return self.comptime_failed_site;
     }
 
-    pub fn getComptimeBranchHits(self: *const LirInterpreter) []const ComptimeBranchHit {
-        return self.comptime_branch_hits.items;
-    }
-
     fn recordFailedCallStackIfUnset(self: *LirInterpreter) Allocator.Error!void {
         if (self.failed_call_stack.items.len != 0) return;
         try self.failed_call_stack.appendSlice(self.allocator, self.call_stack.items);
@@ -1277,7 +1265,6 @@ pub const Interpreter = struct {
     fn resetRetainedExecution(self: *LirInterpreter) void {
         self.call_stack.clearRetainingCapacity();
         self.failed_call_stack.clearRetainingCapacity();
-        self.comptime_branch_hits.clearRetainingCapacity();
         self.scratch.reset();
         self.frame_stack.reset();
 
@@ -1647,7 +1634,6 @@ pub const Interpreter = struct {
         self.failed_stmt_region = base.Region.zero();
         self.failed_stmt_inline_scope = InlineScopeId.none;
         self.failed_crash_stmt = null;
-        self.comptime_branch_hits.clearRetainingCapacity();
         self.comptime_failed_site = null;
         if (builtin.mode == .debug) self.inflight_zeroed_box_payloads.clearRetainingCapacity();
         // The result is copied to scratch before the root's frame ends, so
@@ -3347,13 +3333,6 @@ pub const Interpreter = struct {
                 },
                 .comptime_exhaustiveness_failed => |failed| {
                     return self.comptimeExhaustivenessFailed(failed.site);
-                },
-                .comptime_branch_taken => |marker| {
-                    try self.comptime_branch_hits.append(self.allocator, .{
-                        .site = marker.site,
-                        .branch_index = marker.branch_index,
-                    });
-                    current = marker.next;
                 },
                 .incref => |inc| {
                     if (builtin.mode == .debug and !frame.isAssigned(inc.value)) {

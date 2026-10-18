@@ -13263,17 +13263,18 @@ fail silently rather than loudly.
 
 Consequently finalization selects the CheckedModule data, `ConstStore`, problem
 store, and completion state of a row's declared owner. A compile-time root's
-evaluation reaches sites belonging to several modules; each site's pending
-static exhaustiveness diagnostic is resolved or discarded in its own owner's
-problem store, and a site whose validation was delegated to a specific root is
-resolved only by that root, which only its own module's roots can name. Branch
-coverage stays with the running root's own module: one caller reaching an
-imported body is no account of that module's branches.
+evaluation reaches sites belonging to several modules; an empirical failure at
+a site is reported in its own owner's problem store. A site whose validation
+was delegated to a specific root is decided by that root's outcome once every
+root has run: evaluation ran the site's code, so the site is reported exactly
+when evaluation reached a missing case, unless the root is a guarded root that
+failed and left its original expression to runtime, which decides the site
+statically again. Evaluation records nothing about which branches it took.
 
 Content-identical modules in different packages may share a checked identity
 while retaining separate checked modules and diagnostic stores. Repeated root
 plans for that identity must agree in all execution and representation data.
-Finalization completes each checked module's own constant store and coverage,
+Finalization completes each checked module's own constant store,
 writes shared slots and debug observations once per identity, and applies
 checked-site observations to every checked module with that site's declared
 owner.
@@ -21681,8 +21682,8 @@ compile-time evaluation; it must not silently use the interpreter.
 
 Diagnostic behavior must be identical between the dev-backend evaluator and the
 host-restricted LIR interpreter. A mismatch in crashes, expect failures,
-empirical exhaustiveness diagnostics, branch coverage, literal conversion
-diagnostics, or stored constants is a compiler bug in one of the evaluators or
+empirical exhaustiveness diagnostics, literal conversion diagnostics, or
+stored constants is a compiler bug in one of the evaluators or
 in the data they consume.
 
 Runtime `.boxy` builds do not make compile-time roots use boxy lowering.
@@ -21709,11 +21710,11 @@ Compile-time finalization evaluates dependency-ready roots in batches. Each
 batch is lowered to LIR once, ARC is inserted once, the dev backend emits native
 code for the reachable proc specs, and a generated wrapper is emitted for each
 root. Roots in the same batch are independent pure computations and may run on a
-work queue. The finalizer still commits stored values, diagnostics, coverage
-updates, and root completion in sorted request order.
+work queue. The finalizer still commits stored values, diagnostics, and root
+completion in sorted request order.
 
 Each root job owns its compile-time host state: `RocOps`, a root-local arena for
-Roc allocations, allocation tracking needed by RocOps, branch-hit records,
+Roc allocations, allocation tracking needed by RocOps,
 expect/dbg/crash event lists, failure region state, a call-region stack, a crash
 boundary, and its result buffer. Roc runtime allocations are arena allocations
 and are bulk-freed after the result has been copied into `ConstStore`. Host
@@ -21722,7 +21723,7 @@ events and failure state stay root-local until deterministic replay.
 A crash or empirical exhaustiveness failure in one root records that root's
 result and must not change the result of any other root in the same batch. Root
 jobs do not write diagnostics, stderr output, checked problems, or `ConstStore`
-entries directly. They write root-local event lists and branch-hit data; after
+entries directly. They write root-local event lists; after
 all jobs in the batch finish, checking finalization replays those lists in the
 sorted root order.
 

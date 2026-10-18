@@ -1273,7 +1273,6 @@ fn finalizeLoweredProgram(
         const Self = @This();
         const State = struct {
             completion: RootCompletionState,
-            coverage: ComptimeCoverage,
             /// Demand ordinal of each of this module's compile-time roots, by
             /// root id. Filled from the producer's own root plans, so slot
             /// demand resolves a declared producer by direct indexing.
@@ -1329,7 +1328,7 @@ fn finalizeLoweredProgram(
                 const previous_report_sites = self.owners.report_sites;
                 self.owners.report_sites = previous_report_sites and index == root.module;
                 defer self.owners.report_sites = previous_report_sites;
-                _ = try evalProgramRoots(self.allocator, entry.module, requests[request_index..][0..1], state.completion.request_root_ids[request_index..][0..1], &state.completion, entry.problem_store, &state.coverage, self.owners, evaluation_options, self.lowered, self.lowered.lir_result.const_roots.items[demand_ordinal..][0..1], self.program);
+                _ = try evalProgramRoots(self.allocator, entry.module, requests[request_index..][0..1], state.completion.request_root_ids[request_index..][0..1], &state.completion, entry.problem_store, self.owners, evaluation_options, self.lowered, self.lowered.lir_result.const_roots.items[demand_ordinal..][0..1], self.program);
                 if (!state.completion.isDone(id)) finalizationInvariant("demanded compile-time producer did not complete");
             }
         }
@@ -1352,7 +1351,6 @@ fn finalizeLoweredProgram(
     defer {
         for (states[0..initialized]) |*state| {
             state.completion.deinit();
-            state.coverage.deinit();
             allocator.free(state.ordinals);
         }
         allocator.free(states);
@@ -1383,7 +1381,7 @@ fn finalizeLoweredProgram(
         errdefer completion.deinit();
         const ordinals = try allocator.alloc(?usize, entry.module.compile_time_roots.roots.len);
         @memset(ordinals, null);
-        state.* = .{ .completion = completion, .coverage = ComptimeCoverage.init(allocator), .ordinals = ordinals };
+        state.* = .{ .completion = completion, .ordinals = ordinals };
         initialized += 1;
     }
     // The producer records each root plan's owner and checked root id, so the
@@ -1470,8 +1468,7 @@ fn finalizeLoweredProgram(
             .literal, .checked => {},
         }
     }
-    for (modules, states) |entry, *state| {
-        try state.coverage.reportUnusedBranches(entry.problem_store);
+    for (modules) |entry| {
         if (entry.problem_store) |store| try finishPendingExhaustiveness(entry.module, store);
         try entry.module.const_store.verifyComplete();
     }
@@ -1653,87 +1650,6 @@ const TimingPhase = enum {
     store_results,
 };
 
-const ComptimeCoverage = struct {
-    allocator: Allocator,
-    entries: std.ArrayList(Entry),
-
-    const Entry = struct {
-        kind: lir.LIR.ComptimeSiteKind,
-        region: base.Region,
-        branch_regions: []base.Region,
-        hits: []bool,
-    };
-
-    fn init(allocator: Allocator) ComptimeCoverage {
-        return .{
-            .allocator = allocator,
-            .entries = .empty,
-        };
-    }
-
-    fn deinit(self: *ComptimeCoverage) void {
-        for (self.entries.items) |entry| {
-            self.allocator.free(entry.branch_regions);
-            self.allocator.free(entry.hits);
-        }
-        self.entries.deinit(self.allocator);
-    }
-
-    fn record(self: *ComptimeCoverage, site: lir.LIR.ComptimeSite, branch_index: u32) Allocator.Error!void {
-        if (site.kind != .match and site.kind != .if_) return;
-        if (site.branch_regions.len == 0) return;
-        if (branch_index >= site.branch_regions.len) {
-            finalizationInvariant("compile-time branch hit referenced a branch outside its site");
-        }
-
-        const entry = try self.entryFor(site);
-        entry.hits[branch_index] = true;
-    }
-
-    fn entryFor(self: *ComptimeCoverage, site: lir.LIR.ComptimeSite) Allocator.Error!*Entry {
-        for (self.entries.items) |*entry| {
-            if (entry.kind == site.kind and regionsEqual(entry.region, site.region)) {
-                if (entry.branch_regions.len != site.branch_regions.len) {
-                    finalizationInvariant("compile-time site branch count changed for one source region");
-                }
-                return entry;
-            }
-        }
-
-        const branch_regions = try self.allocator.dupe(base.Region, site.branch_regions);
-        errdefer self.allocator.free(branch_regions);
-        const hits = try self.allocator.alloc(bool, site.branch_regions.len);
-        errdefer self.allocator.free(hits);
-        @memset(hits, false);
-
-        try self.entries.append(self.allocator, .{
-            .kind = site.kind,
-            .region = site.region,
-            .branch_regions = branch_regions,
-            .hits = hits,
-        });
-        return &self.entries.items[self.entries.items.len - 1];
-    }
-
-    fn reportUnusedBranches(self: *const ComptimeCoverage, problem_store: ?*check.problem.Store) Allocator.Error!void {
-        const store = problem_store orelse return;
-        for (self.entries.items) |entry| {
-            for (entry.hits, 0..) |hit, index| {
-                if (hit) continue;
-                _ = try store.appendProblem(.{ .comptime_unused_branch = .{
-                    .kind = switch (entry.kind) {
-                        .match => .match,
-                        .if_ => .if_,
-                        .destructure => unreachable,
-                    },
-                    .site_region = entry.region,
-                    .branch_region = entry.branch_regions[index],
-                } });
-            }
-        }
-    }
-};
-
 /// Return the checking finalizer that evaluates compile-time roots.
 pub fn finalizer() checked.CompileTimeFinalizer {
     return .{ .finalize = finalize };
@@ -1763,9 +1679,6 @@ fn finalize(
     const requests = module.root_requests.compile_time_requests;
     const total_started_ns = if (requests.len != 0) if (options.timing) |timing| timing.start() else 0 else 0;
     if (requests.len != 0) {
-        var coverage = ComptimeCoverage.init(allocator);
-        defer coverage.deinit();
-
         const lowering_imports = try finalizationImports(allocator, checked.importedView(module), imports, available_modules);
         defer allocator.free(lowering_imports);
 
@@ -1793,7 +1706,6 @@ fn finalize(
                     batch_root_ids.items,
                     &state,
                     problem_store,
-                    &coverage,
                     options,
                 );
                 batch_requests.clearRetainingCapacity();
@@ -1817,12 +1729,9 @@ fn finalize(
                 batch_root_ids.items,
                 &state,
                 problem_store,
-                &coverage,
                 options,
             );
         }
-
-        try coverage.reportUnusedBranches(problem_store);
     }
 
     if (problem_store) |store| {
@@ -2143,7 +2052,6 @@ fn lowerEvalAndFinishRoots(
     root_ids: []const checked.ComptimeRootId,
     state: *RootCompletionState,
     problem_store: ?*check.problem.Store,
-    coverage: *ComptimeCoverage,
     options: Options,
 ) FinalizeError!bool {
     if (requests.len != root_ids.len) {
@@ -2177,7 +2085,7 @@ fn lowerEvalAndFinishRoots(
     if (comptime use_interpreter) {
         const program = try InterpreterProgram.init(allocator, lowering_modules, &lowered, options);
         defer program.deinit();
-        return evalInterpreterProgramRoots(allocator, module, requests, root_ids, state, problem_store, coverage, &owners, options, &lowered, const_roots, program);
+        return evalInterpreterProgramRoots(allocator, module, requests, root_ids, state, problem_store, &owners, options, &lowered, const_roots, program);
     }
     if (const_roots.len != requests.len) {
         finalizationInvariant("LIR lowering returned a different number of compile-time roots than requested");
@@ -2185,7 +2093,7 @@ fn lowerEvalAndFinishRoots(
     var native = try DevProgram.init(allocator, lowering_modules, &lowered, options);
     defer native.deinit();
     native.codegen.static_strings = native.static_strings.view();
-    return evalDevProgramRoots(allocator, module, requests, root_ids, state, problem_store, coverage, &owners, options, &lowered, const_roots, &native);
+    return evalDevProgramRoots(allocator, module, requests, root_ids, state, problem_store, &owners, options, &lowered, const_roots, &native);
 }
 
 fn evalInterpreterProgramRoots(
@@ -2195,7 +2103,6 @@ fn evalInterpreterProgramRoots(
     root_ids: []const checked.ComptimeRootId,
     state: *RootCompletionState,
     problem_store: ?*check.problem.Store,
-    coverage: *ComptimeCoverage,
     owners: *const ModuleOwners,
     options: Options,
     lowered: *lir.CheckedPipeline.LoweredProgram,
@@ -2263,7 +2170,6 @@ fn evalInterpreterProgramRoots(
             }
 
             const eval_result = try evalCompileTimeRoot(interpreter, problem_store, owners, root.owner, module, compile_time_root, &lowered.lir_result, root.proc, root.ret_layout, &program.demand_error);
-            try recordComptimeSiteHits(problem_store, coverage, owners, root.owner, compile_time_root, &lowered.lir_result, interpreter.getComptimeBranchHits(), root.proc);
             switch (eval_result) {
                 .value => |value| {
                     defer interpreter.dropValue(value.value, root.ret_layout);
@@ -3664,7 +3570,6 @@ const DevProgram = struct {
         codegen.setNativeStaticData(slots.addresses);
         try codegen.setStaticDataSymbols(slots.materialized);
         const hooks = backend.dev.LirCodeGenMod.ComptimeHooks{
-            .branch_taken = CompileTimeHost.rocComptimeBranchTaken,
             .exhaustiveness_failed = CompileTimeHost.rocComptimeExhaustivenessFailed,
             .failure_region = CompileTimeHost.rocComptimeFailureRegion,
             .ensure_static_value = CompileTimeHost.rocComptimeEnsureStaticValue,
@@ -3842,15 +3747,14 @@ fn evalProgramRoots(
     root_ids: []const checked.ComptimeRootId,
     state: *RootCompletionState,
     problem_store: ?*check.problem.Store,
-    coverage: *ComptimeCoverage,
     owners: *const ModuleOwners,
     options: Options,
     lowered: *lir.CheckedPipeline.LoweredProgram,
     const_roots: []const LirProgram.ConstRootPlan,
     program: anytype,
 ) FinalizeError!bool {
-    if (@TypeOf(program) == *DevProgram) return evalDevProgramRoots(allocator, module, requests, root_ids, state, problem_store, coverage, owners, options, lowered, const_roots, program);
-    if (@TypeOf(program) == *InterpreterProgram) return evalInterpreterProgramRoots(allocator, module, requests, root_ids, state, problem_store, coverage, owners, options, lowered, const_roots, program);
+    if (@TypeOf(program) == *DevProgram) return evalDevProgramRoots(allocator, module, requests, root_ids, state, problem_store, owners, options, lowered, const_roots, program);
+    if (@TypeOf(program) == *InterpreterProgram) return evalInterpreterProgramRoots(allocator, module, requests, root_ids, state, problem_store, owners, options, lowered, const_roots, program);
     @compileError("compile-time evaluation owner must be explicit native or interpreter program");
 }
 
@@ -3861,7 +3765,6 @@ fn evalDevProgramRoots(
     root_ids: []const checked.ComptimeRootId,
     state: *RootCompletionState,
     problem_store: ?*check.problem.Store,
-    coverage: *ComptimeCoverage,
     owners: *const ModuleOwners,
     options: Options,
     lowered: *lir.CheckedPipeline.LoweredProgram,
@@ -4081,8 +3984,6 @@ fn evalDevProgramRoots(
         if (options.publish_shared_slots and failure_message != null) native.slots.publishFailureOrigin(lowered, job.root.owner, .{ .checked = job.root_id }, failure_origin);
         if (options.publish_shared_slots) try native.publishFailure(lowered, job.root.owner, .{ .checked = job.root_id }, if (failure_message) |message| .{ .message = message, .kind = RootFailure.ofPayload(module, payload) } else null);
 
-        try recordComptimeSiteHits(problem_store, coverage, owners, job.root.owner, job.compile_time_root, &lowered.lir_result, job.host.comptime_branch_hits.items, job.root.proc);
-
         if (try reportDevHostEvents(allocator, options, problem_store, module, job.compile_time_root, &lowered.lir_result.store, job.host.events.items)) {
             had_problem = true;
         }
@@ -4259,12 +4160,12 @@ fn devCrashedRootPayload(
     switch (try reportEmbeddedFailure(problem_store, module, devRootSourceRegion(module, root), owners, lir_result, failed_stmt, message, failed_region, failed_loc)) {
         .reported => {
             had_problem.* = true;
-            return try crashedRootPayload(problem_store, module, root, message, RootFailure.of(lir_result, failed_stmt));
+            return try failedRootPayload(module, root, message, RootFailure.of(lir_result, failed_stmt));
         },
-        .reported_elsewhere => return try crashedRootPayload(problem_store, module, root, message, RootFailure.of(lir_result, failed_stmt)),
+        .reported_elsewhere => return try failedRootPayload(module, root, message, RootFailure.of(lir_result, failed_stmt)),
         .none => {},
     }
-    if (root.guarded) return try crashedRootPayload(problem_store, module, root, message, RootFailure.of(lir_result, failed_stmt));
+    if (root.guarded) return try failedRootPayload(module, root, message, RootFailure.of(lir_result, failed_stmt));
     if (request.kind == .compile_time_constant and problem_store == null) {
         return try unreportedFailedRootPayload(module, root, message, .crash);
     }
@@ -4285,7 +4186,7 @@ fn devCrashedRootPayload(
         .origin = try comptimeFailureOrigin(store, site),
     } });
     had_problem.* = true;
-    return try crashedRootPayload(problem_store, module, root, message, RootFailure.of(lir_result, failed_stmt));
+    return try failedRootPayload(module, root, message, RootFailure.of(lir_result, failed_stmt));
 }
 
 fn reportDevHostEvents(
@@ -4523,65 +4424,6 @@ fn evalCompileTimeRoot(
     return .{ .value = result };
 }
 
-/// Account for the compile-time control-flow sites one root's evaluation
-/// reached.
-///
-/// A root's evaluation runs code from several checked modules, so each site is
-/// accounted for against the module the producer recorded on it, not against
-/// the module whose root is running. Branch coverage stays with the running
-/// root's own module: one caller reaching an imported body is no account of
-/// that module's branches, because its other callers are not this evaluation.
-fn recordComptimeSiteHits(
-    maybe_problem_store: ?*check.problem.Store,
-    coverage: *ComptimeCoverage,
-    owners: *const ModuleOwners,
-    root_owner: lir.LIR.LoweringModuleId,
-    compile_time_root: checked.CompileTimeRoot,
-    lir_result: *const lir.Program.Result,
-    hits: anytype,
-    root_proc: lir.LIR.LirProcSpecId,
-) Allocator.Error!void {
-    // An evaluation that collects no diagnostics of its own accounts for no
-    // module's sites, including other modules': it is a replay of results a
-    // diagnostic-collecting evaluation already accounted for.
-    _ = maybe_problem_store orelse return;
-    for (hits) |hit| {
-        const site = lir_result.comptime_sites.items[@backingInt(hit.site)];
-        if (owners.report_sites and comptimeSiteEmpiricalKind(site.kind) != null) {
-            if (site.checked_site) |checked_site| {
-                var alias = owners.position(site.owner);
-                while (alias) |index| : (alias = owners.next_alias[index]) {
-                    const owner = owners.modules[index];
-                    if (owner.problem_store) |store| {
-                        const owning_root: ?checked.ComptimeRootId = if (site.owner == root_owner) compile_time_root.id else null;
-                        if (comptimeSiteMayResolvePending(owner.module, owning_root, checked_site)) {
-                            store.resolvePendingStaticExhaustiveness(checked_site);
-                        }
-                    }
-                }
-            }
-        }
-        if (site.owner == root_owner and reportsUnusedBranches(compile_time_root.kind) and site.proc == root_proc) {
-            try coverage.record(site, hit.branch_index);
-        }
-    }
-}
-
-fn reportsUnusedBranches(kind: checked.CompileTimeRootKind) bool {
-    return switch (kind) {
-        .constant,
-        .callable_binding,
-        .expect,
-        .numeral_conversion,
-        .quote_conversion,
-        .repl_expr,
-        => true,
-        .hoisted_constant,
-        .hoisted_validation,
-        => false,
-    };
-}
-
 fn reportCompileTimeExhaustiveness(
     maybe_problem_store: ?*check.problem.Store,
     owners: *const ModuleOwners,
@@ -4602,6 +4444,27 @@ fn reportCompileTimeExhaustiveness(
     return try failedRootPayload(module, root, "compile-time exhaustiveness failure", .crash);
 }
 
+/// Whether evaluation may decide a site's pending static diagnostic. `root_id`
+/// is the running compile-time root when that root belongs to `module`, and
+/// null otherwise: a root of another module cannot name this module's root
+/// ids, so it can never be the root a site's validation was explicitly
+/// delegated to.
+fn comptimeSiteMayResolvePending(
+    module: *const checked.CheckedModuleArtifact,
+    root_id: ?checked.ComptimeRootId,
+    checked_site: checked.CheckedExhaustivenessSiteId,
+) bool {
+    const site = module.exhaustiveness_sites.get(checked_site);
+    if (site.requires_pairing) return false;
+    return switch (site.policy) {
+        .compile_time_replaced_by_root => |owner_root| if (root_id) |id| owner_root == id else false,
+        .compile_time_only => true,
+        .runtime_reachable,
+        .not_pending,
+        => false,
+    };
+}
+
 fn appendCompileTimeExhaustivenessProblem(
     owners: *const ModuleOwners,
     root_owner: lir.LIR.LoweringModuleId,
@@ -4612,10 +4475,6 @@ fn appendCompileTimeExhaustivenessProblem(
 ) Allocator.Error!void {
     if (!owners.report_sites) return;
     const site = lir_result.comptime_sites.items[@backingInt(site_id)];
-    _ = comptimeSiteEmpiricalKind(site.kind) orelse switch (site.kind) {
-        .if_ => finalizationInvariant("if expression reached empirical exhaustiveness failure"),
-        .match, .destructure => finalizationInvariant("compile-time root had no empirical exhaustiveness kind"),
-    };
     const checked_site = site.checked_site orelse {
         finalizationInvariant("empirical exhaustiveness failure had no checked site id");
     };
@@ -4656,7 +4515,6 @@ fn discardUnreachedRootComptimeSites(
     for (lir_result.comptime_sites.items, 0..) |root_site, raw_site_id| {
         if (root_site.proc != root_proc) continue;
         if (raw_site_id == @backingInt(failed_site_id)) continue;
-        if (comptimeSiteEmpiricalKind(root_site.kind) == null) continue;
         const checked_site = root_site.checked_site orelse continue;
         if (root_site.owner == failed_owner and checked_site == failed_checked_site) continue;
         var alias = owners.position(root_site.owner);
@@ -4679,48 +4537,34 @@ fn discardUnreachedRootComptimeSites(
 
 /// Complete only diagnostics whose checked evaluation context is available.
 /// A generic platform carries the remaining recipes into its cache entry.
+///
+/// A site a compile-time root replaced is decided by that root's outcome:
+/// evaluation ran the site's code, so it reports the site exactly when it
+/// reached a missing case, unless the root is a guarded root that failed and
+/// left its original expression to runtime, which decides the site
+/// statically again, exactly as if the root had not been selected. Every
+/// other site is decided by its checking mode.
 pub fn finishPendingExhaustiveness(module: *const checked.CheckedModuleArtifact, store: *check.problem.Store) Allocator.Error!void {
     var retained: usize = 0;
     for (store.pending_static_exhaustiveness.items) |pending| {
-        if (pending.site != null and module.exhaustiveness_sites.get(pending.site.?).requires_pairing) {
+        if (pending.reported) continue;
+        const site = if (pending.site) |id| module.exhaustiveness_sites.get(id) else null;
+        if (site != null and site.?.requires_pairing) {
             store.pending_static_exhaustiveness.items[retained] = pending;
             retained += 1;
-        } else if (pending.mode == .static and !pending.reported) {
-            _ = try store.appendProblem(pending.problem);
+            continue;
         }
+        const decided_statically = if (site) |checked_site| switch (checked_site.policy) {
+            .compile_time_replaced_by_root => |root| switch (module.compile_time_roots.root(root).payload) {
+                .runtime => true,
+                .const_node, .fn_value, .discarded, .expect => false,
+                .pending, .unevaluated => finalizationInvariant("an exhaustiveness site's replacing root finished unevaluated"),
+            },
+            .compile_time_only, .runtime_reachable, .not_pending => pending.mode == .static,
+        } else pending.mode == .static;
+        if (decided_statically) _ = try store.appendProblem(pending.problem);
     }
     store.pending_static_exhaustiveness.items.len = retained;
-}
-
-/// Whether reaching a site during compile-time evaluation resolves its
-/// owner's pending static diagnostic. `root_id` is the running compile-time
-/// root when that root belongs to `module`, and null otherwise: a root of
-/// another module cannot name this module's root ids, so it can never be the
-/// root a site's validation was explicitly delegated to.
-fn comptimeSiteMayResolvePending(
-    module: *const checked.CheckedModuleArtifact,
-    root_id: ?checked.ComptimeRootId,
-    checked_site: checked.CheckedExhaustivenessSiteId,
-) bool {
-    const site = module.exhaustiveness_sites.get(checked_site);
-    if (site.requires_pairing) return false;
-    return switch (site.policy) {
-        .compile_time_replaced_by_root => |owner_root| if (root_id) |id| owner_root == id else false,
-        .compile_time_only => true,
-        .runtime_reachable,
-        .not_pending,
-        => false,
-    };
-}
-
-fn comptimeSiteEmpiricalKind(
-    site_kind: lir.LIR.ComptimeSiteKind,
-) ?check.problem.Store.EmpiricalSiteKind {
-    return switch (site_kind) {
-        .match => .match,
-        .destructure => .destructure,
-        .if_ => null,
-    };
 }
 
 fn reportCompileTimeCrash(
@@ -4743,10 +4587,10 @@ fn reportCompileTimeCrash(
         interpreter.getFailedCheckedRegion(),
         interpreter.getFailedSourceLoc(),
     )) {
-        .reported, .reported_elsewhere => return try crashedRootPayload(maybe_problem_store, module, root, message, RootFailure.of(lir_result, interpreter.getFailedCrashStmt())),
+        .reported, .reported_elsewhere => return try failedRootPayload(module, root, message, RootFailure.of(lir_result, interpreter.getFailedCrashStmt())),
         .none => {},
     }
-    if (root.guarded) return try crashedRootPayload(maybe_problem_store, module, root, message, RootFailure.of(lir_result, interpreter.getFailedCrashStmt()));
+    if (root.guarded) return try failedRootPayload(module, root, message, RootFailure.of(lir_result, interpreter.getFailedCrashStmt()));
     const problem_store = maybe_problem_store orelse {
         finalizationInvariant("compile-time root crashed without a checking problem store");
     };
@@ -4757,30 +4601,7 @@ fn reportCompileTimeCrash(
         .region = site.region,
         .origin = try comptimeFailureOrigin(problem_store, site),
     } });
-    return try crashedRootPayload(problem_store, module, root, message, RootFailure.of(lir_result, interpreter.getFailedCrashStmt()));
-}
-
-/// A crashed guarded root leaves its original expression and declaration to
-/// runtime, so the exhaustiveness sites it was selected to validate are decided
-/// statically, exactly as if the root had not been selected.
-fn crashedRootPayload(
-    maybe_problem_store: ?*check.problem.Store,
-    module: *checked.CheckedModuleArtifact,
-    root: checked.CompileTimeRoot,
-    message: []const u8,
-    failure: RootFailure,
-) Allocator.Error!checked.CompileTimeRootPayload {
-    if (root.guarded) {
-        if (maybe_problem_store) |store| {
-            for (module.exhaustiveness_sites.sites) |site| {
-                switch (site.policy) {
-                    .compile_time_replaced_by_root => |owner| if (owner == root.id) store.markPendingStaticExhaustivenessStatic(site.id),
-                    .compile_time_only, .runtime_reachable, .not_pending => {},
-                }
-            }
-        }
-    }
-    return try failedRootPayload(module, root, message, failure);
+    return try failedRootPayload(module, root, message, RootFailure.of(lir_result, interpreter.getFailedCrashStmt()));
 }
 
 fn failedRootPayload(
@@ -5278,7 +5099,6 @@ test "CTFE native emission uses worker callbacks and retains reusable code witho
         defer codegen.deinit();
         codegen.dict_seed_mode = .comptime_zero;
         codegen.setComptimeHooks(.{
-            .branch_taken = CompileTimeHost.rocComptimeBranchTaken,
             .exhaustiveness_failed = CompileTimeHost.rocComptimeExhaustivenessFailed,
             .failure_region = CompileTimeHost.rocComptimeFailureRegion,
             .ensure_static_value = CompileTimeHost.rocComptimeEnsureStaticValue,
@@ -5608,7 +5428,6 @@ fn testNativeSlotDemand(lowered: *lir.CheckedPipeline.LoweredProgram, slots: *St
     defer codegen.deinit();
     codegen.setNativeStaticData(slots.addresses);
     codegen.setComptimeHooks(.{
-        .branch_taken = CompileTimeHost.rocComptimeBranchTaken,
         .exhaustiveness_failed = CompileTimeHost.rocComptimeExhaustivenessFailed,
         .failure_region = CompileTimeHost.rocComptimeFailureRegion,
         .ensure_static_value = CompileTimeHost.rocComptimeEnsureStaticValue,

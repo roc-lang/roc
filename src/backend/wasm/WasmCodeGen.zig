@@ -7858,9 +7858,6 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try self.emitRocStaticStringCall(.crashed, "compile-time exhaustiveness failure reached runtime code");
             self.currentCode().append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
         },
-        .comptime_branch_taken => |marker| {
-            try work.append(wa, .{ .node = .{ .stmt_id = marker.next, .stop = stop } });
-        },
         .crash => |crash| {
             switch (crash.msg) {
                 .literal => |literal| try self.emitRocStaticStringCall(.crashed, self.store.getString(literal)),

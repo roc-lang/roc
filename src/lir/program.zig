@@ -724,9 +724,6 @@ pub const Result = struct {
 
     pub fn deinit(self: *Result) void {
         const allocator = self.store.allocator;
-        for (self.comptime_sites.items) |site| {
-            allocator.free(site.branch_regions);
-        }
         self.comptime_sites.deinit(allocator);
         self.lowering_modules.deinit(allocator);
         self.expect_site_ids.deinit(allocator);
@@ -775,10 +772,7 @@ pub const Result = struct {
         region: base.Region,
         checked_site: ?LIR.CheckedExhaustivenessSiteId,
         proc: LIR.LirProcSpecId,
-        branch_regions: []const base.Region,
     ) Allocator.Error!LIR.ComptimeSiteId {
-        const owned_branch_regions = try self.store.allocator.dupe(base.Region, branch_regions);
-        errdefer self.store.allocator.free(owned_branch_regions);
         const id: LIR.ComptimeSiteId = @fromBackingInt(@intCast(@as(u32, @intCast(self.comptime_sites.items.len))));
         try self.comptime_sites.append(self.store.allocator, .{
             .kind = kind,
@@ -786,7 +780,6 @@ pub const Result = struct {
             .region = region,
             .checked_site = checked_site,
             .proc = proc,
-            .branch_regions = owned_branch_regions,
         });
         return id;
     }
@@ -1018,7 +1011,7 @@ test "lowering module table resolves checked module provenance both ways" {
 
     // A site keeps the owner its producer recorded, not the procedure's owner.
     const owner: LIR.LoweringModuleId = @fromBackingInt(@intCast(2));
-    const site = try result.addComptimeSite(.destructure, owner, base.Region.zero(), @fromBackingInt(@intCast(41)), .first, &.{});
+    const site = try result.addComptimeSite(.destructure, owner, base.Region.zero(), @fromBackingInt(@intCast(41)), .first);
     const stored = result.comptime_sites.items[@backingInt(site)];
     try std.testing.expectEqual(owner, stored.owner);
     try std.testing.expectEqual(@as(?LIR.CheckedExhaustivenessSiteId, @fromBackingInt(@intCast(41))), stored.checked_site);

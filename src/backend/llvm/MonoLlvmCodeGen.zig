@@ -3566,7 +3566,6 @@ pub const MonoLlvmCodeGen = struct {
                 .set_local,
                 .debug,
                 .expect,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -3702,7 +3701,6 @@ pub const MonoLlvmCodeGen = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -4000,9 +3998,6 @@ pub const MonoLlvmCodeGen = struct {
             },
             .comptime_exhaustiveness_failed => {
                 try self.emitCrashBytes("compile-time exhaustiveness failure reached runtime code");
-            },
-            .comptime_branch_taken => |marker| {
-                try work.append(wa, .{ .node = marker.next });
             },
             .incref => |inc| {
                 try self.emitExplicitRcStmt(inc.rc, .incref, inc.value, inc.count, inc.atomicity);

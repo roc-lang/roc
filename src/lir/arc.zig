@@ -2378,7 +2378,6 @@ const Inserter = struct {
             .assign_boxy_tag,
             .debug,
             .expect,
-            .comptime_branch_taken,
             => try self.addWithNext(stmt, next, origin),
             .decref_if_initialized => |rc| try self.store.addCFStmt(.{ .decref_if_initialized = .{
                 .cond = rc.cond,
@@ -3140,7 +3139,6 @@ const Inserter = struct {
                     try self.setArcPlanTerminal(segment.plan_index, segment.cursor, &segment.owned, null, retain_value);
                     return;
                 },
-                .comptime_branch_taken => _ = try self.nextArcPlanStep(segment.plan_index, segment.cursor),
             }
             // Every statement that does not end the segment continues on its
             // straight-line successor.
@@ -5553,7 +5551,6 @@ const Inserter = struct {
             .init_uninitialized,
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
-            .comptime_branch_taken,
             .join,
             .jump,
             .runtime_error,
@@ -5596,7 +5593,6 @@ const Inserter = struct {
             .set_local,
             .debug,
             .expect,
-            .comptime_branch_taken,
             .incref,
             => |payload| try out.append(gpa, payload.next),
             .switch_stmt => |switch_stmt| {
@@ -6639,7 +6635,6 @@ const Inserter = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -6688,7 +6683,6 @@ const Inserter = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -6851,7 +6845,6 @@ const Inserter = struct {
                 .init_uninitialized,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .join,
                 .jump,
                 => {},
@@ -8164,7 +8157,6 @@ const ArcTest = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -8219,7 +8211,6 @@ const ArcTest = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .switch_stmt,
                 .switch_initialized_payload,
                 .str_match,
@@ -8335,7 +8326,6 @@ const ArcTest = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -8403,7 +8393,6 @@ const ArcTest = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -8478,7 +8467,6 @@ const ArcTest = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .switch_stmt,
                 .switch_initialized_payload,
                 .str_match,
@@ -8532,7 +8520,6 @@ const ArcTest = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -8594,7 +8581,6 @@ const ArcTest = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .free,
@@ -8641,7 +8627,6 @@ const ArcTest = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -8702,7 +8687,6 @@ const ArcTest = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref_if_initialized,
                 .free,
@@ -8753,7 +8737,6 @@ const ArcTest = struct {
             .set_local,
             .debug,
             .expect,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,
@@ -8950,7 +8933,6 @@ test "ARC preserves erased callable repack reuse" {
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,
@@ -9100,7 +9082,6 @@ test "ARC runtime-checks erased callable repack from an ordinary parameter" {
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,
@@ -9184,7 +9165,6 @@ test "ARC transfers erased call ownership from an explicit outer source" {
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,
@@ -9293,7 +9273,6 @@ test "ARC retains an erased call reuse source that is read after the call" {
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,
@@ -9384,7 +9363,6 @@ test "ARC retains an erased callable whose repack input is used later" {
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,
@@ -14104,7 +14082,6 @@ fn expectDecrefBeforeStmt(f: *const ArcTest, start: LIR.CFStmtId, local: LIR.Loc
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,
@@ -14447,7 +14424,6 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .decref_if_initialized,
             .free,
             .switch_stmt,
@@ -14497,7 +14473,6 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .decref_if_initialized,
             .free,
             .switch_stmt,
@@ -14872,7 +14847,7 @@ test "RC outcome restitution preserves List Str on failure and seeds the success
             break;
         }
         cursor = switch (stmt) {
-            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free, .comptime_branch_taken => |linear| linear.next,
+            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |linear| linear.next,
             .init_uninitialized,
             .assign_call,
             .assign_call_erased,
@@ -15257,7 +15232,7 @@ test "RC outcome restitution releases every returned argument before a nested jo
         }
         cursor = switch (stmt) {
             .join => |join| join.remainder,
-            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free, .comptime_branch_taken => |linear| linear.next,
+            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |linear| linear.next,
             .init_uninitialized,
             .assign_call,
             .assign_call_erased,
@@ -15303,7 +15278,7 @@ test "RC outcome restitution releases every returned argument before a nested jo
         }
         cursor = switch (stmt) {
             .join => |join| join.remainder,
-            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free, .comptime_branch_taken => |linear| linear.next,
+            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |linear| linear.next,
             .init_uninitialized,
             .assign_call,
             .assign_call_erased,
@@ -16226,7 +16201,7 @@ test "RC field take restores the exact aggregate field on checked failure withou
                 break;
             }
             cursor = switch (stmt) {
-                inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free, .comptime_branch_taken => |linear| linear.next,
+                inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |linear| linear.next,
                 .init_uninitialized,
                 .assign_call,
                 .assign_call_erased,
@@ -16406,7 +16381,7 @@ test "RC specialization: caller body survives variant proc append" {
                 }
                 cursor = assign.next;
             },
-            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free, .comptime_branch_taken => |stmt| {
+            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .free => |stmt| {
                 cursor = stmt.next;
             },
             .init_uninitialized,

@@ -2072,7 +2072,7 @@ test "issue 10721: runtime-dependent callable use keeps one validating extractio
     try std.testing.expectEqual(@as(usize, 1), validating_extraction_roots);
 }
 
-test "hoisted match guard does not report unused branch warning" {
+test "a match on a constant with a guard selects a hoisted root" {
     const gpa = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -2124,13 +2124,6 @@ test "hoisted match guard does not report unused branch warning" {
     try coord.coordinatorLoop();
     try coord.finishCheckedProgram(.none);
     try std.testing.expect(!coord.hasUserErrors());
-
-    var found_unused_branch = false;
-    var report_iter = coord.iterReports();
-    while (report_iter.next()) |entry| {
-        if (std.mem.eql(u8, entry.report.title, "Unused Branch")) found_unused_branch = true;
-    }
-    try std.testing.expect(!found_unused_branch);
 
     const artifact = coord.appRootCheckedArtifact();
     var found_hoisted_root = false;
@@ -2759,7 +2752,6 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,

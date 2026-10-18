@@ -512,7 +512,6 @@ pub const ComptimeProducer = union(enum) {
 pub const ComptimeSiteKind = enum {
     match,
     destructure,
-    if_,
 };
 
 /// Metadata for one compile-time-observed control-flow site.
@@ -526,7 +525,6 @@ pub const ComptimeSite = struct {
     region: base.Region,
     checked_site: ?CheckedExhaustivenessSiteId = null,
     proc: LirProcSpecId,
-    branch_regions: []const base.Region = &.{},
 };
 
 /// Identifier of a join point targeted by `jump`.
@@ -1465,12 +1463,6 @@ pub const CFStmt = union(enum) {
     /// terminal and becomes a checking diagnostic while finalizing.
     comptime_exhaustiveness_failed: struct {
         site: ComptimeSiteId,
-    },
-    /// One compile-time-observed branch or match alternative was taken.
-    comptime_branch_taken: struct {
-        site: ComptimeSiteId,
-        branch_index: u32,
-        next: CFStmtId,
     },
     incref: struct {
         value: LocalId,

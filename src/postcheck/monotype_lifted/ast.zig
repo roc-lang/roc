@@ -690,9 +690,6 @@ pub const Program = struct {
         self.source_files.deinit(self.allocator);
         self.lowering_modules.deinit(self.allocator);
         if (self.requirement_reaching_fns) |*reaching| reaching.deinit(self.allocator);
-        for (self.comptime_sites.unsafeRawItemsForView()) |site| {
-            self.allocator.free(site.branch_regions);
-        }
         self.comptime_sites.deinit(self.allocator);
         self.comptime_value_roots.deinit(self.allocator);
         self.static_data_values.deinit(self.allocator);
@@ -1018,7 +1015,7 @@ pub const Program = struct {
                     self.shapes.loop_tuple_result = true;
                 }
             },
-            .local, .int_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .row_widen, .let_, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .join_point, .jump, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .literal_rejected, .expect, .@"unreachable", .unit, .frac_f32_lit, .frac_f64_lit, .uninitialized => {},
+            .local, .int_lit, .dec_lit, .str_lit, .bytes_lit, .typed_boundary, .row_widen, .let_, .call_value, .low_level, .field_access, .tuple_access, .structural_eq, .structural_hash, .match_, .if_, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .join_point, .jump, .crash, .checked_error, .comptime_exhaustiveness_failed, .dbg, .expect_err, .literal_rejected, .expect, .@"unreachable", .unit, .frac_f32_lit, .frac_f64_lit, .uninitialized => {},
         }
     }
 
@@ -1956,7 +1953,6 @@ pub fn appendChildren(allocator: std.mem.Allocator, program: *const Program, exp
         .return_ => |ret| try sink.one(ret.value),
         .expect_err => |expect_err| try sink.one(expect_err.msg),
         .literal_rejected => |rejected| try sink.one(rejected.msg),
-        .comptime_branch_taken => |taken| try sink.one(taken.body),
         .let_ => |let_| {
             try sink.one(let_.value);
             try sink.one(let_.rest);

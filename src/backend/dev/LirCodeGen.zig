@@ -271,7 +271,6 @@ pub const GenerationMode = enum {
 /// Compiler-internal callbacks emitted only for native compile-time evaluation.
 pub const ComptimeHooks = struct {
     ensure_static_value: *const fn (u32) callconv(.c) void,
-    branch_taken: *const fn (u32, u32) callconv(.c) void,
     exhaustiveness_failed: *const fn (u32) callconv(.c) void,
     /// (region start, region end, source file, line, column, statement): the
     /// statement's resolved location rides along with its region so the host
@@ -285,7 +284,6 @@ pub const ComptimeHooks = struct {
 /// machine code, bind these names to the active compile-time host.
 pub const ComptimeHook = enum {
     ensure_static_value,
-    branch_taken,
     exhaustiveness_failed,
     failure_region,
     call_enter,
@@ -293,7 +291,7 @@ pub const ComptimeHook = enum {
 
     pub fn symbolName(self: ComptimeHook) []const u8 {
         return switch (self) {
-            inline .ensure_static_value, .branch_taken, .exhaustiveness_failed, .failure_region, .call_enter, .call_exit => |hook| "roc__comptime_" ++ @tagName(hook),
+            inline .ensure_static_value, .exhaustiveness_failed, .failure_region, .call_enter, .call_exit => |hook| "roc__comptime_" ++ @tagName(hook),
         };
     }
 };
@@ -8634,7 +8632,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .expect_err,
                     .runtime_error,
                     .comptime_exhaustiveness_failed,
-                    .comptime_branch_taken,
                     .incref,
                     .decref,
                     .decref_if_initialized,
@@ -8697,7 +8694,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .expect_err,
                     .runtime_error,
                     .comptime_exhaustiveness_failed,
-                    .comptime_branch_taken,
                     .switch_stmt,
                     .switch_initialized_payload,
                     .str_match,
@@ -8767,7 +8763,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .expect_err,
                     .runtime_error,
                     .comptime_exhaustiveness_failed,
-                    .comptime_branch_taken,
                     .incref,
                     .decref,
                     .decref_if_initialized,
@@ -20534,13 +20529,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try self.emitTrap();
                         },
 
-                        .comptime_branch_taken => |marker| {
-                            if (self.comptime_hooks) |hooks| {
-                                try self.emitComptimeBranchTaken(hooks, marker.site, marker.branch_index);
-                            }
-                            try work.append(wa, .{ .node = marker.next });
-                        },
-
                         .join => |j| {
                             const jp_key = @backingInt(j.id);
                             try self.registerJoinPointParams(j.id, j.params);
@@ -21661,26 +21649,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.fragment_context.comptime_hooks = true;
             if (self.generation_mode == .native_execution) {
                 const address = switch (hook) {
-                    inline .ensure_static_value, .branch_taken, .exhaustiveness_failed, .failure_region, .call_enter, .call_exit => |which| @intFromPtr(@field(hooks, @tagName(which))),
+                    inline .ensure_static_value, .exhaustiveness_failed, .failure_region, .call_enter, .call_exit => |which| @intFromPtr(@field(hooks, @tagName(which))),
                 };
                 try builder.call(address);
             } else {
                 try builder.callRelocatable(try self.internSymbolName(hook.symbolName(), .shared), &self.codegen);
             }
-        }
-
-        fn emitComptimeBranchTaken(
-            self: *Self,
-            hooks: ComptimeHooks,
-            site: lir.LIR.ComptimeSiteId,
-            branch_index: u32,
-        ) Allocator.Error!void {
-            try self.spillAllVectorLocals();
-            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            defer builder.deinit();
-            try builder.addImmArg(@intCast(@backingInt(site)));
-            try builder.addImmArg(@intCast(branch_index));
-            try self.callComptimeHook(&builder, hooks, .branch_taken);
         }
 
         fn emitComptimeExhaustivenessFailed(
@@ -26174,14 +26148,12 @@ test "independent fragment symbolic hooks record actual context use" {
     const allocator = std.testing.allocator;
     const Hooks = struct {
         fn one(_: u32) callconv(.c) void {}
-        fn two(_: u32, _: u32) callconv(.c) void {}
         fn five(_: u32, _: u32, _: u32, _: u32, _: u32) callconv(.c) void {}
         fn six(_: u32, _: u32, _: u32, _: u32, _: u32, _: u32) callconv(.c) void {}
         fn zero() callconv(.c) void {}
     };
     const hooks = ComptimeHooks{
         .ensure_static_value = Hooks.one,
-        .branch_taken = Hooks.two,
         .exhaustiveness_failed = Hooks.one,
         .failure_region = Hooks.six,
         .call_enter = Hooks.five,

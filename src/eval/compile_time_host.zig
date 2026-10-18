@@ -65,12 +65,6 @@ pub const HostEvent = union(enum) {
     }
 };
 
-/// A compile-time branch marker reached by one root.
-pub const ComptimeBranchHit = struct {
-    site: lir.LIR.ComptimeSiteId,
-    branch_index: u32,
-};
-
 /// A generated call frame's checked source region plus the resolved source
 /// location stamped on the calling LIR statement. The location's file entry
 /// carries the declaring module, so a failure region is never rendered
@@ -85,7 +79,6 @@ host_arena: base.SingleThreadArena,
 allocations: std.AutoHashMapUnmanaged(usize, Allocation) = .empty,
 roc_ops: ?RocOps = null,
 events: std.ArrayListUnmanaged(HostEvent) = .empty,
-comptime_branch_hits: std.ArrayListUnmanaged(ComptimeBranchHit) = .empty,
 call_regions: std.ArrayListUnmanaged(CallRegion) = .empty,
 comptime_failed_site: ?lir.LIR.ComptimeSiteId = null,
 failed_region: ?base.Region = null,
@@ -214,17 +207,6 @@ pub fn rocComptimeEnsureStaticValue(slot: u32) callconv(.c) void {
     };
 }
 
-/// Dev-backend hook called when a compile-time branch marker is reached.
-pub fn rocComptimeBranchTaken(site_raw: u32, branch_index: u32) callconv(.c) void {
-    const self = enteredHost();
-    self.comptime_branch_hits.append(self.host_arena.allocator(), .{
-        .site = @fromBackingInt(@intCast(site_raw)),
-        .branch_index = branch_index,
-    }) catch {
-        self.jump(.host_oom);
-    };
-}
-
 /// Dev-backend hook called when empirical exhaustiveness fails.
 pub fn rocComptimeExhaustivenessFailed(site_raw: u32) callconv(.c) void {
     const self = enteredHost();
@@ -282,7 +264,6 @@ fn enteredHost() *CompileTimeHost {
 
 fn clearHostState(self: *CompileTimeHost) void {
     self.events = .empty;
-    self.comptime_branch_hits = .empty;
     self.call_regions = .empty;
     self.allocations = .empty;
 }

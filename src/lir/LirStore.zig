@@ -1860,7 +1860,6 @@ fn noteStmtShapes(self: *Self, stmt: CFStmt) void {
         .expect_err,
         .runtime_error,
         .comptime_exhaustiveness_failed,
-        .comptime_branch_taken,
         .incref,
         .decref,
         .decref_if_initialized,

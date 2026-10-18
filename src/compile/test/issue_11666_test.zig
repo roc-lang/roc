@@ -117,7 +117,6 @@ fn measureLiteralList(literal_count: usize) TestError!Measurement {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .switch_stmt,
                 .switch_initialized_payload,

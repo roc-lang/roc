@@ -312,7 +312,6 @@ const Binding = enum { compiler_function, image, process_data, unresolved };
 /// These private ABI names cannot be supplied by a platform or an artifact.
 const ComptimeHook = enum {
     ensure_static_value,
-    branch_taken,
     exhaustiveness_failed,
     failure_region,
     call_enter,
@@ -321,7 +320,6 @@ const ComptimeHook = enum {
     fn fromName(name: []const u8) ?ComptimeHook {
         return std.StaticStringMap(ComptimeHook).initComptime(.{
             .{ "roc__comptime_ensure_static_value", .ensure_static_value },
-            .{ "roc__comptime_branch_taken", .branch_taken },
             .{ "roc__comptime_exhaustiveness_failed", .exhaustiveness_failed },
             .{ "roc__comptime_failure_region", .failure_region },
             .{ "roc__comptime_call_enter", .call_enter },
@@ -331,7 +329,7 @@ const ComptimeHook = enum {
 
     fn address(self: ComptimeHook, hooks: LirCodeGenMod.ComptimeHooks) usize {
         return switch (self) {
-            inline .ensure_static_value, .branch_taken, .exhaustiveness_failed, .failure_region, .call_enter, .call_exit => |hook| @intFromPtr(@field(hooks, @tagName(hook))),
+            inline .ensure_static_value, .exhaustiveness_failed, .failure_region, .call_enter, .call_exit => |hook| @intFromPtr(@field(hooks, @tagName(hook))),
         };
     }
 };
@@ -487,7 +485,6 @@ test "comptime hook bindings are explicit for every private ABI symbol" {
     const Hooks = struct {
         var exited: bool = false;
         fn ensure(_: u32) callconv(.c) void {}
-        fn branch(_: u32, _: u32) callconv(.c) void {}
         fn exhaustive(_: u32) callconv(.c) void {}
         fn region(_: u32, _: u32, _: u32, _: u32, _: u32, _: u32) callconv(.c) void {}
         fn enter(_: u32, _: u32, _: u32, _: u32, _: u32) callconv(.c) void {}
@@ -497,7 +494,6 @@ test "comptime hook bindings are explicit for every private ABI symbol" {
     };
     const hooks: LirCodeGenMod.ComptimeHooks = .{
         .ensure_static_value = &Hooks.ensure,
-        .branch_taken = &Hooks.branch,
         .exhaustiveness_failed = &Hooks.exhaustive,
         .failure_region = &Hooks.region,
         .call_enter = &Hooks.enter,
