@@ -18952,6 +18952,13 @@ no use for. Which form a
 read takes is therefore a question of where its value reaches, and the
 uniqueness analysis answers it.
 
+The fresh procedure's identity is the list's layout and content (the count
+and the item's construction) and nothing a program numbers, so reads of equal
+lists share one procedure. A pack carries the procedure with any code that
+calls it, and a spliced procedure replaces the program's own procedure of the
+same identity, so an identity that named a program's static-data slot would
+let one list's build stand in for another's.
+
 Every such read is a candidate birth. Alongside the born bit and its parameter
 conditions, the settlement carries each local's *origins*: the candidates its
 born value derives from, flowing over the same pure aliases, join edges,
