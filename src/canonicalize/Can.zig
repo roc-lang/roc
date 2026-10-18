@@ -5512,8 +5512,16 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
                     break :blk null;
                 },
             } else blk: {
-                if (main_status) |status| {
-                    if (status == .not_found) try self.reportTypeModuleOrDefaultAppError();
+                if (main_status) |status| switch (status) {
+                    .not_found => try self.reportTypeModuleOrDefaultAppError(),
+                    // checkMainFunction reported the wrong arity
+                    .invalid => {},
+                    .valid => {
+                        if (builtin.mode == .debug) {
+                            base.invariant("entry module with a valid main! was not classified as a default app", .{});
+                        }
+                        unreachable;
+                    },
                 } else {
                     try self.pushModuleFileDiagnostic(.type_module_missing_matching_type);
                 }
