@@ -8576,12 +8576,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn ensureStableLocationsForStmtLocals(self: *Self, root: CFStmtId) Allocator.Error!void {
             const indexes = try self.stackPlanIndexes();
             var plan = StackPlan.initWithLocalIndices(indexes.allocator, indexes.local_indices);
-            indexes.local_indices = .empty;
+            indexes.local_indices = StackPlan.LocalIndices.init(indexes.allocator);
             defer indexes.local_indices = plan.deinitKeepingLocalIndices();
-            // Every planned statement is in `work`, so it empties the indexes.
+            // Planning leaves the indexes empty for the next procedure.
             var work: std.ArrayList(CFStmtId) = .empty;
             defer {
-                indexes.clear(work.items);
+                indexes.clear();
                 work.deinit(self.allocator);
             }
             var successors: std.ArrayList(CFStmtId) = .empty;

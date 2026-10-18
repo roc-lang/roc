@@ -10,60 +10,60 @@ const none = std.math.maxInt(u32);
 const Self = @This();
 
 allocator: Allocator,
-/// Each local's index in `values`, by local id, or `none`. Planning hands one
-/// column from plan to plan (see `Indexes`).
-local_indices: std.ArrayList(u32) = .empty,
+/// Each local's index in `values`, by local id. Planning hands one map from
+/// plan to plan (see `Indexes`).
+local_indices: LocalIndices,
 values: std.ArrayList(Value) = .empty,
 nodes: std.ArrayList(Node) = .empty,
 edges: std.ArrayList(Edge) = .empty,
 accesses: std.ArrayList(Access) = .empty,
 slots: std.ArrayList(Slot) = .empty,
 
+/// A local's index in a plan's `values`, by local id.
+pub const LocalIndices = collections.DenseMap(lir.LocalId, u32);
+
 /// Indexes from store ids to a procedure's plan, which planning keeps empty
 /// between procedures. A procedure's statement, join, and local ids can be
 /// spread across their whole domains, so one set of indexes serves every
-/// procedure a worker plans, and each procedure costs only its own entries.
+/// procedure a worker plans. The maps are paged, so each procedure costs only
+/// the pages its own ids touch, never the whole id domain of the program.
 pub const Indexes = struct {
     allocator: Allocator,
     /// A plan's local indices (see `Self.local_indices`).
-    local_indices: std.ArrayList(u32) = .empty,
-    /// Each planned statement's node, by statement id, or `none`.
-    node_of_stmt: std.ArrayList(u32) = .empty,
+    local_indices: LocalIndices,
+    /// Each planned statement's node, by statement id.
+    node_of_stmt: collections.DenseMap(lir.CFStmtId, u32),
     /// Each declared join's body.
     joins: collections.DenseMap(lir.LIR.JoinPointId, lir.CFStmtId),
 
     pub fn init(allocator: Allocator) Indexes {
-        return .{ .allocator = allocator, .joins = collections.DenseMap(lir.LIR.JoinPointId, lir.CFStmtId).init(allocator) };
+        return .{
+            .allocator = allocator,
+            .local_indices = LocalIndices.init(allocator),
+            .node_of_stmt = collections.DenseMap(lir.CFStmtId, u32).init(allocator),
+            .joins = collections.DenseMap(lir.LIR.JoinPointId, lir.CFStmtId).init(allocator),
+        };
     }
 
     pub fn deinit(self: *Indexes) void {
-        self.local_indices.deinit(self.allocator);
-        self.node_of_stmt.deinit(self.allocator);
+        self.local_indices.deinit();
+        self.node_of_stmt.deinit();
         self.joins.deinit();
     }
 
     /// The node planned for `stmt`.
     pub fn nodeOf(self: *const Indexes, stmt: lir.CFStmtId) ?u32 {
-        const raw = @backingInt(stmt);
-        if (raw >= self.node_of_stmt.items.len) return null;
-        const index = self.node_of_stmt.items[raw];
-        return if (index == none) null else index;
+        return self.node_of_stmt.get(stmt);
     }
 
     /// Record `stmt`'s node.
     pub fn setNode(self: *Indexes, stmt: lir.CFStmtId, index: u32) Allocator.Error!void {
-        const raw = @backingInt(stmt);
-        if (raw >= self.node_of_stmt.items.len) {
-            const old_len = self.node_of_stmt.items.len;
-            try self.node_of_stmt.resize(self.allocator, @max(raw + 1, old_len * 2));
-            @memset(self.node_of_stmt.items[old_len..], none);
-        }
-        self.node_of_stmt.items[raw] = index;
+        try self.node_of_stmt.put(stmt, index);
     }
 
-    /// Empty the statement nodes `planned` recorded and the joins.
-    pub fn clear(self: *Indexes, planned: []const lir.CFStmtId) void {
-        for (planned) |stmt| self.node_of_stmt.items[@backingInt(stmt)] = none;
+    /// Empty the statement nodes and the joins.
+    pub fn clear(self: *Indexes) void {
+        self.node_of_stmt.clearRetainingCapacity();
         self.joins.clearRetainingCapacity();
     }
 };
@@ -134,21 +134,21 @@ fn rangeOrder(a: Range, b: Range) std.math.Order {
 
 /// Start an empty procedure plan.
 pub fn init(allocator: Allocator) Self {
-    return .{ .allocator = allocator };
+    return .{ .allocator = allocator, .local_indices = LocalIndices.init(allocator) };
 }
 /// A plan indexing its locals in `local_indices`, which holds no entries.
-pub fn initWithLocalIndices(allocator: Allocator, local_indices: std.ArrayList(u32)) Self {
+pub fn initWithLocalIndices(allocator: Allocator, local_indices: LocalIndices) Self {
     return .{ .allocator = allocator, .local_indices = local_indices };
 }
 /// Release all procedure-owned analysis storage.
 pub fn deinit(self: *Self) void {
-    self.local_indices.deinit(self.allocator);
+    self.local_indices.deinit();
     self.deinitAnalysis();
 }
-/// Release the analysis storage and return the local index column holding
-/// no entries, for the next plan.
-pub fn deinitKeepingLocalIndices(self: *Self) std.ArrayList(u32) {
-    for (self.values.items) |v| self.local_indices.items[@backingInt(v.local)] = none;
+/// Release the analysis storage and return the local index map holding no
+/// entries, for the next plan.
+pub fn deinitKeepingLocalIndices(self: *Self) LocalIndices {
+    self.local_indices.clearRetainingCapacity();
     const local_indices = self.local_indices;
     self.deinitAnalysis();
     return local_indices;
@@ -163,24 +163,17 @@ fn deinitAnalysis(self: *Self) void {
 }
 /// Intern a local in the compact procedure domain.
 pub fn local(self: *Self, id: lir.LocalId) Allocator.Error!u32 {
-    if (self.localIndex(id)) |index| return index;
-    const raw = @backingInt(id);
-    if (raw >= self.local_indices.items.len) {
-        const old_len = self.local_indices.items.len;
-        try self.local_indices.resize(self.allocator, @max(raw + 1, old_len * 2));
-        @memset(self.local_indices.items[old_len..], none);
-    }
+    const entry = try self.local_indices.getOrPut(id);
+    if (entry.found_existing) return entry.value_ptr.*;
     const index: u32 = @intCast(self.values.items.len);
+    errdefer _ = self.local_indices.remove(id);
     try self.values.append(self.allocator, .{ .local = id, .representative = index });
-    self.local_indices.items[raw] = index;
+    entry.value_ptr.* = index;
     return index;
 }
 /// The index of an interned local.
 pub fn localIndex(self: *const Self, id: lir.LocalId) ?u32 {
-    const raw = @backingInt(id);
-    if (raw >= self.local_indices.items.len) return null;
-    const index = self.local_indices.items[raw];
-    return if (index == none) null else index;
+    return self.local_indices.get(id);
 }
 /// Add an instruction-selection region. Reads and writes in one region overlap.
 pub fn node(self: *Self) Allocator.Error!u32 {
