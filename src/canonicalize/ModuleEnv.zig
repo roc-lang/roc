@@ -3199,8 +3199,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             break :blk report;
         },
         .type_module_missing_matching_type => |data| blk: {
-            const region_info = self.calcRegionInfo(data.region);
-
             var report = try Report.init(allocator, "Type Module Missing Matching Type", "Type modules must have a nominal type declaration matching the module name.", .runtime_error);
 
             const module_name_bytes = self.getIdent(data.module_name);
@@ -3229,7 +3227,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" (opaque nominal type)");
             try report.document.addLineBreak();
 
-            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
+            try report.setFile(filename);
 
             break :blk report;
         },
@@ -3283,25 +3281,22 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        .default_app_missing_main => |data| blk: {
-            const region_info = self.calcRegionInfo(data.region);
-
+        .default_app_missing_main => blk: {
             var report = try Report.init(allocator, "Missing `main!` Function", "", .runtime_error);
-            try report.headline.addReflowingText("Default app modules must have a ");
+            try report.headline.addReflowingText("This file has no header and declares no types, so it is a default app, but it has no ");
             try report.headline.addInlineCode("main!");
             try report.headline.addReflowingText(" function.");
 
-            try report.document.addText("No ");
+            try report.document.addReflowingText("Add a ");
             try report.document.addInlineCode("main!");
-            try report.document.addReflowingText(" function was found.");
+            try report.document.addReflowingText(" function that takes 1 argument:");
             try report.document.addLineBreaks(2);
-
-            try report.document.addReflowingText("Add a main! function like:");
+            try report.document.addCodeBlock("main! = |arg| { ... }");
+            try report.document.addLineBreaks(2);
+            try report.document.addReflowingText("If this file is meant to be imported by other files instead, declare a nominal type named after the file.");
             try report.document.addLineBreak();
-            try report.document.addInlineCode("main! = |arg| { ... }");
-            try report.document.addLineBreak();
 
-            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
+            try report.setFile(filename);
 
             break :blk report;
         },
@@ -3348,13 +3343,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        .execution_requires_app_or_default_app => |data| CIR.Diagnostic.buildExecutionRequiresAppOrDefaultAppReport(
-            allocator,
-            self.calcRegionInfo(data.region),
-            filename,
-            self.getSourceAll(),
-            self.getLineStartsAll(),
-        ),
         .type_name_case_mismatch => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 

@@ -22562,7 +22562,10 @@ and never grants host effects to imported modules.
 CLI `run` and `build` consume this classification during their existing root
 preparation parse, before platform discovery or host linking. Parse failures
 produce source diagnostics directly; a non-app root produces the execution
-requires-app-or-default-app diagnostic. Neither case is staged as a synthetic
+requires-app-or-default-app diagnostic. That diagnostic points at a non-app
+root's header, which is what makes the root something other than an app; a
+headerless root has no text that is the problem, so its diagnostic is about the
+file as a whole and has no source region. Neither case is staged as a synthetic
 app to obtain an error. Checking still accepts valid type modules, and explicit
 root requests such as `test` do not require an application entrypoint.
 

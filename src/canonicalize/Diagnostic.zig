@@ -1,6 +1,7 @@
 //! Diagnostics related to canonicalization
 
 const std = @import("std");
+const builtin = @import("builtin");
 const base = @import("base");
 const reporting = @import("reporting");
 
@@ -328,17 +329,20 @@ pub const Diagnostic = union(enum) {
     crash_expects_string: struct {
         region: Region,
     },
+    /// About the file as a whole: no text in it is the problem, so it has no
+    /// region.
     type_module_missing_matching_type: struct {
         module_name: Ident.Idx,
-        region: Region,
     },
+    /// `region` is the alias declaration named after the module.
     type_module_has_alias_not_nominal: struct {
         module_name: Ident.Idx,
         region: Region,
     },
+    /// About the file as a whole: no text in it is the problem, so it has no
+    /// region.
     default_app_missing_main: struct {
         module_name: Ident.Idx,
-        region: Region,
     },
     default_app_wrong_arity: struct {
         arity: u32,
@@ -346,9 +350,6 @@ pub const Diagnostic = union(enum) {
     },
     cannot_import_default_app: struct {
         module_name: Ident.Idx,
-        region: Region,
-    },
-    execution_requires_app_or_default_app: struct {
         region: Region,
     },
     type_name_case_mismatch: struct {
@@ -571,12 +572,9 @@ pub const Diagnostic = union(enum) {
             .undeclared_type_var => |d| d.region,
             .type_alias_but_needed_nominal => |d| d.region,
             .crash_expects_string => |d| d.region,
-            .type_module_missing_matching_type => |d| d.region,
             .type_module_has_alias_not_nominal => |d| d.region,
-            .default_app_missing_main => |d| d.region,
             .default_app_wrong_arity => |d| d.region,
             .cannot_import_default_app => |d| d.region,
-            .execution_requires_app_or_default_app => |d| d.region,
             .type_name_case_mismatch => |d| d.region,
             .module_header_deprecated => |d| d.region,
             .roc_version_mismatch => |d| d.region,
@@ -605,34 +603,15 @@ pub const Diagnostic = union(enum) {
             .mutually_recursive_type_aliases => |d| d.region,
             .deprecated_number_suffix => |d| d.region,
             .range_op_chained => |d| d.region,
+            // A diagnostic about its file as a whole never stands in for a
+            // malformed node, the only consumer of a diagnostic's region.
+            .type_module_missing_matching_type, .default_app_missing_main => {
+                if (builtin.mode == .debug) {
+                    base.invariant("file-level diagnostic {s} has no region", .{@tagName(self)});
+                }
+                unreachable;
+            },
         };
-    }
-
-    /// Explain why a parsed root cannot supply an executable entrypoint.
-    /// Shared by root preparation and canonicalization diagnostic rendering.
-    pub fn buildExecutionRequiresAppOrDefaultAppReport(
-        allocator: Allocator,
-        region_info: base.RegionInfo,
-        filename: []const u8,
-        source: []const u8,
-        line_starts: []const u32,
-    ) Allocator.Error!Report {
-        var report = try Report.init(allocator, "Execution Requires App Or Default App", "This file cannot be executed because it is not an app or default-app module.", .runtime_error);
-        errdefer report.deinit();
-
-        try report.document.addReflowingText("Add either:");
-        try report.document.addLineBreak();
-        try report.document.addInlineCode("app");
-        try report.document.addReflowingText(" header at the top of the file");
-        try report.document.addLineBreak();
-        try report.document.addReflowingText("or:");
-        try report.document.addLineBreak();
-        try report.document.addReflowingText("a ");
-        try report.document.addInlineCode("main!");
-        try report.document.addReflowingText(" function with 1 argument (for default-app)");
-        try report.document.addLineBreak();
-        try report.document.addSourceRegion(region_info, .error_highlight, filename, source, line_starts);
-        return report;
     }
 
     /// Build a report for shadowing a type from an outer lexical scope.

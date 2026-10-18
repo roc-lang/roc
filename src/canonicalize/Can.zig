@@ -5506,15 +5506,13 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
                     break :blk true;
                 } else {
                     // Found alias instead of nominal type - emit specific error
-                    const file = self.parse_ir.store.getFile();
                     const module_name_text = self.env.module_name;
                     const module_name_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
-                    const file_region = self.parse_ir.tokenizedRegionToRegion(file.region);
 
                     try self.env.pushDiagnostic(.{
                         .type_module_has_alias_not_nominal = .{
                             .module_name = module_name_ident,
-                            .region = file_region,
+                            .region = result.region,
                         },
                     });
                     break :blk false;
@@ -21465,6 +21463,7 @@ fn checkMainFunction(self: *Self, report_errors: bool) std.mem.Allocator.Error!M
 const MatchingTypeResult = struct {
     ident: Ident.Idx,
     kind: AST.TypeDeclKind,
+    region: Region,
 };
 
 /// Check if there's a type declaration matching the module name
@@ -21486,6 +21485,7 @@ fn findMatchingTypeIdent(self: *Self) ?MatchingTypeResult {
             return .{
                 .ident = type_ident,
                 .kind = kind,
+                .region = self.parserDeclRegion(decl),
             };
         }
     }
@@ -21530,10 +21530,8 @@ fn exposeTopLevelTypesForExplicitRoots(self: *Self) std.mem.Allocator.Error!void
 
 /// Report smart error when neither type module nor default-app is valid (checking mode)
 fn reportTypeModuleOrDefaultAppError(self: *Self) std.mem.Allocator.Error!void {
-    const file = self.parse_ir.store.getFile();
     const module_name_text = self.env.module_name;
     const module_name_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
-    const file_region = self.parse_ir.tokenizedRegionToRegion(file.region);
 
     // If there are types declared, assume type module, else assume default-app.
     if (self.hasAnyTypeDeclarations()) {
@@ -21541,7 +21539,6 @@ fn reportTypeModuleOrDefaultAppError(self: *Self) std.mem.Allocator.Error!void {
         try self.env.pushDiagnostic(.{
             .type_module_missing_matching_type = .{
                 .module_name = module_name_ident,
-                .region = file_region,
             },
         });
     } else {
@@ -21549,7 +21546,6 @@ fn reportTypeModuleOrDefaultAppError(self: *Self) std.mem.Allocator.Error!void {
         try self.env.pushDiagnostic(.{
             .default_app_missing_main = .{
                 .module_name = module_name_ident,
-                .region = file_region,
             },
         });
     }
