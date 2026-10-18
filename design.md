@@ -2505,19 +2505,19 @@ zeroed unused bytes. Longer literals use the allocating runtime constructor.
 This is representation lowering of explicit LIR literal bytes; it introduces no
 ownership decisions and leaves all explicit LIR ARC statements intact.
 
-The physical runtime representation of values is defined once, by the structs
+The runtime encoding of values is defined once, by the structs
 and constants in `src/builtins`: `RocStr` and `RocList` field order and word
 count, the small-string flag and length mask, the seamless-slice tag, the
 capacity shift, the refcount word's position, data-pointer tag bits, and the
 static-data refcount sentinel, and `RocDec`'s scale. Every backend and
-`layout.Store` derives these facts from those definitions, scaling field
+`layout.Store` derives these constants from those definitions, scaling field
 offsets to the target word size with the builtins' target-width helpers, and
 never re-spells them as literals. Where emitted code depends on a particular
 value (for example a signed test of the length word standing in for the
 small-string flag, or `i32.eqz` standing in for the static sentinel), the
 emitting helper comptime-asserts that dependency. Copies that cannot import
 `builtins`, such as the freestanding default-platform views and the Python
-debugger scripts, are locked to the canonical definitions by tests. Likewise,
+debugger scripts, are locked to the definitions in `src/builtins` by tests. Likewise,
 each platform C ABI's argument-register counts are declared once in
 `layout.abi`, and the dev backend's register lists comptime-assert their
 lengths against them.
@@ -20176,12 +20176,12 @@ A container qualifies for dismantling when all of the following hold:
   or join-carried by `set_local`
 
 A container's take domain is its ownership slots, not its top-level fields.
-A struct holding refcounted data numbers its fields by semantic index, and a
+A struct holding refcounted data numbers its fields by field index, and a
 field that is itself a struct holding refcounted data expands in place into
-that struct's own slots: a field's first slot is its semantic index plus the
+that struct's own slots: a field's first slot is its field index plus the
 extra slots of the expanded fields before it
 (`layout.Store.ownershipSlotCount`). A flat record's slots are therefore its
-semantic field indices, and a record nested in a field covers a contiguous
+field indices, and a record nested in a field covers a contiguous
 slot range. A take names the slots its result carries away, residual masks
 and residual shells name slots, and a container dismantles only when every
 slot fits one mask word.
@@ -20319,7 +20319,7 @@ ownership places. The place graph is solved to a fixpoint, so a nested read
 chain such as tag payload to struct field keeps the root aggregate's unit key.
 A take binding, unconditional or owned-only, holds the field unit its take
 consumed, so it starts an ownership place of its own: its aliases and
-projections take the take binding's unit key, never the root's, and moving
+field and payload reads take the take binding's unit key, never the root's, and moving
 one of them into a call moves the unit the take binding holds. In an emission
 whose owned-only take does not apply, that binding holds no unit, and a move
 through it retains exactly as a move through the binding itself would.
@@ -23407,14 +23407,15 @@ each phase's report.
 
 The compiler's developer-only environment variables (`ROC_LIR_DUMP`,
 `ROC_SPEC_CENSUS`, `ROC_PACK_TRACE`, `ROC_PACK_STATS`, `ROC_CTFE_DEMAND_TRACE`,
-`ROC_DEV_PACK_OBJECTS`, `ROC_DEV_PACK_HITS`, `ROC_DEV_ARTIFACT_ROUNDTRIP` and
-`ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE`) are honored only by a compiler for
+`ROC_DEV_PACK_OBJECTS`, `ROC_DEV_PACK_HITS`, the object-compile round-trip
+variable and `ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE`) are honored only by a
+compiler for
 which `build_options.dev_diagnostics` is true: every Debug compiler, and any
 other build made with `-Ddev-diagnostics`. Every site tests that constant at
 compile time, so a release compiler neither reads these variables nor
 carries the code they enable, and an end user's environment cannot change
-what it does. The constant reads each executable's own optimize mode, since
-the release executable shares its modules with the development one. CLI
+what it does. The constant reads each compiler binary's own optimize mode,
+since the release compiler binary shares its modules with the development one. CLI
 cases that set one of these variables skip against a compiler without them.
 Performance work that needs them on an optimized compiler builds it with
 `zig build roc -Doptimize=ReleaseFast -Ddev-diagnostics`.
