@@ -15,15 +15,14 @@ const dev_wrappers = @import("builtins").dev_wrappers;
 const RocOps = @import("builtins").host_abi.RocOps;
 
 /// Builtin wrapper known to wasm codegen: one member, of the same name, per
-/// `builtin_registry.BuiltinFn` member the linkable builtins payloads export
-/// (every member whose `payload()` is not `.jit_only`), in registry order.
+/// `builtin_registry.BuiltinFn` member the linkable builtins payloads export,
+/// in registry order.
 pub const BuiltinKind = blk: {
     @setEvalBranchQuota(10_000);
     const all = std.enums.values(builtin_registry.BuiltinFn);
     var names: [all.len][:0]const u8 = undefined;
     var count: usize = 0;
     for (all) |f| {
-        if (f.payload() == .jit_only) continue;
         names[count] = @tagName(f);
         count += 1;
     }

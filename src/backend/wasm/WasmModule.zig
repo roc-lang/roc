@@ -7492,12 +7492,7 @@ test "builtins payload defines exactly the registry's linkable members" {
     defer builtins_module.deinit();
 
     inline for (comptime std.enums.values(registry.BuiltinFn)) |f| {
-        const found = builtins_module.findDefinedFunctionSymbolExact(f.symbolName());
-        if (comptime f.payload() == .jit_only) {
-            try std.testing.expectError(error.MissingSymbol, found);
-        } else {
-            _ = try found;
-        }
+        _ = try builtins_module.findDefinedFunctionSymbolExact(f.symbolName());
     }
 }
 

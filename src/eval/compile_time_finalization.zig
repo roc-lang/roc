@@ -812,6 +812,10 @@ fn compileTimeTarget(options: Options, solved_policy: lir.CheckedPipeline.Solved
         // copying, stays on.
         .consume_dead_boxes = true,
         .zero_dict_seed = true,
+        // Native dev code always supports a hot-reload session, so its erased
+        // callables reserve the hot-reload prefix; an interpreted evaluation
+        // reserves none.
+        .erased_capture_prefix = if (compilerHostMustUseInterpreterForCtfe()) 0 else builtins.erased_callable.hot_reload_capture_prefix_size,
         .scalarize_joins = false,
         .reuse_boxes = false,
         // Specialization records procedure names for every consumer of the
@@ -4252,6 +4256,9 @@ const DevProgram = struct {
     executable: backend.ExecutableMemory,
     entry_offsets: collections.DenseMap(lir.LIR.LirProcSpecId, usize),
     artifacts: ?NativeProcCompiler.Retained,
+    /// The bytes the program's erased callables reserve before their
+    /// captures (`LirProgram.Result.erased_capture_prefix`).
+    capture_prefix: u32,
 
     /// How a program's procedures are compiled: as a dev build's object
     /// code, linked into this process, or, for a Boxy program, whose code no
@@ -4399,6 +4406,7 @@ const DevProgram = struct {
             .executable = executable,
             .entry_offsets = entry_offsets,
             .artifacts = artifacts,
+            .capture_prefix = lowered.lir_result.erased_capture_prefix,
         };
     }
 
@@ -4422,9 +4430,10 @@ const DevProgram = struct {
         for (self.codegen.store.getProcSpecs(), 0..) |_, index| {
             const proc: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
             const symbol = self.codegen.compiledProcSymbol(proc) orelse continue;
+            // The callable's captures follow the program's capture prefix.
             if (base_address + symbol.code_start == address) return .{
                 .proc = proc,
-                .capture_ptr = builtins.erased_callable.capturePtr(data_ptr),
+                .capture_ptr = builtins.erased_callable.capturePtr(data_ptr) + self.capture_prefix,
             };
         }
         finalizationInvariant("native callable omitted its emitted procedure identity");
@@ -4674,6 +4683,7 @@ fn evalDevProgramRoots(
         codegen: *const backend.HostLirCodeGen,
         store: *const lir.LirStore,
         executable: *const backend.ExecutableMemory,
+        capture_prefix: u32,
 
         fn resolve(raw: ?*anyopaque, data_ptr: [*]u8) error{RuntimeError}!ConstStoreWriter.ErasedCallableResolution {
             const self: *@This() = @ptrCast(@alignCast(raw.?));
@@ -4684,9 +4694,11 @@ fn evalDevProgramRoots(
                 const symbol = self.codegen.compiledProcSymbol(proc_id) orelse continue;
                 const compiled_addr = @intFromPtr(self.executable.codePtr() + symbol.code_start);
                 if (compiled_addr == runtime_addr) {
+                    // The callable's captures follow the program's capture
+                    // prefix.
                     return .{
                         .proc = proc_id,
-                        .capture_ptr = builtins.erased_callable.capturePtr(data_ptr),
+                        .capture_ptr = builtins.erased_callable.capturePtr(data_ptr) + self.capture_prefix,
                     };
                 }
             }
@@ -4698,6 +4710,7 @@ fn evalDevProgramRoots(
         .codegen = &native.codegen,
         .store = &lowered.lir_result.store,
         .executable = &native.executable,
+        .capture_prefix = lowered.lir_result.erased_capture_prefix,
     };
 
     const store_results_started_ns = if (options.timing) |timing| timing.start() else 0;

@@ -16198,16 +16198,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .native_execution => {
                     try builder.call(builtin_fn.wrapperAddress());
                 },
-                .shim_execution => {
-                    try builder.callRelocatable(try self.builtinSymbol(builtin_fn), &self.codegen);
-                },
-                .object_file => {
-                    if (builtin_fn.payload() == .jit_only) {
-                        base.invariant(
-                            "dev object-file codegen referenced JIT-only builtin {s}",
-                            .{builtin_fn.symbolName()},
-                        );
-                    }
+                .shim_execution, .object_file => {
                     try builder.callRelocatable(try self.builtinSymbol(builtin_fn), &self.codegen);
                 },
             }

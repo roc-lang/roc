@@ -145,6 +145,7 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
         .target = .{
             .inline_mode = lir.CheckedPipeline.dev_inline_mode,
             .spec_constr_clone_inlining = lir.CheckedPipeline.dev_spec_constr_clone_inlining,
+            .erased_capture_prefix = @import("builtins").erased_callable.hot_reload_capture_prefix_size,
             .consume_dead_boxes = true,
             .inline_expects = .run,
             .list_in_place_map = false,

@@ -23383,8 +23383,12 @@ and verifies in debug builds that no other procedure's address is taken.
 
 This lifetime rule also covers boxed Roc closures that cross the host boundary.
 The dev backend generates real erased-callable procedures; it does not insert
-trampolines. In shim execution mode, packed erased-callable payloads reserve a
-small shim-only prefix before the ordinary capture bytes. The prefix stores a
+trampolines. Native dev code always supports a hot-reload session: packed
+erased-callable payloads of every native dev program, and of compile-time
+evaluation, reserve a small prefix before the ordinary capture bytes, so
+compile-time evaluation and every dev build compile the same erased
+callables. Outside a hot-reload session the image-tracking builtins return at
+once. The prefix stores a
 reference to the owning loaded image and the original capture-drop callback.
 Generated erased-callable procedures skip this prefix before reading their
 capture, increment the owning image on entry, and decrement it before returning.
@@ -23394,14 +23398,13 @@ reference. That retained reference keeps an old image alive while a host stores
 a boxed Roc closure and later calls it after one or more hot reloads.
 
 Because every generated erased-callable procedure skips the prefix, every
-erased callable value of a hot-reloading image reserves it, including the ones
-compile-time evaluation froze into static data. The runtime lowering of a
-hot-reloading dev image records the prefix size
-(`LirProgram.Result.erased_capture_prefix`), and the frozen images written for
-that program reserve it before their captures. A static value is never dropped,
-so its reserved prefix stays zeroed. The compile-time host program runs in the
-interpreter with no prefix, so its completed values are always transcoded into
-a runtime program whose prefix differs.
+erased callable value of a native dev program reserves it, including the ones
+compile-time evaluation froze into static data. A program's lowering records
+the prefix size (`LirProgram.Result.erased_capture_prefix`), and the frozen
+images written for that program reserve it before their captures. A static
+value is never dropped, so its reserved prefix stays zeroed. Optimized
+builds, other backends, and an interpreted evaluation reserve no prefix, and
+completed values are transcoded into a program whose prefix differs.
 
 Headerless default apps never hot reload. They compile through synthetic
 temporary source files that are discarded after each run, so there is nothing
