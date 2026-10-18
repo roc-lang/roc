@@ -43,7 +43,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+if (5 > 3) 1 else 2
 ~~~
 # CANONICALIZE
 ~~~clojure

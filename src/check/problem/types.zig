@@ -634,6 +634,25 @@ pub const TypeMismatch = struct {
     /// Set when `leaf` failed because the use gave one instantiated
     /// interpolation's values different types.
     interpolation_tie: ?InterpolationTie = null,
+    /// How the report suggests turning the actual value into the expected
+    /// builtin `Str`.
+    str_conversion: StrConversion = .none,
+};
+
+/// The way a report suggests turning a value into a `Str` when it is used
+/// where the builtin `Str` is needed, decided by the checker from the value's
+/// type and that type's methods.
+pub const StrConversion = enum {
+    /// The value's type is not one a hint applies to.
+    none,
+    /// The value's type has a `to_str` method.
+    to_str,
+    /// The value's type is a nominal type declared in the module being
+    /// checked, and it has no `to_str` method.
+    define_to_str,
+    /// The value's type has no `to_str` method, and `Str.inspect` gives a
+    /// representation of it for debugging.
+    inspect,
 };
 
 /// A use of a generalized definition gave the values one of its
@@ -880,6 +899,9 @@ pub const DispatcherDoesNotImplMethod = struct {
     /// Set when the dispatcher is a record's or tag union's `..` extension,
     /// whose obligation came from deriving the method for that whole type.
     row_extension_of: ?RowExtension = null,
+    /// How the report suggests turning the literal into the builtin `Str`
+    /// when the dispatcher is `Str`.
+    str_conversion: StrConversion = .none,
 
     /// Type of the dispatcher
     pub const DispatcherType = enum { nominal, rigid };

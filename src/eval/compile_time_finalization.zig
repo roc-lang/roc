@@ -630,10 +630,10 @@ test "shared producer requires the exact non-null provider capability" {
     const Lookup = lir.CheckedPipeline.SpecCacheLookup;
     const LookupResult = @typeInfo(@typeInfo(@FieldType(Lookup, "find")).pointer.child).@"fn".return_type.?;
     const Callbacks = struct {
-        fn first(_: *anyopaque, _: [32]u8, _: ?[32]u8) LookupResult {
+        fn first(_: *anyopaque, _: [32]u8, _: ?[32]u8, _: bool) LookupResult {
             return null;
         }
-        fn second(context: *anyopaque, _: [32]u8, _: ?[32]u8) LookupResult {
+        fn second(context: *anyopaque, _: [32]u8, _: ?[32]u8, _: bool) LookupResult {
             // Distinct behavior keeps optimized builds from merging callbacks.
             const count: *u8 = @ptrCast(context);
             count.* += 1;

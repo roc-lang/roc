@@ -352,7 +352,7 @@ pub const ModuleType = enum {
             },
             .backend => .{
                 .root = "src/backend/mod.zig",
-                .deps = &.{ .collections, .base, .layout, .builtins, .can, .lir, .static_data, .roc_target, .ctx },
+                .deps = &.{ .collections, .base, .layout, .builtins, .can, .lir, .static_data, .roc_target, .ctx, .build_options },
                 .tests = .{ .unit = .{} },
             },
             .lir_core => .{
@@ -368,7 +368,7 @@ pub const ModuleType = enum {
             },
             .postcheck => .{
                 .root = "src/postcheck/mod.zig",
-                .deps = &.{ .base, .builtins, .can, .check, .collections, .layout, .lir_core, .types, .value_semantics },
+                .deps = &.{ .base, .builtins, .can, .check, .collections, .layout, .lir_core, .types, .value_semantics, .build_options },
                 .tests = .{ .unit = .{ .aggregators = &.{"postcheck declarations are referenced"} } },
             },
             .lir => .{

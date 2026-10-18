@@ -66,7 +66,11 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+id = |x| x
+
+picked = if (Bool.True) id else id
+
+main = (picked(1), picked("a"))
 ~~~
 # CANONICALIZE
 ~~~clojure
