@@ -4126,9 +4126,6 @@ pub const DemandCounters = struct {
 pub const parallel_spec_jobs_per_lane: usize = 64;
 const SharedSummaries = WorkerInputs.AppendIndex(InterfaceReplayAddress, InterfaceSummaryEntry);
 
-const SpecJobRunId = enum(u32) { _ };
-var next_spec_job_run_id = std.atomic.Value(u32).init(0);
-
 /// One reserved specialization whose body has not lowered yet, in the
 /// deterministic scheduler FIFO. Every field is durable for the builder's
 /// lifetime: evidence lives in the evidence arena, the requested type is
@@ -4342,10 +4339,11 @@ const SpecJobWorkspace = struct {
     }
 };
 
-/// Persistent state for one specialization execution lane. Executor-backed
-/// lanes retain it for the worker-pool lifetime; the serial path owns the same
-/// shape directly. Barriers end task-result ownership, while the workspace
-/// retains cumulative relocation state for later tasks.
+/// Persistent state for one specialization execution lane during one Monotype
+/// run. The run's `Builder` owns it for executor lanes (`spec_job_lanes`) and
+/// for the serial path alike, and frees it when the run ends. Barriers end
+/// task-result ownership, while the workspace retains cumulative relocation
+/// state for later tasks of the same run.
 pub const SpecJobWorkerState = struct {
     worker_id: SpecJobWorkerId,
     allocator: Allocator,
@@ -4379,8 +4377,7 @@ pub const SpecJobWorkerState = struct {
     }
 };
 
-/// Cumulative copy of one worker's type/name domain. Executor lanes own their
-/// copy for the pool lifetime; the serial path owns an equivalent directly.
+/// Cumulative copy of one worker's type/name domain for one Monotype run.
 /// Only the coordinator mutates it, in dispatch order, before any contained id
 /// is read.
 const SpecJobCommitDomain = struct {
@@ -4443,23 +4440,20 @@ const SpecJobCommitDomain = struct {
     }
 };
 
-/// Monotype state retained by one executor lane. Keeping the source
+/// Monotype state of one executor lane for one run. Keeping the source
 /// workspace and its ordered destination copy together makes their cumulative
-/// relocation domains follow the worker rather than a particular coordinator
-/// `Builder`. A new Monotype run reinitializes the same retained entry because
-/// its stores belong to a different destination program.
+/// relocation domains follow the worker within the run. Nothing in it is
+/// meaningful to another run, whose stores belong to a different destination
+/// program, so the run's `Builder` frees it when the run ends.
 const SpecJobLaneState = struct {
-    run_id: SpecJobRunId,
     worker: SpecJobWorkerState,
     commit_domain: SpecJobCommitDomain,
 
     fn init(
         allocator: Allocator,
         worker_id: SpecJobWorkerId,
-        run_id: SpecJobRunId,
     ) SpecJobLaneState {
         return .{
-            .run_id = run_id,
             .worker = SpecJobWorkerState.init(allocator, worker_id),
             .commit_domain = SpecJobCommitDomain.init(allocator),
         };
@@ -4470,11 +4464,6 @@ const SpecJobLaneState = struct {
         self.worker.deinit();
         self.* = undefined;
     }
-};
-
-/// Address identity used to reserve this module's entry in an executor lane.
-const SpecJobLaneStateKey = struct {
-    var value: u8 = undefined;
 };
 
 /// One immutable graph-free result handed from ordinary body lowering to
@@ -4533,7 +4522,9 @@ const CompletedProcedureRootShard = struct {
 
 /// Captured immutable input for a root batch or one streaming specialization.
 const SpecJobWorkerInputs = struct {
-    run_id: SpecJobRunId,
+    /// The run's lane states, indexed by executor worker id. A task touches
+    /// only its own lane's slot, and lanes with one id never overlap.
+    lanes: []?*SpecJobLaneState,
     modules: Common.CheckedModules,
     module_views: []const ModuleViewData,
     source_file_ids: *const SourceFileIds,
@@ -4893,7 +4884,6 @@ const LoweringModuleIds = std.AutoHashMap([32]u8, Common.LoweringModuleId);
 
 const Builder = struct {
     allocator: Allocator,
-    spec_job_run_id: SpecJobRunId,
     modules: Common.CheckedModules,
     root_view: checked.ImportedModuleView,
     /// Checked module key -> position in the lowering input; built lazily on
@@ -5019,6 +5009,9 @@ const Builder = struct {
     /// Serial execution uses the same worker-tagged ownership protocol as
     /// executor callbacks.
     spec_job_worker: ?SpecJobWorkerState = null,
+    /// Executor lanes' state for this run, indexed by worker id and created
+    /// on each lane's first task. Freed with the builder.
+    spec_job_lanes: []?*SpecJobLaneState = &.{},
     /// Coordinator-owned exact-prefix copy of immutable specialization
     /// epochs. It is the concrete source for cumulative workspace-to-program
     /// relocation after worker results stop borrowing the mutable workspace.
@@ -5219,15 +5212,10 @@ const Builder = struct {
     fn init(allocator: Allocator, modules: Common.CheckedModules, program: *Ast.Program, options: Options) Builder {
         const counters = options.specialization_counters orelse
             if (options.diagnostics) |diagnostics| &diagnostics.specialization else null;
-        const raw_spec_job_run_id = next_spec_job_run_id.fetchAdd(1, .monotonic);
-        if (raw_spec_job_run_id == std.math.maxInt(u32)) {
-            Common.compilerBug("Monotype specialization run identity overflow");
-        }
         var spec_store = specialize.SpecBuilder.init(allocator, &program.names, &program.types, &program.specs);
         spec_store.counters = counters;
         return .{
             .allocator = allocator,
-            .spec_job_run_id = @fromBackingInt(@intCast(raw_spec_job_run_id)),
             .modules = modules,
             .root_view = checked.importedView(modules.root.module),
             .module_index = std.AutoHashMap([32]u8, ModuleIndexSlot).init(allocator),
@@ -5419,52 +5407,51 @@ const Builder = struct {
         return builder;
     }
 
-    fn deinitSpecJobLaneState(opaque_state: *anyopaque) void {
-        const state: *SpecJobLaneState = @ptrCast(@alignCast(opaque_state));
-        const allocator = state.worker.allocator;
-        state.deinit();
-        allocator.destroy(state);
+    /// This run's lane table, sized to the executor's lanes on first use.
+    fn specJobLanes(self: *Builder) Allocator.Error![]?*SpecJobLaneState {
+        if (self.spec_job_lanes.len == 0) {
+            const executor = self.post_check_executor orelse
+                Common.compilerBug("parallel Monotype specialization ran without an executor");
+            const lanes = try self.allocator.alloc(?*SpecJobLaneState, executor.worker_count);
+            @memset(lanes, null);
+            self.spec_job_lanes = lanes;
+        }
+        return self.spec_job_lanes;
     }
 
+    fn deinitSpecJobLanes(allocator: Allocator, lanes: []?*SpecJobLaneState) void {
+        for (lanes) |maybe_state| {
+            const state = maybe_state orelse continue;
+            // Each lane allocated its state with its own worker allocator.
+            const state_allocator = state.worker.allocator;
+            state.deinit();
+            state_allocator.destroy(state);
+        }
+        if (lanes.len != 0) allocator.free(lanes);
+    }
+
+    /// The calling lane's state for this run, created on the lane's first task.
     fn ensureSpecJobLaneState(
         executor_worker: base.post_check_task_executor.Worker,
         inputs: *const SpecJobWorkerInputs,
     ) Allocator.Error!*SpecJobLaneState {
-        const key: *const anyopaque = @ptrCast(&SpecJobLaneStateKey.value);
-        if (executor_worker.lane_state.get(key)) |opaque_state| {
-            const state: *SpecJobLaneState = @ptrCast(@alignCast(opaque_state));
-            if (@backingInt(state.worker.worker_id) != executor_worker.id) {
-                Common.compilerBug("Monotype lane state moved between executor workers");
-            }
-            if (state.run_id != inputs.run_id) {
-                state.deinit();
-                state.* = SpecJobLaneState.init(
-                    executor_worker.allocator,
-                    @fromBackingInt(@intCast(executor_worker.id)),
-                    inputs.run_id,
-                );
-            }
+        std.debug.assert(executor_worker.id < inputs.lanes.len);
+        const slot = &inputs.lanes[executor_worker.id];
+        if (slot.*) |state| {
+            std.debug.assert(@backingInt(state.worker.worker_id) == executor_worker.id);
             return state;
-        }
-
-        if (executor_worker.id >= std.math.maxInt(u32)) {
-            Common.compilerBug("post-check executor returned an invalid specialization worker id");
         }
         const state = try executor_worker.allocator.create(SpecJobLaneState);
         state.* = SpecJobLaneState.init(
             executor_worker.allocator,
             @fromBackingInt(@intCast(executor_worker.id)),
-            inputs.run_id,
         );
-        errdefer {
-            state.deinit();
-            executor_worker.allocator.destroy(state);
-        }
-        try executor_worker.lane_state.put(key, state, deinitSpecJobLaneState);
+        slot.* = state;
         return state;
     }
 
     fn deinit(self: *Builder) void {
+        deinitSpecJobLanes(self.allocator, self.spec_job_lanes);
         for (self.lower_frame_pool.items) |*frames| frames.deinit(self.allocator);
         self.lower_frame_pool.deinit(self.allocator);
         for (self.decl_scope_pool.items) |scope| {
@@ -6462,7 +6449,7 @@ const Builder = struct {
         defer self.allocator.free(completions);
         const snapshot = try self.captureSpecJobInputs();
         const inputs = SpecJobWorkerInputs{
-            .run_id = self.spec_job_run_id,
+            .lanes = try self.specJobLanes(),
             .modules = self.modules,
             .module_views = self.moduleViews(),
             .source_file_ids = self.sourceFileIds(),
@@ -6660,7 +6647,7 @@ const Builder = struct {
         defer self.allocator.free(completions);
         const snapshot = try self.captureSpecJobInputs();
         const inputs = SpecJobWorkerInputs{
-            .run_id = self.spec_job_run_id,
+            .lanes = try self.specJobLanes(),
             .modules = self.modules,
             .module_views = self.moduleViews(),
             .source_file_ids = self.sourceFileIds(),
@@ -9058,7 +9045,7 @@ const Builder = struct {
                     context.* = .{
                         .snapshot = snapshot,
                         .inputs = .{
-                            .run_id = self.spec_job_run_id,
+                            .lanes = try self.specJobLanes(),
                             .modules = self.modules,
                             .module_views = self.moduleViews(),
                             .source_file_ids = self.sourceFileIds(),
@@ -70241,30 +70228,37 @@ test "specialization store epoch absorption preserves boundaries on allocation f
     );
 }
 
-test "executor lane retains Monotype state within a run and resets it between runs" {
+test "Monotype lane state belongs to its run" {
     const allocator = std.testing.allocator;
     var lane_state = base.post_check_task_executor.LaneState.init(allocator);
     defer lane_state.deinit();
-    const executor_worker = base.post_check_task_executor.Worker{
+    const lanes = try allocator.alloc(?*SpecJobLaneState, 2);
+    @memset(lanes, null);
+    var inputs: SpecJobWorkerInputs = undefined;
+    inputs.lanes = lanes;
+    const first_worker = base.post_check_task_executor.Worker{
         .id = 0,
         .allocator = allocator,
         .scratch = allocator,
         .lane_state = &lane_state,
     };
-    var inputs: SpecJobWorkerInputs = undefined;
-    inputs.run_id = @fromBackingInt(@intCast(1));
+    var second_worker = first_worker;
+    second_worker.id = 1;
 
-    const first = try Builder.ensureSpecJobLaneState(executor_worker, &inputs);
+    const first = try Builder.ensureSpecJobLaneState(first_worker, &inputs);
     first.worker.tasks_started = 7;
-    const same_run = try Builder.ensureSpecJobLaneState(executor_worker, &inputs);
-    try std.testing.expectEqual(first, same_run);
-    try std.testing.expectEqual(@as(u64, 7), same_run.worker.tasks_started);
+    const same_lane = try Builder.ensureSpecJobLaneState(first_worker, &inputs);
+    try std.testing.expectEqual(first, same_lane);
+    try std.testing.expectEqual(@as(u64, 7), same_lane.worker.tasks_started);
 
-    inputs.run_id = @fromBackingInt(@intCast(2));
-    const next_run = try Builder.ensureSpecJobLaneState(executor_worker, &inputs);
-    try std.testing.expectEqual(first, next_run);
-    try std.testing.expectEqual(@as(u64, 0), next_run.worker.tasks_started);
-    try std.testing.expectEqual(inputs.run_id, next_run.run_id);
+    const other_lane = try Builder.ensureSpecJobLaneState(second_worker, &inputs);
+    try std.testing.expect(other_lane != first);
+    try std.testing.expectEqual(@as(u64, 0), other_lane.worker.tasks_started);
+
+    // The executor's own lane storage holds nothing of the run, so nothing
+    // of it outlives the run's builder.
+    try std.testing.expectEqual(@as(usize, 0), lane_state.entries.items.len);
+    Builder.deinitSpecJobLanes(allocator, lanes);
 }
 
 test "body draft comptime roots relocate independent shards and survive source destruction" {
