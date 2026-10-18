@@ -15386,6 +15386,20 @@ const MonoProgramView = struct {
 ```
 
 
+The compile-time evaluator compiles and links the closures of the roots it
+runs, together with the accessors that the object-cache code it splices binds
+through materializer headers, to a fixed point
+(`CompileTimeFinalization.evaluationDemand`). Storage declared for served code
+is retained for the runtime program by compaction; the evaluator provisions an
+accessor only where code it runs names it.
+
+A pack of offers whose every offer a loaded pack already carries for the same
+artifact address with the same facts (relation, refcount signature,
+compile-time root reads, demand), and which reads no literal materializer, is
+not written again (`LoadedPacks.carriesOffer`): a reader would index the stored
+offers identically. The pack of artifacts is written only for the addresses the
+store lacks, as before.
+
 ### Procedure Aliases
 
 A binding whose value is a lookup of a procedure (`f = g`, local or top level)

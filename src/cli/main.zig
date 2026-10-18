@@ -632,7 +632,23 @@ const CompileTimeObjectCache = struct {
         defer roots.deinit(self.allocator);
         var root_rows = std.AutoHashMap([32]u8, u32).init(self.allocator);
         defer root_rows.deinit();
+        var carried_packs: usize = 0;
         for (owner_offers.items) |*owner| {
+            // A pack whose every offer a loaded pack already carries for the
+            // same artifact with the same facts, and which reads no literal
+            // materializer, adds nothing a reader could use: it is not
+            // written again (design.md "Identity Offers").
+            if (owner.offers.materializer_reads.items.len == 0) {
+                var scratch = std.heap.ArenaAllocator.init(self.allocator);
+                defer scratch.deinit();
+                const all_carried = for (owner.offers.specs.items) |spec| {
+                    if (!self.packs.carriesOffer(spec, addresses[serving.old_to_new[spec.artifact].?], scratch.allocator())) break false;
+                } else true;
+                if (all_carried) {
+                    carried_packs += 1;
+                    continue;
+                }
+            }
             roots.clearRetainingCapacity();
             root_rows.clearRetainingCapacity();
             for (owner.offers.specs.items) |*spec| {
@@ -650,6 +666,7 @@ const CompileTimeObjectCache = struct {
             errdefer self.allocator.free(bytes);
             try self.stagePublication(owner.placement, owner.key, bytes);
         }
+        if (trace) std.debug.print("capture: offer packs written {d}, carried already {d}\n", .{ owner_offers.items.len - carried_packs, carried_packs });
         const encoded_at = std.Io.Timestamp.now(self.io, .awake).nanoseconds;
         self.packs.capture_encode_ns += encoded_at - encode_started;
     }

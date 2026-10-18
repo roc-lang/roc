@@ -59,17 +59,22 @@ fn compactProgram(result: *LirProgram.Result, frozen: ?*LirProgram.FrozenStaticD
 /// Produce a code-generation demand list without changing any LIR ids, roots,
 /// bodies, or frozen data. The image eagerly resolves every materialized
 /// callable relocation, so each such declaration is an explicit code root too.
+/// With `cached_storage`, every slot declared for served code is demanded with
+/// its accessor, as compaction retains it. The compile-time evaluator passes
+/// false: it runs only the closures of its roots, and adds the accessors the
+/// code it splices binds (`CompileTimeFinalization.evaluationDemand`).
 pub fn collectProcDemand(
     allocator: Allocator,
     result: *LirProgram.Result,
     roots: []const LIR.LirProcSpecId,
     materialized: []LirProgram.StaticDataExport,
+    cached_storage: bool,
 ) Allocator.Error![]LIR.LirProcSpecId {
     var frozen: LirProgram.FrozenStaticData = .{ .allocator = allocator, .exports = materialized };
     var pass = try Pass.init(result, &frozen);
     defer pass.deinit();
     for (roots) |root| try pass.markProc(root);
-    try pass.markCachedStorage();
+    if (cached_storage) try pass.markCachedStorage();
     for (0..materialized.len) |index| try pass.markFrozenExport(@fromBackingInt(@intCast(index)));
     try pass.markBoxyTableProcs();
     for (result.boxy_worker_procs.items) |proc| try pass.markProc(proc);
@@ -1054,7 +1059,7 @@ test "native demand retains a materializer reached only by cached storage" {
         .bytes = &(@as([8]u8, @splat(0))),
         .alignment = 8,
     }};
-    const demanded = try collectProcDemand(allocator, &result, &.{}, &exports);
+    const demanded = try collectProcDemand(allocator, &result, &.{}, &exports, true);
     defer allocator.free(demanded);
     try std.testing.expectEqualSlices(LIR.LirProcSpecId, &.{accessor}, demanded);
 }
@@ -1419,7 +1424,7 @@ test "CTFE code demand retains union identities and omits runtime-only procedure
             .kind = .function_pointer,
         }},
     }};
-    const demand = try collectProcDemand(allocator, &result, &.{procs[0]}, &exports);
+    const demand = try collectProcDemand(allocator, &result, &.{procs[0]}, &exports, true);
     defer allocator.free(demand);
     try std.testing.expectEqualSlices(LIR.LirProcSpecId, &.{ procs[0], procs[2] }, demand);
     try std.testing.expectEqual(@as(usize, 3), result.store.procSpecCount());

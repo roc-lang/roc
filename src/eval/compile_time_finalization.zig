@@ -4812,6 +4812,65 @@ const StaticSlotEnvironment = struct {
     }
 };
 
+/// The procedures the compile-time evaluator compiles: the closures of the
+/// roots it runs, together with the accessors that the object-cache code it
+/// splices binds through materializer headers, to a fixed point. Storage
+/// declared for served code is retained for the runtime program by
+/// compaction; the evaluator provisions an accessor only where code it runs
+/// names it.
+fn evaluationDemand(
+    allocator: Allocator,
+    lowered: *lir.CheckedPipeline.LoweredProgram,
+    roots: []const lir.LIR.LirProcSpecId,
+    slots: *const StaticSlotEnvironment,
+    splice_source: ?backend.dev.SpliceSource,
+) Allocator.Error![]lir.LIR.LirProcSpecId {
+    var demand_roots = std.ArrayList(lir.LIR.LirProcSpecId).empty;
+    defer demand_roots.deinit(allocator);
+    try demand_roots.appendSlice(allocator, roots);
+    var added = std.AutoHashMapUnmanaged(lir.LIR.LirProcSpecId, void).empty;
+    defer added.deinit(allocator);
+    var visited = std.AutoHashMapUnmanaged(struct { set: *const backend.dev.ProcArtifact.Set, index: u32 }, void).empty;
+    defer visited.deinit(allocator);
+    var stack = std.ArrayList(backend.dev.LocatedArtifact).empty;
+    defer stack.deinit(allocator);
+    while (true) {
+        const demand = try lir.ReachableProcs.collectProcDemand(allocator, &lowered.lir_result, demand_roots.items, slots.materialized, false);
+        const source = splice_source orelse return demand;
+        const headers = &(slots.materializers orelse return demand);
+        var grew = false;
+        for (demand) |proc_id| {
+            const proc = lowered.lir_result.store.getProcSpec(proc_id);
+            if (!proc.external) continue;
+            const located = source.find(source.context, proc.identity) orelse continue;
+            try stack.append(allocator, located);
+        }
+        // Every artifact the spliced closures place, walked once: the code
+        // and data edges `spliceIndexed` follows.
+        while (stack.pop()) |located| {
+            if ((try visited.getOrPut(allocator, .{ .set = located.set, .index = located.index })).found_existing) continue;
+            const artifact = located.set.artifacts[located.index];
+            for (artifact.materializations) |dependency| {
+                const id = headers.index(dependency.materialization);
+                const accessor = headers.procs[id];
+                if ((try added.getOrPut(allocator, accessor)).found_existing) continue;
+                try demand_roots.append(allocator, accessor);
+                grew = true;
+            }
+            for (artifact.refs) |ref| try stack.append(allocator, .{ .set = located.set, .index = ref.target });
+            for (artifact.data) |item| for (item.relocations) |relocation| {
+                const target = relocation.code_target orelse continue;
+                switch (target) {
+                    .local => |index| try stack.append(allocator, .{ .set = located.set, .index = index }),
+                    else => {},
+                }
+            };
+        }
+        if (!grew) return demand;
+        allocator.free(demand);
+    }
+}
+
 const DevProgram = struct {
     static_slot_ready: []const bool = &.{},
     allocator: Allocator,
@@ -4891,7 +4950,7 @@ const DevProgram = struct {
         defer allocator.free(evaluation_roots);
         for (lowered.lir_result.const_roots.items, evaluation_roots[0..const_root_count]) |root, *proc| proc.* = root.proc;
         for (lowered.lir_result.literal_roots.items, evaluation_roots[const_root_count..]) |root, *proc| proc.* = root.proc;
-        const evaluation_demand = try lir.ReachableProcs.collectProcDemand(allocator, &lowered.lir_result, evaluation_roots, slots.materialized);
+        const evaluation_demand = try evaluationDemand(allocator, lowered, evaluation_roots, &slots, if (options.object_cache) |cache| cache.splice_source else null);
         defer allocator.free(evaluation_demand);
         var splice = backend.dev.HostSplice.init(allocator);
         errdefer splice.deinit();

@@ -1343,6 +1343,11 @@ pub const View = struct {
         return self.columns.specs[index].artifact;
     }
 
+    /// Whether the offer at `index` serves lookups by procedure identity.
+    pub fn specIsIdentity(self: *const View, index: usize) bool {
+        return self.columns.specs[index].by_identity != 0;
+    }
+
     /// The platform/app relation offer `index` depends on, if any.
     pub fn specRelation(self: *const View, index: usize) ?[32]u8 {
         const row = self.columns.specs[index];
