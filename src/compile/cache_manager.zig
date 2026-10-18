@@ -233,6 +233,78 @@ pub const CacheManager = struct {
         self.recordStoreFor(kind, size);
     }
 
+    /// One part of a checked cache entry, written to a staging file before the
+    /// rest of the entry exists. Nothing reads it until the entry is published.
+    pub const StagedPart = struct {
+        /// Owned by the manager's allocator.
+        path: []u8,
+        len: usize,
+    };
+
+    /// Write `stream` to a staging file beside the checked entry for
+    /// `cache_key`, publishing nothing. Null when the cache is off or the write
+    /// failed; a failure counts as a store failure, since the entry it belonged
+    /// to can no longer be written.
+    pub fn stageCheckedPart(
+        self: *Self,
+        cache_key: [32]u8,
+        stream: CoreCtx.FileStream,
+        size: usize,
+        entries_dir: []const u8,
+        source_name: []const u8,
+    ) ?StagedPart {
+        if (!self.config.enabled) return null;
+        const allocator = self.allocator;
+        self.ensureCacheSubdirWith(allocator, cache_key, entries_dir) catch |err| {
+            self.verboseLog(allocator, "Failed to create checked cache subdirectory in {s} for {s} (key {x}): {}\n", .{ entries_dir, source_name, cache_key, err });
+            self.recordStoreFailureFor(.checked);
+            return null;
+        };
+        const cache_path = computeCacheFilePathIn(allocator, cache_key, entries_dir) catch {
+            self.recordStoreFailureFor(.checked);
+            return null;
+        };
+        defer allocator.free(cache_path);
+        // Staged parts are named like the writer's own staging files, so cache
+        // cleanup ages out one left behind by a compilation that never finished.
+        var suffix: [16]u8 = undefined;
+        self.roc_ctx.std_io.random(&suffix);
+        const path = std.fmt.allocPrint(allocator, "{s}.{s}.part.tmp", .{ cache_path, std.fmt.bytesToHex(suffix, .lower) }) catch {
+            self.recordStoreFailureFor(.checked);
+            return null;
+        };
+        self.roc_ctx.writeFileStream(path, stream) catch |err| {
+            self.verboseLog(allocator, "Failed to write checked cache part {s} for {s} ({d} bytes): {}\n", .{ path, source_name, size, err });
+            self.removeFailedTempFile(allocator, path);
+            allocator.free(path);
+            self.recordStoreFailureFor(.checked);
+            return null;
+        };
+        return .{ .path = path, .len = size };
+    }
+
+    /// The bytes of a staged part, owned by `allocator`. Null, counted as a
+    /// store failure, when the staging file can no longer be read whole.
+    pub fn readStagedPart(self: *Self, part: StagedPart, allocator: Allocator) ?[]u8 {
+        const bytes = self.roc_ctx.readFile(part.path, allocator) catch |err| {
+            self.verboseLog(allocator, "Failed to read checked cache part {s}: {}\n", .{ part.path, err });
+            self.recordStoreFailureFor(.checked);
+            return null;
+        };
+        if (bytes.len != part.len) {
+            allocator.free(bytes);
+            self.recordStoreFailureFor(.checked);
+            return null;
+        }
+        return bytes;
+    }
+
+    /// Delete a staged part's file and release it.
+    pub fn discardStagedPart(self: *Self, part: StagedPart) void {
+        self.removeFailedTempFile(self.allocator, part.path);
+        self.allocator.free(part.path);
+    }
+
     fn removeFailedTempFile(self: *Self, allocator: Allocator, path: []const u8) void {
         self.roc_ctx.deleteFile(path) catch |err| switch (err) {
             error.FileNotFound => {},

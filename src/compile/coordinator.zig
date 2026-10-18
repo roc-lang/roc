@@ -656,6 +656,14 @@ pub const ModuleState = struct {
     /// earlier compilation demanded: how many requested roots were
     /// unevaluated when it was reopened.
     reopened_unevaluated: ?usize = null,
+    /// Whether this module's solver type store was released once checking
+    /// finished (`Coordinator.release_checked_solver_types`). Its checked cache
+    /// entry can then be published only from `staged_checked_env`.
+    solver_types_released: bool = false,
+    /// The `ModuleEnv` part of this module's checked cache entry, written while
+    /// its solver types were still live. Published with the rest of the entry
+    /// once evaluation completes, or discarded.
+    staged_checked_env: ?CacheManager.StagedPart = null,
     /// Cached AST from parsing (owned, null after canonicalization)
     cached_ast: ?*AST,
     /// Current compilation phase
@@ -1311,6 +1319,11 @@ pub const Coordinator = struct {
     enable_hosted_transform: bool,
     /// Whether to retain exact source byte states for watch-mode refreshes.
     track_watch_inputs: bool,
+    /// Whether every module's solver type store is released once checking
+    /// finishes. Only a command that reads no module's solver types after
+    /// checking sets this: compile-time evaluation, lowering, and evaluation
+    /// reports read checked artifacts, regions, and source, never solver types.
+    release_checked_solver_types: bool = false,
     /// Name of the registered platform package, set via markPlatformPackage.
     /// App-root type checks wait for this package's root module to finish
     /// checking, so platform existence comes from explicit registration data
@@ -1454,6 +1467,7 @@ pub const Coordinator = struct {
         // Stop workers
         self.shutdown();
         self.inline_worker_allocs.deinit();
+        self.discardStagedCheckedParts();
 
         if (comptime trace_build) {
             std.debug.print("[COORD DEINIT] shutdown done, freeing packages...\n", .{});
@@ -1550,6 +1564,10 @@ pub const Coordinator = struct {
 
     pub fn setWatchInputTracking(self: *Coordinator, enabled: bool) void {
         self.track_watch_inputs = enabled;
+    }
+
+    pub fn setReleaseCheckedSolverTypes(self: *Coordinator, enabled: bool) void {
+        self.release_checked_solver_types = enabled;
     }
 
     /// Record which registered package is the app's platform. App-root type
@@ -2027,6 +2045,84 @@ pub const Coordinator = struct {
         return false;
     }
 
+    /// Release the solver type store of every module this compilation checked
+    /// from source. Every module has finished checking, so no importer reads
+    /// those stores again, and nothing after checking reads them: evaluation,
+    /// lowering, and evaluation reports work from checked artifacts, regions,
+    /// and source. A module's checked cache entry serializes its `ModuleEnv`,
+    /// solver types included, so that part of the entry is written first.
+    fn releaseCheckedSolverTypes(self: *Coordinator) Allocator.Error!void {
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            for (entry.value_ptr.*.modules.items) |*mod| {
+                // Only a module awaiting evaluation publishes a checked entry
+                // after this point.
+                if (mod.pending_evaluation == null) continue;
+                const artifact = mod.checkedArtifact() orelse continue;
+                if (artifact.pairing_arena != null) continue;
+                // A cached env is a view of its entry's bytes, and the builtin
+                // env is static; only an env checked from source owns its store.
+                const env = switch (artifact.module_env) {
+                    .checked_source => |module_env| module_env,
+                    .static_builtin, .cached_buffer => continue,
+                };
+                // A module with reports is never cached.
+                if (mod.reports.items.len == 0) self.stageCheckedModuleEnv(mod, artifact);
+                env.types.deinit();
+                env.types = try @import("types").Store.init(env.gpa);
+                mod.solver_types_released = true;
+            }
+        }
+    }
+
+    /// Write `mod`'s `ModuleEnv` cache part to a staging file.
+    fn stageCheckedModuleEnv(self: *Coordinator, mod: *ModuleState, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) void {
+        const manager = self.cache_manager orelse return;
+        if (!manager.config.enabled) return;
+        const entries_dir = manager.config.getCheckedArtifactCacheDir(manager.allocator) catch {
+            manager.recordStoreFailure();
+            return;
+        };
+        defer manager.allocator.free(entries_dir);
+        var arena = base.SingleThreadArena.init(manager.allocator);
+        defer arena.deinit();
+        var env_writer = CompactWriter.init();
+        serializeForCache(ModuleEnv, artifact.moduleEnvConst(), &env_writer, arena.allocator()) catch {
+            manager.recordStoreFailure();
+            return;
+        };
+        const Part = struct {
+            env: *const CompactWriter,
+
+            fn write(raw: *const anyopaque, destination: *std.Io.Writer) std.Io.Writer.Error!void {
+                const part: *const @This() = @ptrCast(@alignCast(raw));
+                try part.env.writeTo(destination);
+            }
+        };
+        const part = Part{ .env = &env_writer };
+        mod.staged_checked_env = manager.stageCheckedPart(
+            artifact.key.bytes,
+            .{ .context = &part, .write = Part.write },
+            env_writer.total_bytes,
+            entries_dir,
+            artifact.moduleEnvConst().module_name,
+        );
+    }
+
+    /// Delete the staged cache parts of modules whose entries were never
+    /// published, such as when compilation stopped before evaluation finished.
+    fn discardStagedCheckedParts(self: *Coordinator) void {
+        const manager = self.cache_manager orelse return;
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            for (entry.value_ptr.*.modules.items) |*mod| {
+                const part = mod.staged_checked_env orelse continue;
+                mod.staged_checked_env = null;
+                manager.discardStagedPart(part);
+            }
+        }
+    }
+
     /// Finish the immutable platform's independent compile-time work, then
     /// compose its checked metadata with the app's recorded requirement solutions.
     /// App evaluation and the pairing's dependent roots share runtime lowering.
@@ -2036,6 +2132,7 @@ pub const Coordinator = struct {
         var finalization_timer = startStageTimer(self.roc_ctx.std_io);
         defer self.program_finalization_ns += readStageTimer(self.roc_ctx.std_io, &finalization_timer);
         if (!self.frontend_complete) coordinatorInvariant("checked program finalization preceded frontend completion", .{});
+        if (self.release_checked_solver_types) try self.releaseCheckedSolverTypes();
         self.checked_program = mode == .executable_artifacts and self.appRootChecked();
         if (self.checked_program and self.findRootModule(.platform) != null) {
             const platform_root = self.findRootModule(.platform).?;
@@ -3035,7 +3132,11 @@ pub const Coordinator = struct {
         const evaluated_more = if (mod.reopened_unevaluated) |before| unevaluatedRequestCount(artifact) < before else true;
         mod.reopened_unevaluated = null;
         if (mod.reports.items.len == 0 and evaluated_more) {
-            if (artifact.pairing_arena == null) self.storeCheckedModuleInCache(artifact, mod.has_source_version_pin) else self.storePlatformPairingInCache(artifact);
+            if (artifact.pairing_arena == null) self.storeCheckedModuleInCache(mod, artifact) else self.storePlatformPairingInCache(artifact);
+        }
+        if (mod.staged_checked_env) |part| {
+            mod.staged_checked_env = null;
+            if (self.cache_manager) |manager| manager.discardStagedPart(part);
         }
         state.deinit();
         mod.pending_evaluation = null;
@@ -3460,9 +3561,15 @@ pub const Coordinator = struct {
         return header.install(platform, arena);
     }
 
-    fn storeCheckedModuleInCache(self: *Coordinator, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, has_source_version_pin: bool) void {
+    fn storeCheckedModuleInCache(self: *Coordinator, mod: *ModuleState, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) void {
         const manager = self.cache_manager orelse return;
         if (!manager.config.enabled) return;
+        const staged_env = mod.staged_checked_env;
+        mod.staged_checked_env = null;
+        defer if (staged_env) |part| manager.discardStagedPart(part);
+        // A released solver type store survives only in its staged part; a
+        // staging failure was already counted when it happened.
+        if (mod.solver_types_released and staged_env == null) return;
 
         const entries_dir = manager.config.getCheckedArtifactCacheDir(manager.allocator) catch {
             manager.recordStoreFailure();
@@ -3478,9 +3585,14 @@ pub const Coordinator = struct {
         const arena_alloc = arena.allocator();
 
         var env_writer = CompactWriter.init();
-        serializeForCache(ModuleEnv, artifact.moduleEnvConst(), &env_writer, arena_alloc) catch {
-            manager.recordStoreFailure();
-            return;
+        const env_bytes: ?[]const u8 = if (staged_env) |part|
+            manager.readStagedPart(part, arena_alloc) orelse return
+        else bytes: {
+            serializeForCache(ModuleEnv, artifact.moduleEnvConst(), &env_writer, arena_alloc) catch {
+                manager.recordStoreFailure();
+                return;
+            };
+            break :bytes null;
         };
 
         var artifact_writer = CompactWriter.init();
@@ -3489,7 +3601,7 @@ pub const Coordinator = struct {
             return;
         };
 
-        const env_len = env_writer.total_bytes;
+        const env_len = if (env_bytes) |bytes| bytes.len else env_writer.total_bytes;
         const artifact_len = artifact_writer.total_bytes;
 
         var header: [checked_module_cache_header_len]u8 = undefined;
@@ -3499,21 +3611,22 @@ pub const Coordinator = struct {
             artifact.key,
             env_len,
             artifact_len,
-            canonicalized_cache_entry.pinValidationHash(has_source_version_pin, self.source_pin_version),
+            canonicalized_cache_entry.pinValidationHash(mod.has_source_version_pin, self.source_pin_version),
         );
         const Entry = struct {
             header: []const u8,
+            env_bytes: ?[]const u8,
             env: *const CompactWriter,
             artifact: *const CompactWriter,
 
             fn write(raw: *const anyopaque, destination: *std.Io.Writer) std.Io.Writer.Error!void {
                 const entry: *const @This() = @ptrCast(@alignCast(raw));
                 try destination.writeAll(entry.header);
-                try entry.env.writeTo(destination);
+                if (entry.env_bytes) |bytes| try destination.writeAll(bytes) else try entry.env.writeTo(destination);
                 try entry.artifact.writeTo(destination);
             }
         };
-        const entry = Entry{ .header = &header, .env = &env_writer, .artifact = &artifact_writer };
+        const entry = Entry{ .header = &header, .env_bytes = env_bytes, .env = &env_writer, .artifact = &artifact_writer };
         manager.storeStream(
             artifact.key.bytes,
             .{ .context = &entry, .write = Entry.write },

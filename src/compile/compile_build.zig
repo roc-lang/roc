@@ -241,6 +241,11 @@ pub const BuildEnv = struct {
     cwd: []const u8,
     /// Whether to retain exact source byte states for watch-mode refreshes.
     track_watch_inputs: bool = false,
+    /// Whether modules' solver type stores are released once checking finishes
+    /// (`Coordinator.release_checked_solver_types`). Commands that read solver
+    /// types after compiling, such as documentation and editor tooling, leave
+    /// this off.
+    release_checked_solver_types: bool = false,
 
     /// Whether `compileDiscovered` validates that the selected platform target's
     /// declared link files exist before type checking.
@@ -873,6 +878,7 @@ pub const BuildEnv = struct {
         // This is required for roc build so that hosted functions can be called at runtime
         coord.enable_hosted_transform = true;
         coord.setWatchInputTracking(self.track_watch_inputs);
+        coord.setReleaseCheckedSolverTypes(self.release_checked_solver_types);
         coord.runtime_lowering = self.runtime_lowering;
         coord.setDetailedLoweringTiming(self.detailed_lowering_timing);
         coord.compile_time_object_cache = self.compile_time_object_cache;
