@@ -680,6 +680,9 @@ pub const ModuleState = struct {
     reachable_local_imports: std.bit_set.DynamicBitSetUnmanaged,
     /// Diagnostic reports
     reports: std.ArrayList(Report),
+    /// Reports already present when type checking began: parsing and
+    /// canonicalization produced them, and their own caches reproduce them.
+    pre_check_report_count: usize = 0,
     /// Minimum dependency depth from root
     depth: u32,
     /// Accumulated compile time for this module (parse + canonicalize + type-check)
@@ -3040,7 +3043,7 @@ pub const Coordinator = struct {
         // compilation evaluated roots it lacked.
         const evaluated_more = if (mod.reopened_unevaluated) |before| unevaluatedRequestCount(artifact) < before else true;
         mod.reopened_unevaluated = null;
-        if (mod.reports.items.len == 0 and evaluated_more) {
+        if (mod.reports.items.len == mod.pre_check_report_count and evaluated_more) {
             if (artifact.pairing_arena == null) self.storeCheckedModuleInCache(artifact, mod.has_source_version_pin) else self.storePlatformPairingInCache(artifact);
         }
         state.deinit();
@@ -4578,8 +4581,11 @@ pub const Coordinator = struct {
         const explicit_roots = try buildExplicitRootRequests(mod, task_payload_alloc);
         errdefer task_payload_alloc.free(explicit_roots);
 
-        if (mod.reports.items.len == 0 and
-            self.tryLoadCachedCheckedModule(pkg, mod, imported_envs, imported_artifacts, platform_requirement_context, explicit_roots))
+        // Earlier-stage diagnostics are a function of the same source the
+        // cache key names, so they never prevent reuse. A stored entry is one
+        // whose checking and evaluation reported nothing further.
+        mod.pre_check_report_count = mod.reports.items.len;
+        if (self.tryLoadCachedCheckedModule(pkg, mod, imported_envs, imported_artifacts, platform_requirement_context, explicit_roots))
         {
             task_payload_alloc.free(imported_envs);
             task_payload_alloc.free(imported_artifacts);
