@@ -1189,6 +1189,13 @@ checker recovery. The recovery rules:
   belongs to the pattern alone, and a use of the name, such as a method call
   on it, adds no report of its own. A `var` name a destructure reassigns
   belongs to its own declaration and is left alone.
+- A `match` owns each branch pattern's relation to the scrutinee, but
+  neither class it relates: the scrutinee's class is shared with whatever
+  produced it, and a pattern that reassigns a `var` is that var's own
+  declaration pattern, whose class every use of the var shares. A rejected
+  relation reports, poisons neither side, and retires the `match`; the
+  branch patterns after it are checked for their own errors but not related
+  to the scrutinee.
 - A pattern can also be rejected by a judgment made after its check: a
   literal pattern whose conversion fails, or a record-destructure binder that
   the kind-directed judgment cannot relate to its field (a closed nested
@@ -3613,9 +3620,9 @@ variable. When the scrutinee is already erroneous, the patterns unify against a
 shared fresh variable instead, so a disagreement between two patterns is still
 reported at the pattern that disagrees rather than surfacing later as an
 unexplained branch-body mismatch. The scrutinee's own error is not re-reported,
-the patterns are never related back to it, and the first disagreement poisons
-the shared variable so later patterns short-circuit exactly as they do when the
-scrutinee carries the relation.
+the patterns are never related back to it, and after the first disagreement
+later patterns are not related, exactly as when the scrutinee carries the
+relation.
 
 A scrutinee that always crashes (`...`, `crash`, or a block or `if` whose
 every result crashes) relates no branch pattern at all: no value ever reaches

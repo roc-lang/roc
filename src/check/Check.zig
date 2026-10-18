@@ -7158,6 +7158,8 @@ fn strConversionFor(
     expected: types_mod.Content,
     actual: types_mod.Content,
 ) Allocator.Error!problem.StrConversion {
+    // A pattern is not a value a conversion could apply to.
+    if (context == .match_pattern) return .none;
     const expected_nominal = expected.unwrapNominalType() orelse return .none;
     if (!self.nominalIsBuiltinStrType(expected_nominal)) return .none;
     const flat = switch (actual) {
@@ -30906,6 +30908,10 @@ const MatchCheck = struct {
     /// it and every name a branch pattern introduces is erroneous.
     scrutinee_erroneous: bool = false,
     has_invalid_try: bool = false,
+    /// A branch pattern's relation to the scrutinee was rejected. The match
+    /// is retired, and later patterns are checked for their own errors but
+    /// never related to the scrutinee.
+    pattern_relation_rejected: bool = false,
     ptrn_target_var: Var = undefined,
     val_var: Var = undefined,
     branch_index: u32 = 0,
@@ -31021,10 +31027,9 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
             // without merging, so each pattern would be solved in isolation
             // and the bindings they share would only collide later, in the
             // branch bodies, far from the pattern that disagrees. Tie the
-            // patterns to a class of their own instead. The first
-            // disagreement poisons that class to `.err`, so later patterns
-            // short-circuit exactly as they do when the scrutinee itself
-            // carries the relation.
+            // patterns to a class of their own instead. After the first
+            // disagreement, later patterns are not related, exactly as when
+            // the scrutinee itself carries the relation.
             state.ptrn_target_var = if (self.types.resolveVar(cond_var).desc.content == .err)
                 try self.fresh(env, expr_region)
             else
@@ -31371,11 +31376,10 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
             if (!valid_pattern) state.had_type_error = true;
             if (state.scrutinee_erroneous) try self.markPatternBindingsErroneous(other_branch_ptrn.pattern);
 
-            // Check the pattern against the cond. A rejected pattern's class
-            // belongs to the pattern alone.
+            // Check the pattern against the cond. A rejected pattern is
+            // never related: its class is `.err`.
             if (valid_pattern and !state.cond_always_crashes) {
-                const other_branch_ptrn_var = ModuleEnv.varFrom(other_branch_ptrn.pattern);
-                _ = try self.unifyInContext(state.ptrn_target_var, other_branch_ptrn_var, env, .{ .match_pattern = .{
+                try self.relateBranchPatternToScrutinee(state, other_branch_ptrn.pattern, env, .{ .match_pattern = .{
                     .branch_index = @intCast(branch_cur_index),
                     .pattern_index = @intCast(other_cur_ptrn_index),
                     .num_branches = @intCast(match.branches.span.len),
@@ -31390,9 +31394,8 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
         return self.requestMatchBranchValue(task, state, branch);
     }
 
-    // Check each of the branch's patterns and unify it with the condition
-    // type. (A failed unify poisons the target to .err, so subsequent
-    // pattern unifications short-circuit rather than cascading.)
+    // Check each of the branch's patterns and relate it to the condition
+    // type.
     for (branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
         const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
         const valid_pattern = try self.checkPattern(branch_ptrn.pattern, .{ .row_openness = .open, .failure_owner = ModuleEnv.nodeIdxFrom(expr_idx) }, env);
@@ -31400,19 +31403,17 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
         // Matching an erroneous value binds nothing.
         if (state.scrutinee_erroneous) try self.markPatternBindingsErroneous(branch_ptrn.pattern);
 
-        // A rejected pattern's class is `.err` and belongs to the pattern
-        // alone: relating it would write that error into the scrutinee's
-        // class, which the scrutinee shares with whatever produced it.
+        // A rejected pattern's class is `.err`: relating it would write that
+        // error into the scrutinee's class, which the scrutinee shares with
+        // whatever produced it.
         if (valid_pattern and !state.cond_always_crashes) {
-            const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
-            const ptrn_result = try self.unifyInContext(state.ptrn_target_var, branch_ptrn_var, env, .{ .match_pattern = .{
+            try self.relateBranchPatternToScrutinee(state, branch_ptrn.pattern, env, .{ .match_pattern = .{
                 .branch_index = @intCast(branch_cur_index),
                 .pattern_index = @intCast(cur_ptrn_index),
                 .num_branches = @intCast(match.branches.span.len),
                 .num_patterns = @intCast(branch_ptrn_idxs.len),
                 .match_expr = expr_idx,
             } });
-            if (!ptrn_result.isEstablished()) state.had_type_error = true;
         }
     }
 
@@ -31431,6 +31432,30 @@ fn beginMatchBranch(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env)
         return .{ .child = .{ .expr = guard_idx, .expected = child_expected.guardHoistSelection() } };
     }
     return self.requestMatchBranchValue(task, state, branch);
+}
+
+/// Relate a branch pattern to the scrutinee. The match owns this relation but
+/// neither class: the scrutinee's is shared with whatever produced it, and a
+/// pattern that reassigns a `var` is that var's own declaration pattern, whose
+/// class every use of the var shares. A rejection therefore poisons neither
+/// side; it retires the match, and the later patterns are not related, since
+/// the rejected relation may already have written part of the scrutinee's
+/// type, and a later pattern would be judged against that.
+fn relateBranchPatternToScrutinee(
+    self: *Self,
+    state: *MatchCheck,
+    pattern: CIR.Pattern.Idx,
+    env: *Env,
+    ctx: problem.Context,
+) std.mem.Allocator.Error!void {
+    if (state.pattern_relation_rejected) return;
+    const pattern_var = ModuleEnv.varFrom(pattern);
+    const result = try self.runUnify(state.ptrn_target_var, pattern_var, env, unifyOptionsForContext(ctx, .write_no_report));
+    if (result.isEstablished()) return;
+    state.had_type_error = true;
+    if (result.isAccepted()) return;
+    state.pattern_relation_rejected = true;
+    _ = try self.appendTypeMismatch(state.ptrn_target_var, pattern_var, self.mismatchContext(ctx, pattern_var));
 }
 
 /// Request a branch's value, which supplies the match's result and so
