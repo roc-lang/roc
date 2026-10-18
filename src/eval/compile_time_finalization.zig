@@ -354,6 +354,9 @@ const runtime_observer_fields = [_]RuntimeTargetField{
     .solved_lir_parallel_metrics_out,
     .lifted_expr_count_out,
     .completed_scalar_values,
+    // The literal value store is consulted while the shared program is
+    // lowered; the continuation lowers no literal roots of its own.
+    .literal_value_store,
 };
 
 /// Two 32-byte identities, compared as one 256-bit integer.
@@ -4923,6 +4926,9 @@ const DevProgram = struct {
             try entry_offsets.put(root.proc, entrypoint.offset);
         }
         for (lowered.lir_result.literal_roots.items, 0..) |root, index| {
+            // A restored root is never run: its procedure is the slot's
+            // static initializer, which the evaluator does not compile.
+            if (root.restored) continue;
             if (entry_offsets.get(root.proc) != null) continue;
             var name_buf: [64]u8 = undefined;
             const symbol_name = std.fmt.bufPrint(&name_buf, "roc_ctfe_literal_root_{d}", .{index}) catch unreachable;

@@ -7486,6 +7486,7 @@ fn lowerDiscoveredLir(
         &spec_timing,
         build_env.runtimeProgramSession(),
         null,
+        if (build_env.literal_value_store) |store| store.lookup() else null,
         .source_bodies,
     );
     errdefer lowered.deinit();
@@ -11525,6 +11526,7 @@ fn lowerBuildCommandToLir(
         &spec_timing,
         build_env.runtimeProgramSession(),
         spec_cache,
+        if (build_env.literal_value_store) |store| store.lookup() else null,
         code_provision,
     );
     finishPostCheckLowering(reporter, &spec_timing, specialization_strategy);
@@ -13861,6 +13863,7 @@ fn lowerCheckedSourceToLir(
     timing: ?*lir.CheckedPipeline.Timing,
     session: ?*eval.CompileTimeFinalization.ProgramSession,
     spec_cache: ?postcheck.Common.SpecCacheLookup,
+    literal_value_store: ?postcheck.Common.LiteralValueLookup,
     code_provision: lir.CheckedPipeline.CodeProvision,
 ) eval.CompileTimeFinalization.RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
     const selected_roots: []const check.CheckedArtifact.RootRequest = switch (roots) {
@@ -13877,6 +13880,7 @@ fn lowerCheckedSourceToLir(
     config.target.post_check_executor = post_check_executor;
     config.target.timing = timing;
     config.target.spec_cache = spec_cache;
+    config.target.literal_value_store = literal_value_store;
     config.target.code_provision = code_provision;
     const requests: lir.CheckedPipeline.RootRequestSet = .{
         .requests = selected_roots,
