@@ -64,6 +64,7 @@ pub const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;
 pub const StaticDataRelocation = @import("StaticDataExport.zig").StaticDataRelocation;
 pub const StaticDataImage = @import("StaticDataImage.zig").StaticDataImage;
 pub const StaticDataImageFunctionResolver = @import("StaticDataImage.zig").FunctionResolver;
+pub const StaticDataImageError = @import("StaticDataImage.zig").Error;
 pub const StaticStringData = @import("StaticStringData.zig");
 pub const RunImage = @import("RunImage.zig");
 pub const procSymbolName = @import("StaticDataExport.zig").procSymbolName;

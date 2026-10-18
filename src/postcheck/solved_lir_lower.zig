@@ -5792,26 +5792,20 @@ const Lowerer = struct {
         }
         const proc_id = self.current_proc orelse Common.invariant("compile-time value lowering ran without a current procedure");
         const is_static_initializer = self.result.store.getProcSpecImmediate(proc_id).is_static_initializer;
-        const runtime_values = if (is_static_initializer) null else self.completed_scalar_values;
+        // Code is lowered only once every compile-time value it reads has
+        // been evaluated, so a read knows the value it reads: one that
+        // completed as a construction lowers as that construction, and any
+        // other reads its slot.
+        const runtime_values = if (is_static_initializer)
+            null
+        else
+            self.completed_scalar_values orelse Common.invariant("code reading compile-time values was lowered before evaluation completed them");
         if (runtime_values) |values| {
             if (values.constructionFor(root.module, root.root, layout_idx)) |construction| {
                 if (try self.lowerConstructionInto(where, target, construction, next)) |built| return built;
             }
         }
         const id = try self.comptimeValueSlot(root, ty, layout_idx);
-        // A program lowered before its roots are evaluated reads each root
-        // through an accessor, so the slot has one guarded read however many
-        // places read it, and the evaluation's slot demand is raised from one
-        // place. A program lowered after evaluation reads its slots directly.
-        if (!is_static_initializer and self.completed_scalar_values == null) {
-            const accessor = try self.comptimeRootAccessor(where, id, root, ty, layout_idx);
-            return try self.result.store.addCFStmt(.{ .assign_call = .{
-                .target = target,
-                .proc = accessor,
-                .args = LIR.LocalSpan.empty(),
-                .next = next,
-            } }, where.source());
-        }
         // A list of copies keeps its slot and also names its fresh form and
         // its item count.
         var fresh_alternative: ?LIR.LirProcSpecId = null;
@@ -5889,64 +5883,6 @@ const Lowerer = struct {
         hasher.update(&try digests.get(layout_idx));
         const slot: u32 = @backingInt(id);
         hasher.update(&[_]u8{ @truncate(slot), @truncate(slot >> 8), @truncate(slot >> 16), @truncate(slot >> 24) });
-        return .{ .bytes = hasher.finalResult() };
-    }
-
-    /// The procedure that reads compile-time value slot `id`, which holds
-    /// `root` at `ty`, created on its first use.
-    fn comptimeRootAccessor(self: *Lowerer, where: LowerSite, id: LIR.StaticDataId, root: Common.ComptimeValueRoot, ty: Type.TypeId, layout_idx: layout.Idx) Common.LowerError!LIR.LirProcSpecId {
-        if (self.result.static_data_values.items[@backingInt(id)].accessor) |accessor| return accessor;
-        const store = &self.result.store;
-        const value = try self.addLocalForLayout(layout_idx);
-        // The accessor is its own procedure: it carries the location of the
-        // read that requested it, outside that read's inline scopes.
-        const origin = LIR.StmtOrigin{
-            .loc = where.loc,
-            .region = where.region,
-            .inline_scope = .none,
-            .kind = .scaffold,
-        };
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, origin);
-        const read = try store.addCFStmt(.{ .assign_literal = .{
-            .target = value,
-            .value = .{ .static_data = id },
-            .next = ret,
-        } }, origin);
-        const frame_locals = try store.addLocalSpan(&[_]LIR.LocalId{value});
-        const accessor = try store.addProcSpec(.{
-            .name = lirSymbol(self.symbols.fresh()),
-            .identity = try self.comptimeRootAccessorIdentity(root, ty, layout_idx),
-            .args = LIR.LocalSpan.empty(),
-            .frame_locals = frame_locals,
-            .body = read,
-            .ret_layout = layout_idx,
-            .abi = .roc,
-        }, where.loc);
-        if (store.procNeedsStackProbe(&self.result.layouts, store.getProcSpec(accessor))) store.getProcSpecPtr(accessor).stack_probe = .required;
-        self.result.static_data_values.items[@backingInt(id)].accessor = accessor;
-        return accessor;
-    }
-
-    /// An accessor is emitted and carried in object-cache packs like any
-    /// procedure, and a spliced procedure takes the place of the program's
-    /// own procedure with its identity, so the identity names what the
-    /// accessor returns in every program: the root's module by content key,
-    /// the root within that module, and the representation the slot commits,
-    /// by a digest no program's numbering enters.
-    fn comptimeRootAccessorIdentity(self: *Lowerer, root: Common.ComptimeValueRoot, ty: Type.TypeId, layout_idx: layout.Idx) std.mem.Allocator.Error!LIR.ProcIdentity {
-        const representation = try self.types.contentDigest(&self.solved.lifted.names, ty, .{ .context = self, .identity = callableTargetIdentity });
-        var hasher = base.TypeDigestHasher.init();
-        hasher.update("roc.proc.comptime-root-accessor.v2");
-        hasher.update(&root.module.bytes);
-        // A literal root's id is program-local; the literal's checked
-        // expression names it within its module.
-        const tag: u8, const index: u32 = switch (root.root) {
-            .checked => |checked_root| .{ 0, @backingInt(checked_root) },
-            .literal => |literal| .{ 1, self.solved.lifted.literalRootsView()[@backingInt(literal)].site.checked_expr },
-        };
-        hasher.update(&[_]u8{ tag, @truncate(index), @truncate(index >> 8), @truncate(index >> 16), @truncate(index >> 24) });
-        hasher.update(&representation.bytes);
-        hasher.update(&try self.result.layouts.contentDigest(layout_idx));
         return .{ .bytes = hasher.finalResult() };
     }
 

@@ -104,28 +104,47 @@ pub const CompletedScalarValues = struct {
     const Map = std.HashMapUnmanaged(Key, Construction, Context, std.hash_map.default_max_load_percentage);
     const UniformMap = std.HashMapUnmanaged(Key, UniformList, Context, std.hash_map.default_max_load_percentage);
 
+    /// No completed values yet.
+    pub fn initEmpty(allocator: Allocator) CompletedScalarValues {
+        return .{ .entries = .empty, .uniform_lists = .empty, .arena = collections.SingleThreadArena.init(allocator) };
+    }
+
     /// Collects every completed successful root of `program` whose frozen
     /// image decodes to a construction.
     pub fn init(allocator: Allocator, program: *const Program.Result, frozen: *const Program.FrozenStaticData) Allocator.Error!CompletedScalarValues {
-        var values = CompletedScalarValues{ .entries = .empty, .uniform_lists = .empty, .arena = collections.SingleThreadArena.init(allocator) };
+        var values = initEmpty(allocator);
         errdefer values.deinit(allocator);
-        var decoder = Decoder{ .program = program, .frozen = frozen, .arena = values.arena.allocator() };
+        try values.add(allocator, program, frozen, null);
+        return values;
+    }
+
+    /// Which roots of a program `add` collects.
+    pub const Filter = struct {
+        context: *const anyopaque,
+        admits: *const fn (context: *const anyopaque, module: checked.ModuleId, root: LIR.ComptimeProducer) bool,
+    };
+
+    /// Collects every completed successful root of `program` that `filter`
+    /// admits, or every one without a filter, whose frozen image decodes to
+    /// a construction.
+    pub fn add(self: *CompletedScalarValues, allocator: Allocator, program: *const Program.Result, frozen: *const Program.FrozenStaticData, filter: ?Filter) Allocator.Error!void {
+        var decoder = Decoder{ .program = program, .frozen = frozen, .arena = self.arena.allocator() };
         for (program.static_data_values.items, 0..) |entry, index| {
             const root = entry.compile_time_root orelse continue;
             if (root.role != .value) continue;
+            if (filter) |admitted| if (!admitted.admits(admitted.context, root.module, root.root)) continue;
             const slot: LIR.StaticDataId = @fromBackingInt(@intCast(index));
             if (!slotSucceeded(program, frozen, slot)) continue;
             const data_export = exportOf(frozen, slot) orelse continue;
             const key = Key{ .module = root.module, .root = root.root };
             const construction = try decoder.decode(data_export, data_export.bytes[data_export.symbol_offset..], data_export.symbol_offset, root.role.value.plan, entry.layout_idx) orelse {
                 if (try decoder.decodeUniformList(data_export, data_export.bytes[data_export.symbol_offset..], data_export.symbol_offset, root.role.value.plan, entry.layout_idx)) |uniform| {
-                    try values.uniform_lists.put(allocator, key, uniform);
+                    try self.uniform_lists.put(allocator, key, uniform);
                 }
                 continue;
             };
-            try values.entries.put(allocator, key, construction);
+            try self.entries.put(allocator, key, construction);
         }
-        return values;
     }
 
     pub fn deinit(self: *CompletedScalarValues, allocator: Allocator) void {

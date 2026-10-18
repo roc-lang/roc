@@ -9016,8 +9016,12 @@ fn publishCompileTimePack(ctx: *CliCtx, build_env: *BuildEnv) (Allocator.Error |
     if (comptime !backend.host_lir_codegen_available) return;
     const owner = build_env.compile_time_object_cache_owner orelse return;
     const cache: *CompileTimeObjectCache = @ptrCast(@alignCast(owner.context));
-    const host = build_env.compileTimeProgram() orelse return;
-    if (host.lir_result.spec_procs.items.len == 0) return;
+    const completed = build_env.compileTimeStages() orelse return;
+    const stages = completed.programs();
+    const offers = for (stages) |stage| {
+        if (stage.lir_result.spec_procs.items.len != 0) break true;
+    } else false;
+    if (!offers) return;
     const root_semantic = build_env.getExecutableRootSemanticData() orelse return;
     const root_artifact = root_semantic.checked_artifact orelse return;
     const placement = build_env.packPlacementForArtifactKey(root_artifact.key) orelse return;
@@ -9025,30 +9029,50 @@ fn publishCompileTimePack(ctx: *CliCtx, build_env: *BuildEnv) (Allocator.Error |
     const store = &cache.compile_time_store;
     if (try store.has(placement.origin, placement.identity, key)) return;
 
-    var object_compiler = backend.ObjectFileCompiler.initForPack(ctx.gpa);
-    object_compiler.post_check_executor = build_env.postCheckExecutor();
-    object_compiler.enable_hot_reload = host.lir_result.erased_capture_prefix != 0;
-    object_compiler.emit_object = false;
-    // Procedures the evaluation spliced from packs are spliced here too.
-    object_compiler.splice_source = cache.packs.spliceSource();
-    const exports = if (host.frozen_static_data) |frozen| frozen.exports else &.{};
-    var compiled = object_compiler.compileToObjectFile(
-        &host.lir_result.store,
-        &host.lir_result.layouts,
-        &.{},
-        exports,
-        host.lir_result.store.getProcSpecs(),
-        host.lir_result.boxy_erased_arg_desc_offsets.items,
-        host.lir_result.boxy_erased_arg_desc_params.items,
-        host.lir_result.boxy_worker_procs.items,
-        RocTarget.detectNative(),
-    ) catch |err| {
-        std.log.err("Compile-time pack compilation failed: {}", .{err});
-        return error.NativeCompilationFailed;
+    // Each stage of the evaluation is its own program; the pack offers the
+    // procedures of all of them.
+    var sets = std.ArrayList(backend.dev.ProcArtifact.Set).empty;
+    defer {
+        for (sets.items) |*set| set.deinit();
+        sets.deinit(ctx.gpa);
+    }
+    for (stages) |host| {
+        var object_compiler = backend.ObjectFileCompiler.initForPack(ctx.gpa);
+        object_compiler.post_check_executor = build_env.postCheckExecutor();
+        object_compiler.enable_hot_reload = host.lir_result.erased_capture_prefix != 0;
+        object_compiler.emit_object = false;
+        // Procedures the evaluation spliced from packs are spliced here too.
+        object_compiler.splice_source = cache.packs.spliceSource();
+        const exports = if (host.frozen_static_data) |frozen| frozen.exports else &.{};
+        var compiled = object_compiler.compileToObjectFile(
+            &host.lir_result.store,
+            &host.lir_result.layouts,
+            &.{},
+            exports,
+            host.lir_result.store.getProcSpecs(),
+            host.lir_result.boxy_erased_arg_desc_offsets.items,
+            host.lir_result.boxy_erased_arg_desc_params.items,
+            host.lir_result.boxy_worker_procs.items,
+            RocTarget.detectNative(),
+        ) catch |err| {
+            std.log.err("Compile-time pack compilation failed: {}", .{err});
+            return error.NativeCompilationFailed;
+        };
+        defer compiled.deinit();
+        const set = compiled.artifacts orelse continue;
+        compiled.artifacts = null;
+        try sets.append(ctx.gpa, set);
+    }
+    const set_ptrs = try ctx.gpa.alloc(*const backend.dev.ProcArtifact.Set, sets.items.len);
+    defer ctx.gpa.free(set_ptrs);
+    for (sets.items, set_ptrs) |*set, *ptr| ptr.* = set;
+    var combined = try backend.dev.ProcArtifact.combine(ctx.gpa, set_ptrs);
+    defer combined.deinit();
+    const comptime_reads = completed.specComptimeReads() orelse {
+        if (builtin.mode == .debug) std.debug.panic("a program written to the object cache recorded no compile-time reads", .{});
+        unreachable;
     };
-    defer compiled.deinit();
-    const set = &(compiled.artifacts orelse return);
-    const bytes = try packFileBytes(ctx.gpa, set, host);
+    const bytes = try packFileBytesOfPrograms(ctx.gpa, &combined, stages, comptime_reads);
     defer ctx.gpa.free(bytes);
     if (devDiagnosticEnv("ROC_PACK_TRACE") != null) std.debug.print("compile-time pack {d} bytes\n", .{bytes.len});
     store.write(placement.origin, placement.identity, key, bytes) catch |err| {
@@ -9075,6 +9099,22 @@ fn packFileBytes(
     set: *const backend.dev.ProcArtifact.Set,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
 ) Allocator.Error![]u8 {
+    const comptime_reads = if (lowered.spec_comptime_reads) |*reads| reads else {
+        if (builtin.mode == .debug) std.debug.panic("a program written to the object cache recorded no compile-time reads", .{});
+        unreachable;
+    };
+    return packFileBytesOfPrograms(allocator, set, &.{lowered}, comptime_reads);
+}
+
+/// Encode the artifacts of several programs lowered from one Solved program,
+/// compiled into one set, with the spec table of every procedure they offer.
+/// A key two programs offer names one procedure, offered once.
+fn packFileBytesOfPrograms(
+    allocator: Allocator,
+    set: *const backend.dev.ProcArtifact.Set,
+    programs: []const *const lir.CheckedPipeline.LoweredProgram,
+    comptime_reads: *const lir.CheckedPipeline.SpecComptimeReads,
+) Allocator.Error![]u8 {
     var artifact_by_identity = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
     defer artifact_by_identity.deinit();
     for (set.artifacts, 0..) |artifact, index| {
@@ -9089,55 +9129,61 @@ fn packFileBytes(
     defer conditions_arena.deinit();
     const trace = devDiagnosticEnv("ROC_PACK_TRACE") != null;
     var withheld: usize = 0;
-    const procs = lowered.lir_result.store.getProcSpecs();
-    const converting = try lir.PackProgram.literalConvertingProcs(allocator, &lowered.lir_result.store);
-    defer allocator.free(converting);
     var literal_converters = std.AutoHashMap(lir.ProcIdentity, void).init(allocator);
     defer literal_converters.deinit();
-    for (procs, converting) |proc, converts| {
-        if (converts) try literal_converters.put(proc.identity, {});
+    for (programs) |lowered| {
+        const converting = try lir.PackProgram.literalConvertingProcs(allocator, &lowered.lir_result.store);
+        defer allocator.free(converting);
+        for (lowered.lir_result.store.getProcSpecs(), converting) |proc, converts| {
+            if (converts) try literal_converters.put(proc.identity, {});
+        }
     }
     var closure = try SpliceClosure.init(allocator, set);
     defer closure.deinit();
-    const comptime_reads = if (lowered.spec_comptime_reads) |*reads| reads else {
-        if (builtin.mode == .debug) std.debug.panic("a program written to the object cache recorded no compile-time reads", .{});
-        unreachable;
-    };
     // Every keyed specialization, then every procedure by its identity
     // (`Common.procIdentityCacheKey`), which serves specializations no
     // reservation-time key names.
     const Candidate = struct {
         key: [32]u8,
+        lowered: *const lir.CheckedPipeline.LoweredProgram,
         proc: lir.LIR.LirProcSpecId,
         reads: lir.CheckedPipeline.SpecComptimeReads.Lookup,
         by_identity: bool,
     };
     var candidates = std.ArrayList(Candidate).empty;
     defer candidates.deinit(allocator);
-    for (lowered.lir_result.spec_procs.items) |spec_proc| {
+    var offered_keys = std.AutoHashMap([32]u8, void).init(allocator);
+    defer offered_keys.deinit();
+    for (programs) |lowered| for (lowered.lir_result.spec_procs.items) |spec_proc| {
+        if ((try offered_keys.getOrPut(spec_proc.key)).found_existing) continue;
         try candidates.append(allocator, .{
             .key = spec_proc.key,
+            .lowered = lowered,
             .proc = spec_proc.proc,
             .reads = comptime_reads.get(spec_proc.key),
             .by_identity = false,
         });
-    }
-    for (procs, 0..) |proc, index| {
+    };
+    for (programs) |lowered| for (lowered.lir_result.store.getProcSpecs(), 0..) |proc, index| {
         if (proc.abi != .roc or proc.hosted != null or proc.is_static_initializer) continue;
         const source_fn = proc.source_monotype_fn orelse continue;
         // A procedure whose identity names its template by site is offered
         // under its code key; any other is offered under its identity only
         // when its identity names all of its code.
         if (proc.code_key == null and try lir.PackProgram.procCopiesSiteCode(allocator, &lowered.lir_result.store, @fromBackingInt(@intCast(index)))) continue;
+        const key = postcheck.Common.procIdentityCacheKey(if (proc.code_key) |code| code else proc.identity.bytes);
+        if ((try offered_keys.getOrPut(key)).found_existing) continue;
         try candidates.append(allocator, .{
-            .key = postcheck.Common.procIdentityCacheKey(if (proc.code_key) |code| code else proc.identity.bytes),
+            .key = key,
+            .lowered = lowered,
             .proc = @fromBackingInt(@intCast(index)),
             .reads = comptime_reads.fnReads(source_fn),
             .by_identity = true,
         });
-    }
+    };
     for (candidates.items) |spec_proc| {
-        const proc = procs[@backingInt(spec_proc.proc)];
+        const lowered = spec_proc.lowered;
+        const proc = lowered.lir_result.store.getProcSpecs()[@backingInt(spec_proc.proc)];
         const artifact = artifact_by_identity.get(proc.identity) orelse continue;
         // An entry whose code evaluates a compile-time root in place would
         // compute that root whenever it runs in a program that evaluates the

@@ -576,13 +576,6 @@ pub const StaticDataValue = struct {
     /// Null when completed frozen data supplies this slot directly.
     initializer: ?LIR.LirProcSpecId,
     layout_idx: layout.Idx,
-    /// The procedure every read of a compile-time root goes through in a
-    /// program lowered before its roots were evaluated. Its body is the slot
-    /// read until the root completes; a root that completed as a
-    /// construction then rebuilds it there, without touching the callers.
-    accessor: ?LIR.LirProcSpecId = null,
-    /// Successful construction replacement is performed only once per accessor.
-    accessor_rebuilt: bool = false,
     /// An evaluated root owns this slot. Its initializer is representation
     /// evidence; materialization must consume the completed root value.
     compile_time_root: ?struct {

@@ -10560,16 +10560,16 @@ test "shared CTFE and runtime requests specialize once across workers and target
             coord.runtime_lowering = .{ .target = target, .explicit_roots = requests, .root_module = app };
             try coord.finishCheckedProgram(.none);
             try std.testing.expect(!coord.hasUserErrors());
-            try std.testing.expect(coord.program_session.?.host != null);
+            const stage_count: u32 = @intCast(coord.program_session.?.completed.?.programs().len);
             try std.testing.expect(coord.program_session.?.runtime_prepared != null);
             try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
             try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
-            try std.testing.expectEqual(@as(u32, 1), metrics.lir_continuations);
+            try std.testing.expectEqual(stage_count, metrics.lir_continuations);
             var runtime = try coord.program_session.?.takeRuntime(allocator, requests, target);
             defer runtime.deinit();
             try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
             try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
-            try std.testing.expectEqual(@as(u32, 2), metrics.lir_continuations);
+            try std.testing.expectEqual(stage_count + 1, metrics.lir_continuations);
             try std.testing.expectEqual(@as(usize, 1), runtime.lir_result.root_procs.items.len);
             // The runtime consumer lowers its own continuation, where the
             // completed scalar is a literal, so no value slot survives.

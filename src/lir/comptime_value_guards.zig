@@ -12,9 +12,11 @@ const Use = struct { proc: LIR.LirProcSpecId, stmt: LIR.CFStmtId, slot: LIR.Stat
 const Guard = struct { locals: [3]LIR.LocalId, success: LIR.CFStmtId, crash: LIR.CFStmtId, checked_crash: LIR.CFStmtId };
 
 /// Insert explicit failure checks before each compile-time value slot read.
-/// A program lowered after its compile-time roots completed passes their
-/// frozen image, which records each value's outcome: only reads of a value
-/// that failed are guarded, and every other read stays as lowered.
+/// A program lowered after compile-time roots completed passes their frozen
+/// image, which records each completed value's outcome: of those, only reads
+/// of a value that failed are guarded, and every other read stays as
+/// lowered. A value the image has no record of is one the program evaluates
+/// itself, so every read of it is guarded.
 pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed: ?*const Program.FrozenStaticData) std.mem.Allocator.Error!void {
     std.debug.assert(program.comptime_value_guards.items.len == 0);
     const has_value_slots = for (program.static_data_values.items) |slot| {
@@ -175,11 +177,12 @@ fn exportsBySlot(allocator: std.mem.Allocator, program: *const Program.Result, f
     return exports;
 }
 
-/// Whether the completed value owning `failure_slot` failed, read from the
-/// `failed` flag of its failure record in the frozen image.
+/// Whether the value owning `failure_slot` failed or is yet to be evaluated:
+/// the `failed` flag of its failure record in the frozen image, when the
+/// image has one.
 fn completedValueFailed(program: *const Program.Result, frozen: *const Program.FrozenStaticData, exports: []const ?u32, failure_slot: LIR.StaticDataId) bool {
     const fields = program.static_data_values.items[@backingInt(failure_slot)].compile_time_root.?.role.failure_message;
-    const index = exports[@backingInt(failure_slot)] orelse invariant("{s}", .{"completed program omitted a compile-time value's failure record"});
+    const index = exports[@backingInt(failure_slot)] orelse return true;
     const record = frozen.exports[index];
     return record.bytes[record.symbol_offset + fields.failed_offset] != 0;
 }

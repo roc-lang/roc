@@ -33,6 +33,7 @@ pub const StaticDataExport = dev.StaticDataExport;
 pub const StaticDataRelocation = dev.StaticDataRelocation;
 pub const StaticDataImage = dev.StaticDataImage;
 pub const StaticDataImageFunctionResolver = dev.StaticDataImageFunctionResolver;
+pub const StaticDataImageError = dev.StaticDataImageError;
 pub const StaticStringData = dev.StaticStringData;
 pub const RunImage = dev.RunImage;
 pub const procSymbolName = dev.procSymbolName;

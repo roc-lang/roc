@@ -1668,7 +1668,7 @@ Runtime reconstruction of completed values is not a target static initializer
 operation. Closed static initializers preserve literal aggregate data rather
 than introducing allocation calls or repeat loops; their explicit procedure
 role selects this construction-only lowering contract. Their compile-time root
-reads always name the completed slot directly, never a runtime accessor.
+reads always name the completed slot directly.
 
 Evaluation and static storage are separate checked outputs. Checking still
 evaluates unreachable top-level values when eligible so their `crash`, `dbg`,
@@ -1922,19 +1922,14 @@ from the named roots alone: a consumer generates no procedure, layout, static
 data, or ARC for another consumer's roots, and no consumer prunes another's
 code after lowering it.
 
-Two consumers share one lowered program exactly when the code they would
-lower is the same code. The compile-time consumer lowers at the host's width
-with expects run and the compile-time LIR policy, so a runtime consumer
-continuing its Solved program that asks for the same answers names the union
-of both root sets in one manifest: that program evaluates the compile-time
-roots and is then the runtime program, with its own roots selected out of it
-and its completed values read through the accessors it already had. A
-runtime consumer that asks for anything else cannot read that code, so each
-consumer names only its own roots: a runtime root request is then never
-lowered while checking finalizes, and a compile-time root's own body never
-reaches the runtime program, which reads each compile-time value through a
-slot the evaluation filled, whose frozen bytes are the value's definition
-there. Whether one program or two, no consumer lowers code only another
+Compile-time evaluation is itself a sequence of consumers, one per level of
+its dependency graph ("Dependency-Ordered Compile-Time Evaluation"), each
+naming that level's roots. A runtime consumer names only its own roots: a
+runtime root request is never lowered while checking finalizes, and a
+compile-time root's own body never reaches the runtime program, which reads
+each compile-time value the way a later level reads it, through a slot the
+evaluation filled, whose frozen bytes are the value's definition there, or as
+the construction it completed to. No consumer lowers code only another
 consumer runs.
 
 For a separate runtime consumer continuing the evaluation's Solved program,
@@ -2125,8 +2120,7 @@ The compilation session retains owned relocatable native procedure code after
 compile-time evaluation, never its JIT image. Reuse requires the same producer LIR
 domain, target/emission policy compatibility, and the procedure's recorded native
 code revision. Guard completion invalidates every recorded owner of a changed
-statement; accessor replacement advances its owner's revision once. These
-revisions survive compaction but are not cross-program identities. An independent
+statement. These revisions survive compaction but are not cross-program identities. An independent
 target lowering cannot reuse code merely because its procedure identity matches.
 Actual static-binding and entry-initialization dependencies further restrict
 reuse across execution policies. Rejected native procedure code is emitted
@@ -22478,18 +22472,32 @@ continues evaluation's Solved program rather than preparing its own.
 
 Compile-time code never asks the compiler to complete a value while it runs:
 evaluation orders its roots so that every value a root reads is complete
-before the root starts. Each declared value and failure slot carries its
-producer's exact checked module and root ID. A root's evaluation runs the
-procedures its root procedure reaches through calls, static data it builds,
-and the constructors a read of a list of copies names; the slots those
-procedures read name the producers the root depends on
-(`CompileTimeRootGraph`). A procedure packed into an erased callable runs only
-when something calls that callable, so it joins a root's evaluation exactly
-when that evaluation makes an erased call: then every callable the evaluation
-packs, and every callable a value it reads holds, may run. A Boxy dictionary
-call, comparison, hash, inspection, or adaptation runs a worker procedure its
-descriptor or dictionary names, so it is an erased call that may run any of
-the program's Boxy workers.
+before the root starts, and lowers a root's code only then. The order comes
+from the Solved program, before any of its code is lowered
+(`PreparedSolved.producerGraph`, `postcheck.ComptimeRootGraph`). A
+producer, a compile-time root or a literal root, runs the functions its own
+function reaches through direct calls, and the compile-time values those
+functions read name the producers it depends on; a read's initializer only
+gives the read its type and runs nothing. A function referenced as a value
+runs only when something calls a function value, so it joins a producer's
+evaluation exactly when that evaluation makes a value call: then every
+function value the evaluation creates, and every one a value it reads holds,
+may run. The graph over-approximates any one lowering's reads, and lowering
+checks that every compile-time slot a program declares is either completed or
+one of its own roots'. A Boxy program has no Solved program; its literal roots
+take the same order from its own LIR (`CompileTimeRootGraph`), where a Boxy
+dictionary call, comparison, hash, inspection, or adaptation is a value call
+that may run any of the program's Boxy workers.
+
+Each level is lowered as its own consumer of the Solved program once every
+level before it has run, so its code is lowered the way a build lowers code
+after evaluation: a completed value that lowers as a construction is
+folded, any other completed value is read from a slot whose frozen bytes are
+transcoded from the stage that evaluated it (`CompletedStages`), and only a
+read of a value that failed is guarded. A read of a value the level evaluates
+itself, which only a group that reads itself makes, keeps its guard. The
+stages' programs and their frozen values are retained until the runtime
+consumer, which reads every completed value the same way, has been lowered.
 
 Producers are grouped into the strongly connected groups of that graph, and
 each group gets a level one past the deepest level it reads. The roots of one

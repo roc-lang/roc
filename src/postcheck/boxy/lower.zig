@@ -7333,7 +7333,6 @@ const ProcedureBuilder = struct {
             .ret_layout = ret_layout,
             .ret_desc = try self.staticDescRefForRepIfNeeded(initializer.rep),
         }, origin.loc);
-        self.result.static_data_values.items[@backingInt(value_slot)].accessor = accessor_id;
         // The dictionary entry returns the checked site's worker representation.
         // Its conversion is ordinary LIR, so every execution engine sees the
         // same explicit boundary and ARC owns its allocation lifetime.
