@@ -35,6 +35,9 @@ pub const Entry = enum {
     canonicalized_module,
     /// One module's pack of native procedure artifacts and offers.
     native_pack,
+    /// One completed literal root's stored value (design.md "Literal Value
+    /// Store"): a ConstStore in the checked artifact's serialization.
+    literal_value,
 };
 
 /// Layout fingerprint of `ModuleEnv.Serialized`.
@@ -47,6 +50,7 @@ const checked_envelope_version: u32 = 14;
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order.
 const canonicalized_envelope_version: u32 = 3;
+const literal_value_envelope_version: u32 = 1;
 
 /// Layout fingerprint of the pack image's root (`backend.dev.PackFile.Serialized`).
 pub const native_pack_layout: [32]u8 = check.rootLayoutVersionHash(backend.dev.PackFile.Serialized, 1);
@@ -73,6 +77,11 @@ pub fn entryVersionHash(comptime entry: Entry) [32]u8 {
             "roc-native-pack-entry-v1",
             &.{backend.dev.PackFile.envelope_version},
             &.{native_pack_layout},
+        ),
+        .literal_value => compose(
+            "roc-literal-value-entry-v1",
+            &.{literal_value_envelope_version},
+            &.{CheckedModuleArtifact.SERIALIZED_VERSION_HASH},
         ),
     };
 }

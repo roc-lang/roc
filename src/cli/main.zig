@@ -282,6 +282,7 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     if (!opts.no_cache) {
         try build_env.enableDefaultCacheManager(opts.verbose_cache);
         try attachCompileTimeObjectCache(ctx, &build_env, opts.verbose_cache);
+        try attachLiteralValueStore(ctx, &build_env, opts.verbose_cache);
     }
 
     return build_env;
@@ -1063,6 +1064,19 @@ fn sharedCompileTimeObjectCache(build_env: *BuildEnv, target: RocTarget, policy:
     CompileTimeObjectCache.bind(alternative, build_env);
     try cache.alternatives.append(cache.allocator, alternative);
     return alternative;
+}
+
+/// Every command that checks a program attaches the literal value store the
+/// same way, so compile-time evaluation restores and records literal values
+/// whatever the command (design.md "Literal Value Store").
+fn attachLiteralValueStore(ctx: *CliCtx, build_env: *BuildEnv, verbose: bool) Allocator.Error!void {
+    const store_config = CacheConfig{ .enabled = true, .verbose = verbose, .roc_ctx = ctx.coreCtx() };
+    const store = eval.LiteralValueStore.init(ctx.gpa, store_config, compile.cache_versioning.entryVersionHash(.literal_value)) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        // Without a cache root there is no store to read.
+        error.NoHomeDirectory => return,
+    };
+    build_env.setLiteralValueStore(store);
 }
 
 fn attachCompileTimeObjectCache(ctx: *CliCtx, build_env: *BuildEnv, verbose: bool) Allocator.Error!void {
@@ -11893,6 +11907,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         packs.projection_target = runtime_lowering.target;
         runtime_lowering.target.spec_cache = packs.specCacheLookup();
     }
+    runtime_lowering.target.literal_value_store = if (build_env.literal_value_store) |store| store.lookup() else null;
     runtime_lowering.target.code_provision = nativeObjectCodeProvision(target, args.opt, loaded_packs != null);
     // This program's specializations go into packs.
     runtime_lowering.target.spec_comptime_reads = object_store != null or std.c.getenv("ROC_DEV_PACK_OBJECTS") != null;

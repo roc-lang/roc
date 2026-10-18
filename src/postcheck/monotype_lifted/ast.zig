@@ -198,6 +198,11 @@ pub const LiteralRoot = struct {
     module: check.CheckedModule.ModuleId,
     site: Common.LiteralRejectionSite,
     recipe: ?Mono.LiteralRecipe = null,
+    /// As `Mono.LiteralRoot.store_key`.
+    store_key: ?[32]u8 = null,
+    /// As `Mono.LiteralRoot.restored_conversion_identity`: set when `fn_id`
+    /// restores the stored value instead of converting the literal.
+    restored_conversion_identity: ?[32]u8 = null,
 };
 
 /// Runtime layout requested for a checked data value.

@@ -245,6 +245,9 @@ pub const BuildEnv = struct {
     /// See `eval.CompileTimeFinalization.CompileTimeObjectCache`.
     compile_time_object_cache: ?eval.CompileTimeFinalization.CompileTimeObjectCache = null,
     compile_time_object_cache_owner: ?CompileTimeObjectCacheOwner = null,
+    /// The literal value store every compilation of this environment reads
+    /// and writes (design.md "Literal Value Store"); owned here.
+    literal_value_store: ?*eval.LiteralValueStore = null,
     /// Let a caller declare a test plan from prepared artifacts before CTFE.
     defer_post_check: bool = false,
     // Cache manager for compiled modules
@@ -477,6 +480,7 @@ pub const BuildEnv = struct {
         self.sink.deinit();
         // Last: the coordinator's retained programs may borrow cached code.
         if (self.compile_time_object_cache_owner) |owner| owner.deinit(owner.context);
+        if (self.literal_value_store) |store| store.deinit();
     }
 
     /// Set the cache manager for this build environment
@@ -863,6 +867,7 @@ pub const BuildEnv = struct {
         coord.runtime_output_probe = self.runtime_output_probe;
         coord.setDetailedLoweringTiming(self.detailed_lowering_timing);
         coord.compile_time_object_cache = self.compile_time_object_cache;
+        coord.literal_value_store = self.literal_value_store;
         if (self.detailed_monotype_diagnostics) coord.ctfe_timing.lowering.enableDetailedMonotypeBody();
         self.coordinator = coord;
     }
@@ -891,6 +896,13 @@ pub const BuildEnv = struct {
         if (self.coordinator) |coordinator| coordinator.compile_time_object_cache = cache;
         self.compile_time_object_cache = cache;
         self.compile_time_object_cache_owner = owner;
+    }
+
+    /// Attach the literal value store, which this environment then owns.
+    pub fn setLiteralValueStore(self: *BuildEnv, store: *eval.LiteralValueStore) void {
+        std.debug.assert(self.literal_value_store == null);
+        if (self.coordinator) |coordinator| coordinator.literal_value_store = store;
+        self.literal_value_store = store;
     }
 
     pub fn setRuntimeOutputProbe(self: *BuildEnv, probe: RuntimeOutputProbe) void {

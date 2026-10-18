@@ -287,6 +287,9 @@ pub const Options = struct {
     /// The object cache to ask for closed specializations at reservation.
     spec_cache: ?Common.SpecCacheLookup = null,
     root_use_cache: ?Common.SpecCacheLookup = null,
+    /// The literal value store consulted for each literal root before its
+    /// conversion is lowered (design.md "Literal Value Store").
+    literal_value_store: ?Common.LiteralValueLookup = null,
     /// Optional deterministic counters for specialization-shape tests.
     specialization_counters: ?*SpecializationCounters = null,
     /// Optional deterministic workload diagnostics. The checked pipeline
@@ -5004,6 +5007,7 @@ const Builder = struct {
     /// The object cache consulted for closed specializations, if any.
     spec_cache: ?Common.SpecCacheLookup,
     root_use_cache: ?Common.SpecCacheLookup,
+    literal_value_store: ?Common.LiteralValueLookup,
     counters: ?*SpecializationCounters,
     diagnostics: ?*Diagnostics,
     /// Result-owned sink while one ordinary specialization shard is lowering or
@@ -5302,6 +5306,7 @@ const Builder = struct {
             .proc_debug_names = options.proc_debug_names,
             .spec_cache = options.spec_cache,
             .root_use_cache = options.root_use_cache,
+            .literal_value_store = options.literal_value_store,
             .counters = counters,
             .diagnostics = options.diagnostics,
             .active_spec_job_diagnostics = null,
@@ -6937,10 +6942,12 @@ const Builder = struct {
         const root = self.program.literal_roots.get(@backingInt(id));
         const view = self.moduleForId(root.module);
         const def = self.program.defs.get(@backingInt(root.def));
+        const restored = root.restored_conversion_identity != null;
         try self.program.addLayoutRequest(.{
             .checked_type = view.bodies.expr(@fromBackingInt(@intCast(root.site.checked_expr))).ty,
             .ty = def.ret,
-            .comptime_root = .{ .module = root.module, .root = .{ .literal = id }, .const_locator = null },
+            .def = if (restored) root.def else null,
+            .comptime_root = .{ .module = root.module, .root = .{ .literal = id }, .const_locator = null, .completion = if (restored) .value else .pending },
         });
     }
 
@@ -7070,6 +7077,43 @@ const Builder = struct {
             program_result = imported[0];
             program_callable = imported[1];
         }
+        const site = context.literalRejectionSite(expr_id);
+        // The store may hold the value this producer's conversion computed,
+        // under the key the producer stored it with; then this program
+        // restores it and never lowers the conversion.
+        if (recipe.local_contexts.len == 0) if (self.literal_value_store) |store| {
+            const key = self.literalValueKey(identity, recipe.evidence, recipe.evidence_frames, recipe.evidence_frame_head);
+            if (store.lookup(key)) |hit| {
+                if (self.literalValueHitApplies(hit) and std.mem.eql(u8, &hit.conversion_identity, &recipe.object_identity) and
+                    !(self.program.types.get(program_result) == .func or try self.monoFnTypeMentionsFunction(program_result)))
+                {
+                    const restored_def = try self.restoredLiteralDef(view, key, hit, identity, program_result);
+                    const id = try self.program.addLiteralRoot(.{
+                        .def = restored_def,
+                        .module = view.key,
+                        .site = site,
+                        .recipe = .{
+                            .producer_key = identity,
+                            .required_native_identity = recipe.object_identity,
+                            .owner_template = recipe.owner_template,
+                            .owner_context_fn_key = recipe.owner_context_fn_key,
+                            .current_fn_key = recipe.current_fn_key,
+                            .method_scope = .{ .bytes = recipe.method_scope },
+                            .in_default_expr = recipe.in_default_expr,
+                            .checked_callable_ty = recipe.checked_callable_ty,
+                            .callable_ty = program_callable,
+                            .const_evidence = try self.program.addConstFnEvidence(recipe.evidence),
+                            .const_evidence_frames = try self.program.addConstFnEvidenceFrames(recipe.evidence_frames),
+                            .const_evidence_frame_head = recipe.evidence_frame_head,
+                        },
+                        .store_key = key,
+                        .restored_conversion_identity = hit.conversion_identity,
+                    });
+                    try self.program.literal_root_by_identity.put(self.allocator, identity, id);
+                    return id;
+                }
+            }
+        };
         const provisional_def = try self.program.addDef(.{
             .symbol = self.symbols.fresh(),
             .root_identity = identity,
@@ -7077,7 +7121,6 @@ const Builder = struct {
             .body = .hosted,
             .ret = program_result,
         });
-        const site = context.literalRejectionSite(expr_id);
         const id = try self.program.addLiteralRoot(.{
             .def = provisional_def,
             .module = view.key,
@@ -9264,14 +9307,135 @@ const Builder = struct {
 
     /// Program extents before a body draft commits, so the procedures it
     /// adds can be found afterwards.
-    const CommitExtent = struct { fns: usize, defs: usize, nested_defs: usize };
+    const CommitExtent = struct { fns: usize, defs: usize, nested_defs: usize, literal_roots: usize };
 
     fn commitExtent(self: *const Builder) CommitExtent {
         return .{
             .fns = self.program.fnCount(),
             .defs = self.program.defCount(),
             .nested_defs = self.program.nestedDefCount(),
+            .literal_roots = self.program.literal_roots.len(),
         };
+    }
+
+    /// The literal value store key of a literal root: its producer identity
+    /// joined with the declaration identities of the conversion evidence it
+    /// was lowered with (design.md "Literal Value Store").
+    fn literalValueKey(
+        self: *Builder,
+        producer_key: names.TypeDigest,
+        evidence: []const check.ConstStore.ConstFnEvidence,
+        frames: []const check.ConstStore.ConstFnEvidenceFrame,
+        head: ?u32,
+    ) [32]u8 {
+        const evidence_declaration = Ast.fnEvidenceDeclarationDigest(evidence, frames, head, TemplateDeclarations{ .builder = self });
+        var hasher = TypeDigestHasher.init();
+        hasher.update("roc.literal-value.key.v1");
+        hasher.update(&producer_key.bytes);
+        hasher.update(&evidence_declaration.bytes);
+        return hasher.finalResult();
+    }
+
+    /// Whether a stored literal value applies to this program: every module
+    /// whose compile-time roots its conversion read is a module of this
+    /// lowering, at the same key. The conversion's own code is named by the
+    /// store key, so a value whose reads are all present was produced from
+    /// exactly this program's declarations.
+    fn literalValueHitApplies(self: *Builder, hit: Common.LiteralValueHit) bool {
+        for (hit.read_modules) |module| {
+            if (self.moduleForKeyBytes(module) == null) return false;
+        }
+        return true;
+    }
+
+    /// Give every literal root the draft just committed its store key, and
+    /// restore the value of each one the literal value store holds, so the
+    /// program neither lowers nor evaluates its conversion.
+    fn completeStoredLiteralRoots(self: *Builder, from: usize) Allocator.Error!void {
+        const store = self.literal_value_store orelse return;
+        const view = self.program.view();
+        var index = from;
+        while (index < self.program.literal_roots.len()) : (index += 1) {
+            const root = self.program.literal_roots.get(index);
+            if (root.declaration_pending or root.store_key != null) continue;
+            const recipe = root.recipe orelse continue;
+            if (recipe.local_contexts.len != 0) continue;
+            const key = self.literalValueKey(
+                recipe.producer_key,
+                view.constFnEvidence(recipe.const_evidence),
+                view.constFnEvidenceFrames(recipe.const_evidence_frames),
+                recipe.const_evidence_frame_head,
+            );
+            self.program.literal_roots.getPtrImmediate(index).store_key = key;
+            const hit = store.lookup(key) orelse continue;
+            if (!self.literalValueHitApplies(hit)) continue;
+            try self.restoreLiteralRoot(@fromBackingInt(@intCast(@as(u32, @intCast(index)))), key, hit);
+        }
+    }
+
+    /// The definition that restores a stored literal value at `ret`, in the
+    /// program: the value's restore expression under the root identity of the
+    /// conversion it stands for. The store's ConstStore is read through the
+    /// literal's module view, under the store key, so its blobs and restore
+    /// cache entries are named apart from the module's own constants.
+    fn restoredLiteralDef(self: *Builder, view: ModuleView, key: [32]u8, hit: Common.LiteralValueHit, identity: names.TypeDigest, ret: Type.TypeId) Allocator.Error!Ast.DefId {
+        const destination = ProgramTypeDestination.begin(self);
+        defer destination.end();
+        const saved_graph = self.active_graph;
+        const saved_draft = self.active_body_draft;
+        self.active_graph = null;
+        self.active_body_draft = null;
+        defer {
+            self.active_graph = saved_graph;
+            self.active_body_draft = saved_draft;
+        }
+        var store_data = view.*;
+        store_data.const_store = hit.store;
+        store_data.key = .{ .bytes = key };
+        const body = try self.restoreConstNodeAtType(&store_data, view, hit.root, ret);
+        return try self.program.addDef(.{
+            .symbol = self.symbols.fresh(),
+            .fn_def = null,
+            .root_identity = identity,
+            .args = .empty(),
+            .body = .{ .roc = body },
+            .ret = ret,
+        });
+    }
+
+    /// Replace a literal root's conversion with the stored value it produced:
+    /// the root's definition becomes the value's restore expression, and its
+    /// storage is declared completed, as a stored checked root's is
+    /// (`declareCachedRootReads`). A value holding a callable keeps the
+    /// conversion: its lambda sets are the conversion body's.
+    fn restoreLiteralRoot(self: *Builder, id: Common.LiteralRootId, key: [32]u8, hit: Common.LiteralValueHit) Allocator.Error!void {
+        const root = self.program.literal_roots.get(@backingInt(id));
+        const conversion = self.program.getDef(root.def);
+        const ret = conversion.ret;
+        if (self.program.types.get(ret) == .func or try self.monoFnTypeMentionsFunction(ret)) return;
+        const view = self.moduleForId(root.module);
+        const def = try self.restoredLiteralDef(view, key, hit, conversion.root_identity orelse Common.invariant("literal root definition had no root identity"), ret);
+        const declared = self.program.literal_roots.getPtrImmediate(@backingInt(id));
+        declared.def = def;
+        declared.restored_conversion_identity = hit.conversion_identity;
+        var declared_storage = false;
+        for (0..self.program.layout_requests.len()) |request_index| {
+            const request = self.program.layout_requests.get(request_index);
+            const descriptor = request.comptime_root orelse continue;
+            if (descriptor.root != .literal or descriptor.root.literal != id) continue;
+            const pending = self.program.layout_requests.getPtrImmediate(request_index);
+            pending.def = def;
+            pending.comptime_root.?.completion = .value;
+            declared_storage = true;
+        }
+        if (!declared_storage) {
+            try self.program.addLayoutRequest(.{
+                .checked_type = view.bodies.expr(@fromBackingInt(@intCast(root.site.checked_expr))).ty,
+                .ty = ret,
+                .def = def,
+                .comptime_root = .{ .module = root.module, .root = .{ .literal = id }, .const_locator = null, .completion = .value },
+            });
+        }
     }
 
     /// Mark every procedure a discovery body draft committed, with the
@@ -15228,6 +15392,7 @@ const Builder = struct {
             commit_map.emit_defs,
             commit_map.emit_nested_defs,
         );
+        try self.completeStoredLiteralRoots(commit_extent.literal_roots);
         self.final_body_output_allowance.addDelta(output_before, FinalBodyOutputCounts.fromProgram(self.program));
         try self.commitDraftRootValueReads(body_draft, body_ids);
         const sealed_extra = if (extra_ty) |ty| blk: {
@@ -15291,6 +15456,7 @@ const Builder = struct {
             commit_map.emit_defs,
             commit_map.emit_nested_defs,
         );
+        try self.completeStoredLiteralRoots(commit_extent.literal_roots);
         self.final_body_output_allowance.addDelta(output_before, FinalBodyOutputCounts.fromProgram(self.program));
         try self.commitDraftRootValueReads(body_draft, body_ids);
         try self.markDraftNestedReady(body_draft, body_ids);

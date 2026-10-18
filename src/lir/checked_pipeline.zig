@@ -203,6 +203,9 @@ pub const TargetConfig = struct {
     /// Native CTFE storage demand remains relevant when another consumer needs
     /// source bodies and therefore forbids early native body substitution.
     root_use_cache: ?postcheck.Common.SpecCacheLookup = null,
+    /// The literal value store Monotype restores completed literal roots from
+    /// (design.md "Literal Value Store"); consulted only with `literal_roots`.
+    literal_value_store: ?postcheck.Common.LiteralValueLookup = null,
     /// Keep every keyed specialization procedure through compaction; a pack
     /// program offers them from its manifest whether or not its export
     /// wrappers inlined their calls.
@@ -1477,6 +1480,7 @@ pub fn prepareCheckedModulesMonotype(
                 .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or packTraceEnabled(),
                 .spec_cache = if (target.code_provision.permitsNativeObjects()) target.spec_cache else null,
                 .root_use_cache = target.root_use_cache,
+                .literal_value_store = if (target.literal_roots) target.literal_value_store else null,
                 .post_check_executor = target.post_check_executor,
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,

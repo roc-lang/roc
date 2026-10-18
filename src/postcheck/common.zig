@@ -468,6 +468,28 @@ pub const CheckedRootUse = struct {
     root: u32,
 };
 
+/// A completed literal root's stored value (design.md "Literal Value Store"):
+/// the ConstStore holding it, the procedure identity of the conversion that
+/// produced it, and the modules whose compile-time roots that conversion
+/// read. The store and its node belong to the provider for the compilation.
+pub const LiteralValueHit = struct {
+    conversion_identity: [32]u8,
+    read_modules: []const [32]u8,
+    store: *const check.ConstStore.ConstStore,
+    root: check.ConstStore.ConstNodeId,
+};
+
+/// The literal value store Monotype asks before it lowers a literal root's
+/// conversion. The key is the literal root's store key (`literalValueKey`).
+pub const LiteralValueLookup = struct {
+    context: *anyopaque,
+    find: *const fn (context: *anyopaque, key: [32]u8) ?LiteralValueHit,
+
+    pub fn lookup(self: LiteralValueLookup, key: [32]u8) ?LiteralValueHit {
+        return self.find(self.context, key);
+    }
+};
+
 /// A cached specialization's identity, demand facts, and the refcount facts
 /// callers rely on in place of its body.
 pub const SpecCacheHit = struct {

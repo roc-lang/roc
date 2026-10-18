@@ -36,6 +36,7 @@ const BoxyNativeFnTable = backend.LirCodeGenMod.BoxyNativeFnTable;
 const NativeProcCompiler = backend.dev.NativeProcCompiler;
 const NativeFailure = @import("native_failure.zig");
 const NativeContext = @import("native_context.zig");
+const LiteralValueStore = @import("literal_value_store.zig").LiteralValueStore;
 
 const SiteRegistry = union(enum) {
     lir_program: *const lir.Program.Result,
@@ -127,6 +128,10 @@ pub const Options = struct {
     slow_root_period_ns: u64 = std.time.ns_per_s,
     timing: ?*Timing = null,
     object_cache: ?CompileTimeObjectCache = null,
+    /// The literal value store this finalization restores completed literal
+    /// roots from and records newly completed ones into (design.md "Literal
+    /// Value Store").
+    literal_value_store: ?*LiteralValueStore = null,
     /// Ordinary native object policy, shared with the runtime provider.
     native_cpu_level: roc_target.CpuLevel = roc_target.RocTarget.detectNative().cpuLevel(),
     /// Where a compile-time failure is reported when the source it names
@@ -669,6 +674,7 @@ fn compileTimeTarget(options: Options, solved_policy: lir.CheckedPipeline.Solved
     target.comptime_value_reads = true;
     target.literal_roots = true;
     target.spec_cache = if (options.object_cache) |cache| cache.spec_cache else null;
+    target.literal_value_store = if (options.literal_value_store) |store| store.lookup() else null;
     target.code_provision = if (!compilerHostMustUseInterpreterForCtfe() and backend.host_lir_codegen_available and options.object_cache != null) .host_dev_objects else .source_bodies;
     target.post_check_executor = options.post_check_executor;
     target.timing = if (options.timing) |timing| &timing.lowering else null;
@@ -1404,6 +1410,7 @@ pub fn finalizeProgram(
         host_target.timing = if (options.timing) |timing| &timing.lowering else null;
         host_target.spec_cache = null;
         host_target.root_use_cache = null;
+        host_target.literal_value_store = if (options.literal_value_store) |store| store.lookup() else null;
         host_target.code_provision = if (!compilerHostMustUseInterpreterForCtfe() and backend.host_lir_codegen_available and options.object_cache != null) .host_dev_objects else .source_bodies;
         if (options.object_cache) |cache| {
             if (cache.select_policy) |selector| policy_options.object_cache = try selector.select(selector.context, host_target, lowering_modules);
@@ -2136,6 +2143,7 @@ fn finalizeLoweredProgram(
         }
     }
     for (literal_roots, 0..) |plan, index| {
+        if (plan.restored) continue;
         var next = publication.first(plan.site.owner, .{ .literal = plan.id });
         while (next) |slot| {
             slot_roots[@backingInt(slot)] = root_count + index;
@@ -2170,6 +2178,12 @@ fn finalizeLoweredProgram(
         try ordinals.append(allocator, ordinal);
     }
     for (literal_roots, 0..) |plan, index| {
+        // A restored root's slot is frozen from its stored value; the
+        // conversion that produced it is not part of this program.
+        if (plan.restored) {
+            literal_done[index] = true;
+            continue;
+        }
         try nodes.append(allocator, .{
             .key = lir.CtfeSchedule.Key.init(plan.module.bytes, .{ .literal = plan.id }),
             .guarded = false,
@@ -3426,6 +3440,9 @@ fn evalInterpreterLiteralRoot(
             };
         };
         defer interpreter.dropValue(result.value, plan.ret_layout);
+        if (program.host.debugMessages().len == 0 and interpreter.getExpectFailures().len == 0) {
+            try recordLiteralValue(allocator, options, lowered, plan, result.value);
+        }
         if (options.publish_shared_slots) try program.publishRoot(lowered, plan.site.owner, producer, plan.shape(), result.value);
         break :evaluated null;
     };
@@ -3503,6 +3520,7 @@ fn evalDevLiteralRoot(
         .crashed => {},
     };
     const failed = failure orelse {
+        if (host.events.items.len == 0) try recordLiteralValue(allocator, options, lowered, plan, .{ .ptr = ret_buf.ptr });
         if (options.publish_shared_slots) try native.publishRootWithRuntime(lowered, plan.site.owner, producer, plan.shape(), .{ .ptr = ret_buf.ptr }, if (selected_runtime) |runtime| &runtime.runtime else null);
         if (options.publish_shared_slots) try native.publishFailure(lowered, plan.site.owner, producer, null);
         return;
@@ -3512,6 +3530,61 @@ fn evalDevLiteralRoot(
         native.slots.publishFailureOrigin(lowered, plan.site.owner, producer, .{ .loc = failed.loc, .region = failed.region });
         try native.publishFailure(lowered, plan.site.owner, producer, .{ .message = failed.message, .kind = .crash });
     }
+}
+
+/// Persist a literal root's completed value when the store takes it
+/// (design.md "Literal Value Store"): the root is storable, its evaluation
+/// produced no `dbg` or `expect` observation, and its value holds no
+/// callable. The value is stored like a compile-time constant's.
+fn recordLiteralValue(
+    allocator: Allocator,
+    options: Options,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    plan: LirProgram.LiteralRootPlan,
+    value: @import("value.zig").Value,
+) FinalizeError!void {
+    const store = options.literal_value_store orelse return;
+    const key = plan.store_key orelse return;
+    if (try constPlanHoldsCallable(allocator, &lowered.lir_result, plan.plan)) return;
+    var scratch = check.ConstStore.ConstStore.init(allocator);
+    defer scratch.deinit();
+    var writer = ConstStoreWriter.Writer.initForStore(allocator, null, &scratch, &lowered.lir_result);
+    defer writer.deinit();
+    const root = try writer.storeLiteral(plan.plan, plan.ret_layout, value);
+    if (scratch.fns.items.len != 0) return;
+    var read_modules = std.ArrayList([32]u8).empty;
+    defer read_modules.deinit(allocator);
+    for (plan.demand.reads) |read| {
+        var seen = false;
+        for (read_modules.items) |existing| {
+            if (std.mem.eql(u8, &existing, &read.module.bytes)) seen = true;
+        }
+        if (!seen) try read_modules.append(allocator, read.module.bytes);
+    }
+    try store.write(key, lowered.lir_result.store.getProcSpec(plan.proc).identity.bytes, read_modules.items, &scratch, root);
+}
+
+/// Whether a value of this const plan may hold a callable anywhere in it.
+fn constPlanHoldsCallable(allocator: Allocator, result: *const LirProgram.Result, root: LirProgram.ConstPlanId) Allocator.Error!bool {
+    var visited = try std.DynamicBitSetUnmanaged.initEmpty(allocator, result.const_plans.items.len);
+    defer visited.deinit(allocator);
+    var pending = std.ArrayList(LirProgram.ConstPlanId).empty;
+    defer pending.deinit(allocator);
+    try pending.append(allocator, root);
+    while (pending.pop()) |id| {
+        if (visited.isSet(@backingInt(id))) continue;
+        visited.set(@backingInt(id));
+        switch (result.const_plans.items[@backingInt(id)]) {
+            .fn_value, .erased_fn => return true,
+            .pending, .layout_only, .zst, .scalar, .str => {},
+            .list, .box => |child| try pending.append(allocator, child),
+            .boxy_box => |boxy| try pending.append(allocator, boxy.payload),
+            .tuple, .record => |children| try pending.appendSlice(allocator, children),
+            .tag_union => |variants| for (variants) |variant| try pending.appendSlice(allocator, variant.payloads),
+            .named => |named| try pending.append(allocator, named.backing),
+        }
+    }
+    return false;
 }
 
 fn recordLiteralRootFailure(

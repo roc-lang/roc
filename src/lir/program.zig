@@ -839,6 +839,12 @@ pub const LiteralRootPlan = struct {
     /// Every consumer that reads a literal root reads it from this slot.
     value_slot: LIR.StaticDataId,
     demand: CtfeDemandFacts = .{},
+    /// The literal value store key under which a completed value is stored
+    /// (design.md "Literal Value Store"); null when the root is not storable.
+    store_key: ?[32]u8 = null,
+    /// The store supplied this root's value: `proc` is the slot's static
+    /// initializer, and finalization evaluates nothing for it.
+    restored: bool = false,
 
     pub fn shape(self: LiteralRootPlan) RootShape {
         return .{ .ret_layout = self.ret_layout, .plan = self.plan };

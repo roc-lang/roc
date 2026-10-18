@@ -35,6 +35,7 @@ pub const CheckedArtifact = @import("checked_artifact.zig");
 /// nested aggregates and `SerializedElement`s), so every admitted blob invalidates on
 /// any layout change, not just a top-level one.
 pub const rootLayoutVersionHash = @import("artifact_serialize.zig").rootLayoutVersionHash;
+pub const artifact_serialize = @import("artifact_serialize.zig");
 /// Checked module data exported under the post-check-facing name.
 pub const CheckedModule = CheckedArtifact;
 

@@ -326,7 +326,7 @@ pub const ModuleType = enum {
             },
             .eval => .{
                 .root = "src/eval/mod.zig",
-                .deps = &.{ .tracy, .ctx, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .static_data, .build_options, .reporting, .backend, .lir, .symbol, .roc_target, .sljmp, .ipc },
+                .deps = &.{ .tracy, .ctx, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .static_data, .build_options, .reporting, .backend, .lir, .postcheck, .symbol, .roc_target, .sljmp, .ipc },
                 .extra_imports = &.{"vendor_relocatable_loader"},
                 .tests = .{ .unit = .{ .aggregators = &.{"eval tests"} } },
             },

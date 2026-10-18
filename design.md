@@ -2574,6 +2574,40 @@ A root that no compilation evaluated, in a module this compilation does not
 finalize, has no slot to read; a program that reads it evaluates its body in
 place, as a pack program does.
 
+### Literal Value Store
+
+A literal root's conversion is deterministic in the literal, the concrete type
+the specialization gives it, and the compile-time roots the conversion reads.
+Its completed value is therefore stored across compilations, in the cache's
+`literals` namespace, one entry per *store key*: the root's producer identity
+(the literal's module key and expression, and its result type by declaration)
+joined with the declaration identities of the conversion evidence the root was
+lowered with, so the key names the conversion's code and its type. An entry
+holds the value as a ConstStore, the procedure identity of the conversion that
+produced it, and the modules whose compile-time roots the conversion read.
+
+An entry is written when a literal root completes with a value, its evaluation
+produced no `dbg` or `expect` observation (so nothing would have to replay),
+and the value holds no callable (a callable's lambda sets are the conversion
+body's, which only lowering it gives). A root with a local declaration context
+in its recipe has no store key. A root that fails is never stored; its next
+compilation evaluates and reports it again.
+
+Monotype asks the store when it commits a literal root, and when it declares
+one from a cached body's recipe, before the conversion is lowered as the root's
+body. An entry applies when every module its reads name is a module of the
+lowering at the same key: the key names the conversion's code, so a value
+whose reads are all present was produced from exactly this program's
+declarations. The root then keeps its id and identities, but its definition
+becomes the stored value's restore expression (as a stored checked root's is),
+its storage is declared completed with that definition as its static
+initializer, and no conversion is lowered, offered, or evaluated. Direct LIR
+does not mark a restored root's definition as compile-time code, lowers it
+only as the slot's static initializer, offers no conversion object for it, and
+names the stored conversion identity in the recipe a cached body replays.
+Finalization schedules nothing for a restored root: its slot is frozen from
+the initializer like a restored checked root's.
+
 ## Builtins Build Their Own Tag Unions
 
 If a builtin function's type contains a structural tag union anywhere—in its

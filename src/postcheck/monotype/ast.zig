@@ -1649,6 +1649,14 @@ pub const LiteralRoot = struct {
     site: Common.LiteralRejectionSite,
     recipe: ?LiteralRecipe = null,
     declaration_pending: bool = false,
+    /// The literal value store key of this root (design.md "Literal Value
+    /// Store"); null when the root is not storable (its recipe carries local
+    /// declaration contexts) or no store is consulted.
+    store_key: ?[32]u8 = null,
+    /// Set when the store supplied the root's value: `def` then restores the
+    /// stored value instead of running the conversion, and this is the
+    /// procedure identity of the conversion that produced it.
+    restored_conversion_identity: ?[32]u8 = null,
 };
 
 /// Exact declaration context recorded when the conversion producer is built.

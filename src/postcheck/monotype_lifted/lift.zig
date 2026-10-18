@@ -505,6 +505,8 @@ const Lifter = struct {
                 .module = root.module,
                 .site = root.site,
                 .recipe = recipe,
+                .store_key = root.store_key,
+                .restored_conversion_identity = root.restored_conversion_identity,
             });
         }
 

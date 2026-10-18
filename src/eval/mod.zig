@@ -40,6 +40,7 @@ pub const CompileTimeHost = @import("compile_time_host.zig");
 pub const NativeContext = @import("native_context.zig");
 /// Stores compile-time interpreter results in ConstStore
 pub const ConstStoreWriter = @import("const_store_writer.zig");
+pub const LiteralValueStore = @import("literal_value_store.zig").LiteralValueStore;
 pub const NativeRootExport = @import("native_root_export.zig");
 pub const FrozenRootTranscode = @import("frozen_root_transcode.zig");
 /// Owned relocated immutable graph and callable registry for runtime interpretation.

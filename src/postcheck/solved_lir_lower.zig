@@ -556,6 +556,10 @@ const LiteralRootEntry = struct {
     fn_id: Type.FnId,
     module: check.CheckedModule.ModuleId,
     site: Common.LiteralRejectionSite,
+    store_key: ?[32]u8,
+    /// Set when the root's value was restored from the literal value store:
+    /// `fn_id` is then the slot's static initializer, not a conversion.
+    restored_conversion_identity: ?[32]u8,
 };
 
 const LayoutRequest = struct {
@@ -1489,6 +1493,8 @@ const Lowerer = struct {
                     .fn_id = try self.ensureOwnFnSpec(root.fn_id, .finite),
                     .module = root.module,
                     .site = root.site,
+                    .store_key = root.store_key,
+                    .restored_conversion_identity = root.restored_conversion_identity,
                 });
             }
         }
@@ -1515,7 +1521,10 @@ const Lowerer = struct {
             if (!rootRunsAtCompileTime(root.request)) continue;
             _ = try self.markReachableFn(root.fn_id);
         }
-        for (self.literal_roots.items) |root| _ = try self.markReachableFn(root.fn_id);
+        for (self.literal_roots.items) |root| {
+            if (root.restored_conversion_identity != null) continue;
+            _ = try self.markReachableFn(root.fn_id);
+        }
         try self.lowerReachableFns();
         self.comptime_phase = false;
         for (self.roots.items) |root| {
@@ -3276,7 +3285,7 @@ const Lowerer = struct {
     /// This is the earlier producer table, not a search of a cached body.
     fn literalProducer(self: *const Lowerer, source: Lifted.FnId) ?Lifted.LiteralRoot {
         for (self.solved.lifted.literalRootsView()) |root| {
-            if (root.fn_id == source) return root;
+            if (root.fn_id == source) return if (root.restored_conversion_identity == null) root else null;
         }
         return null;
     }
@@ -4733,9 +4742,13 @@ const Lowerer = struct {
     fn cachedLiteralRecipe(self: *Lowerer, id: Common.LiteralRootId) Common.LowerError!LirProgram.CachedLiteralRecipe {
         const root = self.solved.lifted.literalRootsView()[@backingInt(id)];
         const declaration = root.recipe orelse Common.invariant("literal demand has no earlier producer declaration recipe");
-        const producer_fn = try self.ensureOwnFnSpec(root.fn_id, .finite);
-        const producer_entry = self.fn_entries.items[@backingInt(producer_fn)];
-        const object_identity = try self.procIdentity(producer_entry.spec, producer_entry);
+        // A restored root names the conversion object that produced its stored
+        // value; its own definition only restores that value.
+        const object_identity: LIR.ProcIdentity = if (root.restored_conversion_identity) |identity| .{ .bytes = identity } else blk: {
+            const producer_fn = try self.ensureOwnFnSpec(root.fn_id, .finite);
+            const producer_entry = self.fn_entries.items[@backingInt(producer_fn)];
+            break :blk try self.procIdentity(producer_entry.spec, producer_entry);
+        };
         const export_ = @import("literal_recipe.zig");
         const callable = try export_.representation(self.allocator, self.solved.lifted.types.view(), &self.solved.lifted.names, declaration.callable_ty);
         errdefer callable.deinit(self.allocator);
@@ -4910,6 +4923,8 @@ const Lowerer = struct {
                 .plan = try self.constPlanOfType(entry.ret),
                 .value_slot = try self.comptimeValueSlot(.{ .module = root.module, .root = .{ .literal = id }, .const_locator = null }, entry.ret, ret_layout),
                 .demand = try self.rootDemand(self.fn_specs.items[@backingInt(root.fn_id)].source),
+                .store_key = root.store_key,
+                .restored = root.restored_conversion_identity != null,
             });
         }
 
