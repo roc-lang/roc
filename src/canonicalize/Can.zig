@@ -5433,9 +5433,9 @@ fn defPatternIdent(store: *const CIR.NodeStore, pattern_idx: CIR.Pattern.Idx) ?I
 /// so the two can never disagree about what the module is being compiled for.
 pub const Validation = enum(u8) {
     /// Roc's user-facing app/type-module validation: a headerless file must be
-    /// either a type module whose nominal type matches the file name, or a
-    /// default app with a valid `main!`, and an app must supply every
-    /// definition its platform requires.
+    /// a type module whose nominal type matches the file name, or, when it is
+    /// the entry module, a default app with a valid `main!`; and an app must
+    /// supply every definition its platform requires.
     checking,
     /// Validation for a module whose compile-time roots are requested
     /// explicitly rather than derived from an app entrypoint or a type module.
@@ -5494,39 +5494,38 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
 
     switch (self.env.module_kind) {
         .type_module => |*main_type_ident| {
-            const main_status = try self.checkMainFunction(true);
-            const matching_type_result = self.findMatchingTypeIdent();
+            // An entry module reaches this point only when its `main!` is
+            // missing or malformed, since a valid one made it a default app.
+            // Any other headerless file can only be a type module: `main!` is
+            // an ordinary name there, so it neither satisfies nor fails
+            // validation.
+            const main_status: ?MainFunctionStatus = if (self.is_entry_module)
+                try self.checkMainFunction(true)
+            else
+                null;
 
-            // Check if we found a matching type and whether it's a nominal type
-            const has_valid_type_module = if (matching_type_result) |result| blk: {
+            const main_type: ?Ident.Idx = if (self.findMatchingTypeIdent()) |result| switch (result.kind) {
                 // Type modules require nominal types (:= or ::), not aliases (:)
-                if (result.kind == .nominal or result.kind == .@"opaque") {
-                    // Store the matching type ident in module_kind
-                    main_type_ident.* = result.ident;
-                    break :blk true;
+                .nominal, .@"opaque" => result.ident,
+                .alias, .where_alias => blk: {
+                    try self.pushModuleFileDiagnostic(.type_module_has_alias_not_nominal);
+                    break :blk null;
+                },
+            } else blk: {
+                if (main_status) |status| {
+                    if (status == .not_found) try self.reportTypeModuleOrDefaultAppError();
                 } else {
-                    // Found alias instead of nominal type - emit specific error
-                    const file = self.parse_ir.store.getFile();
-                    const module_name_text = self.env.module_name;
-                    const module_name_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
-                    const file_region = self.parse_ir.tokenizedRegionToRegion(file.region);
-
-                    try self.env.pushDiagnostic(.{
-                        .type_module_has_alias_not_nominal = .{
-                            .module_name = module_name_ident,
-                            .region = file_region,
-                        },
-                    });
-                    break :blk false;
+                    try self.pushModuleFileDiagnostic(.type_module_missing_matching_type);
                 }
-            } else false;
+                break :blk null;
+            };
 
-            // Valid if either we have a valid main! or a valid nominal type declaration
-            const is_valid = (main_status == .valid) or has_valid_type_module;
-
-            if (!is_valid and main_status == .not_found and matching_type_result == null) {
-                // Neither valid main! nor matching type - report helpful error
-                try self.reportTypeModuleOrDefaultAppError();
+            if (main_type) |ident| {
+                main_type_ident.* = ident;
+            } else {
+                // Neither a type module nor a default app, so there is no main
+                // type; the file is compiled on as a plain module.
+                self.env.module_kind = .module;
             }
         },
         .default_app, .app, .package, .platform, .hosted, .module, .malformed => {
@@ -21528,31 +21527,26 @@ fn exposeTopLevelTypesForExplicitRoots(self: *Self) std.mem.Allocator.Error!void
     }
 }
 
-/// Report smart error when neither type module nor default-app is valid (checking mode)
+/// Report smart error when an entry module is neither a valid type module nor
+/// a valid default app (checking mode)
 fn reportTypeModuleOrDefaultAppError(self: *Self) std.mem.Allocator.Error!void {
-    const file = self.parse_ir.store.getFile();
-    const module_name_text = self.env.module_name;
-    const module_name_ident = try self.env.insertIdent(base.Ident.for_text(module_name_text));
-    const file_region = self.parse_ir.tokenizedRegionToRegion(file.region);
-
     // If there are types declared, assume type module, else assume default-app.
     if (self.hasAnyTypeDeclarations()) {
-        // Assume user wanted type module
-        try self.env.pushDiagnostic(.{
-            .type_module_missing_matching_type = .{
-                .module_name = module_name_ident,
-                .region = file_region,
-            },
-        });
+        try self.pushModuleFileDiagnostic(.type_module_missing_matching_type);
     } else {
-        // Assume user wanted default-app
-        try self.env.pushDiagnostic(.{
-            .default_app_missing_main = .{
-                .module_name = module_name_ident,
-                .region = file_region,
-            },
-        });
+        try self.pushModuleFileDiagnostic(.default_app_missing_main);
     }
+}
+
+/// Report a problem with the module as a whole, at the file's region.
+fn pushModuleFileDiagnostic(self: *Self, comptime tag: std.meta.Tag(Diagnostic)) std.mem.Allocator.Error!void {
+    const file = self.parse_ir.store.getFile();
+    const module_name_ident = try self.env.insertIdent(base.Ident.for_text(self.env.module_name));
+    const file_region = self.parse_ir.tokenizedRegionToRegion(file.region);
+    try self.env.pushDiagnostic(@unionInit(Diagnostic, @tagName(tag), .{
+        .module_name = module_name_ident,
+        .region = file_region,
+    }));
 }
 
 // We write out this giant literal because it's actually annoying to try to
