@@ -3205,3 +3205,47 @@ pub fn wasmEvaluatorInspectedStr(allocator: Allocator, lowered: *const LoweredPr
 pub fn wasmEvaluatorStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) Error!EvalRunResult {
     return legacyInspectedRun(allocator, .wasm, lowered);
 }
+
+/// Evaluate via the wasm backend for both CPU levels. A WebAssembly 1.0
+/// result that differs from the default one, in output or allocation count,
+/// is reported as the output, so it never agrees with the expected value.
+pub fn wasmBothCpuLevelsStrWithStats(allocator: Allocator, lowered: *const LoweredProgram) Error!EvalRunResult {
+    const default = try wasmEvaluatorStrWithStats(allocator, lowered);
+    const v1 = try wasmRunAt(allocator, lowered, .v1);
+    defer allocator.free(v1.output);
+    if (std.mem.eql(u8, default.output, v1.output) and default.allocation_count == v1.allocation_count) return default;
+    defer allocator.free(default.output);
+    return .{
+        .output = try std.fmt.allocPrint(allocator, "{s} ({d} allocations), but wasm32v1: {s} ({d} allocations)", .{ default.output, default.allocation_count, v1.output, v1.allocation_count }),
+        .allocation_count = default.allocation_count,
+    };
+}
+
+pub fn wasmBothCpuLevelsInspectedStr(allocator: Allocator, lowered: *const LoweredProgram) Error![]u8 {
+    const result = try wasmBothCpuLevelsStrWithStats(allocator, lowered);
+    return result.output;
+}
+
+fn wasmRunAt(allocator: Allocator, lowered: *const LoweredProgram, cpu_level: roc_target.CpuLevel) Error!EvalRunResult {
+    const result = try InspectedRun.runWasmAt(allocator, .{
+        .store = &lowered.view.store,
+        .layouts = &lowered.view.layouts,
+        .boxy_tables = boxy_runtime.BoxyTables.fromImageView(&lowered.view),
+        .boxy_sidecar_blob = lowered.shm.base_ptr[0..lowered.shm.getUsedSize()],
+        .boxy_sidecar_desc = LirImage.BoxySidecar.fromHeader(lowered.image_header),
+        .main_proc = lowered.mainProc(),
+        .static_data = lowered.view.static_data,
+        .static_data_value_count = lowered.view.static_data_value_count,
+    }, cpu_level);
+    result.deinitEvents(allocator);
+    return switch (result.outcome) {
+        .returned => |output| .{
+            .output = output,
+            .allocation_count = result.allocation_count,
+        },
+        .crashed => |message| {
+            allocator.free(message);
+            return error.Crash;
+        },
+    };
+}

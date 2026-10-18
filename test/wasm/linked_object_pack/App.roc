@@ -11,7 +11,6 @@ import num.Numeric
 main! = |seed| {
 	# The host's seed is 0, which the compiler cannot know.
 	n = seed + 10
-	# 10 shifted left four times sets every lane's high bit.
-	shifted = Numeric.shift_lanes(U8x16.splat(n.to_u8_wrap()), seed + 4)
-	"${Numeric.describe(n)}\n${Numeric.sum_squares(n + 1).to_str()}\n${shifted.to_bitmask().to_str()}"
+	doubled = Numeric.double_lanes(U8x16.splat(n.to_u8_wrap()), seed + 1)
+	"${Numeric.describe(n)}\n${Numeric.sum_squares(n + 1).to_str()}\n${Str.inspect(doubled)}"
 }

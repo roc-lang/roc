@@ -24080,6 +24080,17 @@ instruction legalization: there is no runtime operation descriptor, evaluator
 call, or alternate source decoder. The default Wasm target continues to use
 native `v128` values and SIMD instructions.
 
+Every input of a wasm32v1 module is WebAssembly 1.0, not only Roc's own code.
+Emitting a vector instruction, a `v128` local, or a `v128` function type at
+the v1 level is a compiler invariant violation. The builtins, Boxy runtime,
+and compiler-rt objects a wasm32v1 build links are built for the
+WebAssembly 1.0 CPU (Zig's wasm baseline includes later proposals, so
+wasm32v1 does not share wasm32's objects the way other v1 targets share
+their default twins'), and Binaryen optimizes a wasm32v1 module with every
+proposal disabled. The evaluator's wasm backend runs each eval program at
+both CPU levels and requires the same result, which puts the full SIMD
+differential corpus through the v1 lowering.
+
 ### Doc comments name the instructions
 
 Every operation's doc comment states the instruction (or short sequence)

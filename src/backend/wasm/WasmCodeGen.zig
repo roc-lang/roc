@@ -1953,6 +1953,9 @@ pub fn generateModule(
 /// `skip_count` is the number of leading locals to skip (e.g., function parameters).
 fn encodeLocalsDecl(self: *Self, func_body: *std.ArrayList(u8), skip_count: u32) Allocator.Error!void {
     const all_types = self.storage.currentTypes();
+    if (self.cpu_level == .v1) for (all_types) |vt| {
+        if (vt == .v128) wasmInvariantFmt("WASM/codegen invariant violated: v128 local declared for WebAssembly 1.0", .{});
+    };
     if (all_types.len <= skip_count) {
         WasmModule.leb128WriteU32(self.allocator, func_body, 0) catch return error.OutOfMemory;
         return;
@@ -3222,8 +3225,8 @@ fn emitCanonicalizeScalarForLayout(self: *Self, layout_idx: layout.Idx) Allocato
     if (try self.resolveValType(layout_idx) != .i32) return;
 
     switch (layout_idx) {
-        .i8 => self.currentCode().append(self.allocator, Op.i32_extend8_s) catch return error.OutOfMemory,
-        .i16 => self.currentCode().append(self.allocator, Op.i32_extend16_s) catch return error.OutOfMemory,
+        .i8 => try self.emitSignExtendI32(8),
+        .i16 => try self.emitSignExtendI32(16),
         .u8 => {
             try self.emitI32Const(0xFF);
             self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
@@ -5658,6 +5661,9 @@ fn emitConversion(self: *Self, source: ValType, target: ValType) Allocator.Error
 }
 
 fn internFuncType(self: *Self, params: []const ValType, results: []const ValType) Allocator.Error!u32 {
+    if (self.cpu_level == .v1) for ([_][]const ValType{ params, results }) |types| {
+        for (types) |vt| if (vt == .v128) wasmInvariantFmt("WASM/codegen invariant violated: v128 function type declared for WebAssembly 1.0", .{});
+    };
     self.func_type_key_scratch.clearRetainingCapacity();
     try self.func_type_key_scratch.append(self.allocator, @intCast(params.len));
     for (params) |param| {
@@ -13814,6 +13820,7 @@ const SimdCompareOp = enum { eq_lanes, gt_lanes, gte_lanes };
 const SimdShiftOp = enum { shl_wrap, shr_wrap, shr_zf_wrap };
 
 fn emitSimdOp(self: *Self, opcode: u32) Allocator.Error!void {
+    if (self.cpu_level == .v1) wasmInvariantFmt("WASM/codegen invariant violated: vector instruction 0xfd {d} emitted for WebAssembly 1.0", .{opcode});
     self.currentCode().append(self.allocator, Op.simd_prefix) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), opcode) catch return error.OutOfMemory;
 }
@@ -14054,14 +14061,11 @@ fn emitSimdWithLane(self: *Self, args: anytype, kind: layout.Vector) Allocator.E
     try self.emitV128Load(4, 0);
 }
 
-fn emitSimdShuffle(self: *Self, args: anytype, kind: layout.Vector, mode: enum { interleave_lo, interleave_hi, even, odd, reverse }) Allocator.Error!void {
-    try self.emitProcLocal(GuardedList.at(args, 0));
-    if (mode == .reverse) {
-        try self.emitProcLocal(GuardedList.at(args, 0));
-    } else {
-        try self.emitProcLocal(GuardedList.at(args, 1));
-    }
+const SimdShuffleMode = enum { interleave_lo, interleave_hi, even, odd, reverse };
 
+/// The byte permutation of a lane shuffle, over the thirty-two bytes of the
+/// first operand followed by the second (`reverse` reads only the first).
+fn simdShuffleIndices(kind: layout.Vector, mode: SimdShuffleMode) [16]u8 {
     const lane_bytes: usize = wasmSimdLaneBytes(kind);
     const lane_count: usize = kind.laneCount();
     var indices: [16]u8 = undefined;
@@ -14088,7 +14092,17 @@ fn emitSimdShuffle(self: *Self, args: anytype, kind: layout.Vector, mode: enum {
             for (0..lane_bytes) |byte| indices[i * lane_bytes + byte] = @intCast((lane_count - 1 - i) * lane_bytes + byte);
         },
     }
-    try self.emitI8x16Shuffle(indices);
+    return indices;
+}
+
+fn emitSimdShuffle(self: *Self, args: anytype, kind: layout.Vector, mode: SimdShuffleMode) Allocator.Error!void {
+    try self.emitProcLocal(GuardedList.at(args, 0));
+    if (mode == .reverse) {
+        try self.emitProcLocal(GuardedList.at(args, 0));
+    } else {
+        try self.emitProcLocal(GuardedList.at(args, 1));
+    }
+    try self.emitI8x16Shuffle(simdShuffleIndices(kind, mode));
 }
 
 // WebAssembly 1.0 vectors occupy explicit sixteen-byte stack slots. These
@@ -14109,48 +14123,608 @@ fn emitSimdV1Lane(self: *Self, arg: ProcLocalId, kind: layout.Vector, lane: u32,
     if (signed and width < 4) try self.emitSignExtendI32(@intCast(kind.laneBits()));
 }
 
-const SimdV1LaneOp = enum { splat, bitwise_and, bitwise_or, shl, shr, gt };
+/// A WebAssembly 1.0 SIMD operation whose result lanes have the kind of its
+/// operands' lanes, each computed from the same lane of each operand.
+const SimdV1LaneOp = enum {
+    splat,
+    add,
+    sub,
+    mul,
+    add_sat,
+    sub_sat,
+    neg,
+    abs,
+    min,
+    max,
+    abs_diff,
+    avg_rounded,
+    mul_high,
+    mul_q15_sat,
+    bitwise_and,
+    bitwise_or,
+    bitwise_xor,
+    bitwise_not,
+    eq,
+    gt,
+    gte,
+    shl,
+    shr,
+    shr_zf,
+
+    fn operandCount(op: SimdV1LaneOp) u2 {
+        return switch (op) {
+            .splat => 0,
+            .neg, .abs, .bitwise_not, .shl, .shr, .shr_zf => 1,
+            else => 2,
+        };
+    }
+};
+
+fn simdV1ValType(kind: layout.Vector) ValType {
+    return if (wasmSimdLaneBytes(kind) == 8) .i64 else .i32;
+}
+
+/// Push lane `lane` of the vector at `ptr`, extended to its value type by its
+/// kind's signedness when `signed`, and by zeros otherwise.
+fn emitSimdV1LoadLane(self: *Self, ptr: u32, kind: layout.Vector, lane: usize, signed: bool) Allocator.Error!void {
+    const width = wasmSimdLaneBytes(kind);
+    try self.emitLocalGet(ptr);
+    try self.emitLoadOpSized(simdV1ValType(kind), width, @intCast(lane * width));
+    if (signed and width < 4) try self.emitSignExtendI32(@intCast(kind.laneBits()));
+}
+
+/// Clamp the i32 in `value` to `[lo, hi]`, leaving the result on the stack.
+fn emitSimdV1ClampI32(self: *Self, value: u32, lo: i32, hi: i32) Allocator.Error!void {
+    try self.emitI32Const(hi);
+    try self.emitLocalGet(value);
+    try self.emitLocalGet(value);
+    try self.emitI32Const(hi);
+    try self.emitOps(.{ Op.i32_gt_s, Op.select });
+    try self.emitLocalSet(value);
+    try self.emitI32Const(lo);
+    try self.emitLocalGet(value);
+    try self.emitLocalGet(value);
+    try self.emitI32Const(lo);
+    try self.emitOps(.{ Op.i32_lt_s, Op.select });
+}
+
+fn simdV1LaneMin(kind: layout.Vector) i32 {
+    if (!kind.isSigned()) return 0;
+    return -(@as(i32, 1) << @intCast(kind.laneBits() - 1));
+}
+
+fn simdV1LaneMax(kind: layout.Vector) i32 {
+    if (!kind.isSigned()) return (@as(i32, 1) << @intCast(kind.laneBits())) - 1;
+    return (@as(i32, 1) << @intCast(kind.laneBits() - 1)) - 1;
+}
 
 fn emitSimdV1LaneOp(self: *Self, args: anytype, kind: layout.Vector, op: SimdV1LaneOp) Allocator.Error!void {
-    const result = try self.allocSimdV1Result();
     const width = wasmSimdLaneBytes(kind);
-    const vt: ValType = if (width == 8) .i64 else .i32;
-    for (0..kind.laneCount()) |lane| {
-        try self.emitLocalGet(result);
-        if (op == .splat) {
+    const vt = simdV1ValType(kind);
+    const wide = vt == .i64;
+    const signed = kind.isSigned() and op != .shr_zf;
+    const operands = op.operandCount();
+    const a: u32 = if (operands >= 1) try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32) else undefined;
+    const b: u32 = if (operands == 2) try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32) else undefined;
+    const scalar: u32 = switch (op) {
+        .splat => scalar: {
             try self.emitProcLocal(GuardedList.at(args, 0));
             try self.emitConversion(try self.procLocalValType(GuardedList.at(args, 0)), vt);
-        } else {
-            const signed = kind.isSigned() and (op == .shr or op == .gt);
-            try self.emitSimdV1Lane(GuardedList.at(args, 0), kind, @intCast(lane), signed);
-            if (op == .shl or op == .shr) {
-                try self.emitProcLocal(GuardedList.at(args, 1));
-                try self.emitConversion(try self.procLocalValType(GuardedList.at(args, 1)), .i32);
-                try self.emitI32Const(@intCast(kind.laneBits() - 1));
-                self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-                try self.emitConversion(.i32, vt);
-            } else {
-                try self.emitSimdV1Lane(GuardedList.at(args, 1), kind, @intCast(lane), signed);
-            }
-            const opcode: u8 = switch (op) {
-                .splat => unreachable,
-                .bitwise_and => if (vt == .i64) Op.i64_and else Op.i32_and,
-                .bitwise_or => if (vt == .i64) Op.i64_or else Op.i32_or,
-                .shl => if (vt == .i64) Op.i64_shl else Op.i32_shl,
-                .shr => if (vt == .i64) (if (signed) Op.i64_shr_s else Op.i64_shr_u) else (if (signed) Op.i32_shr_s else Op.i32_shr_u),
-                .gt => if (vt == .i64) (if (signed) Op.i64_gt_s else Op.i64_gt_u) else (if (signed) Op.i32_gt_s else Op.i32_gt_u),
-            };
-            self.currentCode().append(self.allocator, opcode) catch return error.OutOfMemory;
-            if (op == .gt) {
-                // A true SIMD comparison fills every bit of its lane.
-                try self.emitConversion(.i32, vt);
-                if (vt == .i64) try self.emitI64Const(-1) else try self.emitI32Const(-1);
-                self.currentCode().append(self.allocator, if (vt == .i64) Op.i64_mul else Op.i32_mul) catch return error.OutOfMemory;
-            }
+            break :scalar try self.emitSetNewLocal(vt);
+        },
+        // The count is taken modulo the lane width, as wasm's vector shifts do.
+        .shl, .shr, .shr_zf => scalar: {
+            try self.emitProcLocal(GuardedList.at(args, 1));
+            try self.emitConversion(try self.procLocalValType(GuardedList.at(args, 1)), .i32);
+            try self.emitI32Const(@intCast(kind.laneBits() - 1));
+            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
+            try self.emitConversion(.i32, vt);
+            break :scalar try self.emitSetNewLocal(vt);
+        },
+        else => undefined,
+    };
+    const ta, const tb = try self.allocAnonymousLocals(vt, 2);
+    const result = try self.allocSimdV1Result();
+    for (0..kind.laneCount()) |lane| {
+        try self.emitLocalGet(result);
+        if (operands >= 1) {
+            try self.emitSimdV1LoadLane(a, kind, lane, signed);
+            try self.emitLocalSet(ta);
+        }
+        if (operands == 2) {
+            try self.emitSimdV1LoadLane(b, kind, lane, signed);
+            try self.emitLocalSet(tb);
+        }
+        const lt: u8 = if (wide) (if (signed) Op.i64_lt_s else Op.i64_lt_u) else (if (signed) Op.i32_lt_s else Op.i32_lt_u);
+        const gt: u8 = if (wide) (if (signed) Op.i64_gt_s else Op.i64_gt_u) else (if (signed) Op.i32_gt_s else Op.i32_gt_u);
+        const ge: u8 = if (wide) (if (signed) Op.i64_ge_s else Op.i64_ge_u) else (if (signed) Op.i32_ge_s else Op.i32_ge_u);
+        const add: u8 = if (wide) Op.i64_add else Op.i32_add;
+        const sub: u8 = if (wide) Op.i64_sub else Op.i32_sub;
+        const mul: u8 = if (wide) Op.i64_mul else Op.i32_mul;
+        switch (op) {
+            .splat => try self.emitLocalGet(scalar),
+            .add, .sub, .mul, .bitwise_and, .bitwise_or, .bitwise_xor => {
+                try self.emitLocalGets(.{ ta, tb });
+                self.currentCode().append(self.allocator, switch (op) {
+                    .add => add,
+                    .sub => sub,
+                    .mul => mul,
+                    .bitwise_and => if (wide) Op.i64_and else Op.i32_and,
+                    .bitwise_or => if (wide) Op.i64_or else Op.i32_or,
+                    .bitwise_xor => if (wide) Op.i64_xor else Op.i32_xor,
+                    else => unreachable,
+                }) catch return error.OutOfMemory;
+            },
+            // Lanes of eight and sixteen bits only, so the exact sum fits.
+            .add_sat, .sub_sat => {
+                try self.emitLocalGets(.{ ta, tb });
+                self.currentCode().append(self.allocator, if (op == .add_sat) Op.i32_add else Op.i32_sub) catch return error.OutOfMemory;
+                try self.emitLocalSet(ta);
+                try self.emitSimdV1ClampI32(ta, simdV1LaneMin(kind), simdV1LaneMax(kind));
+            },
+            .neg => {
+                if (wide) try self.emitI64Const(0) else try self.emitI32Const(0);
+                try self.emitLocalGet(ta);
+                self.currentCode().append(self.allocator, sub) catch return error.OutOfMemory;
+            },
+            .abs => {
+                if (wide) try self.emitI64Const(0) else try self.emitI32Const(0);
+                try self.emitLocalGet(ta);
+                self.currentCode().append(self.allocator, sub) catch return error.OutOfMemory;
+                try self.emitLocalGet(ta);
+                try self.emitLocalGet(ta);
+                if (wide) try self.emitI64Const(0) else try self.emitI32Const(0);
+                try self.emitOps(.{ lt, Op.select });
+            },
+            .min, .max => {
+                try self.emitLocalGets(.{ ta, tb, ta, tb });
+                try self.emitOps(.{ if (op == .min) lt else gt, Op.select });
+            },
+            .abs_diff => {
+                try self.emitLocalGets(.{ ta, tb });
+                self.currentCode().append(self.allocator, sub) catch return error.OutOfMemory;
+                try self.emitLocalGets(.{ tb, ta });
+                self.currentCode().append(self.allocator, sub) catch return error.OutOfMemory;
+                try self.emitLocalGets(.{ ta, tb });
+                try self.emitOps(.{ gt, Op.select });
+            },
+            // Unsigned lanes of eight and sixteen bits.
+            .avg_rounded => {
+                try self.emitLocalGets(.{ ta, tb });
+                self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                try self.emitI32Const(1);
+                self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                try self.emitI32Const(1);
+                self.currentCode().append(self.allocator, Op.i32_shr_u) catch return error.OutOfMemory;
+            },
+            // Sixteen-bit lanes: the exact product fits in thirty-two bits.
+            .mul_high => {
+                try self.emitLocalGets(.{ ta, tb });
+                self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
+                try self.emitI32Const(16);
+                self.currentCode().append(self.allocator, if (signed) Op.i32_shr_s else Op.i32_shr_u) catch return error.OutOfMemory;
+            },
+            .mul_q15_sat => {
+                try self.emitLocalGets(.{ ta, tb });
+                self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
+                try self.emitI32Const(0x4000);
+                self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+                try self.emitI32Const(15);
+                self.currentCode().append(self.allocator, Op.i32_shr_s) catch return error.OutOfMemory;
+                try self.emitLocalSet(ta);
+                try self.emitSimdV1ClampI32(ta, simdV1LaneMin(kind), simdV1LaneMax(kind));
+            },
+            .bitwise_not => {
+                try self.emitLocalGet(ta);
+                if (wide) try self.emitI64Const(-1) else try self.emitI32Const(-1);
+                self.currentCode().append(self.allocator, if (wide) Op.i64_xor else Op.i32_xor) catch return error.OutOfMemory;
+            },
+            // A true comparison fills every bit of its lane.
+            .eq, .gt, .gte => {
+                if (wide) try self.emitI64Const(0) else try self.emitI32Const(0);
+                try self.emitLocalGets(.{ ta, tb });
+                self.currentCode().append(self.allocator, switch (op) {
+                    .eq => if (wide) Op.i64_eq else Op.i32_eq,
+                    .gt => gt,
+                    .gte => ge,
+                    else => unreachable,
+                }) catch return error.OutOfMemory;
+                if (wide) self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
+                self.currentCode().append(self.allocator, sub) catch return error.OutOfMemory;
+            },
+            .shl, .shr, .shr_zf => {
+                try self.emitLocalGets(.{ ta, scalar });
+                self.currentCode().append(self.allocator, switch (op) {
+                    .shl => if (wide) Op.i64_shl else Op.i32_shl,
+                    .shr => if (wide) (if (signed) Op.i64_shr_s else Op.i64_shr_u) else (if (signed) Op.i32_shr_s else Op.i32_shr_u),
+                    .shr_zf => if (wide) Op.i64_shr_u else Op.i32_shr_u,
+                    else => unreachable,
+                }) catch return error.OutOfMemory;
+            },
         }
         try self.emitStoreOpSized(vt, width, @intCast(lane * width));
     }
     try self.emitLocalGet(result);
+}
+
+/// Each result lane of `dst` is lane `index(lane)` of `src` from the vector at
+/// `ptr`, extended by `src`'s signedness to `dst`'s width.
+fn emitSimdV1Extended(self: *Self, ptr: u32, src: layout.Vector, lane: usize, dst_vt: ValType) Allocator.Error!void {
+    try self.emitSimdV1LoadLane(ptr, src, lane, src.isSigned());
+    const src_vt = simdV1ValType(src);
+    if (src_vt == .i32 and dst_vt == .i64) {
+        self.currentCode().append(self.allocator, if (src.isSigned()) Op.i64_extend_i32_s else Op.i64_extend_i32_u) catch return error.OutOfMemory;
+    }
+}
+
+const SimdV1WideningOp = enum { widen_lo, widen_hi, mul_wide_lo, mul_wide_hi, pairwise_add };
+
+/// Operations whose result lanes are twice as wide as their operands'.
+fn emitSimdV1Widening(self: *Self, args: anytype, src: layout.Vector, dst: layout.Vector, op: SimdV1WideningOp) Allocator.Error!void {
+    const dst_width = wasmSimdLaneBytes(dst);
+    const dst_vt = simdV1ValType(dst);
+    const a = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
+    const b: u32 = switch (op) {
+        .mul_wide_lo, .mul_wide_hi => try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32),
+        .widen_lo, .widen_hi, .pairwise_add => undefined,
+    };
+    const first_lane: usize = switch (op) {
+        .widen_hi, .mul_wide_hi => dst.laneCount(),
+        .widen_lo, .mul_wide_lo, .pairwise_add => 0,
+    };
+    const result = try self.allocSimdV1Result();
+    for (0..dst.laneCount()) |lane| {
+        try self.emitLocalGet(result);
+        switch (op) {
+            .widen_lo, .widen_hi => try self.emitSimdV1Extended(a, src, first_lane + lane, dst_vt),
+            .mul_wide_lo, .mul_wide_hi => {
+                try self.emitSimdV1Extended(a, src, first_lane + lane, dst_vt);
+                try self.emitSimdV1Extended(b, src, first_lane + lane, dst_vt);
+                self.currentCode().append(self.allocator, if (dst_vt == .i64) Op.i64_mul else Op.i32_mul) catch return error.OutOfMemory;
+            },
+            .pairwise_add => {
+                try self.emitSimdV1Extended(a, src, 2 * lane, dst_vt);
+                try self.emitSimdV1Extended(a, src, 2 * lane + 1, dst_vt);
+                self.currentCode().append(self.allocator, if (dst_vt == .i64) Op.i64_add else Op.i32_add) catch return error.OutOfMemory;
+            },
+        }
+        try self.emitStoreOpSized(dst_vt, dst_width, @intCast(lane * dst_width));
+    }
+    try self.emitLocalGet(result);
+}
+
+/// `a[2i] * b[2i] + a[2i + 1] * b[2i + 1]` for each result lane: signed
+/// sixteen-bit operands into thirty-two-bit lanes, or unsigned and signed
+/// eight-bit operands into saturated sixteen-bit lanes.
+fn emitSimdV1DotPairs(self: *Self, args: anytype, saturate: bool) Allocator.Error!void {
+    const a = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
+    const b = try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32);
+    const a_kind: layout.Vector = if (saturate) .u8x16 else .i16x8;
+    const b_kind: layout.Vector = if (saturate) .i8x16 else .i16x8;
+    const dst: layout.Vector = if (saturate) .i16x8 else .i32x4;
+    const sum = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const result = try self.allocSimdV1Result();
+    for (0..dst.laneCount()) |lane| {
+        try self.emitLocalGet(result);
+        for (0..2) |pair| {
+            try self.emitSimdV1LoadLane(a, a_kind, 2 * lane + pair, a_kind.isSigned());
+            try self.emitSimdV1LoadLane(b, b_kind, 2 * lane + pair, b_kind.isSigned());
+            self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
+        }
+        self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+        if (saturate) {
+            try self.emitLocalSet(sum);
+            try self.emitSimdV1ClampI32(sum, simdV1LaneMin(dst), simdV1LaneMax(dst));
+        }
+        try self.emitStoreOpSized(.i32, wasmSimdLaneBytes(dst), @intCast(lane * wasmSimdLaneBytes(dst)));
+    }
+    try self.emitLocalGet(result);
+}
+
+/// The sum of absolute byte differences of each eight-byte half, as two
+/// sixty-four-bit lanes.
+fn emitSimdV1Sad(self: *Self, args: anytype) Allocator.Error!void {
+    const a = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
+    const b = try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32);
+    const ta, const tb = try self.allocAnonymousLocals(.i32, 2);
+    const result = try self.allocSimdV1Result();
+    for (0..2) |half| {
+        try self.emitLocalGet(result);
+        try self.emitI32Const(0);
+        for (0..8) |byte| {
+            try self.emitSimdV1LoadLane(a, .u8x16, half * 8 + byte, false);
+            try self.emitLocalSet(ta);
+            try self.emitSimdV1LoadLane(b, .u8x16, half * 8 + byte, false);
+            try self.emitLocalSet(tb);
+            try self.emitLocalGets(.{ ta, tb });
+            self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
+            try self.emitLocalGets(.{ tb, ta });
+            self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
+            try self.emitLocalGets(.{ ta, tb });
+            try self.emitOps(.{ Op.i32_gt_u, Op.select, Op.i32_add });
+        }
+        self.currentCode().append(self.allocator, Op.i64_extend_i32_u) catch return error.OutOfMemory;
+        try self.emitStoreOp(.i64, @intCast(half * 8));
+    }
+    try self.emitLocalGet(result);
+}
+
+/// Each lane rounded-shifted right by a count shared by every lane: zero
+/// leaves it unchanged, the lane width or more clears it, and otherwise half
+/// of the dropped range is added before an arithmetic shift, in a lane twice
+/// as wide so that adding it cannot wrap.
+fn emitSimdV1RoundedShift(self: *Self, args: anytype, kind: layout.Vector) Allocator.Error!void {
+    const a = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
+    try self.emitProcLocal(GuardedList.at(args, 1));
+    try self.emitConversion(try self.procLocalValType(GuardedList.at(args, 1)), .i32);
+    const count = try self.emitSetNewLocal(.i32);
+    const width = wasmSimdLaneBytes(kind);
+    const lane_vt = simdV1ValType(kind);
+    const wide_vt: ValType = if (kind.laneBits() == 32) .i64 else .i32;
+    const result = try self.allocSimdV1Result();
+
+    try self.emitLocalGet(count);
+    self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
+    try self.emitVoidIf();
+    try self.emitMemCopy(result, 0, a, 16);
+    self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+    try self.emitLocalGet(count);
+    try self.emitI32Const(@intCast(kind.laneBits()));
+    self.currentCode().append(self.allocator, Op.i32_ge_u) catch return error.OutOfMemory;
+    try self.emitVoidIf();
+    for ([_]u32{ 0, 8 }) |offset| {
+        try self.emitLocalGet(result);
+        try self.emitI64Const(0);
+        try self.emitStoreOp(.i64, offset);
+    }
+    self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
+    for (0..kind.laneCount()) |lane| {
+        try self.emitLocalGet(result);
+        try self.emitSimdV1LoadLane(a, kind, lane, true);
+        if (wide_vt == .i64) self.currentCode().append(self.allocator, Op.i64_extend_i32_s) catch return error.OutOfMemory;
+        if (wide_vt == .i64) try self.emitI64Const(1) else try self.emitI32Const(1);
+        try self.emitLocalGet(count);
+        try self.emitI32Const(1);
+        self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
+        if (wide_vt == .i64) {
+            try self.emitOps(.{ Op.i64_extend_i32_u, Op.i64_shl, Op.i64_add });
+            try self.emitLocalGet(count);
+            try self.emitOps(.{ Op.i64_extend_i32_u, Op.i64_shr_s, Op.i32_wrap_i64 });
+        } else {
+            try self.emitOps(.{ Op.i32_shl, Op.i32_add });
+            try self.emitLocalGet(count);
+            self.currentCode().append(self.allocator, Op.i32_shr_s) catch return error.OutOfMemory;
+        }
+        try self.emitStoreOpSized(lane_vt, width, @intCast(lane * width));
+    }
+    try self.emitOps(.{ Op.end, Op.end });
+    try self.emitLocalGet(result);
+}
+
+/// Each lane's numeric value clamped to `dst`'s range: lanes of the first
+/// operand, then of the second.
+fn emitSimdV1NarrowSat(self: *Self, args: anytype, src: layout.Vector, dst: layout.Vector) Allocator.Error!void {
+    const a = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
+    const b = try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32);
+    const dst_width = wasmSimdLaneBytes(dst);
+    // A thirty-two-bit source lane's value is compared in sixty-four bits.
+    const wide = src.laneBits() == 32;
+    const value = self.storage.allocAnonymousLocal(if (wide) .i64 else .i32) catch return error.OutOfMemory;
+    const result = try self.allocSimdV1Result();
+    for (0..dst.laneCount()) |lane| {
+        try self.emitLocalGet(result);
+        try self.emitSimdV1Extended(if (lane < src.laneCount()) a else b, src, lane % src.laneCount(), if (wide) .i64 else .i32);
+        try self.emitLocalSet(value);
+        if (wide) {
+            const lo: i64 = simdV1LaneMin(dst);
+            const hi: i64 = simdV1LaneMax(dst);
+            try self.emitI64Const(hi);
+            try self.emitLocalGets(.{ value, value });
+            try self.emitI64Const(hi);
+            try self.emitOps(.{ Op.i64_gt_s, Op.select });
+            try self.emitLocalSet(value);
+            try self.emitI64Const(lo);
+            try self.emitLocalGets(.{ value, value });
+            try self.emitI64Const(lo);
+            try self.emitOps(.{ Op.i64_lt_s, Op.select, Op.i32_wrap_i64 });
+        } else {
+            try self.emitSimdV1ClampI32(value, simdV1LaneMin(dst), simdV1LaneMax(dst));
+        }
+        try self.emitStoreOpSized(.i32, dst_width, @intCast(lane * dst_width));
+    }
+    try self.emitLocalGet(result);
+}
+
+/// The sum of every lane, each extended by the kind's signedness: in
+/// thirty-two bits for lanes of eight and sixteen bits and in sixty-four
+/// bits otherwise.
+fn emitSimdV1Sum(self: *Self, args: anytype, kind: layout.Vector) Allocator.Error!void {
+    const a = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
+    const vt: ValType = if (kind.laneBits() >= 32) .i64 else .i32;
+    for (0..kind.laneCount()) |lane| {
+        try self.emitSimdV1Extended(a, kind, lane, vt);
+        if (lane != 0) self.currentCode().append(self.allocator, if (vt == .i64) Op.i64_add else Op.i32_add) catch return error.OutOfMemory;
+    }
+}
+
+/// Byte `i` of the result is byte `indices[i]` of the thirty-two bytes of
+/// the first operand followed by the second.
+fn emitSimdV1Shuffle(self: *Self, first: ProcLocalId, second: ProcLocalId, indices: [16]u8) Allocator.Error!void {
+    const a = try self.emitProcLocalToNewLocal(first, .i32);
+    const b = try self.emitProcLocalToNewLocal(second, .i32);
+    const result = try self.allocSimdV1Result();
+    for (indices, 0..) |index, byte| {
+        try self.emitLocalGet(result);
+        try self.emitLocalGet(if (index < 16) a else b);
+        try self.emitLoadOpSized(.i32, 1, index % 16);
+        try self.emitStoreOpSized(.i32, 1, @intCast(byte));
+    }
+    try self.emitLocalGet(result);
+}
+
+/// Byte `i` of the result is the table's byte at the index in byte `i` of
+/// the second operand, or zero for an index past the table.
+fn emitSimdV1TableLookup(self: *Self, args: anytype) Allocator.Error!void {
+    const table = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
+    const indices = try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32);
+    const index = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+    const result = try self.allocSimdV1Result();
+    for (0..16) |byte| {
+        try self.emitLocalGet(indices);
+        try self.emitLoadOpSized(.i32, 1, @intCast(byte));
+        try self.emitLocalSet(index);
+        try self.emitLocalGet(result);
+        try self.emitLocalGet(table);
+        try self.emitLocalGet(index);
+        try self.emitI32Const(15);
+        try self.emitOps(.{ Op.i32_and, Op.i32_add });
+        try self.emitLoadOpSized(.i32, 1, 0);
+        try self.emitI32Const(0);
+        try self.emitLocalGet(index);
+        try self.emitI32Const(16);
+        try self.emitOps(.{ Op.i32_lt_u, Op.select });
+        try self.emitStoreOpSized(.i32, 1, @intCast(byte));
+    }
+    try self.emitLocalGet(result);
+}
+
+/// Bytes `n` through `n + 15` of the first operand followed by the second.
+fn emitSimdV1ConcatShift(self: *Self, args: anytype) Allocator.Error!void {
+    const a = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
+    const b = try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32);
+    const scratch = try self.emitFpOffsetToNewLocal(try self.allocStackMemory(32, 16));
+    try self.emitMemCopy(scratch, 0, a, 16);
+    try self.emitMemCopy(scratch, 16, b, 16);
+    try self.emitLocalGet(scratch);
+    try self.emitProcLocal(GuardedList.at(args, 2));
+    try self.emitConversion(try self.procLocalValType(GuardedList.at(args, 2)), .i32);
+    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+    const source = try self.emitSetNewLocal(.i32);
+    const result = try self.allocSimdV1Result();
+    try self.emitMemCopy(result, 0, source, 16);
+    try self.emitLocalGet(result);
+}
+
+/// The mask selects, bit by bit, between the second operand (set) and the
+/// third (clear).
+fn emitSimdV1BitSelect(self: *Self, args: anytype) Allocator.Error!void {
+    const mask = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
+    const if_set = try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32);
+    const if_clear = try self.emitProcLocalToNewLocal(GuardedList.at(args, 2), .i32);
+    const result = try self.allocSimdV1Result();
+    for ([_]u32{ 0, 8 }) |offset| {
+        try self.emitLocalGet(result);
+        try self.emitLoadAt(if_set, .i64, offset);
+        try self.emitLoadAt(mask, .i64, offset);
+        self.currentCode().append(self.allocator, Op.i64_and) catch return error.OutOfMemory;
+        try self.emitLoadAt(if_clear, .i64, offset);
+        try self.emitLoadAt(mask, .i64, offset);
+        try self.emitI64Const(-1);
+        try self.emitOps(.{ Op.i64_xor, Op.i64_and, Op.i64_or });
+        try self.emitStoreOp(.i64, offset);
+    }
+    try self.emitLocalGet(result);
+}
+
+/// The address of lane `index` of a vector.
+fn emitSimdV1LaneAddress(self: *Self, index_arg: ProcLocalId, kind: layout.Vector, vector_ptr: u32) Allocator.Error!void {
+    try self.emitLocalGet(vector_ptr);
+    try self.emitProcLocal(index_arg);
+    try self.emitConversion(try self.procLocalValType(index_arg), .i32);
+    const lane_bytes = wasmSimdLaneBytes(kind);
+    if (lane_bytes != 1) {
+        try self.emitI32Const(@intCast(lane_bytes));
+        self.currentCode().append(self.allocator, Op.i32_mul) catch return error.OutOfMemory;
+    }
+    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+}
+
+fn emitSimdV1GetLane(self: *Self, args: anytype, kind: layout.Vector, ret_layout: layout.Idx) Allocator.Error!void {
+    const vector = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
+    try self.emitSimdV1LaneAddress(GuardedList.at(args, 1), kind, vector);
+    try self.emitLoadOpSized(simdV1ValType(kind), wasmSimdLaneBytes(kind), 0);
+    try self.emitCanonicalizeScalarForLayout(ret_layout);
+}
+
+fn emitSimdV1WithLane(self: *Self, args: anytype, kind: layout.Vector) Allocator.Error!void {
+    const source = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
+    const result = try self.allocSimdV1Result();
+    try self.emitMemCopy(result, 0, source, 16);
+    try self.emitSimdV1LaneAddress(GuardedList.at(args, 1), kind, result);
+    const vt = simdV1ValType(kind);
+    try self.emitProcLocal(GuardedList.at(args, 2));
+    try self.emitConversion(try self.procLocalValType(GuardedList.at(args, 2)), vt);
+    try self.emitStoreOpSized(vt, wasmSimdLaneBytes(kind), 0);
+    try self.emitLocalGet(result);
+}
+
+/// A fresh copy of a value's sixteen bytes: the bit casts between a vector
+/// and a 128-bit integer, both of which are stored in memory.
+fn emitSimdV1Copy(self: *Self, arg: ProcLocalId) Allocator.Error!void {
+    const source = try self.emitProcLocalToNewLocal(arg, .i32);
+    const result = try self.allocSimdV1Result();
+    try self.emitMemCopy(result, 0, source, 16);
+    try self.emitLocalGet(result);
+}
+
+/// Lower a SIMD operation for WebAssembly 1.0, which has no vector
+/// instructions: a vector is a pointer to its sixteen bytes of lane storage,
+/// and each operation is scalar code over its lanes.
+fn emitSimdLowLevelV1(self: *Self, op: SimdLowLevel, ll: anytype, args: anytype, arg_kind: layout.Vector, ret_kind: layout.Vector) Allocator.Error!void {
+    switch (op) {
+        .simd_load_16_unchecked => try self.emitSimdLoad16(args),
+        .simd_store_16_unchecked => try self.emitSimdStore16(args, ll.unique_args),
+        .simd_append_16 => try self.emitSimdAppend16(args, ll.unique_args),
+        .simd_splat => try self.emitSimdV1LaneOp(args, ret_kind, .splat),
+        .simd_get_lane_unchecked => try self.emitSimdV1GetLane(args, arg_kind, ll.ret_layout),
+        .simd_with_lane_unchecked => try self.emitSimdV1WithLane(args, arg_kind),
+        .simd_to_u128_bits, .simd_from_u128_bits => try self.emitSimdV1Copy(GuardedList.at(args, 0)),
+        .simd_add_wrap => try self.emitSimdV1LaneOp(args, arg_kind, .add),
+        .simd_sub_wrap => try self.emitSimdV1LaneOp(args, arg_kind, .sub),
+        .simd_add_sat => try self.emitSimdV1LaneOp(args, arg_kind, .add_sat),
+        .simd_sub_sat => try self.emitSimdV1LaneOp(args, arg_kind, .sub_sat),
+        .simd_neg_wrap => try self.emitSimdV1LaneOp(args, arg_kind, .neg),
+        .simd_abs_wrap => try self.emitSimdV1LaneOp(args, arg_kind, .abs),
+        .simd_min => try self.emitSimdV1LaneOp(args, arg_kind, .min),
+        .simd_max => try self.emitSimdV1LaneOp(args, arg_kind, .max),
+        .simd_abs_diff => try self.emitSimdV1LaneOp(args, arg_kind, .abs_diff),
+        .simd_avg_rounded => try self.emitSimdV1LaneOp(args, arg_kind, .avg_rounded),
+        .simd_mul_wrap => try self.emitSimdV1LaneOp(args, arg_kind, .mul),
+        .simd_mul_high => try self.emitSimdV1LaneOp(args, arg_kind, .mul_high),
+        .simd_mul_q15_sat => try self.emitSimdV1LaneOp(args, arg_kind, .mul_q15_sat),
+        .simd_mul_wide_lo => try self.emitSimdV1Widening(args, arg_kind, ret_kind, .mul_wide_lo),
+        .simd_mul_wide_hi => try self.emitSimdV1Widening(args, arg_kind, ret_kind, .mul_wide_hi),
+        .simd_dot_pairs => try self.emitSimdV1DotPairs(args, false),
+        .simd_dot_pairs_sat => try self.emitSimdV1DotPairs(args, true),
+        .simd_sad => try self.emitSimdV1Sad(args),
+        .simd_and => try self.emitSimdV1LaneOp(args, arg_kind, .bitwise_and),
+        .simd_or => try self.emitSimdV1LaneOp(args, arg_kind, .bitwise_or),
+        .simd_xor => try self.emitSimdV1LaneOp(args, arg_kind, .bitwise_xor),
+        .simd_not => try self.emitSimdV1LaneOp(args, arg_kind, .bitwise_not),
+        .simd_bit_select => try self.emitSimdV1BitSelect(args),
+        .simd_eq_lanes => try self.emitSimdV1LaneOp(args, arg_kind, .eq),
+        .simd_gt_lanes => try self.emitSimdV1LaneOp(args, arg_kind, .gt),
+        .simd_gte_lanes => try self.emitSimdV1LaneOp(args, arg_kind, .gte),
+        .simd_bitmask => try self.emitSimdV1Bitmask(GuardedList.at(args, 0), arg_kind),
+        .simd_shl_wrap => try self.emitSimdV1LaneOp(args, arg_kind, .shl),
+        .simd_shr_wrap => try self.emitSimdV1LaneOp(args, arg_kind, .shr),
+        .simd_shr_zf_wrap => try self.emitSimdV1LaneOp(args, arg_kind, .shr_zf),
+        .simd_shr_rounded => try self.emitSimdV1RoundedShift(args, arg_kind),
+        .simd_interleave_lo => try self.emitSimdV1Shuffle(GuardedList.at(args, 0), GuardedList.at(args, 1), simdShuffleIndices(arg_kind, .interleave_lo)),
+        .simd_interleave_hi => try self.emitSimdV1Shuffle(GuardedList.at(args, 0), GuardedList.at(args, 1), simdShuffleIndices(arg_kind, .interleave_hi)),
+        .simd_even_lanes => try self.emitSimdV1Shuffle(GuardedList.at(args, 0), GuardedList.at(args, 1), simdShuffleIndices(arg_kind, .even)),
+        .simd_odd_lanes => try self.emitSimdV1Shuffle(GuardedList.at(args, 0), GuardedList.at(args, 1), simdShuffleIndices(arg_kind, .odd)),
+        .simd_reverse_lanes => try self.emitSimdV1Shuffle(GuardedList.at(args, 0), GuardedList.at(args, 0), simdShuffleIndices(arg_kind, .reverse)),
+        .simd_table_lookup => try self.emitSimdV1TableLookup(args),
+        .simd_concat_shift_bytes => try self.emitSimdV1ConcatShift(args),
+        .simd_widen_lo => try self.emitSimdV1Widening(args, arg_kind, ret_kind, .widen_lo),
+        .simd_widen_hi => try self.emitSimdV1Widening(args, arg_kind, ret_kind, .widen_hi),
+        .simd_pairwise_add_widen => try self.emitSimdV1Widening(args, arg_kind, ret_kind, .pairwise_add),
+        .simd_narrow_wrap => try self.emitSimdNarrowWrap(args, arg_kind, ret_kind),
+        .simd_narrow_sat => try self.emitSimdV1NarrowSat(args, arg_kind, ret_kind),
+        .simd_sum_lanes, .simd_sum_lanes_wrap => try self.emitSimdV1Sum(args, arg_kind),
+        .simd_clmul_lo, .simd_clmul_hi => try self.emitSimdClmul(args, op == .simd_clmul_hi),
+    }
 }
 
 fn emitSimdV1Bitmask(self: *Self, arg: ProcLocalId, kind: layout.Vector) Allocator.Error!void {
@@ -14246,7 +14820,8 @@ fn emitNumFromLeBytes(self: *Self, ll: anytype, args: anytype) Allocator.Error!v
     const result_ptr = if (width > 8) blk: {
         const result_offset = try self.allocStackMemory(16, 16);
         const ptr = try self.emitFpOffsetToNewLocal(result_offset);
-        try self.emitLocalGet(ptr);
+        // The store below takes the destination before the value.
+        if (self.cpu_level != .v1) try self.emitLocalGet(ptr);
         break :blk ptr;
     } else null;
 
@@ -14258,8 +14833,13 @@ fn emitNumFromLeBytes(self: *Self, ll: anytype, args: anytype) Allocator.Error!v
     self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
 
     if (result_ptr) |ptr| {
-        try self.emitV128Load(0, 0);
-        try self.emitStoreOp(.v128, 0);
+        if (self.cpu_level == .v1) {
+            const source = try self.emitSetNewLocal(.i32);
+            try self.emitMemCopy(ptr, 0, source, 16);
+        } else {
+            try self.emitV128Load(0, 0);
+            try self.emitStoreOp(.v128, 0);
+        }
         try self.emitLocalGet(ptr);
     } else {
         try self.emitLoadOpForLayout(ll.ret_layout, 0);
@@ -14285,13 +14865,13 @@ fn emitSimdLowLevel(self: *Self, op: SimdLowLevel, ll: anytype, args: anytype) A
     const ret_vector = if (ret_lay.tag == .scalar and ret_lay.getScalar().tag == .vector) ret_lay.getScalar().getVector() else null;
     const arg_kind = wasmSimdArgKind(self, args) orelse ret_vector orelse unreachable;
     const ret_kind = ret_vector orelse arg_kind;
+    if (self.cpu_level == .v1) return self.emitSimdLowLevelV1(op, ll, args, arg_kind, ret_kind);
 
     switch (op) {
         .simd_load_16_unchecked => try self.emitSimdLoad16(args),
         .simd_store_16_unchecked => try self.emitSimdStore16(args, ll.unique_args),
         .simd_append_16 => try self.emitSimdAppend16(args, ll.unique_args),
         .simd_splat => {
-            if (self.cpu_level == .v1) return self.emitSimdV1LaneOp(args, ret_kind, .splat);
             try self.emitProcLocal(GuardedList.at(args, 0));
             try self.emitSimdOp(wasmSimdSplatOpcode(ret_kind));
         },
@@ -14351,12 +14931,10 @@ fn emitSimdLowLevel(self: *Self, op: SimdLowLevel, ll: anytype, args: anytype) A
         .simd_dot_pairs_sat => try self.emitSimdDotPairsSat(args),
         .simd_sad => try self.emitSimdSad(args),
         .simd_and => {
-            if (self.cpu_level == .v1) return self.emitSimdV1LaneOp(args, arg_kind, .bitwise_and);
             try self.emitSimdBinaryArgs(args);
             try self.emitSimdOp(Op.v128_and);
         },
         .simd_or => {
-            if (self.cpu_level == .v1) return self.emitSimdV1LaneOp(args, arg_kind, .bitwise_or);
             try self.emitSimdBinaryArgs(args);
             try self.emitSimdOp(Op.v128_or);
         },
@@ -14380,7 +14958,6 @@ fn emitSimdLowLevel(self: *Self, op: SimdLowLevel, ll: anytype, args: anytype) A
             try self.emitSimdOp(wasmSimdCompareOpcode(arg_kind, .eq_lanes));
         },
         .simd_gt_lanes => {
-            if (self.cpu_level == .v1) return self.emitSimdV1LaneOp(args, arg_kind, .gt);
             try self.emitSimdBinaryArgs(args);
             try self.emitSimdOp(wasmSimdCompareOpcode(arg_kind, .gt_lanes));
         },
@@ -14389,17 +14966,14 @@ fn emitSimdLowLevel(self: *Self, op: SimdLowLevel, ll: anytype, args: anytype) A
             try self.emitSimdOp(wasmSimdCompareOpcode(arg_kind, .gte_lanes));
         },
         .simd_bitmask => {
-            if (self.cpu_level == .v1) return self.emitSimdV1Bitmask(GuardedList.at(args, 0), arg_kind);
             try self.emitProcLocal(GuardedList.at(args, 0));
             try self.emitSimdOp(wasmSimdBitmaskOpcode(arg_kind));
         },
         .simd_shl_wrap => {
-            if (self.cpu_level == .v1) return self.emitSimdV1LaneOp(args, arg_kind, .shl);
             try self.emitSimdBinaryArgs(args);
             try self.emitSimdOp(wasmSimdShiftOpcode(arg_kind, .shl_wrap));
         },
         .simd_shr_wrap => {
-            if (self.cpu_level == .v1) return self.emitSimdV1LaneOp(args, arg_kind, .shr);
             try self.emitSimdBinaryArgs(args);
             try self.emitSimdOp(wasmSimdShiftOpcode(arg_kind, .shr_wrap));
         },
@@ -14690,12 +15264,19 @@ fn emitSimdSum(self: *Self, args: anytype, kind: layout.Vector) Allocator.Error!
 fn emitSimdClmul(self: *Self, args: anytype, high_lane: bool) Allocator.Error!void {
     const input_offset = try self.allocStackMemory(32, 16);
     const input = try self.emitFpOffsetToNewLocal(input_offset);
-    try self.emitLocalGet(input);
-    try self.emitProcLocal(GuardedList.at(args, 0));
-    try self.emitStoreOp(.v128, 0);
-    try self.emitLocalGet(input);
-    try self.emitProcLocal(GuardedList.at(args, 1));
-    try self.emitStoreOp(.v128, 16);
+    if (self.cpu_level == .v1) {
+        for (0..2) |operand| {
+            const source = try self.emitProcLocalToNewLocal(GuardedList.at(args, operand), .i32);
+            try self.emitMemCopy(input, @intCast(operand * 16), source, 16);
+        }
+    } else {
+        try self.emitLocalGet(input);
+        try self.emitProcLocal(GuardedList.at(args, 0));
+        try self.emitStoreOp(.v128, 0);
+        try self.emitLocalGet(input);
+        try self.emitProcLocal(GuardedList.at(args, 1));
+        try self.emitStoreOp(.v128, 16);
+    }
 
     const x_lo, const x_hi, const y, const out_lo, const out_hi = try self.allocAnonymousLocals(.i64, 5);
     const count = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
@@ -14754,7 +15335,8 @@ fn emitSimdClmul(self: *Self, args: anytype, high_lane: bool) Allocator.Error!vo
     try self.emitLocalGets(.{ input, out_hi });
     try self.emitStoreOp(.i64, 8);
     try self.emitLocalGet(input);
-    try self.emitV128Load(4, 0);
+    // A WebAssembly 1.0 vector is the address of its lanes.
+    if (self.cpu_level != .v1) try self.emitV128Load(4, 0);
 }
 
 fn emitStrMatchSourceShape(self: *Self, source: ProcLocalId) Allocator.Error!StrMatchSourceShape {
@@ -14910,46 +15492,50 @@ fn emitStrMatchFindDelimiter(
         try self.emitLocalGet(cursor);
         try self.emitLocalSet(pos);
 
-        const simd_width = 16;
-        const mask = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
+        // Sixteen bytes at a time where vector instructions exist; WebAssembly
+        // 1.0 searches byte by byte below.
+        if (self.cpu_level != .v1) {
+            const simd_width = 16;
+            const mask = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
 
-        try self.emitVoidBlock();
-        try self.emitVoidLoop();
+            try self.emitVoidBlock();
+            try self.emitVoidLoop();
 
-        try self.emitLocalGets(.{ search_limit, pos });
-        self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
-        try self.emitI32Const(simd_width);
-        self.currentCode().append(self.allocator, Op.i32_lt_u) catch return error.OutOfMemory;
-        try self.emitBrIf(1);
+            try self.emitLocalGets(.{ search_limit, pos });
+            self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
+            try self.emitI32Const(simd_width);
+            self.currentCode().append(self.allocator, Op.i32_lt_u) catch return error.OutOfMemory;
+            try self.emitBrIf(1);
 
-        try self.emitLocalGets(.{ source_bytes, pos });
-        self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-        try self.emitV128Load(0, 0);
-        try self.emitI32Const(@intCast(delimiter[0]));
-        try self.emitSimdOp(Op.i8x16_splat);
-        try self.emitSimdOp(Op.i8x16_eq);
-        try self.emitSimdOp(Op.i8x16_bitmask);
-        try self.emitLocalSet(mask);
+            try self.emitLocalGets(.{ source_bytes, pos });
+            self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+            try self.emitV128Load(0, 0);
+            try self.emitI32Const(@intCast(delimiter[0]));
+            try self.emitSimdOp(Op.i8x16_splat);
+            try self.emitSimdOp(Op.i8x16_eq);
+            try self.emitSimdOp(Op.i8x16_bitmask);
+            try self.emitLocalSet(mask);
 
-        try self.emitLocalGet(mask);
-        try self.emitVoidIf();
-        {
-            try self.emitSetI32Local(found, 1);
-            try self.emitLocalGets(.{ pos, mask });
-            try self.emitOps(.{ Op.i32_ctz, Op.i32_add });
-            try self.emitLocalSet(found_pos);
-            try self.emitBr(2);
+            try self.emitLocalGet(mask);
+            try self.emitVoidIf();
+            {
+                try self.emitSetI32Local(found, 1);
+                try self.emitLocalGets(.{ pos, mask });
+                try self.emitOps(.{ Op.i32_ctz, Op.i32_add });
+                try self.emitLocalSet(found_pos);
+                try self.emitBr(2);
+            }
+            self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
+
+            try self.emitLocalGet(pos);
+            try self.emitI32Const(simd_width);
+            self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
+            try self.emitLocalSet(pos);
+
+            try self.emitBr(0);
+
+            try self.emitOps(.{ Op.end, Op.end });
         }
-        self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
-
-        try self.emitLocalGet(pos);
-        try self.emitI32Const(simd_width);
-        self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-        try self.emitLocalSet(pos);
-
-        try self.emitBr(0);
-
-        try self.emitOps(.{ Op.end, Op.end });
 
         try self.emitLocalGet(found);
         self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;

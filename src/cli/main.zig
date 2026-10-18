@@ -685,11 +685,13 @@ const EmbeddedTargetObjects = struct {
 
     /// The embedded objects for `requested`.
     ///
-    /// A `v1` target uses its default twin's objects. The cross-compile target
-    /// queries in `build.zig` name no CPU model, so Zig resolves them to the
-    /// architecture baseline and these objects already contain no instruction
-    /// above it. `assertCrossTargetsAreBaseline` in `build.zig` keeps that true.
+    /// A `v1` target other than wasm32v1 uses its default twin's objects. The
+    /// cross-compile target queries in `build.zig` name no CPU model, so Zig
+    /// resolves them to the architecture baseline, which for x86-64 and
+    /// AArch64 is the v1 floor. Zig's wasm baseline includes extensions past
+    /// WebAssembly 1.0, so wasm32v1 has objects of its own, built for it.
     fn forTarget(requested: RocTarget) EmbeddedTargetObjects {
+        if (requested == .wasm32v1) return comptime cross(.wasm32v1, .none);
         return switch (requested.defaultCpuTarget()) {
             inline .x64musl,
             .arm64musl,
@@ -738,11 +740,19 @@ const EmbeddedTargetObjects = struct {
     }
 };
 
-/// Compiler implementation support for wasm32. This object is composed into
-/// the Roc-owned object and localized before any platform input participates
-/// in symbol resolution; it is never linked as a public archive member.
+/// Compiler implementation support for a wasm target. This object is
+/// composed into the Roc-owned object and localized before any platform input
+/// participates in symbol resolution; it is never linked as a public archive
+/// member.
 const WasmCompilerRtObject = struct {
-    const bytes = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/wasm32/roc_compiler_rt.o");
+    fn forTarget(target: RocTarget) []const u8 {
+        if (builtin.is_test) return &[_]u8{};
+        return switch (target) {
+            .wasm32 => @import("embedded_assets").file("targets/wasm32/roc_compiler_rt.o"),
+            .wasm32v1 => @import("embedded_assets").file("targets/wasm32v1/roc_compiler_rt.o"),
+            else => unreachable,
+        };
+    }
 };
 
 // Workaround for Zig standard library compilation issue on macOS ARM64.
@@ -9833,6 +9843,7 @@ fn mergeBoxySidecarWasm(
 
 fn writeSealedWasmObject(
     ctx: *CliCtx,
+    target: RocTarget,
     artifact_dir: []const u8,
     output_filename: []const u8,
     module: *backend.wasm.WasmModule,
@@ -9846,13 +9857,13 @@ fn writeSealedWasmObject(
     backend.writeFileWindowsAvSafe(ctx.io.std_io, unsealed_path, unsealed_bytes) catch return error.WasmOutputWriteFailed;
 
     const compiler_rt_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_compiler_rt_support.o" });
-    backend.writeFileWindowsAvSafe(ctx.io.std_io, compiler_rt_path, WasmCompilerRtObject.bytes) catch return error.WasmOutputWriteFailed;
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, compiler_rt_path, WasmCompilerRtObject.forTarget(target)) catch return error.WasmOutputWriteFailed;
 
     var compiler_inputs = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 3);
     try compiler_inputs.append(unsealed_path);
     try compiler_inputs.append(compiler_rt_path);
     if (lirResultNeedsBoxyRuntime(lir_result)) {
-        const runtime_bytes = EmbeddedTargetObjects.forTarget(.wasm32).boxy_runtime orelse return error.UnsupportedTarget;
+        const runtime_bytes = EmbeddedTargetObjects.forTarget(target).boxy_runtime orelse return error.UnsupportedTarget;
         const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_boxy_runtime_support.o" });
         backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, runtime_bytes) catch return error.WasmOutputWriteFailed;
         try compiler_inputs.append(runtime_path);
@@ -10165,7 +10176,7 @@ fn writeDevWasmObject(
     entrypoints: []const backend.Entrypoint,
     static_data_exports: []const backend.StaticDataExport,
     linked_packs: []const *const backend.dev.PackFile.ObjectPack,
-    cpu_level: roc_target.CpuLevel,
+    target: RocTarget,
 ) CliMainError![]const u8 {
     if (entrypoints.len == 0) {
         if (builtin.mode == .debug) {
@@ -10191,7 +10202,7 @@ fn writeDevWasmObject(
         lowered.lir_result.boxy_erased_arg_desc_params.items,
         lowered.lir_result.boxy_worker_procs.items,
         &wasm_module,
-        cpu_level,
+        target.cpuLevel(),
     );
     wasm_module_owned_here = false;
     defer codegen.deinit();
@@ -10205,7 +10216,7 @@ fn writeDevWasmObject(
     try codegen.registerHostedSymbolTargets(lowered.lir_result.store.getProcSpecs());
     if (lirResultNeedsBoxyRuntime(&lowered.lir_result)) try codegen.registerBoxySymbolTargets();
 
-    const builtins_bytes = EmbeddedTargetObjects.forTarget(.wasm32).builtins_extern;
+    const builtins_bytes = EmbeddedTargetObjects.forTarget(target).builtins_extern;
     if (builtins_bytes.len > 0) {
         var builtins_module = backend.wasm.WasmModule.preload(ctx.gpa, builtins_bytes, .relocatable_for_merge) catch |err| {
             std.log.err("Failed to preload wasm builtins: {}", .{err});
@@ -10266,6 +10277,7 @@ fn writeDevWasmObject(
     try pack_imports.appendSlice(ctx.arena, try wasmRocHostRequirements(ctx.arena, &lowered.lir_result.store));
     return writeSealedWasmObject(
         ctx,
+        target,
         artifact_dir,
         "roc_app_wasm32.o",
         &codegen.module,
@@ -10353,7 +10365,7 @@ fn rocBuildWasm(
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
         // just the app); no platform wasm file is required.
-        const obj_path = try writeDevWasmObject(ctx, scratch_dir, lowered, entrypoints, static_data_exports, linked_packs, target.cpuLevel());
+        const obj_path = try writeDevWasmObject(ctx, scratch_dir, lowered, entrypoints, static_data_exports, linked_packs, target);
         try writeArchiveOutput(ctx, .wasm32, final_output_path, link_inputs, &.{obj_path});
         return;
     }
@@ -10373,7 +10385,7 @@ fn rocBuildWasm(
         entrypoints,
         static_data_exports,
         linked_packs,
-        target.cpuLevel(),
+        target,
     );
 
     try linkWasmOutput(ctx, args, target, link_inputs, final_output_path, obj_path, scratch_dir);
@@ -10776,6 +10788,7 @@ fn mergeStaticDataWasmModule(
 
 fn writeCombinedLlvmWasmObject(
     ctx: *CliCtx,
+    target: RocTarget,
     artifact_dir: []const u8,
     app_object_path: []const u8,
     lir_result: *const lir.Program.Result,
@@ -10801,6 +10814,7 @@ fn writeCombinedLlvmWasmObject(
     const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_wasm32_{s}.o", .{@tagName(opt)});
     return writeSealedWasmObject(
         ctx,
+        target,
         artifact_dir,
         obj_filename,
         &wasm_module,
@@ -10854,7 +10868,7 @@ fn rocBuildWasmLlvm(
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
         // just the app); no platform wasm file is required.
-        const combined_obj = try writeCombinedLlvmWasmObject(ctx, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs);
+        const combined_obj = try writeCombinedLlvmWasmObject(ctx, target, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs);
         try writeArchiveOutput(ctx, target, final_output_path, link_inputs, &.{combined_obj});
         return;
     }
@@ -10864,7 +10878,7 @@ fn rocBuildWasmLlvm(
         return error.UnsupportedTarget;
     }
 
-    const combined_obj = try writeCombinedLlvmWasmObject(ctx, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs);
+    const combined_obj = try writeCombinedLlvmWasmObject(ctx, target, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs);
     try linkWasmOutput(ctx, args, target, link_inputs, final_output_path, combined_obj, app_object.artifact_dir);
 }
 

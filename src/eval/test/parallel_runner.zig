@@ -1259,7 +1259,7 @@ fn runAllocationTest(
     const eval_fns = [NUM_BACKENDS]BackendEvalWithStatsFn{
         helpers.lirInterpreterStrWithStats,
         helpers.devEvaluatorStrWithStats,
-        helpers.wasmEvaluatorStrWithStats,
+        helpers.wasmBothCpuLevelsStrWithStats,
         helpers.devEvaluatorStrWithStats, // unused; LLVM allocation stats are not implemented
     };
 
@@ -1398,7 +1398,7 @@ fn runInspectTest(
     const eval_fns = [NUM_BACKENDS]BackendEvalFn{
         helpers.lirInterpreterInspectedStr,
         helpers.devEvaluatorInspectedStr,
-        helpers.wasmEvaluatorInspectedStr,
+        helpers.wasmBothCpuLevelsInspectedStr,
         helpers.llvmEvaluatorInspectedStr,
     };
 
@@ -1639,7 +1639,7 @@ fn runCrashTest(
     const eval_fns = [NUM_BACKENDS]BackendEvalFn{
         helpers.lirInterpreterInspectedStr,
         helpers.devEvaluatorInspectedStr,
-        helpers.wasmEvaluatorInspectedStr,
+        helpers.wasmBothCpuLevelsInspectedStr,
         helpers.llvmEvaluatorInspectedStr,
     };
 
