@@ -1267,6 +1267,14 @@ pub const StaticDispatchConstraint = struct {
             };
         }
 
+        /// Whether this relation came from a desugared operator.
+        pub fn isOperator(self: Origin) bool {
+            return switch (self) {
+                .desugared_binop, .desugared_unaryop => true,
+                .method_call, .where_clause, .from_literal => false,
+            };
+        }
+
         /// Whether this is a `desugared_binop` whose source operator was `!=`
         /// rather than `==`; false otherwise.
         pub fn binopNegated(self: Origin) bool {

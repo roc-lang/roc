@@ -213,5 +213,24 @@ test "issue 12310: operator requirements on a generalized type at incompatible t
         \\}
     );
     defer env.deinit();
-    try env.assertOneTypeError("Type Mismatch");
+    try env.assertOneTypeErrorMsg(
+        \\**Type Mismatch**
+        \\This is used in a way that requires its type to have two different, incompatible `plus` methods (which `+` calls), but no type can have more than one `plus` method.
+        \\```roc
+        \\    _a = y + 1.U8
+        \\```
+        \\         ^^^^^^^^
+        \\
+        \\One part of this use needs `plus` to have this type:
+        \\
+        \\    b, c -> b where [c.from_quote : Str -> Try(c, [BadQuotedBytes(Str)])]
+        \\
+        \\Another part needs it to have this type:
+        \\
+        \\    b, U8 -> b
+        \\
+        \\A type has only one `plus` method, so no type can satisfy both.
+        \\
+        \\
+    );
 }

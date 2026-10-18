@@ -39179,7 +39179,7 @@ fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRo
     const rank = env.rank();
     var snapshot: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty;
     defer snapshot.deinit(self.gpa);
-    var retained_by_name = std.AutoHashMap(Ident.Idx, Var).init(self.gpa);
+    var retained_by_name = std.AutoHashMap(Ident.Idx, StaticDispatchConstraint).init(self.gpa);
     defer retained_by_name.deinit();
     var visited = std.AutoHashMap(Var, void).init(self.gpa);
     defer visited.deinit();
@@ -39211,10 +39211,10 @@ fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRo
                 if (isFixedLiteralConversion(constraint.origin)) continue;
                 const entry = try retained_by_name.getOrPut(constraint.fn_name);
                 if (!entry.found_existing) {
-                    entry.value_ptr.* = constraint.fn_var;
+                    entry.value_ptr.* = constraint;
                     continue;
                 }
-                if (self.types.resolveVar(entry.value_ptr.*).var_ == self.types.resolveVar(constraint.fn_var).var_) continue;
+                if (self.types.resolveVar(entry.value_ptr.fn_var).var_ == self.types.resolveVar(constraint.fn_var).var_) continue;
                 switch (try self.relateSameMethodRequirements(entry.value_ptr.*, constraint, resolved.var_, roots, env)) {
                     .merged => related_any = true,
                     .erroneous => {},
@@ -39233,12 +39233,13 @@ fn relateSameMethodRequirementsAtBoundary(self: *Self, roots: []const BoundaryRo
 /// reports nothing further.
 fn relateSameMethodRequirements(
     self: *Self,
-    retained_fn_var: Var,
+    retained: StaticDispatchConstraint,
     duplicate: StaticDispatchConstraint,
     receiver_var: Var,
     roots: []const BoundaryRoot,
     env: *Env,
 ) Allocator.Error!SameMethodRelation {
+    const retained_fn_var = retained.fn_var;
     const deferred_start = env.deferred_static_dispatch_constraints.len();
     var probe = try self.beginCommitProbe(env);
     const result = try probe.unify(retained_fn_var, duplicate.fn_var);
@@ -39253,7 +39254,7 @@ fn relateSameMethodRequirements(
         // after recording them.
         probe.rollback();
         const merged: MergedMethodObligation = .{
-            .conflict = try self.methodConflict(retained_fn_var, duplicate, receiver_var),
+            .conflict = try self.methodConflict(retained, duplicate, receiver_var),
             .first_fn_var = retained_fn_var,
             .use_var = self.methodConflictUseVar(duplicate, roots),
             .definition_var = roots[0].owner,
@@ -39276,7 +39277,7 @@ fn relateSameMethodRequirements(
     if (!result.isProblem()) return .erroneous;
 
     try self.appendMethodConflict(.{
-        .conflict = try self.methodConflict(retained_fn_var, duplicate, receiver_var),
+        .conflict = try self.methodConflict(retained, duplicate, receiver_var),
         .first_fn_var = retained_fn_var,
         .use_var = self.methodConflictUseVar(duplicate, roots),
         .definition_var = roots[0].owner,
@@ -39295,11 +39296,12 @@ const MergedMethodObligation = struct {
     definition_var: Var,
 };
 
-fn methodConflict(self: *Self, first_fn_var: Var, second: StaticDispatchConstraint, receiver_var: Var) Allocator.Error!problem.MethodConflict {
+fn methodConflict(self: *Self, first: StaticDispatchConstraint, second: StaticDispatchConstraint, receiver_var: Var) Allocator.Error!problem.MethodConflict {
     const unify_env = self.unifyEnv();
     return .{
         .method_name = second.fn_name,
-        .first_type = try unifier.methodTypeDisplay(&unify_env, first_fn_var, receiver_var),
+        .from_operator = first.origin.isOperator() or second.origin.isOperator(),
+        .first_type = try unifier.methodTypeDisplay(&unify_env, first.fn_var, receiver_var),
         .second_type = try unifier.methodTypeDisplay(&unify_env, second.fn_var, receiver_var),
     };
 }

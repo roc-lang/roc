@@ -607,13 +607,26 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Type Mismatch", "", .runtime_error);
         errdefer report.deinit();
         if (self.method_conflict) |conflict| {
-            try D.renderSliceInto(&.{
-                D.bytes("This is used in a way that requires its type to have two different, incompatible"),
-                D.ident(conflict.method_name).withAnnotation(.inline_code),
-                D.bytes("methods, but no type can have more than one"),
-                D.ident(conflict.method_name).withAnnotation(.inline_code),
-                D.bytes("method."),
-            }, self, &report, &report.headline);
+            const operator: ?[]const u8 = if (conflict.from_operator) self.getOperatorForMethod(conflict.method_name) else null;
+            if (operator) |operator_text| {
+                try D.renderSliceInto(&.{
+                    D.bytes("This is used in a way that requires its type to have two different, incompatible"),
+                    D.ident(conflict.method_name).withAnnotation(.inline_code),
+                    D.bytes("methods (which"),
+                    D.bytes(operator_text).withAnnotation(.inline_code),
+                    D.bytes("calls), but no type can have more than one"),
+                    D.ident(conflict.method_name).withAnnotation(.inline_code),
+                    D.bytes("method."),
+                }, self, &report, &report.headline);
+            } else {
+                try D.renderSliceInto(&.{
+                    D.bytes("This is used in a way that requires its type to have two different, incompatible"),
+                    D.ident(conflict.method_name).withAnnotation(.inline_code),
+                    D.bytes("methods, but no type can have more than one"),
+                    D.ident(conflict.method_name).withAnnotation(.inline_code),
+                    D.bytes("method."),
+                }, self, &report, &report.headline);
+            }
         } else {
             try D.renderSliceInto(title, self, &report, &report.headline);
         }

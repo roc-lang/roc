@@ -95,6 +95,8 @@ const RawTypePair = struct {
 /// agree. A type has one method of each name, so no type can satisfy both.
 const RawMethodConflict = struct {
     method_name: Ident.Idx,
+    /// Whether one of the requirements came from an operator.
+    from_operator: bool,
     /// The two variables whose requirements were being merged.
     receivers: RawTypePair,
     /// False when the requirements are an annotation's own, whose variable
@@ -373,6 +375,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
     unifier.deferred_callables = env.deferred_callables;
     const root_mismatch: MismatchHandling = if (opts.method_requirements) |requirements| .{ .record_method_conflict = .{
         .method_name = requirements.method_name,
+        .from_operator = false,
         .receivers = .{ .expected = requirements.receiver, .actual = requirements.receiver },
         .poison_receivers = false,
         .methods = .{ .expected = a, .actual = b },
@@ -512,6 +515,7 @@ pub fn snapshotMismatchMethodConflict(env: *const Env) std.mem.Allocator.Error!?
     const raw = env.unify_scratch.mismatch_evidence.method_conflict orelse return null;
     return .{
         .method_name = raw.method_name,
+        .from_operator = raw.from_operator,
         .first_type = try methodTypeDisplay(env, raw.methods.expected, raw.receivers.expected),
         .second_type = try methodTypeDisplay(env, raw.methods.actual, raw.receivers.actual),
     };
@@ -3513,6 +3517,7 @@ const Unifier = struct {
         // Unify the constraint function types
         try self.scheduleGuardedPair(a_constraint.fn_var, b_constraint.fn_var, .{ .record_method_conflict = .{
             .method_name = a_constraint.fn_name,
+            .from_operator = a_constraint.origin.isOperator() or b_constraint.origin.isOperator(),
             .receivers = receivers,
             .poison_receivers = true,
             .methods = .{ .expected = a_constraint.fn_var, .actual = b_constraint.fn_var },

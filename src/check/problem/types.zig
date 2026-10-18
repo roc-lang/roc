@@ -646,6 +646,9 @@ pub const TypeMismatch = struct {
 /// has one method of each name, so no type can satisfy both.
 pub const MethodConflict = struct {
     method_name: Ident.Idx,
+    /// Whether one of the requirements came from an operator, which the
+    /// report names alongside the method it calls.
+    from_operator: bool,
     /// Display text of each required method type.
     first_type: ExtraStringIdx,
     second_type: ExtraStringIdx,
