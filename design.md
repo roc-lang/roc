@@ -3476,6 +3476,28 @@ second checked representative. This preserves the unifier's descriptor merge
 destination and externally observable survivor while allowing the storage
 tree to remain balanced.
 
+Every merge of two distinct storage roots leaves one descriptor that no slot
+names: the side whose descriptor the merge did not keep (ordinary union, union
+with a frozen class, mismatch poisoning of a class that joins the error class
+whole, a declared solver-mutating redirect, and resetting a storage root to an
+unbound flex). The store recycles that descriptor rather than leaving it dead:
+it goes on a free list, and the next class created takes the most recently
+freed descriptor index (and its root-metadata entry) before the descriptor
+store grows. Freeing forgets everything the store remembers about the
+descriptor by index—its settled mark, its class watch, and its frozen
+anchor—so a reissued index carries nothing from the class that died. Reuse is
+last-in-first-out, so the indices a module's check produces, and the bytes
+written to its cache, stay deterministic. The free list is runtime-only: a
+loaded store starts with none, and nothing outside the store may hold a
+descriptor index across a merge, since the index may name another class once
+reused. While a savepoint is open a merge does not free its orphan, because
+rollback restores the slot that named it; the orphan waits on a pending list
+that commit frees and rollback discards. A probe may still reissue descriptors
+from the free list: those predate the probe, so the writes that reissue them
+journal like any other pre-probe write, and the probe only counts them as
+taken rather than removing them, so commit removes them and rollback forgets
+the count.
+
 `resolveVar` returns the checked representative and class descriptor;
 storage-root traversal is a private store operation. Consequently a checked
 representative is not required to be a storage root slot. `is_root` on a
