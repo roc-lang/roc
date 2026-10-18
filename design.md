@@ -3486,6 +3486,28 @@ second checked representative. This preserves the unifier's descriptor merge
 destination and externally observable survivor while allowing the storage
 tree to remain balanced.
 
+Every merge of two distinct storage roots leaves one descriptor that no slot
+names: the side whose descriptor the merge did not keep (ordinary union, union
+with a frozen class, mismatch poisoning of a class that joins the error class
+whole, a declared solver-mutating redirect, and resetting a storage root to an
+unbound flex). The store recycles that descriptor rather than leaving it dead:
+it goes on a free list, and the next class created takes the most recently
+freed descriptor index (and its root-metadata entry) before the descriptor
+store grows. Freeing forgets everything the store remembers about the
+descriptor by index—its settled mark, its class watch, and its frozen
+anchor—so a reissued index carries nothing from the class that died. Reuse is
+last-in-first-out, so the indices a module's check produces, and the bytes
+written to its cache, stay deterministic. The free list is runtime-only: a
+loaded store starts with none, and nothing outside the store may hold a
+descriptor index across a merge, since the index may name another class once
+reused. While a savepoint is open a merge does not free its orphan, because
+rollback restores the slot that named it; the orphan waits on a pending list
+that commit frees and rollback discards. A probe may still reissue descriptors
+from the free list: those predate the probe, so the writes that reissue them
+journal like any other pre-probe write, and the probe only counts them as
+taken rather than removing them, so commit removes them and rollback forgets
+the count.
+
 `resolveVar` returns the checked representative and class descriptor;
 storage-root traversal is a private store operation. Consequently a checked
 representative is not required to be a storage root slot. `is_root` on a
@@ -19101,6 +19123,13 @@ no use for. Which form a
 read takes is therefore a question of where its value reaches, and the
 uniqueness analysis answers it.
 
+The fresh procedure's identity is the list's layout and content (the count
+and the item's construction) and nothing a program numbers, so reads of equal
+lists share one procedure. A pack carries the procedure with any code that
+calls it, and a spliced procedure replaces the program's own procedure of the
+same identity, so an identity that named a program's static-data slot would
+let one list's build stand in for another's.
+
 Every such read is a candidate birth. Alongside the born bit and its parameter
 conditions, the settlement carries each local's *origins*: the candidates its
 born value derives from, flowing over the same pure aliases, join edges,
@@ -21831,11 +21860,15 @@ work queue. The finalizer still commits stored values, diagnostics, and root
 completion in sorted request order.
 
 Each root job owns its compile-time host state: `RocOps`, a root-local arena for
-Roc allocations, allocation tracking needed by RocOps,
-expect/dbg/crash event lists, the point in generated code it failed at, a crash
-boundary, and its result buffer. Roc runtime allocations are arena allocations
-and are bulk-freed after the result has been copied into `ConstStore`. Host
-events and failure state stay root-local until deterministic replay.
+Roc allocations, expect/dbg/crash event lists, the point in generated code it
+failed at, a crash boundary, and its result buffer. Roc runtime allocations are
+arena allocations and are bulk-freed after the result has been copied into
+`ConstStore`. Each allocation carries its length in a fixed-size header before
+the bytes handed to Roc, so reallocation reads the old length from the header
+and deallocation is free; the host keeps no per-pointer table, whose cost would
+grow with the allocations a root has ever held rather than with the ones it
+holds. Host events and failure state stay root-local until deterministic
+replay.
 
 #### Compile-Time Failure Sites
 
