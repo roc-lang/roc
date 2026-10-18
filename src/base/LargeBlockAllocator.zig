@@ -39,8 +39,11 @@ const class_count = max_class_log2 - min_class_log2 + 1;
 /// class together. Kept blocks stay resident, so this is memory the process
 /// holds without using it; a block freed past the bound is unmapped instead.
 /// One total bound keeps that idle memory small however many classes the
-/// compiler's allocation pattern touches.
-pub const default_max_cached_bytes: usize = 256 * 1024 * 1024;
+/// compiler's allocation pattern touches. Most of the remap and fault work the
+/// cache saves comes from its first few dozen megabytes: checking a large
+/// program with this bound does about half the kernel work of an empty cache,
+/// and a bound sixteen times larger saves only a sixth more.
+pub const default_max_cached_bytes: usize = 64 * 1024 * 1024;
 const huge_page_threshold: usize = 2 * 1024 * 1024;
 
 const FreeBlock = struct {
