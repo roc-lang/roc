@@ -433,6 +433,7 @@ const CustomCase = enum {
     boxed_closure_object_cache,
     spliced_procedure_debug_lines,
     linked_object_pack,
+    wasm_linked_object_pack,
     run_object_cache,
     tier2_object_cache,
     proc_identity_object_cache,
@@ -3037,6 +3038,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "object cache: editing an app lambda's body keeps the package specializations that receive it cached, calling the edited lambda", .timeout_ms = 600_000, .body = .{ .custom = .edited_lambda_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: an edited app is served higher-order specializations by their procedure identity", .timeout_ms = 600_000, .body = .{ .custom = .proc_identity_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: a dev build links a URL package's optimized object pack and behaves like the uncached build", .timeout_ms = 900_000, .body = .{ .custom = .linked_object_pack } },
+    .{ .id = 0, .suite = .subcommands, .name = "object cache: a wasm32 dev build composes a URL package's size-optimized object pack and behaves like the uncached build", .timeout_ms = 900_000, .backend = .size, .body = .{ .custom = .wasm_linked_object_pack } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: roc run links URL package objects into its host executable and splices the app's dev packs", .timeout_ms = 900_000, .body = .{ .custom = .run_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: a dev build compiles its tier 2 entries with LLVM and an edited rebuild links them", .timeout_ms = 900_000, .body = .{ .custom = .tier2_object_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "object cache: spliced procedures keep the debug lines of the cold build", .timeout_ms = 600_000, .body = .{ .custom = .spliced_procedure_debug_lines } },
@@ -4968,6 +4970,7 @@ fn runCustomCase(
         .boxed_closure_object_cache => customBoxedClosureObjectCache(io, allocator, &env, &timer, timeout_ms),
         .spliced_procedure_debug_lines => customSplicedProcedureDebugLines(io, allocator, &env, &timer, timeout_ms),
         .linked_object_pack => customLinkedObjectPack(io, allocator, &env, &timer, timeout_ms),
+        .wasm_linked_object_pack => customWasmLinkedObjectPack(io, allocator, &env, &timer, timeout_ms),
         .run_object_cache => customRunObjectCache(io, allocator, &env, &timer, timeout_ms),
         .tier2_object_cache => customTier2ObjectCache(io, allocator, &env, &timer, timeout_ms),
         .proc_identity_object_cache => customProcIdentityObjectCache(io, allocator, &env, &timer, timeout_ms),
@@ -8347,6 +8350,130 @@ fn customLinkedObjectPack(
     }
     if (object_packs == 0) return customFailure(allocator, timer, "no optimized object pack was written", .{});
     return null;
+}
+
+/// A wasm32 dev build whose store lacks a URL package's object pack builds
+/// it with `--opt=size` once the package is checked and composes it into the
+/// app's object, and so does every later build; each module must return
+/// exactly what a module built without the store returns and leave the same
+/// allocations outstanding. Two independent stores must write byte-identical
+/// object packs.
+fn customWasmLinkedObjectPack(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const roc_file = "test/wasm/linked_object_pack/App.roc";
+    const expected = "sum of squares to 10: 385\n506";
+    var stores: [2][]const u8 = undefined;
+    var uncached_outstanding: ?i64 = null;
+    for (&stores, 0..) |*store_root, store_index| {
+        const cache_root = std.fmt.allocPrint(allocator, "{s}/wasm_linked_pack_cache_{d}", .{ env.dirs.work_dir, store_index }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate cache root: {}", .{err});
+        seedLinkedObjectPackage(io, allocator, cache_root) catch |err|
+            return customInfraFailure(allocator, timer, "failed to seed the URL package: {}", .{err});
+        store_root.* = cache_root;
+        var store_env = CaseEnv{
+            .dirs = env.dirs,
+            .env_map = env.env_map.clone(allocator) catch |err|
+                return customInfraFailure(allocator, timer, "failed to clone the store environment: {}", .{err}),
+        };
+        defer store_env.env_map.deinit();
+        for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+            store_env.env_map.put(key, cache_root) catch |err|
+                return customInfraFailure(allocator, timer, "failed to set the cache root: {}", .{err});
+        }
+        store_env.env_map.put("ROC_PACK_STATS", "1") catch |err|
+            return customInfraFailure(allocator, timer, "failed to enable pack statistics: {}", .{err});
+        const builds = [_]struct { name: []const u8, cache: bool }{
+            .{ .name = "uncached", .cache = false },
+            .{ .name = "cold", .cache = true },
+            .{ .name = "warm", .cache = true },
+        };
+        for (builds) |build| {
+            const output_path = std.fmt.allocPrint(allocator, "{s}/wasm_linked_pack_{d}_{s}.wasm", .{ env.dirs.work_dir, store_index, build.name }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+            const out_arg = outputArg(allocator, output_path) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+            const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+                return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
+            const args: []const []const u8 = if (build.cache)
+                &.{ "build", "--target=wasm32", "--opt=dev", out_arg }
+            else
+                &.{ "build", "--target=wasm32", "--no-cache", "--opt=dev", out_arg };
+            const built = runRocInEnv(io, allocator, &store_env, args, roc_file, .relative, &.{}, null, build_timeout) catch |err|
+                return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+            if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
+                return failureFromRun(allocator, timer, built, "wasm32 dev build did not succeed");
+            }
+            if (build.cache) {
+                const marker = "linked procs: ";
+                const at = std.mem.find(u8, built.stderr, marker) orelse
+                    return failureFromRun(allocator, timer, built, "the cached build did not report pack statistics");
+                if (countAfterMarker(built.stderr[at + marker.len ..]) == 0) {
+                    return failureFromRun(allocator, timer, built, "the cached build did not compose the URL package's object pack");
+                }
+            }
+            if (validateWasmOutput(io, allocator, timer, output_path)) |failure| return failure;
+
+            var wasm = setupGlueRuntimeWasm(io, allocator, output_path) catch |err|
+                return customFailure(allocator, timer, "failed to load the {s} wasm module: {}", .{ build.name, err });
+            defer wasm.deinit();
+            const result = callGlueRuntimeWasmMain(&wasm, allocator) catch |err|
+                return customFailure(allocator, timer, "the {s} wasm module failed: {}", .{ build.name, err });
+            if (!std.mem.eql(u8, result, expected)) {
+                return customFailure(allocator, timer, "the {s} wasm module returned \"{s}\"", .{ build.name, result });
+            }
+            const outstanding = wasmOutstandingAllocations(&wasm) catch |err|
+                return customFailure(allocator, timer, "failed to read the {s} wasm module's allocation counts: {}", .{ build.name, err });
+            if (uncached_outstanding) |reference| {
+                if (outstanding != reference) {
+                    return customFailure(allocator, timer, "the {s} wasm module left {d} allocations outstanding, the uncached one {d}", .{ build.name, outstanding, reference });
+                }
+            } else uncached_outstanding = outstanding;
+        }
+    }
+    var first = PackStoreFiles.read(io, allocator, stores[0]) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read the first store's packs: {}", .{err});
+    defer first.deinit(allocator);
+    var second = PackStoreFiles.read(io, allocator, stores[1]) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read the second store's packs: {}", .{err});
+    defer second.deinit(allocator);
+    var object_packs: usize = 0;
+    for (first.paths.items, first.contents.items) |path, bytes| {
+        if (std.mem.find(u8, path, "wasm32-size") == null) continue;
+        object_packs += 1;
+        const key_name = std.fs.path.basename(path);
+        const other = for (second.paths.items, second.contents.items) |other_path, other_bytes| {
+            if (std.mem.find(u8, other_path, "wasm32-size") != null and std.mem.eql(u8, std.fs.path.basename(other_path), key_name)) break other_bytes;
+        } else return customFailure(allocator, timer, "size-optimized pack {s} was written by one store and not the other", .{key_name});
+        if (!std.mem.eql(u8, bytes, other)) {
+            return customFailure(allocator, timer, "size-optimized pack {s} differs between two stores", .{key_name});
+        }
+    }
+    if (object_packs == 0) return customFailure(allocator, timer, "no size-optimized object pack was written", .{});
+    for (first.paths.items) |path| {
+        if (std.mem.find(u8, path, "wasm32-dev") != null) {
+            return customFailure(allocator, timer, "a wasm32 build wrote dev pack {s}, which no wasm32 build can splice", .{path});
+        }
+    }
+    return null;
+}
+
+/// Allocations a wasm test module made that it has not freed, from the test
+/// platform's counters.
+fn wasmOutstandingAllocations(wasm: *const GlueRuntimeWasmInterface) !i64 {
+    var counts: [2]i64 = undefined;
+    for ([_][]const u8{ "wasm_alloc_count", "wasm_dealloc_count" }, &counts) |name, *count| {
+        const handle = try wasm.module_instance.getFunctionHandle(name);
+        var params: [0]bytebox.Val = undefined;
+        var returns: [1]bytebox.Val = undefined;
+        _ = try wasm.module_instance.invoke(handle, &params, &returns, .{});
+        count.* = returns[0].I32;
+    }
+    return counts[0] - counts[1];
 }
 
 /// `roc run` reads the object cache: its host executable links a URL

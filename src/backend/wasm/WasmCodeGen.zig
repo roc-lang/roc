@@ -288,6 +288,9 @@ registered_procs: collections.DenseMap(u32, u32),
 /// index. Populated before proc compilation so imports never shift function
 /// indices mid-codegen.
 hosted_symbol_targets: std.AutoHashMap(u32, HostedSymbolTarget),
+/// The C-ABI entries of linked object-cache objects, keyed by the proc spec
+/// id of the `c_abi_entry` procedure each one provides.
+linked_entry_targets: std.AutoHashMap(u32, HostedSymbolTarget),
 /// The fixed runtime symbols, resolved like hosted symbols before any
 /// defined function index is assigned.
 runtime_symbol_targets: ?RuntimeSymbolTargets = null,
@@ -410,6 +413,7 @@ pub fn init(
         .fp_local = 0,
         .registered_procs = collections.DenseMap(u32, u32).init(allocator),
         .hosted_symbol_targets = std.AutoHashMap(u32, HostedSymbolTarget).init(allocator),
+        .linked_entry_targets = std.AutoHashMap(u32, HostedSymbolTarget).init(allocator),
         .function_symbols_by_index = std.AutoHashMap(u32, SymbolIndex).init(allocator),
         .boxy_symbol_targets = std.StringHashMap(HostedSymbolTarget).init(allocator),
         .boxy_dict_thunk_table_indices = std.AutoHashMap(u32, u32).init(allocator),
@@ -489,6 +493,7 @@ pub fn deinit(self: *Self) void {
     for (self.tail_drivers.items) |*driver| driver.members.deinit(self.allocator);
     self.tail_drivers.deinit(self.allocator);
     self.hosted_symbol_targets.deinit();
+    self.linked_entry_targets.deinit();
     self.function_symbols_by_index.deinit();
     self.boxy_symbol_targets.deinit();
     self.boxy_dict_thunk_table_indices.deinit();
@@ -6264,7 +6269,15 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
                 .{proc.name.raw()},
             );
         }
-        try self.generateHostedProcWrapper(hosted, args, proc.ret_layout);
+        try self.generateCAbiProcWrapper(self.hostedSymbolTarget(hosted), args, proc.ret_layout);
+    } else if (proc.c_abi_entry) {
+        // The procedure's code is a linked object-cache entry; this body
+        // forwards to its C-ABI entry.
+        const target = self.linked_entry_targets.get(@backingInt(proc_id)) orelse wasmInvariantFmt(
+            "WASM/codegen invariant violated: linked proc {d} has no registered C-ABI entry",
+            .{@backingInt(proc_id)},
+        );
+        try self.generateCAbiProcWrapper(target, args, proc.ret_layout);
     } else {
         // Emit proc body block (ret branches to this block after storing the return local)
         try self.emitVoidBlock();
@@ -6841,39 +6854,11 @@ pub fn registerHostedSymbolTargets(self: *Self, proc_specs: []const LIR.LirProcS
         const symbol_text = self.store.getString(hosted.symbol);
 
         // Build the natural C-ABI wasm type for the import declaration.
-        const param_locals = self.store.getLocalSpan(spec.args);
-        const hosted_arg_layouts = try self.allocator.alloc(layout.Idx, param_locals.len);
-        defer self.allocator.free(hosted_arg_layouts);
-        for (0..param_locals.len) |i| {
-            const param = GuardedList.at(param_locals, i);
-            hosted_arg_layouts[i] = self.procLocalLayoutIdx(param);
-        }
-
-        var arena_state = base.SingleThreadArena.init(self.allocator);
-        defer arena_state.deinit();
-        const lowered = layout.abi.lower(arena_state.allocator(), self.getLayoutStore(), if (self.cpu_level == .v1) .wasm32v1 else .wasm32, hosted_arg_layouts, spec.ret_layout, false) catch return error.OutOfMemory;
-
         var params = std.ArrayList(ValType).empty;
         defer params.deinit(self.allocator);
         var results = std.ArrayList(ValType).empty;
         defer results.deinit(self.allocator);
-
-        if (lowered.ret == .indirect) try params.append(self.allocator, .i32);
-        for (lowered.args) |placement| {
-            switch (placement) {
-                .none => {},
-                .indirect => try params.append(self.allocator, .i32),
-                .registers => |registers| {
-                    for (registers.pieces) |piece| try params.append(self.allocator, pieceValType(piece));
-                },
-            }
-        }
-        switch (lowered.ret) {
-            .none, .indirect => {},
-            .registers => |registers| {
-                for (registers.pieces) |piece| try results.append(self.allocator, pieceValType(piece));
-            },
-        }
+        try self.cAbiSignature(spec, &params, &results);
 
         const type_idx = try self.internFuncType(params.items, results.items);
 
@@ -6904,9 +6889,83 @@ pub fn registerHostedSymbolTargets(self: *Self, proc_specs: []const LIR.LirProcS
     }
 }
 
-fn emitHostedCall(
+/// The wasm C-ABI signature of a procedure called through the platform C
+/// ABI: its argument and return layouts classified by `layout.abi`.
+fn cAbiSignature(self: *Self, spec: LirProcSpec, params: *std.ArrayList(ValType), results: *std.ArrayList(ValType)) Allocator.Error!void {
+    const param_locals = self.store.getLocalSpan(spec.args);
+    const arg_layouts = try self.allocator.alloc(layout.Idx, param_locals.len);
+    defer self.allocator.free(arg_layouts);
+    for (0..param_locals.len) |i| {
+        arg_layouts[i] = self.procLocalLayoutIdx(GuardedList.at(param_locals, i));
+    }
+
+    var arena_state = base.SingleThreadArena.init(self.allocator);
+    defer arena_state.deinit();
+    const lowered = layout.abi.lower(arena_state.allocator(), self.getLayoutStore(), if (self.cpu_level == .v1) .wasm32v1 else .wasm32, arg_layouts, spec.ret_layout, false) catch return error.OutOfMemory;
+
+    if (lowered.ret == .indirect) try params.append(self.allocator, .i32);
+    for (lowered.args) |placement| {
+        switch (placement) {
+            .none => {},
+            .indirect => try params.append(self.allocator, .i32),
+            .registers => |registers| {
+                for (registers.pieces) |piece| try params.append(self.allocator, pieceValType(piece));
+            },
+        }
+    }
+    switch (lowered.ret) {
+        .none, .indirect => {},
+        .registers => |registers| {
+            for (registers.pieces) |piece| try results.append(self.allocator, pieceValType(piece));
+        },
+    }
+}
+
+/// Bind every procedure a linked object-cache object provides
+/// (`LIR.LirProcSpec.c_abi_entry`) to the C-ABI entry that object defines.
+/// The objects must already be merged into the module
+/// (`WasmModule.mergeLinkedObject`).
+pub fn registerLinkedEntryTargets(self: *Self, proc_specs: []const LIR.LirProcSpec) Allocator.Error!void {
+    for (proc_specs, 0..) |spec, index| {
+        if (!spec.c_abi_entry) continue;
+        var name_buffer: [LIR.ProcIdentity.symbol_name_len]u8 = undefined;
+        const name = spec.identity.writeCAbiEntryName(&name_buffer);
+        const symbol = self.module.findDefinedFunctionSymbolExact(name) catch |err| wasmInvariantFmt(
+            "WASM/codegen invariant violated: linked proc {d} has no single C-ABI entry {s} in the merged objects: {}",
+            .{ index, name, err },
+        );
+        const func_idx = self.module.linking.symbol_table.items[symbol.raw()].index;
+        if (builtin.mode == .debug) {
+            var params = std.ArrayList(ValType).empty;
+            defer params.deinit(self.allocator);
+            var results = std.ArrayList(ValType).empty;
+            defer results.deinit(self.allocator);
+            try self.cAbiSignature(spec, &params, &results);
+            if (!self.module.funcTypeMatches(self.module.functionType(FunctionIndex.fromRaw(func_idx)), params.items, results.items)) {
+                wasmInvariantFmt("WASM/codegen invariant violated: C-ABI entry {s} does not have its procedure's C-ABI type", .{name});
+            }
+        }
+        try self.linked_entry_targets.put(@intCast(index), .{ .func_idx = func_idx, .symbol = symbol });
+    }
+}
+
+/// The linker symbol a hosted procedure's calls go to, registered before
+/// proc compilation by registerHostedSymbolTargets.
+fn hostedSymbolTarget(self: *const Self, hosted: LIR.HostedProc) HostedSymbolTarget {
+    return self.hosted_symbol_targets.get(hosted.dispatch_index) orelse {
+        if (builtin.mode == .debug) {
+            base.invariant(
+                "WASM/codegen invariant violated: hosted dispatch index {d} has no registered symbol target",
+                .{hosted.dispatch_index},
+            );
+        }
+        unreachable;
+    };
+}
+
+fn emitCAbiCall(
     self: *Self,
-    hosted: LIR.HostedProc,
+    target: HostedSymbolTarget,
     args: anytype,
     arg_layouts: []const layout.Idx,
     ret_layout: layout.Idx,
@@ -6965,17 +7024,6 @@ fn emitHostedCall(
         }
     }
 
-    // The call goes directly to the host's linker symbol, registered before
-    // proc compilation by registerHostedSymbolTargets.
-    const target = self.hosted_symbol_targets.get(hosted.dispatch_index) orelse {
-        if (builtin.mode == .debug) {
-            base.invariant(
-                "WASM/codegen invariant violated: hosted dispatch index {d} has no registered symbol target",
-                .{hosted.dispatch_index},
-            );
-        }
-        unreachable;
-    };
     try self.currentBody().emitRelocatableCall(self.allocator, target.symbol, target.func_idx);
 
     // Store a register-class return into the return slot. Multiple wasm results sit on the
@@ -7002,9 +7050,11 @@ fn emitHostedCall(
     }
 }
 
-fn generateHostedProcWrapper(
+/// The body of a procedure whose code is a C-ABI function: a hosted function
+/// or a linked object-cache entry. It calls `target` with its parameters.
+fn generateCAbiProcWrapper(
     self: *Self,
-    hosted: LIR.HostedProc,
+    target: HostedSymbolTarget,
     params: anytype,
     ret_layout: layout.Idx,
 ) Allocator.Error!void {
@@ -7016,7 +7066,7 @@ fn generateHostedProcWrapper(
         arg_layouts[i] = self.procLocalLayoutIdx(param);
     }
 
-    try self.emitHostedCall(hosted, params, arg_layouts, ret_layout);
+    try self.emitCAbiCall(target, params, arg_layouts, ret_layout);
     try self.emitLocalSet(self.proc_return_local);
 }
 

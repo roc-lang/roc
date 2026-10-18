@@ -430,14 +430,35 @@ pub fn procIdentityCacheKey(identity: [32]u8) [32]u8 {
     return hasher.finalResult();
 }
 
+/// Which object-cache entries can serve a consumer, decided by how its code
+/// is emitted.
+pub const SpecCacheTakes = enum {
+    /// Dev artifacts only: the consumer splices code and links nothing.
+    dev_artifacts,
+    /// A linked object's entry (`SpecCacheHit.c_abi_entry`) ahead of the dev
+    /// artifacts of the same specialization: the consumer splices code and
+    /// its output is linked.
+    dev_artifacts_and_linked_objects,
+    /// Linked objects' entries only: the consumer's output is linked, and
+    /// its emitter cannot splice dev artifacts.
+    linked_objects,
+
+    pub fn takesLinkedObjects(self: SpecCacheTakes) bool {
+        return self != .dev_artifacts;
+    }
+
+    pub fn takesDevArtifacts(self: SpecCacheTakes) bool {
+        return self != .linked_objects;
+    }
+};
+
 /// The object cache's answer for a specialization key, asked when Monotype
 /// reserves the specialization and before its body exists. The consumer that
 /// owns the cache supplies the context and the lookup.
 pub const SpecCacheLookup = struct {
     context: *anyopaque,
-    /// `accept_linked`: whether the asking consumer's code is linked, so a
-    /// linked-object entry (`SpecCacheHit.c_abi_entry`) can serve it.
-    find: *const fn (context: *anyopaque, key: [32]u8, accept_linked: bool) ?SpecCacheHit,
+    /// `takes`: which entries can serve the asking consumer.
+    find: *const fn (context: *anyopaque, key: [32]u8, takes: SpecCacheTakes) ?SpecCacheHit,
 
     /// Session capability identity, not a persistent cache key. Equal providers
     /// expose the same immutable offer and artifact collection to both readers.
@@ -445,7 +466,7 @@ pub const SpecCacheLookup = struct {
         return self.context == other.context and self.find == other.find;
     }
 
-    pub fn lookup(self: SpecCacheLookup, key: [32]u8, accept_linked: bool) ?SpecCacheHit {
-        return self.find(self.context, key, accept_linked);
+    pub fn lookup(self: SpecCacheLookup, key: [32]u8, takes: SpecCacheTakes) ?SpecCacheHit {
+        return self.find(self.context, key, takes);
     }
 };

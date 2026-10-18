@@ -608,9 +608,10 @@ a module version the program does not have, and they are not emitted rather
 than misattributed.
 
 A URL-package module also gets an optimized object pack, filed in the same
-layout under `<target>-speed/pkg/`: its closed exports lowered under the
-optimized LIR policy and compiled by LLVM into one object, with the same spec
-table naming each entry's procedure. The object defines everything its code
+layout under `<target>-speed/pkg/` for a native target and
+`<target>-size/pkg/` for wasm32: its closed exports lowered under the LIR
+policy of that optimization level and compiled by LLVM at it into one object,
+with the same spec table naming each entry's procedure. The object defines everything its code
 needs (procedures, constants, refcount helpers, builtins) as internal symbols
 and exports, for each entry it offers, a weak C-ABI entry
 `roc__c{hash}`, the procedure's arguments and result classified by
@@ -621,7 +622,7 @@ program's own layout indices, and a module whose object needs the runtime at
 all gets no object pack.
 
 Only a consumer whose code is linked takes an object pack's entry
-(`CodeProvision.permitsLinkedObjects`): a `roc build --opt=dev` program or
+(`CodeProvision.specCacheTakes`): a `roc build --opt=dev` program or
 a `roc run --opt=dev` image, never compile-time evaluation, and never a
 producer shared with compile-time evaluation, which instead takes the dev
 entry of the same procedure and lets the linked consumer switch to the
@@ -633,6 +634,20 @@ offers an entry whose code reaches a linked entry, so a program that splices
 dev code never needs an object it did not ask for. A build whose store lacks
 a URL-package module's object pack builds it once the module is checked and
 before the program lowers, so that build already links it.
+
+The wasm32 dev backend cannot splice dev artifacts, so a wasm32 dev build
+reads and writes no dev packs and takes only object packs' entries
+(`CodeProvision.target_linked_objects`, whose lookups never return a dev
+artifact). It composes each object pack that served it into its own
+relocatable object before sealing (`WasmModule.mergeLinkedObject`): every
+definition of the object other than the entries it offers, and any entry an
+earlier object already defines, becomes local under a name in a namespace
+of that object's own, so no name the program's code or its static data
+resolves can bind to an object's internal copy of a procedure, constant, or
+builtin. A `c_abi_entry` procedure's body forwards to its entry through the
+wasm C ABI exactly as a hosted procedure's forwards to the host, and the
+object's imports, the runtime and hosted functions its code calls, are
+allowed undefined in the sealed object beside the program's own.
 
 `roc run --opt=dev` links every object pack of its URL packages into the
 cached host program, beside a table of their C-ABI entries that the
