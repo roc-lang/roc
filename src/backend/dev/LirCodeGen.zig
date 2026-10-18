@@ -14830,12 +14830,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
 
-            // A linked object-cache entry exists only in a linked object, so
-            // only object output can call one; a fragment compiled for it
-            // emits relocatable calls too.
-            const object_output = self.generation_mode == .object_file or
-                (self.fragment_mode and self.fragment_source_mode == .object_file);
-            if (callee == .entry and !object_output) {
+            // A linked object-cache entry exists only in a linked object: an
+            // object output links it, a `roc run` image's shim resolves it by
+            // name in the host executable that links it, and a fragment
+            // compiled for either emits relocatable calls too.
+            const linked_output = self.generation_mode == .object_file or self.generation_mode == .shim_execution or
+                (self.fragment_mode and (self.fragment_source_mode == .object_file or self.fragment_source_mode == .shim_execution));
+            if (callee == .entry and !linked_output) {
                 if (builtin.mode == .debug) base.invariant("{s}", .{"a C-ABI object-cache entry reached code that is not linked as an object"});
                 unreachable;
             }

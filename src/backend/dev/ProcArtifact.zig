@@ -676,12 +676,24 @@ pub fn extractPrepared(
             break;
         }
 
+        // Code whose identity names it reaches a procedure whose identity
+        // names its template by site (`LIR.LirProcSpec.code_key`) by that
+        // identity, never by a copy of its code: a program the artifact is
+        // spliced into calls its own code of the procedure.
+        const region_names_code = switch (region.kind) {
+            .proc => |proc_id| proc_specs[@backingInt(proc_id)].code_key == null,
+            .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island, .hosted_stub, .spliced_proc, .spliced_boxy_thunk, .spliced_helper => true,
+        };
         var region_refs = std.ArrayList(Reference).empty;
         var symbolic_refs = std.ArrayList(SymbolicReference).empty;
         for (refs) |ref| {
             if (ref.site < region.start or ref.site >= region.end) continue;
             const symbolic_target: ?@FieldType(SymbolicReference, "target") = switch (ref.target) {
-                .proc => |proc_id| if (codegen.compiledProcSymbol(proc_id) == null) .{ .proc = proc_specs[@backingInt(proc_id)].identity } else null,
+                .proc => |proc_id| if (codegen.compiledProcSymbol(proc_id) == null or
+                    (region_names_code and proc_specs[@backingInt(proc_id)].code_key != null))
+                    .{ .proc = proc_specs[@backingInt(proc_id)].identity }
+                else
+                    null,
                 .rc_helper => |key| if (codegen.compiledRcHelperOffset(key) == null) .{ .rc_helper = try LirCodeGenMod.compiledRcHelperSymbolName(arena_allocator, layout_store, key) } else null,
                 .boxy_thunk => |proc_id| if (codegen.boxyThunkOffset(proc_id) == null) .{ .boxy_thunk = proc_specs[@backingInt(proc_id)].identity } else null,
                 .message, .offset => null,
@@ -708,6 +720,25 @@ pub fn extractPrepared(
             };
             const target_region = regionContaining(CG, regions, target_offset) orelse return error.DanglingReference;
             const target_index = artifact_of_region[target_region] orelse return error.DanglingReference;
+            if (region_names_code) site: {
+                const target_proc = switch (regions[target_region].kind) {
+                    .proc => |proc_id| proc_id,
+                    .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island, .hosted_stub, .spliced_proc, .spliced_boxy_thunk, .spliced_helper => break :site,
+                };
+                if (proc_specs[@backingInt(target_proc)].code_key == null) break :site;
+                if (target_offset != regions[target_region].start + regions[target_region].entry) return error.DanglingReference;
+                try symbolic_refs.append(arena_allocator, .{
+                    .site = @intCast(ref.site - region.start),
+                    .form = switch (ref.form) {
+                        .call => .call,
+                        .inline_call => .inline_call,
+                        .addr => .addr,
+                    },
+                    .veneer = if (codegen.codeRefVeneer(ref.site)) |offset| if (offset >= region.start and offset < region.end) @intCast(offset - region.start) else null else null,
+                    .target = .{ .proc = proc_specs[@backingInt(target_proc)].identity },
+                });
+                continue;
+            }
             try region_refs.append(arena_allocator, .{
                 .site = @intCast(ref.site - region.start),
                 .form = switch (ref.form) {
@@ -1226,6 +1257,13 @@ pub fn splice(
         // A pack may combine independent fragments. Stable references to
         // definitions in this pack participate in the same transitive closure.
         for (artifact.symbolic_refs) |ref| {
+            // A procedure of this program has its own code, compiled or
+            // spliced as an entry of its own under the key it was served by;
+            // a copy from this pack never stands in for it.
+            switch (ref.target) {
+                .proc => |identity| if (procs_by_identity.contains(identity)) continue,
+                .boxy_thunk, .rc_helper => {},
+            }
             for (set.artifacts, 0..) |candidate, candidate_index| {
                 const matches = switch (ref.target) {
                     .proc => |identity| candidate.kind == .proc and std.meta.eql(identity, candidate.kind.proc),

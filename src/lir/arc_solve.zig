@@ -3306,7 +3306,10 @@ fn fillPinnedProcContracts(
     }
     for (0..store.procSpecCount()) |proc_index| {
         const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
-        if (proc.body == null or proc.hosted != null or proc.abi == .erased_callable) {
+        // A procedure named by site keeps its identity when its body changes,
+        // so code compiled against an earlier body calls it; its signature is
+        // the one its types determine (`LIR.LirProcSpec.code_key`).
+        if (proc.body == null or proc.hosted != null or proc.abi == .erased_callable or proc.code_key != null) {
             pinned.set(proc_index);
         }
     }

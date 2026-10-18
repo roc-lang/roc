@@ -560,16 +560,18 @@ keeps program names, so only a pack write pays for the hashing.
 A `ProcIdentity` names the same code in every program only because everything
 that decides a procedure's code is digested into it: its checked source, its
 evidence, and its solved types (`postcheck/proc_identity.zig`). Those also
-decide every procedure it references, except across a platform requirement:
-which app value fills a platform's requirement is chosen by the app, not by
-the platform's source or types. So a function that references a function of
-the app from outside the app (which only a requirement can), or references a
-function that does, digests the program's platform/app relation key into its
-identity (`Lifted.Program.fnReachesPlatformRequirement`). The relation key is a
-function of the app's checked module key, which the app's own procedure identities
-already digest, so such a platform procedure is shared exactly as widely as
-the app procedures it reaches; every other platform procedure keeps one
-identity across apps.
+decide every procedure it references, except the app's: which app value
+fills a platform's requirement is chosen by the app, not by the platform's
+source or types, and an app procedure is named by site (below), not by its
+code. So a function that references a function of the app from outside the
+app (through a platform requirement or a method of an app type its evidence
+names), or references a function that does, digests what it reaches there
+into its identity (`Lifted.Program.fnSourceDigest`): each closed app function
+it reaches contributes that function's own source identity, and any other
+contributes the program's platform/app relation key, a function of the app's
+checked module key. Editing the body of a closed app function therefore
+leaves every procedure reaching it unchanged, and every other procedure keeps
+one identity across apps.
 
 Names a procedure's code carries for the procedures it was built from are
 content identities too. A fused call variant (`body_clone.cloneCallVariant`)
@@ -618,8 +620,8 @@ program's own layout indices, and a module whose object needs the runtime at
 all gets no object pack.
 
 Only a consumer whose code is linked takes an object pack's entry
-(`CodeProvision.permitsLinkedObjects`): a `roc build --opt=dev` program,
-never compile-time evaluation or an in-memory `roc run` image, and never a
+(`CodeProvision.permitsLinkedObjects`): a `roc build --opt=dev` program or
+a `roc run --opt=dev` image, never compile-time evaluation, and never a
 producer shared with compile-time evaluation, which instead takes the dev
 entry of the same procedure and lets the linked consumer switch to the
 object's entry in Direct LIR. Such a procedure is `external` with
@@ -630,6 +632,82 @@ offers an entry whose code reaches a linked entry, so a program that splices
 dev code never needs an object it did not ask for. A build whose store lacks
 a URL-package module's object pack builds it once the module is checked and
 before the program lowers, so that build already links it.
+
+`roc run --opt=dev` links every object pack of its URL packages into the
+cached host program, beside a table of their C-ABI entries that the
+generated platform shim defines (`roc_shim_package_names`), and its image,
+streamed to that host program, calls an entry by name: the machine-code shim
+resolves it from the table as it resolves hosted functions. The object packs
+are part of the host program's identity, so editing the app reloads only
+the image, and a hot reload rebuild that would need other objects reports a
+changed host interface. The image splices the dev packs' entries the same way
+an object build does, with the data they carry.
+
+A tier 2 entry, one the program offers by identity alone, can be optimized
+only once an app requests it. After a cached dev build writes its packs, it
+starts a detached `roc build --tier2-objects=<requests>` naming the entries it
+offered by identity that no object served. That build lowers the app exactly
+as the requesting build did, so each entry keeps its identity, compiles with
+LLVM every entry whose call closure an object can define whole (no literal
+conversion, no erased call, and no procedure served from the cache, named by
+site, or holding a copy of such code), and files the object pack under the
+app module in the optimized store, named by its requests. A later dev build
+loads the root module's object packs too and links such an entry in place of
+its dev code. `roc check` never starts one, and `roc run` links only its URL
+packages' objects, so a hot reload session keeps one host program.
+`ROC_BACKGROUND_OBJECTS=off` disables the build and `wait` makes the dev
+build wait for it.
+
+A specialization whose request mentions a function type has no
+reservation-time key: which closures it receives is decided by lambda
+solving. Its earliest hit is therefore in Direct LIR, once Lambda Mono has
+decided its `ProcIdentity` (source, solved types with their lambda sets,
+captures). A dev pack offers every procedure of the program it was written
+from under `Common.procIdentityCacheKey(identity)`, by the same rules as its
+keyed entries, and Direct LIR looks a finite-ABI procedure up by that key
+when no reservation key served it. Monotype and lifting have already run
+for such a procedure; the hit skips its Direct LIR body, the LIR passes, ARC,
+and code generation. Whether the code evaluates a compile-time root in place
+is read from Monotype's per-function summary (`SpecComptimeReads.fnReads`),
+through the procedure's `source_monotype_fn`.
+
+A function of the root app module is identified by site, not content: its
+template, or its nested owner's, is named by the module's name and the
+definition's name (`Mono.FnTemplate.site_identity`), so editing the module
+leaves its procedure identities, and the identity of every specialization
+that receives one of its functions as a value, unchanged. Such a
+procedure's own code is named by its code key (`LIR.LirProcSpec.code_key`:
+its identity with the module's content key), under which a pack offers it and
+Direct LIR looks it up. Code whose identity names it never holds a copy of
+site-identified code: an entry whose body inlined one
+(`LIR.InlineScope.copies_site_code`) is not offered by identity, and its
+calls to one are extracted as symbolic references by identity rather than as
+references into the pack. A program that takes an entry lowers and retains
+every lambda-set member the entry's signature mentions
+(`Result.retained_procs`), and a splice never follows a symbolic reference
+to a procedure the program compiles itself, so the entry calls the program's
+current code of each closure it receives. Because such code was compiled
+against an earlier body of the procedures it calls by identity, ARC pins
+every procedure with a code key to the signature its types determine (all
+parameters and the return owned, no return uniqueness). An entry whose code reaches the
+app from outside it (`Lifted.Program.appCalleesReachedBy`) is offered under
+its identity only, never under a reservation-time key, and a program that
+takes it lowers and retains every app function it reaches, so the entry
+calls that code's current version too.
+
+A package function that dispatches to a method of an app type records that
+method in its evidence. The evidence digest it is keyed by
+(`Mono.FnTemplate.evidence_site_digest`) names the method's template by site,
+like the method's own identity, so editing the app leaves the package
+specialization's identity unchanged unless the method's declaration or type
+changes.
+
+A type the root app module declares is named the same way
+(`Type.TypeDef.site`): identity digests (the equality digest that seeds keys
+and source digests, and procedure identities) name it by its declaration and
+the structure of its backing rather than by its module's content, so a
+package specialization at an app type keeps its identity across edits that
+leave the type's structure alone.
 
 ### Read-Only Type Analysis
 
@@ -719,15 +797,12 @@ provider supplies both readers the same immutable offers and splice packs.
 This is session-local provider identity, never a persistent cache-key input.
 Separate providers retain source bodies and their independent late native hits.
 
-An early cache offer carries the full-body producer's platform-requirement
-dependency summary. An independent entry is reusable across app fillings;
-a dependent entry names its exact relation and is admitted only for that
-relation. Cached functions seed the same transitive reachability computation
-as full bodies, so erasing a body cannot erase a code-identity input. Offer
-selection retains distinct relations rather than letting an incompatible
-first entry hide a compatible entry. Final procedure identity validation is
-unchanged. Old contracts use a different format and storage namespace and are
-declined before any body is skipped.
+An early cache offer is never code that reaches the app: such code calls app
+procedures whose current bodies only the program has, and Monotype skipping
+its body would hide which ones. It is offered under its procedure identity
+instead, where its body is still lowered. Final procedure identity validation
+is unchanged. Old contracts use a different format and storage namespace and
+are declined before any body is skipped.
 
 Monotype reservation may consume an offered
 closed object specialization during checking finalization under the same proof
@@ -2346,9 +2421,8 @@ the demanded roots only, whether this compilation evaluated them or restored
 their values, so a build reports the same observations with or without a
 cache and whatever an earlier command evaluated.
 
-The object cache composes with demand the way it composes with an app's
-platform requirements: an entry carries what its skipped body would have told
-the program that links it. For each specialization a program may write to
+The object cache composes with demand by having an entry carry what its
+skipped body would have told the program that links it. For each specialization a program may write to
 the object cache, Monotype records the roots its code reads, through every
 procedure it reaches. An entry whose code evaluates a root in place is
 withheld: it would compute the root whenever it runs, in a program that
@@ -13788,14 +13862,34 @@ it actually reaches. A request that lowers the callee body in the caller's own
 draft (a caller-owned lexical specialization or an eager iterator completion)
 still replays them, because that replay is the body's own relation production.
 
-Repeated dependency requests are memoized by the complete procedure family
-(template, method scope, and checked source-function key), exact evidence
-topology, and the complete open input interface. Inputs include the function
+Repeated dependency requests are memoized by the procedure family (template
+and method scope), exact evidence topology, and the complete open input
+interface. The checked source-function key through which a call site reached
+the template is not part of a summary's identity: it names how that site
+spelled the callee's type, and the request's input already carries everything
+the instantiation constrains. Inputs include the function
 request and the scheme substitution cells, with their sharing and checked-error
 slots. An input identity is captured when its dependency is consumed, after the
 preceding explicit relations. Applying defaults is never part of cache identity.
 Digests select buckets; exact input constraints and evidence are the collision
 authorities.
+
+A request's input omits the finished-type witness of every open class. The
+witness records how the requesting graph reached a class, not what the request
+constrains: a body lowered at its sealed request imports every cell of its root
+from a finished Monotype, while the expansion that reached the same callee
+inside that body's caller related live cells of identical structure. Requests
+that differ only in witnesses therefore share one input identity and one
+summary, and expansion runs on detached inputs that carry none. Relating a
+summary back leaves each request cell's own witness in place, so replay and
+fresh expansion agree. A witness that expansion itself attaches to a class is
+part of its output constraints and is replayed like any other. Keying on input
+witnesses would make every body on a call chain re-expand the transitive
+interfaces its caller's expansion already summarized, and a witness on
+structure enclosing a parametric hole would carry the hole's contents into the
+identity. The pins are the monotype capture test "interface request identity
+omits finished witnesses of open classes" and the compile test "interface
+summary replay into a body's finished request lowers like a fresh expansion".
 
 A Roc template without evidence parameters cannot dispatch on its quantified
 variables, so its interface relates a quantified variable only by unification
@@ -13941,12 +14035,17 @@ recursive entries remain graph-local. Replay must agree with fresh checked
 relation expansion, including unresolved state and relationships between roots.
 Agreement is judged up to what a producing graph chooses arbitrarily: local
 numbering, the order in which a row's members were joined, a named-instance
-group with a single member inside the interface, and whether a class that
-finished as a settled type and carries no other evidence was captured as open
-structure or as its settled leaf. Recursive-slot and forced-dynamic membership
-decide only iterator representations, so they are no evidence on a class that
-finished as a type containing no iterator interface. An unchanged summary
-stands for its input.
+group with a single member inside the interface, whether a class whose content
+is settled and carries no other evidence was captured as open structure or as
+its settled leaf, and whether an open class carries a finished-type witness.
+A witness is no evidence: replaying an unchanged summary relates nothing back,
+while a fresh expansion relates witnessed copies of its settled leaves, so
+whether a class acquired one records which history reached it (pinned by the
+monotype test "interface agreement ignores finished witnesses of open
+classes"). Recursive-slot
+and forced-dynamic membership decide only iterator representations, so they
+are no evidence on a class that settles as a type containing no iterator
+interface. An unchanged summary stands for its input.
 
 Digest discovery encodes each uncached node's scalar bytes once and retains
 ordered child offsets. Acyclic resolution and cyclic-group reduction replay
