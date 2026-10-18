@@ -521,7 +521,6 @@ reads that distinction, or anything else, back out of the spelling:
 | --- | --- | --- |
 | `roc__d{N}` | the value owner `N` holds | program |
 | `roc__d{N}_{k}` | the `k`th further node (from 1) of owner `N`'s value | program |
-| `roc__b{N}` | the compile-time evaluator's cell holding the address of slot `N`'s value | program |
 | `roc__h{hash}` | a datum named by content: a string literal's backing, or a constant an object-cache pack carries | shared |
 | `roc__p{hash}` | a procedure, by its `ProcIdentity` | shared |
 
@@ -546,7 +545,7 @@ A symbol's scope says whether its name means the same thing in every program,
 which decides whether code referring to it can be cached and linked into
 another program. Code generation declares the scope of every symbol it refers
 to when it interns it (`SymbolTable.Scope`): `shared` for procedures, refcount
-helpers, builtins, host and hosted functions, and content-named data; `program` for slot values and binding cells, and for the
+helpers, builtins, host and hosted functions, and content-named data; `program` for slot values, and for the
 Boxy runtime, whose calls index this program's descriptor sidecar. Symbols
 only object emission names declare no scope, and reading the scope of a
 relocation target no reference declared is an invariant violation. Relocations
@@ -596,6 +595,15 @@ thirty, by last use (`max(atime, mtime)`), and then deletes the least
 recently used persistent cache files of every family until the cache fits
 `CacheConfig.max_size_mb`. Eviction only deletes files; it never changes what
 a build writes.
+
+A pack entry's code is a function of the procedure alone: every reference
+from it into code placed with it, and every reference by identity to code
+placed elsewhere, holds no displacement in the stored bytes
+(`LirCodeGen.normalizeArtifactRefSite`), since placement patches each again.
+Two programs that compile one procedure therefore store the same bytes for it
+however their buffers were laid out, which is what lets a dev build take
+compile-time evaluation's code for a procedure as its own (tested by
+`ctfe_code_identity_test`).
 
 A pack's line entries index the pack's own source-file table, which names
 each file by its module's content identity in the order the lines first use
@@ -804,13 +812,11 @@ instead, where its body is still lowered. Final procedure identity validation
 is unchanged. Old contracts use a different format and storage namespace and
 are declined before any body is skipped.
 
-Monotype reservation may consume an offered
-closed object specialization during checking finalization under the same proof
-that permits Direct LIR to splice it: no checked module or relation in the
-program has a `compile_time_only` exhaustiveness site whose verdict requires
-observing evaluator branches. The proof is computed before Monotype and carried
-unchanged to Direct LIR. A hosted placeholder created by an early cache hit
-must not bypass this proof when reached by compile-time evaluation.
+Monotype reservation may consume an offered closed object specialization
+during checking finalization, as Direct LIR may splice it: spliced code
+classifies its crashes from the failure sites it carries exactly as compiled
+code does ("Compile-Time Failure Sites"), so evaluation reports the same
+failures whichever it runs.
 
 This changes when an eligible body is skipped, not which entries a pack may
 offer. The producer still excludes the transitive closure of specialized
@@ -1883,10 +1889,11 @@ programs: optimized builds keep the runtime seed, and dev builds and
 compile-time evaluation compile the same code. Every command also gives evaluation the same
 object cache (`CompileTimeObjectCache`): the host's dev-policy packs, whose
 procedures run expects. The evaluator's program takes a hit for a procedure
-it runs (under `comptime_closure_hits`) only when the entry names that
-procedure's own identity, and splices its cached code in place of compiling
-it; a cache entry is the procedure its key names, so the cache too changes
-only what evaluation compiles. `roc check` and `roc build` therefore
+it runs only when the entry names that procedure's own identity, and splices
+its cached code in place of compiling it; a cache entry is the procedure its
+key names, and carries the failure sites that classify its crashes
+("Compile-Time Failure Sites"), so the cache too changes only what
+evaluation compiles. `roc check` and `roc build` therefore
 compute the same value for every root both evaluate: a build cannot report an
 error in the program that checking did not, checking reports the errors of
 roots no build demands, and `--opt` never moves a computation between compile
@@ -2080,25 +2087,23 @@ parked, unparked, and upgraded requests, and never-run stubs.
 
 #### Compile-Time Object Packs
 
-A runtime build fills the object cache with packs of runtime-policy code;
-compile-time evaluation reads them. A command that only checks fills it too:
-once checking completes with no error, the CLI compiles the compile-time
-evaluation program's LIR again for the object cache (no compile-time hooks,
-ordinary relocatable code) and stores its keyed closed specializations as
-one pack, under the same withholding rules as a runtime pack: an entry whose
-closure reads a compile-time value slot, names another program-local symbol,
-or still converts a literal is not offered. The pack is filed beside the root
-module's packs in a separate compile-time store (`<target>-comptime`) under a
-key derived from the root module's code-generation key, which no runtime pack
-uses, so it never stands in for, removes, or completes a runtime pack, and an
-edited root files a new pack beside the old one. Every compile-time
-evaluation provider loads the compile-time store after the runtime store, so
-an entry both offer is served by the runtime pack. The provider a dev build
-for the host shares with its runtime program does not load it: that program
-must be served runtime-policy code only. Evaluation serves a compile-time
-pack's entries exactly as it serves runtime packs' (see "Early Compile-Time
-Object Reuse"), so a later check whose roots must be evaluated again splices
-the code instead of lowering and compiling it.
+A runtime build fills the object cache with packs of dev code; compile-time
+evaluation reads them. A command that only checks fills it too: compile-time
+evaluation runs a dev build's code, so once checking completes with no error,
+the CLI files the code evaluation ran, lifted from each stage's image
+(`CompletedStages.artifacts`) with one copy of each procedure, as one pack of
+its keyed closed specializations, under the same withholding rules as a
+runtime pack: an entry whose closure names a program-local symbol it does not
+carry, or still converts a literal, is not offered. A completed value the
+code reads is carried, named by its content, so an entry reading one is
+offered with the value it read. The pack is filed beside the root module's
+dev packs under a key derived from the root module's code-generation key,
+which covers every module the program's code comes from and no runtime pack
+uses, so an edited program files a new pack beside the old one. Evaluation
+and a dev build for the host serve its entries exactly as they serve runtime
+packs' (see "Early Compile-Time Object Reuse"), so a later check whose roots
+must be evaluated again, or a build of the checked program, splices the code
+instead of lowering and compiling it.
 
 Native compile-time instruction generation consumes an explicit, read-only LIR
 demand closure seeded by compile-time root procedures and materialized callable
@@ -2127,10 +2132,14 @@ reuse across execution policies. Rejected native procedure code is emitted
 from the consumer's explicit LIR; no body hashing or reconstruction proves reuse.
 
 Native procedure code contains no process-local callback or slot addresses,
-and compile-time code calls nothing in the compiler. Mutable root bindings use producer-declared pointer
-cells with external relocations; JIT image linking supplies the original slot
-address without copying its mutable storage. Immutable carried data is captured
-only from referenced export closure using one prepared catalog. Native procedure code ownership
+and compile-time code calls nothing in the compiler. Compile-time evaluation
+compiles its procedures as a dev build's object code, so a procedure's code
+in evaluation is the code a build links, and links that code into its own
+image (`HostSplice`): the program's static data, the slots evaluation
+publishes completed values into included, is placed in a writable region at
+the end of the image, where object code's PC-relative data references reach
+it. Immutable carried data is captured only from referenced export closure
+using one prepared catalog. Native procedure code ownership
 includes code, referenced data, names, and metadata, so image teardown and worker
 scratch reset cannot invalidate a later consumer. Source lines remain tied to
 their producer source-file domain; persistent cross-program packs must not
@@ -3476,6 +3485,28 @@ the retained storage root adopts the second class's descriptor and records the
 second checked representative. This preserves the unifier's descriptor merge
 destination and externally observable survivor while allowing the storage
 tree to remain balanced.
+
+Every merge of two distinct storage roots leaves one descriptor that no slot
+names: the side whose descriptor the merge did not keep (ordinary union, union
+with a frozen class, mismatch poisoning of a class that joins the error class
+whole, a declared solver-mutating redirect, and resetting a storage root to an
+unbound flex). The store recycles that descriptor rather than leaving it dead:
+it goes on a free list, and the next class created takes the most recently
+freed descriptor index (and its root-metadata entry) before the descriptor
+store grows. Freeing forgets everything the store remembers about the
+descriptor by index—its settled mark, its class watch, and its frozen
+anchor—so a reissued index carries nothing from the class that died. Reuse is
+last-in-first-out, so the indices a module's check produces, and the bytes
+written to its cache, stay deterministic. The free list is runtime-only: a
+loaded store starts with none, and nothing outside the store may hold a
+descriptor index across a merge, since the index may name another class once
+reused. While a savepoint is open a merge does not free its orphan, because
+rollback restores the slot that named it; the orphan waits on a pending list
+that commit frees and rollback discards. A probe may still reissue descriptors
+from the free list: those predate the probe, so the writes that reissue them
+journal like any other pre-probe write, and the probe only counts them as
+taken rather than removing them, so commit removes them and rollback forgets
+the count.
 
 `resolveVar` returns the checked representative and class descriptor;
 storage-root traversal is a private store operation. Consequently a checked
@@ -19083,6 +19114,13 @@ no use for. Which form a
 read takes is therefore a question of where its value reaches, and the
 uniqueness analysis answers it.
 
+The fresh procedure's identity is the list's layout and content (the count
+and the item's construction) and nothing a program numbers, so reads of equal
+lists share one procedure. A pack carries the procedure with any code that
+calls it, and a spliced procedure replaces the program's own procedure of the
+same identity, so an identity that named a program's static-data slot would
+let one list's build stand in for another's.
+
 Every such read is a candidate birth. Alongside the born bit and its parameter
 conditions, the settlement carries each local's *origins*: the candidates its
 born value derives from, flowing over the same pure aliases, join edges,
@@ -21813,11 +21851,15 @@ work queue. The finalizer still commits stored values, diagnostics, and root
 completion in sorted request order.
 
 Each root job owns its compile-time host state: `RocOps`, a root-local arena for
-Roc allocations, allocation tracking needed by RocOps,
-expect/dbg/crash event lists, the point in generated code it failed at, a crash
-boundary, and its result buffer. Roc runtime allocations are arena allocations
-and are bulk-freed after the result has been copied into `ConstStore`. Host
-events and failure state stay root-local until deterministic replay.
+Roc allocations, expect/dbg/crash event lists, the point in generated code it
+failed at, a crash boundary, and its result buffer. Roc runtime allocations are
+arena allocations and are bulk-freed after the result has been copied into
+`ConstStore`. Each allocation carries its length in a fixed-size header before
+the bytes handed to Roc, so reallocation reads the old length from the header
+and deallocation is free; the host keeps no per-pointer table, whose cost would
+grow with the allocations a root has ever held rather than with the ones it
+holds. Host events and failure state stay root-local until deterministic
+replay.
 
 #### Compile-Time Failure Sites
 
@@ -23374,8 +23416,12 @@ and verifies in debug builds that no other procedure's address is taken.
 
 This lifetime rule also covers boxed Roc closures that cross the host boundary.
 The dev backend generates real erased-callable procedures; it does not insert
-trampolines. In shim execution mode, packed erased-callable payloads reserve a
-small shim-only prefix before the ordinary capture bytes. The prefix stores a
+trampolines. Native dev code always supports a hot-reload session: packed
+erased-callable payloads of every native dev program, and of compile-time
+evaluation, reserve a small prefix before the ordinary capture bytes, so
+compile-time evaluation and every dev build compile the same erased
+callables. Outside a hot-reload session the image-tracking builtins return at
+once. The prefix stores a
 reference to the owning loaded image and the original capture-drop callback.
 Generated erased-callable procedures skip this prefix before reading their
 capture, increment the owning image on entry, and decrement it before returning.
@@ -23385,14 +23431,13 @@ reference. That retained reference keeps an old image alive while a host stores
 a boxed Roc closure and later calls it after one or more hot reloads.
 
 Because every generated erased-callable procedure skips the prefix, every
-erased callable value of a hot-reloading image reserves it, including the ones
-compile-time evaluation froze into static data. The runtime lowering of a
-hot-reloading dev image records the prefix size
-(`LirProgram.Result.erased_capture_prefix`), and the frozen images written for
-that program reserve it before their captures. A static value is never dropped,
-so its reserved prefix stays zeroed. The compile-time host program runs in the
-interpreter with no prefix, so its completed values are always transcoded into
-a runtime program whose prefix differs.
+erased callable value of a native dev program reserves it, including the ones
+compile-time evaluation froze into static data. A program's lowering records
+the prefix size (`LirProgram.Result.erased_capture_prefix`), and the frozen
+images written for that program reserve it before their captures. A static
+value is never dropped, so its reserved prefix stays zeroed. Optimized
+builds, other backends, and an interpreted evaluation reserve no prefix, and
+completed values are transcoded into a program whose prefix differs.
 
 Headerless default apps never hot reload. They compile through synthetic
 temporary source files that are discarded after each run, so there is nothing

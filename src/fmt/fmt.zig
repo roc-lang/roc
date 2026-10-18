@@ -8085,6 +8085,12 @@ test "comment prefix matches inter-token scans for every region" {
     }
 }
 
+/// The native stack the nesting tests format on. It holds the module
+/// environment's setup with room to spare, and is far below what formatting
+/// even the shallowest of their cases would take if each nesting level cost a
+/// native call.
+const small_native_stack_bytes = 512 * 1024;
+
 test "nested lists and tuples format on a small native stack" {
     const StackTestError = FormatTestError || std.mem.Allocator.Error || error{TestExpectedEqual};
     const Worker = struct {
@@ -8127,7 +8133,7 @@ test "nested lists and tuples format on a small native stack" {
         }
     };
     var result: StackTestError!void = {};
-    const thread = try std.Thread.spawn(.{ .stack_size = 256 * 1024 }, Worker.run, .{&result});
+    const thread = try std.Thread.spawn(.{ .stack_size = small_native_stack_bytes }, Worker.run, .{&result});
     thread.join();
     try result;
 }
@@ -8384,7 +8390,7 @@ test "nested expressions, patterns, types, and statements format on a small nati
         }
     };
     var result: StackTestError!void = {};
-    const thread = try std.Thread.spawn(.{ .stack_size = 256 * 1024 }, Worker.run, .{&result});
+    const thread = try std.Thread.spawn(.{ .stack_size = small_native_stack_bytes }, Worker.run, .{&result});
     thread.join();
     try result;
 }

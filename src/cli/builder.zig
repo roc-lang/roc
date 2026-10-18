@@ -347,8 +347,8 @@ test "core builtin roots include common LLVM declarations" {
         try std.testing.expect(core_builtin_roots.has(root));
     }
 
-    // `.full`-only and `.jit_only` wrappers are absent from the core payload,
-    // so they are not valid core roots.
+    // `.full`-only wrappers are absent from the core payload, so they are not
+    // valid core roots.
     try std.testing.expect(!core_builtin_roots.has(BuiltinFn.dec_sqrt.symbolName()));
     try std.testing.expect(!core_builtin_roots.has(BuiltinFn.hot_reload_enter.symbolName()));
 }

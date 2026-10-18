@@ -26,7 +26,7 @@ pub fn handler(comptime ServerType: type) type {
             defer params.deinit(self.allocator);
 
             const response = protocol.InitializeResult{
-                .capabilities = capabilities.buildCapabilities(),
+                .capabilities = capabilities.buildCapabilities(params.trusted_workspace),
                 .serverInfo = .{
                     .name = ServerType.server_name,
                     .version = ServerType.version,

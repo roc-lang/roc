@@ -301,14 +301,10 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
 const CompileTimeObjectCache = struct {
     allocator: Allocator,
     io: std.Io,
+    /// The host's dev packs, which compile-time evaluation publishes its own
+    /// programs' code into too.
     store: pack_store.Store,
-    /// The packs compile-time evaluation publishes from its own programs.
-    compile_time_store: pack_store.Store,
     packs: pack_store.LoadedPacks,
-    /// Whether the provider offers the compile-time store's packs. A dev
-    /// build for the host shares this provider with its runtime program,
-    /// which must be served only runtime-policy code.
-    offers_compile_time_packs: bool = true,
     /// The optimized object packs a linked dev build for the host offers its
     /// runtime program (`pack_store.Pending.linked_store`).
     linked_store: ?*const pack_store.Store = null,
@@ -322,7 +318,6 @@ const CompileTimeObjectCache = struct {
         self.build_env = build_env;
         self.packs.pending = .{
             .store = &self.store,
-            .compile_time_store = if (self.offers_compile_time_packs) &self.compile_time_store else null,
             .linked_store = self.linked_store,
             .io = self.io,
             .build_env = build_env,
@@ -331,26 +326,20 @@ const CompileTimeObjectCache = struct {
 
     fn deinit(context: *anyopaque) void {
         const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
-        if (self.pack_parts) |*parts| parts.deinit(self.allocator);
+        if (self.pack_parts) |*parts| parts.deinit();
         self.packs.deinit();
-        self.compile_time_store.deinit();
         self.store.deinit();
         self.allocator.destroy(self);
     }
 };
 
-/// What a compile-time pack is written from: each evaluation level's
-/// artifacts and offers, taken while the level's code exists
-/// (`eval.CompileTimeFinalization.StageSink`). A level's artifacts are the
-/// code the evaluator compiled to run it, reused rather than compiled again
-/// wherever that code does not depend on the evaluator's own context.
+/// The offers of this command's compile-time pack, gathered from each
+/// evaluation level while its code exists (`eval.CompileTimeFinalization.StageSink`);
+/// the pack's code is the code evaluation ran (`CompletedStages.artifacts`).
 const CompileTimePackParts = struct {
-    sets: std.ArrayList(backend.dev.ProcArtifact.Set) = .empty,
     offers: PackOffers,
     /// Whether any level has a keyed specialization to offer.
     has_keyed: bool = false,
-    /// Why a level's artifacts could not be compiled; nothing is published.
-    failure: ?backend.dev.CompilationError = null,
     /// Where the pack goes, decided at the first level: null when the
     /// program has no place for one or the store already holds it.
     destination: ?Destination = undefined,
@@ -367,20 +356,17 @@ const CompileTimePackParts = struct {
         const root_artifact = root_semantic.checked_artifact orelse return null;
         const placement = build_env.packPlacementForArtifactKey(root_artifact.key) orelse return null;
         const key = pack_store.compileTimePackKey(root_artifact.codeGenerationKey().bytes);
-        if (try cache.compile_time_store.has(placement.origin, placement.identity, key)) return null;
+        if (try cache.store.has(placement.origin, placement.identity, key)) return null;
         return .{ .placement = placement, .key = key };
     }
 
-    fn deinit(self: *CompileTimePackParts, allocator: Allocator) void {
-        for (self.sets.items) |*set| set.deinit();
-        self.sets.deinit(allocator);
+    fn deinit(self: *CompileTimePackParts) void {
         self.offers.deinit();
     }
 
     fn acceptStage(
         context: *anyopaque,
         stage: *const lir.CheckedPipeline.LoweredProgram,
-        compiled: ?*const backend.NativeProcCompiler.Retained,
         comptime_reads: *const lir.CheckedPipeline.SpecComptimeReads,
     ) Allocator.Error!void {
         const cache: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
@@ -389,50 +375,11 @@ const CompileTimePackParts = struct {
             self.destination = try decideDestination(cache);
             self.decided = true;
         }
-        if (self.destination == null or self.failure != null) return;
+        if (self.destination == null) return;
         if (stage.lir_result.spec_procs.items.len != 0) self.has_keyed = true;
-        var object_compiler = backend.ObjectFileCompiler.initForPack(cache.allocator);
-        object_compiler.post_check_executor = if (cache.build_env) |build_env| build_env.postCheckExecutor() else null;
-        object_compiler.enable_hot_reload = stage.lir_result.erased_capture_prefix != 0;
-        object_compiler.emit_object = false;
-        // Procedures the evaluation spliced from packs are spliced here too.
-        object_compiler.splice_source = cache.packs.spliceSource();
-        object_compiler.reuse_same_program = compiled;
-        const exports = if (stage.frozen_static_data) |frozen| frozen.exports else &.{};
-        var result = object_compiler.compileToObjectFile(
-            &stage.lir_result.store,
-            &stage.lir_result.layouts,
-            &.{},
-            exports,
-            stage.lir_result.store.getProcSpecs(),
-            stage.lir_result.boxy_erased_arg_desc_offsets.items,
-            stage.lir_result.boxy_erased_arg_desc_params.items,
-            stage.lir_result.boxy_worker_procs.items,
-            RocTarget.detectNative(),
-        ) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.NoEntrypoints, error.CodeGenerationFailed, error.ObjectGenerationFailed, error.UnsupportedTarget => {
-                self.failure = err;
-                return;
-            },
-        };
-        defer result.deinit();
-        if (result.artifacts) |set| {
-            result.artifacts = null;
-            self.sets.append(cache.allocator, set) catch |err| {
-                var owned = set;
-                owned.deinit();
-                return err;
-            };
-        }
         try self.offers.addProgram(stage, comptime_reads);
     }
 };
-
-/// The store directory name of the packs compile-time evaluation publishes,
-/// in place of an optimization level: their code is lowered under the
-/// compile-time LIR policy, which no runtime build uses.
-const compile_time_pack_policy = "comptime";
 
 /// The compile-time object cache, when a build's own runtime packs are the
 /// same store: a dev build for the host.
@@ -440,8 +387,6 @@ fn sharedCompileTimeObjectCache(build_env: *BuildEnv, target: RocTarget, opt: cl
     if (opt != .dev or target != RocTarget.detectNative()) return null;
     const owner = build_env.compile_time_object_cache_owner orelse return null;
     const cache: *CompileTimeObjectCache = @ptrCast(@alignCast(owner.context));
-    // The runtime program reads these offers too.
-    cache.offers_compile_time_packs = false;
     return cache;
 }
 
@@ -453,20 +398,11 @@ fn attachCompileTimeObjectCache(ctx: *CliCtx, build_env: *BuildEnv, verbose: boo
         error.NoHomeDirectory => return,
     };
     errdefer store.deinit();
-    var compile_time_store = pack_store.Store.init(ctx.gpa, store_config, RocTarget.detectNative(), compile_time_pack_policy) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.NoHomeDirectory => {
-            store.deinit();
-            return;
-        },
-    };
-    errdefer compile_time_store.deinit();
     const cache = try ctx.gpa.create(CompileTimeObjectCache);
     cache.* = .{
         .allocator = ctx.gpa,
         .io = ctx.io.std_io,
         .store = store,
-        .compile_time_store = compile_time_store,
         .packs = pack_store.LoadedPacks.init(ctx.gpa),
         .pack_parts = if (publishes_pack) .{ .offers = PackOffers.init(ctx.gpa) } else null,
     };
@@ -7002,7 +6938,7 @@ fn lowerDiscoveredLir(
         .{ .platform_entrypoints = artifact },
         opt,
         specialization_strategy,
-        base.target.TargetUsize.native,
+        RocTarget.detectNative(),
         false,
     );
     if (object_cache) |cache| {
@@ -7056,7 +6992,7 @@ fn lowerDiscoveredLir(
         .{ .platform_entrypoints = artifact },
         opt,
         specialization_strategy,
-        base.target.TargetUsize.native,
+        RocTarget.detectNative(),
         false,
         build_env.postCheckExecutor(),
         &spec_timing,
@@ -8528,7 +8464,6 @@ fn lowerModulePack(
     specialization_strategy: base.SpecializationStrategy,
     target: RocTarget,
 ) CliMainError!LoweredModulePack {
-    const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
     const own_imports = try build_env.collectImportedArtifactViews(ctx.gpa, artifact);
     defer ctx.gpa.free(own_imports);
     // A platform's internal modules bind their hosted functions through the
@@ -8553,7 +8488,7 @@ fn lowerModulePack(
     const relations = try build_env.collectRelationArtifactViews(ctx.gpa, artifact);
     defer ctx.gpa.free(relations);
 
-    var config = checkedRuntimeLoweringConfig(.linked_output, opt, specialization_strategy, target_usize, true);
+    var config = checkedRuntimeLoweringConfig(.linked_output, opt, specialization_strategy, target, true);
     config.target.post_check_executor = build_env.postCheckExecutor();
     config.target.spec_comptime_reads = true;
     var lowered = try lir.PackProgram.lowerPackProgram(ctx.gpa, artifact, imports.items, relations, roots, config.target);
@@ -8902,7 +8837,7 @@ fn buildTier2Objects(ctx: *CliCtx, args: cli_args.BuildArgs, requests_path: []co
         .linked_output,
         .dev,
         currentRuntimeSpecializationStrategy(args.specialization_strategy),
-        base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
+        target,
         false,
     );
     runtime_lowering.target.spec_cache = lookup;
@@ -9112,33 +9047,27 @@ fn objectPackBytes(
     return try backend.dev.PackFile.writeObject(ctx.gpa, object, identities.items, specs.items);
 }
 
-/// Publish the code compile-time evaluation compiled for this program, so a
-/// later compatible evaluation splices it instead of compiling it again
-/// (design.md "Compile-Time Object Packs"). The pack holds the keyed closed
-/// specializations of the evaluation's program under the same withholding
-/// rules as a runtime pack, filed beside the root module's packs in the
-/// compile-time store under a key no runtime pack uses. A program whose
-/// evaluation reported an error publishes nothing.
-fn publishCompileTimePack(ctx: *CliCtx, build_env: *BuildEnv) (Allocator.Error || error{NativeCompilationFailed})!void {
+/// Publish the code compile-time evaluation ran for this program, so a later
+/// compatible evaluation splices it instead of compiling it again (design.md
+/// "Compile-Time Object Packs"). The pack holds the keyed closed
+/// specializations of the evaluation's programs under the same withholding
+/// rules as a runtime pack, filed beside the root module's dev packs under a
+/// key no runtime pack uses. A program whose evaluation reported an error
+/// publishes nothing.
+fn publishCompileTimePack(ctx: *CliCtx, build_env: *BuildEnv) Allocator.Error!void {
     if (comptime !backend.host_lir_codegen_available) return;
     const owner = build_env.compile_time_object_cache_owner orelse return;
     const cache: *CompileTimeObjectCache = @ptrCast(@alignCast(owner.context));
     const parts = if (cache.pack_parts) |*parts| parts else return;
     if (!parts.decided) return;
     const destination = parts.destination orelse return;
-    if (parts.failure) |err| {
-        std.log.err("Compile-time pack compilation failed: {}", .{err});
-        return error.NativeCompilationFailed;
-    }
     if (!parts.has_keyed) return;
-    const store = &cache.compile_time_store;
+    const completed = build_env.compileTimeStages() orelse return;
+    const store = &cache.store;
 
-    // Each level of the evaluation is its own program; the pack offers the
-    // procedures of all of them.
-    const set_ptrs = try ctx.gpa.alloc(*const backend.dev.ProcArtifact.Set, parts.sets.items.len);
-    defer ctx.gpa.free(set_ptrs);
-    for (parts.sets.items, set_ptrs) |*set, *ptr| ptr.* = set;
-    var combined = try backend.dev.ProcArtifact.combine(ctx.gpa, set_ptrs);
+    // The pack holds the code evaluation ran: each stage of the evaluation is
+    // its own program, and the pack offers the procedures of all of them.
+    var combined = try completed.combinedArtifacts(ctx.gpa);
     defer combined.deinit();
     const bytes = try parts.offers.encode(ctx.gpa, &combined);
     defer ctx.gpa.free(bytes);
@@ -11141,7 +11070,7 @@ fn lowerBuildCommandToLir(
         roots,
         args.opt,
         specialization_strategy,
-        base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
+        target,
         proc_debug_names,
         build_env.postCheckExecutor(),
         &spec_timing,
@@ -11252,7 +11181,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         .linked_output,
         args.opt,
         currentRuntimeSpecializationStrategy(args.specialization_strategy),
-        base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
+        target,
         args.synthetic_default_platform,
     ));
     build_env.setValidateTargetFilesForSelectedTarget(true);
@@ -11538,7 +11467,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         .linked_output,
         args.opt,
         currentRuntimeSpecializationStrategy(args.specialization_strategy),
-        base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
+        target,
         args.synthetic_default_platform,
     );
     if (loaded_packs) |packs| {
@@ -11810,7 +11739,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         .{ .platform_entrypoints = .lir_image },
         args.opt,
         currentRuntimeSpecializationStrategy(args.specialization_strategy),
-        base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
+        target,
         false,
     ));
     build_env.setValidateTargetFilesForSelectedTarget(true);
@@ -13051,7 +12980,7 @@ test "only optimized builds emit thread-confined count updates" {
         .{ .opt = .dev, .confined = false },
         .{ .opt = .interpreter, .confined = false },
     }) |case| {
-        const config = checkedRuntimeLoweringConfig(.linked_output, case.opt, .lss, .native, false);
+        const config = checkedRuntimeLoweringConfig(.linked_output, case.opt, .lss, RocTarget.detectNative(), false);
         try std.testing.expectEqual(case.confined, config.target.thread_confined_rc);
     }
 }
@@ -13163,7 +13092,7 @@ fn checkedRuntimeLoweringConfig(
     roots: CheckedLirRoots,
     opt: cli_args.OptLevel,
     specialization_strategy: base.SpecializationStrategy,
-    target_usize: base.target.TargetUsize,
+    target: RocTarget,
     proc_debug_names: bool,
 ) compile.build.RuntimeLoweringConfig {
     return .{
@@ -13174,14 +13103,8 @@ fn checkedRuntimeLoweringConfig(
             .test_plan => false,
         },
         .target = .{
-            .target_usize = target_usize,
-            .erased_capture_prefix = switch (roots) {
-                .platform_entrypoints => |artifact| switch (artifact) {
-                    .dev_run_image => |image| if (image.hot_reload) @import("builtins").erased_callable.hot_reload_capture_prefix_size else 0,
-                    .lir_image => 0,
-                },
-                .linked_output, .test_plan => 0,
-            },
+            .target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
+            .erased_capture_prefix = devCapturePrefix(roots, opt, target),
             .specialization_strategy = specialization_strategy,
             .inline_mode = postCheckInlineModeForOpt(opt),
             .spec_constr_clone_inlining = specConstrCloneInliningForOpt(opt),
@@ -13204,6 +13127,24 @@ fn checkedRuntimeLoweringConfig(
             .proc_debug_names = proc_debug_names,
         },
     };
+}
+
+/// The bytes a program's erased callables reserve at the start of their
+/// captures. Native dev code always supports a hot-reload session, so every
+/// native dev build, like compile-time evaluation, reserves the hot-reload
+/// prefix and compiles the same erased callables; other backends and the
+/// interpreter reserve none.
+fn devCapturePrefix(roots: CheckedLirRoots, opt: cli_args.OptLevel, target: RocTarget) u32 {
+    if (opt != .dev) return 0;
+    switch (roots) {
+        .platform_entrypoints => |artifact| switch (artifact) {
+            .dev_run_image => {},
+            .lir_image => return 0,
+        },
+        .linked_output, .test_plan => {},
+    }
+    const arch = target.toCpuArch();
+    return if (arch == .x86_64 or arch == .aarch64) @import("builtins").erased_callable.hot_reload_capture_prefix_size else 0;
 }
 
 /// Native builds promise object provision only when their emitter has a
@@ -13240,7 +13181,7 @@ fn lowerCheckedSourceToLir(
     roots: CheckedLirRoots,
     opt: cli_args.OptLevel,
     specialization_strategy: base.SpecializationStrategy,
-    target_usize: base.target.TargetUsize,
+    target: RocTarget,
     proc_debug_names: bool,
     post_check_executor: ?base.post_check_task_executor.Executor,
     timing: ?*lir.CheckedPipeline.Timing,
@@ -13258,7 +13199,7 @@ fn lowerCheckedSourceToLir(
         .test_plan => {},
     };
 
-    var config = checkedRuntimeLoweringConfig(roots, opt, specialization_strategy, target_usize, proc_debug_names);
+    var config = checkedRuntimeLoweringConfig(roots, opt, specialization_strategy, target, proc_debug_names);
     config.target.post_check_executor = post_check_executor;
     config.target.timing = timing;
     config.target.spec_cache = spec_cache;
@@ -15624,7 +15565,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         .{ .test_plan = .{ .requests = runtime_requests.items, .metadata = runtime_metadata.items } },
         args.opt,
         specialization_strategy,
-        base.target.TargetUsize.native,
+        RocTarget.detectNative(),
         false,
     );
     runtime_config.explicit_roots = runtime_roots;

@@ -40,6 +40,14 @@ const IndexedRelocation = RelocationMod.IndexedRelocation;
 /// Producer-selected encoding: direct branch, inline address-plus-call, or address.
 pub const Form = enum { call, inline_call, addr };
 
+fn codeRefForm(form: Form) LirCodeGenMod.SymbolicRefForm {
+    return switch (form) {
+        .call => .call,
+        .inline_call => .inline_call,
+        .addr => .addr,
+    };
+}
+
 /// A producer-identified target whose code need not have been emitted yet.
 pub const SymbolicReference = struct {
     site: u32,
@@ -305,6 +313,105 @@ pub fn combine(allocator: Allocator, sets: []const *const Set) Allocator.Error!S
     }
     const owned = try artifacts.toOwnedSlice(a);
     return .{ .arena = arena, .artifacts = owned, .source_files = try source_files.toOwnedSlice(a) };
+}
+
+/// Deep-copy sets compiled from programs of one Solved program, which name a
+/// procedure, refcount helper, or Boxy thunk only by the code they hold, into
+/// one ownership domain with one copy of each: a later set's copy of one is
+/// dropped, and references to it resolve to the first copy. The sets share
+/// one source-file table, as programs of one Solved program do.
+pub fn combineDistinct(allocator: Allocator, sets: []const *const Set) Allocator.Error!Set {
+    const source_files: []const [32]u8 = if (sets.len == 0) &.{} else sets[0].source_files;
+    if (@import("builtin").mode == .debug) for (sets) |set| {
+        if (set.source_files.len != source_files.len) base.invariant("{s}", .{"combined artifact sets index different source-file tables"});
+        for (set.source_files, source_files) |left, right| {
+            if (!std.mem.eql(u8, &left, &right)) base.invariant("{s}", .{"combined artifact sets index different source-file tables"});
+        }
+    };
+    var arena = collections.SingleThreadArena.init(allocator);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+    const Named = union(enum) { proc: lir.ProcIdentity, thunk: lir.ProcIdentity, helper: []const u8 };
+    const NamedContext = struct {
+        pub fn hash(_: @This(), key: Named) u64 {
+            var hasher = std.hash.Wyhash.init(0);
+            switch (key) {
+                .proc => |identity| {
+                    hasher.update("p");
+                    hasher.update(&identity.bytes);
+                },
+                .thunk => |identity| {
+                    hasher.update("t");
+                    hasher.update(&identity.bytes);
+                },
+                .helper => |name| {
+                    hasher.update("h");
+                    hasher.update(name);
+                },
+            }
+            return hasher.final();
+        }
+        pub fn eql(_: @This(), left: Named, right: Named) bool {
+            return switch (left) {
+                .proc => |identity| right == .proc and std.meta.eql(identity, right.proc),
+                .thunk => |identity| right == .thunk and std.meta.eql(identity, right.thunk),
+                .helper => |name| right == .helper and std.mem.eql(u8, name, right.helper),
+            };
+        }
+    };
+    var placed = std.HashMap(Named, u32, NamedContext, std.hash_map.default_max_load_percentage).init(allocator);
+    defer placed.deinit();
+    // Where each set's artifacts land, and which of them are copied.
+    const maps = try allocator.alloc([]u32, sets.len);
+    var mapped: usize = 0;
+    defer {
+        for (maps[0..mapped]) |map| allocator.free(map);
+        allocator.free(maps);
+    }
+    const kept = try allocator.alloc([]bool, sets.len);
+    var kept_count: usize = 0;
+    defer {
+        for (kept[0..kept_count]) |flags| allocator.free(flags);
+        allocator.free(kept);
+    }
+    var next: u32 = 0;
+    for (sets, maps, kept) |set, *map, *flags| {
+        map.* = try allocator.alloc(u32, set.artifacts.len);
+        mapped += 1;
+        flags.* = try allocator.alloc(bool, set.artifacts.len);
+        kept_count += 1;
+        for (set.artifacts, map.*, flags.*) |artifact, *index, *keep| {
+            const named: ?Named = switch (artifact.kind) {
+                .proc => |identity| .{ .proc = identity },
+                .boxy_thunk => |identity| .{ .thunk = identity },
+                .rc_helper => |name| .{ .helper = name },
+                .entrypoint, .message_pool_run, .branch_island => null,
+            };
+            if (named) |key| {
+                const gop = try placed.getOrPut(key);
+                if (gop.found_existing) {
+                    index.* = gop.value_ptr.*;
+                    keep.* = false;
+                    continue;
+                }
+                gop.value_ptr.* = next;
+            }
+            index.* = next;
+            keep.* = true;
+            next += 1;
+        }
+    }
+    var artifacts = try std.ArrayList(Artifact).initCapacity(a, next);
+    for (sets, maps, kept) |set, map, flags| {
+        for (set.artifacts, flags) |source, keep| {
+            if (!keep) continue;
+            const first: u32 = @intCast(artifacts.items.len);
+            try copyArtifacts(a, &artifacts, &.{ .arena = undefined, .artifacts = &.{source} }, null);
+            const refs: []Reference = @constCast(artifacts.items[first].refs);
+            for (refs, source.refs) |*ref, original| ref.target = map[original.target];
+        }
+    }
+    return .{ .arena = arena, .artifacts = try artifacts.toOwnedSlice(a), .source_files = try a.dupe([32]u8, source_files) };
 }
 
 /// Deep-copy a set whose lines index a source-file table it does not carry
@@ -612,29 +719,6 @@ pub fn extractPrepared(
     errdefer arena.deinit();
     const arena_allocator = arena.allocator();
 
-    // Only producer-local binding cells enter this overlay. Immutable data
-    // remains in the shared catalog until a relocation actually reaches it.
-    var data_by_name = std.StringHashMap(DataItem).init(allocator);
-    defer data_by_name.deinit();
-    for (codegen.bindingDataCells()) |cell| {
-        const name = try arena_allocator.dupe(u8, cell.name);
-        const cell_relocations = try arena_allocator.alloc(DataRelocation, 1);
-        cell_relocations[0] = .{
-            .offset = 0,
-            .name = try arena_allocator.dupe(u8, cell.target_name),
-            .addend = 0,
-            .function = false,
-            .external = true,
-        };
-        try data_by_name.put(name, .{
-            .name = name,
-            .bytes = try arena_allocator.dupe(u8, &(@as([8]u8, @splat(0)))),
-            .alignment = 8,
-            .symbol_offset = 0,
-            .relocations = cell_relocations,
-        });
-    }
-
     const code = codegen.getGeneratedCode();
     const all_regions = try allocator.dupe(CG.CodeRegion, codegen.codeRegions());
     defer allocator.free(all_regions);
@@ -821,7 +905,7 @@ pub fn extractPrepared(
 
         // Every data item the region names, then every item those name, so
         // an artifact carries the whole constant graph it points into.
-        const region_data = try captureData(allocator, arena_allocator, region_relocations.items, &data_by_name, prepared);
+        const region_data = try captureData(allocator, arena_allocator, region_relocations.items, prepared);
 
         // Lines and failure sites are in code offset order, so each region's
         // are one contiguous run found by search. A failing call's return
@@ -840,6 +924,8 @@ pub fn extractPrepared(
         }
         const artifact_code = try arena_allocator.dupe(u8, code[region.start..region.end]);
         codegen.normalizeArtifactCode(region.start, artifact_code);
+        for (region_refs.items) |ref| CG.normalizeArtifactRefSite(artifact_code, ref.site, codeRefForm(ref.form), if (ref.veneer) |offset| offset else null);
+        for (symbolic_refs.items) |ref| CG.normalizeArtifactRefSite(artifact_code, ref.site, codeRefForm(ref.form), if (ref.veneer) |offset| offset else null);
         artifacts[index] = .{
             .kind = kind,
             .code = artifact_code,
@@ -993,7 +1079,6 @@ fn captureData(
     allocator: Allocator,
     arena_allocator: Allocator,
     relocations: []const NamedRelocation,
-    local: *const std.StringHashMap(DataItem),
     prepared: *const PreparedData,
 ) ExtractError![]const DataItem {
     var data = std.ArrayList(DataItem).empty;
@@ -1002,13 +1087,13 @@ fn captureData(
     var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
     for (relocations) |relocation| {
-        const item = local.get(relocation.name) orelse prepared.items.get(relocation.name) orelse continue;
+        const item = prepared.items.get(relocation.name) orelse continue;
         try pending.append(allocator, item.name);
     }
     while (pending.pop()) |name| {
         const visited = try seen.getOrPut(name);
         if (visited.found_existing) continue;
-        const item = local.get(name) orelse prepared.items.get(name) orelse return error.DanglingReference;
+        const item = prepared.items.get(name) orelse return error.DanglingReference;
         try data.append(arena_allocator, try cloneData(arena_allocator, item));
         for (item.relocations) |relocation| {
             if (relocation.function or relocation.external) continue;
@@ -1566,7 +1651,7 @@ test "artifact combination owns all fields and rebases only local references" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testCombineOwnership, .{});
 }
 
-test "artifact prepared data captures only reached closure and preserves external bindings" {
+test "artifact prepared data captures only the reached closure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testPreparedData, .{});
 }
 
@@ -1582,29 +1667,17 @@ fn testPreparedData(allocator: Allocator) (ExtractError || error{ TestExpectedEq
     var arena = collections.SingleThreadArena.init(allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    var local = std.StringHashMap(DataItem).init(allocator);
-    defer local.deinit();
-    try local.put("cell", .{
-        .name = "cell",
-        .bytes = &(@as([8]u8, @splat(0))),
-        .alignment = 8,
-        .symbol_offset = 0,
-        .relocations = &.{.{ .offset = 0, .name = "roc__d0", .addend = 0, .function = false, .external = true }},
-    });
+    // A slot the catalog does not carry is left for the image to bind.
     var refs = [_]NamedRelocation{
         .{ .offset = 0, .name = "literal", .scope = .shared, .kind = .{ .data = .rel32 } },
-        .{ .offset = 4, .name = "cell", .scope = .program, .kind = .{ .data = .rel32 } },
+        .{ .offset = 4, .name = "roc__d1", .scope = .program, .kind = .{ .data = .rel32 } },
     };
-    const items = try captureData(allocator, a, &refs, &local, &prepared);
+    const items = try captureData(allocator, a, &refs, &prepared);
     prepared.deinit();
     prepared_live = false;
-    try std.testing.expectEqual(@as(usize, 2), items.len);
-    try std.testing.expectEqualStrings("cell", items[0].name);
-    try std.testing.expectEqualSlices(u8, &(@as([8]u8, @splat(0))), items[0].bytes);
-    try std.testing.expect(items[0].relocations[0].external);
-    try std.testing.expectEqualStrings("roc__d0", items[0].relocations[0].name);
-    try std.testing.expectEqualStrings("literal", items[1].name);
-    try std.testing.expectEqualStrings("owned string", items[1].bytes);
+    try std.testing.expectEqual(@as(usize, 1), items.len);
+    try std.testing.expectEqualStrings("literal", items[0].name);
+    try std.testing.expectEqualStrings("owned string", items[0].bytes);
     try std.testing.expectEqualStrings("literal", refs[0].name);
 }
 

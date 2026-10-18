@@ -178,11 +178,6 @@ pub const Options = struct {
     /// Whether this program's code is linked, so the cache may serve it a
     /// linked-object entry (`Common.SpecCacheHit.c_abi_entry`).
     spec_cache_accepts_linked: bool = false,
-    /// Whether the cache may also serve specializations the compile-time
-    /// roots reach. The evaluator splices those entries into its own image,
-    /// which is only faithful when no compile-time-only exhaustiveness site
-    /// waits for the evaluation to reach it (`CheckedPipeline` decides).
-    comptime_closure_hits: bool = false,
     inline_plan: SolvedInline.Plan = .{},
     /// Lower every keyed specialization's procedure body, even one whose every
     /// call was inlined, so a pack program can offer it.
@@ -785,14 +780,8 @@ const Lowerer = struct {
     proc_debug_names: bool,
     spec_cache: ?Common.SpecCacheLookup,
     spec_cache_accepts_linked: bool,
-    comptime_closure_hits: bool,
     /// This consumer's explicit share of the producer's roots and requests.
     root_manifest: ?RootManifest,
-    /// True while the closure of the compile-time roots is being lowered.
-    /// Those procedures run in the compile-time evaluator, which takes
-    /// object-cache entries only under `comptime_closure_hits`; procedures
-    /// first reached afterwards may always be served.
-    comptime_phase: bool,
     /// Drain positions, kept across calls so a second drain resumes.
     fn_queue_index: usize,
     initializer_queue_index: usize,
@@ -833,8 +822,9 @@ const Lowerer = struct {
     const_type_map: collections.DenseMap(Type.TypeId, const_store.ConstTypeId),
     callable_source_fn_map: collections.DenseMap(Type.TypeId, SolvedType.TypeVarId),
     static_initializer_map: std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId),
-    /// The fresh-form procedure of each static list of copies, by slot.
-    uniform_constructors: collections.DenseMap(LIR.StaticDataId, LIR.LirProcSpecId),
+    /// The fresh-form procedure of each static list of copies, by the
+    /// identity naming what it builds.
+    uniform_constructors: std.AutoHashMap(LIR.ProcIdentity, LIR.LirProcSpecId),
     comptime_value_map: std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId),
     /// Whether a root-slot read at one type takes its root's slot value
     /// as stored, per (root type, read type) pair.
@@ -1086,9 +1076,7 @@ const Lowerer = struct {
             .proc_debug_names = options.proc_debug_names,
             .spec_cache = options.spec_cache,
             .spec_cache_accepts_linked = options.spec_cache_accepts_linked,
-            .comptime_closure_hits = options.comptime_closure_hits,
             .root_manifest = options.root_manifest,
-            .comptime_phase = true,
             .fn_queue_index = 0,
             .initializer_queue_index = 0,
             .layout_request_const_plans = options.layout_request_const_plans,
@@ -1117,7 +1105,7 @@ const Lowerer = struct {
             .const_type_map = collections.DenseMap(Type.TypeId, const_store.ConstTypeId).init(allocator),
             .callable_source_fn_map = collections.DenseMap(Type.TypeId, SolvedType.TypeVarId).init(allocator),
             .static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(allocator),
-            .uniform_constructors = collections.DenseMap(LIR.StaticDataId, LIR.LirProcSpecId).init(allocator),
+            .uniform_constructors = std.AutoHashMap(LIR.ProcIdentity, LIR.LirProcSpecId).init(allocator),
             .comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(allocator),
             .comptime_root_slots = std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot).init(allocator),
             .static_initializer_queue = .empty,
@@ -1333,7 +1321,7 @@ const Lowerer = struct {
         self.packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(self.allocator);
         self.packed_literals = std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral).init(self.allocator);
         self.static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(self.allocator);
-        self.uniform_constructors = collections.DenseMap(LIR.StaticDataId, LIR.LirProcSpecId).init(self.allocator);
+        self.uniform_constructors = std.AutoHashMap(LIR.ProcIdentity, LIR.LirProcSpecId).init(self.allocator);
         self.comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(self.allocator);
         self.comptime_read_shares_root = .empty;
         self.comptime_root_slots = std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot).init(self.allocator);
@@ -1403,21 +1391,8 @@ const Lowerer = struct {
                 }
             },
         }
-        // The compile-time roots' closure lowers first, so that a procedure
-        // the evaluator runs is known as such when the object cache is
-        // asked for it: the evaluator takes hits only under its own rules
-        // (`comptime_closure_hits`), a runtime-only procedure takes any.
-        for (self.roots.items) |root| {
-            if (!rootRunsAtCompileTime(root.request)) continue;
-            _ = try self.markReachableFn(root.fn_id);
-        }
+        for (self.roots.items) |root| _ = try self.markReachableFn(root.fn_id);
         for (self.literal_roots.items) |root| _ = try self.markReachableFn(root.fn_id);
-        try self.lowerReachableFns();
-        self.comptime_phase = false;
-        for (self.roots.items) |root| {
-            if (rootRunsAtCompileTime(root.request)) continue;
-            _ = try self.markReachableFn(root.fn_id);
-        }
 
         if (self.lowersLayoutRequests()) try self.lowerLayoutRequests();
         if (self.lowersRuntimeSchemaRequests()) try self.lowerRuntimeSchemaRequests();
@@ -2941,9 +2916,6 @@ const Lowerer = struct {
         // body and lowers normally.
         if (source_fn.body == .hosted) if (source_fn.source) |template| if (template.cached) |monotype_hit| {
             const hit = self.linkedEntryFor(template, monotype_hit);
-            if (self.comptime_phase and !self.comptime_closure_hits) {
-                Common.invariant("early object cache hit reached CTFE without the checked-program eligibility proof");
-            }
             if (plain_spec) {
                 if (!std.mem.eql(u8, &hit.identity, &identity.bytes)) {
                     Common.invariant("object cache entry identity disagrees with the identity lowered for its specialization key");
@@ -2961,7 +2933,7 @@ const Lowerer = struct {
                 entry.forwards_to = try self.ensureOwnFnSpec(spec.source, .finite);
             }
         };
-        if (cached == null and plain_spec and (!self.comptime_phase or self.comptime_closure_hits)) {
+        if (cached == null and plain_spec) {
             if (self.spec_cache) |cache| {
                 if (source_fn.source) |template| {
                     if (template.spec_key) |key| {
@@ -2976,7 +2948,7 @@ const Lowerer = struct {
                 }
             }
         } else if (pack_trace_available and self.spec_cache != null and packTraceEnabled()) {
-            if (source_fn.source) |template| if (template.spec_key) |key| std.debug.print("lookup direct-lir key={x} skipped comptime={} plain={} cached={}\n", .{ key.bytes[0..8], self.comptime_phase, plain_spec, cached != null });
+            if (source_fn.source) |template| if (template.spec_key) |key| std.debug.print("lookup direct-lir key={x} skipped plain={} cached={}\n", .{ key.bytes[0..8], plain_spec, cached != null });
         }
         // Only a program using the object cache separates a site-named
         // procedure's code from its identity.
@@ -2986,9 +2958,7 @@ const Lowerer = struct {
         // its solved types with their lambda sets, and its captures. A
         // procedure whose identity names its template by site is served by
         // its code key instead.
-        if (cached == null and source_fn.body == .roc and spec.abi == .finite and !spec.return_reuse.enabled() and
-            (!self.comptime_phase or self.comptime_closure_hits))
-        {
+        if (cached == null and source_fn.body == .roc and spec.abi == .finite and !spec.return_reuse.enabled()) {
             if (self.spec_cache) |cache| {
                 const key = Common.procIdentityCacheKey(if (code_key) |code| code else identity.bytes);
                 if (cache.lookup(key, self.spec_cache_accepts_linked)) |hit| {
@@ -5813,7 +5783,7 @@ const Lowerer = struct {
         var list_len: ?u64 = null;
         if (runtime_values) |values| {
             if (values.uniformListFor(root.module, root.root)) |uniform| {
-                fresh_alternative = try self.uniformListConstructor(where, id, uniform, layout_idx);
+                fresh_alternative = try self.uniformListConstructor(where, uniform, layout_idx);
                 if (fresh_alternative != null) list_len = uniform.count;
             }
         }
@@ -5826,11 +5796,12 @@ const Lowerer = struct {
         } }, where.source());
     }
 
-    /// The argument-free procedure that builds the list of copies held in
-    /// slot `id` fresh, created on its first use. Null when the value does
-    /// not fit `layout_idx` as a list.
-    fn uniformListConstructor(self: *Lowerer, where: LowerSite, id: LIR.StaticDataId, uniform: postcheck_values.UniformList, layout_idx: layout.Idx) Common.LowerError!?LIR.LirProcSpecId {
-        if (self.uniform_constructors.get(id)) |proc| return proc;
+    /// The argument-free procedure that builds a static list of copies
+    /// fresh, created on the first use of its content. Null when the value
+    /// does not fit `layout_idx` as a list.
+    fn uniformListConstructor(self: *Lowerer, where: LowerSite, uniform: postcheck_values.UniformList, layout_idx: layout.Idx) Common.LowerError!?LIR.LirProcSpecId {
+        const identity = try self.uniformListConstructorIdentity(uniform, layout_idx);
+        if (self.uniform_constructors.get(identity)) |proc| return proc;
         if (uniform.count > std.math.maxInt(i64)) return null;
         const store = &self.result.store;
         var new_locals: std.ArrayList(LIR.LocalId) = .empty;
@@ -5849,7 +5820,7 @@ const Lowerer = struct {
         const body = try postcheck_values.emitRepeat(context, store, &self.result.layouts, origin, value, uniform.element, @intCast(uniform.count), ret) orelse return null;
         const proc = try store.addProcSpec(.{
             .name = lirSymbol(self.symbols.fresh()),
-            .identity = try self.uniformListConstructorIdentity(id, layout_idx),
+            .identity = identity,
             .args = LIR.LocalSpan.empty(),
             .frame_locals = try store.addLocalSpan(new_locals.items),
             .join_points = LIR.JoinPointSpan.empty(),
@@ -5858,7 +5829,7 @@ const Lowerer = struct {
             .abi = .roc,
         }, where.loc);
         if (store.procNeedsStackProbe(&self.result.layouts, store.getProcSpec(proc))) store.getProcSpecPtr(proc).stack_probe = .required;
-        try self.uniform_constructors.put(id, proc);
+        try self.uniform_constructors.put(identity, proc);
         return proc;
     }
 
@@ -5873,24 +5844,17 @@ const Lowerer = struct {
         }
     };
 
-    /// Identity of a fresh-form procedure: it builds the value of one
-    /// static-data slot at one layout within this program, and is never
-    /// shared across programs.
-    fn uniformListConstructorIdentity(self: *Lowerer, id: LIR.StaticDataId, layout_idx: layout.Idx) std.mem.Allocator.Error!LIR.ProcIdentity {
-        var digests = try layout.Digests.init(self.allocator, &self.result.layouts);
-        defer digests.deinit();
+    /// A fresh-form procedure is emitted and carried in object-cache packs
+    /// like any procedure, and a spliced procedure takes the place of the
+    /// program's own procedure with its identity, so the identity names
+    /// what the procedure builds in every program: the list's layout and
+    /// content, by digests no program's numbering enters.
+    fn uniformListConstructorIdentity(self: *Lowerer, uniform: postcheck_values.UniformList, layout_idx: layout.Idx) std.mem.Allocator.Error!LIR.ProcIdentity {
         var hasher = base.TypeDigestHasher.init();
-        hasher.update("roc.proc.uniform-list-constructor.v2");
-        hasher.update(&try digests.get(layout_idx));
-        const slot: u32 = @backingInt(id);
-        hasher.update(&[_]u8{ @truncate(slot), @truncate(slot >> 8), @truncate(slot >> 16), @truncate(slot >> 24) });
+        hasher.update("roc.proc.uniform-list-constructor.v3");
+        hasher.update(&try self.result.layouts.contentDigest(layout_idx));
+        try uniform.writeDigest(self.allocator, &hasher);
         return .{ .bytes = hasher.finalResult() };
-    }
-
-    /// The content identity of the specialization a callable variant targets.
-    fn callableTargetIdentity(context: *anyopaque, target: Type.FnId) std.mem.Allocator.Error!proc_identity.Identity {
-        const self: *Lowerer = @ptrCast(@alignCast(context));
-        return (try self.specIdentity(self.fn_specs.items[@backingInt(target)])).bytes;
     }
 
     fn noteWorkerExpr(self: *Lowerer, data: Lifted.ExprData) void {
@@ -7081,7 +7045,7 @@ const Lowerer = struct {
             var fresh_alternative: ?LIR.LirProcSpecId = null;
             var list_len: ?u64 = null;
             if (try self.uniformListOfExpr(arena.allocator(), candidate.runtime_expr, ty, layout_idx)) |uniform| {
-                fresh_alternative = try self.uniformListConstructor(where, id, uniform, layout_idx);
+                fresh_alternative = try self.uniformListConstructor(where, uniform, layout_idx);
                 if (fresh_alternative != null) list_len = uniform.count;
             }
             return .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
@@ -15588,13 +15552,6 @@ const pack_trace_available = @import("builtin").link_libc and build_options.dev_
 /// `ROC_PACK_TRACE` is set: print every object cache lookup.
 fn packTraceEnabled() bool {
     return std.c.getenv("ROC_PACK_TRACE") != null;
-}
-
-fn rootRunsAtCompileTime(request: check.CheckedModule.RootRequest) bool {
-    return switch (request.kind) {
-        .compile_time_constant, .compile_time_callable => true,
-        .runtime_entrypoint, .provided_export, .platform_required_binding, .hosted_export, .test_expect, .repl_expr, .dev_expr => false,
-    };
 }
 
 test "value encoding preserves tag identities but excludes finite call targets" {

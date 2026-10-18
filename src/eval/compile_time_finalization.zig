@@ -54,28 +54,26 @@ pub const SpliceSource = backend.dev.SpliceSource;
 
 /// The object cache compile-time evaluation reads, the same way in every
 /// command: entries compiled for the host under the dev policy, which run
-/// expects. The evaluator's program takes a hit for a procedure it runs, under
-/// `comptime_closure_hits`, only when the entry names that procedure's own
-/// identity, and splices its cached code in place of compiling it.
+/// expects. The evaluator's program takes a hit for a procedure it runs only
+/// when the entry names that procedure's own identity, and splices its cached
+/// code in place of compiling it.
 pub const CompileTimeObjectCache = struct {
     spec_cache: lir.CheckedPipeline.SpecCacheLookup,
     splice_source: SpliceSource,
     /// Receives each level's program once the level has run, while its code
     /// still exists, so a cache that publishes the evaluation's code can take
-    /// that level's share before the code is released.
+    /// what it needs of that level's procedures before the code is released.
     stage_sink: ?StageSink = null,
 };
 
-/// Takes one evaluation level's program, with the procedure fragments the
-/// evaluator compiled for it (none when the level ran in the interpreter)
-/// and the specializations' compile-time reads. Everything it keeps must be
-/// its own: the level's code is released when it returns.
+/// Takes one evaluation level's program and the specializations'
+/// compile-time reads. Everything it keeps must be its own: the level's code
+/// is released when it returns.
 pub const StageSink = struct {
     context: *anyopaque,
     accept: *const fn (
         context: *anyopaque,
         stage: *const lir.CheckedPipeline.LoweredProgram,
-        compiled: ?*const NativeProcCompiler.Retained,
         comptime_reads: *const lir.CheckedPipeline.SpecComptimeReads,
     ) Allocator.Error!void,
 };
@@ -112,6 +110,9 @@ pub const Options = struct {
     slow_root_period_ns: u64 = std.time.ns_per_s,
     timing: ?*Timing = null,
     object_cache: ?CompileTimeObjectCache = null,
+    /// Keep each stage's code as object-cache artifacts
+    /// (`CompletedStages.artifacts`): what an object cache publishes.
+    keep_artifacts: bool = false,
     /// Where a compile-time failure is reported when the source it names
     /// belongs to a checked module this finalization does not complete: a
     /// literal in a module whose checking finished in an earlier compilation,
@@ -494,6 +495,9 @@ pub const CompletedStages = struct {
     /// The specializations' compile-time reads, which the object cache
     /// writes beside the program's procedures.
     spec_comptime_reads: ?lir.CheckedPipeline.SpecComptimeReads = null,
+    /// Each stage's code as object-cache artifacts, when the evaluation
+    /// writes to an object cache.
+    artifacts: std.ArrayList(backend.dev.ProcArtifact.Set) = .empty,
 
     const ComptimeRootOwner = @typeInfo(@FieldType(LirProgram.StaticDataValue, "compile_time_root")).optional.child;
     const SlotKey = struct {
@@ -523,7 +527,17 @@ pub const CompletedStages = struct {
         self.scalar_values.deinit(self.allocator);
         self.pending.deinit(self.allocator);
         if (self.spec_comptime_reads) |*reads| reads.deinit();
+        for (self.artifacts.items) |*set| set.deinit();
+        self.artifacts.deinit(self.allocator);
         self.* = undefined;
+    }
+
+    /// The stages' code as one artifact set, one copy of each procedure.
+    pub fn combinedArtifacts(self: *const CompletedStages, allocator: Allocator) Allocator.Error!backend.dev.ProcArtifact.Set {
+        const sets = try allocator.alloc(*const backend.dev.ProcArtifact.Set, self.artifacts.items.len);
+        defer allocator.free(sets);
+        for (self.artifacts.items, sets) |*set, *ptr| ptr.* = set;
+        return backend.dev.ProcArtifact.combineDistinct(allocator, sets);
     }
 
     /// The stages' programs, in evaluation order. Each one's code was
@@ -806,6 +820,10 @@ fn compileTimeTarget(options: Options, solved_policy: lir.CheckedPipeline.Solved
         // copying, stays on.
         .consume_dead_boxes = true,
         .zero_dict_seed = true,
+        // Native dev code always supports a hot-reload session, so its erased
+        // callables reserve the hot-reload prefix; an interpreted evaluation
+        // reserves none.
+        .erased_capture_prefix = if (compilerHostMustUseInterpreterForCtfe()) 0 else builtins.erased_callable.hot_reload_capture_prefix_size,
         .scalarize_joins = false,
         .reuse_boxes = false,
         // Specialization records procedure names for every consumer of the
@@ -1036,7 +1054,7 @@ pub fn finalizeProgram(
         const solved_policy = if (lss_runtime) lir.CheckedPipeline.SolvedPolicy.fromTarget(runtime_target.?) else check_solved_policy;
         var host_target = compileTimeTarget(options, solved_policy);
         host_target.demand_driven_comptime_roots = demand_driven;
-        var host_lir_policy = lir.CheckedPipeline.LirPolicy.fromTarget(host_target);
+        const host_lir_policy = lir.CheckedPipeline.LirPolicy.fromTarget(host_target);
         // All readers of this producer are declared before any cache hit can
         // erase a source body. CTFE still owns its native late-splice policy.
         host_target.code_provision = sharedProducerProvision(host_target, runtime_target);
@@ -1069,7 +1087,6 @@ pub fn finalizeProgram(
         var prepared = try lir.CheckedPipeline.prepareMonotypeToSolved(monotype);
         var prepared_owned = true;
         errdefer if (prepared_owned) prepared.deinit();
-        host_lir_policy.comptime_closure_hits = prepared.target.comptime_closure_hits;
 
         if (compile_time_root_count != 0 or prepared.literalRootCount() != 0) {
             // The compile-time roots are published first, so compile-time
@@ -1392,7 +1409,7 @@ fn evaluateBoxyLiteralRoots(
     try evaluation.init(allocator, &.{}, &PublishedRequests{}, host.lir_result.lowering_modules.items, producers, options);
     defer evaluation.deinit();
     evaluation.owners.report_sites = false;
-    var program_storage = try initEvaluationProgram(ProgramPtr, allocator, lowering_modules, host, options);
+    var program_storage = try initEvaluationProgram(ProgramPtr, allocator, lowering_modules, host, .boxy_in_process, options);
     defer program_storage.deinit();
     const program = program_storage.ptr();
     try evaluation.enterStage(host, program, &.{});
@@ -1414,12 +1431,6 @@ fn EvaluationProgram(comptime ProgramPtr: type) type {
             return if (ProgramPtr == *DevProgram) &self.storage else self.storage;
         }
 
-        /// The procedure fragments the evaluator compiled for the program.
-        fn compiled(self: *const @This()) ?*const NativeProcCompiler.Retained {
-            if (ProgramPtr != *DevProgram) return null;
-            return if (self.storage.artifacts) |*artifacts| artifacts else null;
-        }
-
         fn deinit(self: *@This()) void {
             if (ProgramPtr == *DevProgram) self.storage.deinit() else self.storage.deinit();
         }
@@ -1431,11 +1442,12 @@ fn initEvaluationProgram(
     allocator: Allocator,
     lowering_modules: lir.CheckedPipeline.CheckedModuleSet,
     lowered: *lir.CheckedPipeline.LoweredProgram,
+    code: DevProgram.Code,
     options: Options,
 ) FinalizeError!EvaluationProgram(ProgramPtr) {
     if (ProgramPtr == *InterpreterProgram) return .{ .storage = try InterpreterProgram.init(allocator, lowering_modules, lowered, options) };
     if (comptime !backend.host_lir_codegen_available) return error.UnsupportedPlatform;
-    var native = try DevProgram.init(allocator, lowering_modules, lowered, options);
+    var native = try DevProgram.init(allocator, lowering_modules, lowered, code, options);
     native.codegen.static_strings = native.static_strings.view();
     return .{ .storage = native };
 }
@@ -1546,7 +1558,7 @@ fn evaluateStaged(
         }, stage_producers.items, producers, lifted.loweringModules());
         if (stage.lir_result.root_procs.items.len != stage_roots.items.len)
             finalizationInvariant("compile-time stage lowering changed its requested root count");
-        var program_storage = try initEvaluationProgram(ProgramPtr, allocator, lowering_modules, stage, options);
+        var program_storage = try initEvaluationProgram(ProgramPtr, allocator, lowering_modules, stage, .dev_object, options);
         defer program_storage.deinit();
         const program = program_storage.ptr();
         try evaluation.enterStage(stage, program, stage_roots.items);
@@ -1556,9 +1568,14 @@ fn evaluateStaged(
         const frozen = try program.freezeCompleted();
         if (stage.frozen_static_data) |*read| read.deinit();
         stage.frozen_static_data = frozen;
+        if (ProgramPtr == *DevProgram and options.keep_artifacts) {
+            var set = try program.extractArtifacts(stage);
+            errdefer set.deinit();
+            try completed.artifacts.append(allocator, set);
+        }
         try completed.finishStage();
         if (options.object_cache) |cache| if (cache.stage_sink) |sink| if (prepared.spec_comptime_reads) |*reads| {
-            try sink.accept(sink.context, stage, program_storage.compiled(), reads);
+            try sink.accept(sink.context, stage, reads);
         };
         // Later levels and a runtime consumer read only the level's completed
         // values and their representation metadata, never its procedures.
@@ -2767,7 +2784,7 @@ fn lowerEvalAndFinishRoots(
     if (const_roots.len != requests.len) {
         finalizationInvariant("LIR lowering returned a different number of compile-time roots than requested");
     }
-    var native = try DevProgram.init(allocator, lowering_modules, &lowered, options);
+    var native = try DevProgram.init(allocator, lowering_modules, &lowered, .dev_object, options);
     defer native.deinit();
     native.codegen.static_strings = native.static_strings.view();
     return evalDevProgramRoots(allocator, module, requests, root_ids, state, problem_store, &owners, options, &lowered, const_roots, &native);
@@ -4253,14 +4270,29 @@ const DevProgram = struct {
     executable: backend.ExecutableMemory,
     entry_offsets: collections.DenseMap(lir.LIR.LirProcSpecId, usize),
     artifacts: ?NativeProcCompiler.Retained,
+    /// The bytes the program's erased callables reserve before their
+    /// captures (`LirProgram.Result.erased_capture_prefix`).
+    capture_prefix: u32,
 
-    fn init(allocator: Allocator, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram, options: Options) FinalizeError!DevProgram {
+    /// How a program's procedures are compiled: as a dev build's object
+    /// code, linked into this process, or, for a Boxy program, whose code no
+    /// build shares and whose runtime the evaluator installs itself, as
+    /// in-process code.
+    const Code = enum { dev_object, boxy_in_process };
+
+    fn init(allocator: Allocator, modules: lir.CheckedPipeline.CheckedModuleSet, lowered: *lir.CheckedPipeline.LoweredProgram, code: Code, options: Options) FinalizeError!DevProgram {
         const static_data_started_ns = if (options.timing) |timing| timing.start() else 0;
         var static_strings = try backend.StaticStringData.build(allocator, &lowered.lir_result.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);
         errdefer static_strings.deinit();
 
-        var slots = try StaticSlotEnvironment.init(allocator, modules, lowered, backend.dev.LirCodeGenMod.host_lir_codegen_target, .{});
-        errdefer slots.deinit();
+        // The program's static data is placed in the image, after its code,
+        // where the code reaches it as object code reaches data.
+        const materialized = try StaticSlotEnvironment.materialize(allocator, modules, lowered, backend.dev.LirCodeGenMod.host_lir_codegen_target);
+        var materialized_owned = true;
+        errdefer if (materialized_owned) static_data_exports.deinitStaticData(allocator, materialized);
+        var static_layout = backend.StaticDataImage.Layout.plan(allocator, materialized, .{}) catch |err| return StaticSlotEnvironment.staticImageError(err);
+        var layout_owned = true;
+        errdefer if (layout_owned) static_layout.deinit(allocator);
         if (options.timing) |timing| timing.finish(static_data_started_ns, .static_data);
 
         const code_generation_started_ns = if (options.timing) |timing| timing.start() else 0;
@@ -4277,8 +4309,14 @@ const DevProgram = struct {
             roc_target.host_cpu.level(),
         );
         errdefer codegen.deinit();
-        codegen.setNativeStaticData(slots.addresses);
-        try codegen.setStaticDataSymbols(slots.materialized);
+        // A dev object program's procedures compile exactly as a dev build's
+        // object code does, so the code evaluation runs is the code a build
+        // links; this image links it into the compiler's own process.
+        codegen.generation_mode = switch (code) {
+            .dev_object => .object_file,
+            .boxy_in_process => .native_execution,
+        };
+        try codegen.setStaticDataSymbols(materialized);
         codegen.enable_hot_reload = lowered.lir_result.erased_capture_prefix != 0;
         var native_fns = boxyNativeFnTable();
         codegen.boxy_native_fns = &native_fns;
@@ -4287,25 +4325,25 @@ const DevProgram = struct {
         defer allocator.free(evaluation_roots);
         for (lowered.lir_result.const_roots.items, evaluation_roots[0..const_root_count]) |root, *proc| proc.* = root.proc;
         for (lowered.lir_result.literal_roots.items, evaluation_roots[const_root_count..]) |root, *proc| proc.* = root.proc;
-        const evaluation_demand = try lir.ReachableProcs.collectProcDemand(allocator, &lowered.lir_result, evaluation_roots, slots.materialized);
+        const evaluation_demand = try lir.ReachableProcs.collectProcDemand(allocator, &lowered.lir_result, evaluation_roots, materialized);
         defer allocator.free(evaluation_demand);
         var splice = backend.dev.HostSplice.init(allocator);
         errdefer splice.deinit();
-        splice.bindStaticDataSymbols(slots.materialized, &slots.image) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.MissingStaticDataSymbol => finalizationInvariant("CTFE slot image omitted a declared static data symbol"),
-            error.DuplicateStaticDataSymbol => finalizationInvariant("CTFE slot image contains conflicting static data symbols"),
-        };
+        splice.reserveStaticData(&static_layout);
         if (options.object_cache) |cache| try splice.spliceExternal(&codegen, evaluation_demand, cache.splice_source);
-        const static_rc_helpers = try static_data_exports.collectRequiredRcHelpers(allocator, slots.materialized);
+        const static_rc_helpers = try static_data_exports.collectRequiredRcHelpers(allocator, materialized);
         defer allocator.free(static_rc_helpers);
         var artifacts = try compileProcedures(allocator, &codegen, evaluation_demand, static_rc_helpers, options);
         errdefer artifacts.deinit();
-        // Prepared fragments own their carried strings and pointer cells.
-        // The splice borrows those bytes until image placement completes.
+        // Prepared fragments own their carried strings. The splice borrows
+        // those bytes until image placement completes.
         const carried_data = try artifacts.dataItems(allocator);
         defer allocator.free(carried_data);
         try splice.addDataItems(carried_data);
+
+        // The evaluator calls each root through its own in-process entry
+        // wrapper.
+        codegen.generation_mode = .native_execution;
 
         var entry_offsets = collections.DenseMap(lir.LIR.LirProcSpecId, usize).init(allocator);
         errdefer entry_offsets.deinit();
@@ -4329,10 +4367,15 @@ const DevProgram = struct {
         var executable = splice.link(&codegen, &native_fns) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.MappingFailed => return error.MmapFailed,
-            error.UnresolvedSymbol => spliceInvariant(&splice, "spliced object-cache code names a symbol the compile-time evaluator cannot bind"),
-            error.InvalidRelocation => spliceInvariant(&splice, "spliced object-cache code carries a relocation the compile-time evaluator cannot patch"),
+            error.UnresolvedSymbol => spliceInvariant(&splice, "compile-time code names a symbol the compile-time evaluator cannot bind"),
+            error.InvalidRelocation => spliceInvariant(&splice, "compile-time code carries a relocation the compile-time evaluator cannot patch"),
         };
         errdefer executable.deinit();
+        layout_owned = false;
+        const static_image = static_layout.place(allocator, splice.staticDataMemory(&executable)) catch |err| return StaticSlotEnvironment.staticImageError(err);
+        materialized_owned = false;
+        var slots = try StaticSlotEnvironment.initInImage(allocator, lowered, materialized, static_image, .{});
+        errdefer slots.deinit();
 
         const StaticFunctionResolver = struct {
             codegen: *const backend.HostLirCodeGen,
@@ -4377,6 +4420,7 @@ const DevProgram = struct {
             .executable = executable,
             .entry_offsets = entry_offsets,
             .artifacts = artifacts,
+            .capture_prefix = lowered.lir_result.erased_capture_prefix,
         };
     }
 
@@ -4400,9 +4444,10 @@ const DevProgram = struct {
         for (self.codegen.store.getProcSpecs(), 0..) |_, index| {
             const proc: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
             const symbol = self.codegen.compiledProcSymbol(proc) orelse continue;
+            // The callable's captures follow the program's capture prefix.
             if (base_address + symbol.code_start == address) return .{
                 .proc = proc,
-                .capture_ptr = builtins.erased_callable.capturePtr(data_ptr),
+                .capture_ptr = builtins.erased_callable.capturePtr(data_ptr) + self.capture_prefix,
             };
         }
         finalizationInvariant("native callable omitted its emitted procedure identity");
@@ -4456,6 +4501,26 @@ const DevProgram = struct {
 
     fn freezeCompleted(self: *DevProgram) Allocator.Error!LirProgram.FrozenStaticData {
         return self.slots.freezeCompleted();
+    }
+
+    /// The image's code as object-cache artifacts, carrying the completed
+    /// values it reads. Its procedures are a dev build's object code, so a
+    /// build splices them as its own.
+    fn extractArtifacts(self: *DevProgram, lowered: *const lir.CheckedPipeline.LoweredProgram) Allocator.Error!backend.dev.ProcArtifact.Set {
+        const frozen = lowered.frozen_static_data orelse finalizationInvariant("compile-time stage froze no completed values");
+        return backend.dev.ProcArtifact.extract(
+            backend.HostLirCodeGen,
+            self.allocator,
+            &self.codegen,
+            lowered.lir_result.store.getProcSpecs(),
+            &lowered.lir_result.layouts,
+            self.static_strings.exports,
+            frozen.exports,
+            self.splice.data.items,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.NestedCodeRegion, error.UncoveredCode, error.DanglingReference, error.UnsupportedRelocation => finalizationInvariant("compile-time image could not be lifted into artifacts"),
+        };
     }
 
     fn deinit(self: *DevProgram) void {
@@ -4632,6 +4697,7 @@ fn evalDevProgramRoots(
         codegen: *const backend.HostLirCodeGen,
         store: *const lir.LirStore,
         executable: *const backend.ExecutableMemory,
+        capture_prefix: u32,
 
         fn resolve(raw: ?*anyopaque, data_ptr: [*]u8) error{RuntimeError}!ConstStoreWriter.ErasedCallableResolution {
             const self: *@This() = @ptrCast(@alignCast(raw.?));
@@ -4642,9 +4708,11 @@ fn evalDevProgramRoots(
                 const symbol = self.codegen.compiledProcSymbol(proc_id) orelse continue;
                 const compiled_addr = @intFromPtr(self.executable.codePtr() + symbol.code_start);
                 if (compiled_addr == runtime_addr) {
+                    // The callable's captures follow the program's capture
+                    // prefix.
                     return .{
                         .proc = proc_id,
-                        .capture_ptr = builtins.erased_callable.capturePtr(data_ptr),
+                        .capture_ptr = builtins.erased_callable.capturePtr(data_ptr) + self.capture_prefix,
                     };
                 }
             }
@@ -4656,6 +4724,7 @@ fn evalDevProgramRoots(
         .codegen = &native.codegen,
         .store = &lowered.lir_result.store,
         .executable = &native.executable,
+        .capture_prefix = lowered.lir_result.erased_capture_prefix,
     };
 
     const store_results_started_ns = if (options.timing) |timing| timing.start() else 0;
