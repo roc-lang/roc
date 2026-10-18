@@ -5437,8 +5437,8 @@ Ordinary top-level constant bodies use a stronger compile-time-root context that
 suppresses nested root selection and nested eligibility entirely, because the
 enclosing body is already evaluated at compile time.
 
-Canonicalization's top-level dependency order remains an input for ordinary
-top-level constants, and checking should prefer to emit selected hoisted roots
+The checked strict-demand relation orders ordinary top-level constants, and
+checking should prefer to emit selected hoisted roots
 in dependency-first order as it proves and selects them. The request order is
 then computed from explicit checked references across all same-module
 compile-time roots: ordinary top-level constants, selected hoisted constants,
@@ -5448,22 +5448,34 @@ the checked module is finalized. The durable checked module data stores only the
 roots, the sorted request stream, stored `ConstStore` payloads, and sparse
 lookup indexes.
 
-Canonicalization outputs the initial exact strict-demand edges between top-level
-definitions. Literal conversions and method dispatches remain leaves in that
-initial relation because their method targets do not exist until static
-dispatch resolves. At the checked boundary, checking supplies every selected
-dispatch target (literal conversions, method calls, operators, interpolation,
-`for` loop iteration, and the component dispatches derived for a derived
-method, structural comparison, or hash) and reruns the same demand analysis
-once. Demand summaries retain an unresolved dispatch requirement while it is
+The exact strict-demand edges between top-level definitions are computed once,
+at the checked boundary, because literal conversions and method dispatches
+have no targets until static dispatch resolves. Checking supplies every
+selected dispatch target (literal conversions, method calls, operators,
+interpolation, `for` loop iteration, and the component dispatches derived for
+a derived method, structural comparison, or hash) to the demand analysis. Demand summaries retain an unresolved dispatch requirement while it is
 polymorphic; when a callable is demanded, the checker-produced
 `SchemeUseRecord` pairs map that requirement through each concrete
 instantiation until its selected target is exact, so a `where`-clause method
 demands only the body its own instantiation selects. A resolved dispatch is an
 eager call, so the selected callable body's top-level demands flow into its
-caller exactly like those of any other statically known call. The resulting
-relation replaces the initial one, and checking applies the ordinary SCC
-non-function-cycle rule before constructing the CheckedModule.
+caller exactly like those of any other statically known call. Checking then
+reports every non-function definition in a cyclic SCC of the relation as a
+circular value definition and poisons it before constructing the
+CheckedModule.
+
+Most value cycles need neither a dispatch target nor a function value to be
+seen, and those are rejected before any definition is checked, so no type is
+inferred from a value that is never computed. Every demand edge is a name
+reference, so such a cycle lies within one recursive binding group that holds
+a value definition. For each such group, checking runs the same demand
+analysis over the group and every definition it reaches, with dispatches as
+leaves and function values left out, and poisons the cycles it finds; the
+binding groups are then recomputed without the poisoned definitions'
+references. Inference itself never decides a value cycle: an in-group
+reference to a value member links monomorphically, like any other
+binding-group reference, and the relation built after checking rejects the
+cycles only dispatch targets or function values reveal.
 
 ### Function Values In Strict Demand
 
@@ -5489,9 +5501,6 @@ function it holds. An importer reads it for each imported function it calls,
 including a method dispatch that selects a foreign target. Imports are
 acyclic, so an imported function's body can never demand the importer's
 values, and the record is the only thing an importer needs from it.
-Canonicalization's initial relation has no knowledge of imported functions,
-so it leaves function values out; the checked relation alone applies this
-rule.
 
 The finalized edges are durable `ModuleEnv` data, serialized independently of
 the transient SCC evaluation order, because `RootRequestTable` scheduling and
@@ -11906,7 +11915,7 @@ non-record backings construct no fields. Three consumers agree on it:
 (1) `DefaultCycles`—the omission edges of the cycle graph; (2)
 `DependencyGraph`'s demand walk—a def constructing `Cfg.{}` that omits a
 defaulted field depends on everything that default's expression demands,
-so `evaluation_order` and the top-level demand relation carry the edge
+so the top-level demand relation carries the edge
 explicitly and comptime root scheduling never re-derives it; (3)
 `collectNameReferences` (check order)—the checker materializes the
 default at the construction site, so the default's referenced defs are

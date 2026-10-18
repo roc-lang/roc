@@ -147,29 +147,6 @@ pub const EvaluationOrder = struct {
 
     allocator: std.mem.Allocator,
 
-    pub fn clone(self: *const EvaluationOrder, allocator: std.mem.Allocator) std.mem.Allocator.Error!EvaluationOrder {
-        const sccs = try allocator.alloc(SCC, self.sccs.len);
-        errdefer allocator.free(sccs);
-
-        var built: usize = 0;
-        errdefer {
-            for (sccs[0..built]) |scc| allocator.free(scc.defs);
-        }
-
-        for (self.sccs, 0..) |scc, i| {
-            sccs[i] = .{
-                .defs = try allocator.dupe(CIR.Def.Idx, scc.defs),
-                .is_recursive = scc.is_recursive,
-            };
-            built += 1;
-        }
-
-        return .{
-            .sccs = sccs,
-            .allocator = allocator,
-        };
-    }
-
     pub fn deinit(self: *EvaluationOrder) void {
         for (self.sccs) |scc| {
             self.allocator.free(scc.defs);
@@ -405,8 +382,9 @@ const DemandAnalyzer = struct {
     dispatch_by_intro: std.AutoHashMapUnmanaged(CIR.Expr.Idx, std.ArrayListUnmanaged(Var)) = .{},
     /// Present once checking has run: function values then demand their
     /// bodies whenever their holder can invoke them (design.md "Function
-    /// Values In Strict Demand"). Canonicalization's initial relation has no
-    /// such knowledge of imported functions and leaves function values out.
+    /// Values In Strict Demand"). Before checking, nothing is known of what
+    /// imported functions or dispatches invoke, and function values are left
+    /// out.
     foreign: ?ForeignCallees = null,
     scheme_use_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, u32) = .{},
     /// The `iter` and `next` dispatch callables of each `for` loop, by node.
@@ -1805,25 +1783,30 @@ fn mapDefBinderPatterns(
     }
 }
 
-/// Build canonicalization's initial strict-demand graph for all definitions.
-/// It has no knowledge of imported functions or selected dispatch targets;
-/// checking replaces it (`buildCheckedDependencyGraph`).
-pub fn buildDependencyGraph(
+/// Build the strict-demand graph among one binding group's definitions
+/// before the group is checked. Every demand edge is a name reference, so a
+/// strict value cycle lies within one binding group; `reachable_defs` are the
+/// group's definitions and every definition they reference, directly or not,
+/// whose bodies decide what the group's calls demand. Nothing is known yet of
+/// dispatch targets or of what imported functions invoke, so dispatches are
+/// leaves and function values are left out; the cycles found are those that
+/// need neither (`buildCheckedDependencyGraph` finds the rest).
+pub fn buildUncheckedGroupDependencyGraph(
     cir: *const ModuleEnv,
-    all_defs: CIR.Def.Span,
+    reachable_defs: []const CIR.Def.Idx,
+    group_defs: []const CIR.Def.Idx,
     allocator: std.mem.Allocator,
 ) std.mem.Allocator.Error!DependencyGraph {
-    const defs_slice = cir.store.sliceDefs(all_defs);
-    var graph = DependencyGraph.init(allocator, defs_slice);
+    var graph = DependencyGraph.init(allocator, group_defs);
     errdefer graph.deinit();
 
-    var analyzer = try DemandAnalyzer.init(cir, defs_slice, defs_slice, &.{}, null, allocator);
+    var analyzer = try DemandAnalyzer.init(cir, reachable_defs, group_defs, &.{}, null, allocator);
     defer analyzer.deinit();
 
     try analyzer.computeSummaries();
     analyzer.walked_value_lambdas.clearRetainingCapacity();
 
-    for (defs_slice) |def_idx| {
+    for (group_defs) |def_idx| {
         var deps = DemandSummary{};
         defer deps.deinit(allocator);
 
@@ -1840,7 +1823,8 @@ pub fn buildDependencyGraph(
 }
 
 /// Build the strict-demand graph after checking. This is the same demand
-/// analysis canonicalization uses, with checker-produced inputs: the selected
+/// analysis `buildUncheckedGroupDependencyGraph` runs, over every definition
+/// and with checker-produced inputs: the selected
 /// dispatch targets, and what imported functions can invoke. With them,
 /// function values demand their bodies wherever their holder can invoke a
 /// function value it does not name (design.md "Function Values In Strict

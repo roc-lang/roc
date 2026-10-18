@@ -9985,9 +9985,9 @@ test "platform root candidate comes from registration, not name probing" {
 /// What one module's phases were observed to be while the module it imports
 /// was still incomplete.
 const ImportPhaseObservations = struct {
-    /// The importer was canonicalized -- it reached `.WaitingOnImports` and
-    /// its environment carries canonicalization's strict-demand relation --
-    /// while the module it imports had not been canonicalized itself.
+    /// The importer was canonicalized -- it reached `.WaitingOnImports` with
+    /// its canonicalized environment -- while the module it imports had not
+    /// been canonicalized itself.
     canonicalized_before_import_canonicalized: bool,
     /// The importer left `.WaitingOnImports` for type checking while the
     /// module it imports had not completed.
@@ -10063,10 +10063,7 @@ fn observeImportPhases(
         };
         switch (importer.phase) {
             .WaitingOnImports => {
-                const importer_canonicalized = if (importer.moduleEnv()) |env|
-                    env.topLevelDemandDependenciesReady()
-                else
-                    false;
+                const importer_canonicalized = importer.moduleEnv() != null;
                 if (importer_canonicalized and import_not_canonicalized) {
                     observations.canonicalized_before_import_canonicalized = true;
                 }

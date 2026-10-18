@@ -1085,36 +1085,6 @@ fn processSnapshotContent(
     // Assert that everything is in-sync
     can_ir.debugAssertArraysInSync();
 
-    // Compute dependency-based evaluation order if not already set
-    // Skip for .file/.package/.platform/.app tests because canonicalizeAndTypeCheckModule
-    // will call canonicalizeFile which sets it. Only do this for .expr/.statement which
-    // don't call canonicalizeFile.
-    const needs_evaluation_order = switch (content.meta.node_type) {
-        .expr, .statement, .mono => true,
-        .file, .package, .platform, .app, .snippet, .repl, .header, .dev_object, .docs, .reporting => false,
-    };
-
-    if (needs_evaluation_order and can_ir.evaluation_order == null) {
-        const DependencyGraph = @import("can").DependencyGraph;
-        var graph = try DependencyGraph.buildDependencyGraph(
-            can_ir,
-            can_ir.all_defs,
-            allocator,
-        );
-        defer graph.deinit();
-
-        var demand_dependencies = try DependencyGraph.collectDependencies(&graph, can_ir.gpa);
-        errdefer demand_dependencies.deinit(can_ir.gpa);
-        const eval_order = try DependencyGraph.computeSCCs(&graph, allocator);
-        // IMPORTANT: Use can_ir.gpa here, not allocator, because ModuleEnv.deinit()
-        // will free this with self.gpa. They must match to avoid memory leaks.
-        const eval_order_ptr = try can_ir.gpa.create(DependencyGraph.EvaluationOrder);
-        eval_order_ptr.* = eval_order;
-        can_ir.setTopLevelDemandDependencies(demand_dependencies);
-        demand_dependencies = .{};
-        can_ir.evaluation_order = eval_order_ptr;
-    }
-
     // Types - include Set, Dict, Bool, Try, and Str modules in the order they appear in imports
     // The order MUST match the import order in can_ir.imports because module_idx in external
     // type references is based on the import index

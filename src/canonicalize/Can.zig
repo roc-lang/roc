@@ -5258,30 +5258,11 @@ pub fn canonicalizeFile(
     // constructions. Cyclic defaults report once per cycle and are dropped
     // here, so check and lowering never see them; dispatch-mediated and
     // foreign-omission cycles are the checker's residue (design.md
-    // "Defaulted Fields"). This MUST run before the dependency graph below:
-    // its demand walk follows omission edges into surviving defaults'
-    // expressions, and its termination relies on that omission relation
-    // being acyclic (a dropped default is never materialized, so it
-    // rightly contributes no dependency).
+    // "Defaulted Fields"). The checker's strict-demand walk follows omission
+    // edges into surviving defaults' expressions, and its termination relies
+    // on that omission relation being acyclic (a dropped default is never
+    // materialized, so it rightly contributes no dependency).
     try DefaultCycles.checkDefaultCycles(self.env, self.env.gpa);
-
-    // Compute dependency-based evaluation order using SCC analysis
-    var graph = try DependencyGraph.buildDependencyGraph(
-        self.env,
-        self.env.all_defs,
-        self.env.gpa,
-    );
-    defer graph.deinit();
-
-    var demand_dependencies = try DependencyGraph.collectDependencies(&graph, self.env.gpa);
-    errdefer demand_dependencies.deinit(self.env.gpa);
-    const eval_order = try DependencyGraph.computeSCCs(&graph, self.env.gpa);
-    try self.poisonRecursiveNonFunctionDefs(&eval_order);
-    const eval_order_ptr = try self.env.gpa.create(DependencyGraph.EvaluationOrder);
-    eval_order_ptr.* = eval_order;
-    self.env.setTopLevelDemandDependencies(demand_dependencies);
-    demand_dependencies = .{};
-    self.env.evaluation_order = eval_order_ptr;
 
     self.env.finalizeMethodTables();
 
@@ -5299,83 +5280,6 @@ pub fn canonicalizeFile(
     // it here; re-raise it now rather than letting the OOM be swallowed.
     if (self.scope_exit_oom) return error.OutOfMemory;
     file_completed = true;
-}
-
-fn poisonRecursiveNonFunctionDefs(
-    self: *Self,
-    eval_order: *const @import("DependencyGraph.zig").EvaluationOrder,
-) std.mem.Allocator.Error!void {
-    const RecursiveNonFunctionDef = struct {
-        def_idx: CIR.Def.Idx,
-        ident: Ident.Idx,
-        region: Region,
-    };
-
-    var binders: std.ArrayList(CIR.Pattern.Idx) = .empty;
-    defer binders.deinit(self.env.gpa);
-    var binder_scratch: std.ArrayList(CIR.Pattern.Idx) = .empty;
-    defer binder_scratch.deinit(self.env.gpa);
-
-    for (eval_order.sccs) |scc| {
-        if (!scc.is_recursive) continue;
-
-        var defs_to_poison = std.ArrayList(RecursiveNonFunctionDef).empty;
-        defer defs_to_poison.deinit(self.env.gpa);
-
-        for (scc.defs) |def_idx| {
-            const def = self.env.store.getDef(def_idx);
-            if (isRecursiveFunctionDefExpr(self.env.store.getExpr(def.expr))) continue;
-
-            // Every name the def binds is computed from the one cyclic
-            // value, so each is circular: the single name of a plain def,
-            // or each name a destructure binds.
-            binders.clearRetainingCapacity();
-            try DependencyGraph.appendPatternBinders(self.env, def.pattern, &binders, &binder_scratch, self.env.gpa);
-            for (binders.items) |binder| {
-                try defs_to_poison.append(self.env.gpa, .{
-                    .def_idx = def_idx,
-                    .ident = defPatternIdent(&self.env.store, binder).?,
-                    .region = self.env.store.getPatternRegion(binder),
-                });
-            }
-        }
-
-        std.mem.sort(RecursiveNonFunctionDef, defs_to_poison.items, {}, struct {
-            fn lessThan(_: void, a: RecursiveNonFunctionDef, b: RecursiveNonFunctionDef) bool {
-                if (a.region.start.offset != b.region.start.offset) {
-                    return a.region.start.offset < b.region.start.offset;
-                }
-                if (a.region.end.offset != b.region.end.offset) {
-                    return a.region.end.offset < b.region.end.offset;
-                }
-                return @backingInt(a.def_idx) < @backingInt(b.def_idx);
-            }
-        }.lessThan);
-
-        var poisoned_defs: std.AutoHashMapUnmanaged(CIR.Def.Idx, void) = .{};
-        defer poisoned_defs.deinit(self.env.gpa);
-        for (defs_to_poison.items) |def_to_poison| {
-            const diagnostic = Diagnostic{
-                .circular_value_definition = .{
-                    .ident = def_to_poison.ident,
-                    .region = def_to_poison.region,
-                },
-            };
-            // A destructuring def reports once per bound name; its one
-            // right-hand side is replaced once.
-            const poisoned = try poisoned_defs.getOrPut(self.env.gpa, def_to_poison.def_idx);
-            if (poisoned.found_existing) {
-                try self.env.pushDiagnostic(diagnostic);
-                continue;
-            }
-            const malformed_idx = try self.env.pushMalformed(CIR.Expr.Idx, diagnostic);
-            self.env.store.setDefExpr(def_to_poison.def_idx, malformed_idx);
-        }
-    }
-}
-
-fn isRecursiveFunctionDefExpr(expr: CIR.Expr) bool {
-    return expr == .e_closure or expr == .e_lambda or expr == .e_anno_only or expr == .e_derived_method or expr == .e_hosted_lambda;
 }
 
 fn derivedMethodKind(self: *const Self, ident: Ident.Idx) ?CIR.DerivedMethodKind {
