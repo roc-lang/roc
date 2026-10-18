@@ -31238,23 +31238,8 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
             } });
         }
 
-        // Report redundant patterns
-        for (result.redundant_indices) |idx| {
-            _ = try self.problems.appendProblem(.{ .redundant_pattern = .{
-                .match_expr = expr_idx,
-                .num_branches = @intCast(match.branches.span.len),
-                .problem_branch_index = idx,
-            } });
-        }
-
-        // Report unmatchable patterns (patterns on uninhabited types)
-        for (result.unmatchable_indices) |idx| {
-            _ = try self.problems.appendProblem(.{ .unmatchable_pattern = .{
-                .match_expr = expr_idx,
-                .num_branches = @intCast(match.branches.span.len),
-                .problem_branch_index = idx,
-            } });
-        }
+        try self.reportUselessMatchRows(expr_idx, match, result.redundant_rows, .redundant);
+        try self.reportUselessMatchRows(expr_idx, match, result.unmatchable_rows, .unmatchable);
     }
 
     // A match whose pattern matrix, guard contract, or branch result failed
@@ -31266,6 +31251,54 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
         try self.markErroneousValueExpr(expr_idx);
     }
     return .done;
+}
+
+const UselessPatternKind = enum { redundant, unmatchable };
+
+/// Report the redundant or unmatchable alternatives of a match. A branch whose
+/// every alternative is useless for this reason gets one report for the whole
+/// branch; otherwise each useless alternative gets its own report.
+fn reportUselessMatchRows(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    match: CIR.Expr.Match,
+    rows: []const exhaustive.UselessRow,
+    comptime kind: UselessPatternKind,
+) std.mem.Allocator.Error!void {
+    const branch_indices = self.cir.store.matchBranchSlice(match.branches);
+    var start: usize = 0;
+    while (start < rows.len) {
+        const branch_index = rows[start].branch_index;
+        var end = start + 1;
+        while (end < rows.len and rows[end].branch_index == branch_index) end += 1;
+
+        const branch = self.cir.store.getMatchBranch(branch_indices[branch_index]);
+        const branch_patterns = self.cir.store.sliceMatchBranchPatterns(branch.patterns);
+        if (end - start == branch_patterns.len) {
+            try self.appendUselessMatchPattern(expr_idx, branch_index, .whole_branch, kind);
+        } else {
+            for (rows[start..end]) |row| {
+                const alternative_index = for (branch_patterns, 0..) |bp_idx, i| {
+                    if (self.cir.store.getMatchBranchPattern(bp_idx).pattern == row.pattern) break i;
+                } else base.invariant("a useless match row's pattern is not an alternative of its branch", .{});
+                try self.appendUselessMatchPattern(expr_idx, branch_index, .alternative(@intCast(alternative_index)), kind);
+            }
+        }
+        start = end;
+    }
+}
+
+fn appendUselessMatchPattern(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    branch_index: u32,
+    part: problem.MatchBranchPart,
+    comptime kind: UselessPatternKind,
+) std.mem.Allocator.Error!void {
+    _ = try self.problems.appendProblem(switch (kind) {
+        .redundant => .{ .redundant_pattern = .{ .match_expr = expr_idx, .branch_index = branch_index, .part = part } },
+        .unmatchable => .{ .unmatchable_pattern = .{ .match_expr = expr_idx, .branch_index = branch_index, .part = part } },
+    });
 }
 
 /// Relate an operand to the `Bool` its consumer demands: an `if` or `while`
