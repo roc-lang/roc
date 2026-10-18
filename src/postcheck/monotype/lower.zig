@@ -38205,23 +38205,21 @@ const BodyContext = struct {
         return info.item_fields;
     }
 
-    const GeneratedParseTagUnionSpecBackingInfo = struct {
-        record_fields: TypeFieldSpanBorrow,
-    };
-
-    fn generatedParseTagUnionSpecBackingInfo(
-        self: *BodyContext,
-        spec_ty: Type.TypeId,
-    ) ?GeneratedParseTagUnionSpecBackingInfo {
+    /// The generated backing of a tag-union spec, or null when `spec_ty` is
+    /// not a tag-union spec.
+    fn generatedParseTagUnionSpecBackingType(self: *BodyContext, spec_ty: Type.TypeId) ?Type.TypeId {
         if (!self.typeHasBuiltinOwner(spec_ty, .parse_tag_union_spec)) return null;
-        const backing_ty = self.namedBackingType(spec_ty) orelse return null;
-        const record_fields = switch (self.shapeContent(backing_ty)) {
+        return self.namedBackingType(spec_ty) orelse Common.invariant("generated tag-union spec had no backing type");
+    }
+
+    /// The label fields of a generated tag-union spec backing, which is empty
+    /// when no payload record has a field.
+    fn generatedParseTagUnionSpecLabels(self: *BodyContext, spec_backing_ty: Type.TypeId) TypeFieldSpanBorrow {
+        return switch (self.shapeContent(spec_backing_ty)) {
             .record => |span| self.typeStore().fieldSpan(span),
             .zst => self.typeStore().fieldSpan(.empty()),
-            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => return null,
+            .primitive, .named, .tuple, .tag_union, .list, .box, .func, .erased => Common.invariant("generated tag-union spec backing was not a record"),
         };
-        if (record_fields.len == 0) return null;
-        return .{ .record_fields = record_fields };
     }
 
     fn isGeneratedIteratorEvidenceNode(self: *BodyContext, node: NodeId) Allocator.Error!bool {
@@ -39942,7 +39940,7 @@ const BodyContext = struct {
         var label_locals = try self.parserPrecomputedLabelLocals(plan, union_ty);
         defer label_locals.deinit();
 
-        const backing_fields = try GuardedList.dupe(self.allocator, Type.Field, self.typeStore().fieldSpan(self.recordFieldsSpan(spec_backing_ty)));
+        const backing_fields = try GuardedList.dupe(self.allocator, Type.Field, self.generatedParseTagUnionSpecLabels(spec_backing_ty));
         defer self.allocator.free(backing_fields);
         const values = try self.allocator.alloc(DraftFieldExpr, backing_fields.len);
         defer self.allocator.free(values);
@@ -39967,16 +39965,17 @@ const BodyContext = struct {
     }
 
     /// Record every record shape the tag union's payload parsers reach into
-    /// `plan`, each field reading its label's renamed name from the spec.
+    /// `plan`, each field reading its label's renamed name from the spec. A
+    /// spec with no labels has no backing local to read.
     fn buildParserPrecomputedPlanFromTagUnionSpec(
         self: *BodyContext,
         plan: *ParserPrecomputedPlan,
-        spec_backing_local: DraftLocalId,
+        spec_backing_local: ?DraftLocalId,
         spec_backing_ty: Type.TypeId,
         union_ty: Type.TypeId,
     ) Allocator.Error!void {
         const str_ty = try self.primitiveType(.str);
-        const backing_fields = try GuardedList.dupe(self.allocator, Type.Field, self.typeStore().fieldSpan(self.recordFieldsSpan(spec_backing_ty)));
+        const backing_fields = try GuardedList.dupe(self.allocator, Type.Field, self.generatedParseTagUnionSpecLabels(spec_backing_ty));
         defer self.allocator.free(backing_fields);
 
         var label_captures = collections.DenseMap(names.RecordFieldNameId, ParserPrecomputedCapture).init(self.allocator);
@@ -39986,7 +39985,7 @@ const BodyContext = struct {
             const capture = ParserPrecomputedCapture{
                 .local = try self.addLocal(self.builder.symbols.fresh(), str_ty),
                 .value = try self.addFieldAccessExpr(
-                    try self.localExpr(spec_backing_local, spec_backing_ty),
+                    try self.localExpr(spec_backing_local orelse Common.invariant("generated tag-union spec labels had no backing local"), spec_backing_ty),
                     backing_field.name,
                     str_ty,
                 ),
@@ -43163,19 +43162,22 @@ const BodyContext = struct {
 
         var precomputed_plan = ParserPrecomputedPlan.init(self.allocator);
         defer precomputed_plan.deinit();
-        const maybe_spec_backing_ty = if (self.generatedParseTagUnionSpecBackingInfo(spec_ty) != null)
-            self.namedBackingType(spec_ty) orelse Common.invariant("generated tag-union spec had no backing type")
+        const maybe_spec_backing_ty = self.generatedParseTagUnionSpecBackingType(spec_ty);
+        const spec_has_labels = if (maybe_spec_backing_ty) |spec_backing_ty|
+            self.generatedParseTagUnionSpecLabels(spec_backing_ty).len != 0
         else
-            null;
-        const spec_local = if (maybe_spec_backing_ty != null)
+            false;
+        const spec_local = if (spec_has_labels)
             try self.addLocal(self.builder.symbols.fresh(), spec_ty)
         else
             null;
-        const spec_backing_local = if (maybe_spec_backing_ty) |spec_backing_ty| blk: {
-            const local = try self.addLocal(self.builder.symbols.fresh(), spec_backing_ty);
-            try self.buildParserPrecomputedPlanFromTagUnionSpec(&precomputed_plan, local, spec_backing_ty, value_ty);
-            break :blk local;
-        } else null;
+        const spec_backing_local = if (spec_has_labels)
+            try self.addLocal(self.builder.symbols.fresh(), maybe_spec_backing_ty orelse Common.invariant("generated tag-union spec labels had no backing type"))
+        else
+            null;
+        if (maybe_spec_backing_ty) |spec_backing_ty| {
+            try self.buildParserPrecomputedPlanFromTagUnionSpec(&precomputed_plan, spec_backing_local, spec_backing_ty, value_ty);
+        }
 
         var body = try self.unknownDecodedTagErr(ret_ty, missing_local, missing_ty);
         var index = tags.len;
@@ -43212,14 +43214,14 @@ const BodyContext = struct {
         body = try self.wrapLet(encoding_local, encoding_ty, encoding_value, body, ret_ty);
         body = try self.wrapLet(key_local, key_ty, key_value, body, ret_ty);
         body = try self.wrapLet(options_local, options_ty, options_value, body, ret_ty);
-        if (maybe_spec_backing_ty) |spec_backing_ty| {
+        if (spec_backing_local) |backing_local| {
+            const spec_backing_ty = maybe_spec_backing_ty orelse Common.invariant("generated tag-union spec backing local had no backing type");
             var capture_index = precomputed_plan.captures.items.len;
             while (capture_index > 0) {
                 capture_index -= 1;
                 const capture = precomputed_plan.captures.items[capture_index];
                 body = try self.wrapLet(capture.local, try self.primitiveType(.str), capture.value, body, ret_ty);
             }
-            const backing_local = spec_backing_local orelse Common.invariant("generated tag-union spec backing local was missing");
             const spec_pat = try self.addPat(.{
                 .ty = spec_ty,
                 .data = .{ .nominal = try self.bindPat(backing_local, spec_backing_ty) },

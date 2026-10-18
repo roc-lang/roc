@@ -1,7 +1,7 @@
 # repro for https://github.com/roc-lang/roc/issues/12376
 # Derived parsers for tag unions whose payloads reach the same record through
 # several imported opaque types, share field labels across records, or carry
-# an empty record. The input depends on the command line so each parse runs
+# an empty record (alone or alongside records with fields). The input depends on the command line so each parse runs
 # at runtime rather than being evaluated during compilation.
 import Issue12376Inner
 import Issue12376Outer
@@ -47,6 +47,10 @@ main! = |args| {
 	echo!("${describe(camel)}\n")
 	camel_nested = parse_camel(Str.concat("{\"Nested\": {\"inner\": {\"id\": 5}, \"userId\": \"v\"}}", suffix))
 	echo!("${describe(camel_nested)}\n")
+
+	unit : Try([Unit({}), Num(U64)], _)
+	unit = Json.parse(Str.concat("{\"Unit\": {}}", suffix))
+	echo!("${Str.inspect(unit)}\n")
 
 	Ok({})
 }
