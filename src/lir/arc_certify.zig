@@ -6037,6 +6037,18 @@ const Certifier = struct {
             _ = try self.requireAggregateRepresentation(state, source);
             return;
         }
+        // An aggregate read out of an aggregate whose stored units are spent
+        // is still an inline representation: it names bytes of its source and
+        // can be read for its non-refcounted leaves, which
+        // `requireAggregateRepresentation` admits. Lent only by a dead value,
+        // it is dead itself, so anything that needs a unit through it fails.
+        if (self.isRc(target) and self.isInlineAggregateRepresentation(target) and self.isInlineAggregateRepresentation(source)) {
+            const representation = try self.requireAggregateRepresentation(state, source);
+            if (representation != no_value and !try self.valueIsLive(state, representation)) {
+                _ = try self.bindFresh(state, target, 0, &.{representation});
+                return;
+            }
+        }
         const source_value = try self.requireLive(state, source);
         // Reading a variant's payload proves the container holds that variant
         // on this path; anything else is already undefined.
