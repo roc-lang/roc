@@ -3053,8 +3053,15 @@ pub fn compute(
     var undo = std.ArrayList(UndoEntry).empty;
     defer undo.deinit(gpa);
 
+    // `root` is the place's unit-carrying origin, which parameter benefits
+    // trace through every link. `owner` is the nearest binding on the
+    // place's chain that holds a unit of its own: the root, or a take
+    // binding or owned-only binding between the root and this local, which
+    // holds the field unit its take consumed. `projected` is relative to
+    // `owner`.
     const PlaceOrigin = struct {
         root: u32,
+        owner: u32,
         projected: bool,
     };
     const PlaceEdge = struct {
@@ -3728,7 +3735,7 @@ pub fn compute(
                     is_param[root_index] or
                     solution.isJoinParam(root);
                 if (!root_can_own) continue;
-                try places.put(gpa, source_index, .{ .root = root_index, .projected = false });
+                try places.put(gpa, source_index, .{ .root = root_index, .owner = root_index, .projected = false });
                 try component_place_keys.append(gpa, source_index);
                 try place_work.append(gpa, source_index);
             }
@@ -3739,7 +3746,6 @@ pub fn compute(
                 var edge_index = place_heads[source_index];
                 while (edge_index != no_index) {
                     const edge = place_edges.items[edge_index];
-                    const projected = source_origin.projected or edge.kind == .projection;
                     const target: LIR.LocalId = @fromBackingInt(edge.target);
                     // A join parameter is a cell with one definition per
                     // incoming edge, not an SSA value. Its edge-specific
@@ -3754,17 +3760,37 @@ pub fn compute(
                         edge_index = edge.next;
                         continue;
                     }
+                    // A take binding (owned-only ones included, in the
+                    // emissions their take applies to) holds the field unit
+                    // its take consumed, so it starts an ownership place of
+                    // its own; the root's unit no longer includes that field.
+                    const target_holds_unit = result.take_bindings[edge.target] or
+                        result.owned_only_binding_roots[edge.target] != no_index;
+                    const arrival: PlaceOrigin = if (target_holds_unit)
+                        .{ .root = source_origin.root, .owner = edge.target, .projected = false }
+                    else
+                        .{
+                            .root = source_origin.root,
+                            .owner = source_origin.owner,
+                            .projected = source_origin.projected or edge.kind == .projection,
+                        };
                     const slot = try places.getOrPut(gpa, edge.target);
                     if (!slot.found_existing) {
-                        slot.value_ptr.* = .{ .root = source_origin.root, .projected = projected };
+                        slot.value_ptr.* = arrival;
                         try component_place_keys.append(gpa, edge.target);
                         try place_work.append(gpa, edge.target);
-                    } else if (slot.value_ptr.root != ambiguous_index and slot.value_ptr.root != source_origin.root) {
-                        slot.value_ptr.* = .{ .root = ambiguous_index, .projected = false };
+                    } else if (slot.value_ptr.root != ambiguous_index and slot.value_ptr.root != arrival.root) {
+                        slot.value_ptr.* = .{ .root = ambiguous_index, .owner = ambiguous_index, .projected = false };
                         try place_work.append(gpa, edge.target);
-                    } else if (slot.value_ptr.root == source_origin.root and projected and !slot.value_ptr.projected) {
-                        slot.value_ptr.projected = true;
-                        try place_work.append(gpa, edge.target);
+                    } else if (slot.value_ptr.root == arrival.root) {
+                        if (slot.value_ptr.owner != ambiguous_index and slot.value_ptr.owner != arrival.owner) {
+                            slot.value_ptr.owner = ambiguous_index;
+                            slot.value_ptr.projected = false;
+                            try place_work.append(gpa, edge.target);
+                        } else if (slot.value_ptr.owner == arrival.owner and arrival.projected and !slot.value_ptr.projected) {
+                            slot.value_ptr.projected = true;
+                            try place_work.append(gpa, edge.target);
+                        }
                     }
                     edge_index = edge.next;
                 }
@@ -3858,18 +3884,18 @@ pub fn compute(
             if (!recursive) break;
         }
 
-        // Borrowed complete projections keep the root as their unit key.
-        // Owned projection targets instead receive a solve-time move
-        // opportunity at the read itself; if liveness says the root
-        // survives, ARC retains exactly as before and the target owns the
-        // retained unit independently.
+        // Borrowed complete projections keep their place's owner as their
+        // unit key. A take binding owns its place and is never a projection
+        // of it, so it keeps its own unit. Owned projection targets instead
+        // receive a solve-time move opportunity at the read itself; if
+        // liveness says the owner survives, ARC retains exactly as before
+        // and the target owns the retained unit independently.
         for (component_place_keys.items) |key| {
             const origin = places.get(key).?;
-            if (origin.root == ambiguous_index or !origin.projected) continue;
+            if (origin.root == ambiguous_index or origin.owner == ambiguous_index or !origin.projected) continue;
             const local: LIR.LocalId = @fromBackingInt(key);
             if (!solution.isBorrowed(local) or solution.isJoinParam(local)) continue;
-            if (result.isTakeBinding(local) or result.owned_only_binding_roots[key] != no_index) continue;
-            try result.projection_units.put(local, @fromBackingInt(origin.root));
+            try result.projection_units.put(local, @fromBackingInt(origin.owner));
         }
         for (place_edges.items) |edge| {
             if (edge.kind != .projection) continue;
@@ -3879,8 +3905,8 @@ pub fn compute(
             // the unit on this edge without conflating its other definitions.
             if (solution.isBorrowed(target)) continue;
             const origin = places.get(edge.source) orelse continue;
-            if (origin.root == ambiguous_index) continue;
-            try result.complete_takes.put(@fromBackingInt(edge.kind.projection), @fromBackingInt(origin.root));
+            if (origin.root == ambiguous_index or origin.owner == ambiguous_index) continue;
+            try result.complete_takes.put(@fromBackingInt(edge.kind.projection), @fromBackingInt(origin.owner));
         }
     }
     // Materialize only equivalences whose representative actually acquired a

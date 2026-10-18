@@ -396,6 +396,10 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
         const actual_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, b);
         const evidence = try snapshotMismatchEvidence(env);
         const leaf = try snapshotMismatchLeaf(env);
+        env.unify_scratch.rejected_roots = .{
+            .expected = env.types.resolveThroughAliases(a).desc.content,
+            .actual = env.types.resolveThroughAliases(b).desc.content,
+        };
         const method_conflict = try snapshotMismatchMethodConflict(env);
         const problem_idx = try env.problems.appendProblem(.{ .type_mismatch = .{
             .types = .{
@@ -4172,6 +4176,12 @@ pub const BoundedRowViolation = struct {
 /// An unordered pair of resolved type descriptors.
 const VisitedPairKey = struct { low: u32, high: u32 };
 
+/// The contents of a reported mismatch's root operands before poisoning.
+pub const RejectedRoots = struct {
+    expected: Content,
+    actual: Content,
+};
+
 /// A reusable memory arena used across unification calls to avoid per-call allocations.
 ///
 /// `Scratch` owns several typed scratch arrays, each designed to hold a specific type of
@@ -4245,6 +4255,9 @@ pub const Scratch = struct {
     /// The bounded extension and the tag the current unify call refused to add
     /// to it, when a refusal caused its mismatch.
     bounded_row_violation: ?BoundedRowViolation,
+    /// The root operands' contents, read through aliases just before the
+    /// reported mismatch of the current unify call poisoned them.
+    rejected_roots: ?RejectedRoots,
     only_in_a_tags: TagSafeList,
     only_in_b_tags: TagSafeList,
     in_both_tags: TwoTagsSafeList,
@@ -4420,6 +4433,7 @@ pub const Scratch = struct {
             .absorbed_record_defaults = try AbsorbedRecordDefault.SafeList.initCapacity(gpa, 4),
             .gathered_tags = try TagSafeList.initCapacity(gpa, 32),
             .bounded_row_violation = null,
+            .rejected_roots = null,
             .only_in_a_tags = try TagSafeList.initCapacity(gpa, 32),
             .only_in_b_tags = try TagSafeList.initCapacity(gpa, 32),
             .in_both_tags = try TwoTagsSafeList.initCapacity(gpa, 32),
@@ -4493,6 +4507,7 @@ pub const Scratch = struct {
         self.absorbed_record_defaults.items.clearRetainingCapacity();
         self.gathered_tags.items.clearRetainingCapacity();
         self.bounded_row_violation = null;
+        self.rejected_roots = null;
         self.only_in_a_tags.items.clearRetainingCapacity();
         self.only_in_b_tags.items.clearRetainingCapacity();
         self.in_both_tags.items.clearRetainingCapacity();

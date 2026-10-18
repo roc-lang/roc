@@ -31,10 +31,10 @@ pub const WasmRepr = union(enum) {
     stack_memory: u32, // size in bytes
 };
 
-/// Map a layout.Idx to its wasm representation.
-/// For composite types (records, tuples, tags), returns stack_memory with size 0.
-/// Use wasmReprWithStore for accurate composite sizes.
-pub fn wasmRepr(layout_idx: layout.Idx, simd_enabled: bool) WasmRepr {
+/// Map a named scalar layout.Idx to its wasm representation, reading any
+/// linear-memory size from the layout store. Returns null for every other
+/// layout, which `wasmReprWithStore` classifies from its stored layout.
+fn namedScalarRepr(layout_idx: layout.Idx, ls: *const layout.Store, simd_enabled: bool) ?WasmRepr {
     if (layout_idx == .u8 or layout_idx == .i8 or layout_idx == .u16 or layout_idx == .i16 or layout_idx == .u32 or layout_idx == .i32) {
         return .{ .primitive = .i32 };
     }
@@ -42,11 +42,13 @@ pub fn wasmRepr(layout_idx: layout.Idx, simd_enabled: bool) WasmRepr {
     if (layout_idx == .f32) return .{ .primitive = .f32 };
     if (layout_idx == .f64) return .{ .primitive = .f64 };
     if (layout_idx == .u8x16 or layout_idx == .i8x16 or layout_idx == .u16x8 or layout_idx == .i16x8 or layout_idx == .u32x4 or layout_idx == .i32x4 or layout_idx == .u64x2 or layout_idx == .i64x2) {
-        return if (simd_enabled) .{ .primitive = .v128 } else .{ .stack_memory = 16 };
+        if (simd_enabled) return .{ .primitive = .v128 };
+        return .{ .stack_memory = ls.sizeAt(ls.getLayout(layout_idx), wasm_target) };
     }
-    if (layout_idx == .i128 or layout_idx == .u128 or layout_idx == .dec) return .{ .stack_memory = 16 };
-    if (layout_idx == .str) return .{ .stack_memory = 12 }; // wasm32: ptr(4) + encoded cap(4) + len(4)
-    return .{ .stack_memory = 0 }; // composite—use wasmReprWithStore for size
+    if (layout_idx == .i128 or layout_idx == .u128 or layout_idx == .dec or layout_idx == .str) {
+        return .{ .stack_memory = ls.sizeAt(ls.getLayout(layout_idx), wasm_target) };
+    }
+    return null;
 }
 
 /// Map a layout.Idx to its wasm representation using the layout store for
@@ -60,49 +62,47 @@ pub fn wasmReprWithStore(layout_idx: layout.Idx, ls: *const layout.Store, simd_e
     var idx = layout_idx;
     var outer_closure: ?layout.Layout = null;
     while (true) {
-        // Try the scalar fast-path first; named scalar idxs are not valid for getLayout.
-        const basic = wasmRepr(idx, simd_enabled);
-        switch (basic) {
-            .primitive => return basic, // a primitive captures makes the closure that primitive
-            .stack_memory => |size| {
-                if (size > 0) {
-                    // Known-size scalar (i128, dec, str).
+        // Named scalars (including i128, dec, and str) first.
+        if (namedScalarRepr(idx, ls, simd_enabled)) |basic| {
+            switch (basic) {
+                .primitive => return basic, // a primitive captures makes the closure that primitive
+                .stack_memory => {
                     if (outer_closure) |outer| return .{ .stack_memory = ls.layoutSize(outer) };
                     return basic;
-                }
-                // Composite type—look up from layout store.
-                const l = ls.getLayout(idx);
-                if (l.tag == .closure) {
-                    if (outer_closure == null) outer_closure = l;
-                    idx = l.getClosure().captures_layout_idx;
-                    continue;
-                }
-                const repr: WasmRepr = switch (l.tag) {
-                    .scalar => if (!simd_enabled and l.getScalar().tag == .vector) .{ .stack_memory = 16 } else .{ .primitive = scalarValType(l) },
-                    .struct_ => .{ .stack_memory = ls.sizeAt(l, wasm_target) },
-                    .tag_union => blk: {
-                        const tu_layout = try tagUnionLayoutWithStore(l.getTagUnion().idx, ls);
-                        // Discriminant-only tag unions (enums, disc_offset == 0) with size ≤ 4
-                        // are treated as i32 primitives. Tag unions with payloads
-                        // (disc_offset > 0) always use stack memory so the payload
-                        // can be stored and extracted correctly.
-                        if (tu_layout.size <= 4 and tu_layout.discriminant_offset == 0) break :blk .{ .primitive = .i32 };
-                        break :blk .{ .stack_memory = tu_layout.size };
-                    },
-                    .zst => .{ .primitive = .i32 }, // zero-sized, dummy i32
-                    .box, .box_of_zst, .erased_box, .erased_callable, .ptr => .{ .primitive = .i32 }, // pointer
-                    .list, .list_of_zst => .{ .stack_memory = ls.sizeAt(l, wasm_target) }, // RocList
-                    .closure => unreachable, // handled above
-                };
-                if (outer_closure) |outer| {
-                    return switch (repr) {
-                        .primitive => repr,
-                        .stack_memory => .{ .stack_memory = ls.layoutSize(outer) },
-                    };
-                }
-                return repr;
-            },
+                },
+            }
         }
+        // Every other layout—look up from layout store.
+        const l = ls.getLayout(idx);
+        if (l.tag == .closure) {
+            if (outer_closure == null) outer_closure = l;
+            idx = l.getClosure().captures_layout_idx;
+            continue;
+        }
+        const repr: WasmRepr = switch (l.tag) {
+            .scalar => if (!simd_enabled and l.getScalar().tag == .vector) .{ .stack_memory = ls.sizeAt(l, wasm_target) } else .{ .primitive = scalarValType(l) },
+            .struct_ => .{ .stack_memory = ls.sizeAt(l, wasm_target) },
+            .tag_union => blk: {
+                const tu_layout = try tagUnionLayoutWithStore(l.getTagUnion().idx, ls);
+                // Discriminant-only tag unions (enums, disc_offset == 0) with size ≤ 4
+                // are treated as i32 primitives. Tag unions with payloads
+                // (disc_offset > 0) always use stack memory so the payload
+                // can be stored and extracted correctly.
+                if (tu_layout.size <= 4 and tu_layout.discriminant_offset == 0) break :blk .{ .primitive = .i32 };
+                break :blk .{ .stack_memory = tu_layout.size };
+            },
+            .zst => .{ .primitive = .i32 }, // zero-sized, dummy i32
+            .box, .box_of_zst, .erased_box, .erased_callable, .ptr => .{ .primitive = .i32 }, // pointer
+            .list, .list_of_zst => .{ .stack_memory = ls.sizeAt(l, wasm_target) }, // RocList
+            .closure => unreachable, // handled above
+        };
+        if (outer_closure) |outer| {
+            return switch (repr) {
+                .primitive => repr,
+                .stack_memory => .{ .stack_memory = ls.layoutSize(outer) },
+            };
+        }
+        return repr;
     }
 }
 

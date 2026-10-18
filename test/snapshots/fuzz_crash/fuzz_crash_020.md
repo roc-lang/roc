@@ -1911,7 +1911,7 @@ Maybe(a) : [Somne]
 Mayine(a) : [ #
 ] # )
 
-ane = |num| if num 2 else 5
+ane = |num| if (num) 2 else 5
 
 one : U6
 

@@ -152,6 +152,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_12014_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12128_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12024_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12030_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12141_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12151_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12142_test.zig"));
@@ -159,6 +160,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/issue_12223_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12228_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12310_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_11886_test.zig"));
     std.testing.refAllDecls(@import("test/issue_12318_test.zig"));
     std.testing.refAllDecls(@import("test/nominal_decl_growth_test.zig"));
     std.testing.refAllDecls(@import("test/frame_owned_judgment_test.zig"));

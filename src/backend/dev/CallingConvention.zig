@@ -20,6 +20,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const layout = @import("layout");
+const builtins = @import("builtins");
+const RocStr = builtins.str.RocStr;
+const RocList = builtins.list.RocList;
 
 const x86_64 = @import("x86_64/mod.zig");
 const aarch64 = @import("aarch64/mod.zig");
@@ -95,6 +98,15 @@ pub fn CallBuilder(comptime EmitType: type) type {
     // size and alignment; AAPCS64 elsewhere and both x86_64 conventions give
     // each one a full eightbyte slot.
     const target_packs_stack_args = is_aarch64 and roc_target.isMacOS();
+
+    // RocStr/RocList field offsets for passing their words as separate arguments.
+    const target_word_size: u32 = roc_target.ptrBitWidth() / 8;
+    const str_bytes_offset: i32 = @intCast(RocStr.targetFieldOffset(.bytes, target_word_size));
+    const str_capacity_offset: i32 = @intCast(RocStr.targetFieldOffset(.capacity_or_alloc_ptr, target_word_size));
+    const str_len_offset: i32 = @intCast(RocStr.targetFieldOffset(.length, target_word_size));
+    const list_bytes_offset: i32 = @intCast(RocList.targetFieldOffset(.bytes, target_word_size));
+    const list_len_offset: i32 = @intCast(RocList.targetFieldOffset(.length, target_word_size));
+    const list_capacity_offset: i32 = @intCast(RocList.targetFieldOffset(.capacity_or_alloc_ptr, target_word_size));
 
     // Represents a deferred argument source (used for both stack and register args)
     const ArgSource = union(enum) {
@@ -221,20 +233,20 @@ pub fn CallBuilder(comptime EmitType: type) type {
             }
         }
 
-        /// Add the three machine words of a RocStr or RocList stored at `offset`
-        /// as three consecutive integer-class memory arguments.
-        pub inline fn addThreeWordMemArg(self: *Self, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
-            try self.addMemArg(base_reg, offset);
-            try self.addMemArg(base_reg, offset + 8);
-            try self.addMemArg(base_reg, offset + 16);
+        /// Add the RocList stored at `offset` as three consecutive integer-class
+        /// memory arguments in bytes, length, capacity order.
+        pub inline fn addListBytesLenCapMemArgs(self: *Self, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
+            try self.addMemArg(base_reg, offset + list_bytes_offset);
+            try self.addMemArg(base_reg, offset + list_len_offset);
+            try self.addMemArg(base_reg, offset + list_capacity_offset);
         }
 
         /// Add the RocStr stored at `offset` as three consecutive integer-class
         /// memory arguments in bytes, length, capacity order.
         pub inline fn addStrBytesLenCapMemArgs(self: *Self, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
-            try self.addMemArg(base_reg, offset);
-            try self.addMemArg(base_reg, offset + 16);
-            try self.addMemArg(base_reg, offset + 8);
+            try self.addMemArg(base_reg, offset + str_bytes_offset);
+            try self.addMemArg(base_reg, offset + str_len_offset);
+            try self.addMemArg(base_reg, offset + str_capacity_offset);
         }
 
         /// Add an integer-class memory argument at its ABI-assigned register.

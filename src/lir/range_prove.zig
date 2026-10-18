@@ -5342,6 +5342,7 @@ const Pass = struct {
             .list_append_range_within_unsafe,
             .list_append_sublist,
             .list_append_le_bytes,
+            .list_append_le_bytes_unsafe,
             .list_slack_unique,
             .list_owned_unique,
             .list_drop_at,

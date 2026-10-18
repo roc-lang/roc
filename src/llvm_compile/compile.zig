@@ -685,7 +685,7 @@ pub fn compileBitcodeModulesToObject(allocator: Allocator, io: std.Io, bitcodes:
     pic_options.lower_memory_intrinsics_to_loops = pic_options.no_target_libcalls;
 
     const object_bytes = try emitMergedBitcodeModulesToObject(allocator, io, bitcodes, pic_options);
-    recordInProcessCompileForTest(allocator, io);
+    if (comptime build_options.dev_diagnostics) recordInProcessCompileForTest(allocator, io);
 
     if (comptime build_options.llvm_keep_object.len != 0) {
         std.Io.Dir.cwd().writeFile(io, .{
@@ -699,6 +699,7 @@ pub fn compileBitcodeModulesToObject(allocator: Allocator, io: std.Io, bitcodes:
 
 /// Append one record to the file `ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE`
 /// names, so a test can count how many in-process objects a run compiled.
+/// Only compilers built with developer diagnostics call it.
 fn recordInProcessCompileForTest(allocator: Allocator, io: std.Io) void {
     const path_key = allocator.dupeSentinel(u8, "ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE", 0) catch return;
     defer allocator.free(path_key);
