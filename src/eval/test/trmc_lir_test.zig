@@ -288,12 +288,12 @@ test "ptr ops round trip a multi-word payload through a heap cell" {
     const add = try lowLevelStmt(&store, sum, .num_int_add_wrap, &.{ f0, f1 }, drop_cell);
     const get_f1 = try store.addCFStmt(.{ .assign_ref = .{
         .target = f1,
-        .op = .{ .field = .{ .source = loaded, .field_idx = 1 } },
+        .op = .field(loaded, 1),
         .next = add,
     } }, .test_fixture);
     const get_f0 = try store.addCFStmt(.{ .assign_ref = .{
         .target = f0,
-        .op = .{ .field = .{ .source = loaded, .field_idx = 0 } },
+        .op = .field(loaded, 0),
         .next = get_f1,
     } }, .test_fixture);
     const load_pair = try lowLevelStmt(&store, loaded, .ptr_load, &.{p}, get_f0);
@@ -405,7 +405,7 @@ fn buildRepeatProc(
     const def_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const alias = try store.addCFStmt(.{ .assign_ref = .{
         .target = res,
-        .op = .{ .local = t },
+        .op = .local(t),
         .next = def_jump,
     } }, .test_fixture);
     const mk_tag = try store.addCFStmt(.{ .assign_tag = .{
@@ -925,7 +925,7 @@ test "mixed construct and plain-tail branches both become jumps" {
     const cons_jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const alias = try store.addCFStmt(.{ .assign_ref = .{
         .target = res,
-        .op = .{ .local = t },
+        .op = .local(t),
         .next = cons_jump,
     } }, .test_fixture);
     const mk_tag = try store.addCFStmt(.{ .assign_tag = .{

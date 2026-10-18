@@ -71,10 +71,10 @@ pub const Projection = extern struct {
 /// Encodes the ownership-relevant shape of a reference projection, or null
 /// when the operation does not select aggregate storage.
 pub fn encodeProjection(op: LIR.RefOp) ?Projection {
-    return switch (op) {
-        .field => |field| .{ .kind = .field, .first = field.field_idx, .second = 0 },
-        .tag_payload => |payload| .{ .kind = .tag_payload, .first = payload.variant_index, .second = payload.payload_idx },
-        .tag_payload_struct => |payload| .{ .kind = .tag_payload_struct, .first = payload.variant_index, .second = 0 },
+    return switch (op.kind) {
+        .field => .{ .kind = .field, .first = op.index, .second = 0 },
+        .tag_payload => .{ .kind = .tag_payload, .first = op.variant_index, .second = op.index },
+        .tag_payload_struct => .{ .kind = .tag_payload_struct, .first = op.variant_index, .second = 0 },
         .local, .discriminant, .list_reinterpret, .nominal => null,
     };
 }
@@ -780,7 +780,7 @@ const Analysis = struct {
     fn notePayloadView(self: *Analysis, target: LIR.LocalId, op: anytype) Error!bool {
         if (!self.solution.isBorrowed(target)) return false;
         const root_index = self.unionRootOf(op.source) orelse return false;
-        const projection = encodeProjection(.{ .tag_payload_struct = op }).?;
+        const projection = encodeProjection(op).?;
         if (!projectionOwnsAllRc(self.store, self.layouts, op.source, target, projection)) return false;
         const entry = try self.unionEntryOf(root_index);
         if (entry.view == no_index) {
@@ -1344,7 +1344,7 @@ test "future field uses resolve joins in their procedure" {
     const back_edge = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const read = try store.addCFStmt(.{ .assign_ref = .{
         .target = field,
-        .op = .{ .field = .{ .source = container, .field_idx = 0 } },
+        .op = .field(container, 0),
         .next = back_edge,
     } }, .test_fixture);
     const loop_proc = try store.addCFStmt(.{ .join = .{
@@ -1409,7 +1409,7 @@ test "future field observations agree with per-read traversal across joins rebin
     } }, .test_fixture);
     const read = try store.addCFStmt(.{ .assign_ref = .{
         .target = other,
-        .op = .{ .field = .{ .source = local, .field_idx = 0 } },
+        .op = .field(local, 0),
         .next = rebind,
     } }, .test_fixture);
     const branch = try store.addCFStmt(.{ .switch_stmt = .{
@@ -1447,7 +1447,7 @@ test "future field observations agree with per-read traversal across joins rebin
     for (starts, &probes) |start, *probe| {
         probe.* = try store.addCFStmt(.{ .assign_ref = .{
             .target = other,
-            .op = .{ .field = .{ .source = local, .field_idx = 2 } },
+            .op = .field(local, 2),
             .next = start,
         } }, .test_fixture);
         try reads.put(probe.*, .{ .bit = 4, .consuming = true });
@@ -1505,7 +1505,7 @@ test "future field observations share one reversed CFG across many consuming rea
     for (0..255) |_| {
         start = try store.addCFStmt(.{ .assign_ref = .{
             .target = local,
-            .op = .{ .local = local },
+            .op = .local(local),
             .next = start,
         } }, .test_fixture);
     }
@@ -1526,7 +1526,7 @@ test "future field observations share one reversed CFG across many consuming rea
         while (reads.count() <= count) {
             const probe = try store.addCFStmt(.{ .assign_ref = .{
                 .target = local,
-                .op = .{ .field = .{ .source = local, .field_idx = 0 } },
+                .op = .field(local, 0),
                 .next = start,
             } }, .test_fixture);
             try reads.put(probe, .{ .bit = 1, .consuming = true });
@@ -2028,36 +2028,36 @@ fn classifyStatement(
             try analysis.useWhole(current, stmt.target);
         },
         .assign_ref => |stmt| {
-            switch (stmt.op) {
-                .field => |op| {
-                    if (!try analysis.noteFieldRead(current, op.source, op.field_idx, stmt.target)) {
+            switch (stmt.op.kind) {
+                .field => {
+                    if (!try analysis.noteFieldRead(current, stmt.op.source, stmt.op.index, stmt.target)) {
                         try analysis.noteDef(stmt.target, current);
                     }
                 },
-                .local => |source| {
-                    try analysis.noteDemandAlias(source, stmt.target);
-                    if (stmt.target == source) {
-                        try analysis.useWhole(current, source);
+                .local => {
+                    try analysis.noteDemandAlias(stmt.op.source, stmt.target);
+                    if (stmt.target == stmt.op.source) {
+                        try analysis.useWhole(current, stmt.op.source);
                     } else {
-                        try analysis.noteAliasDef(current, stmt.target, source);
+                        try analysis.noteAliasDef(current, stmt.target, stmt.op.source);
                     }
                 },
-                .discriminant => |op| {
+                .discriminant => {
                     // The tag word is disjoint from every stored unit, so
                     // reading it is no use of a tag union.
-                    analysis.disqualify(op.source);
+                    analysis.disqualify(stmt.op.source);
                     try analysis.noteDef(stmt.target, current);
                 },
-                .tag_payload => |op| {
-                    try analysis.useWhole(current, op.source);
+                .tag_payload => {
+                    try analysis.useWhole(current, stmt.op.source);
                     try analysis.noteDef(stmt.target, current);
                 },
-                .tag_payload_struct => |op| {
-                    if (!try analysis.notePayloadView(stmt.target, op)) try analysis.useWhole(current, op.source);
+                .tag_payload_struct => {
+                    if (!try analysis.notePayloadView(stmt.target, stmt.op)) try analysis.useWhole(current, stmt.op.source);
                     try analysis.noteDef(stmt.target, current);
                 },
-                inline .list_reinterpret, .nominal => |op| {
-                    try analysis.useWhole(current, op.backing_ref);
+                inline .list_reinterpret, .nominal => {
+                    try analysis.useWhole(current, stmt.op.source);
                     analysis.disqualify(stmt.target);
                 },
             }
@@ -2288,16 +2288,16 @@ fn projectionEdgeOf(
     stmt_id: LIR.CFStmtId,
     assign: anytype,
 ) ?ProjectionEdge {
-    const source: LIR.LocalId, const is_projection: bool = switch (assign.op) {
-        .local => |local| blk: {
+    const source: LIR.LocalId, const is_projection: bool = switch (assign.op.kind) {
+        .local => blk: {
             if (!solution.isBorrowed(assign.target)) return null;
-            if (store.getLocal(local).layout_idx != store.getLocal(assign.target).layout_idx) return null;
-            break :blk .{ local, false };
+            if (store.getLocal(assign.op.source).layout_idx != store.getLocal(assign.target).layout_idx) return null;
+            break :blk .{ assign.op.source, false };
         },
         .field, .tag_payload, .tag_payload_struct => blk: {
             const projection = encodeProjection(assign.op).?;
-            const local = switch (assign.op) {
-                inline .field, .tag_payload, .tag_payload_struct => |op| op.source,
+            const local = switch (assign.op.kind) {
+                inline .field, .tag_payload, .tag_payload_struct => assign.op.source,
                 .local, .discriminant, .list_reinterpret, .nominal => unreachable,
             };
             if (!projectionOwnsAllRc(store, layouts, local, assign.target, projection)) return null;
@@ -2328,16 +2328,16 @@ fn placeLinkOf(
     stmt_index: u32,
     assign: anytype,
 ) ?PlaceLink {
-    const source: LIR.LocalId, const kind: PlaceEdgeKind = switch (assign.op) {
-        .local => |local| blk: {
+    const source: LIR.LocalId, const kind: PlaceEdgeKind = switch (assign.op.kind) {
+        .local => blk: {
             if (!solution.isBorrowed(assign.target)) return null;
-            if (solution.unitLocalOf(assign.target) != solution.unitLocalOf(local)) return null;
-            break :blk .{ local, .alias };
+            if (solution.unitLocalOf(assign.target) != solution.unitLocalOf(assign.op.source)) return null;
+            break :blk .{ assign.op.source, .alias };
         },
         .field, .tag_payload, .tag_payload_struct => blk: {
             const projection = encodeProjection(assign.op).?;
-            const projection_source = switch (assign.op) {
-                inline .field, .tag_payload, .tag_payload_struct => |op| op.source,
+            const projection_source = switch (assign.op.kind) {
+                inline .field, .tag_payload, .tag_payload_struct => assign.op.source,
                 .local, .discriminant, .list_reinterpret, .nominal => unreachable,
             };
             if (!projectionOwnsAllRc(store, layouts, projection_source, assign.target, projection)) return null;
@@ -2574,7 +2574,7 @@ fn materializedPlaceLink(
     const representative_local: LIR.LocalId = @fromBackingInt(representative);
     if (!result.containers.contains(representative_local) and
         !result.owned_only_containers.contains(representative_local)) return read.link;
-    return placeLinkOf(store, layouts, solution, read.stmt, .{ .target = assign.target, .op = LIR.RefOp{ .local = representative_local } });
+    return placeLinkOf(store, layouts, solution, read.stmt, .{ .target = assign.target, .op = LIR.RefOp.local(representative_local) });
 }
 
 /// Solve takes for every reachable statement in the store.
@@ -3219,7 +3219,7 @@ pub fn compute(
                         inline .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag => |stmt| stmt.next,
                         .assign_ref => |stmt| if (union_root != null or
                             analysis.projected_root[@backingInt(local)] != no_index or
-                            (stmt.op == .local and !solution.isBorrowed(local))) stmt.next else continue :candidates,
+                            (stmt.op.kind == .local and !solution.isBorrowed(local))) stmt.next else continue :candidates,
                         .set_local => continue :candidates,
                         .init_uninitialized,
                         .assign_boxy_desc_ref,
@@ -3938,7 +3938,7 @@ pub fn compute(
         if (stmt_index == no_index) continue;
         const stmt = store.getCFStmtPtr(@fromBackingInt(@intCast(stmt_index)));
         if (stmt.* != .assign_ref) dismantleInvariant("projected alias definition stopped being a reference read");
-        stmt.assign_ref.op = .{ .local = representative_local };
+        stmt.assign_ref.op = .local(representative_local);
         try result.projection_aliases.put(@fromBackingInt(@intCast(@as(u32, @intCast(local_index)))), representative_local);
     }
     // Publish the views of committed containers. A tag union's container is

@@ -2629,13 +2629,13 @@ pub const Interpreter = struct {
                         value,
                         false,
                         self.store.stmtRowOrDefault(assign.extra).residual_shell_absent_fields,
-                        switch (assign.op) {
+                        switch (assign.op.kind) {
                             .local, .list_reinterpret, .nominal => .descriptor,
                             .field, .tag_payload, .tag_payload_struct, .discriminant => .items,
                         },
                     );
-                    if (assign.op == .local) {
-                        const source = assign.op.local;
+                    if (assign.op.kind == .local) {
+                        const source = assign.op.source;
                         const source_desc = frame.localDesc(source) orelse if (self.store.getLocal(source).boxy_desc) |desc_ref|
                             try self.resolveBoxyDescRef(frame, desc_ref)
                         else
@@ -2692,7 +2692,7 @@ pub const Interpreter = struct {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
                     const arg_layouts = try self.localLayouts(arg_locals);
-                    if (assign.replaces_frame) {
+                    if (extra.replaces_frame) {
                         return .{ .tail_call = .{ .proc = assign.proc, .args = arg_values, .arg_layouts = arg_layouts } };
                     }
                     const call_loc = self.activeStmtLoc();
@@ -2704,7 +2704,7 @@ pub const Interpreter = struct {
                     };
                     var stored_as: ?*const LirProgram.BoxyTypeDesc = null;
                     if (self.pending_erased != null) {
-                        if (!drivesHere(frame, assign.drive)) {
+                        if (!drivesHere(frame, extra.drive)) {
                             // The conversions that follow would read a value
                             // that is not there yet, so the procedure returns
                             // now to whoever makes the pending call.
@@ -3827,28 +3827,28 @@ pub const Interpreter = struct {
         op: LIR.RefOp,
         target_layout: layout_mod.Idx,
     ) Error!Value {
-        return switch (op) {
-            .local => |source| blk: {
-                const source_layout = self.store.getLocal(source).layout_idx;
+        return switch (op.kind) {
+            .local => blk: {
+                const source_layout = self.store.getLocal(op.source).layout_idx;
                 const local_value = try self.coerceExplicitRefValueToLayout(
-                    try self.getLocalChecked(frame, source),
+                    try self.getLocalChecked(frame, op.source),
                     source_layout,
                     target_layout,
                 );
                 break :blk local_value;
             },
-            .field => |field| blk: {
-                const source_val = try self.getLocalChecked(frame, field.source);
-                const source_layout = self.store.getLocal(field.source).layout_idx;
+            .field => blk: {
+                const source_val = try self.getLocalChecked(frame, op.source);
+                const source_layout = self.store.getLocal(op.source).layout_idx;
                 const struct_base = self.resolveStructBaseValue(source_val, source_layout);
                 const struct_layout_val = self.layout_store.getLayout(struct_base.layout);
                 const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(
                     struct_layout_val.getStruct().idx,
-                    field.field_idx,
+                    op.index,
                 );
                 const actual_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(
                     struct_layout_val.getStruct().idx,
-                    field.field_idx,
+                    op.index,
                 );
                 const field_value = try self.coerceExplicitRefValueToLayout(
                     struct_base.value.offset(field_offset),
@@ -3864,10 +3864,10 @@ pub const Interpreter = struct {
                     self.invariantFailed(
                         "LIR/interpreter invariant violated: field projection source_local={d} source_layout={d} base_layout={d} field_idx={d} actual_field_layout={d} target_layout={d} normalized to ZST",
                         .{
-                            @backingInt(field.source),
+                            @backingInt(op.source),
                             @backingInt(source_layout),
                             @backingInt(struct_base.layout),
-                            field.field_idx,
+                            op.index,
                             @backingInt(actual_field_layout),
                             @backingInt(target_layout),
                         },
@@ -3875,28 +3875,28 @@ pub const Interpreter = struct {
                 }
                 break :blk field_value;
             },
-            .tag_payload => |payload| blk: {
-                const source_val = try self.getLocalChecked(frame, payload.source);
-                const source_layout = self.store.getLocal(payload.source).layout_idx;
+            .tag_payload => blk: {
+                const source_val = try self.getLocalChecked(frame, op.source);
+                const source_layout = self.store.getLocal(op.source).layout_idx;
                 const tag_base = self.boxy_runtime.resolveTagUnionBaseValue(source_val, source_layout);
                 const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
-                if (builtin.mode == .debug and disc != payload.tag_discriminant) {
+                if (builtin.mode == .debug and disc != op.tag_discriminant) {
                     self.invariantFailed(
                         "LIR/interpreter invariant violated: tag payload access expected discriminant {d} but observed {d}",
-                        .{ payload.tag_discriminant, disc },
+                        .{ op.tag_discriminant, disc },
                     );
                 }
-                const actual_payload_layout = self.boxy_runtime.tagPayloadLayout(source_layout, payload.variant_index);
+                const actual_payload_layout = self.boxy_runtime.tagPayloadLayout(source_layout, op.variant_index);
                 const payload_layout_val = self.layout_store.getLayout(actual_payload_layout);
                 switch (payload_layout_val.tag) {
                     .struct_ => {
                         const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(
                             payload_layout_val.getStruct().idx,
-                            payload.payload_idx,
+                            op.index,
                         );
                         const actual_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(
                             payload_layout_val.getStruct().idx,
-                            payload.payload_idx,
+                            op.index,
                         );
                         const payload_value = try self.coerceExplicitRefValueToLayout(
                             tag_base.value.offset(field_offset),
@@ -3917,10 +3917,10 @@ pub const Interpreter = struct {
                     .tag_union,
                     .ptr,
                     => {
-                        if (builtin.mode == .debug and payload.payload_idx != 0) {
+                        if (builtin.mode == .debug and op.index != 0) {
                             self.invariantFailed(
                                 "LIR/interpreter invariant violated: scalar tag payload access requested payload_idx {d} from non-struct payload layout {d}",
-                                .{ payload.payload_idx, @backingInt(actual_payload_layout) },
+                                .{ op.index, @backingInt(actual_payload_layout) },
                             );
                         }
                         const payload_value = try self.coerceExplicitRefValueToLayout(tag_base.value, actual_payload_layout, target_layout);
@@ -3928,32 +3928,32 @@ pub const Interpreter = struct {
                     },
                 }
             },
-            .tag_payload_struct => |payload| blk: {
-                const source_val = try self.getLocalChecked(frame, payload.source);
-                const source_layout = self.store.getLocal(payload.source).layout_idx;
+            .tag_payload_struct => blk: {
+                const source_val = try self.getLocalChecked(frame, op.source);
+                const source_layout = self.store.getLocal(op.source).layout_idx;
                 const tag_base = self.boxy_runtime.resolveTagUnionBaseValue(source_val, source_layout);
                 const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
-                if (builtin.mode == .debug and disc != payload.tag_discriminant) {
+                if (builtin.mode == .debug and disc != op.tag_discriminant) {
                     self.invariantFailed(
                         "LIR/interpreter invariant violated: tag payload struct access expected discriminant {d} but observed {d}",
-                        .{ payload.tag_discriminant, disc },
+                        .{ op.tag_discriminant, disc },
                     );
                 }
-                const actual_payload_layout = self.boxy_runtime.tagPayloadLayout(source_layout, payload.variant_index);
+                const actual_payload_layout = self.boxy_runtime.tagPayloadLayout(source_layout, op.variant_index);
                 const payload_value = try self.coerceExplicitRefValueToLayout(tag_base.value, actual_payload_layout, target_layout);
                 break :blk payload_value;
             },
-            .list_reinterpret => |list_reinterpret| blk: {
-                const reinterpreted = try self.boxy_runtime.coerceExplicitListValueToLayout(try self.getLocalChecked(frame, list_reinterpret.backing_ref), self.store.getLocal(list_reinterpret.backing_ref).layout_idx, target_layout);
+            .list_reinterpret => blk: {
+                const reinterpreted = try self.boxy_runtime.coerceExplicitListValueToLayout(try self.getLocalChecked(frame, op.source), self.store.getLocal(op.source).layout_idx, target_layout);
                 break :blk reinterpreted;
             },
-            .nominal => |nominal| blk: {
-                const reinterpreted = try self.boxy_runtime.coerceExplicitNominalValueToLayout(self.boxyFrameHooks(null), try self.getLocalChecked(frame, nominal.backing_ref), self.store.getLocal(nominal.backing_ref).layout_idx, target_layout);
+            .nominal => blk: {
+                const reinterpreted = try self.boxy_runtime.coerceExplicitNominalValueToLayout(self.boxyFrameHooks(null), try self.getLocalChecked(frame, op.source), self.store.getLocal(op.source).layout_idx, target_layout);
                 break :blk reinterpreted;
             },
-            .discriminant => |discriminant| blk: {
-                const source_val = try self.getLocalChecked(frame, discriminant.source);
-                const source_layout = self.store.getLocal(discriminant.source).layout_idx;
+            .discriminant => blk: {
+                const source_val = try self.getLocalChecked(frame, op.source);
+                const source_layout = self.store.getLocal(op.source).layout_idx;
                 const tag_base = self.boxy_runtime.resolveTagUnionBaseValue(source_val, source_layout);
                 const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
                 const disc_value = try self.alloc(target_layout);
@@ -3975,7 +3975,10 @@ pub const Interpreter = struct {
     fn evalLiteral(self: *LirInterpreter, literal: LIR.LiteralValue, target_layout: layout_mod.Idx) Error!Value {
         return switch (literal) {
             .i64_literal => |lit| self.evalI64Literal(lit.value, lit.layout_idx),
-            .i128_literal => |lit| self.boxy_runtime.i128LiteralValue(self.boxyFrameHooks(null), lit.value, lit.layout_idx),
+            .i128_literal => |lit_id| blk_lit: {
+                const lit = self.store.stmtRow(lit_id);
+                break :blk_lit self.boxy_runtime.i128LiteralValue(self.boxyFrameHooks(null), lit.value, lit.layout_idx);
+            },
             .f64_literal => |value| self.evalF64Literal(value),
             .f32_literal => |value| self.evalF32Literal(value),
             .dec_literal => |value| self.evalDecLiteral(value),

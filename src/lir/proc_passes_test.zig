@@ -55,7 +55,7 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
         // neither variant has a payload, so the copies drop the release.
         const arm_start = if (phase == .tag_fusion) try store.addCFStmt(.{ .decref = .{
             .value = outer,
-            .rc = .{ .concrete = .{ .op = .decref, .layout_idx = .bool } },
+            .rc = try store.addRcHelperRef(.{ .concrete = .{ .op = .decref, .layout_idx = .bool } }),
             .atomicity = .single_thread,
             .next = initialize,
         } }, .test_fixture) else initialize;
@@ -76,7 +76,7 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
             } }, .test_fixture);
             consumer = try store.addCFStmt(.{ .assign_ref = .{
                 .target = disc,
-                .op = .{ .discriminant = .{ .source = outer } },
+                .op = .discriminant(outer),
                 .next = choose,
             } }, .test_fixture);
             const first = try store.addCFStmt(.{ .assign_tag = .{
@@ -212,7 +212,7 @@ const Fixture = struct {
             const ret = try self.store.addCFStmt(.{ .ret = .{ .value = projected } }, .test_fixture);
             const read = try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = projected,
-                .op = .{ .field = .{ .source = wrapper, .field_idx = 0 } },
+                .op = .field(wrapper, 0),
                 .next = ret,
             } }, .test_fixture);
             const body = try self.store.addCFStmt(.{ .assign_struct = .{
@@ -280,12 +280,12 @@ const Fixture = struct {
             const ret = try self.store.addCFStmt(.{ .ret = .{ .value = number } }, .test_fixture);
             const read_text = try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = text,
-                .op = .{ .field = .{ .source = state, .field_idx = 1 } },
+                .op = .field(state, 1),
                 .next = ret,
             } }, .test_fixture);
             const read_number = try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = number,
-                .op = .{ .field = .{ .source = state, .field_idx = 0 } },
+                .op = .field(state, 0),
                 .next = read_text,
             } }, .test_fixture);
             const jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);

@@ -57,6 +57,7 @@ pub const stmt_row_types = .{
     lir_defs.LiteralExtra,
     lir_defs.JoinExtra,
     lir_defs.BoxyDescRef,
+    lir_defs.I128Literal,
     lir_defs.BoxyDynamicNumLiteral,
     lir_defs.BoxyDynamicFracLiteral,
     lir_defs.ErasedCallData,

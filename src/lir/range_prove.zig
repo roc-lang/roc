@@ -380,7 +380,7 @@ test "range prove folds a threaded Bool join site that wrote the parameter as a 
     } }, .test_fixture);
     const set_written = try store.addCFStmt(.{ .assign_literal = .{
         .target = written,
-        .value = .{ .i128_literal = .{ .value = 1, .layout_idx = .bool } },
+        .value = .{ .i128_literal = try store.addStmtRow(LIR.I128Literal, .{ .value = 1, .layout_idx = .bool }) },
         .next = set_flag,
     } }, .test_fixture);
     const set_zero = try store.addCFStmt(.{ .assign_literal = .{
@@ -2322,7 +2322,7 @@ const Pass = struct {
             try seen.put(current, {});
             const stmt = self.store.getCFStmt(current);
             switch (stmt) {
-                .assign_ref => |s| if (s.op == .local) try self.alias_of.put(s.target, s.op.local),
+                .assign_ref => |s| if (s.op.kind == .local) try self.alias_of.put(s.target, s.op.source),
                 inline .store_struct, .store_tag => |s| try self.bumpAssign(s.dest),
                 .join => |s| {
                     try self.join_stmts.put(s.id, current);
@@ -4477,16 +4477,20 @@ const Pass = struct {
             const false_join = try self.store.addCFStmt(.{ .join = .{
                 .id = false_id,
                 .params = empty_params,
-                .retained = join.retained,
                 .body = false_arm,
                 .remainder = join.remainder,
+                .extra = try self.store.addOptionalStmtRow(LIR.JoinExtra, .{
+                    .retained = self.store.stmtRowOrDefault(join.extra).retained,
+                }),
             } }, split_join_origin);
             try self.store.replaceCFStmt(join_stmt, .{ .join = .{
                 .id = true_id,
                 .params = empty_params,
-                .retained = join.retained,
                 .body = true_arm,
                 .remainder = false_join,
+                .extra = try self.store.addOptionalStmtRow(LIR.JoinExtra, .{
+                    .retained = self.store.stmtRowOrDefault(join.extra).retained,
+                }),
             } }, join_origin);
 
             for (structural_jumps.items) |record| {
@@ -4732,10 +4736,10 @@ const Pass = struct {
                 switch (self.store.getCFStmtImmediate(current).*) {
                     .assign_ref => |s| {
                         try self.visited.put(current, {});
-                        switch (s.op) {
-                            .local => |src| {
-                                if (try self.valueOf(src)) |node| {
-                                    const source_binding = self.lookup(src);
+                        switch (s.op.kind) {
+                            .local => {
+                                if (try self.valueOf(s.op.source)) |node| {
+                                    const source_binding = self.lookup(s.op.source);
                                     try self.bind(s.target, .{
                                         .node = node,
                                         .pred = if (source_binding) |b| b.pred else null,
@@ -4746,8 +4750,8 @@ const Pass = struct {
                                     try self.bindFresh(s.target);
                                 }
                             },
-                            .field => |f| {
-                                try self.bindFieldRead(s.target, f.source, f.field_idx);
+                            .field => {
+                                try self.bindFieldRead(s.target, s.op.source, s.op.index);
                             },
                             .discriminant, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => try self.bindFresh(s.target),
                         }
@@ -5064,7 +5068,11 @@ const Pass = struct {
             return;
         }
         const literal: ?i128 = switch (value) {
-            inline .i64_literal, .i128_literal => |lit| if (lit.value >= 0) lit.value else null,
+            .i64_literal => |lit| if (lit.value >= 0) lit.value else null,
+            .i128_literal => |lit_id| blk_lit: {
+                const lit = self.store.stmtRow(lit_id);
+                break :blk_lit if (lit.value >= 0) lit.value else null;
+            },
             .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => null,
         };
         if (literal) |v| {
@@ -6144,9 +6152,8 @@ const Pass = struct {
             return true;
         }
         const combined_constant = chain.constant + outer_constant;
-        self.store.getCFStmtPtr(outer_literal_stmt).assign_literal.value = .{
-            .i128_literal = .{ .value = combined_constant, .layout_idx = operand_layout },
-        };
+        const combined_literal = try self.store.addStmtRow(LIR.I128Literal, .{ .value = combined_constant, .layout_idx = operand_layout });
+        self.store.getCFStmtPtr(outer_literal_stmt).assign_literal.value = .{ .i128_literal = combined_literal };
         const combined_args = try self.store.addLocalSpan(&.{ chain.base, outer_constant_local });
         self.store.getCFStmtPtr(stmt).assign_low_level.args = combined_args;
         self.rewrites += 1;

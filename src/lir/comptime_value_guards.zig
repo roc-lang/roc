@@ -89,12 +89,12 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
         const checked_crash = try store.addCFStmt(.{ .crash = .{ .msg = .{ .local = message }, .checked_error = true } }, guard_origin);
         const load_message = try store.addCFStmt(.{ .assign_ref = .{
             .target = message,
-            .op = .{ .field = .{ .source = record, .field_idx = @intCast(fields.message_field) } },
+            .op = .field(record, @intCast(fields.message_field)),
             .next = crash,
         } }, guard_origin);
         const load_checked_message = try store.addCFStmt(.{ .assign_ref = .{
             .target = message,
-            .op = .{ .field = .{ .source = record, .field_idx = @intCast(fields.message_field) } },
+            .op = .field(record, @intCast(fields.message_field)),
             .next = checked_crash,
         } }, guard_origin);
         const branch = try store.addCFStmt(.{ .switch_stmt = .{
@@ -108,7 +108,7 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
         } }, guard_origin);
         const load_failed = try store.addCFStmt(.{ .assign_ref = .{
             .target = failed,
-            .op = .{ .field = .{ .source = record, .field_idx = @intCast(fields.failed_field) } },
+            .op = .field(record, @intCast(fields.failed_field)),
             .next = branch,
         } }, guard_origin);
         try store.replaceCFStmt(use.stmt, .{ .assign_literal = .{

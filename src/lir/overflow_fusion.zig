@@ -58,8 +58,8 @@ pub fn findResultConsumer(store: *const LirStore, predicate_stmt: LIR.CFStmtId) 
         const stmt = store.getCFStmtImmediate(current);
         if (std.meta.activeTag(stmt.*) == .assign_ref) {
             const assign = stmt.assign_ref;
-            if (assign.op != .local) return null;
-            const source = assign.op.local;
+            if (assign.op.kind != .local) return null;
+            const source = assign.op.source;
             var followed = false;
             if (source == lhs_alias) {
                 lhs_alias = assign.target;
@@ -120,12 +120,12 @@ test "finds an overflow result through false-arm aliases" {
     } }, .test_fixture);
     const alias_rhs = try store.addCFStmt(.{ .assign_ref = .{
         .target = rhs_alias,
-        .op = .{ .local = rhs },
+        .op = .local(rhs),
         .next = consumer,
     } }, .test_fixture);
     const alias_lhs = try store.addCFStmt(.{ .assign_ref = .{
         .target = lhs_alias,
-        .op = .{ .local = lhs },
+        .op = .local(lhs),
         .next = alias_rhs,
     } }, .test_fixture);
     const overflow_path = try store.addCFStmt(.runtime_error, .test_fixture);

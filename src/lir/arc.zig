@@ -1989,7 +1989,6 @@ const Inserter = struct {
             tail = try self.addCFStmtAtSource(terminal.stmt, .{ .join = .{
                 .id = source.id,
                 .params = source.params,
-                .retained = source.retained,
                 .extra = source.extra,
                 .body = state.body,
                 .remainder = state.remainder,
@@ -2139,8 +2138,8 @@ const Inserter = struct {
         shell_view: ?LIR.LocalId,
     ) ResourceError!LIR.U32Span {
         if (absent_mask == 0 and !all_rc_fields_absent) return .empty();
-        switch (assign.op) {
-            .local => |source| if (self.store.getLocal(source).layout_idx != self.store.getLocal(assign.target).layout_idx) {
+        switch (assign.op.kind) {
+            .local => if (self.store.getLocal(assign.op.source).layout_idx != self.store.getLocal(assign.target).layout_idx) {
                 arcInvariant("ARC attached representation-shell fields to a layout-changing alias");
             },
             .field => if (shell_view == null) {
@@ -2170,7 +2169,7 @@ const Inserter = struct {
         const container_unit, const first: u32 = if (shell_view) |view| blk: {
             const placement = self.dismantles.viewOf(view) orelse arcInvariant("ARC view shell named a local that is no view");
             break :blk .{ self.unitOf(placement.root), placement.base };
-        } else .{ self.unitOf(assign.op.local), 0 };
+        } else .{ self.unitOf(assign.op.source), 0 };
         const container = self.dismantleFor(container_unit) orelse
             arcInvariant("ARC residual representation-shell alias has no committed field domain");
         if ((absent_mask & ~container.full_mask) != 0) {
@@ -2265,6 +2264,11 @@ const Inserter = struct {
                         arcInvariant("ARC frame-replacing call was not immediately followed by the return of its result");
                     }
                 }
+                var extra = self.store.stmtRowOrDefault(assign.extra);
+                const extra_row = if (extra.replaces_frame == step.replaces_frame) assign.extra else row: {
+                    extra.replaces_frame = step.replaces_frame;
+                    break :row try self.store.addOptionalStmtRow(LIR.CallExtra, extra);
+                };
                 break :blk try self.store.addCFStmt(.{ .assign_call = .{
                     .target = assign.target,
                     .proc = if (step.variant_request) |request|
@@ -2272,9 +2276,7 @@ const Inserter = struct {
                     else
                         assign.proc,
                     .args = assign.args,
-                    .is_cold = assign.is_cold,
-                    .replaces_frame = step.replaces_frame,
-                    .extra = assign.extra,
+                    .extra = extra_row,
                     .next = next,
                 } }, origin);
             },
@@ -2565,22 +2567,22 @@ const Inserter = struct {
                 .assign_ref => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     const any_views = self.dismantles.views.count() != 0;
-                    if (any_views and assign.op == .field and self.dismantles.viewOf(assign.target) != null and self.isBindingBorrowed(assign.target)) {
+                    if (any_views and assign.op.kind == .field and self.dismantles.viewOf(assign.target) != null and self.isBindingBorrowed(assign.target)) {
                         // A view copies its container's representation,
                         // including slots already given away on this path.
                         step.residual_shell_absent_mask = self.viewShellAbsentMask(&segment.owned, assign.target);
                         step.residual_shell_view = assign.target;
-                    } else if (any_views and assign.op == .local and self.dismantles.viewOf(assign.op.local) != null and self.isBindingBorrowed(assign.op.local) and
-                        self.store.getLocal(assign.op.local).layout_idx == self.store.getLocal(assign.target).layout_idx)
+                    } else if (any_views and assign.op.kind == .local and self.dismantles.viewOf(assign.op.source) != null and self.isBindingBorrowed(assign.op.source) and
+                        self.store.getLocal(assign.op.source).layout_idx == self.store.getLocal(assign.target).layout_idx)
                     {
-                        step.residual_shell_absent_mask = self.viewShellAbsentMask(&segment.owned, assign.op.local);
-                        step.residual_shell_view = assign.op.local;
-                    } else if (assign.op == .local and
-                        self.store.getLocal(assign.op.local).layout_idx == self.store.getLocal(assign.target).layout_idx and
-                        self.layouts.getLayout(self.store.getLocal(assign.op.local).layout_idx).tag == .struct_ and
-                        self.localContainsRefcounted(assign.op.local))
+                        step.residual_shell_absent_mask = self.viewShellAbsentMask(&segment.owned, assign.op.source);
+                        step.residual_shell_view = assign.op.source;
+                    } else if (assign.op.kind == .local and
+                        self.store.getLocal(assign.op.source).layout_idx == self.store.getLocal(assign.target).layout_idx and
+                        self.layouts.getLayout(self.store.getLocal(assign.op.source).layout_idx).tag == .struct_ and
+                        self.localContainsRefcounted(assign.op.source))
                     {
-                        const source_unit = self.unitOf(assign.op.local);
+                        const source_unit = self.unitOf(assign.op.source);
                         if (self.dismantleFor(source_unit)) |container| {
                             if (segment.owned.contains(source_unit)) {
                                 step.residual_shell_absent_mask = container.full_mask & ~segment.owned.residualMask(source_unit);
@@ -2596,12 +2598,12 @@ const Inserter = struct {
                             // a representation-only struct even when no
                             // partial-field container domain was needed.
                             step.residual_shell_all_rc_fields_absent = true;
-                        } else if (self.isBindingBorrowed(assign.op.local)) {
+                        } else if (self.isBindingBorrowed(assign.op.source)) {
                             // A borrowed struct lives only as long as the
                             // ownership place it borrows from. Once that
                             // place's unit has left the path state, the
                             // borrow keeps only its inline representation.
-                            const place_unit = self.unitOf(self.ownershipPlaceLeader(assign.op.local));
+                            const place_unit = self.unitOf(self.ownershipPlaceLeader(assign.op.source));
                             if (!segment.owned.contains(place_unit) and !self.isBindingBorrowed(place_unit)) {
                                 step.residual_shell_all_rc_fields_absent = true;
                             }
@@ -2622,10 +2624,10 @@ const Inserter = struct {
                         complete_moved_root = !transfer.retain_target;
                         step.take_assign_ref_target = complete_moved_root;
                     } else {
-                        switch (assign.op) {
-                            .local => |source| {
-                                if (assign.target != source) {
-                                    transfer = try self.transferForAliasBind(&segment.owned, assign.target, source, assign.next);
+                        switch (assign.op.kind) {
+                            .local => {
+                                if (assign.target != assign.op.source) {
+                                    transfer = try self.transferForAliasBind(&segment.owned, assign.target, assign.op.source, assign.next);
                                 } else {
                                     transfer.retain_target = false;
                                 }
@@ -4309,7 +4311,7 @@ const Inserter = struct {
                 .id = join_stmt.id,
                 .start = segment.cursor,
                 .params = join_stmt.params,
-                .retained = join_stmt.retained,
+                .retained = self.store.stmtRowOrDefault(join_stmt.extra).retained,
                 .maybe_uninitialized_params = self.store.stmtRowOrDefault(join_stmt.extra).maybe_uninitialized_params,
                 .remainder = join_stmt.remainder,
                 .body = join_stmt.body,
@@ -4319,7 +4321,7 @@ const Inserter = struct {
                 .jump_common = try OwnedSet.init(self.solve_allocator, self.domain()),
                 .back_edge_params = try OwnedSet.init(self.solve_allocator, self.domain()),
                 .seed_placed = try OwnedSet.init(self.solve_allocator, self.domain()),
-                .retained_resources = try self.resourceIndicesOf(join_stmt.retained),
+                .retained_resources = try self.resourceIndicesOf(self.store.stmtRowOrDefault(join_stmt.extra).retained),
                 .region_dead = segment.ctx.region_dead,
                 .remainder_plan = remainder_plan,
                 .body_plan = body_plan,
@@ -4335,7 +4337,7 @@ const Inserter = struct {
         const summary = self.join_summaries[join_index].?;
         if (summary.body != join_stmt.body or summary.remainder != join_stmt.remainder or
             !localSpanEql(summary.params, join_stmt.params) or
-            !localSpanEql(summary.retained, join_stmt.retained) or
+            !localSpanEql(summary.retained, self.store.stmtRowOrDefault(join_stmt.extra).retained) or
             !localSpanEql(summary.maybe_uninitialized_params, self.store.stmtRowOrDefault(join_stmt.extra).maybe_uninitialized_params))
         {
             arcInvariant("ARC solver saw one join id with conflicting metadata");
@@ -4651,23 +4653,23 @@ const Inserter = struct {
             const stmt = self.store.getCFStmt(cursor);
             if (stmt == .assign_ref) {
                 const assign = stmt.assign_ref;
-                switch (assign.op) {
-                    .local => |source| {
-                        if (aliasesContain(aliases.items, source)) {
+                switch (assign.op.kind) {
+                    .local => {
+                        if (aliasesContain(aliases.items, assign.op.source)) {
                             if (!aliasesContain(aliases.items, assign.target)) {
                                 try aliases.append(self.emission_allocator, assign.target);
                             }
                         }
                     },
-                    .field => |field| {
-                        if (aliasesContain(aliases.items, field.source) and self.localContainsRefcounted(assign.target)) {
+                    .field => {
+                        if (aliasesContain(aliases.items, assign.op.source) and self.localContainsRefcounted(assign.target)) {
                             return null;
                         }
                     },
-                    .discriminant => |op| if (aliasesContain(aliases.items, op.source)) return null,
-                    .tag_payload => |op| if (aliasesContain(aliases.items, op.source)) return null,
-                    .tag_payload_struct => |op| if (aliasesContain(aliases.items, op.source)) return null,
-                    inline .list_reinterpret, .nominal => |op| if (aliasesContain(aliases.items, op.backing_ref)) return null,
+                    .discriminant => if (aliasesContain(aliases.items, assign.op.source)) return null,
+                    .tag_payload => if (aliasesContain(aliases.items, assign.op.source)) return null,
+                    .tag_payload_struct => if (aliasesContain(aliases.items, assign.op.source)) return null,
+                    inline .list_reinterpret, .nominal => if (aliasesContain(aliases.items, assign.op.source)) return null,
                 }
                 cursor = assign.next;
             } else if (stmt == .assign_literal) {
@@ -5531,11 +5533,11 @@ const Inserter = struct {
         const gpa = self.emission_allocator;
         const node = self.store.getCFStmt(stmt);
         switch (node) {
-            .assign_ref => |assign| switch (assign.op) {
-                .local => |source| if (source != assign.target and !self.isBindingBorrowed(assign.target)) try uses.append(gpa, source),
+            .assign_ref => |assign| switch (assign.op.kind) {
+                .local => if (assign.op.source != assign.target and !self.isBindingBorrowed(assign.target)) try uses.append(gpa, assign.op.source),
                 .discriminant => {},
-                inline .field, .tag_payload, .tag_payload_struct => |op| if (self.localContainsRefcounted(assign.target)) try uses.append(gpa, op.source),
-                inline .list_reinterpret, .nominal => |op| if (!self.isBindingBorrowed(assign.target)) try uses.append(gpa, op.backing_ref),
+                inline .field, .tag_payload, .tag_payload_struct => if (self.localContainsRefcounted(assign.target)) try uses.append(gpa, assign.op.source),
+                inline .list_reinterpret, .nominal => if (!self.isBindingBorrowed(assign.target)) try uses.append(gpa, assign.op.source),
             },
             inline .assign_call, .assign_low_level => |assign| try self.appendSpanLocals(uses, assign.args),
             .assign_call_erased => |assign_stmt| {
@@ -6657,7 +6659,7 @@ const Inserter = struct {
                     // the same retained units through its existing successor
                     // edge, instead of expanding the environment per edge.
                     const body_node = try self.ensureReadBeforeRebindNode(&graph, &work, join.body);
-                    try self.noteLivenessUseSpan(&graph.nodes.items[body_node].reads, join.retained);
+                    try self.noteLivenessUseSpan(&graph.nodes.items[body_node].reads, self.store.stmtRowOrDefault(join.extra).retained);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, join.remainder);
                     continue;
                 },
@@ -7264,7 +7266,7 @@ const Inserter = struct {
         } }, self.dismantleOrigin(cause, local));
         return try self.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
-            .op = .{ .discriminant = .{ .source = local } },
+            .op = .discriminant(local),
             .next = dispatch,
         } }, self.dismantleOrigin(cause, local));
     }
@@ -7375,10 +7377,7 @@ const Inserter = struct {
             if (!coverage.residual) continue;
             const temp = try self.store.addLocal(.{ .layout_idx = field.layout });
             try self.dismantle_temps.append(self.emission_allocator, temp);
-            const read_op: LIR.RefOp = .{ .field = .{
-                .source = source,
-                .field_idx = @intCast(field.index),
-            } };
+            const read_op: LIR.RefOp = LIR.RefOp.field(source, @intCast(field.index));
             if (coverage.absent) {
                 tail = try self.releaseResidualSlots(local, temp, field.layout, first, container, residual_mask, cause, tail);
                 var absent = std.ArrayList(u32).empty;
@@ -8070,7 +8069,7 @@ const ArcTest = struct {
     fn assignRefLocal(self: *ArcTest, target: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
-            .op = .{ .local = source },
+            .op = .local(source),
             .next = next,
         } }, .test_fixture);
     }
@@ -8078,7 +8077,7 @@ const ArcTest = struct {
     fn assignRefReinterpret(self: *ArcTest, target: LIR.LocalId, backing: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
-            .op = .{ .list_reinterpret = .{ .backing_ref = backing } },
+            .op = .listReinterpret(backing),
             .next = next,
         } }, .test_fixture);
     }
@@ -8086,7 +8085,7 @@ const ArcTest = struct {
     fn assignRefField(self: *ArcTest, target: LIR.LocalId, source: LIR.LocalId, field_idx: u32, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
-            .op = .{ .field = .{ .source = source, .field_idx = field_idx } },
+            .op = .field(source, field_idx),
             .next = next,
         } }, .test_fixture);
     }
@@ -8094,7 +8093,7 @@ const ArcTest = struct {
     fn assignDiscriminant(self: *ArcTest, target: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
-            .op = .{ .discriminant = .{ .source = source } },
+            .op = .discriminant(source),
             .next = next,
         } }, .test_fixture);
     }
@@ -8102,7 +8101,7 @@ const ArcTest = struct {
     fn assignTagPayload(self: *ArcTest, target: LIR.LocalId, source: LIR.LocalId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         return try self.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
-            .op = .{ .tag_payload = .{ .source = source, .payload_idx = 0, .variant_index = 1, .tag_discriminant = 1 } },
+            .op = .tagPayload(source, 0, 1, 1),
             .next = next,
         } }, .test_fixture);
     }
@@ -10579,7 +10578,7 @@ test "RC complete take keeps the root live for a later RC read through a borrowe
     const alias_first = try f.assignRefLocal(first_alias, projection, read_first);
     const project = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = projection,
-        .op = .{ .tag_payload_struct = .{ .source = tag_value, .variant_index = 1, .tag_discriminant = 1 } },
+        .op = .tagPayloadStruct(tag_value, 1, 1),
         .next = alias_first,
     } }, .test_fixture);
     const make_tag = try f.assignTag(tag_value, 1, record, project);
@@ -10847,8 +10846,8 @@ test "RC residual release reads a partly taken nested record as a view" {
     var residual_views: usize = 0;
     for (0..f.store.cfStmtCount()) |stmt_index| {
         const stmt = f.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-        if (stmt != .assign_ref or stmt.assign_ref.op != .field) continue;
-        if (stmt.assign_ref.op.field.source != outer or stmt.assign_ref.target == view) continue;
+        if (stmt != .assign_ref or stmt.assign_ref.op.kind != .field) continue;
+        if (stmt.assign_ref.op.source != outer or stmt.assign_ref.target == view) continue;
         const absent = f.store.getU32Span(f.store.stmtRowOrDefault(stmt.assign_ref.extra).residual_shell_absent_fields);
         if (absent.len == 0) continue;
         try testing.expectEqual(@as(usize, 1), absent.len);
@@ -11114,7 +11113,9 @@ test "RC direct call preserves cold metadata" {
         .target = result,
         .proc = try f.addBodylessProc(.i64),
         .args = try f.span(&.{}),
-        .is_cold = true,
+        .extra = try f.store.addOptionalStmtRow(LIR.CallExtra, .{
+            .is_cold = true,
+        }),
         .next = ret,
     } }, .test_fixture);
 
@@ -11124,7 +11125,7 @@ test "RC direct call preserves cold metadata" {
     const rewritten_body = f.store.getCFStmt(f.procBody());
     if (rewritten_body != .assign_call) arcInvariant("ARC cold-call test body shape changed");
     const rewritten_call = rewritten_body.assign_call;
-    try testing.expect(rewritten_call.is_cold);
+    try testing.expect(f.store.stmtRowOrDefault(rewritten_call.extra).is_cold);
 }
 
 test "RC join remainder starts from join entry ownership" {
@@ -11638,7 +11639,7 @@ test "RC loop payload view preserves field units of a tag union defined outside 
     const read = try f.assignRefField(field, view, 0, wrap);
     const project = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = view,
-        .op = .{ .tag_payload_struct = .{ .source = outer, .variant_index = 1, .tag_discriminant = 1 } },
+        .op = .tagPayloadStruct(outer, 1, 1),
         .next = read,
     } }, .test_fixture);
     const match = try f.switchStmt(disc, project, back_jump, null);
@@ -11699,7 +11700,7 @@ test "RC loop payload view takes fresh field units of a tag union rebuilt inside
     const read = try f.assignRefField(field, view, 0, wrap);
     const project = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = view,
-        .op = .{ .tag_payload_struct = .{ .source = outer, .variant_index = 1, .tag_discriminant = 1 } },
+        .op = .tagPayloadStruct(outer, 1, 1),
         .next = read,
     } }, .test_fixture);
     const match = try f.switchStmt(disc, project, back_jump, null);
@@ -11756,7 +11757,7 @@ test "RC tag union dismantles through its payload view when the payload dies fie
     const read_first = try f.assignRefField(first_read, view, 0, read_second);
     const view_read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = view,
-        .op = .{ .tag_payload_struct = .{ .source = tag_value, .variant_index = 1, .tag_discriminant = 1 } },
+        .op = .tagPayloadStruct(tag_value, 1, 1),
         .next = read_first,
     } }, .test_fixture);
     const default_body = try f.assignI64(result, 0, ret);
@@ -11806,7 +11807,7 @@ test "RC tag union dismantles through its payload view when one field remains fo
     const read_first = try f.assignRefField(first_read, view, 0, first_call);
     const view_read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = view,
-        .op = .{ .tag_payload_struct = .{ .source = tag_value, .variant_index = 1, .tag_discriminant = 1 } },
+        .op = .tagPayloadStruct(tag_value, 1, 1),
         .next = read_first,
     } }, .test_fixture);
     const default_body = try f.assignI64(result, 0, ret);
@@ -12312,13 +12313,13 @@ test "RC retained conditional environment releases once in shared join body" {
     const join = try f.store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = LIR.LocalSpan.empty(),
-        .retained = try f.span(&.{payload}),
         .body = body,
         .remainder = remainder,
         .extra = try f.store.addOptionalStmtRow(LIR.JoinExtra, .{
             .maybe_uninitialized_params = try f.span(&.{payload}),
             .maybe_uninitialized_conditions = try f.span(&.{present}),
             .maybe_uninitialized_condition_masks = try f.store.addU64Span(&.{1}),
+            .retained = try f.span(&.{payload}),
         }),
     } }, .test_fixture);
 
@@ -13291,7 +13292,7 @@ test "uniqueness: fields taken through a dying Ok payload view inherit their fre
     const read_first = try f.assignRefField(first, view, 0, append_first);
     const project = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = view,
-        .op = .{ .tag_payload_struct = .{ .source = tag_value, .variant_index = 1, .tag_discriminant = 1 } },
+        .op = .tagPayloadStruct(tag_value, 1, 1),
         .next = read_first,
     } }, .test_fixture);
     const default_ret = try f.ret(default_result);
@@ -13349,7 +13350,7 @@ test "uniqueness: a field taken from a callee's Ok record result inherits the ca
     const read_first = try f.assignRefField(first, view, 0, append_first);
     const project = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = view,
-        .op = .{ .tag_payload_struct = .{ .source = tag_value, .variant_index = 1, .tag_discriminant = 1 } },
+        .op = .tagPayloadStruct(tag_value, 1, 1),
         .next = read_first,
     } }, .test_fixture);
     const default_ret = try f.ret(default_result);
@@ -13867,7 +13868,7 @@ test "uniqueness: an error-path return without payload does not veto a record fi
     const read_first = try f.assignRefField(first, view, 0, append);
     const project = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = view,
-        .op = .{ .tag_payload_struct = .{ .source = tag_value, .variant_index = 1, .tag_discriminant = 1 } },
+        .op = .tagPayloadStruct(tag_value, 1, 1),
         .next = read_first,
     } }, .test_fixture);
     const default_ret = try f.ret(default_result);
@@ -16229,7 +16230,7 @@ test "RC field takes through repeated dominating complete projections" {
     try testing.expectEqual(@as(usize, 0), f.countRc(extracted_second, .incref));
     const second_projection_stmt = f.store.getCFStmt(project_again);
     try testing.expect(second_projection_stmt == .assign_ref);
-    try testing.expectEqual(first_view, second_projection_stmt.assign_ref.op.local);
+    try testing.expectEqual(first_view, second_projection_stmt.assign_ref.op.source);
 }
 
 test "RC field take restores the exact aggregate field on checked failure without optional specialization" {
@@ -16428,11 +16429,7 @@ test "RC field-take demand crosses complete tag payload and wrapper calls" {
     const alias = try f.assignRefLocal(payload_alias, payload, branch_call);
     const payload_read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = payload,
-        .op = .{ .tag_payload_struct = .{
-            .source = wrapper_param,
-            .variant_index = 1,
-            .tag_discriminant = 1,
-        } },
+        .op = .tagPayloadStruct(wrapper_param, 1, 1),
         .next = alias,
     } }, .test_fixture);
     const default_ret = try f.ret(default_result);

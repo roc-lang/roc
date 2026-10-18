@@ -245,7 +245,7 @@ test "str append fuses through a single-use alias of the call result" {
     const concat = try testConcat(&store, out, &.{ acc, result_alias }, ret);
     const alias = try store.addCFStmt(.{ .assign_ref = .{
         .target = result_alias,
-        .op = .{ .local = result },
+        .op = .local(result),
         .next = concat,
     } }, .test_fixture);
     const call = try store.addCFStmt(.{ .assign_call = .{
@@ -293,7 +293,7 @@ test "str append does not fuse across an alias of an unrelated local" {
     const concat = try testConcat(&store, out, &.{ acc, result }, late_use);
     const alias = try store.addCFStmt(.{ .assign_ref = .{
         .target = unrelated_alias,
-        .op = .{ .local = unrelated },
+        .op = .local(unrelated),
         .next = concat,
     } }, .test_fixture);
     const call = try store.addCFStmt(.{ .assign_call = .{

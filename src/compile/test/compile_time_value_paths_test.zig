@@ -159,7 +159,7 @@ fn hasIntLiteral(result: *const lir.Program.Result, value: i128) bool {
         if (stmt != .assign_literal) continue;
         switch (stmt.assign_literal.value) {
             .i64_literal => |literal| if (literal.value == value) return true,
-            .i128_literal => |literal| if (literal.value == value) return true,
+            .i128_literal => |id| if (result.store.stmtRow(id).value == value) return true,
             .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => {},
         }
     }
@@ -510,7 +510,7 @@ fn callsPassingIntLiteral(gpa: std.mem.Allocator, result: *const lir.Program.Res
         if (stmt != .assign_literal) continue;
         const literal: i128 = switch (stmt.assign_literal.value) {
             .i64_literal => |int| int.value,
-            .i128_literal => |int| int.value,
+            .i128_literal => |id| result.store.stmtRow(id).value,
             .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => continue,
         };
         if (literal == value) try holders.put(gpa, stmt.assign_literal.target, {});

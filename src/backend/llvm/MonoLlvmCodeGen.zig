@@ -3932,12 +3932,12 @@ pub const MonoLlvmCodeGen = struct {
             .init_uninitialized => |uninit| {
                 try work.append(wa, .{ .node = uninit.next });
             },
-            .assign_call => |assign| if (assign.replaces_frame) {
+            .assign_call => |assign| if (self.store.stmtRowOrDefault(assign.extra).replaces_frame) {
                 try self.emitFrameReplacingCall(assign.proc, assign.args);
             } else {
                 const extra = self.store.stmtRowOrDefault(assign.extra);
-                try self.emitDirectCall(assign.target, assign.proc, assign.args, extra.out_desc, assign.is_cold);
-                try self.emitDrivePending(assign.drive, assign.target, extra.result_desc, extra.out_desc);
+                try self.emitDirectCall(assign.target, assign.proc, assign.args, extra.out_desc, extra.is_cold);
+                try self.emitDrivePending(extra.drive, assign.target, extra.result_desc, extra.out_desc);
                 if (extra.returns_pending) |pending| try self.emitReturnIfCallPending(pending);
                 try work.append(wa, .{ .node = assign.next });
             },
@@ -4093,47 +4093,47 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitAssignRef(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LIR.RefOp) Error!void {
         const target_slot = self.slot(target);
-        switch (op) {
-            .local => |source| try self.copyLocal(target, source),
-            inline .list_reinterpret, .nominal => |ref| try self.copyLocal(target, ref.backing_ref),
-            .discriminant => |ref| {
+        switch (op.kind) {
+            .local => try self.copyLocal(target, op.source),
+            inline .list_reinterpret, .nominal => try self.copyLocal(target, op.source),
+            .discriminant => {
                 try self.prepareLocalWrite(target);
-                try self.materializeLocalIfDeferred(ref.source);
-                const base = try self.resolveTagBase(ref.source);
+                try self.materializeLocalIfDeferred(op.source);
+                const base = try self.resolveTagBase(op.source);
                 const discrim = try self.readTagDiscriminant(base.ptr, base.layout_idx);
                 try self.storeIntToLayout(target_slot.ptr, discrim, target_slot.layout_idx);
             },
-            .field => |ref| {
+            .field => {
                 try self.prepareLocalWrite(target);
-                try self.materializeLocalIfDeferred(ref.source);
-                const base = try self.resolveStructBase(ref.source);
+                try self.materializeLocalIfDeferred(op.source);
+                const base = try self.resolveStructBase(op.source);
                 const base_layout = self.layoutValue(base.layout_idx);
                 if (base_layout.tag != .struct_) return error.CompilationFailed;
-                const offset = self.layouts().getStructFieldOffsetByOriginalIndex(base_layout.getStruct().idx, ref.field_idx);
-                const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(base_layout.getStruct().idx, ref.field_idx);
+                const offset = self.layouts().getStructFieldOffsetByOriginalIndex(base_layout.getStruct().idx, op.index);
+                const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(base_layout.getStruct().idx, op.index);
                 const src = try self.offsetPtr(base.ptr, offset);
                 try self.copyBytes(target_slot.ptr, src, self.layoutDataSize(field_layout), self.alignmentForLayout(field_layout));
             },
-            .tag_payload => |ref| {
+            .tag_payload => {
                 try self.prepareLocalWrite(target);
-                try self.materializeLocalIfDeferred(ref.source);
-                const base = try self.resolveTagBase(ref.source);
-                const payload_layout = self.tagPayloadLayout(base.layout_idx, ref.tag_discriminant);
+                try self.materializeLocalIfDeferred(op.source);
+                const base = try self.resolveTagBase(op.source);
+                const payload_layout = self.tagPayloadLayout(base.layout_idx, op.tag_discriminant);
                 const payload_layout_val = self.layoutValue(payload_layout);
                 var src = base.ptr;
                 var copy_layout = payload_layout;
                 if (payload_layout_val.tag == .struct_) {
-                    const offset = self.layouts().getStructFieldOffsetByOriginalIndex(payload_layout_val.getStruct().idx, ref.payload_idx);
+                    const offset = self.layouts().getStructFieldOffsetByOriginalIndex(payload_layout_val.getStruct().idx, op.index);
                     src = try self.offsetPtr(base.ptr, offset);
-                    copy_layout = self.layouts().getStructFieldLayoutByOriginalIndex(payload_layout_val.getStruct().idx, ref.payload_idx);
+                    copy_layout = self.layouts().getStructFieldLayoutByOriginalIndex(payload_layout_val.getStruct().idx, op.index);
                 }
                 try self.copyBytes(target_slot.ptr, src, self.layoutDataSize(copy_layout), self.alignmentForLayout(copy_layout));
             },
-            .tag_payload_struct => |ref| {
+            .tag_payload_struct => {
                 try self.prepareLocalWrite(target);
-                try self.materializeLocalIfDeferred(ref.source);
-                const base = try self.resolveTagBase(ref.source);
-                const payload_layout = self.tagPayloadLayout(base.layout_idx, ref.tag_discriminant);
+                try self.materializeLocalIfDeferred(op.source);
+                const base = try self.resolveTagBase(op.source);
+                const payload_layout = self.tagPayloadLayout(base.layout_idx, op.tag_discriminant);
                 try self.copyBytes(target_slot.ptr, base.ptr, self.layoutDataSize(payload_layout), self.alignmentForLayout(payload_layout));
             },
         }
@@ -4144,7 +4144,10 @@ pub const MonoLlvmCodeGen = struct {
         const slot_v = self.slot(target);
         switch (value) {
             .i64_literal => |lit| try self.storeIntLiteral(slot_v.ptr, slot_v.layout_idx, lit.value),
-            .i128_literal => |lit| try self.storeI128Literal(slot_v.ptr, slot_v.layout_idx, lit.value),
+            .i128_literal => |lit_id| blk_lit: {
+                const lit = self.store.stmtRow(lit_id);
+                break :blk_lit try self.storeI128Literal(slot_v.ptr, slot_v.layout_idx, lit.value);
+            },
             .f64_literal => |lit| try self.storeFloatLiteral(slot_v.ptr, .f64, lit),
             .f32_literal => |lit| try self.storeFloatLiteral(slot_v.ptr, .f32, lit),
             .dec_literal => |lit| try self.storeI128Literal(slot_v.ptr, .dec, lit),

@@ -206,6 +206,12 @@ of these widths is checked, and a count past the field's range returns
 `error.OutOfMemory`, the same failure as an allocation returning null. No
 stage narrows such a count unchecked.
 
+A tag union layout has at most `layout.max_tag_union_variants` (2^30)
+variants; the layout store returns `error.OutOfMemory` for a larger one when
+it creates the layout. Every variant index and discriminant therefore fits
+`layout.VariantIndex`, and producers carry them in that type from where they
+number a variant, so later stages never narrow them.
+
 A walk along a chain in a store (alias and wrapper chains, row extensions,
 descriptor extensions) is bounded by that store's entry count: a longer walk
 must revisit an entry, so it has found a cycle, which is an invariant
@@ -18616,31 +18622,31 @@ same signature, which is the wrapper's C ABI.
 ### Statement Storage
 
 Every LIR statement occupies one fixed-size slot in the store's statement
-column: 36 bytes, holding the statement's kind and at most 32 bytes of inline
+column: 32 bytes, holding the statement's kind and at most 28 bytes of inline
 fields aligned to 4 bytes. The LIR store is alive through the program's later
 memory peaks (code generation for compile-time evaluation, pack compiles, and
 dev builds), so a statement kind's inline fields are chosen by how often they
-are read and set, not by what the largest kind needs. No id, index, or count
-is narrowed below the width its owner allows to fit a slot (see
-"Representation Capacity"); a field that does not fit moves out of line
-instead.
+are read and set, not by what the largest kind needs. An inline field is
+narrower than 32 bits only where its producer bounds it (see "Representation
+Capacity"); a field that does not fit moves out of line instead.
 
 Fields that do not fit live in out-of-line rows. A statement names a row by a
 `LIR.StmtRowId(Row)`, and each row type has its own column in the store
 (`LirStore.stmt_row_types`). Rows hold:
 
 - the payload of a rare, large statement kind (Boxy value statements, erased
-  calls, packed erased functions, dictionary calls, and conditional releases)
-  and a string match's pattern. The statement keeps its target, its
+  calls, packed erased functions, dictionary calls, and conditional releases),
+  a string match's pattern, and a 128-bit integer literal. The statement keeps its target, its
   successors, and the few fields generic statement walkers read inline;
   every other field is in the row
 - a low-level operation's reference-count effect, which is larger than every
   inline payload
-- the rarely set fields of a common kind: a call's descriptors and pending
-  return; the ownership facts ARC stamps on a reference read; the uniqueness
-  proofs and single-operation facts of a low-level operation; a static data
-  read's list-of-copies facts; a join's maybe-uninitialized environment; and
-  the descriptors of tags, struct contents, Boxy tag matches, and Boxy
+- the rarely set fields of a common kind: a call's cold-path, frame-replacing,
+  and tail-drive flags, descriptors, and pending return; the ownership facts
+  ARC stamps on a reference read; the uniqueness proofs and single-operation
+  facts of a low-level operation; a static data read's list-of-copies facts;
+  a join's retained units and maybe-uninitialized environment; and the
+  descriptors of tags, struct contents, Boxy tag matches, and Boxy
   reference-count helpers.
   Such a row is optional: `none` names no row, meaning there is no
   descriptor or every field of the row has its default (`optionalStmtRow`,
@@ -18651,7 +18657,12 @@ rather than Zig optionals, which would double their size: a call's
 self-tail link is a `TailCallLink`, whose `none` and `last` tags occupy the
 top two `CFStmtId` values (so the statement count stays below them), and an
 incref, decref, or free names its helper by an `RcHelperRef`, which keeps a
-concrete layout helper inline.
+concrete layout helper inline. A reference read's `RefOp` is a 128-bit packed
+struct: a 3-bit kind, the source local, a field or payload index, and the
+variant index and discriminant as `layout.VariantIndex`, with the fields a
+kind does not use left zero. Literal values a statement does not hold, such
+as a completed compile-time scalar, use a store-independent literal type and
+become a `LiteralValue` only when emitted into a store.
 
 Rows are immutable. A rewrite that changes a field adds a new row and points
 the statement at it, and statements copied from one another share their rows.

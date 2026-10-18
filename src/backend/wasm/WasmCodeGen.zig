@@ -7439,7 +7439,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         .init_uninitialized => |uninit| {
             try work.append(wa, .{ .node = .{ .stmt_id = uninit.next, .stop = stop } });
         },
-        .assign_call => |assign| if (assign.replaces_frame) {
+        .assign_call => |assign| if (self.store.stmtRowOrDefault(assign.extra).replaces_frame) {
             try self.generateFrameReplacingCall(assign.proc, assign.args);
         } else {
             const extra = self.store.stmtRowOrDefault(assign.extra);
@@ -7449,7 +7449,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 .ret_layout = self.procLocalLayoutIdx(assign.target),
                 .out_desc = extra.out_desc,
             });
-            try self.emitDrivePending(assign.drive, self.procLocalLayoutIdx(assign.target), extra.result_desc, extra.out_desc);
+            try self.emitDrivePending(extra.drive, self.procLocalLayoutIdx(assign.target), extra.result_desc, extra.out_desc);
             try self.bindAssignedLocal(assign.target);
             if (extra.returns_pending) |pending| try self.emitReturnIfCallPending(pending);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
@@ -7895,7 +7895,10 @@ fn generateLiteral(self: *Self, target: ProcLocalId, value: LIR.LiteralValue) Al
                 .f32, .f64, .v128 => unreachable,
             }
         },
-        .i128_literal => |lit| try self.generateIntLiteralForLayout(lit.value, lit.layout_idx),
+        .i128_literal => |lit_id| blk_lit: {
+            const lit = self.store.stmtRow(lit_id);
+            break :blk_lit try self.generateIntLiteralForLayout(lit.value, lit.layout_idx);
+        },
         .f64_literal => |lit| {
             self.currentCode().append(self.allocator, Op.f64_const) catch return error.OutOfMemory;
             var buf: [8]u8 = undefined;
@@ -8119,11 +8122,11 @@ fn bindLocalFromWasmStack(self: *Self, target: ProcLocalId) Allocator.Error!void
 }
 
 fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Error!void {
-    switch (op) {
-        .local => |local| try self.emitProcLocal(local),
-        .discriminant => |disc| {
+    switch (op.kind) {
+        .local => try self.emitProcLocal(op.source),
+        .discriminant => {
             const ls = self.getLayoutStore();
-            const source_layout_idx = self.procLocalLayoutIdx(disc.source);
+            const source_layout_idx = self.procLocalLayoutIdx(op.source);
             const source_layout = ls.getLayout(source_layout_idx);
             const target_vt = try self.resolveValType(target_layout);
             const source_vt: ValType = switch (source_layout.tag) {
@@ -8134,16 +8137,16 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                             try self.emitI32Const(0);
                             break :blk .i32;
                         } else {
-                            try self.emitProcLocal(disc.source);
+                            try self.emitProcLocal(op.source);
                             if (tu_layout.discriminant_size < 4) {
                                 const mask: i32 = (@as(i32, 1) << @intCast(tu_layout.discriminant_size * 8)) - 1;
                                 try self.emitI32Const(mask);
                                 self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
                             }
                         }
-                        break :blk try self.procLocalValType(disc.source);
+                        break :blk try self.procLocalValType(op.source);
                     } else {
-                        try self.emitProcLocal(disc.source);
+                        try self.emitProcLocal(op.source);
                         try self.emitLoadBySize(tu_layout.discriminant_size, @intCast(tu_layout.discriminant_offset));
                         break :blk .i32;
                     }
@@ -8157,7 +8160,7 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                         );
                     }
                     const tu_layout = try WasmLayout.tagUnionLayoutWithStore(inner_layout.getTagUnion().idx, ls);
-                    try self.emitProcLocal(disc.source);
+                    try self.emitProcLocal(op.source);
                     try self.emitLoadBySize(tu_layout.discriminant_size, @intCast(tu_layout.discriminant_offset));
                     break :blk .i32;
                 },
@@ -8166,8 +8169,8 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                     break :blk .i32;
                 },
                 .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => blk: {
-                    try self.emitProcLocal(disc.source);
-                    break :blk try self.procLocalValType(disc.source);
+                    try self.emitProcLocal(op.source);
+                    break :blk try self.procLocalValType(op.source);
                 },
                 .erased_box => wasmInvariantFmt("WasmCodeGen invariant violated: erased-box discriminant access survived Boxy lowering", .{}),
             };
@@ -8195,63 +8198,63 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                 ),
             }
         },
-        .field => |field| try self.generateStructAccess(.{
-            .struct_expr = field.source,
-            .struct_layout = self.procLocalLayoutIdx(field.source),
-            .field_idx = field.field_idx,
+        .field => try self.generateStructAccess(.{
+            .struct_expr = op.source,
+            .struct_layout = self.procLocalLayoutIdx(op.source),
+            .field_idx = op.index,
             .field_layout = target_layout,
         }),
-        .tag_payload => |payload| {
-            try self.emitProcLocal(payload.source);
+        .tag_payload => {
+            try self.emitProcLocal(op.source);
             const ls = self.getLayoutStore();
-            const source_layout = self.procLocalLayoutIdx(payload.source);
+            const source_layout = self.procLocalLayoutIdx(op.source);
             const union_layout = ls.getLayout(source_layout);
             const payload_layout_idx = switch (union_layout.tag) {
                 .tag_union => blk: {
                     const variants = ls.getTagUnionVariants(ls.getTagUnionData(union_layout.getTagUnion().idx));
-                    break :blk variants.get(payload.variant_index).payload_layout;
+                    break :blk variants.get(op.variant_index).payload_layout;
                 },
                 .box => blk: {
                     const inner = ls.getLayout(union_layout.getIdx());
                     if (inner.tag != .tag_union) break :blk .zst;
                     const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner.getTagUnion().idx));
-                    break :blk variants.get(payload.variant_index).payload_layout;
+                    break :blk variants.get(op.variant_index).payload_layout;
                 },
                 .erased_box => wasmInvariantFmt("WasmCodeGen invariant violated: erased-box tag payload access survived Boxy lowering", .{}),
                 .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => .zst,
             };
             const payload_layout = ls.getLayout(payload_layout_idx);
             if (payload_layout.tag == .struct_) {
-                const field_offset = try self.structFieldOffsetByOriginalIndexWasm(payload_layout.getStruct().idx, payload.payload_idx);
+                const field_offset = try self.structFieldOffsetByOriginalIndexWasm(payload_layout.getStruct().idx, op.index);
                 if (field_offset > 0) {
                     try self.emitI32Const(@intCast(field_offset));
                     self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
                 }
-            } else if (builtin.mode == .debug and payload.payload_idx != 0) {
+            } else if (builtin.mode == .debug and op.index != 0) {
                 base.invariant(
                     "LIR/wasm invariant violated: scalar tag payload access requested payload_idx {d} from non-struct payload",
-                    .{payload.payload_idx},
+                    .{op.index},
                 );
             }
             if (!try self.isCompositeLayout(target_layout)) {
                 try self.emitLoadOpForLayout(target_layout, 0);
             }
         },
-        .tag_payload_struct => |payload| {
-            try self.emitProcLocal(payload.source);
+        .tag_payload_struct => {
+            try self.emitProcLocal(op.source);
             const ls = self.getLayoutStore();
-            const source_layout = self.procLocalLayoutIdx(payload.source);
+            const source_layout = self.procLocalLayoutIdx(op.source);
             const union_layout = ls.getLayout(source_layout);
             const payload_layout_idx = switch (union_layout.tag) {
                 .tag_union => blk: {
                     const variants = ls.getTagUnionVariants(ls.getTagUnionData(union_layout.getTagUnion().idx));
-                    break :blk variants.get(payload.variant_index).payload_layout;
+                    break :blk variants.get(op.variant_index).payload_layout;
                 },
                 .box => blk: {
                     const inner = ls.getLayout(union_layout.getIdx());
                     if (inner.tag != .tag_union) break :blk .zst;
                     const variants = ls.getTagUnionVariants(ls.getTagUnionData(inner.getTagUnion().idx));
-                    break :blk variants.get(payload.variant_index).payload_layout;
+                    break :blk variants.get(op.variant_index).payload_layout;
                 },
                 .erased_box => wasmInvariantFmt("WasmCodeGen invariant violated: erased-box tag payload access survived Boxy lowering", .{}),
                 .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => .zst,
@@ -8276,8 +8279,8 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                 try self.emitLoadOpForLayout(target_layout, 0);
             }
         },
-        .list_reinterpret => |list_reinterpret| try self.emitProcLocal(list_reinterpret.backing_ref),
-        .nominal => |nom| try self.emitProcLocal(nom.backing_ref),
+        .list_reinterpret => try self.emitProcLocal(op.source),
+        .nominal => try self.emitProcLocal(op.source),
     }
 }
 

@@ -1572,7 +1572,7 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
         });
         worker.getCFStmtPtr(root).* = .{ .assign_ref = .{
             .target = local,
-            .op = .{ .local = original },
+            .op = .local(original),
             .next = ret,
         } };
     }

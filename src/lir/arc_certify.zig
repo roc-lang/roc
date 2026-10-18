@@ -923,23 +923,23 @@ fn appendLocalSpan(context: *FailureContext, store: *const LirStore, span: LIR.L
 }
 
 fn appendRefOp(context: *FailureContext, op: LIR.RefOp) void {
-    switch (op) {
-        .local => |source| context.append("local({d})", .{@backingInt(source)}),
-        .discriminant => |ref| context.append("discriminant({d})", .{@backingInt(ref.source)}),
-        .field => |ref| context.append("field({d}, {d})", .{ @backingInt(ref.source), ref.field_idx }),
-        .tag_payload => |ref| context.append("tag_payload({d}, variant={d}, payload={d}, disc={d})", .{
-            @backingInt(ref.source),
-            ref.variant_index,
-            ref.payload_idx,
-            ref.tag_discriminant,
+    switch (op.kind) {
+        .local => context.append("local({d})", .{@backingInt(op.source)}),
+        .discriminant => context.append("discriminant({d})", .{@backingInt(op.source)}),
+        .field => context.append("field({d}, {d})", .{ @backingInt(op.source), op.index }),
+        .tag_payload => context.append("tag_payload({d}, variant={d}, payload={d}, disc={d})", .{
+            @backingInt(op.source),
+            op.variant_index,
+            op.index,
+            op.tag_discriminant,
         }),
-        .tag_payload_struct => |ref| context.append("tag_payload_struct({d}, variant={d}, disc={d})", .{
-            @backingInt(ref.source),
-            ref.variant_index,
-            ref.tag_discriminant,
+        .tag_payload_struct => context.append("tag_payload_struct({d}, variant={d}, disc={d})", .{
+            @backingInt(op.source),
+            op.variant_index,
+            op.tag_discriminant,
         }),
-        .list_reinterpret => |ref| context.append("list_reinterpret({d})", .{@backingInt(ref.backing_ref)}),
-        .nominal => |ref| context.append("nominal({d})", .{@backingInt(ref.backing_ref)}),
+        .list_reinterpret => context.append("list_reinterpret({d})", .{@backingInt(op.source)}),
+        .nominal => context.append("nominal({d})", .{@backingInt(op.source)}),
     }
 }
 
@@ -5469,14 +5469,14 @@ const Certifier = struct {
             switch (stmt) {
                 .assign_ref => |assign| {
                     try self.validateResidualShellFields(&state, assign);
-                    switch (assign.op) {
-                        .local => |source| {
-                            if (assign.target != source) {
-                                try self.bindLocalAlias(&state, assign.target, source);
+                    switch (assign.op.kind) {
+                        .local => {
+                            if (assign.target != assign.op.source) {
+                                try self.bindLocalAlias(&state, assign.target, assign.op.source);
                             }
                         },
-                        .discriminant => |op| {
-                            const source_value = try self.requireAggregateRepresentation(&state, op.source);
+                        .discriminant => {
+                            const source_value = try self.requireAggregateRepresentation(&state, assign.op.source);
                             try state.removeOutcomeDiscriminant(assign.target);
                             if (source_value != no_value and
                                 !self.values.items[source_value].call_outcomes.isEmpty())
@@ -5488,32 +5488,32 @@ const Certifier = struct {
                                 try state.put(&state.variant_discriminants, @backingInt(assign.target), source_value);
                             }
                         },
-                        .field => |op| try self.bindPayloadReadWithShell(
+                        .field => try self.bindPayloadReadWithShell(
                             &state,
                             assign.target,
-                            op.source,
+                            assign.op.source,
                             arc_dismantle.encodeProjection(assign.op).?,
                             self.store.stmtRowOrDefault(assign.extra).take_kind,
                             null,
                             self.store.getU32Span(self.store.stmtRowOrDefault(assign.extra).residual_shell_absent_fields),
                         ),
-                        .tag_payload => |op| try self.bindPayloadRead(
+                        .tag_payload => try self.bindPayloadRead(
                             &state,
                             assign.target,
-                            op.source,
+                            assign.op.source,
                             arc_dismantle.encodeProjection(assign.op).?,
                             self.store.stmtRowOrDefault(assign.extra).take_kind,
-                            op.tag_discriminant,
+                            assign.op.tag_discriminant,
                         ),
-                        .tag_payload_struct => |op| try self.bindPayloadRead(
+                        .tag_payload_struct => try self.bindPayloadRead(
                             &state,
                             assign.target,
-                            op.source,
+                            assign.op.source,
                             arc_dismantle.encodeProjection(assign.op).?,
                             self.store.stmtRowOrDefault(assign.extra).take_kind,
-                            op.tag_discriminant,
+                            assign.op.tag_discriminant,
                         ),
-                        inline .list_reinterpret, .nominal => |op| try self.bindSameValue(&state, assign.target, op.backing_ref),
+                        inline .list_reinterpret, .nominal => try self.bindSameValue(&state, assign.target, assign.op.source),
                     }
                     cursor = assign.next;
                 },
@@ -6214,8 +6214,8 @@ const Certifier = struct {
         assign: @FieldType(LIR.CFStmt, "assign_ref"),
     ) CertifyError!void {
         const absent_fields = self.store.getU32Span(self.store.stmtRowOrDefault(assign.extra).residual_shell_absent_fields);
-        const source = switch (assign.op) {
-            .local => |local| local,
+        const source = switch (assign.op.kind) {
+            .local => assign.op.source,
             .field => {
                 // A struct view's shell names refcounted slots of its own
                 // layout; the read itself checks them against the claims of
@@ -6677,7 +6677,7 @@ test "certify list metadata survives release but payload and retain do not" {
             if (use == .retain) read = try f.increfStmt(alias, list_layout, read);
             const copy = try f.store.addCFStmt(.{ .assign_ref = .{
                 .target = alias,
-                .op = .{ .local = list },
+                .op = .local(list),
                 .next = read,
             } }, .test_fixture);
             const continuation = if (cross_join) blk: {
@@ -7189,7 +7189,7 @@ test "unique-argument certification rejects a multiply-defined local with a fore
     // The other arm binds the parameter's value, which is no birth at all.
     const second_def = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = fresh,
-        .op = .{ .local = left },
+        .op = .local(left),
         .next = checked,
     } }, .test_fixture);
     const body = try f.store.addCFStmt(.{ .switch_stmt = .{
@@ -7289,7 +7289,7 @@ test "certify accepts erased call reuse from a transparent outer owner" {
     } }, .test_fixture);
     const body = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = closure,
-        .op = .{ .nominal = .{ .backing_ref = owner } },
+        .op = .nominal(owner),
         .next = call,
     } }, .test_fixture);
     _ = try f.addProc(&.{owner}, body, erased_callable);
@@ -7321,12 +7321,12 @@ test "erased owner resolution re-derives a reuse source that became an alias" {
     } }, .test_fixture);
     const closure_assign = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = closure,
-        .op = .{ .local = read },
+        .op = .local(read),
         .next = call,
     } }, .test_fixture);
     const body = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = read,
-        .op = .{ .local = owner },
+        .op = .local(owner),
         .next = closure_assign,
     } }, .test_fixture);
     const proc_id = try f.addProc(&.{owner}, body, erased_callable);
@@ -7462,7 +7462,7 @@ test "certify accepts an aliased value released through either name" {
     const result_assign = try f.assignI64(result, release);
     const alias_stmt = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
-        .op = .{ .local = original },
+        .op = .local(original),
         .next = result_assign,
     } }, .test_fixture);
     const body = try f.assignStr(original, alias_stmt);
@@ -7482,7 +7482,7 @@ test "certify flags releasing an aliased value through both names" {
     const result_assign = try f.assignI64(result, first);
     const alias_stmt = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
-        .op = .{ .local = original },
+        .op = .local(original),
         .next = result_assign,
     } }, .test_fixture);
     const body = try f.assignStr(original, alias_stmt);
@@ -7511,7 +7511,7 @@ test "certify accepts a payload borrow used while the owner is live" {
     } }, .test_fixture);
     const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = field,
-        .op = .{ .field = .{ .source = pair, .field_idx = 0 } },
+        .op = .field(pair, 0),
         .next = use_field,
     } }, .test_fixture);
     const release_b = try f.decrefStmt(b, .str, field_read);
@@ -7558,7 +7558,7 @@ test "certify accepts a retained Boxy field borrowed from implicit capture stora
     } }, .test_fixture);
     const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = field,
-        .op = .{ .field = .{ .source = capture, .field_idx = 0 } },
+        .op = .field(capture, 0),
         .next = retain,
     } }, .test_fixture);
     _ = try f.addProc(&.{ capture, desc_local }, field_read, .i64);
@@ -7590,7 +7590,7 @@ test "certify flags a payload borrow used after the owner dies" {
     const release_pair = try f.decrefStmt(pair, f.pair_str, use_field);
     const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = field,
-        .op = .{ .field = .{ .source = pair, .field_idx = 0 } },
+        .op = .field(pair, 0),
         .next = release_pair,
     } }, .test_fixture);
     const a = try f.local(.str);
@@ -7628,7 +7628,7 @@ test "certify flags an incref-restored payload borrow only when over-released" {
     const incref_field = try f.increfStmt(field, .str, release_pair);
     const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = field,
-        .op = .{ .field = .{ .source = pair, .field_idx = 0 } },
+        .op = .field(pair, 0),
         .next = incref_field,
     } }, .test_fixture);
     const a = try f.local(.str);
@@ -7762,7 +7762,7 @@ test "certify preserves borrowed parameter lifetime through an owned alias join"
     const retain_alias = try f.increfStmt(alias, .str, join_stmt);
     const bind_alias = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
-        .op = .{ .local = param },
+        .op = .local(param),
         .next = retain_alias,
     } }, .test_fixture);
     _ = try f.addProc(&.{param}, bind_alias, .i64);
@@ -7886,7 +7886,7 @@ test "decref_if_initialized tracks a guarded cell release across aliases" {
     const retain_alias = try f.increfStmt(alias, .str, first_guarded_release);
     const bind_alias = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
-        .op = .{ .local = payload },
+        .op = .local(payload),
         .next = retain_alias,
     } }, .test_fixture);
     const result_assign = try f.assignI64(result, bind_alias);
@@ -8290,7 +8290,7 @@ fn certifyDistinctBorrowLenders(release_last_lender: bool) (CertifyError || erro
         const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
         const read = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = field,
-            .op = .{ .field = .{ .source = owner, .field_idx = 0 } },
+            .op = .field(owner, 0),
             .next = if (release_last_lender and index == owners.len - 1)
                 try f.decrefStmt(owner, f.pair_str, jump)
             else
@@ -8399,7 +8399,7 @@ test "certify preserves payload lender when retained holder crosses join" {
     const retain_field = try f.increfStmt(field, .str, assign_holder_other);
     const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = field,
-        .op = .{ .field = .{ .source = owner, .field_idx = 0 } },
+        .op = .field(owner, 0),
         .next = retain_field,
     } }, .test_fixture);
     _ = try f.addProc(&.{owner}, field_read, .i64);
@@ -8430,7 +8430,7 @@ fn buildRecordDismantledTwice(f: *CertifyTest, retain: bool) Allocator.Error!voi
     const take_right = try takeFieldStmt(f, right_taken, right, 0, take_right_residual);
     const alias_right = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = right,
-        .op = .{ .local = record },
+        .op = .local(record),
         .next = take_right,
     } }, .test_fixture);
     const release_left_taken = try f.decrefStmt(left_taken, .str, alias_right);
@@ -8440,7 +8440,7 @@ fn buildRecordDismantledTwice(f: *CertifyTest, retain: bool) Allocator.Error!voi
     const retain_left = if (retain) try f.increfStmt(left, f.pair_str, take_left) else take_left;
     const alias_left = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = left,
-        .op = .{ .local = record },
+        .op = .local(record),
         .next = retain_left,
     } }, .test_fixture);
     const make_record = try f.store.addCFStmt(.{ .assign_struct = .{
@@ -8518,16 +8518,12 @@ fn buildPayloadViewDismantledBeforeJoin(f: *CertifyTest, retain: bool) Allocator
     const retain_copy = if (retain) try f.increfStmt(copy, f.pair_str, take) else take;
     const alias_copy = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = copy,
-        .op = .{ .local = view },
+        .op = .local(view),
         .next = retain_copy,
     } }, .test_fixture);
     const project = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = view,
-        .op = .{ .tag_payload_struct = .{
-            .source = tag_value,
-            .variant_index = 1,
-            .tag_discriminant = 1,
-        } },
+        .op = .tagPayloadStruct(tag_value, 1, 1),
         .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
             .take_kind = .take,
         }),
@@ -8605,11 +8601,7 @@ fn buildTakenPayloadInInnerJoinFrame(f: *CertifyTest, release_both: bool) Alloca
     const retain_payload = try f.increfStmt(payload, .str, outer_join);
     const take = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = payload,
-        .op = .{ .tag_payload_struct = .{
-            .source = tag_value,
-            .variant_index = 1,
-            .tag_discriminant = 1,
-        } },
+        .op = .tagPayloadStruct(tag_value, 1, 1),
         .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
             .take_kind = .take,
         }),
@@ -8667,7 +8659,7 @@ test "certify preserves an owned payload's dormant lender across a join" {
     const retain_field = try f.increfStmt(field, .str, join_stmt);
     const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = field,
-        .op = .{ .field = .{ .source = owner, .field_idx = 0 } },
+        .op = .field(owner, 0),
         .next = retain_field,
     } }, .test_fixture);
     _ = try f.addProc(&.{owner}, field_read, .i64);
@@ -8709,7 +8701,7 @@ test "certify preserves a holder alternative to a payload lender across a join" 
     const retain_field = try f.increfStmt(field, .str, assign_holder_other);
     const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = field,
-        .op = .{ .field = .{ .source = owner, .field_idx = 0 } },
+        .op = .field(owner, 0),
         .next = retain_field,
     } }, .test_fixture);
     _ = try f.addProc(&.{owner}, field_read, .i64);
@@ -8776,7 +8768,7 @@ test "certify drops a dead dormant lender from an owned join value" {
     const retain_field = try f.increfStmt(field, .str, release_owner);
     const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = field,
-        .op = .{ .field = .{ .source = owner, .field_idx = 0 } },
+        .op = .field(owner, 0),
         .next = retain_field,
     } }, .test_fixture);
     _ = try f.addProc(&.{owner}, field_read, .i64);
@@ -8818,7 +8810,7 @@ test "certify rejects a join value after every dormant lifetime alternative dies
     const retain_field = try f.increfStmt(field, .str, assign_holder_other);
     const field_read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = field,
-        .op = .{ .field = .{ .source = owner, .field_idx = 0 } },
+        .op = .field(owner, 0),
         .next = retain_field,
     } }, .test_fixture);
     _ = try f.addProc(&.{owner}, field_read, .i64);
@@ -8859,13 +8851,13 @@ test "certify preserves deep ABI lender when join body releases retained interme
     } }, .test_fixture);
     const read_inner_field = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = inner_field,
-        .op = .{ .field = .{ .source = retained_intermediate, .field_idx = 0 } },
+        .op = .field(retained_intermediate, 0),
         .next = join_stmt,
     } }, .test_fixture);
     const retain_intermediate = try f.increfStmt(retained_intermediate, f.pair_str, read_inner_field);
     const read_intermediate = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = retained_intermediate,
-        .op = .{ .field = .{ .source = owner, .field_idx = 0 } },
+        .op = .field(owner, 0),
         .next = retain_intermediate,
     } }, .test_fixture);
     _ = try f.addProc(&.{owner}, read_intermediate, .i64);
@@ -8921,7 +8913,7 @@ fn buildAliasLoop(f: *CertifyTest, comptime k: usize, injection: AliasLoopInject
         const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
         const rebind = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = locals[i + 1],
-            .op = .{ .local = locals[i] },
+            .op = .local(locals[i]),
             .next = jump,
         } }, .test_fixture);
         const release_old = if (injection == .leak_on_rebind and i == 0)
@@ -9025,7 +9017,7 @@ test "certify joins entries whose partitions differ but balances agree" {
     const jump_aliased = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const rebind = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = y,
-        .op = .{ .local = x },
+        .op = .local(x),
         .next = jump_aliased,
     } }, .test_fixture);
     const release_old_y = try f.decrefStmt(y, .str, rebind);
@@ -9081,7 +9073,7 @@ test "certify flags unbounded per-iteration balance accumulation" {
 fn fieldReadStmt(f: *CertifyTest, target: LIR.LocalId, source: LIR.LocalId, field_idx: u32, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
     return try f.store.addCFStmt(.{ .assign_ref = .{
         .target = target,
-        .op = .{ .field = .{ .source = source, .field_idx = field_idx } },
+        .op = .field(source, field_idx),
         .next = next,
     } }, .test_fixture);
 }
@@ -9089,7 +9081,7 @@ fn fieldReadStmt(f: *CertifyTest, target: LIR.LocalId, source: LIR.LocalId, fiel
 fn takeFieldStmt(f: *CertifyTest, target: LIR.LocalId, source: LIR.LocalId, field_idx: u32, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
     return try f.store.addCFStmt(.{ .assign_ref = .{
         .target = target,
-        .op = .{ .field = .{ .source = source, .field_idx = field_idx } },
+        .op = .field(source, field_idx),
         .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
             .take_kind = .take,
         }),
@@ -9101,16 +9093,12 @@ fn tagPayloadStructReadStmt(
     f: *CertifyTest,
     target: LIR.LocalId,
     source: LIR.LocalId,
-    variant_index: u32,
+    variant_index: layout_mod.VariantIndex,
     next: LIR.CFStmtId,
 ) Allocator.Error!LIR.CFStmtId {
     return try f.store.addCFStmt(.{ .assign_ref = .{
         .target = target,
-        .op = .{ .tag_payload_struct = .{
-            .source = source,
-            .variant_index = variant_index,
-            .tag_discriminant = variant_index,
-        } },
+        .op = .tagPayloadStruct(source, variant_index, variant_index),
         .next = next,
     } }, .test_fixture);
 }
@@ -9131,7 +9119,7 @@ test "certify carries a released struct representation across a join for scalar 
     const read_scalar = try fieldReadStmt(&f, scalar, alias, 1, ret);
     const alias_shell = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
-        .op = .{ .local = record },
+        .op = .local(record),
         .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
             .residual_shell_absent_fields = try f.store.addU32Span(&.{0}),
         }),
@@ -9160,12 +9148,12 @@ test "certify carries a released union tag across a join and alias" {
     const ret = try f.ret(disc);
     const read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = disc,
-        .op = .{ .discriminant = .{ .source = alias } },
+        .op = .discriminant(alias),
         .next = ret,
     } }, .test_fixture);
     const copy = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
-        .op = .{ .local = tag },
+        .op = .local(tag),
         .next = read,
     } }, .test_fixture);
     const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
@@ -9193,7 +9181,7 @@ test "certify rejects a payload view through a released union representation" {
     const read_payload = try tagPayloadStructReadStmt(&f, view, tag, 1, result_assign);
     const read_tag = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = disc,
-        .op = .{ .discriminant = .{ .source = tag } },
+        .op = .discriminant(tag),
         .next = read_payload,
     } }, .test_fixture);
     const release = try f.decrefStmt(tag, tag_layout, read_tag);
@@ -9218,7 +9206,7 @@ test "certify rejects a released struct alias without exact residual-shell field
     const read_scalar = try fieldReadStmt(&f, scalar, alias, 1, ret);
     const malformed_alias = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
-        .op = .{ .local = record },
+        .op = .local(record),
         .next = read_scalar,
     } }, .test_fixture);
     const release = try f.decrefStmt(record, record_layout, malformed_alias);
@@ -9245,7 +9233,7 @@ test "certify accepts shell fields transferred before their lazy claims settle" 
     const read_scalar = try fieldReadStmt(&f, scalar, alias, 1, release_field);
     const alias_shell = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
-        .op = .{ .local = record },
+        .op = .local(record),
         .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
             .residual_shell_absent_fields = try f.store.addU32Span(&.{0}),
         }),
@@ -9308,7 +9296,7 @@ test "certify rejects an RC field read after a take through its payload projecti
     const read_second = try fieldReadStmt(&f, second, second_alias, 0, retain_second);
     const alias_second = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = second_alias,
-        .op = .{ .local = projection },
+        .op = .local(projection),
         .next = read_second,
     } }, .test_fixture);
     const release_holder = try f.decrefStmt(holder, record_layout, alias_second);
@@ -9320,7 +9308,7 @@ test "certify rejects an RC field read after a take through its payload projecti
     const read_first = try fieldReadStmt(&f, first, first_alias, 0, make_holder);
     const alias_first = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = first_alias,
-        .op = .{ .local = projection },
+        .op = .local(projection),
         .next = read_first,
     } }, .test_fixture);
     const project = try tagPayloadStructReadStmt(&f, projection, tag_value, 1, alias_first);
@@ -9371,7 +9359,7 @@ test "certify accepts a retained payload field read twice through aliases of its
     const read_second = try fieldReadStmt(&f, second, second_alias, 0, retain_second);
     const alias_second = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = second_alias,
-        .op = .{ .local = projection },
+        .op = .local(projection),
         .next = read_second,
     } }, .test_fixture);
     const release_holder = try f.decrefStmt(holder, record_layout, alias_second);
@@ -9384,7 +9372,7 @@ test "certify accepts a retained payload field read twice through aliases of its
     const read_first = try fieldReadStmt(&f, first, first_alias, 0, retain_first);
     const alias_first = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = first_alias,
-        .op = .{ .local = projection },
+        .op = .local(projection),
         .next = read_first,
     } }, .test_fixture);
     const project = try tagPayloadStructReadStmt(&f, projection, tag_value, 1, alias_first);
@@ -9464,14 +9452,14 @@ test "certify accepts a retained record moved whole after a field take across a 
         } }, .test_fixture);
         const join_body = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = moved_alias,
-            .op = .{ .local = carried_alias },
+            .op = .local(carried_alias),
             .next = move_after_take,
         } }, .test_fixture);
         const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
         const release_before_jump = try f.decrefStmt(taken, .str, jump);
         const take_before_jump = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = taken,
-            .op = .{ .field = .{ .source = record, .field_idx = 0 } },
+            .op = .field(record, 0),
             .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
                 .take_kind = .take,
             }),
@@ -9481,7 +9469,7 @@ test "certify accepts a retained record moved whole after a field take across a 
         const release_after_move = try f.decrefStmt(taken, .str, ret);
         const take_after_move = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = taken,
-            .op = .{ .field = .{ .source = record, .field_idx = 0 } },
+            .op = .field(record, 0),
             .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
                 .take_kind = .take,
             }),
@@ -9505,18 +9493,18 @@ test "certify accepts a retained record moved whole after a field take across a 
         } }, .test_fixture);
         const carry = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = carried_alias,
-            .op = .{ .local = retained_alias },
+            .op = .local(retained_alias),
             .next = join,
         } }, .test_fixture);
         const retain = try f.increfStmt(retained_alias, record_layout, carry);
         const alias = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = retained_alias,
-            .op = .{ .local = record },
+            .op = .local(record),
             .next = retain,
         } }, .test_fixture);
         const body = if (projected) try f.store.addCFStmt(.{ .assign_ref = .{
             .target = record,
-            .op = .{ .field = .{ .source = parent, .field_idx = 0 } },
+            .op = .field(parent, 0),
             .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
                 .take_kind = .take,
             }),
@@ -9584,7 +9572,7 @@ test "certify whole consumption of dismantled projections requires an available 
                 }
                 var body = try f.store.addCFStmt(.{ .assign_ref = .{
                     .target = taken,
-                    .op = .{ .field = .{ .source = record, .field_idx = 0 } },
+                    .op = .field(record, 0),
                     .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
                         .take_kind = .take,
                     }),
@@ -9597,7 +9585,7 @@ test "certify whole consumption of dismantled projections requires an available 
                 for (0..depth) |index| {
                     body = try f.store.addCFStmt(.{ .assign_ref = .{
                         .target = locals[index],
-                        .op = .{ .field = .{ .source = locals[index + 1], .field_idx = 0 } },
+                        .op = .field(locals[index + 1], 0),
                         .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
                             .take_kind = .take,
                         }),
@@ -9638,7 +9626,7 @@ test "certifier restitution restores a claimed surplus parent unit exactly once"
     const parent_value = try certifier.bindFresh(&state, parent, 1, &.{});
     const record_value = try certifier.bindFresh(&state, record, 1, &.{parent_value});
     certifier.values.items[record_value].payload_source = parent_value;
-    certifier.values.items[record_value].payload_projection = arc_dismantle.encodeProjection(.{ .field = .{ .source = parent, .field_idx = 0 } }).?;
+    certifier.values.items[record_value].payload_projection = arc_dismantle.encodeProjection(LIR.RefOp.field(parent, 0)).?;
     try state.setClaims(record_value, .{ .low = 1 });
     const result_value = try certifier.bindFresh(&state, result, 0, &.{});
     var mutations = std.ArrayList(OwnershipMutation).empty;
@@ -9716,9 +9704,9 @@ test "certify complete projections spend exactly the retained units" {
             } }, .test_fixture);
             for ([_]LIR.LocalId{ second, first }) |target| {
                 const op: LIR.RefOp = if (tagged)
-                    .{ .tag_payload = .{ .source = container, .payload_idx = 0, .variant_index = 1, .tag_discriminant = 1 } }
+                    LIR.RefOp.tagPayload(container, 0, 1, 1)
                 else
-                    .{ .field = .{ .source = container, .field_idx = 0 } };
+                    LIR.RefOp.field(container, 0);
                 body = try f.store.addCFStmt(.{ .assign_ref = .{ .target = target, .op = op, .next = body } }, .test_fixture);
             }
             for (0..retains) |_| body = try f.increfStmt(container, container_layout, body);
@@ -9889,7 +9877,7 @@ test "certify validates wide residual shell identities across a join" {
         const read_scalar = try fieldReadStmt(&f, scalar, alias, 0, try f.ret(scalar));
         const alias_shell = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = alias,
-            .op = .{ .local = record },
+            .op = .local(record),
             .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
                 .residual_shell_absent_fields = try f.store.addU32Span(absent),
             }),
@@ -9970,7 +9958,7 @@ fn buildNestedViewTakes(f: *CertifyTest, second_view_shell: []const u32, release
     const take_a = if (release_a) try takeFieldStmt(f, a, second_view, 0, after_a) else after_a;
     const read_second_view = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = second_view,
-        .op = .{ .field = .{ .source = outer, .field_idx = 0 } },
+        .op = .field(outer, 0),
         .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
             .residual_shell_absent_fields = try f.store.addU32Span(second_view_shell),
         }),
@@ -10133,12 +10121,7 @@ test "certify rejects moving only part of an active tag payload" {
     const release_partial = try f.decrefStmt(partial, .str, result_assign);
     const body = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = partial,
-        .op = .{ .tag_payload = .{
-            .source = tag,
-            .payload_idx = 0,
-            .variant_index = 1,
-            .tag_discriminant = 1,
-        } },
+        .op = .tagPayload(tag, 0, 1, 1),
         .next = release_partial,
     } }, .test_fixture);
     _ = try f.addProc(&.{tag}, body, .i64);
@@ -10250,7 +10233,7 @@ fn buildFrameNest(f: *CertifyTest, shape: FrameNestShape) Allocator.Error!void {
     if (shape == .inner_alias_release) {
         outer_default = try f.store.addCFStmt(.{ .assign_ref = .{
             .target = alias,
-            .op = .{ .local = outer_value },
+            .op = .local(outer_value),
             .next = outer_default,
         } }, .test_fixture);
     }

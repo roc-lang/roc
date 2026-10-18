@@ -695,12 +695,12 @@ const Detection = struct {
             },
             .assign_ref => |s| {
                 if (candidate.state != .tagged) return false;
-                const source = if (s.op == .local)
-                    s.op.local
-                else if (s.op == .nominal)
-                    s.op.nominal.backing_ref
-                else if (s.op == .list_reinterpret)
-                    s.op.list_reinterpret.backing_ref
+                const source = if (s.op.kind == .local)
+                    s.op.source
+                else if (s.op.kind == .nominal)
+                    s.op.source
+                else if (s.op.kind == .list_reinterpret)
+                    s.op.source
                 else
                     return false;
                 if (source != candidate.current()) return false;
@@ -1214,7 +1214,7 @@ const Transform = struct {
             const tmp = try self.addLocal(self.store.getLocal(move.target).layout_idx);
             try self.appendLoopBackStmt(&first, &last, origin, .{ .assign_ref = .{
                 .target = tmp,
-                .op = .{ .local = move.target },
+                .op = .local(move.target),
                 .next = undefined,
             } });
             var index = start;

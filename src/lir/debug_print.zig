@@ -74,14 +74,14 @@ const Printer = struct {
             switch (stmt) {
                 .assign_ref => |s| {
                     try self.writeTarget(s.target, indent, writer);
-                    switch (s.op) {
-                        .local => |src| try writer.print("ref.local l{d}", .{@backingInt(src)}),
-                        .discriminant => |d| try writer.print("ref.discriminant l{d}", .{@backingInt(d.source)}),
-                        .field => |f| try writer.print("ref.field l{d}[{d}]", .{ @backingInt(f.source), f.field_idx }),
-                        .tag_payload => |t| try writer.print("ref.tag_payload l{d} v{d}[{d}]", .{ @backingInt(t.source), t.variant_index, t.payload_idx }),
-                        .tag_payload_struct => |t| try writer.print("ref.tag_payload_struct l{d} v{d}", .{ @backingInt(t.source), t.variant_index }),
-                        .list_reinterpret => |l| try writer.print("ref.list_reinterpret l{d}", .{@backingInt(l.backing_ref)}),
-                        .nominal => |n| try writer.print("ref.nominal l{d}", .{@backingInt(n.backing_ref)}),
+                    switch (s.op.kind) {
+                        .local => try writer.print("ref.local l{d}", .{@backingInt(s.op.source)}),
+                        .discriminant => try writer.print("ref.discriminant l{d}", .{@backingInt(s.op.source)}),
+                        .field => try writer.print("ref.field l{d}[{d}]", .{ @backingInt(s.op.source), s.op.index }),
+                        .tag_payload => try writer.print("ref.tag_payload l{d} v{d}[{d}]", .{ @backingInt(s.op.source), s.op.variant_index, s.op.index }),
+                        .tag_payload_struct => try writer.print("ref.tag_payload_struct l{d} v{d}", .{ @backingInt(s.op.source), s.op.variant_index }),
+                        .list_reinterpret => try writer.print("ref.list_reinterpret l{d}", .{@backingInt(s.op.source)}),
+                        .nominal => try writer.print("ref.nominal l{d}", .{@backingInt(s.op.source)}),
                     }
                     if (self.store.stmtRowOrDefault(s.extra).take_kind == .take) try writer.writeAll(" take");
                     const absent_fields = self.store.getU32Span(self.store.stmtRowOrDefault(s.extra).residual_shell_absent_fields);
@@ -99,7 +99,11 @@ const Printer = struct {
                 .assign_literal => |s| {
                     try self.writeTarget(s.target, indent, writer);
                     switch (s.value) {
-                        inline .i64_literal, .i128_literal => |l| try writer.print("literal {d}", .{l.value}),
+                        .i64_literal => |l| try writer.print("literal {d}", .{l.value}),
+                        .i128_literal => |l_id| blk_l: {
+                            const l = self.store.stmtRow(l_id);
+                            break :blk_l try writer.print("literal {d}", .{l.value});
+                        },
                         .f64_literal => |f| try writer.print("literal f64 {d}", .{f}),
                         .f32_literal => |f| try writer.print("literal f32 {d}", .{f}),
                         .dec_literal => |d| try writer.print("literal dec {d}", .{d}),
@@ -132,9 +136,9 @@ const Printer = struct {
                         try writeBoxyDescRef(result_desc, writer);
                     }
                     if (extra.out_desc) |out_desc| try writer.print(" out_desc=l{d}", .{@backingInt(out_desc)});
-                    if (s.is_cold) try writer.writeAll(" cold");
-                    if (s.replaces_frame) try writer.writeAll(" replaces_frame");
-                    if (s.drive != .none) try writer.print(" drive={s}", .{@tagName(s.drive)});
+                    if (extra.is_cold) try writer.writeAll(" cold");
+                    if (extra.replaces_frame) try writer.writeAll(" replaces_frame");
+                    if (extra.drive != .none) try writer.print(" drive={s}", .{@tagName(extra.drive)});
                     if (extra.returns_pending) |pending| {
                         try writer.writeAll(" returns_pending");
                         if (pending.result_desc) |result_desc| {
@@ -592,9 +596,9 @@ const Printer = struct {
                     try writer.print("join j{d} params=[", .{@backingInt(s.id)});
                     try self.writeLocals(s.params, writer);
                     try writer.writeAll("]");
-                    if (!s.retained.isEmpty()) {
+                    if (!self.store.stmtRowOrDefault(s.extra).retained.isEmpty()) {
                         try writer.writeAll(" retained=[");
-                        try self.writeLocals(s.retained, writer);
+                        try self.writeLocals(self.store.stmtRowOrDefault(s.extra).retained, writer);
                         try writer.writeAll("]");
                     }
                     const extra = self.store.stmtRowOrDefault(s.extra);

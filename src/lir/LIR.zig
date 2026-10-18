@@ -844,10 +844,9 @@ pub const LiteralValue = union(enum) {
         value: i64 align(4),
         layout_idx: layout.Idx,
     },
-    i128_literal: struct {
-        value: i128 align(4),
-        layout_idx: layout.Idx,
-    },
+    /// A 128-bit integer literal, stored out of line: its value and layout
+    /// are larger than every other literal.
+    i128_literal: StmtRowId(I128Literal),
     f64_literal: f64 align(4),
     f32_literal: f32,
     dec_literal: i128 align(4),
@@ -880,33 +879,69 @@ pub const TakeKind = enum(u8) {
     take,
 };
 
-/// Reference-producing operation lowered by `assign_ref`.
-pub const RefOp = union(enum) {
-    local: LocalId,
-    discriminant: struct {
-        source: LocalId,
-    },
-    field: struct {
-        source: LocalId,
-        field_idx: u32,
-    },
-    tag_payload: struct {
-        source: LocalId,
-        payload_idx: u32,
-        variant_index: u32,
-        tag_discriminant: u32,
-    },
-    tag_payload_struct: struct {
-        source: LocalId,
-        variant_index: u32,
-        tag_discriminant: u32,
-    },
-    list_reinterpret: struct {
-        backing_ref: LocalId,
-    },
-    nominal: struct {
-        backing_ref: LocalId,
-    },
+/// Reference-producing operation lowered by `assign_ref`. Which fields carry
+/// meaning depends on `kind`; a field a kind does not use is zero.
+///
+/// - `local`: `source` is the local read.
+/// - `discriminant`: `source` is the tag union whose discriminant is read.
+/// - `field`: `source` is the struct and `index` the field read.
+/// - `tag_payload`: `source` is the tag union, `index` the payload read, and
+///   `variant_index` and `tag_discriminant` name its variant.
+/// - `tag_payload_struct`: as `tag_payload`, reading the variant's whole
+///   payload struct; `index` is unused.
+/// - `list_reinterpret`, `nominal`: `source` is the backing reference.
+pub const RefOp = packed struct(u128) {
+    kind: Kind,
+    source: LocalId,
+    index: u32 = 0,
+    variant_index: layout.VariantIndex = 0,
+    tag_discriminant: layout.VariantIndex = 0,
+    reserved: u1 = 0,
+
+    pub const Kind = enum(u3) {
+        local,
+        discriminant,
+        field,
+        tag_payload,
+        tag_payload_struct,
+        list_reinterpret,
+        nominal,
+    };
+
+    pub fn local(source: LocalId) RefOp {
+        return .{ .kind = .local, .source = source };
+    }
+
+    pub fn discriminant(source: LocalId) RefOp {
+        return .{ .kind = .discriminant, .source = source };
+    }
+
+    pub fn field(source: LocalId, field_idx: u32) RefOp {
+        return .{ .kind = .field, .source = source, .index = field_idx };
+    }
+
+    pub fn tagPayload(source: LocalId, payload_idx: u32, variant_index: layout.VariantIndex, tag_discriminant: layout.VariantIndex) RefOp {
+        return .{ .kind = .tag_payload, .source = source, .index = payload_idx, .variant_index = variant_index, .tag_discriminant = tag_discriminant };
+    }
+
+    pub fn tagPayloadStruct(source: LocalId, variant_index: layout.VariantIndex, tag_discriminant: layout.VariantIndex) RefOp {
+        return .{ .kind = .tag_payload_struct, .source = source, .variant_index = variant_index, .tag_discriminant = tag_discriminant };
+    }
+
+    pub fn listReinterpret(backing_ref: LocalId) RefOp {
+        return .{ .kind = .list_reinterpret, .source = backing_ref };
+    }
+
+    pub fn nominal(backing_ref: LocalId) RefOp {
+        return .{ .kind = .nominal, .source = backing_ref };
+    }
+
+    /// The same operation reading `source` instead.
+    pub fn withSource(self: RefOp, source: LocalId) RefOp {
+        var result = self;
+        result.source = source;
+        return result;
+    }
 };
 
 /// Platform-hosted proc metadata used for external proc ABIs.
@@ -1113,8 +1148,18 @@ pub fn StmtRowId(comptime T: type) type {
 }
 
 /// The fields of `CFStmt.assign_call` that most calls leave unset, stored
-/// out of line.
+/// out of line: cold-path and frame-replacement flags, descriptors, and the
+/// tail-drive pass's facts.
 pub const CallExtra = struct {
+    is_cold: bool = false,
+    /// Set by ARC emission on a call to a procedure in the caller's own
+    /// call-graph SCC whose next statement returns `target`: the caller
+    /// frame owns nothing afterwards, so every backend must replace that
+    /// frame with the callee's instead of growing the stack.
+    replaces_frame: bool = false,
+    /// Set by the tail-drive pass on a call whose callee can return with
+    /// an erased call pending.
+    drive: PendingDrive = .none,
     result_desc: ?BoxyDescRef = null,
     /// Fresh descriptor local initialized with the descriptor governing
     /// the value written to `target` when the callee produces that
@@ -1248,9 +1293,13 @@ pub const LiteralExtra = struct {
     list_len: ?u64 = null,
 };
 
-/// The maybe-uninitialized locals of a `CFStmt.join` environment, stored out
-/// of line.
+/// The outer ownership units a `CFStmt.join` transfers to its body and its
+/// environment's maybe-uninitialized locals, stored out of line.
 pub const JoinExtra = struct {
+    /// Outer ownership units explicitly transferred to the shared body.
+    /// They have no runtime ABI and need no assignments; ARC keeps them
+    /// across every jump and emits their release once in the body.
+    retained: LocalSpan = .empty(),
     /// Join-environment locals whose initial value is the compiler-only
     /// uninitialized marker. This includes rebound parameters and
     /// pass-through retained locals. ARC must release them only under
@@ -1263,6 +1312,12 @@ pub const JoinExtra = struct {
     /// lets one condition local be a packed presence word rather than a
     /// separate Bool local per maybe-initialized payload.
     maybe_uninitialized_condition_masks: U64Span = .empty(),
+};
+
+/// The payload of `LiteralValue.i128_literal`, stored out of line.
+pub const I128Literal = struct {
+    value: i128,
+    layout_idx: layout.Idx,
 };
 
 /// The payload of `LiteralValue.boxy_dynamic_num_literal`, stored out of line.
@@ -1489,7 +1544,7 @@ pub const CFStmt = union(enum) {
     },
     assign_ref: struct {
         target: LocalId,
-        op: RefOp,
+        op: RefOp align(4),
         /// The ownership facts ARC stamps on the read; `none` when it stamps
         /// none.
         extra: StmtRowId(RefExtra) = .none,
@@ -1506,18 +1561,9 @@ pub const CFStmt = union(enum) {
         args: LocalSpan,
         /// The fields most calls leave unset; `none` when all of them are.
         extra: StmtRowId(CallExtra) = .none,
-        is_cold: bool = false,
         /// Producer-proven self-tail site, linked for procedure finalization.
         /// Consumed before ARC; no backend tail-call inference is required.
         tail_call: TailCallLink = .none,
-        /// Set by ARC emission on a call to a procedure in the caller's own
-        /// call-graph SCC whose next statement returns `target`: the caller
-        /// frame owns nothing afterwards, so every backend must replace that
-        /// frame with the callee's instead of growing the stack.
-        replaces_frame: bool = false,
-        /// Set by the tail-drive pass on a call whose callee can return with
-        /// an erased call pending.
-        drive: PendingDrive = .none,
         next: CFStmtId,
     },
     assign_call_erased: struct {
@@ -1779,12 +1825,8 @@ pub const CFStmt = union(enum) {
     join: struct {
         id: JoinPointId,
         params: LocalSpan,
-        /// Outer ownership units explicitly transferred to the shared body.
-        /// They have no runtime ABI and need no assignments; ARC keeps them
-        /// across every jump and emits their release once in the body.
-        retained: LocalSpan = .empty(),
-        /// The join environment's maybe-uninitialized locals; `none` when it
-        /// has none.
+        /// The join's retained units and maybe-uninitialized locals; `none`
+        /// when it has neither.
         extra: StmtRowId(JoinExtra) = .none,
         body: CFStmtId,
         remainder: CFStmtId,
@@ -2008,10 +2050,10 @@ pub const LirProcSpec = struct {
     rc_variant_demandable: bool = false,
 };
 
-test "a statement occupies one 36-byte slot" {
-    // A statement's inline fields fit in 32 bytes beside its 4-byte-aligned
+test "a statement occupies one 32-byte slot" {
+    // A statement's inline fields fit in 28 bytes beside its 4-byte-aligned
     // tag; larger payloads live in out-of-line rows (`StmtRowId`).
-    try std.testing.expectEqual(@as(usize, 36), @sizeOf(CFStmt));
+    try std.testing.expectEqual(@as(usize, 32), @sizeOf(CFStmt));
     try std.testing.expectEqual(@as(usize, 4), @alignOf(CFStmt));
 }
 

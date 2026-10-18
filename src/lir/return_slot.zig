@@ -260,7 +260,7 @@ test "return slot creates an explicit ptr-result variant for aggregate call stor
     const ptr_store = try testLowLevel(&store, store_unit, .ptr_store, &.{ destination, temporary_alias }, ret);
     const alias = try store.addCFStmt(.{ .assign_ref = .{
         .target = temporary_alias,
-        .op = .{ .local = temporary },
+        .op = .local(temporary),
         .next = ptr_store,
     } }, .test_fixture);
     const call = try store.addCFStmt(.{ .assign_call = .{

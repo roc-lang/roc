@@ -8815,15 +8815,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // subsequently permit the same physical slot.
             for (work.items) |id| {
                 const stmt = self.store.getCFStmt(id);
-                if (stmt != .assign_ref or stmt.assign_ref.op != .local) continue;
+                if (stmt != .assign_ref or stmt.assign_ref.op.kind != .local) continue;
                 const assign = stmt.assign_ref;
                 const target_index = plan.localIndex(assign.target).?;
-                const source = plan.localIndex(assign.op.local).?;
+                const source = plan.localIndex(assign.op.source).?;
                 const t = plan.values.items[target_index];
                 const s = plan.values.items[source];
                 if (t.definitions != 1 or s.definitions > 1 or t.mutable or s.mutable) continue;
                 const rep = self.runtimeRepresentationLayoutIdx(self.localLayout(assign.target));
-                if (rep != self.runtimeRepresentationLayoutIdx(self.localLayout(assign.op.local))) continue;
+                if (rep != self.runtimeRepresentationLayoutIdx(self.localLayout(assign.op.source))) continue;
                 if (rep == .f32 or rep == .f64 or self.simdKindForLayout(rep) != null) continue;
                 plan.values.items[target_index].representative = source;
             }
@@ -8855,47 +8855,47 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn generateRefOp(self: *Self, op: lir.RefOp, target_layout: layout.Idx) Allocator.Error!ValueLocation {
-            return switch (op) {
-                .local => |local| blk: {
-                    const raw_loc = try self.emitValueLocal(local);
+            return switch (op.kind) {
+                .local => blk: {
+                    const raw_loc = try self.emitValueLocal(op.source);
                     break :blk try self.coerceRefLocalValueToLayout(
                         raw_loc,
-                        self.localLayout(local),
+                        self.localLayout(op.source),
                         target_layout,
                         "assign_ref.local",
                     );
                 },
-                .discriminant => |disc| try self.generateDiscriminantAccess(.{
-                    .source = disc.source,
+                .discriminant => try self.generateDiscriminantAccess(.{
+                    .source = op.source,
                     .target_layout = target_layout,
                 }),
-                .field => |field| try self.generateStructAccess(.{
-                    .source = field.source,
-                    .field_idx = field.field_idx,
+                .field => try self.generateStructAccess(.{
+                    .source = op.source,
+                    .field_idx = op.index,
                     .target_layout = target_layout,
                 }),
-                .tag_payload => |payload| try self.generateTagPayloadAccess(.{
-                    .source = payload.source,
-                    .payload_idx = payload.payload_idx,
-                    .variant_index = payload.variant_index,
-                    .tag_discriminant = payload.tag_discriminant,
+                .tag_payload => try self.generateTagPayloadAccess(.{
+                    .source = op.source,
+                    .payload_idx = op.index,
+                    .variant_index = op.variant_index,
+                    .tag_discriminant = op.tag_discriminant,
                     .target_layout = target_layout,
                 }),
-                .tag_payload_struct => |payload| try self.generateTagPayloadStructAccess(.{
-                    .source = payload.source,
-                    .variant_index = payload.variant_index,
-                    .tag_discriminant = payload.tag_discriminant,
+                .tag_payload_struct => try self.generateTagPayloadStructAccess(.{
+                    .source = op.source,
+                    .variant_index = op.variant_index,
+                    .tag_discriminant = op.tag_discriminant,
                     .target_layout = target_layout,
                 }),
-                .list_reinterpret => |list_reinterpret| self.requireExplicitListValueLocationToLayout(
-                    try self.emitValueLocal(list_reinterpret.backing_ref),
-                    self.localLayout(list_reinterpret.backing_ref),
+                .list_reinterpret => self.requireExplicitListValueLocationToLayout(
+                    try self.emitValueLocal(op.source),
+                    self.localLayout(op.source),
                     target_layout,
                     "assign_ref.list_reinterpret",
                 ),
-                .nominal => |nominal| try self.requireExplicitNominalValueLocationToLayout(
-                    try self.emitValueLocal(nominal.backing_ref),
-                    self.localLayout(nominal.backing_ref),
+                .nominal => try self.requireExplicitNominalValueLocationToLayout(
+                    try self.emitValueLocal(op.source),
+                    self.localLayout(op.source),
                     target_layout,
                     "assign_ref.nominal",
                 ),
@@ -20235,7 +20235,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .assign_literal => |assign| {
                             const value_loc: ValueLocation = switch (assign.value) {
                                 .i64_literal => |lit| .{ .immediate_i64 = lit.value },
-                                .i128_literal => |lit| try self.generateI128Literal(lit.value),
+                                .i128_literal => |lit_id| blk_lit: {
+                                    const lit = self.store.stmtRow(lit_id);
+                                    break :blk_lit try self.generateI128Literal(lit.value);
+                                },
                                 .f64_literal => |lit| .{ .immediate_f64 = lit },
                                 .f32_literal => |lit| .{ .immediate_f32 = lit },
                                 .dec_literal => |lit| try self.generateI128Literal(lit),
@@ -20280,7 +20283,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try work.append(wa, .{ .node = uninit.next });
                         },
 
-                        .assign_call => |assign| if (assign.replaces_frame) {
+                        .assign_call => |assign| if (self.store.stmtRowOrDefault(assign.extra).replaces_frame) {
                             try self.generateTailCall(.{
                                 .proc = assign.proc,
                                 .args = assign.args,
@@ -20294,8 +20297,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .ret_layout = self.localLayout(assign.target),
                                 .out_desc = extra.out_desc,
                             });
-                            const driven_loc = try self.emitDrivePending(assign.drive, value_loc, self.localLayout(assign.target), extra.result_desc, extra.out_desc);
-                            try self.bindCallResult(assign.target, driven_loc, assign.drive);
+                            const driven_loc = try self.emitDrivePending(extra.drive, value_loc, self.localLayout(assign.target), extra.result_desc, extra.out_desc);
+                            try self.bindCallResult(assign.target, driven_loc, extra.drive);
                             if (extra.returns_pending) |pending| try self.emitReturnIfCallPending(pending);
                             try work.append(wa, .{ .node = assign.next });
                         },
@@ -24626,7 +24629,7 @@ test "immutable aliases share storage but aliases of mutable locals do not" {
     } }, .test_fixture);
     const mutable_alias_stmt = try store.addCFStmt(.{ .assign_ref = .{
         .target = mutable_alias,
-        .op = .{ .local = mutable_source },
+        .op = .local(mutable_source),
         .next = mutate,
     } }, .test_fixture);
     const mutable_source_stmt = try store.addCFStmt(.{ .assign_literal = .{
@@ -24636,12 +24639,12 @@ test "immutable aliases share storage but aliases of mutable locals do not" {
     } }, .test_fixture);
     const alias2_stmt = try store.addCFStmt(.{ .assign_ref = .{
         .target = alias2,
-        .op = .{ .local = alias1 },
+        .op = .local(alias1),
         .next = mutable_source_stmt,
     } }, .test_fixture);
     const alias1_stmt = try store.addCFStmt(.{ .assign_ref = .{
         .target = alias1,
-        .op = .{ .local = source },
+        .op = .local(source),
         .next = alias2_stmt,
     } }, .test_fixture);
     const source_stmt = try store.addCFStmt(.{ .assign_literal = .{
@@ -25219,12 +25222,7 @@ test "tag payload bind invariant rejects mismatched pattern layout" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = mismatched_target } }, .test_fixture);
     _ = try store.addCFStmt(.{ .assign_ref = .{
         .target = mismatched_target,
-        .op = .{ .tag_payload = .{
-            .source = source,
-            .payload_idx = 0,
-            .variant_index = 0,
-            .tag_discriminant = 0,
-        } },
+        .op = .tagPayload(source, 0, 0, 0),
         .next = ret,
     } }, .test_fixture);
 }

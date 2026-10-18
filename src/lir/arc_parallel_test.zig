@@ -576,7 +576,7 @@ const OutcomeFixture = struct {
         const refine = try switchStmt(s, discriminant, caller_success, caller_failure);
         const read = try s.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
-            .op = .{ .discriminant = .{ .source = call_result } },
+            .op = .discriminant(call_result),
             .next = refine,
         } }, .test_fixture);
         const call = try s.addCFStmt(.{ .assign_call = .{
@@ -772,7 +772,7 @@ const DismantleRangeFixture = struct {
         } }, .test_fixture);
         const first_branch = try s.addCFStmt(.{ .assign_ref = .{
             .target = first_read,
-            .op = .{ .field = .{ .source = pair, .field_idx = 0 } },
+            .op = .field(pair, 0),
             .next = first_call,
         } }, .test_fixture);
         const second_call = try s.addCFStmt(.{ .assign_call = .{
@@ -783,7 +783,7 @@ const DismantleRangeFixture = struct {
         } }, .test_fixture);
         const second_branch = try s.addCFStmt(.{ .assign_ref = .{
             .target = second_read,
-            .op = .{ .field = .{ .source = pair, .field_idx = 1 } },
+            .op = .field(pair, 1),
             .next = second_call,
         } }, .test_fixture);
         const choose = try s.addCFStmt(.{ .switch_stmt = .{

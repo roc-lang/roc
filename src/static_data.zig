@@ -516,9 +516,9 @@ const StaticInitializerMachine = struct {
         op: lir.LIR.RefOp,
         target_layout: layout.Idx,
     ) MaterializationError!*SymbolicValue {
-        return switch (op) {
-            .local => |source| try self.cloneValueAs(local(locals, source), target_layout),
-            inline .list_reinterpret, .nominal => |source| try self.cloneValueAs(local(locals, source.backing_ref), target_layout),
+        return switch (op.kind) {
+            .local => try self.cloneValueAs(local(locals, op.source), target_layout),
+            inline .list_reinterpret, .nominal => try self.cloneValueAs(local(locals, op.source), target_layout),
             .discriminant,
             .field,
             .tag_payload,
@@ -535,7 +535,10 @@ const StaticInitializerMachine = struct {
         const value = try self.newValue(target_layout);
         switch (literal) {
             .i64_literal => |int| self.writeSigned(value.bytes, int.value),
-            .i128_literal => |int| self.writeSigned(value.bytes, int.value),
+            .i128_literal => |int_id| blk_int: {
+                const int = self.store().stmtRow(int_id);
+                break :blk_int self.writeSigned(value.bytes, int.value);
+            },
             .f64_literal => |float| std.mem.writeInt(u64, value.bytes[0..8], @bitCast(float), .little),
             .f32_literal => |float| std.mem.writeInt(u32, value.bytes[0..4], @bitCast(float), .little),
             .dec_literal => |dec| std.mem.writeInt(i128, value.bytes[0..16], dec, .little),

@@ -220,8 +220,8 @@ fn forwardLocalAliasChainImpl(
         const stmt_node = store.getCFStmtImmediate(current);
         if (stmt_node.* != .assign_ref) return .{ .value = value, .next = current };
         const stmt = stmt_node.assign_ref;
-        if (stmt.op == .local) {
-            const local = stmt.op.local;
+        if (stmt.op.kind == .local) {
+            const local = stmt.op.source;
             if (local == value and store.getLocal(stmt.target).layout_idx == store.getLocal(value).layout_idx) {
                 if (chain) |list| try list.append(allocator, stmt.target);
                 value = stmt.target;
@@ -758,10 +758,10 @@ pub fn forEachStmtDef(
 
 /// The one local a reference operation reads.
 pub fn refOpSource(op: LIR.RefOp) LocalId {
-    return switch (op) {
-        .local => |local| local,
-        inline .discriminant, .field, .tag_payload, .tag_payload_struct => |ref| ref.source,
-        inline .list_reinterpret, .nominal => |ref| ref.backing_ref,
+    return switch (op.kind) {
+        .local => op.source,
+        inline .discriminant, .field, .tag_payload, .tag_payload_struct => op.source,
+        inline .list_reinterpret, .nominal => op.source,
     };
 }
 
@@ -1546,7 +1546,9 @@ pub fn CallResultFusion(comptime Spec: type) type {
                 .target = consumer.target,
                 .proc = variant_proc,
                 .args = try self.store.addLocalSpan(args.items),
-                .is_cold = call.is_cold,
+                .extra = try self.store.addOptionalStmtRow(LIR.CallExtra, .{
+                    .is_cold = self.store.stmtRowOrDefault(call.extra).is_cold,
+                }),
                 .next = consumer.next,
             } }, origin);
             return true;
@@ -1864,7 +1866,6 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .proc = s.proc,
                     .args = try self.mapLocalSpan(s.args),
                     .extra = try self.mapCallExtra(s.extra),
-                    .is_cold = s.is_cold,
                     .next = s.next,
                 } },
                 .assign_call_erased => |inline_stmt| blk: {
@@ -2194,7 +2195,6 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                         frame.built = .{ .join = .{
                             .id = try self.mapJoinPoint(s.id),
                             .params = try self.mapLocalSpan(s.params),
-                            .retained = try self.mapLocalSpan(s.retained),
                             .extra = try self.mapJoinExtra(s.extra),
                             .body = undefined,
                             .remainder = undefined,
@@ -2433,26 +2433,14 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         }
 
         fn mapRefOp(self: *Self, op: LIR.RefOp) Allocator.Error!LIR.RefOp {
-            return switch (op) {
-                .local => |local| .{ .local = try self.mapLocal(local) },
-                .discriminant => |d| .{ .discriminant = .{ .source = try self.mapLocal(d.source) } },
-                .field => |f| .{ .field = .{
-                    .source = try self.mapLocal(f.source),
-                    .field_idx = f.field_idx,
-                } },
-                .tag_payload => |t| .{ .tag_payload = .{
-                    .source = try self.mapLocal(t.source),
-                    .payload_idx = t.payload_idx,
-                    .variant_index = t.variant_index,
-                    .tag_discriminant = t.tag_discriminant,
-                } },
-                .tag_payload_struct => |t| .{ .tag_payload_struct = .{
-                    .source = try self.mapLocal(t.source),
-                    .variant_index = t.variant_index,
-                    .tag_discriminant = t.tag_discriminant,
-                } },
-                .list_reinterpret => |l| .{ .list_reinterpret = .{ .backing_ref = try self.mapLocal(l.backing_ref) } },
-                .nominal => |n| .{ .nominal = .{ .backing_ref = try self.mapLocal(n.backing_ref) } },
+            return switch (op.kind) {
+                .local => LIR.RefOp.local(try self.mapLocal(op.source)),
+                .discriminant => LIR.RefOp.discriminant(try self.mapLocal(op.source)),
+                .field => LIR.RefOp.field(try self.mapLocal(op.source), op.index),
+                .tag_payload => LIR.RefOp.tagPayload(try self.mapLocal(op.source), op.index, op.variant_index, op.tag_discriminant),
+                .tag_payload_struct => LIR.RefOp.tagPayloadStruct(try self.mapLocal(op.source), op.variant_index, op.tag_discriminant),
+                .list_reinterpret => LIR.RefOp.listReinterpret(try self.mapLocal(op.source)),
+                .nominal => LIR.RefOp.nominal(try self.mapLocal(op.source)),
             };
         }
 
@@ -2485,11 +2473,12 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             return if (maybe) |desc| try self.mapBoxyDescRef(desc) else null;
         }
 
-        /// The extra fields a call's clone carries: its result descriptor and
-        /// out-descriptor, remapped.
+        /// The extra fields a call's clone carries: its cold-path flag, and
+        /// its result descriptor and out-descriptor, remapped.
         pub fn mapCallExtra(self: *Self, id: LIR.StmtRowId(LIR.CallExtra)) Allocator.Error!LIR.StmtRowId(LIR.CallExtra) {
             const extra = self.store.stmtRowOrDefault(id);
             return self.store.addOptionalStmtRow(LIR.CallExtra, .{
+                .is_cold = extra.is_cold,
                 .result_desc = try self.mapMaybeBoxyDescRef(extra.result_desc),
                 .out_desc = try self.mapMaybeLocal(extra.out_desc),
             });
@@ -2498,6 +2487,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         pub fn mapJoinExtra(self: *Self, id: LIR.StmtRowId(LIR.JoinExtra)) Allocator.Error!LIR.StmtRowId(LIR.JoinExtra) {
             const extra = self.store.stmtRowOrDefault(id);
             return self.store.addOptionalStmtRow(LIR.JoinExtra, .{
+                .retained = try self.mapLocalSpan(extra.retained),
                 .maybe_uninitialized_params = try self.mapLocalSpan(extra.maybe_uninitialized_params),
                 .maybe_uninitialized_conditions = try self.mapLocalSpan(extra.maybe_uninitialized_conditions),
                 .maybe_uninitialized_condition_masks = extra.maybe_uninitialized_condition_masks,
@@ -2771,7 +2761,7 @@ test "chainIsSingleUse rejects an extra read of any link" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = b } }, .test_fixture);
     const alias = try store.addCFStmt(.{ .assign_ref = .{
         .target = b,
-        .op = .{ .local = a },
+        .op = .local(a),
         .next = ret,
     } }, .test_fixture);
 
@@ -2781,7 +2771,7 @@ test "chainIsSingleUse rejects an extra read of any link" {
     // A second read of the head link refuses the chain.
     const extra_head = try store.addCFStmt(.{ .assign_ref = .{
         .target = unit,
-        .op = .{ .local = a },
+        .op = .local(a),
         .next = alias,
     } }, .test_fixture);
     try std.testing.expect(!try chainIsSingleUse(&store, extra_head, &.{ a, b }));
@@ -2789,7 +2779,7 @@ test "chainIsSingleUse rejects an extra read of any link" {
     // A second read of the tail link refuses it just the same.
     const extra_tail = try store.addCFStmt(.{ .assign_ref = .{
         .target = unit,
-        .op = .{ .local = b },
+        .op = .local(b),
         .next = alias,
     } }, .test_fixture);
     try std.testing.expect(!try chainIsSingleUse(&store, extra_tail, &.{ a, b }));
@@ -2923,7 +2913,7 @@ test "body_clone scratch is bounded by reachable locals and scopes" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = alias } }, source_origin);
     const copy = try store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
-        .op = .{ .local = value },
+        .op = .local(value),
         .next = ret,
     } }, source_origin);
     const body = try store.addCFStmt(.{ .assign_boxy_desc_ref = .{
@@ -3055,7 +3045,7 @@ test "body_clone sparse counting propagates allocation failures" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_ref = .{
         .target = local,
-        .op = .{ .local = local },
+        .op = .local(local),
         .next = ret,
     } }, .test_fixture);
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testSparseCountAllocations, .{ &store, body });
@@ -3091,7 +3081,7 @@ test "body_clone retained counts isolate nested inventories and clear only live 
     for (0..100000) |_| _ = try store.addLocal(.{ .layout_idx = .u64 });
     const high = try store.addLocal(.{ .layout_idx = .u64 });
     const ret = try store.addCFStmt(.{ .ret = .{ .value = high } }, .test_fixture);
-    const copy = try store.addCFStmt(.{ .assign_ref = .{ .target = high, .op = .{ .local = low }, .next = ret } }, .test_fixture);
+    const copy = try store.addCFStmt(.{ .assign_ref = .{ .target = high, .op = .local(low), .next = ret } }, .test_fixture);
     // Both successors share a suffix: count its statements once, but count
     // both operand occurrences of low (the condition and the copy).
     const body = try store.addCFStmt(.{ .switch_stmt = .{

@@ -417,7 +417,6 @@ const Transform = struct {
         self.store.getCFStmtPtr(join_stmt_id).* = .{ .join = .{
             .id = join_stmt.id,
             .params = try self.store.addLocalSpan(&.{ join_payload, result_box, payload_ptr }),
-            .retained = join_stmt.retained,
             .extra = join_stmt.extra,
             .body = join_stmt.body,
             .remainder = join_stmt.remainder,
@@ -524,8 +523,8 @@ const Transform = struct {
             const node = self.store.getCFStmt(current);
             if (node == .assign_ref) {
                 const stmt = node.assign_ref;
-                if (stmt.op != .local) return .{ .value = value, .next = current };
-                const local = stmt.op.local;
+                if (stmt.op.kind != .local) return .{ .value = value, .next = current };
+                const local = stmt.op.source;
                 if (local == value and self.store.getLocal(stmt.target).layout_idx == self.store.getLocal(value).layout_idx) {
                     value = stmt.target;
                 }
@@ -549,7 +548,7 @@ const Transform = struct {
             const node = self.store.getCFStmt(current);
             if (node == .assign_ref) {
                 const stmt = node.assign_ref;
-                if (stmt.op != .local) return current;
+                if (stmt.op.kind != .local) return current;
                 current = stmt.next;
                 continue;
             }
@@ -705,7 +704,7 @@ fn testLowLevel(store: *LirStore, target: LocalId, op: LowLevelOp, args: []const
 fn testLocalRef(store: *LirStore, target: LocalId, source: LocalId, next: CFStmtId) ResourceError!CFStmtId {
     return try store.addCFStmt(.{ .assign_ref = .{
         .target = target,
-        .op = .{ .local = source },
+        .op = .local(source),
         .next = next,
     } }, .test_fixture);
 }

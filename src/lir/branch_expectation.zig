@@ -105,8 +105,8 @@ fn carriesExpectation(store: *const LirStore, definitions: *const collections.De
         const definition = (definitions.get(local) orelse return false) orelse return false;
         switch (store.getCFStmtImmediate(definition).*) {
             .assign_low_level => |s| return s.op == .bool_likely,
-            .assign_ref => |s| switch (s.op) {
-                .local => |source| local = source,
+            .assign_ref => |s| switch (s.op.kind) {
+                .local => local = s.op.source,
                 .field, .discriminant, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return false,
             },
             .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .store_struct, .store_tag, .set_local, .join, .switch_stmt, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .jump, .ret, .crash => return false,
@@ -156,7 +156,7 @@ const Fixture = struct {
             current = try store.addCFStmt(.{ .set_local = .{ .target = cond, .value = compared, .mode = .replace_existing, .next = current } }, .test_fixture);
         }
         if (alias) {
-            current = try store.addCFStmt(.{ .assign_ref = .{ .target = aliased, .op = .{ .local = if (likely) marked else compared }, .next = current } }, .test_fixture);
+            current = try store.addCFStmt(.{ .assign_ref = .{ .target = aliased, .op = .local(if (likely) marked else compared), .next = current } }, .test_fixture);
         }
         if (likely) {
             current = try store.addCFStmt(.{ .assign_low_level = .{

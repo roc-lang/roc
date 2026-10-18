@@ -173,7 +173,7 @@ fn successor(self: *const Self, store: anytype, stmt: LIR.CFStmt) ?LIR.CFStmtId 
     return switch (stmt) {
         .jump => |jump| self.joins.get(jump.target) orelse unreachable,
         .join => |join| join.remainder,
-        .assign_ref => |assign| switch (assign.op) {
+        .assign_ref => |assign| switch (assign.op.kind) {
             .local, .nominal, .list_reinterpret => assign.next,
             .discriminant,
             .field,
@@ -250,10 +250,10 @@ fn returnedLocal(self: *Self, store: anytype, start: LIR.CFStmtId) std.mem.Alloc
             // The path holds only statements `successor` forwards through.
             switch (store.getCFStmtImmediate(id).*) {
                 .assign_ref => |assign| {
-                    result = if (assign.target != local) null else switch (assign.op) {
-                        .local => |source| source,
-                        .nominal => |nominal| nominal.backing_ref,
-                        .list_reinterpret => |list| list.backing_ref,
+                    result = if (assign.target != local) null else switch (assign.op.kind) {
+                        .local => assign.op.source,
+                        .nominal => assign.op.source,
+                        .list_reinterpret => assign.op.source,
                         .discriminant,
                         .field,
                         .tag_payload,

@@ -172,17 +172,17 @@ pub fn run(
         if (!may_pend.isSet(call.callee)) continue;
         const drive = driveAfter(store, &outside, call.caller, call.returns != .no);
         const updated = &store.getCFStmtPtr(call.stmt).assign_call;
-        updated.drive = drive;
+        var extra = store.stmtRowOrDefault(updated.extra);
+        extra.drive = drive;
         // Whatever is still pending once this statement has run its drive is
         // the caller's to make, before the conversions that follow read a
         // value that is not there yet.
         if (call.returns == .converted and drive.canLeavePending()) {
-            var extra = store.stmtRowOrDefault(updated.extra);
             extra.returns_pending = call.returns.converted;
-            updated.extra = try store.addStmtRow(LIR.CallExtra, extra);
         }
         // A call that runs pending calls afterwards keeps its frame to do so.
-        if (drive.canDriveHere()) updated.replaces_frame = false;
+        if (drive.canDriveHere()) extra.replaces_frame = false;
+        updated.extra = try store.addOptionalStmtRow(LIR.CallExtra, extra);
         if (drive == .unless_caller_drives) store.getProcSpecPtr(@fromBackingInt(call.caller)).reads_caller_drives = true;
     }
 }

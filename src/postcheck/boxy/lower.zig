@@ -7886,7 +7886,7 @@ const ProcedureBuilder = struct {
         } }, proc.derivedOrigin());
         continuation = try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = runtime_id,
-            .op = .{ .field = .{ .source = proc.arg_locals.items[0], .field_idx = 1 } },
+            .op = .field(proc.arg_locals.items[0], 1),
             .next = continuation,
         } }, proc.derivedOrigin());
         continuation = try proc.generatedParserReadRecordField(
@@ -8278,7 +8278,7 @@ const ProcedureBuilder = struct {
         initial_jump = try proc.assignUnaryLowLevel(len, .list_len, source_items, initial_jump);
         initial_jump = try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = source_items,
-            .op = .{ .field = .{ .source = proc.arg_locals.items[0], .field_idx = 0 } },
+            .op = .field(proc.arg_locals.items[0], 0),
             .next = initial_jump,
         } }, proc.derivedOrigin());
 
@@ -8431,12 +8431,12 @@ const ProcedureBuilder = struct {
         );
         continuation = try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = source_index,
-            .op = .{ .field = .{ .source = source_field, .field_idx = 1 } },
+            .op = .field(source_field, 1),
             .next = continuation,
         } }, proc.derivedOrigin());
         continuation = try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = source_name,
-            .op = .{ .field = .{ .source = source_field, .field_idx = 0 } },
+            .op = .field(source_field, 0),
             .next = continuation,
         } }, proc.derivedOrigin());
         continuation = try proc.assignBinaryLowLevel(source_field, .list_get_unsafe, source_items, index, continuation);
@@ -8499,7 +8499,7 @@ const ProcedureBuilder = struct {
         continuation = try proc.assignUnaryLowLevel(len, .list_len, items, continuation);
         return try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = items,
-            .op = .{ .field = .{ .source = proc.arg_locals.items[0], .field_idx = 0 } },
+            .op = .field(proc.arg_locals.items[0], 0),
             .next = continuation,
         } }, proc.derivedOrigin());
     }
@@ -8681,7 +8681,7 @@ const ProcedureBuilder = struct {
             dispatch = try proc.assignBinaryLowLevel(matches, .num_is_eq, name_len, captures[3], dispatch);
             dispatch = try self.result.store.addCFStmt(.{ .assign_ref = .{
                 .target = name_len,
-                .op = .{ .field = .{ .source = raw_item, .field_idx = 2 } },
+                .op = .field(raw_item, 2),
                 .next = dispatch,
             } }, proc.derivedOrigin());
         }
@@ -8733,7 +8733,7 @@ const ProcedureBuilder = struct {
         dispatch = try proc.assignIntLiteral(one_literal, 1, dispatch);
         dispatch = try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = items,
-            .op = .{ .field = .{ .source = captures[0], .field_idx = 0 } },
+            .op = .field(captures[0], 0),
             .next = dispatch,
         } }, proc.derivedOrigin());
         const at_end = try proc.addFrameLocal(.bool);
@@ -9341,7 +9341,7 @@ const ProcedureBuilder = struct {
         const dispatch = try proc.generatedParserTagDispatch(field_value, field.rep, &variants, &bodies, impossible);
         return try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = field_value,
-            .op = .{ .field = .{ .source = record_value, .field_idx = @intCast(field.index) } },
+            .op = .field(record_value, @intCast(field.index)),
             .next = dispatch,
         } }, proc.derivedOrigin());
     }
@@ -10166,7 +10166,7 @@ const ProcedureBuilder = struct {
         }
         return try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = frame.field_slot,
-            .op = .{ .field = .{ .source = record_value, .field_idx = @intCast(field.index) } },
+            .op = .field(record_value, @intCast(field.index)),
             .next = continuation,
         } }, proc.derivedOrigin());
     }
@@ -12490,7 +12490,7 @@ const ProcedureBuilder = struct {
         } }, proc.derivedOrigin());
         var continuation = try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = index,
-            .op = .{ .field = .{ .source = field_handle, .field_idx = 1 } },
+            .op = .field(field_handle, 1),
             .next = field_switch,
         } }, proc.derivedOrigin());
         continuation = try proc.generatedParserReadRecordField(
@@ -12708,13 +12708,13 @@ const ProcedureBuilder = struct {
         const loop_body = try self.result.store.addCFStmt(.{ .join = .{
             .id = state.error_join,
             .params = try proc.joinParamSpan(&.{context.target}),
-            .retained = try self.result.store.addLocalSpan(retained[0..retained_len]),
             .body = error_body,
             .remainder = step_loop,
             .extra = try self.result.store.addOptionalStmtRow(LIR.JoinExtra, .{
                 .maybe_uninitialized_params = try self.result.store.addLocalSpan(maybe_payloads),
                 .maybe_uninitialized_conditions = try self.result.store.addLocalSpan(maybe_conditions),
                 .maybe_uninitialized_condition_masks = try self.result.store.addU64Span(maybe_masks),
+                .retained = try self.result.store.addLocalSpan(retained[0..retained_len]),
             }),
         } }, proc.derivedOrigin());
 
@@ -13295,7 +13295,7 @@ const ProcedureBuilder = struct {
         tag_rep: Plan.TypeRepId,
         /// The row node that explicitly declares this variant.
         owner_rep: Plan.TypeRepId,
-        index: u32,
+        index: layout.VariantIndex,
         variant: Plan.TagVariant,
     };
 
@@ -13516,7 +13516,7 @@ const ProcedureBuilder = struct {
             const field_index = try proc.addFrameLocal(.u64);
             continuation = try self.result.store.addCFStmt(.{ .assign_ref = .{
                 .target = fields[index].renamed,
-                .op = .{ .field = .{ .source = field, .field_idx = 0 } },
+                .op = .field(field, 0),
                 .next = continuation,
             } }, proc.derivedOrigin());
             continuation = try proc.assignBinaryLowLevel(field, .list_get_unsafe, items, field_index, continuation);
@@ -13524,7 +13524,7 @@ const ProcedureBuilder = struct {
         }
         continuation = try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = items,
-            .op = .{ .field = .{ .source = field_names, .field_idx = 0 } },
+            .op = .field(field_names, 0),
             .next = continuation,
         } }, proc.derivedOrigin());
         const record_index = try proc.addFrameLocal(.u64);
@@ -13538,7 +13538,7 @@ const ProcedureBuilder = struct {
         continuation = try proc.assignIntLiteral(record_index, @intCast(record_index_value), continuation);
         return try self.result.store.addCFStmt(.{ .assign_ref = .{
             .target = evidence_list,
-            .op = .{ .field = .{ .source = tag_source.spec, .field_idx = 0 } },
+            .op = .field(tag_source.spec, 0),
             .next = continuation,
         } }, proc.derivedOrigin());
     }
@@ -14717,11 +14717,11 @@ const ProcedureBuilder = struct {
                         changed = changed or !entry.found_existing;
                     },
                     .assign_ref => |assign| {
-                        const source = switch (assign.op) {
-                            .local => |local| local,
-                            .field => |field| field.source,
-                            inline .discriminant, .tag_payload, .tag_payload_struct => |op| op.source,
-                            inline .list_reinterpret, .nominal => |op| op.backing_ref,
+                        const source = switch (assign.op.kind) {
+                            .local => assign.op.source,
+                            .field => assign.op.source,
+                            inline .discriminant, .tag_payload, .tag_payload_struct => assign.op.source,
+                            inline .list_reinterpret, .nominal => assign.op.source,
                         };
                         if (!dynamic.contains(source)) continue;
                         const entry = try dynamic.getOrPut(assign.target);
@@ -15014,7 +15014,7 @@ const ProcBodyBuilder = struct {
         },
         tag_payload: struct {
             source: LIR.LocalId,
-            variant_index: u32,
+            variant_index: layout.VariantIndex,
             payload_index: ?u32,
             rep: Plan.TypeRepId,
         },
@@ -16510,7 +16510,7 @@ const ProcBodyBuilder = struct {
                 const wrapper_local = slot_wrapper_local.?;
                 continuation = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                     .target = value_local,
-                    .op = .{ .field = .{ .source = wrapper_local, .field_idx = 0 } },
+                    .op = .field(wrapper_local, 0),
                     .next = continuation,
                 } }, self.glueOrigin());
                 continuation = try self.assignUnaryLowLevel(wrapper_local, .box_unbox, slot_local, continuation);
@@ -16599,10 +16599,7 @@ const ProcBodyBuilder = struct {
         if (self.isZstLocal(target)) return try self.assignZst(target, next);
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
-            .op = .{ .field = .{
-                .source = capture_value,
-                .field_idx = field_index,
-            } },
+            .op = .field(capture_value, field_index),
             .next = next,
         } }, self.scaffoldOrigin());
     }
@@ -16764,7 +16761,7 @@ const ProcBodyBuilder = struct {
             for_: ForLoop,
             step: IteratorStepShape,
             step_local: LIR.LocalId,
-            variant_index: ?u32,
+            variant_index: ?layout.VariantIndex,
             iterator_param: LIR.LocalId,
             join_id: LIR.JoinPointId,
             next: LIR.CFStmtId,
@@ -19898,7 +19895,7 @@ const ProcBodyBuilder = struct {
             } }, self.glueOrigin());
             const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                 .target = discriminant,
-                .op = .{ .discriminant = .{ .source = step_local } },
+                .op = .discriminant(step_local),
                 .next = switch_stmt,
             } }, self.glueOrigin());
             return .{ .tail = .{ .iter_dispatch = .{
@@ -20369,7 +20366,7 @@ const ProcBodyBuilder = struct {
             defer self.parent.allocator.free(lowered);
             const alias = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                 .target = target,
-                .op = .{ .local = lowered[0] },
+                .op = .local(lowered[0]),
                 .next = next,
             } }, self.origin);
             const hint = try self.parent.result.store.addCFStmt(.{ .assign_low_level = .{
@@ -20722,7 +20719,7 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("literal conversion result did not have a tag-union representation");
         const tag_rep = self.parent.plan.representations.items[@backingInt(tag_rep_id)];
         var ok_variant: ?Plan.TagVariant = null;
-        var ok_index: u32 = 0;
+        var ok_index: layout.VariantIndex = 0;
         for (self.parent.plan.tagVariantSlice(tag_rep.tag_variants), 0..) |variant, index| {
             if (!std.mem.eql(u8, self.tagVariantNameText(variant), "Ok")) continue;
             if (index > std.math.maxInt(u32)) {
@@ -20798,7 +20795,7 @@ const ProcBodyBuilder = struct {
         } }, self.origin);
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
-            .op = .{ .discriminant = .{ .source = source } },
+            .op = .discriminant(source),
             .next = switch_stmt,
         } }, self.origin);
     }
@@ -20856,7 +20853,7 @@ const ProcBodyBuilder = struct {
         } }, self.origin);
         const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
-            .op = .{ .discriminant = .{ .source = error_value } },
+            .op = .discriminant(error_value),
             .next = select,
         } }, self.origin);
         return try self.assignConcreteTagPayloadRead(error_value, error_rep, null, source, try_rep, err_variant.name, @intCast(err_index), 0, 1, read_discriminant);
@@ -21195,12 +21192,12 @@ const ProcBodyBuilder = struct {
     /// selected by the slot's explicit Present discriminant.
     fn presenceSlotVariants(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?PresenceSlotVariants {
         const rep = self.parent.plan.representations.items[@backingInt(rep_id)];
-        const present: u32 = rep.presence_slot_present_discriminant orelse return null;
+        const present: layout.VariantIndex = @intCast(rep.presence_slot_present_discriminant orelse return null);
         const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
         if (variants.len != 2 or present >= variants.len) {
             boxyLowerInvariant("presence slot did not have exactly two variants");
         }
-        const missing: u32 = if (present == 0) 1 else 0;
+        const missing: layout.VariantIndex = if (present == 0) 1 else 0;
         if (variants[missing].payloads.len != 0) boxyLowerInvariant("presence slot Missing variant carried a payload");
         return .{
             .present = .{ .boundary_rep = rep_id, .tag_rep = rep_id, .owner_rep = rep_id, .index = present, .variant = variants[present] },
@@ -21289,7 +21286,7 @@ const ProcBodyBuilder = struct {
                 } }, self.derivedOrigin());
                 break :blk try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                     .target = discriminant,
-                    .op = .{ .discriminant = .{ .source = source } },
+                    .op = .discriminant(source),
                     .next = switch_stmt,
                 } }, self.derivedOrigin());
             },
@@ -21506,7 +21503,7 @@ const ProcBodyBuilder = struct {
         }
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
-            .op = .{ .field = .{ .source = self.arg_locals.items[0], .field_idx = 0 } },
+            .op = .field(self.arg_locals.items[0], 0),
             .next = next,
         } }, self.derivedOrigin());
     }
@@ -21525,7 +21522,7 @@ const ProcBodyBuilder = struct {
         }
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
-            .op = .{ .field = .{ .source = self.arg_locals.items[0], .field_idx = field_index } },
+            .op = .field(self.arg_locals.items[0], field_index),
             .next = next,
         } }, self.derivedOrigin());
     }
@@ -21974,7 +21971,7 @@ const ProcBodyBuilder = struct {
         if (self.isZstLocal(target)) return next;
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
-            .op = .{ .local = source },
+            .op = .local(source),
             .next = next,
         } }, self.origin);
     }
@@ -28152,7 +28149,7 @@ const ProcBodyBuilder = struct {
         } }, self.origin);
         const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
-            .op = .{ .discriminant = .{ .source = optional.slot_local } },
+            .op = .discriminant(optional.slot_local),
             .next = switch_stmt,
         } }, self.origin);
         return try self.lowerRecordFieldFromLocalInto(
@@ -28307,10 +28304,7 @@ const ProcBodyBuilder = struct {
         };
         const read = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = stored_field_local,
-            .op = .{ .field = .{
-                .source = read_source,
-                .field_idx = access.field_idx,
-            } },
+            .op = .field(read_source, access.field_idx),
             .next = after_stored_field_read,
         } }, self.origin);
         const before_read = if (field_desc_local) |desc_local| blk: {
@@ -28395,10 +28389,7 @@ const ProcBodyBuilder = struct {
 
         const read = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
-            .op = .{ .field = .{
-                .source = source,
-                .field_idx = elem_index,
-            } },
+            .op = .field(source, elem_index),
             .next = next,
         } }, self.origin);
         const tuple_rep = self.tupleRepForBoundary(source_rep) orelse
@@ -28955,7 +28946,7 @@ const ProcBodyBuilder = struct {
     const TagPayloadPatterns = struct {
         source_rep: Plan.TypeRepId,
         tag_name: names.TagNameId,
-        variant_index: ?u32,
+        variant_index: ?layout.VariantIndex,
         args: []const checked.CheckedPatternId,
         source: LIR.LocalId,
         source_tag_rep: Plan.TypeRepId,
@@ -28997,7 +28988,7 @@ const ProcBodyBuilder = struct {
             },
         },
         /// Test a concrete tag's discriminant unless the union has one variant.
-        tag_discriminant: struct { source: LIR.LocalId, variant_index: u32, single_variant: bool, context: PatternContext },
+        tag_discriminant: struct { source: LIR.LocalId, variant_index: layout.VariantIndex, single_variant: bool, context: PatternContext },
         /// Test a dynamic tag's name unless the contextual union has one
         /// closed variant.
         dynamic_tag_match: struct { source: LIR.LocalId, source_rep: Plan.TypeRepId, name: names.TagNameId, cannot_miss: bool, context: PatternContext },
@@ -29741,7 +29732,7 @@ const ProcBodyBuilder = struct {
         pattern_tag_rep: Plan.TypeRepId,
         source_rep: Plan.TypeRepId,
         tag_name: names.TagNameId,
-        variant_index: ?u32,
+        variant_index: ?layout.VariantIndex,
         args: []const checked.CheckedPatternId,
         source: LIR.LocalId,
         context: PatternContext,
@@ -29900,10 +29891,7 @@ const ProcBodyBuilder = struct {
         else
             try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                 .target = read_target,
-                .op = .{ .field = .{
-                    .source = field_read.local,
-                    .field_idx = access.field_idx,
-                } },
+                .op = .field(field_read.local, access.field_idx),
                 .next = after_read,
             } }, self.origin);
         if (nested_desc_index) |index| {
@@ -30105,7 +30093,7 @@ const ProcBodyBuilder = struct {
         } }, self.glueOrigin());
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
-            .op = .{ .discriminant = .{ .source = source } },
+            .op = .discriminant(source),
             .next = switch_stmt,
         } }, self.glueOrigin());
     }
@@ -30691,7 +30679,7 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         step: IteratorStepShape,
         step_local: LIR.LocalId,
-        variant_index: ?u32,
+        variant_index: ?layout.VariantIndex,
         iterator_param: LIR.LocalId,
         join_id: LIR.JoinPointId,
     ) Allocator.Error!LIR.CFStmtId {
@@ -30714,7 +30702,7 @@ const ProcBodyBuilder = struct {
         source: LIR.LocalId,
         source_rep: Plan.TypeRepId,
         tag_name: names.TagNameId,
-        variant_index: ?u32,
+        variant_index: ?layout.VariantIndex,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const source_tag_rep = self.tagVariantRepForBoundary(source_rep) orelse
@@ -31028,7 +31016,7 @@ const ProcBodyBuilder = struct {
             if (source_desc != null or target_desc != null) {
                 const assign = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                     .target = target,
-                    .op = .{ .local = source },
+                    .op = .local(source),
                     .next = next,
                 } }, self.glueOrigin());
                 switch (boxyLowLevelKind(op)) {
@@ -34338,7 +34326,7 @@ const ProcBodyBuilder = struct {
             presence: struct {
                 request: InspectRequest,
                 done: LIR.JoinPointId,
-                present_discriminant: u32,
+                present_discriminant: layout.VariantIndex,
                 missing_discriminant: u32,
                 value: LIR.LocalId,
             },
@@ -34551,20 +34539,8 @@ const ProcBodyBuilder = struct {
                     .target = value,
                     .op = switch (state.parts[state.remaining]) {
                         .literal => unreachable,
-                        .field => |field| .{ .field = .{
-                            .source = field.source,
-                            .field_idx = field.field_index,
-                        } },
-                        .tag_payload => |payload| if (payload.payload_index) |index| .{ .tag_payload = .{
-                            .source = payload.source,
-                            .payload_idx = index,
-                            .variant_index = payload.variant_index,
-                            .tag_discriminant = payload.variant_index,
-                        } } else .{ .tag_payload_struct = .{
-                            .source = payload.source,
-                            .variant_index = payload.variant_index,
-                            .tag_discriminant = payload.variant_index,
-                        } },
+                        .field => |field| LIR.RefOp.field(field.source, field.field_index),
+                        .tag_payload => |payload| if (payload.payload_index) |index| LIR.RefOp.tagPayload(payload.source, index, payload.variant_index, payload.variant_index) else LIR.RefOp.tagPayloadStruct(payload.source, payload.variant_index, payload.variant_index),
                     },
                     .next = continuation,
                 } }, self.derivedOrigin());
@@ -34656,7 +34632,7 @@ const ProcBodyBuilder = struct {
         target: LIR.LocalId,
         source: LIR.LocalId,
         variant: Plan.TagVariant,
-        variant_index: u32,
+        variant_index: layout.VariantIndex,
         next: LIR.CFStmtId,
     ) Allocator.Error!union(enum) { done: LIR.CFStmtId, parts: InspectPartsState } {
         const payloads = self.parent.plan.childSlice(variant.payloads);
@@ -34720,8 +34696,9 @@ const ProcBodyBuilder = struct {
 
     fn beginPresenceSlotInspect(self: *ProcBodyBuilder, frames: *std.ArrayList(InspectFrame), request: InspectRequest) Allocator.Error!?LIR.CFStmtId {
         const rep = self.parent.plan.representations.items[@backingInt(request.rep_id)];
-        const present_discriminant = rep.presence_slot_present_discriminant orelse
-            boxyLowerInvariant("presence-slot inspect lacked its Present discriminant");
+        // The presence slot's tag union layout bounds its discriminants.
+        const present_discriminant: layout.VariantIndex = @intCast(rep.presence_slot_present_discriminant orelse
+            boxyLowerInvariant("presence-slot inspect lacked its Present discriminant"));
         const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
         const present_index: usize = present_discriminant;
         if (variants.len != 2 or present_index >= variants.len) {
@@ -34871,7 +34848,7 @@ const ProcBodyBuilder = struct {
                 } }, self.derivedOrigin());
                 const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                     .target = tag.discriminant,
-                    .op = .{ .discriminant = .{ .source = request.source } },
+                    .op = .discriminant(request.source),
                     .next = switch_stmt,
                 } }, self.derivedOrigin());
                 return self.finishInspectFrame(frames, try self.derivedResultJoin(tag.done, request.target, request.next, read_discriminant));
@@ -34882,11 +34859,7 @@ const ProcBodyBuilder = struct {
                 if (!self.isZstLocal(presence.value)) {
                     present_body = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                         .target = presence.value,
-                        .op = .{ .tag_payload_struct = .{
-                            .source = request.source,
-                            .variant_index = presence.present_discriminant,
-                            .tag_discriminant = presence.present_discriminant,
-                        } },
+                        .op = .tagPayloadStruct(request.source, presence.present_discriminant, presence.present_discriminant),
                         .next = present_body,
                     } }, self.derivedOrigin());
                 }
@@ -34904,7 +34877,7 @@ const ProcBodyBuilder = struct {
                 } }, self.derivedOrigin());
                 const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                     .target = discriminant,
-                    .op = .{ .discriminant = .{ .source = request.source } },
+                    .op = .discriminant(request.source),
                     .next = switch_stmt,
                 } }, self.derivedOrigin());
                 return self.finishInspectFrame(frames, try self.derivedResultJoin(presence.done, request.target, request.next, read_discriminant));
@@ -35117,7 +35090,7 @@ const ProcBodyBuilder = struct {
         } }, self.derivedOrigin());
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
-            .op = .{ .discriminant = .{ .source = source } },
+            .op = .discriminant(source),
             .next = switch_stmt,
         } }, self.derivedOrigin());
     }
@@ -35482,20 +35455,14 @@ const ProcBodyBuilder = struct {
                     if (!self.isZstLocal(pending.rhs_field)) {
                         current = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                             .target = pending.rhs_field,
-                            .op = .{ .field = .{
-                                .source = request.rhs,
-                                .field_idx = pending.field_index,
-                            } },
+                            .op = .field(request.rhs, pending.field_index),
                             .next = current,
                         } }, self.derivedOrigin());
                     }
                     if (!self.isZstLocal(pending.lhs_field)) {
                         current = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                             .target = pending.lhs_field,
-                            .op = .{ .field = .{
-                                .source = request.lhs,
-                                .field_idx = pending.field_index,
-                            } },
+                            .op = .field(request.lhs, pending.field_index),
                             .next = current,
                         } }, self.derivedOrigin());
                     }
@@ -35654,12 +35621,12 @@ const ProcBodyBuilder = struct {
         } }, self.derivedOrigin());
         const read_rhs = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = state.rhs_disc,
-            .op = .{ .discriminant = .{ .source = request.rhs } },
+            .op = .discriminant(request.rhs),
             .next = compare_disc,
         } }, self.derivedOrigin());
         const read_lhs = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = state.lhs_disc,
-            .op = .{ .discriminant = .{ .source = request.lhs } },
+            .op = .discriminant(request.lhs),
             .next = read_rhs,
         } }, self.derivedOrigin());
         return try self.derivedResultJoin(state.done, request.target, request.next, read_lhs);
@@ -35940,12 +35907,12 @@ const ProcBodyBuilder = struct {
         const compare = try self.lowerScalarEqLocalsInto(target, lhs_disc, rhs_disc, .num_is_eq, negated, next);
         const read_rhs = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = rhs_disc,
-            .op = .{ .discriminant = .{ .source = rhs } },
+            .op = .discriminant(rhs),
             .next = compare,
         } }, self.derivedOrigin());
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = lhs_disc,
-            .op = .{ .discriminant = .{ .source = lhs } },
+            .op = .discriminant(lhs),
             .next = read_rhs,
         } }, self.derivedOrigin());
     }
@@ -36191,7 +36158,7 @@ const ProcBodyBuilder = struct {
     const HashVariantState = struct {
         request: HashRequest,
         variant: Plan.TagVariant,
-        variant_index: u32,
+        variant_index: layout.VariantIndex,
         after_discriminant: LIR.LocalId,
         intermediate_hashers: []LIR.LocalId = &.{},
         source_has_payload_desc: bool = false,
@@ -36493,10 +36460,7 @@ const ProcBodyBuilder = struct {
                     if (!self.isZstLocal(fields.pending_field)) {
                         current = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                             .target = fields.pending_field,
-                            .op = .{ .field = .{
-                                .source = request.value,
-                                .field_idx = component.field_index,
-                            } },
+                            .op = .field(request.value, component.field_index),
                             .next = current,
                         } }, self.derivedOrigin());
                     }
@@ -36565,7 +36529,7 @@ const ProcBodyBuilder = struct {
                 } }, self.derivedOrigin());
                 const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                     .target = tag.discriminant,
-                    .op = .{ .discriminant = .{ .source = request.value } },
+                    .op = .discriminant(request.value),
                     .next = switch_stmt,
                 } }, self.derivedOrigin());
                 return self.finishHashFrame(frames, try self.derivedResultJoin(tag.done, request.target, request.next, read_discriminant));
@@ -36574,7 +36538,7 @@ const ProcBodyBuilder = struct {
     }
 
     /// Begin one tag variant's hash, which `request.next` follows.
-    fn beginHashVariant(self: *ProcBodyBuilder, request: HashRequest, variant: Plan.TagVariant, variant_index: u32) Allocator.Error!HashVariantState {
+    fn beginHashVariant(self: *ProcBodyBuilder, request: HashRequest, variant: Plan.TagVariant, variant_index: layout.VariantIndex) Allocator.Error!HashVariantState {
         const payloads = self.parent.plan.childSlice(variant.payloads);
         const hasher_layout = self.parent.result.store.getLocal(request.hasher).layout_idx;
         const after_discriminant = if (payloads.len == 0) request.target else try self.addFrameLocal(hasher_layout);
@@ -36653,10 +36617,10 @@ const ProcBodyBuilder = struct {
         } }, self.derivedOrigin());
         return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
             .target = discriminant_value,
-            .value = .{ .i128_literal = .{
+            .value = .{ .i128_literal = try self.parent.result.store.addStmtRow(LIR.I128Literal, .{
                 .value = state.variant_index,
                 .layout_idx = .u64,
-            } },
+            }) },
             .next = current,
         } }, self.derivedOrigin());
     }
@@ -36829,7 +36793,7 @@ const ProcBodyBuilder = struct {
                     break :blk try self.invalidNumeralLiteral();
                 break :blk try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
                     .target = target,
-                    .value = .{ .i128_literal = .{ .value = value, .layout_idx = payload_layout } },
+                    .value = .{ .i128_literal = try self.parent.result.store.addStmtRow(LIR.I128Literal, .{ .value = value, .layout_idx = payload_layout }) },
                     .next = next,
                 } }, self.origin);
             },
@@ -37168,19 +37132,19 @@ const ProcBodyBuilder = struct {
             const box = try self.assignBoxedLiteralPayload(target, payload, info, next);
             return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = payload,
-                .value = .{ .i128_literal = .{
+                .value = .{ .i128_literal = try self.parent.result.store.addStmtRow(LIR.I128Literal, .{
                     .value = value,
                     .layout_idx = info.payload_layout,
-                } },
+                }) },
                 .next = box,
             } }, self.origin);
         }
         return try self.parent.result.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
-            .value = .{ .i128_literal = .{
+            .value = .{ .i128_literal = try self.parent.result.store.addStmtRow(LIR.I128Literal, .{
                 .value = value,
                 .layout_idx = self.parent.result.store.getLocal(target).layout_idx,
-            } },
+            }) },
             .next = next,
         } }, self.origin);
     }
@@ -37323,7 +37287,7 @@ const ProcBodyBuilder = struct {
         if (try self.assignToFixedDescriptorBoundary(target, source, next)) |adapted| return adapted;
         const assign = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
-            .op = .{ .local = source },
+            .op = .local(source),
             .next = next,
         } }, self.origin);
         var transferred = try self.prependSetLocalDescriptorTransfer(target, source, .replace_existing, assign);
@@ -37439,7 +37403,7 @@ const ProcBodyBuilder = struct {
         }
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
-            .op = .{ .nominal = .{ .backing_ref = source } },
+            .op = .nominal(source),
             .next = next,
         } }, self.glueOrigin());
     }
@@ -38830,7 +38794,7 @@ const ProcBodyBuilder = struct {
         source: LIR.LocalId,
         source_tag_rep: Plan.TypeRepId,
         tag_name: names.TagNameId,
-        variant_index: u32,
+        variant_index: layout.VariantIndex,
         /// The payload being converted; the payloads after it are done.
         remaining: usize,
         current: LIR.CFStmtId,
@@ -39245,10 +39209,7 @@ const ProcBodyBuilder = struct {
                     const index = state.remaining;
                     const read_field = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                         .target = state.source_fields[index],
-                        .op = .{ .field = .{
-                            .source = state.fields_source,
-                            .field_idx = state.source_field_indices[index],
-                        } },
+                        .op = .field(state.fields_source, state.source_field_indices[index]),
                         .next = converted,
                     } }, self.glueOrigin());
                     state.current = try self.prependAggregateFieldDescriptorBind(
@@ -40150,7 +40111,7 @@ const ProcBodyBuilder = struct {
         }
         state.branches[variant_position].value = @intCast(variant_position);
         const variant = state.source_variants[variant_position];
-        const variant_index: u32 = @intCast(variant_position);
+        const variant_index: layout.VariantIndex = @intCast(variant_position);
         const target = state.request.target;
         const target_rep = state.request.target_rep;
         const source = state.request.source;
@@ -40272,7 +40233,7 @@ const ProcBodyBuilder = struct {
         } }, self.glueOrigin());
         const read_discriminant = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
-            .op = .{ .discriminant = .{ .source = state.request.source } },
+            .op = .discriminant(state.request.source),
             .next = switch_stmt,
         } }, self.glueOrigin());
         const scope = state.scope orelse return read_discriminant;
@@ -40598,7 +40559,7 @@ const ProcBodyBuilder = struct {
                 // Only a target whose variants all have zero-sized payloads is
                 // a bare discriminant; other unions need payload conversion.
                 const target_info = self.parent.result.layouts.getTagUnionInfo(target_layout_value);
-                var variant_index: u32 = 0;
+                var variant_index: layout.VariantIndex = 0;
                 while (variant_index < target_info.variants.len) : (variant_index += 1) {
                     const payload_layout = target_info.variants.get(variant_index).payload_layout;
                     if (!self.parent.result.layouts.isZeroSized(self.parent.result.layouts.getLayout(payload_layout))) return null;
@@ -40639,7 +40600,7 @@ const ProcBodyBuilder = struct {
         } }, self.glueOrigin());
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = discriminant,
-            .op = .{ .discriminant = .{ .source = source } },
+            .op = .discriminant(source),
             .next = switch_stmt,
         } }, self.glueOrigin());
     }
@@ -40941,7 +40902,7 @@ const ProcBodyBuilder = struct {
         source: LIR.LocalId,
         source_tag_rep: Plan.TypeRepId,
         tag_name: names.TagNameId,
-        variant_index: u32,
+        variant_index: layout.VariantIndex,
         payload_index: u32,
         payload_count: usize,
         next: LIR.CFStmtId,
@@ -40999,7 +40960,7 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
         source: LIR.LocalId,
-        variant_index: u32,
+        variant_index: layout.VariantIndex,
         payload_index: u32,
         payload_count: usize,
         after_read: LIR.CFStmtId,
@@ -41007,22 +40968,13 @@ const ProcBodyBuilder = struct {
         if (payload_count == 1) {
             return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
                 .target = target,
-                .op = .{ .tag_payload_struct = .{
-                    .source = source,
-                    .variant_index = variant_index,
-                    .tag_discriminant = variant_index,
-                } },
+                .op = .tagPayloadStruct(source, variant_index, variant_index),
                 .next = after_read,
             } }, self.glueOrigin());
         }
         return try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
             .target = target,
-            .op = .{ .tag_payload = .{
-                .source = source,
-                .payload_idx = @intCast(payload_index),
-                .variant_index = variant_index,
-                .tag_discriminant = variant_index,
-            } },
+            .op = .tagPayload(source, @intCast(payload_index), variant_index, variant_index),
             .next = after_read,
         } }, self.glueOrigin());
     }
@@ -43270,7 +43222,7 @@ const ProcBodyBuilder = struct {
     }
 
     const TagVariantLookup = struct {
-        index: u32,
+        index: layout.VariantIndex,
         name: names.TagNameId,
         name_module: checked.ModuleId,
         payloads: Plan.Span,
@@ -44774,7 +44726,9 @@ test "boxy lowerer emits private worker proc for zero-arg numeric lambda root" {
 
     const assign = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (assign.value) {
-        .i128_literal => |literal| {
+        .i128_literal => |literal_id| {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+
             try std.testing.expectEqual(@as(i128, 42), literal.value);
             try std.testing.expectEqual(@as(@TypeOf(literal.layout_idx), .u64), literal.layout_idx);
         },
@@ -44951,7 +44905,9 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind, stored: ConstLookupS
     }
     const assign = body.assign_literal;
     switch (assign.value) {
-        .i128_literal => |literal| {
+        .i128_literal => |literal_id| {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+
             try std.testing.expectEqual(@as(i128, 5), literal.value);
             try std.testing.expectEqual(@as(@TypeOf(literal.layout_idx), .u64), literal.layout_idx);
         },
@@ -45220,7 +45176,10 @@ test "boxy lowerer emits direct calls to planned private workers" {
     const root_proc = out.lir_result.store.getProcSpec(root_proc_id);
     const arg = out.lir_result.store.getCFStmtImmediate(root_proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (arg.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 41), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 41), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const call = out.lir_result.store.getCFStmtImmediate(arg.next).assign_call;
@@ -45234,8 +45193,8 @@ test "boxy lowerer emits direct calls to planned private workers" {
     const callee_args = out.lir_result.store.getLocalSpan(callee_proc.args);
     try std.testing.expectEqual(@as(usize, 1), callee_args.len);
     const callee_copy = out.lir_result.store.getCFStmtImmediate(callee_proc.body orelse return error.TestUnexpectedResult).assign_ref;
-    switch (callee_copy.op) {
-        .local => |local| try std.testing.expectEqual(GuardedList.at(callee_args, 0), local),
+    switch (callee_copy.op.kind) {
+        .local => try std.testing.expectEqual(GuardedList.at(callee_args, 0), callee_copy.op.source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = callee_copy.target } }, out.lir_result.store.getCFStmt(callee_copy.next));
@@ -45502,8 +45461,8 @@ test "boxy lowerer emits direct calls to planned imported workers" {
     const return_stmt = out.lir_result.store.getCFStmt(call.next);
     const returned = switch (return_stmt) {
         .assign_ref => |return_copy| blk: {
-            switch (return_copy.op) {
-                .local => |local| try std.testing.expectEqual(call.target, local),
+            switch (return_copy.op.kind) {
+                .local => try std.testing.expectEqual(call.target, return_copy.op.source),
                 .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
             }
             break :blk .{ return_copy.target, return_copy.next };
@@ -45533,7 +45492,10 @@ test "boxy lowerer emits direct calls to planned imported workers" {
     try std.testing.expect(helper_proc.args.isEmpty());
     const literal = out.lir_result.store.getCFStmtImmediate(helper_proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (literal.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 99), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 99), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = literal.target } }, out.lir_result.store.getCFStmt(literal.next));
@@ -45913,11 +45875,14 @@ test "boxy lowerer emits checked return expressions as terminal ret" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const assign = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (assign.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 7), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 7), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const copy = out.lir_result.store.getCFStmtImmediate(assign.next).assign_ref;
-    try std.testing.expectEqual(LIR.RefOp{ .local = assign.target }, copy.op);
+    try std.testing.expectEqual(LIR.RefOp.local(assign.target), copy.op);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = copy.target } }, out.lir_result.store.getCFStmt(copy.next));
 }
 
@@ -46016,11 +45981,14 @@ test "boxy lowerer emits checked return statements as terminal ret" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const assign = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (assign.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 7), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 7), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const copy = out.lir_result.store.getCFStmtImmediate(assign.next).assign_ref;
-    try std.testing.expectEqual(LIR.RefOp{ .local = assign.target }, copy.op);
+    try std.testing.expectEqual(LIR.RefOp.local(assign.target), copy.op);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = copy.target } }, out.lir_result.store.getCFStmt(copy.next));
 }
 
@@ -46314,7 +46282,10 @@ test "boxy lowerer emits checked while statements as join-backed loops" {
 
     const after_loop = out.lir_result.store.getCFStmtImmediate(switch_stmt.default_branch).assign_literal;
     switch (after_loop.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 99), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 99), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = after_loop.target } }, out.lir_result.store.getCFStmt(after_loop.next));
@@ -46444,7 +46415,10 @@ test "boxy lowerer emits checked break as the active loop exit" {
 
     const after_loop = out.lir_result.store.getCFStmtImmediate(break_unit.next).assign_literal;
     switch (after_loop.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 41), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 41), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = after_loop.target } }, out.lir_result.store.getCFStmt(after_loop.next));
@@ -46572,14 +46546,20 @@ test "boxy lowerer emits checked if expressions with a shared continuation join"
 
     const then_value = out.lir_result.store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_literal;
     switch (then_value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 11), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = join.id } }, out.lir_result.store.getCFStmt(then_value.next));
 
     const else_value = out.lir_result.store.getCFStmtImmediate(switch_stmt.default_branch).assign_literal;
     switch (else_value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 22), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 22), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = join.id } }, out.lir_result.store.getCFStmt(else_value.next));
@@ -46717,8 +46697,8 @@ test "boxy lowerer emits checked tag matches as ordered discriminant tests" {
 
     const first_join = out.lir_result.store.getCFStmtImmediate(cond_tag.next).join;
     const first_disc = out.lir_result.store.getCFStmtImmediate(first_join.remainder).assign_ref;
-    switch (first_disc.op) {
-        .discriminant => |disc| try std.testing.expectEqual(cond_tag.target, disc.source),
+    switch (first_disc.op.kind) {
+        .discriminant => try std.testing.expectEqual(cond_tag.target, first_disc.op.source),
         .local, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
     const first_switch = out.lir_result.store.getCFStmtImmediate(first_disc.next).switch_stmt;
@@ -46727,14 +46707,17 @@ test "boxy lowerer emits checked tag matches as ordered discriminant tests" {
     try std.testing.expectEqual(@as(u64, 0), GuardedList.at(first_branches, 0).value);
     const first_value = out.lir_result.store.getCFStmtImmediate(GuardedList.at(first_branches, 0).body).assign_literal;
     switch (first_value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 11), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const second_join = out.lir_result.store.getCFStmtImmediate(first_join.body).join;
     const second_disc = out.lir_result.store.getCFStmtImmediate(second_join.remainder).assign_ref;
-    switch (second_disc.op) {
-        .discriminant => |disc| try std.testing.expectEqual(cond_tag.target, disc.source),
+    switch (second_disc.op.kind) {
+        .discriminant => try std.testing.expectEqual(cond_tag.target, second_disc.op.source),
         .local, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
     const second_switch = out.lir_result.store.getCFStmtImmediate(second_disc.next).switch_stmt;
@@ -46743,7 +46726,10 @@ test "boxy lowerer emits checked tag matches as ordered discriminant tests" {
     try std.testing.expectEqual(@as(u64, 1), GuardedList.at(second_branches, 0).value);
     const second_value = out.lir_result.store.getCFStmtImmediate(GuardedList.at(second_branches, 0).body).assign_literal;
     switch (second_value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 22), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 22), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 }
@@ -46901,7 +46887,10 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
     const outer_join = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).join;
     const payload_literal = out.lir_result.store.getCFStmtImmediate(outer_join.remainder).assign_literal;
     switch (payload_literal.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 41), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 41), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const cond_tag = out.lir_result.store.getCFStmtImmediate(payload_literal.next).assign_tag;
@@ -46914,24 +46903,24 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
     try std.testing.expectEqual(@as(u64, 0), GuardedList.at(branches, 0).value);
 
     const payload_read = out.lir_result.store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_ref;
-    switch (payload_read.op) {
-        .tag_payload_struct => |payload| {
-            try std.testing.expectEqual(cond_tag.target, payload.source);
-            try std.testing.expectEqual(@as(u32, 0), payload.variant_index);
-            try std.testing.expectEqual(@as(u32, 0), payload.tag_discriminant);
+    switch (payload_read.op.kind) {
+        .tag_payload_struct => {
+            try std.testing.expectEqual(cond_tag.target, payload_read.op.source);
+            try std.testing.expectEqual(@as(u32, 0), payload_read.op.variant_index);
+            try std.testing.expectEqual(@as(u32, 0), payload_read.op.tag_discriminant);
         },
         .local, .discriminant, .field, .tag_payload, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
 
     const binder_assign = out.lir_result.store.getCFStmtImmediate(payload_read.next).assign_ref;
-    switch (binder_assign.op) {
-        .local => |source| try std.testing.expectEqual(payload_read.target, source),
+    switch (binder_assign.op.kind) {
+        .local => try std.testing.expectEqual(payload_read.target, binder_assign.op.source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
 
     const branch_result = out.lir_result.store.getCFStmtImmediate(binder_assign.next).assign_ref;
-    switch (branch_result.op) {
-        .local => |source| try std.testing.expectEqual(binder_assign.target, source),
+    switch (branch_result.op.kind) {
+        .local => try std.testing.expectEqual(binder_assign.target, branch_result.op.source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
 }
@@ -47130,9 +47119,9 @@ test "boxy lowerer emits checked list match patterns as length checks and elemen
     try std.testing.expectEqual(item_index.target, GuardedList.at(item_args, 1));
 
     const bind = out.lir_result.store.getCFStmtImmediate(item.next).assign_ref;
-    try std.testing.expectEqual(item.target, bind.op.local);
+    try std.testing.expectEqual(item.target, bind.op.source);
     const branch_result = out.lir_result.store.getCFStmtImmediate(bind.next).assign_ref;
-    try std.testing.expectEqual(bind.target, branch_result.op.local);
+    try std.testing.expectEqual(bind.target, branch_result.op.source);
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = outer_join.id } }, out.lir_result.store.getCFStmt(branch_result.next));
 }
 
@@ -47288,9 +47277,9 @@ test "boxy lowerer emits checked string interpolation match patterns" {
     };
 
     const bind = out.lir_result.store.getCFStmtImmediate(str_match_stmt.on_match).assign_ref;
-    try std.testing.expectEqual(capture, bind.op.local);
+    try std.testing.expectEqual(capture, bind.op.source);
     const branch_result = out.lir_result.store.getCFStmtImmediate(bind.next).assign_ref;
-    try std.testing.expectEqual(bind.target, branch_result.op.local);
+    try std.testing.expectEqual(bind.target, branch_result.op.source);
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = outer_join.id } }, out.lir_result.store.getCFStmt(branch_result.next));
 }
 
@@ -47469,18 +47458,18 @@ test "boxy lowerer maps checked alternative binders onto representative match lo
     try std.testing.expectEqual(@as(u64, 1), GuardedList.at(second_branches, 0).value);
 
     const payload_read = out.lir_result.store.getCFStmtImmediate(GuardedList.at(second_branches, 0).body).assign_ref;
-    switch (payload_read.op) {
-        .tag_payload_struct => |payload| try std.testing.expectEqual(cond_tag.target, payload.source),
+    switch (payload_read.op.kind) {
+        .tag_payload_struct => try std.testing.expectEqual(cond_tag.target, payload_read.op.source),
         .local, .discriminant, .field, .tag_payload, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
     const remapped_assign = out.lir_result.store.getCFStmtImmediate(payload_read.next).assign_ref;
-    switch (remapped_assign.op) {
-        .local => |source| try std.testing.expectEqual(payload_read.target, source),
+    switch (remapped_assign.op.kind) {
+        .local => try std.testing.expectEqual(payload_read.target, remapped_assign.op.source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
     const branch_result = out.lir_result.store.getCFStmtImmediate(remapped_assign.next).assign_ref;
-    switch (branch_result.op) {
-        .local => |source| try std.testing.expectEqual(remapped_assign.target, source),
+    switch (branch_result.op.kind) {
+        .local => try std.testing.expectEqual(remapped_assign.target, branch_result.op.source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
 }
@@ -47620,7 +47609,10 @@ test "boxy lowerer emits checked numeric literal match patterns as equality test
     try std.testing.expectEqual(@as(u64, 1), GuardedList.at(branches, 0).value);
     const matched_value = out.lir_result.store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_literal;
     switch (matched_value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 11), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 }
@@ -47776,7 +47768,10 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
     try std.testing.expectEqual(@as(u64, 1), GuardedList.at(branches, 0).value);
     const matched_value = out.lir_result.store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_literal;
     switch (matched_value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 11), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 }
@@ -48213,12 +48208,18 @@ test "boxy lowerer emits primitive structural equality as low-level equality" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const lhs = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (lhs.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 42), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const rhs = out.lir_result.store.getCFStmtImmediate(lhs.next).assign_literal;
     switch (rhs.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 42), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const eq = out.lir_result.store.getCFStmtImmediate(rhs.next).assign_low_level;
@@ -48371,11 +48372,11 @@ test "boxy lowerer emits tuple structural equality with field short-circuiting" 
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = result } }, out.lir_result.store.getCFStmt(result_join.body));
 
     const read_lhs_field0 = out.lir_result.store.getCFStmtImmediate(result_join.remainder).assign_ref;
-    try std.testing.expectEqual(lhs_tuple.target, read_lhs_field0.op.field.source);
-    try std.testing.expectEqual(@as(u32, 0), read_lhs_field0.op.field.field_idx);
+    try std.testing.expectEqual(lhs_tuple.target, read_lhs_field0.op.source);
+    try std.testing.expectEqual(@as(u32, 0), read_lhs_field0.op.index);
     const read_rhs_field0 = out.lir_result.store.getCFStmtImmediate(read_lhs_field0.next).assign_ref;
-    try std.testing.expectEqual(rhs_tuple.target, read_rhs_field0.op.field.source);
-    try std.testing.expectEqual(@as(u32, 0), read_rhs_field0.op.field.field_idx);
+    try std.testing.expectEqual(rhs_tuple.target, read_rhs_field0.op.source);
+    try std.testing.expectEqual(@as(u32, 0), read_rhs_field0.op.index);
 
     const compare_field0 = out.lir_result.store.getCFStmtImmediate(read_rhs_field0.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .num_is_eq), compare_field0.op);
@@ -48391,8 +48392,8 @@ test "boxy lowerer emits tuple structural equality with field short-circuiting" 
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = result_join.id } }, out.lir_result.store.getCFStmt(failed.next));
 
     const read_lhs_field1 = out.lir_result.store.getCFStmtImmediate(GuardedList.at(branches, 0).body).assign_ref;
-    try std.testing.expectEqual(lhs_tuple.target, read_lhs_field1.op.field.source);
-    try std.testing.expectEqual(@as(u32, 1), read_lhs_field1.op.field.field_idx);
+    try std.testing.expectEqual(lhs_tuple.target, read_lhs_field1.op.source);
+    try std.testing.expectEqual(@as(u32, 1), read_lhs_field1.op.index);
 }
 
 test "boxy lowerer emits primitive structural hash as hasher low-level" {
@@ -48480,12 +48481,18 @@ test "boxy lowerer emits primitive structural hash as hasher low-level" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const value = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 5), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 5), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const seed = out.lir_result.store.getCFStmtImmediate(value.next).assign_literal;
     switch (seed.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 99), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 99), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const hash = out.lir_result.store.getCFStmtImmediate(seed.next).assign_low_level;
@@ -48610,8 +48617,8 @@ test "boxy lowerer emits tuple structural hash by threading hasher through field
     const seed = out.lir_result.store.getCFStmtImmediate(tuple.next).assign_literal;
 
     const read_field0 = out.lir_result.store.getCFStmtImmediate(seed.next).assign_ref;
-    try std.testing.expectEqual(tuple.target, read_field0.op.field.source);
-    try std.testing.expectEqual(@as(u32, 0), read_field0.op.field.field_idx);
+    try std.testing.expectEqual(tuple.target, read_field0.op.source);
+    try std.testing.expectEqual(@as(u32, 0), read_field0.op.index);
     const hash_field0 = out.lir_result.store.getCFStmtImmediate(read_field0.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .hasher_write_u64), hash_field0.op);
     const first_args = out.lir_result.store.getLocalSpan(hash_field0.args);
@@ -48619,8 +48626,8 @@ test "boxy lowerer emits tuple structural hash by threading hasher through field
     try std.testing.expectEqual(read_field0.target, GuardedList.at(first_args, 1));
 
     const read_field1 = out.lir_result.store.getCFStmtImmediate(hash_field0.next).assign_ref;
-    try std.testing.expectEqual(tuple.target, read_field1.op.field.source);
-    try std.testing.expectEqual(@as(u32, 1), read_field1.op.field.field_idx);
+    try std.testing.expectEqual(tuple.target, read_field1.op.source);
+    try std.testing.expectEqual(@as(u32, 1), read_field1.op.index);
     const hash_field1 = out.lir_result.store.getCFStmtImmediate(read_field1.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .hasher_write_u64), hash_field1.op);
     const second_args = out.lir_result.store.getLocalSpan(hash_field1.args);
@@ -49000,7 +49007,10 @@ test "boxy lowerer emits checked dbg expressions before unit result" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const value = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 7), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 7), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const message = out.lir_result.store.getCFStmtImmediate(value.next).assign_low_level;
@@ -49188,7 +49198,10 @@ test "boxy lowerer emits expect_err messages from inspected payloads" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const payload = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (payload.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 42), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
@@ -49327,7 +49340,10 @@ test "boxy lowerer emits checked dbg statements in block order" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const value = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 13), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 13), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const message = out.lir_result.store.getCFStmtImmediate(value.next).assign_low_level;
@@ -49451,7 +49467,9 @@ test "boxy lowerer emits block declaration bindings with checked type layouts" {
 
     const decl_assign = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (decl_assign.value) {
-        .i128_literal => |literal| {
+        .i128_literal => |literal_id| {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+
             try std.testing.expectEqual(@as(i128, 99), literal.value);
             try std.testing.expectEqual(@as(@TypeOf(literal.layout_idx), .u64), literal.layout_idx);
         },
@@ -49459,7 +49477,7 @@ test "boxy lowerer emits block declaration bindings with checked type layouts" {
     }
 
     const final_copy = out.lir_result.store.getCFStmtImmediate(decl_assign.next).assign_ref;
-    try std.testing.expectEqual(decl_assign.target, final_copy.op.local);
+    try std.testing.expectEqual(decl_assign.target, final_copy.op.source);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_copy.target } }, out.lir_result.store.getCFStmt(final_copy.next));
 }
 
@@ -49565,7 +49583,10 @@ test "boxy lowerer emits uninitialized mutable block bindings" {
     const final_assign = out.lir_result.store.getCFStmtImmediate(init.next).assign_literal;
     try std.testing.expect(init.target != final_assign.target);
     switch (final_assign.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 5), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 5), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_assign.target } }, out.lir_result.store.getCFStmt(final_assign.next));
@@ -49699,13 +49720,19 @@ test "boxy lowerer emits mutable reassignment as set_local replace" {
 
     const initial = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (initial.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 1), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 1), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const replacement = out.lir_result.store.getCFStmtImmediate(initial.next).assign_literal;
     switch (replacement.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 2), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 2), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
@@ -49715,7 +49742,7 @@ test "boxy lowerer emits mutable reassignment as set_local replace" {
     try std.testing.expectEqual(LIR.SetLocalWriteMode.replace_existing, write.mode);
 
     const final_copy = out.lir_result.store.getCFStmtImmediate(write.next).assign_ref;
-    try std.testing.expectEqual(write.target, final_copy.op.local);
+    try std.testing.expectEqual(write.target, final_copy.op.source);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_copy.target } }, out.lir_result.store.getCFStmt(final_copy.next));
 }
 
@@ -49889,20 +49916,26 @@ test "boxy lowerer destructures tuple declaration patterns" {
     const final_copy = out.lir_result.store.getCFStmtImmediate(bind_second.next).assign_ref;
 
     switch (first.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 1), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 1), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 2), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 2), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    try std.testing.expectEqual(tuple.target, read_first.op.field.source);
-    try std.testing.expectEqual(@as(u32, 0), read_first.op.field.field_idx);
-    try std.testing.expectEqual(read_first.target, bind_first.op.local);
-    try std.testing.expectEqual(tuple.target, read_second.op.field.source);
-    try std.testing.expectEqual(@as(u32, 1), read_second.op.field.field_idx);
-    try std.testing.expectEqual(read_second.target, bind_second.op.local);
-    try std.testing.expectEqual(bind_second.target, final_copy.op.local);
+    try std.testing.expectEqual(tuple.target, read_first.op.source);
+    try std.testing.expectEqual(@as(u32, 0), read_first.op.index);
+    try std.testing.expectEqual(read_first.target, bind_first.op.source);
+    try std.testing.expectEqual(tuple.target, read_second.op.source);
+    try std.testing.expectEqual(@as(u32, 1), read_second.op.index);
+    try std.testing.expectEqual(read_second.target, bind_second.op.source);
+    try std.testing.expectEqual(bind_second.target, final_copy.op.source);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_copy.target } }, out.lir_result.store.getCFStmt(final_copy.next));
 }
 
@@ -50091,20 +50124,26 @@ test "boxy lowerer materializes record rest declaration patterns" {
     const final_read = out.lir_result.store.getCFStmtImmediate(final_receiver.next).assign_ref;
 
     switch (first.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 11), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 11), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 22), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 22), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    try std.testing.expectEqual(source_record.target, read_rest_field.op.field.source);
-    try std.testing.expectEqual(@as(u32, 1), read_rest_field.op.field.field_idx);
+    try std.testing.expectEqual(source_record.target, read_rest_field.op.source);
+    try std.testing.expectEqual(@as(u32, 1), read_rest_field.op.index);
     try std.testing.expectEqual(read_rest_field.target, GuardedList.at(out.lir_result.store.getLocalSpan(rest_record.fields), 0));
-    try std.testing.expectEqual(rest_record.target, bind_rest.op.local);
-    try std.testing.expectEqual(bind_rest.target, final_receiver.op.local);
-    try std.testing.expectEqual(final_receiver.target, final_read.op.field.source);
-    try std.testing.expectEqual(@as(u32, 0), final_read.op.field.field_idx);
+    try std.testing.expectEqual(rest_record.target, bind_rest.op.source);
+    try std.testing.expectEqual(bind_rest.target, final_receiver.op.source);
+    try std.testing.expectEqual(final_receiver.target, final_read.op.source);
+    try std.testing.expectEqual(@as(u32, 0), final_read.op.index);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_read.target } }, out.lir_result.store.getCFStmt(final_read.next));
 }
 
@@ -50255,15 +50294,21 @@ test "boxy lowerer binds irrefutable list rest declaration patterns" {
     const final_copy = out.lir_result.store.getCFStmtImmediate(bind_rest.next).assign_ref;
 
     switch (first.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 3), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 3), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 4), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 4), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
-    try std.testing.expectEqual(list.target, bind_rest.op.local);
-    try std.testing.expectEqual(bind_rest.target, final_copy.op.local);
+    try std.testing.expectEqual(list.target, bind_rest.op.source);
+    try std.testing.expectEqual(bind_rest.target, final_copy.op.source);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_copy.target } }, out.lir_result.store.getCFStmt(final_copy.next));
 }
 
@@ -50363,12 +50408,18 @@ test "boxy lowerer emits tuple construction in element order" {
 
     const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (first.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 1), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 1), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
     switch (second.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 2), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 2), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const build = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
@@ -50481,10 +50532,10 @@ test "boxy lowerer emits tuple access as field_read" {
     const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
     const build = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
     const read = out.lir_result.store.getCFStmtImmediate(build.next).assign_ref;
-    switch (read.op) {
-        .field => |field| {
-            try std.testing.expectEqual(build.target, field.source);
-            try std.testing.expectEqual(@as(u32, 1), field.field_idx);
+    switch (read.op.kind) {
+        .field => {
+            try std.testing.expectEqual(build.target, read.op.source);
+            try std.testing.expectEqual(@as(u32, 1), read.op.index);
         },
         .local, .discriminant, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
@@ -50595,12 +50646,18 @@ test "boxy lowerer emits record construction in layout order after source-order 
 
     const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (first.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 2), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 2), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
     switch (second.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 1), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 1), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const build = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
@@ -50718,7 +50775,10 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const extension_value = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (extension_value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 5), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 5), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const extension_message = out.lir_result.store.getCFStmtImmediate(extension_value.next).assign_low_level;
@@ -50732,7 +50792,10 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
     try std.testing.expect(extension_unit.fields.isEmpty());
     const field_value = out.lir_result.store.getCFStmtImmediate(extension_unit.next).assign_literal;
     switch (field_value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 9), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 9), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const build = out.lir_result.store.getCFStmtImmediate(field_value.next).assign_struct;
@@ -50861,10 +50924,10 @@ test "boxy lowerer emits record field access using layout field index" {
     const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
     const build = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
     const read = out.lir_result.store.getCFStmtImmediate(build.next).assign_ref;
-    switch (read.op) {
-        .field => |field| {
-            try std.testing.expectEqual(build.target, field.source);
-            try std.testing.expectEqual(@as(u32, 1), field.field_idx);
+    switch (read.op.kind) {
+        .field => {
+            try std.testing.expectEqual(build.target, read.op.source);
+            try std.testing.expectEqual(@as(u32, 1), read.op.index);
         },
         .local, .discriminant, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
@@ -50977,11 +51040,14 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const literal = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (literal.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 5), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 5), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const copy = out.lir_result.store.getCFStmtImmediate(literal.next).assign_ref;
-    try std.testing.expectEqual(literal.target, copy.op.local);
+    try std.testing.expectEqual(literal.target, copy.op.source);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = copy.target } }, out.lir_result.store.getCFStmt(copy.next));
 }
 
@@ -51004,10 +51070,10 @@ fn expectDeclaredNominalRecordBoundary(
     var idx: u32 = 0;
     while (idx < 2) : (idx += 1) {
         const read = store.getCFStmtImmediate(cursor).assign_ref;
-        try std.testing.expectEqual(source, read.op.field.source);
-        try std.testing.expectEqual(idx, read.op.field.field_idx);
+        try std.testing.expectEqual(source, read.op.source);
+        try std.testing.expectEqual(idx, read.op.index);
         const copy = store.getCFStmtImmediate(read.next).assign_ref;
-        try std.testing.expectEqual(read.target, copy.op.local);
+        try std.testing.expectEqual(read.target, copy.op.source);
         field_locals[idx] = copy.target;
         cursor = copy.next;
     }
@@ -51234,11 +51300,17 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
     const backing_record = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
 
     switch (first.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 7), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 7), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 500), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 500), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
@@ -51252,10 +51324,10 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
     const bind_field = out.lir_result.store.getCFStmtImmediate(read_field.next).assign_ref;
     const final_copy = out.lir_result.store.getCFStmtImmediate(bind_field.next).assign_ref;
 
-    try std.testing.expectEqual(destruct_backing.target, read_field.op.field.source);
-    try std.testing.expectEqual(@as(u32, 0), read_field.op.field.field_idx);
-    try std.testing.expectEqual(read_field.target, bind_field.op.local);
-    try std.testing.expectEqual(bind_field.target, final_copy.op.local);
+    try std.testing.expectEqual(destruct_backing.target, read_field.op.source);
+    try std.testing.expectEqual(@as(u32, 0), read_field.op.index);
+    try std.testing.expectEqual(read_field.target, bind_field.op.source);
+    try std.testing.expectEqual(bind_field.target, final_copy.op.source);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_copy.target } }, out.lir_result.store.getCFStmt(final_copy.next));
 }
 
@@ -51428,11 +51500,11 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
     while (guard < 100) : (guard += 1) {
         switch (out.lir_result.store.getCFStmtImmediate(cursor).*) {
             .assign_ref => |assign| {
-                switch (assign.op) {
-                    .field => |field| {
-                        try std.testing.expectEqual(destruct_backing.target, field.source);
+                switch (assign.op.kind) {
+                    .field => {
+                        try std.testing.expectEqual(destruct_backing.target, assign.op.source);
                         if (read_count >= reads.len) return error.TestUnexpectedResult;
-                        reads[read_count] = field.field_idx;
+                        reads[read_count] = assign.op.index;
                         read_count += 1;
                     },
                     .local, .discriminant, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => {},
@@ -51635,11 +51707,11 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
     while (guard < 32) : (guard += 1) {
         switch (out.lir_result.store.getCFStmtImmediate(cursor).*) {
             .assign_ref => |assign| {
-                switch (assign.op) {
-                    .field => |field| {
-                        try std.testing.expectEqual(destruct_backing.target, field.source);
+                switch (assign.op.kind) {
+                    .field => {
+                        try std.testing.expectEqual(destruct_backing.target, assign.op.source);
                         if (read_count >= reads.len) return error.TestUnexpectedResult;
-                        reads[read_count] = field.field_idx;
+                        reads[read_count] = assign.op.index;
                         read_count += 1;
                     },
                     .local, .discriminant, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => {},
@@ -51845,11 +51917,17 @@ test "boxy lowerer emits payload tag construction using planned variant payload 
     const payload = out.lir_result.store.getCFStmtImmediate(second.next).assign_struct;
     const tag = out.lir_result.store.getCFStmtImmediate(payload.next).assign_tag;
     switch (first.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 3), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 3), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 4), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 4), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(first.target, GuardedList.at(out.lir_result.store.getLocalSpan(payload.fields), 0));
@@ -51953,11 +52031,17 @@ test "boxy lowerer emits list construction with committed element layout" {
     const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
     const list = out.lir_result.store.getCFStmtImmediate(second.next).assign_list;
     switch (first.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 8), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 8), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
-        .i128_literal => |value| try std.testing.expectEqual(@as(i128, 9), value.value),
+        .i128_literal => |value_id| blk_value: {
+            const value = out.lir_result.store.stmtRow(value_id);
+            break :blk_value try std.testing.expectEqual(@as(i128, 9), value.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(first.target, GuardedList.at(out.lir_result.store.getLocalSpan(list.elems), 0));
@@ -52100,8 +52184,8 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
         };
     }
     const first = out.lir_result.store.getCFStmtImmediate(cursor).assign_ref;
-    switch (first.op) {
-        .local => |local| try std.testing.expectEqual(GuardedList.at(args, 0), local),
+    switch (first.op.kind) {
+        .local => try std.testing.expectEqual(GuardedList.at(args, 0), first.op.source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
     cursor = first.next;
@@ -52113,8 +52197,8 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
         };
     }
     const second = out.lir_result.store.getCFStmtImmediate(cursor).assign_ref;
-    switch (second.op) {
-        .local => |local| try std.testing.expectEqual(GuardedList.at(args, 1), local),
+    switch (second.op.kind) {
+        .local => try std.testing.expectEqual(GuardedList.at(args, 1), second.op.source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
     cursor = second.next;
@@ -52269,7 +52353,10 @@ test "boxy lowerer inspects concrete lists with an index and string accumulator 
 
     const step_zero = out.lir_result.store.getCFStmtImmediate(switch_stmt.default_branch).assign_literal;
     switch (step_zero.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 0), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 0), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const separator_check = out.lir_result.store.getCFStmtImmediate(step_zero.next).assign_low_level;
@@ -52445,12 +52532,18 @@ test "boxy lowerer emits checked low-level calls after source-order argument low
 
     const first = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (first.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 10), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 10), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const second = out.lir_result.store.getCFStmtImmediate(first.next).assign_literal;
     switch (second.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 20), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 20), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const add = out.lir_result.store.getCFStmtImmediate(second.next).assign_low_level;
@@ -52548,7 +52641,10 @@ test "boxy lowerer boxes concrete values with ordinary box low-level" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const value = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 42), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const boxed = out.lir_result.store.getCFStmtImmediate(value.next).assign_low_level;
@@ -52669,8 +52765,8 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
         };
     }
     const from_arg = out.lir_result.store.getCFStmtImmediate(cursor).assign_ref;
-    switch (from_arg.op) {
-        .local => |local| try std.testing.expectEqual(GuardedList.at(args, 0), local),
+    switch (from_arg.op.kind) {
+        .local => try std.testing.expectEqual(GuardedList.at(args, 0), from_arg.op.source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
 
@@ -52694,8 +52790,8 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
         };
     }
     const reused = out.lir_result.store.getCFStmtImmediate(cursor).assign_ref;
-    switch (reused.op) {
-        .local => |local| try std.testing.expectEqual(from_arg.target, local),
+    switch (reused.op.kind) {
+        .local => try std.testing.expectEqual(from_arg.target, reused.op.source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
     const reused_desc = out.lir_result.store.getLocal(reused.target).boxy_desc orelse return error.TestUnexpectedResult;
@@ -52803,7 +52899,10 @@ test "boxy lowerer unboxes concrete values with ordinary box low-level" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const value = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 99), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 99), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const boxed = out.lir_result.store.getCFStmtImmediate(value.next).assign_low_level;
@@ -52912,7 +53011,10 @@ test "boxy lowerer inspects concrete Box payloads" {
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const value = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
-        .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
+        .i128_literal => |literal_id| blk_literal: {
+            const literal = out.lir_result.store.stmtRow(literal_id);
+            break :blk_literal try std.testing.expectEqual(@as(i128, 42), literal.value);
+        },
         .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const boxed = out.lir_result.store.getCFStmtImmediate(value.next).assign_low_level;
@@ -52968,14 +53070,14 @@ test "boxy lowerer emits list_map_can_reuse when list map layouts are interchang
     try std.testing.expectEqual(@as(usize, 2), proc_args.len);
 
     const list_arg = out.lir_result.store.getCFStmtImmediate(proc.body orelse return error.TestUnexpectedResult).assign_ref;
-    switch (list_arg.op) {
-        .local => |local| try std.testing.expectEqual(GuardedList.at(proc_args, 0), local),
+    switch (list_arg.op.kind) {
+        .local => try std.testing.expectEqual(GuardedList.at(proc_args, 0), list_arg.op.source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
 
     const transform_arg = out.lir_result.store.getCFStmtImmediate(list_arg.next).assign_ref;
-    switch (transform_arg.op) {
-        .local => |local| try std.testing.expectEqual(GuardedList.at(proc_args, 1), local),
+    switch (transform_arg.op.kind) {
+        .local => try std.testing.expectEqual(GuardedList.at(proc_args, 1), transform_arg.op.source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
 
@@ -53216,8 +53318,8 @@ test "boxy lowerer publishes host wrapper proc for exported roots" {
     const worker_args = out.lir_result.store.getLocalSpan(worker.args);
     try std.testing.expectEqual(@as(usize, 1), worker_args.len);
     const worker_copy = out.lir_result.store.getCFStmtImmediate(worker.body orelse return error.TestUnexpectedResult).assign_ref;
-    switch (worker_copy.op) {
-        .local => |local| try std.testing.expectEqual(GuardedList.at(worker_args, 0), local),
+    switch (worker_copy.op.kind) {
+        .local => try std.testing.expectEqual(GuardedList.at(worker_args, 0), worker_copy.op.source),
         .discriminant, .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = worker_copy.target } }, out.lir_result.store.getCFStmt(worker_copy.next));

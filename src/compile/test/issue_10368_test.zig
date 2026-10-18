@@ -39,8 +39,8 @@ fn retainReachesPrepare(
                 current = release.next;
             },
             .assign_ref => |assign| {
-                if (assign.op == .local) {
-                    const source = assign.op.local;
+                if (assign.op.kind == .local) {
+                    const source = assign.op.source;
                     if (source == retained_alias) {
                         retained_alias = assign.target;
                     } else if (assign.target == retained_alias) {

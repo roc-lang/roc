@@ -1218,18 +1218,18 @@ pub fn findOutcomeRefinement(
     var cursor = next;
     while (true) {
         switch (store.getCFStmt(cursor)) {
-            .assign_ref => |assign| switch (assign.op) {
-                .local => |source| {
+            .assign_ref => |assign| switch (assign.op.kind) {
+                .local => {
                     if (discriminant != null) return null;
-                    if (std.mem.findScalar(LIR.LocalId, aliases.items, source) == null) return null;
+                    if (std.mem.findScalar(LIR.LocalId, aliases.items, assign.op.source) == null) return null;
                     if (std.mem.findScalar(LIR.LocalId, aliases.items, assign.target) == null) {
                         try aliases.append(allocator, assign.target);
                     }
                     cursor = assign.next;
                 },
-                .discriminant => |op| {
+                .discriminant => {
                     if (discriminant != null) return null;
-                    if (std.mem.findScalar(LIR.LocalId, aliases.items, op.source) == null) return null;
+                    if (std.mem.findScalar(LIR.LocalId, aliases.items, assign.op.source) == null) return null;
                     discriminant = assign.target;
                     cursor = assign.next;
                 },
@@ -2687,12 +2687,12 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
     const allocator = solver.allocator;
     switch (store.getCFStmtImmediate(current).*) {
         .assign_ref => |assign| {
-            switch (assign.op) {
-                .local => |source| {
-                    if (assign.target != source) {
-                        try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = source } });
-                        try solver.binding_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = source } });
-                        if (!aliasPreservesBoxyRcDescriptor(solver, assign.target, source)) {
+            switch (assign.op.kind) {
+                .local => {
+                    if (assign.target != assign.op.source) {
+                        try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = assign.op.source } });
+                        try solver.binding_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = assign.op.source } });
+                        if (!aliasPreservesBoxyRcDescriptor(solver, assign.target, assign.op.source)) {
                             try solver.binding_facts.append(allocator, .{ .demand = assign.target });
                         }
                     } else {
@@ -2700,34 +2700,34 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                     }
                 },
                 .discriminant => try solver.binding_facts.append(allocator, .{ .fresh = assign.target }),
-                .field => |op| try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = op.source } }),
-                .tag_payload => |op| try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = op.source } }),
-                .tag_payload_struct => |op| try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = op.source } }),
-                inline .list_reinterpret, .nominal => |op| {
-                    try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = op.backing_ref } });
-                    try solver.binding_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = op.backing_ref } });
-                    if (!aliasPreservesBoxyRcDescriptor(solver, assign.target, op.backing_ref)) {
+                .field => try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = assign.op.source } }),
+                .tag_payload => try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = assign.op.source } }),
+                .tag_payload_struct => try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = assign.op.source } }),
+                inline .list_reinterpret, .nominal => {
+                    try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = assign.op.source } });
+                    try solver.binding_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = assign.op.source } });
+                    if (!aliasPreservesBoxyRcDescriptor(solver, assign.target, assign.op.source)) {
                         try solver.binding_facts.append(allocator, .{ .demand = assign.target });
                     }
                 },
             }
-            switch (assign.op) {
-                .local => |source| {
-                    try liftVisibilityLink(solver, assign.target, source);
-                    try solver.unique_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = source, .stmt = current } });
+            switch (assign.op.kind) {
+                .local => {
+                    try liftVisibilityLink(solver, assign.target, assign.op.source);
+                    try solver.unique_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = assign.op.source, .stmt = current } });
                 },
-                inline .list_reinterpret, .nominal => |op| {
-                    try liftVisibilityLink(solver, assign.target, op.backing_ref);
-                    try solver.unique_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = op.backing_ref, .stmt = current } });
+                inline .list_reinterpret, .nominal => {
+                    try liftVisibilityLink(solver, assign.target, assign.op.source);
+                    try solver.unique_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = assign.op.source, .stmt = current } });
                 },
-                inline .field, .tag_payload, .tag_payload_struct => |op| {
-                    try liftVisibilityLink(solver, assign.target, op.source);
+                inline .field, .tag_payload, .tag_payload_struct => {
+                    try liftVisibilityLink(solver, assign.target, assign.op.source);
                     try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
-                    try solver.unique_facts.append(allocator, .{ .read = op.source });
+                    try solver.unique_facts.append(allocator, .{ .read = assign.op.source });
                 },
-                .discriminant => |op| {
+                .discriminant => {
                     try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
-                    try solver.unique_facts.append(allocator, .{ .read = op.source });
+                    try solver.unique_facts.append(allocator, .{ .read = assign.op.source });
                 },
             }
         },
@@ -3551,12 +3551,12 @@ fn computeVisibilityFromLift(
         switch (stmt) {
             .assign_ref => |assign| {
                 const target = @backingInt(assign.target);
-                switch (assign.op) {
-                    .local => |source| addEdge(&sets, rc_local, target, @backingInt(source)),
-                    inline .list_reinterpret, .nominal => |op| addEdge(&sets, rc_local, target, @backingInt(op.backing_ref)),
-                    .field => |op| addEdge(&sets, rc_local, target, @backingInt(op.source)),
-                    .tag_payload => |op| addEdge(&sets, rc_local, target, @backingInt(op.source)),
-                    .tag_payload_struct => |op| addEdge(&sets, rc_local, target, @backingInt(op.source)),
+                switch (assign.op.kind) {
+                    .local => addEdge(&sets, rc_local, target, @backingInt(assign.op.source)),
+                    inline .list_reinterpret, .nominal => addEdge(&sets, rc_local, target, @backingInt(assign.op.source)),
+                    .field => addEdge(&sets, rc_local, target, @backingInt(assign.op.source)),
+                    .tag_payload => addEdge(&sets, rc_local, target, @backingInt(assign.op.source)),
+                    .tag_payload_struct => addEdge(&sets, rc_local, target, @backingInt(assign.op.source)),
                     .discriminant => {},
                 }
             },
@@ -5715,9 +5715,9 @@ fn computeUniquenessDetailed(
         switch (stmt) {
             .assign_ref => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
-                const alias_of: ?LIR.LocalId = switch (assign.op) {
-                    .local => |source| source,
-                    inline .list_reinterpret, .nominal => |op| op.backing_ref,
+                const alias_of: ?LIR.LocalId = switch (assign.op.kind) {
+                    .local => assign.op.source,
+                    inline .list_reinterpret, .nominal => assign.op.source,
                     .discriminant, .field, .tag_payload, .tag_payload_struct => null,
                 };
                 const is_view = alias_of != null and borrowed != null and
@@ -5731,25 +5731,25 @@ fn computeUniquenessDetailed(
                         }
                     };
                 }
-                switch (assign.op) {
-                    .local => |source| if (!is_view) try Alias.record(marks, allocator, &alias_defs, &foreign_def, &consumes, assign.target, source, @intCast(stmt_index)),
-                    .list_reinterpret => |op| if (!is_view) try Alias.record(marks, allocator, &alias_defs, &foreign_def, &consumes, assign.target, op.backing_ref, @intCast(stmt_index)),
-                    .nominal => |op| if (!is_view) try Alias.record(marks, allocator, &alias_defs, &foreign_def, &consumes, assign.target, op.backing_ref, @intCast(stmt_index)),
+                switch (assign.op.kind) {
+                    .local => if (!is_view) try Alias.record(marks, allocator, &alias_defs, &foreign_def, &consumes, assign.target, assign.op.source, @intCast(stmt_index)),
+                    .list_reinterpret => if (!is_view) try Alias.record(marks, allocator, &alias_defs, &foreign_def, &consumes, assign.target, assign.op.source, @intCast(stmt_index)),
+                    .nominal => if (!is_view) try Alias.record(marks, allocator, &alias_defs, &foreign_def, &consumes, assign.target, assign.op.source, @intCast(stmt_index)),
                     // A payload or discriminant read names an interior
                     // value of a possibly-shared outer one; a field read
                     // inherits only through a take, decided below.
                     .discriminant => marks.destroy(&foreign_def, assign.target),
-                    .field => |op| {
+                    .field => {
                         marks.destroy(&foreign_def, assign.target);
-                        try noteFieldRead(&field_reads, marks, takes, store, allocator, assign.target, op.source, op.field_idx, @intCast(stmt_index));
+                        try noteFieldRead(&field_reads, marks, takes, store, allocator, assign.target, assign.op.source, assign.op.index, @intCast(stmt_index));
                     },
-                    .tag_payload => |op| {
+                    .tag_payload => {
                         marks.destroy(&foreign_def, assign.target);
-                        try noteFieldRead(&field_reads, marks, takes, store, allocator, assign.target, op.source, op.payload_idx, @intCast(stmt_index));
+                        try noteFieldRead(&field_reads, marks, takes, store, allocator, assign.target, assign.op.source, assign.op.index, @intCast(stmt_index));
                     },
-                    .tag_payload_struct => |op| {
+                    .tag_payload_struct => {
                         marks.destroy(&foreign_def, assign.target);
-                        if (marks.indexOf(assign.target)) |target| if (marks.indexOf(op.source)) |source| {
+                        if (marks.indexOf(assign.target)) |target| if (marks.indexOf(assign.op.source)) |source| {
                             try mask_aliases.append(allocator, .{ .source = source, .target = target });
                             field_def_counts[target] += 1;
                         };
@@ -5757,8 +5757,8 @@ fn computeUniquenessDetailed(
                 }
                 // A same-value alias of an aggregate views the same stored
                 // fields.
-                if (assign.op == .local) {
-                    if (marks.indexOf(assign.target)) |target| if (marks.indexOf(assign.op.local)) |source| if (target != source) {
+                if (assign.op.kind == .local) {
+                    if (marks.indexOf(assign.target)) |target| if (marks.indexOf(assign.op.source)) |source| if (target != source) {
                         try mask_aliases.append(allocator, .{ .source = source, .target = target });
                         field_def_counts[target] += 1;
                     };
@@ -6849,8 +6849,8 @@ test "per-procedure use orders in a shared scratch match standalone orders and r
     var bodies: [4]LIR.CFStmtId = undefined;
     for (bodies[0..3], 0..) |*body, index| {
         const id: LIR.JoinPointId = @fromBackingInt(@intCast(index));
-        const left = try f.store.addCFStmt(.{ .assign_ref = .{ .target = y, .op = .{ .local = x }, .next = try f.store.addCFStmt(.{ .jump = .{ .target = id } }, .test_fixture) } }, .test_fixture);
-        const right = try f.store.addCFStmt(.{ .assign_ref = .{ .target = y, .op = .{ .local = x }, .next = try f.store.addCFStmt(.{ .jump = .{ .target = id } }, .test_fixture) } }, .test_fixture);
+        const left = try f.store.addCFStmt(.{ .assign_ref = .{ .target = y, .op = .local(x), .next = try f.store.addCFStmt(.{ .jump = .{ .target = id } }, .test_fixture) } }, .test_fixture);
+        const right = try f.store.addCFStmt(.{ .assign_ref = .{ .target = y, .op = .local(x), .next = try f.store.addCFStmt(.{ .jump = .{ .target = id } }, .test_fixture) } }, .test_fixture);
         const branch = try f.store.addCFStmt(.{ .switch_stmt = .{
             .cond = cond,
             .branches = try f.store.addCFSwitchBranches(&.{.{ .value = 1, .body = left }}),
@@ -6859,7 +6859,7 @@ test "per-procedure use orders in a shared scratch match standalone orders and r
         body.* = try f.store.addCFStmt(.{ .join = .{ .id = id, .params = LIR.LocalSpan.empty(), .body = try f.ret(y), .remainder = branch } }, .test_fixture);
     }
     // A jump to no join in its procedure has unknown successors.
-    bodies[3] = try f.store.addCFStmt(.{ .assign_ref = .{ .target = y, .op = .{ .local = x }, .next = try f.store.addCFStmt(.{ .jump = .{ .target = @fromBackingInt(@intCast(9)) } }, .test_fixture) } }, .test_fixture);
+    bodies[3] = try f.store.addCFStmt(.{ .assign_ref = .{ .target = y, .op = .local(x), .next = try f.store.addCFStmt(.{ .jump = .{ .target = @fromBackingInt(@intCast(9)) } }, .test_fixture) } }, .test_fixture);
     var lists: [4]std.ArrayList(LIR.CFStmtId) = @splat(.empty);
     defer for (&lists) |*list| list.deinit(allocator);
     for (bodies, &lists) |body, *list| {
@@ -6915,9 +6915,9 @@ test "uniqueness workspace reuses topology and exact use queries across signatur
     const taken = try f.local(f.list);
     const proc = try f.proc(&.{param}, null, f.list);
     const ret = try f.ret(taken);
-    const read = try f.store.addCFStmt(.{ .assign_ref = .{ .target = taken, .op = .{ .field = .{ .source = pair, .field_idx = 0 } }, .next = ret } }, .test_fixture);
+    const read = try f.store.addCFStmt(.{ .assign_ref = .{ .target = taken, .op = .field(pair, 0), .next = ret } }, .test_fixture);
     const store = try f.store.addCFStmt(.{ .assign_struct = .{ .target = pair, .fields = try f.store.addLocalSpan(&.{alias}), .next = read } }, .test_fixture);
-    const alias_stmt = try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .{ .local = result }, .next = store } }, .test_fixture);
+    const alias_stmt = try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .local(result), .next = store } }, .test_fixture);
     const call = try f.call(result, proc, &.{param}, alias_stmt);
     f.store.setProcSpecBody(proc, call);
     var statements = [_]std.ArrayList(LIR.CFStmtId){.empty};
@@ -6981,7 +6981,7 @@ test "uniqueness workspace reanalyzes read-only signatures through borrowed view
     const callee = try f.proc(&.{param}, null, .i64);
     const ret = try f.ret(source);
     const call = try f.call(ignored, callee, &.{view}, ret);
-    const alias = try f.store.addCFStmt(.{ .assign_ref = .{ .target = view, .op = .{ .local = source }, .next = call } }, .test_fixture);
+    const alias = try f.store.addCFStmt(.{ .assign_ref = .{ .target = view, .op = .local(source), .next = call } }, .test_fixture);
     const body = try f.store.addCFStmt(.{ .assign_list = .{ .target = source, .elems = try f.store.addLocalSpan(&.{}), .next = alias } }, .test_fixture);
     _ = try f.proc(&.{}, body, f.list);
     var statements = [_]std.ArrayList(LIR.CFStmtId){ .empty, .empty };
@@ -7043,11 +7043,11 @@ fn aliasBornUniqueAfterRepeatedDefinitions(sequential: bool) SolveError!bool {
     const alias = try f.local(f.list);
     const ret = try f.ret(alias);
     const body = if (sequential) blk: {
-        const second = try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .{ .local = list }, .next = ret } }, .test_fixture);
-        break :blk try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .{ .local = list }, .next = second } }, .test_fixture);
+        const second = try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .local(list), .next = ret } }, .test_fixture);
+        break :blk try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .local(list), .next = second } }, .test_fixture);
     } else blk: {
-        const first = try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .{ .local = list }, .next = ret } }, .test_fixture);
-        const second = try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .{ .local = list }, .next = try f.ret(alias) } }, .test_fixture);
+        const first = try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .local(list), .next = ret } }, .test_fixture);
+        const second = try f.store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .local(list), .next = try f.ret(alias) } }, .test_fixture);
         const branches = try f.store.addCFSwitchBranches(&[_]LIR.CFSwitchBranch{.{ .value = 1, .body = first }});
         break :blk try f.store.addCFStmt(.{ .switch_stmt = .{
             .cond = flag,
@@ -7349,7 +7349,7 @@ test "component uniqueness read-only return refinement revives a borrowed-view l
     } }, .test_fixture);
     const callee = try f.proc(&.{param}, callee_body, .i64);
     const call = try f.call(ignored, callee, &.{view}, try f.ret(source));
-    const alias = try f.store.addCFStmt(.{ .assign_ref = .{ .target = view, .op = .{ .local = source }, .next = call } }, .test_fixture);
+    const alias = try f.store.addCFStmt(.{ .assign_ref = .{ .target = view, .op = .local(source), .next = call } }, .test_fixture);
     const body = try f.store.addCFStmt(.{ .assign_list = .{
         .target = source,
         .elems = try f.store.addLocalSpan(&.{}),
@@ -7383,7 +7383,7 @@ test "component uniqueness recursive conditional fields restart after committed 
     const ret = try f.ret(taken);
     const read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = taken,
-        .op = .{ .field = .{ .source = pair, .field_idx = 0 } },
+        .op = .field(pair, 0),
         .next = ret,
     } }, .test_fixture);
     const aggregate = try f.store.addCFStmt(.{ .assign_struct = .{
@@ -7548,7 +7548,7 @@ test "uniqueness carries a candidate read's origin through a returned record fie
     } }, .test_fixture);
     const take = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = first,
-        .op = .{ .field = .{ .source = got, .field_idx = 0 } },
+        .op = .field(got, 0),
         .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
             .take_kind = .take,
         }),
@@ -7574,7 +7574,7 @@ test "uniqueness carries a candidate read's origin through a returned record fie
     const idle_first = try f.local(f.list);
     const idle_take = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = idle_first,
-        .op = .{ .field = .{ .source = idle_got, .field_idx = 0 } },
+        .op = .field(idle_got, 0),
         .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
             .take_kind = .take,
         }),
@@ -7653,7 +7653,7 @@ test "uniqueness vetoes a join cell's field that a call definition does not vouc
     const join_id = join_ids.freshJoinPoint();
     const take = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = first,
-        .op = .{ .field = .{ .source = cell, .field_idx = 0 } },
+        .op = .field(cell, 0),
         .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
             .take_kind = .take,
         }),
@@ -7715,7 +7715,7 @@ test "uniqueness gives a tail loop parameter no field origins from its back edge
     const join_id = join_ids.freshJoinPoint();
     const read = try f.store.addCFStmt(.{ .assign_ref = .{
         .target = taken,
-        .op = .{ .field = .{ .source = param, .field_idx = 0 } },
+        .op = .field(param, 0),
         .next = try f.ret(taken),
     } }, .test_fixture);
     const back_edge = try f.store.addCFStmt(.{ .set_local = .{
