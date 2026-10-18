@@ -96,7 +96,7 @@ const Inventory = struct {
                     self.unique_site[callee_index] = .{ .caller = caller, .stmt = stmt_id };
                     try self.markReachable(call.proc);
                 } else if (stmt == .assign_packed_erased_fn) {
-                    const packed_fn = stmt.assign_packed_erased_fn;
+                    const packed_fn = self.store.stmtRow(stmt.assign_packed_erased_fn.data);
                     self.escapes[@backingInt(packed_fn.proc)] = true;
                     try self.markReachable(packed_fn.proc);
                 } else if (stmt == .assign_literal and stmt.assign_literal.value == .proc_ref) {
@@ -147,7 +147,8 @@ fn eligibleCall(
     layouts: *const layout_mod.Store,
     call: @FieldType(LIR.CFStmt, "assign_call"),
 ) bool {
-    if (call.is_cold or call.result_desc != null or call.out_desc != null) return false;
+    const extra = store.stmtRowOrDefault(call.extra);
+    if (call.is_cold or extra.result_desc != null or extra.out_desc != null) return false;
     const callee = store.getProcSpec(call.proc);
     return callee.body != null and
         callee.hosted == null and

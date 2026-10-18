@@ -213,7 +213,7 @@ const Transform = struct {
         try self.store.replaceCFStmt(unbox_stmt_id, .{ .assign_low_level = .{
             .target = result_box,
             .op = .box_prepare_update,
-            .rc_effect = LowLevelOp.box_prepare_update.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.box_prepare_update.rcEffect()),
             .args = try self.store.addLocalSpan(&.{boxed}),
             .next = cast_stmt_id,
         } }, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
@@ -221,7 +221,7 @@ const Transform = struct {
         try self.store.replaceCFStmt(box_stmt_id, .{ .assign_low_level = .{
             .target = store_unit,
             .op = .ptr_store,
-            .rc_effect = LowLevelOp.ptr_store.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.ptr_store.rcEffect()),
             .args = try self.store.addLocalSpan(&.{ payload_ptr, payload_value }),
             .next = ret_stmt_id,
         } }, reuseOrigin(self.store.stmtOrigin(box_stmt_id)));
@@ -243,9 +243,10 @@ const Transform = struct {
 
         const join_params = self.store.getLocalSpan(join_stmt.params);
         if (join_params.len != 1) return false;
-        if (self.store.getLocalSpan(join_stmt.maybe_uninitialized_params).len != 0) return false;
-        if (self.store.getLocalSpan(join_stmt.maybe_uninitialized_conditions).len != 0) return false;
-        if (self.store.getU64Span(join_stmt.maybe_uninitialized_condition_masks).len != 0) return false;
+        const join_extra = self.store.stmtRowOrDefault(join_stmt.extra);
+        if (self.store.getLocalSpan(join_extra.maybe_uninitialized_params).len != 0) return false;
+        if (self.store.getLocalSpan(join_extra.maybe_uninitialized_conditions).len != 0) return false;
+        if (self.store.getU64Span(join_extra.maybe_uninitialized_condition_masks).len != 0) return false;
         const join_payload = GuardedList.at(join_params, 0);
 
         const body_alias = body_clone.forwardLocalAliasChain(self.store, join_payload, join_stmt.body);
@@ -305,7 +306,7 @@ const Transform = struct {
         try self.store.replaceCFStmt(unbox_stmt_id, .{ .assign_low_level = .{
             .target = result_box,
             .op = .box_prepare_update,
-            .rc_effect = LowLevelOp.box_prepare_update.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.box_prepare_update.rcEffect()),
             .args = try self.store.addLocalSpan(&.{boxed}),
             .next = cast_stmt_id,
         } }, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
@@ -313,7 +314,7 @@ const Transform = struct {
         try self.store.replaceCFStmt(box_stmt_id, .{ .assign_low_level = .{
             .target = store_unit,
             .op = .ptr_store,
-            .rc_effect = LowLevelOp.ptr_store.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.ptr_store.rcEffect()),
             .args = try self.store.addLocalSpan(&.{ payload_ptr, payload_value }),
             .next = ret_stmt_id,
         } }, reuseOrigin(self.store.stmtOrigin(box_stmt_id)));
@@ -328,9 +329,10 @@ const Transform = struct {
 
         const join_params = self.store.getLocalSpan(join_stmt.params);
         if (join_params.len != 1) return false;
-        if (self.store.getLocalSpan(join_stmt.maybe_uninitialized_params).len != 0) return false;
-        if (self.store.getLocalSpan(join_stmt.maybe_uninitialized_conditions).len != 0) return false;
-        if (self.store.getU64Span(join_stmt.maybe_uninitialized_condition_masks).len != 0) return false;
+        const join_extra = self.store.stmtRowOrDefault(join_stmt.extra);
+        if (self.store.getLocalSpan(join_extra.maybe_uninitialized_params).len != 0) return false;
+        if (self.store.getLocalSpan(join_extra.maybe_uninitialized_conditions).len != 0) return false;
+        if (self.store.getU64Span(join_extra.maybe_uninitialized_condition_masks).len != 0) return false;
         const join_payload = GuardedList.at(join_params, 0);
 
         const body_alias = body_clone.forwardLocalAliasChain(self.store, join_payload, join_stmt.body);
@@ -399,7 +401,7 @@ const Transform = struct {
         try self.store.replaceCFStmt(unbox_stmt_id, .{ .assign_low_level = .{
             .target = result_box,
             .op = .box_prepare_update,
-            .rc_effect = LowLevelOp.box_prepare_update.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.box_prepare_update.rcEffect()),
             .args = try self.store.addLocalSpan(&.{boxed}),
             .next = cast_stmt_id,
         } }, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
@@ -407,7 +409,7 @@ const Transform = struct {
         try self.store.replaceCFStmt(box_stmt_id, .{ .assign_low_level = .{
             .target = store_unit,
             .op = .ptr_store,
-            .rc_effect = LowLevelOp.ptr_store.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.ptr_store.rcEffect()),
             .args = try self.store.addLocalSpan(&.{ payload_ptr, payload_value }),
             .next = ret_stmt_id,
         } }, reuseOrigin(self.store.stmtOrigin(box_stmt_id)));
@@ -416,9 +418,7 @@ const Transform = struct {
             .id = join_stmt.id,
             .params = try self.store.addLocalSpan(&.{ join_payload, result_box, payload_ptr }),
             .retained = join_stmt.retained,
-            .maybe_uninitialized_params = join_stmt.maybe_uninitialized_params,
-            .maybe_uninitialized_conditions = join_stmt.maybe_uninitialized_conditions,
-            .maybe_uninitialized_condition_masks = join_stmt.maybe_uninitialized_condition_masks,
+            .extra = join_stmt.extra,
             .body = join_stmt.body,
             .remainder = join_stmt.remainder,
         } };
@@ -448,15 +448,17 @@ const Transform = struct {
         const old_node = self.store.getCFStmt(old_stmt_id);
         if (old_node != .assign_packed_erased_fn) return false;
         const old_stmt = old_node.assign_packed_erased_fn;
-        if (old_stmt.reuse != null) return false;
+        const old_data = self.store.stmtRow(old_stmt.data);
+        if (old_data.reuse != null) return false;
 
         const new_stmt_id = self.skipLocalAliasesAndZsts(old_stmt.next);
         const new_node = self.store.getCFStmt(new_stmt_id);
         if (new_node != .assign_packed_erased_fn) return false;
         const new_stmt = new_node.assign_packed_erased_fn;
-        if (new_stmt.reuse != null) return false;
+        const new_data = self.store.stmtRow(new_stmt.data);
+        if (new_data.reuse != null) return false;
         if (old_stmt.target == new_stmt.target) return false;
-        if (new_stmt.capture != null and new_stmt.capture.? == old_stmt.target) return false;
+        if (new_data.capture != null and new_data.capture.? == old_stmt.target) return false;
 
         var return_chain = std.ArrayList(LocalId).empty;
         defer return_chain.deinit(self.scratch_allocator);
@@ -477,7 +479,7 @@ const Transform = struct {
         if (self.store.getProcSpecImmediate(self.proc_id).ret_layout != erased_layout) return false;
         if (self.layouts.getLayout(erased_layout).tag != .erased_callable) return false;
 
-        if (!self.samePackedErasedPayloadShape(old_stmt.capture_layout, new_stmt.capture_layout)) return false;
+        if (!self.samePackedErasedPayloadShape(old_data.capture_layout, new_data.capture_layout)) return false;
 
         // The first pack's allocation becomes the reuse target, so its result
         // must have no other consumer: any read would still be live after the
@@ -491,13 +493,16 @@ const Transform = struct {
             if (self.reads.get(local) != 1) return false;
         }
 
+        const data = try self.store.addStmtRow(LIR.PackedErasedFnData, .{
+            .proc = new_data.proc,
+            .capture = new_data.capture,
+            .capture_layout = new_data.capture_layout,
+            .on_drop = new_data.on_drop,
+            .reuse = old_stmt.target,
+        });
         self.store.getCFStmtPtr(new_stmt_id).* = .{ .assign_packed_erased_fn = .{
             .target = new_stmt.target,
-            .proc = new_stmt.proc,
-            .capture = new_stmt.capture,
-            .capture_layout = new_stmt.capture_layout,
-            .on_drop = new_stmt.on_drop,
-            .reuse = old_stmt.target,
+            .data = data,
             .next = new_stmt.next,
         } };
 
@@ -691,7 +696,7 @@ fn testLowLevel(store: *LirStore, target: LocalId, op: LowLevelOp, args: []const
     return try store.addCFStmt(.{ .assign_low_level = .{
         .target = target,
         .op = op,
-        .rc_effect = op.rcEffect(),
+        .rc_effect = try store.addRcEffect(op.rcEffect()),
         .args = try store.addLocalSpan(args),
         .next = next,
     } }, .test_fixture);
@@ -729,10 +734,12 @@ fn testPackedErased(
 ) ResourceError!CFStmtId {
     return try store.addCFStmt(.{ .assign_packed_erased_fn = .{
         .target = target,
-        .proc = proc,
-        .capture = capture,
-        .capture_layout = capture_layout,
-        .on_drop = .none,
+        .data = try store.addStmtRow(LIR.PackedErasedFnData, .{
+            .proc = proc,
+            .capture = capture,
+            .capture_layout = capture_layout,
+            .on_drop = .none,
+        }),
         .next = next,
     } }, .test_fixture);
 }
@@ -1167,18 +1174,22 @@ test "erased callable reuse rewrites adjacent same-shape repack" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = new_callable } }, .test_fixture);
     const new_pack = try store.addCFStmt(.{ .assign_packed_erased_fn = .{
         .target = new_callable,
-        .proc = new_proc,
-        .capture = new_capture,
-        .capture_layout = .u64,
-        .on_drop = .none,
+        .data = try store.addStmtRow(LIR.PackedErasedFnData, .{
+            .proc = new_proc,
+            .capture = new_capture,
+            .capture_layout = .u64,
+            .on_drop = .none,
+        }),
         .next = ret,
     } }, .test_fixture);
     const old_pack = try store.addCFStmt(.{ .assign_packed_erased_fn = .{
         .target = old_callable,
-        .proc = old_proc,
-        .capture = old_capture,
-        .capture_layout = .u64,
-        .on_drop = .none,
+        .data = try store.addStmtRow(LIR.PackedErasedFnData, .{
+            .proc = old_proc,
+            .capture = old_capture,
+            .capture_layout = .u64,
+            .on_drop = .none,
+        }),
         .next = new_pack,
     } }, .test_fixture);
     const caller = try store.addProcSpec(.{
@@ -1192,7 +1203,7 @@ test "erased callable reuse rewrites adjacent same-shape repack" {
 
     try run(&store, &layouts);
 
-    const rewritten = store.getCFStmtImmediate(new_pack).assign_packed_erased_fn;
+    const rewritten = store.stmtRow(store.getCFStmtImmediate(new_pack).assign_packed_erased_fn.data);
     try std.testing.expectEqual(old_callable, rewritten.reuse.?);
     try std.testing.expect(!rewritten.reuse_unique);
 
@@ -1259,7 +1270,7 @@ test "erased callable reuse forwards through aliases between the packs" {
 
     try run(&store, &layouts);
 
-    const rewritten = store.getCFStmtImmediate(new_pack).assign_packed_erased_fn;
+    const rewritten = store.stmtRow(store.getCFStmtImmediate(new_pack).assign_packed_erased_fn.data);
     try std.testing.expectEqual(old_callable, rewritten.reuse.?);
     try std.testing.expect(!rewritten.reuse_unique);
 }
@@ -1321,7 +1332,7 @@ test "erased callable reuse declines when an alias of the old pack is read elsew
 
     try run(&store, &layouts);
 
-    const unchanged = store.getCFStmtImmediate(new_pack).assign_packed_erased_fn;
+    const unchanged = store.stmtRow(store.getCFStmtImmediate(new_pack).assign_packed_erased_fn.data);
     try std.testing.expectEqual(@as(?LocalId, null), unchanged.reuse);
 }
 
@@ -1379,7 +1390,7 @@ test "erased callable reuse forwards through the aliased return path" {
 
     try run(&store, &layouts);
 
-    const rewritten = store.getCFStmtImmediate(new_pack).assign_packed_erased_fn;
+    const rewritten = store.stmtRow(store.getCFStmtImmediate(new_pack).assign_packed_erased_fn.data);
     try std.testing.expectEqual(old_callable, rewritten.reuse.?);
     try std.testing.expect(!rewritten.reuse_unique);
 }

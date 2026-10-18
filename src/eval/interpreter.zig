@@ -2646,7 +2646,7 @@ pub const Interpreter = struct {
                 },
                 .assign_literal => |assign| {
                     if (assign.value == .boxy_dynamic_num_literal) {
-                        const lit = assign.value.boxy_dynamic_num_literal;
+                        const lit = self.store.stmtRow(assign.value.boxy_dynamic_num_literal);
                         var desc = try self.resolveBoxyDescRef(frame, lit.desc);
                         const target_layout = self.store.getLocal(assign.target).layout_idx;
                         desc = try self.boxy_runtime.effectiveBoxyScalarLiteralDesc(desc, lit.default_layout);
@@ -2662,7 +2662,7 @@ pub const Interpreter = struct {
                         continue;
                     }
                     if (assign.value == .boxy_dynamic_frac_literal) {
-                        const lit = assign.value.boxy_dynamic_frac_literal;
+                        const lit = self.store.stmtRow(assign.value.boxy_dynamic_frac_literal);
                         var desc = try self.resolveBoxyDescRef(frame, lit.desc);
                         const target_layout = self.store.getLocal(assign.target).layout_idx;
                         desc = try self.boxy_runtime.effectiveBoxyScalarLiteralDesc(desc, lit.default_layout);
@@ -2688,6 +2688,7 @@ pub const Interpreter = struct {
                     current = uninit.next;
                 },
                 .assign_call => |assign| {
+                    const extra = self.store.stmtRowOrDefault(assign.extra);
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
                     const arg_layouts = try self.localLayouts(arg_locals);
@@ -2707,7 +2708,7 @@ pub const Interpreter = struct {
                             // The conversions that follow would read a value
                             // that is not there yet, so the procedure returns
                             // now to whoever makes the pending call.
-                            if (assign.returns_pending) |pending_return| {
+                            if (extra.returns_pending) |pending_return| {
                                 self.pending_erased.?.conversion = .{
                                     .layout = self.store.getProcSpecImmediate(frame.proc_id).ret_layout,
                                     .desc = try self.resolveOptionalBoxyDescRef(frame, pending_return.result_desc),
@@ -2719,7 +2720,7 @@ pub const Interpreter = struct {
                             // value; this procedure returns to whoever makes
                             // it without reading the value.
                             frame.setLocal(assign.target, result.value);
-                            if (assign.out_desc) |out_desc| frame.setLocal(out_desc, try self.allocPointerIntValue(0));
+                            if (extra.out_desc) |out_desc| frame.setLocal(out_desc, try self.allocPointerIntValue(0));
                             current = assign.next;
                             continue;
                         }
@@ -2732,7 +2733,7 @@ pub const Interpreter = struct {
                         result.value,
                         result.layout,
                         result.desc,
-                        assign.result_desc,
+                        extra.result_desc,
                         stored_as,
                         self.store.getLocal(assign.target).layout_idx,
                     ) catch |err| {
@@ -2759,7 +2760,7 @@ pub const Interpreter = struct {
                         false,
                     );
                     frame.setLocalDesc(assign.target, materialized_result.desc);
-                    if (assign.out_desc) |out_desc| {
+                    if (extra.out_desc) |out_desc| {
                         const desc = materialized_result.desc orelse {
                             return self.invariantFailedError(
                                 "LIR/interpreter invariant violated: direct call declared a descriptor output but produced no descriptor",
@@ -2770,7 +2771,8 @@ pub const Interpreter = struct {
                     }
                     current = assign.next;
                 },
-                .assign_call_erased => |assign| {
+                .assign_call_erased => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
                     const arg_layouts_end = @as(usize, assign.arg_layouts.start) + assign.arg_layouts.len;
@@ -2814,7 +2816,7 @@ pub const Interpreter = struct {
                     const call_loc = self.activeStmtLoc();
                     const call_region = self.activeStmtRegion();
                     const call_inline_scope = self.activeStmtInlineScope();
-                    const target_layout = self.store.getLocal(assign.target).layout_idx;
+                    const target_layout = self.store.getLocal(assign_stmt.target).layout_idx;
                     const result = if (assign.deferred) deferred: {
                         if (self.pending_erased != null) {
                             return self.invariantFailedError(
@@ -2846,9 +2848,9 @@ pub const Interpreter = struct {
                                 };
                                 return .returned_pending;
                             }
-                            frame.setLocal(assign.target, try self.poisonUninitializedValue(target_layout));
+                            frame.setLocal(assign_stmt.target, try self.poisonUninitializedValue(target_layout));
                             if (assign.out_desc) |out_desc| frame.setLocal(out_desc, try self.allocPointerIntValue(0));
-                            current = assign.next;
+                            current = assign_stmt.next;
                             continue;
                         }
                         break :deferred (self.drivePendingErasedCalls(frame) catch |err| {
@@ -2876,16 +2878,16 @@ pub const Interpreter = struct {
                         result.desc,
                         assign.result_desc,
                         result.stored_as,
-                        self.store.getLocal(assign.target).layout_idx,
+                        self.store.getLocal(assign_stmt.target).layout_idx,
                     );
                     try self.setLocalChecked(
                         frame,
                         current,
-                        assign.target,
+                        assign_stmt.target,
                         materialized_result.value,
                         false,
                     );
-                    frame.setLocalDesc(assign.target, materialized_result.desc);
+                    frame.setLocalDesc(assign_stmt.target, materialized_result.desc);
                     if (assign.out_desc) |out_desc| {
                         const desc = materialized_result.desc orelse {
                             return self.invariantFailedError(
@@ -2895,19 +2897,21 @@ pub const Interpreter = struct {
                         };
                         try self.setLocalChecked(frame, current, out_desc, try self.allocPointerIntValue(@intFromPtr(desc)), false);
                     }
-                    current = assign.next;
+                    current = assign_stmt.next;
                 },
-                .assign_packed_erased_fn => |assign| {
+                .assign_packed_erased_fn => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.setLocalChecked(
                         frame,
                         current,
-                        assign.target,
-                        try self.evalPackedErasedFn(frame, assign, self.store.getLocal(assign.target).layout_idx),
+                        assign_stmt.target,
+                        try self.evalPackedErasedFn(frame, assign, self.store.getLocal(assign_stmt.target).layout_idx),
                         false,
                     );
-                    current = assign.next;
+                    current = assign_stmt.next;
                 },
-                .assign_call_dict => |assign| {
+                .assign_call_dict => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     const dict = try self.resolveBoxyDictRef(frame, assign.dict);
                     const required_method = @backingInt(assign.method);
                     const arg_locals = self.store.getLocalSpan(assign.args);
@@ -2972,17 +2976,17 @@ pub const Interpreter = struct {
                         result.layout,
                         result.desc,
                         assign.result_desc,
-                        self.store.getLocal(assign.target).layout_idx,
+                        self.store.getLocal(assign_stmt.target).layout_idx,
                     );
                     try self.setLocalChecked(
                         frame,
                         current,
-                        assign.target,
+                        assign_stmt.target,
                         materialized_result.value,
                         false,
                     );
-                    frame.setLocalDesc(assign.target, materialized_result.desc);
-                    if (self.store.getLocal(assign.target).boxy_desc) |desc_ref| {
+                    frame.setLocalDesc(assign_stmt.target, materialized_result.desc);
+                    if (self.store.getLocal(assign_stmt.target).boxy_desc) |desc_ref| {
                         if (desc_ref.localOrNull()) |desc_local| {
                             const desc = materialized_result.desc orelse {
                                 return self.invariantFailedError(
@@ -2993,9 +2997,10 @@ pub const Interpreter = struct {
                             try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)), false);
                         }
                     }
-                    current = assign.next;
+                    current = assign_stmt.next;
                 },
-                .assign_boxy_desc_ref => |assign| {
+                .assign_boxy_desc_ref => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     const desc_value = try self.evalBoxyDescRefValueAtProjection(
                         frame,
                         assign.desc,
@@ -3006,14 +3011,15 @@ pub const Interpreter = struct {
                         assign.tag_residual_for,
                         assign.captures,
                     );
-                    try self.setLocalChecked(frame, current, assign.target, desc_value, false);
-                    current = assign.next;
+                    try self.setLocalChecked(frame, current, assign_stmt.target, desc_value, false);
+                    current = assign_stmt.next;
                 },
                 .assign_boxy_dict_ref => |assign| {
                     try self.setLocalChecked(frame, current, assign.target, try self.evalBoxyDictRefValue(frame, assign.dict, assign.captures), false);
                     current = assign.next;
                 },
-                .assign_boxy_box => |assign| {
+                .assign_boxy_box => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     const payload_value = try self.getLocalChecked(frame, assign.payload);
                     const payload_desc = if (assign.payload_desc) |desc_ref| try self.resolveBoxyDescRef(frame, desc_ref) else {
                         return self.invariantFailedError(
@@ -3032,13 +3038,14 @@ pub const Interpreter = struct {
                         source_desc,
                         payload_desc,
                         assign.payload_mode,
-                        self.store.getLocal(assign.target).layout_idx,
+                        self.store.getLocal(assign_stmt.target).layout_idx,
                     );
-                    try self.setLocalChecked(frame, current, assign.target, boxed.value, false);
-                    frame.setLocalDesc(assign.target, boxed.desc);
-                    current = assign.next;
+                    try self.setLocalChecked(frame, current, assign_stmt.target, boxed.value, false);
+                    frame.setLocalDesc(assign_stmt.target, boxed.desc);
+                    current = assign_stmt.next;
                 },
-                .assign_boxy_record_update => |assign| {
+                .assign_boxy_record_update => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     const updated = try self.boxy_runtime.boxyRecordUpdate(
                         self.boxyFrameHooks(frame),
                         try self.getLocalChecked(frame, assign.base),
@@ -3047,13 +3054,14 @@ pub const Interpreter = struct {
                         try self.getLocalChecked(frame, assign.fields),
                         assign.fields_layout,
                         try self.resolveBoxyDescRef(frame, assign.fields_desc),
-                        self.store.getLocal(assign.target).layout_idx,
+                        self.store.getLocal(assign_stmt.target).layout_idx,
                     );
-                    try self.setLocalChecked(frame, current, assign.target, updated.value, false);
-                    frame.setLocalDesc(assign.target, updated.desc);
-                    current = assign.next;
+                    try self.setLocalChecked(frame, current, assign_stmt.target, updated.value, false);
+                    frame.setLocalDesc(assign_stmt.target, updated.desc);
+                    current = assign_stmt.next;
                 },
-                .assign_boxy_unbox => |assign| {
+                .assign_boxy_unbox => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     const source_desc = try self.resolveBoxyDescRef(frame, assign.source_desc);
                     const target_desc = try self.resolveOptionalBoxyDescRef(frame, assign.target_desc);
                     const source_value = try self.getLocalChecked(frame, assign.source);
@@ -3066,9 +3074,9 @@ pub const Interpreter = struct {
                         assign.target_layout,
                         assign.source_mode,
                     );
-                    try self.setLocalChecked(frame, current, assign.target, unboxed.value, false);
-                    frame.setLocalDesc(assign.target, unboxed.desc);
-                    if (self.store.getLocal(assign.target).boxy_desc) |desc_ref| {
+                    try self.setLocalChecked(frame, current, assign_stmt.target, unboxed.value, false);
+                    frame.setLocalDesc(assign_stmt.target, unboxed.desc);
+                    if (self.store.getLocal(assign_stmt.target).boxy_desc) |desc_ref| {
                         if (desc_ref.localOrNull()) |desc_local| {
                             const desc = unboxed.desc orelse return self.invariantFailedError(
                                 "LIR/interpreter invariant violated: boxy unbox produced no descriptor for descriptor-bearing target",
@@ -3077,9 +3085,10 @@ pub const Interpreter = struct {
                             try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)), false);
                         }
                     }
-                    current = assign.next;
+                    current = assign_stmt.next;
                 },
-                .assign_boxy_tag => |assign| {
+                .assign_boxy_tag => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     const target_desc = try self.resolveBoxyDescRef(frame, assign.target_desc);
                     const payload_desc = if (assign.payload_desc) |desc_ref|
                         try self.resolveBoxyDescRef(frame, desc_ref)
@@ -3093,25 +3102,26 @@ pub const Interpreter = struct {
                         assign.payload_layout,
                         payload_desc,
                         assign.payload_mode,
-                        self.store.getLocal(assign.target).layout_idx,
+                        self.store.getLocal(assign_stmt.target).layout_idx,
                     );
                     try self.setLocalChecked(
                         frame,
                         current,
-                        assign.target,
+                        assign_stmt.target,
                         constructed,
                         false,
                     );
-                    frame.setLocalDesc(assign.target, target_desc);
-                    current = assign.next;
+                    frame.setLocalDesc(assign_stmt.target, target_desc);
+                    current = assign_stmt.next;
                 },
-                .assign_boxy_tag_payload => |assign| {
+                .assign_boxy_tag_payload => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     const source_desc = try self.resolveBoxyDescRef(frame, assign.source_desc);
                     const source_value = try self.getLocalChecked(frame, assign.source);
-                    const target_layout = self.store.getLocal(assign.target).layout_idx;
+                    const target_layout = self.store.getLocal(assign_stmt.target).layout_idx;
                     const payload_read = try self.boxy_runtime.readBoxyTagPayloadByName(self.boxyFrameHooks(frame), source_value, self.store.getLocal(assign.source).layout_idx, source_desc, assign.tag_name, assign.payload_index, target_layout, assign.source_mode);
-                    try self.setLocalChecked(frame, current, assign.target, payload_read.value, false);
-                    frame.setLocalDesc(assign.target, try self.resolveOptionalBoxyDescRef(frame, payload_read.desc));
+                    try self.setLocalChecked(frame, current, assign_stmt.target, payload_read.value, false);
+                    frame.setLocalDesc(assign_stmt.target, try self.resolveOptionalBoxyDescRef(frame, payload_read.desc));
                     if (assign.target_desc) |target_desc| {
                         const payload_desc = payload_read.desc orelse {
                             return self.invariantFailedError(
@@ -3121,21 +3131,23 @@ pub const Interpreter = struct {
                         };
                         try self.setLocalChecked(frame, current, target_desc, try self.evalBoxyDescRefValue(frame, payload_desc), false);
                     }
-                    current = assign.next;
+                    current = assign_stmt.next;
                 },
-                .assign_boxy_inspect => |assign| {
+                .assign_boxy_inspect => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     const source_desc = try self.resolveBoxyDescRef(frame, assign.source_desc);
                     const source_value = try self.getLocalChecked(frame, assign.source);
                     try self.setLocalChecked(
                         frame,
                         current,
-                        assign.target,
+                        assign_stmt.target,
                         try self.inspectBoxyValue(frame, source_value, self.store.getLocal(assign.source).layout_idx, source_desc),
                         false,
                     );
-                    current = assign.next;
+                    current = assign_stmt.next;
                 },
-                .assign_boxy_eq => |assign| {
+                .assign_boxy_eq => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     const desc = try self.resolveBoxyDescRef(frame, assign.desc);
                     const value_layout = self.store.getLocal(assign.lhs).layout_idx;
                     if (self.store.getLocal(assign.rhs).layout_idx != value_layout) {
@@ -3151,12 +3163,13 @@ pub const Interpreter = struct {
                         value_layout,
                         desc,
                     );
-                    const result = try self.alloc(self.store.getLocal(assign.target).layout_idx);
+                    const result = try self.alloc(self.store.getLocal(assign_stmt.target).layout_idx);
                     result.write(u8, if (equal) 1 else 0);
-                    try self.setLocalChecked(frame, current, assign.target, result, false);
-                    current = assign.next;
+                    try self.setLocalChecked(frame, current, assign_stmt.target, result, false);
+                    current = assign_stmt.next;
                 },
-                .assign_boxy_hash => |assign| {
+                .assign_boxy_hash => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     const desc = try self.resolveBoxyDescRef(frame, assign.desc);
                     const state = try self.boxy_runtime.boxyHash(
                         self.boxyFrameHooks(frame),
@@ -3165,12 +3178,13 @@ pub const Interpreter = struct {
                         desc,
                         (try self.getLocalChecked(frame, assign.hasher)).read(u64),
                     );
-                    const result = try self.alloc(self.store.getLocal(assign.target).layout_idx);
+                    const result = try self.alloc(self.store.getLocal(assign_stmt.target).layout_idx);
                     result.write(u64, state);
-                    try self.setLocalChecked(frame, current, assign.target, result, false);
-                    current = assign.next;
+                    try self.setLocalChecked(frame, current, assign_stmt.target, result, false);
+                    current = assign_stmt.next;
                 },
-                .assign_boxy_adapt => |assign| {
+                .assign_boxy_adapt => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     const source_desc = if (assign.source_desc) |desc| try self.resolveBoxyDescRef(frame, desc) else null;
                     const target_desc = if (assign.target_desc) |desc| try self.resolveBoxyDescRef(frame, desc) else null;
                     const source_value = try self.getLocalChecked(frame, assign.source);
@@ -3182,9 +3196,9 @@ pub const Interpreter = struct {
                         assign.adapter,
                         assign.source_mode,
                     );
-                    try self.setLocalChecked(frame, current, assign.target, adapted.value, false);
-                    frame.setLocalDesc(assign.target, adapted.desc);
-                    if (self.store.getLocal(assign.target).boxy_desc) |desc_ref| {
+                    try self.setLocalChecked(frame, current, assign_stmt.target, adapted.value, false);
+                    frame.setLocalDesc(assign_stmt.target, adapted.desc);
+                    if (self.store.getLocal(assign_stmt.target).boxy_desc) |desc_ref| {
                         if (desc_ref.localOrNull()) |desc_local| {
                             const desc = adapted.desc orelse return self.invariantFailedError(
                                 "LIR/interpreter invariant violated: boxy adapter produced no descriptor for descriptor-bearing target",
@@ -3193,7 +3207,7 @@ pub const Interpreter = struct {
                             try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)), false);
                         }
                     }
-                    current = assign.next;
+                    current = assign_stmt.next;
                 },
                 .boxy_tag_match => |tag_match| {
                     const source_desc = try self.resolveBoxyDescRef(frame, tag_match.source_desc);
@@ -3259,7 +3273,7 @@ pub const Interpreter = struct {
                     current = assign.next;
                 },
                 .assign_tag => |assign| {
-                    const target_desc = try self.resolveOptionalBoxyDescRef(frame, assign.target_desc);
+                    const target_desc = try self.resolveOptionalBoxyDescRef(frame, self.store.optionalStmtRow(assign.target_desc));
                     const tag_value = try self.evalTagLiteral(
                         frame,
                         assign.variant_index,
@@ -3414,39 +3428,40 @@ pub const Interpreter = struct {
                     );
                     current = dec.next;
                 },
-                .decref_if_initialized => |dec| {
+                .decref_if_initialized => |dec_stmt| {
+                    const dec = self.store.stmtRow(dec_stmt.data);
                     const cond_value = try self.boxy_runtime.readSwitchValue(
-                        try self.getLocalChecked(frame, dec.cond),
-                        self.store.getLocal(dec.cond).layout_idx,
+                        try self.getLocalChecked(frame, dec_stmt.cond),
+                        self.store.getLocal(dec_stmt.cond).layout_idx,
                     );
                     if ((cond_value & dec.cond_mask) == dec.cond_mask) {
-                        if (builtin.mode == .debug and !frame.isAssigned(dec.value)) {
+                        if (builtin.mode == .debug and !frame.isAssigned(dec_stmt.value)) {
                             debugPrint(
                                 "LIR/interpreter invariant violated before decref_if_initialized: local {d} unassigned in proc {d} at stmt {d}\n",
-                                .{ @backingInt(dec.value), @backingInt(frame.proc_id), @backingInt(current) },
+                                .{ @backingInt(dec_stmt.value), @backingInt(frame.proc_id), @backingInt(current) },
                             );
                             self.debugDumpProc(frame.proc_id);
                         }
                         trace_rc.log("stmt decref_if_initialized: proc={d} stmt={d} cond={d} mask=0x{x} local={d} layout={d} ptr=0x{x}", .{
                             @backingInt(frame.proc_id),
                             @backingInt(current),
-                            @backingInt(dec.cond),
+                            @backingInt(dec_stmt.cond),
                             dec.cond_mask,
-                            @backingInt(dec.value),
-                            @backingInt(self.store.getLocal(dec.value).layout_idx),
-                            @intFromPtr((try self.getLocalChecked(frame, dec.value)).ptr),
+                            @backingInt(dec_stmt.value),
+                            @backingInt(self.store.getLocal(dec_stmt.value).layout_idx),
+                            @intFromPtr((try self.getLocalChecked(frame, dec_stmt.value)).ptr),
                         });
                         try self.performExplicitRcStmt(
                             frame,
                             .decref,
                             dec.rc,
-                            try self.getLocalChecked(frame, dec.value),
-                            self.store.getLocal(dec.value).layout_idx,
+                            try self.getLocalChecked(frame, dec_stmt.value),
+                            self.store.getLocal(dec_stmt.value).layout_idx,
                             0,
                             dec.atomicity,
                         );
                     }
-                    current = dec.next;
+                    current = dec_stmt.next;
                 },
                 .free => |free_stmt| {
                     if (builtin.mode == .debug and !frame.isAssigned(free_stmt.value)) {
@@ -9175,7 +9190,7 @@ test "interpreter turns a compiler host allocation failure into a Roc crash" {
     const with_capacity = try store.addCFStmt(.{ .assign_low_level = .{
         .target = list,
         .op = .list_with_capacity,
-        .rc_effect = base.LowLevel.list_with_capacity.rcEffect(),
+        .rc_effect = try store.addRcEffect(base.LowLevel.list_with_capacity.rcEffect()),
         .args = try store.addLocalSpan(&.{capacity}),
         .next = ret_stmt,
     } }, .test_fixture);

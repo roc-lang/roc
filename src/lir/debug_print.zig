@@ -104,14 +104,15 @@ const Printer = struct {
                         .f32_literal => |f| try writer.print("literal f32 {d}", .{f}),
                         .dec_literal => |d| try writer.print("literal dec {d}", .{d}),
                         .str_literal => try writer.writeAll("literal str"),
-                        .boxy_dynamic_num_literal => |l| try writer.print("literal boxy_dynamic_num {d}", .{l.value}),
-                        .boxy_dynamic_frac_literal => |l| try writer.print("literal boxy_dynamic_frac {d}", .{l.dec_bits}),
+                        .boxy_dynamic_num_literal => |l| try writer.print("literal boxy_dynamic_num {d}", .{self.store.stmtRow(l).value}),
+                        .boxy_dynamic_frac_literal => |l| try writer.print("literal boxy_dynamic_frac {d}", .{self.store.stmtRow(l).dec_bits}),
                         .static_data => |id| try writer.print("literal static_data s{d}", .{@backingInt(id)}),
                         .bytes_literal => try writer.writeAll("literal bytes"),
                         .proc_ref => |p| try writer.print("literal proc_ref p{d}", .{@backingInt(p)}),
                     }
-                    if (s.fresh_alternative) |proc| try writer.print(" fresh=p{d}", .{@backingInt(proc)});
-                    if (s.list_len) |len| try writer.print(" len={d}", .{len});
+                    const extra = self.store.stmtRowOrDefault(s.extra);
+                    if (extra.fresh_alternative) |proc| try writer.print(" fresh=p{d}", .{@backingInt(proc)});
+                    if (extra.list_len) |len| try writer.print(" len={d}", .{len});
                     try writer.writeAll("\n");
                     current = s.next;
                 },
@@ -125,15 +126,16 @@ const Printer = struct {
                     try writer.print("call p{d}(", .{@backingInt(s.proc)});
                     try self.writeLocals(s.args, writer);
                     try writer.writeByte(')');
-                    if (s.result_desc) |result_desc| {
+                    const extra = self.store.stmtRowOrDefault(s.extra);
+                    if (extra.result_desc) |result_desc| {
                         try writer.writeAll(" result_desc=");
                         try writeBoxyDescRef(result_desc, writer);
                     }
-                    if (s.out_desc) |out_desc| try writer.print(" out_desc=l{d}", .{@backingInt(out_desc)});
+                    if (extra.out_desc) |out_desc| try writer.print(" out_desc=l{d}", .{@backingInt(out_desc)});
                     if (s.is_cold) try writer.writeAll(" cold");
                     if (s.replaces_frame) try writer.writeAll(" replaces_frame");
                     if (s.drive != .none) try writer.print(" drive={s}", .{@tagName(s.drive)});
-                    if (s.returns_pending) |pending| {
+                    if (extra.returns_pending) |pending| {
                         try writer.writeAll(" returns_pending");
                         if (pending.result_desc) |result_desc| {
                             try writer.writeAll("=");
@@ -144,8 +146,9 @@ const Printer = struct {
                     try writer.writeByte('\n');
                     current = s.next;
                 },
-                .assign_call_erased => |s| {
-                    try self.writeTarget(s.target, indent, writer);
+                .assign_call_erased => |inline_s| {
+                    const s = self.store.stmtRow(inline_s.data);
+                    try self.writeTarget(inline_s.target, indent, writer);
                     try writer.print("call_erased l{d}(", .{@backingInt(s.closure)});
                     try self.writeLocals(s.args, writer);
                     try writer.writeByte(')');
@@ -169,10 +172,11 @@ const Printer = struct {
                         if (pending.keeps_own_desc) try writer.writeAll("=own");
                     }
                     try writer.writeByte('\n');
-                    current = s.next;
+                    current = inline_s.next;
                 },
-                .assign_packed_erased_fn => |s| {
-                    try self.writeTarget(s.target, indent, writer);
+                .assign_packed_erased_fn => |s_stmt| {
+                    const s = self.store.stmtRow(s_stmt.data);
+                    try self.writeTarget(s_stmt.target, indent, writer);
                     try writer.print("packed_erased_fn p{d}", .{@backingInt(s.proc)});
                     if (s.capture) |capture| {
                         try writer.print(" capture=l{d}", .{@backingInt(capture)});
@@ -191,10 +195,11 @@ const Printer = struct {
                         if (s.reuse_unique) try writer.writeAll(" unique");
                     }
                     try writer.writeByte('\n');
-                    current = s.next;
+                    current = s_stmt.next;
                 },
-                .assign_boxy_desc_ref => |s| {
-                    try self.writeTarget(s.target, indent, writer);
+                .assign_boxy_desc_ref => |inline_s| {
+                    const s = self.store.stmtRow(inline_s.data);
+                    try self.writeTarget(inline_s.target, indent, writer);
                     try writer.writeAll("boxy_desc_ref ");
                     try writeBoxyDescRef(s.desc, writer);
                     if (s.nested_index) |nested_index| {
@@ -221,7 +226,7 @@ const Printer = struct {
                         try writer.writeAll("]");
                     }
                     try writer.writeAll("\n");
-                    current = s.next;
+                    current = inline_s.next;
                 },
                 .assign_boxy_dict_ref => |s| {
                     try self.writeTarget(s.target, indent, writer);
@@ -235,8 +240,9 @@ const Printer = struct {
                     try writer.writeAll("\n");
                     current = s.next;
                 },
-                .assign_boxy_box => |s| {
-                    try self.writeTarget(s.target, indent, writer);
+                .assign_boxy_box => |s_stmt| {
+                    const s = self.store.stmtRow(s_stmt.data);
+                    try self.writeTarget(s_stmt.target, indent, writer);
                     try writer.print("boxy_box payload=l{d} layout=", .{@backingInt(s.payload)});
                     try writeLayout(self.layouts, s.payload_layout, writer);
                     if (s.payload_desc) |desc| {
@@ -244,10 +250,11 @@ const Printer = struct {
                         try writeBoxyDescRef(desc, writer);
                     }
                     try writer.print(" mode={s}\n", .{@tagName(s.payload_mode)});
-                    current = s.next;
+                    current = s_stmt.next;
                 },
-                .assign_boxy_record_update => |s| {
-                    try self.writeTarget(s.target, indent, writer);
+                .assign_boxy_record_update => |inline_s| {
+                    const s = self.store.stmtRow(inline_s.data);
+                    try self.writeTarget(inline_s.target, indent, writer);
                     try writer.print("boxy_record_update base=l{d} desc=", .{@backingInt(s.base)});
                     try writeBoxyDescRef(s.base_desc, writer);
                     try writer.print(" fields=l{d} layout=", .{@backingInt(s.fields)});
@@ -255,10 +262,11 @@ const Printer = struct {
                     try writer.writeAll(" desc=");
                     try writeBoxyDescRef(s.fields_desc, writer);
                     try writer.writeAll("\n");
-                    current = s.next;
+                    current = inline_s.next;
                 },
-                .assign_boxy_unbox => |s| {
-                    try self.writeTarget(s.target, indent, writer);
+                .assign_boxy_unbox => |s_stmt| {
+                    const s = self.store.stmtRow(s_stmt.data);
+                    try self.writeTarget(s_stmt.target, indent, writer);
                     try writer.print("boxy_unbox source=l{d} desc=", .{@backingInt(s.source)});
                     try writeBoxyDescRef(s.source_desc, writer);
                     if (s.target_desc) |target_desc| {
@@ -268,10 +276,11 @@ const Printer = struct {
                     try writer.writeAll(" target_layout=");
                     try writeLayout(self.layouts, s.target_layout, writer);
                     try writer.print(" mode={s}\n", .{@tagName(s.source_mode)});
-                    current = s.next;
+                    current = s_stmt.next;
                 },
-                .assign_boxy_adapt => |s| {
-                    try self.writeTarget(s.target, indent, writer);
+                .assign_boxy_adapt => |s_stmt| {
+                    const s = self.store.stmtRow(s_stmt.data);
+                    try self.writeTarget(s_stmt.target, indent, writer);
                     try writer.print("boxy_adapt source=l{d} adapter={d}", .{
                         @backingInt(s.source),
                         @backingInt(s.adapter),
@@ -285,31 +294,35 @@ const Printer = struct {
                         try writeBoxyDescRef(desc, writer);
                     }
                     try writer.print(" mode={s}\n", .{@tagName(s.source_mode)});
-                    current = s.next;
+                    current = s_stmt.next;
                 },
-                .assign_boxy_inspect => |s| {
-                    try self.writeTarget(s.target, indent, writer);
+                .assign_boxy_inspect => |s_stmt| {
+                    const s = self.store.stmtRow(s_stmt.data);
+                    try self.writeTarget(s_stmt.target, indent, writer);
                     try writer.print("boxy_inspect source=l{d} desc=", .{@backingInt(s.source)});
                     try writeBoxyDescRef(s.source_desc, writer);
                     try writer.print(" mode={s}\n", .{@tagName(s.source_mode)});
-                    current = s.next;
+                    current = s_stmt.next;
                 },
-                .assign_boxy_eq => |s| {
-                    try self.writeTarget(s.target, indent, writer);
+                .assign_boxy_eq => |inline_s| {
+                    const s = self.store.stmtRow(inline_s.data);
+                    try self.writeTarget(inline_s.target, indent, writer);
                     try writer.print("boxy_eq lhs=l{d} rhs=l{d} desc=", .{ @backingInt(s.lhs), @backingInt(s.rhs) });
                     try writeBoxyDescRef(s.desc, writer);
                     try writer.writeAll("\n");
-                    current = s.next;
+                    current = inline_s.next;
                 },
-                .assign_boxy_hash => |s| {
-                    try self.writeTarget(s.target, indent, writer);
+                .assign_boxy_hash => |inline_s| {
+                    const s = self.store.stmtRow(inline_s.data);
+                    try self.writeTarget(inline_s.target, indent, writer);
                     try writer.print("boxy_hash value=l{d} hasher=l{d} desc=", .{ @backingInt(s.value), @backingInt(s.hasher) });
                     try writeBoxyDescRef(s.desc, writer);
                     try writer.writeAll("\n");
-                    current = s.next;
+                    current = inline_s.next;
                 },
-                .assign_boxy_tag => |s| {
-                    try self.writeTarget(s.target, indent, writer);
+                .assign_boxy_tag => |s_stmt| {
+                    const s = self.store.stmtRow(s_stmt.data);
+                    try self.writeTarget(s_stmt.target, indent, writer);
                     try writer.writeAll("boxy_tag desc=");
                     try writeBoxyDescRef(s.target_desc, writer);
                     try writer.print(" tag={s}", .{self.store.getBoxyName(s.tag_name)});
@@ -323,10 +336,11 @@ const Printer = struct {
                         try writer.print(" mode={s}", .{@tagName(s.payload_mode)});
                     }
                     try writer.writeAll("\n");
-                    current = s.next;
+                    current = s_stmt.next;
                 },
-                .assign_boxy_tag_payload => |s| {
-                    try self.writeTarget(s.target, indent, writer);
+                .assign_boxy_tag_payload => |s_stmt| {
+                    const s = self.store.stmtRow(s_stmt.data);
+                    try self.writeTarget(s_stmt.target, indent, writer);
                     try writer.print("boxy_tag_payload source=l{d} desc=", .{@backingInt(s.source)});
                     try writeBoxyDescRef(s.source_desc, writer);
                     try writer.print(" tag={s} payload={d}", .{ self.store.getBoxyName(s.tag_name), s.payload_index });
@@ -334,7 +348,7 @@ const Printer = struct {
                         try writer.print(" target_desc=l{d}", .{@backingInt(target_desc)});
                     }
                     try writer.print(" mode={s}\n", .{@tagName(s.source_mode)});
-                    current = s.next;
+                    current = s_stmt.next;
                 },
                 .boxy_tag_match => |s| {
                     try writeIndent(indent, writer);
@@ -349,8 +363,9 @@ const Printer = struct {
                     try self.writeChainInner(gpa, s.on_miss, indent + 1, writer);
                     return;
                 },
-                .assign_call_dict => |s| {
-                    try self.writeTarget(s.target, indent, writer);
+                .assign_call_dict => |inline_s| {
+                    const s = self.store.stmtRow(inline_s.data);
+                    try self.writeTarget(inline_s.target, indent, writer);
                     try writer.writeAll("call_dict ");
                     try writeBoxyDictRef(s.dict, writer);
                     try writer.print(" method={d} slot={d} args=[", .{ @backingInt(s.method), s.method_slot });
@@ -365,7 +380,7 @@ const Printer = struct {
                         try writeBoxyDescRef(result_desc, writer);
                     }
                     try writer.print(" cold={}\n", .{s.is_cold});
-                    current = s.next;
+                    current = inline_s.next;
                 },
                 .assign_low_level => |s| {
                     try self.writeTarget(s.target, indent, writer);
@@ -394,7 +409,7 @@ const Printer = struct {
                 .assign_tag => |s| {
                     try self.writeTarget(s.target, indent, writer);
                     try writer.print("tag v{d} d{d}", .{ s.variant_index, s.discriminant });
-                    if (s.target_desc) |target_desc| {
+                    if (self.store.optionalStmtRow(s.target_desc)) |target_desc| {
                         try writer.writeAll(" desc=");
                         try writeBoxyDescRef(target_desc, writer);
                     }
@@ -461,17 +476,18 @@ const Printer = struct {
                     try writer.writeAll("\n");
                     current = s.next;
                 },
-                .decref_if_initialized => |s| {
+                .decref_if_initialized => |inline_s| {
+                    const s = self.store.stmtRow(inline_s.data);
                     try writeIndent(indent, writer);
                     try writer.print("decref_if_initialized cond=l{d} mask=0x{x} value=l{d} ", .{
-                        @backingInt(s.cond),
+                        @backingInt(inline_s.cond),
                         s.cond_mask,
-                        @backingInt(s.value),
+                        @backingInt(inline_s.value),
                     });
                     try writeRcHelper(s.rc, writer);
                     try writeAtomicity(s.atomicity, writer);
                     try writer.writeAll("\n");
-                    current = s.next;
+                    current = inline_s.next;
                 },
                 .free => |s| {
                     try writeIndent(indent, writer);
@@ -580,15 +596,16 @@ const Printer = struct {
                         try self.writeLocals(s.retained, writer);
                         try writer.writeAll("]");
                     }
-                    if (!s.maybe_uninitialized_params.isEmpty()) {
+                    const extra = self.store.stmtRowOrDefault(s.extra);
+                    if (!extra.maybe_uninitialized_params.isEmpty()) {
                         try writer.writeAll(" maybe_uninitialized=[");
-                        try self.writeLocals(s.maybe_uninitialized_params, writer);
+                        try self.writeLocals(extra.maybe_uninitialized_params, writer);
                         try writer.writeAll("]");
                         try writer.writeAll(" conditions=[");
-                        try self.writeLocals(s.maybe_uninitialized_conditions, writer);
+                        try self.writeLocals(extra.maybe_uninitialized_conditions, writer);
                         try writer.writeAll("]");
                         try writer.writeAll(" masks=[");
-                        const masks = self.store.getU64Span(s.maybe_uninitialized_condition_masks);
+                        const masks = self.store.getU64Span(extra.maybe_uninitialized_condition_masks);
                         for (0..masks.len) |index| {
                             const mask = GuardedList.at(masks, index);
                             if (index > 0) try writer.writeAll(", ");
@@ -961,50 +978,62 @@ test "debug print includes boxy statement surface" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const call = try store.addCFStmt(.{ .assign_call_dict = .{
         .target = result,
-        .dict = .{ .local = dict },
-        .method = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .method_slot = 2,
-        .args = call_args,
-        .hidden_args = hidden_args,
-        .result_desc = .{ .local = desc },
-        .is_cold = true,
+        .data = try store.addStmtRow(LIR.CallDictData, .{
+            .dict = .{ .local = dict },
+            .method = @fromBackingInt(@intCast(fixtureTableIndex(0))),
+            .method_slot = 2,
+            .args = call_args,
+            .hidden_args = hidden_args,
+            .result_desc = .{ .local = desc },
+            .is_cold = true,
+        }),
         .next = ret,
     } }, .test_fixture);
     const inspect = try store.addCFStmt(.{ .assign_boxy_inspect = .{
         .target = result,
-        .source = adapted,
-        .source_desc = .{ .local = desc },
-        .source_mode = .borrow,
+        .data = try store.addStmtRow(LIR.BoxyInspectData, .{
+            .source = adapted,
+            .source_desc = .{ .local = desc },
+            .source_mode = .borrow,
+        }),
         .next = call,
     } }, .test_fixture);
     const adapt = try store.addCFStmt(.{ .assign_boxy_adapt = .{
         .target = adapted,
-        .source = unboxed,
-        .adapter = @fromBackingInt(@intCast(5)),
-        .source_desc = .{ .local = desc },
-        .target_desc = .{ .local = desc },
-        .source_mode = .move,
+        .data = try store.addStmtRow(LIR.BoxyAdaptData, .{
+            .source = unboxed,
+            .adapter = @fromBackingInt(@intCast(5)),
+            .source_desc = .{ .local = desc },
+            .target_desc = .{ .local = desc },
+            .source_mode = .move,
+        }),
         .next = inspect,
     } }, .test_fixture);
     const unbox = try store.addCFStmt(.{ .assign_boxy_unbox = .{
         .target = unboxed,
-        .source = boxed,
-        .source_desc = .{ .local = desc },
-        .target_layout = .str,
-        .source_mode = .borrow,
+        .data = try store.addStmtRow(LIR.BoxyUnboxData, .{
+            .source = boxed,
+            .source_desc = .{ .local = desc },
+            .target_layout = .str,
+            .source_mode = .borrow,
+        }),
         .next = adapt,
     } }, .test_fixture);
     const box = try store.addCFStmt(.{ .assign_boxy_box = .{
         .target = boxed,
-        .payload = payload,
-        .payload_layout = .str,
-        .payload_desc = .{ .local = desc },
-        .payload_mode = .copy,
+        .data = try store.addStmtRow(LIR.BoxyBoxData, .{
+            .payload = payload,
+            .payload_layout = .str,
+            .payload_desc = .{ .local = desc },
+            .payload_mode = .copy,
+        }),
         .next = unbox,
     } }, .test_fixture);
     const desc_ref = try store.addCFStmt(.{ .assign_boxy_desc_ref = .{
         .target = desc,
-        .desc = .{ .static = @fromBackingInt(@intCast(4)) },
+        .data = try store.addStmtRow(LIR.BoxyDescRefData, .{
+            .desc = .{ .static = @fromBackingInt(@intCast(4)) },
+        }),
         .next = box,
     } }, .test_fixture);
     const dict_ref = try store.addCFStmt(.{ .assign_boxy_dict_ref = .{

@@ -150,7 +150,7 @@ test "range prove ordered procedure runs match whole-store constant arithmetic a
         const add = try store.addCFStmt(.{ .assign_low_level = .{
             .target = result,
             .op = .num_int_add_crash_on_overflow,
-            .rc_effect = .none(),
+            .rc_effect = try store.addRcEffect(.none()),
             .args = try store.addLocalSpan(&.{ lhs, rhs }),
             .next = done,
         } }, .test_fixture);
@@ -458,7 +458,7 @@ test "range prove reads a static list of copies' stated item count as its length
         const compare = try store.addCFStmt(.{ .assign_low_level = .{
             .target = in_range,
             .op = .num_is_lt,
-            .rc_effect = .none(),
+            .rc_effect = try store.addRcEffect(.none()),
             .args = try store.addLocalSpan(&.{ last, len }),
             .next = test_switch,
         } }, .test_fixture);
@@ -480,7 +480,7 @@ test "range prove reads a static list of copies' stated item count as its length
         const measure = try store.addCFStmt(.{ .assign_low_level = .{
             .target = len,
             .op = .list_len,
-            .rc_effect = LIR.LowLevel.list_len.rcEffect(),
+            .rc_effect = try store.addRcEffect(LIR.LowLevel.list_len.rcEffect()),
             .args = try store.addLocalSpan(&.{list}),
             .next = set_last,
         } }, .test_fixture);
@@ -490,7 +490,9 @@ test "range prove reads a static list of copies' stated item count as its length
                 // The prover reads only the literal's stated length, never its
                 // static data.
                 .value = .{ .static_data = undefined },
-                .list_len = list_len,
+                .extra = try store.addOptionalStmtRow(LIR.LiteralExtra, .{
+                    .list_len = list_len,
+                }),
                 .next = measure,
             },
         }, .test_fixture);
@@ -4385,7 +4387,7 @@ const Pass = struct {
             };
             const params = self.store.getLocalSpan(join.params);
             if (GuardedList.borrowLen(params) != 1) continue;
-            if (!join.maybe_uninitialized_params.isEmpty()) continue;
+            if (!self.store.stmtRowOrDefault(join.extra).maybe_uninitialized_params.isEmpty()) continue;
             const param = GuardedList.at(params, 0);
             if (self.localLayout(param) != .bool) continue;
 
@@ -4751,7 +4753,7 @@ const Pass = struct {
                     },
                     .assign_literal => |s| {
                         try self.visited.put(current, {});
-                        try self.modelLiteral(s.target, s.value, s.list_len);
+                        try self.modelLiteral(s.target, s.value, self.store.stmtRowOrDefault(s.extra).list_len);
                         current = s.next;
                     },
                     .assign_tag => |s| {
@@ -6033,9 +6035,10 @@ const Pass = struct {
                 self.deferred_rewrites = true;
             } else if (CheckedArithmetic.provenForm(s.op)) |proven| {
                 try self.recordProof(stmt);
+                const rc_effect = try self.store.addRcEffect(proven.rcEffect());
                 const ptr = &self.store.getCFStmtPtr(stmt).assign_low_level;
                 ptr.op = proven;
-                ptr.rc_effect = proven.rcEffect();
+                ptr.rc_effect = rc_effect;
                 self.rewrites += 1;
             }
         }
@@ -6126,8 +6129,9 @@ const Pass = struct {
         if (inner_entry.operation != entry.operation or inner_entry.mode != .crash_on_overflow) return false;
 
         const wrapping_op = CheckedArithmetic.member(entry.operation, .wrap);
+        const wrapping_effect = try self.store.addRcEffect(wrapping_op.rcEffect());
         self.store.getCFStmtPtr(chain.stmt).assign_low_level.op = wrapping_op;
-        self.store.getCFStmtPtr(chain.stmt).assign_low_level.rc_effect = wrapping_op.rcEffect();
+        self.store.getCFStmtPtr(chain.stmt).assign_low_level.rc_effect = wrapping_effect;
 
         if (outer_constant > max - chain.constant) {
             try self.rewriteAsArithmeticCrash(stmt, entry.operation);

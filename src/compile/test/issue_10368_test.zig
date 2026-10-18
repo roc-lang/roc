@@ -112,8 +112,8 @@ fn inspect(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLi
         if (stmt == .assign_low_level and stmt.assign_low_level.op == .list_map_prepare_reuse) {
             const assign = stmt.assign_low_level;
             prepare_count += 1;
-            try std.testing.expectEqual(@as(u64, 1), assign.rc_effect.consume_args);
-            try std.testing.expectEqual(@as(u64, 1), assign.rc_effect.result_aliases_consumed_args);
+            try std.testing.expectEqual(@as(u64, 1), store.stmtRow(assign.rc_effect).consume_args);
+            try std.testing.expectEqual(@as(u64, 1), store.stmtRow(assign.rc_effect).result_aliases_consumed_args);
         } else if (stmt == .incref and retainReachesPrepare(store, stmt.incref.next, stmt.incref.value)) {
             retained_prepare_count += 1;
         }

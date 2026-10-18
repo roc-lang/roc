@@ -18613,6 +18613,46 @@ result slot never escapes into a non-inlined call; every other builtin's
 shim has the builtin's own signature. Every call site of a builtin states the
 same signature, which is the wrapper's C ABI.
 
+### Statement Storage
+
+Every LIR statement occupies one fixed-size slot in the store's statement
+column: 48 bytes, holding the statement's kind and at most 44 bytes of inline
+fields aligned to 4 bytes. The LIR store is alive through the program's later
+memory peaks (code generation for compile-time evaluation, pack compiles, and
+dev builds), so a statement kind's inline fields are chosen by how often they
+are read and set, not by what the largest kind needs.
+
+Fields that do not fit live in out-of-line rows. A statement names a row by a
+`LIR.StmtRowId(Row)`, and each row type has its own column in the store
+(`LirStore.stmt_row_types`). Rows hold:
+
+- the payload of a rare, large statement kind (Boxy value statements, erased
+  calls, packed erased functions, dictionary calls, and conditional releases).
+  The statement keeps its target, its successor, and the few fields generic
+  statement walkers read inline; every other field is in the row
+- a low-level operation's reference-count effect, which is larger than every
+  inline payload
+- the rarely set fields of a common kind: a call's descriptors and pending
+  return, a literal's fresh form and stated length, a join's
+  maybe-uninitialized environment, and a tag's descriptor. Such a row is
+  optional: `none` names no row, meaning the tag has no descriptor or every
+  field of the row has its default (`optionalStmtRow`, `stmtRowOrDefault`)
+
+Rows are immutable. A rewrite that changes a field adds a new row and points
+the statement at it, and statements copied from one another share their rows.
+A row holds no statement id, no span a procedure rewrite prepares for
+mutation, and no other row id, which the store checks at compile time; a
+procedure rewrite therefore never takes a private copy of a row, and a body
+shard relocates the rows it adds exactly as it relocates its spans. The LIR
+image serializes each row column alongside the statements.
+
+Statement compaction (`ReachableProcs`, which runs before ARC and again after
+ARC and the tail-drive pass) drops every statement no reachable procedure
+reaches, then every row no remaining statement names, and releases the
+capacity both occupied. A procedure body that ARC or a procedure-local
+rewrite replaced therefore does not stay resident after the pass that
+replaced it.
+
 ### Statement Provenance
 
 Every LIR statement records where it came from and why it exists. This is the

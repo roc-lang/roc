@@ -173,7 +173,7 @@ fn testConcat(store: *LirStore, target: LocalId, args: []const LocalId, next: CF
     return try store.addCFStmt(.{ .assign_low_level = .{
         .target = target,
         .op = .str_concat,
-        .rc_effect = LowLevelOp.str_concat.rcEffect(),
+        .rc_effect = try store.addRcEffect(LowLevelOp.str_concat.rcEffect()),
         .args = try store.addLocalSpan(args),
         .next = next,
     } }, .test_fixture);

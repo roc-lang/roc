@@ -118,7 +118,7 @@ const Analysis = struct {
                 try self.joins.put(stmt.join.id, stmt_id);
             } else if (stmt == .assign_tag) {
                 const tag = stmt.assign_tag;
-                if (tag.payload == null and tag.target_desc == null and defs.get(tag.target) == 1) {
+                if (tag.payload == null and tag.target_desc == .none and defs.get(tag.target) == 1) {
                     try self.tag_defs.put(tag.target, tag.discriminant);
                 }
             } else if (stmt == .assign_literal) {
@@ -178,7 +178,7 @@ const Analysis = struct {
             if ((try visited.getOrPut(target)).found_existing) return null;
             const join_stmt = self.joins.get(target) orelse return null;
             const join = self.store.getCFStmtImmediate(join_stmt).join;
-            if (!plainJoin(join)) return null;
+            if (!plainJoin(self.store, join)) return null;
             const params = self.store.getLocalSpan(join.params);
             if (params.len == 0 or pending.count() != params.len) return null;
             env.clearRetainingCapacity();
@@ -267,7 +267,7 @@ const Analysis = struct {
                 if (exit_id == first_target) return null;
                 const exit_stmt = self.joins.get(exit_id) orelse return null;
                 const exit_join = self.store.getCFStmtImmediate(exit_stmt).join;
-                if (!plainJoin(exit_join) or exit_join.params.len != 0) return null;
+                if (!plainJoin(self.store, exit_join) or exit_join.params.len != 0) return null;
                 if (try self.reachableOutside(chain[0], exit_stmt)) return null;
                 if (try self.exitReads(exit_join.body, &changed)) return null;
             },
@@ -468,7 +468,7 @@ fn boolLiteralDiscriminant(value: LIR.LiteralValue) ?u32 {
 /// payload-free tags, literals, structs, and join-parameter writes.
 fn edgeStatement(stmt: LIR.CFStmt) bool {
     if (stmt == .assign_ref) return stmt.assign_ref.op == .local and stmt.assign_ref.take_kind == .none;
-    if (stmt == .assign_tag) return stmt.assign_tag.payload == null and stmt.assign_tag.target_desc == null;
+    if (stmt == .assign_tag) return stmt.assign_tag.payload == null and stmt.assign_tag.target_desc == .none;
     if (stmt == .assign_literal) return true;
     if (stmt == .assign_struct) return stmt.assign_struct.contents_desc == null;
     if (stmt == .set_local) return stmt.set_local.mode == .initialize_join_param;
@@ -490,8 +490,8 @@ fn withNext(stmt: LIR.CFStmt, next: CFStmtId) LIR.CFStmt {
 
 /// A join with ordinary parameters only: no retained units and no
 /// maybe-uninitialized environment.
-fn plainJoin(join: @FieldType(LIR.CFStmt, "join")) bool {
-    return join.retained.len == 0 and join.maybe_uninitialized_params.len == 0;
+fn plainJoin(store: *const LirStore, join: @FieldType(LIR.CFStmt, "join")) bool {
+    return join.retained.len == 0 and store.stmtRowOrDefault(join.extra).maybe_uninitialized_params.len == 0;
 }
 
 const testing = std.testing;
@@ -652,7 +652,7 @@ fn flagLoop(exit_reads: enum { steps, done }, true_flag: enum { tag, bool_litera
             const negate = try store.addCFStmt(.{ .assign_low_level = .{
                 .target = not_done,
                 .op = .bool_not,
-                .rc_effect = LIR.LowLevel.bool_not.rcEffect(),
+                .rc_effect = try store.addRcEffect(LIR.LowLevel.bool_not.rcEffect()),
                 .args = try store.addLocalSpan(&.{flag_copy}),
                 .next = test_flag,
             } }, .test_fixture);

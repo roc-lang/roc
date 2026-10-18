@@ -336,7 +336,7 @@ const UniquenessFixture = struct {
                 try s.addCFStmt(.{ .assign_low_level = .{
                     .target = result,
                     .op = .list_reverse,
-                    .rc_effect = core.LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+                    .rc_effect = try s.addRcEffect(core.LIR.LowLevel.RcEffect.runtimeUniqueness(1)),
                     .args = try s.addLocalSpan(&.{param}),
                     .next = ret,
                 } }, .test_fixture)
@@ -532,7 +532,7 @@ const OutcomeFixture = struct {
         const mutate = try s.addCFStmt(.{ .assign_low_level = .{
             .target = changed,
             .op = .list_reverse,
-            .rc_effect = core.LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+            .rc_effect = try s.addRcEffect(core.LIR.LowLevel.RcEffect.runtimeUniqueness(1)),
             .args = try s.addLocalSpan(&.{param}),
             .next = success,
         } }, .test_fixture);
@@ -569,7 +569,7 @@ const OutcomeFixture = struct {
         const caller_failure = try s.addCFStmt(.{ .assign_low_level = .{
             .target = answer,
             .op = .list_len,
-            .rc_effect = core.LIR.LowLevel.list_len.rcEffect(),
+            .rc_effect = try s.addRcEffect(core.LIR.LowLevel.list_len.rcEffect()),
             .args = try s.addLocalSpan(&.{input}),
             .next = caller_ret,
         } }, .test_fixture);

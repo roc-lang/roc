@@ -1522,7 +1522,8 @@ fn computeOutcomeRestitution(
                         valid = false;
                         break;
                     },
-                    .assign_packed_erased_fn => |assign| {
+                    .assign_packed_erased_fn => |assign_stmt| {
+                        const assign = store.stmtRow(assign_stmt.data);
                         if (assign.capture) |capture| {
                             if (!consumeOutcomeLocal(solution, active_param, &next_state.present, capture)) {
                                 valid = false;
@@ -1536,13 +1537,15 @@ fn computeOutcomeRestitution(
                             }
                         }
                     },
-                    .assign_boxy_box => |assign| {
+                    .assign_boxy_box => |assign_stmt| {
+                        const assign = store.stmtRow(assign_stmt.data);
                         if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.payload, assign.payload_mode)) {
                             valid = false;
                             break;
                         }
                     },
-                    .assign_boxy_record_update => |assign| {
+                    .assign_boxy_record_update => |assign_stmt| {
+                        const assign = store.stmtRow(assign_stmt.data);
                         if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.base, .borrow) or
                             !consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.fields, .move))
                         {
@@ -1550,13 +1553,15 @@ fn computeOutcomeRestitution(
                             break;
                         }
                     },
-                    inline .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag_payload => |assign| {
+                    inline .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag_payload => |assign_stmt| {
+                        const assign = store.stmtRow(assign_stmt.data);
                         if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.source, assign.source_mode)) {
                             valid = false;
                             break;
                         }
                     },
-                    .assign_boxy_eq => |assign| {
+                    .assign_boxy_eq => |assign_stmt| {
+                        const assign = store.stmtRow(assign_stmt.data);
                         if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.lhs, .borrow) or
                             !consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.rhs, .borrow))
                         {
@@ -1564,7 +1569,8 @@ fn computeOutcomeRestitution(
                             break;
                         }
                     },
-                    .assign_boxy_hash => |assign| {
+                    .assign_boxy_hash => |assign_stmt| {
+                        const assign = store.stmtRow(assign_stmt.data);
                         if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.value, .borrow) or
                             !consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.hasher, .borrow))
                         {
@@ -1572,7 +1578,8 @@ fn computeOutcomeRestitution(
                             break;
                         }
                     },
-                    .assign_boxy_tag => |assign| {
+                    .assign_boxy_tag => |assign_stmt| {
+                        const assign = store.stmtRow(assign_stmt.data);
                         if (assign.payload) |payload| {
                             if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, payload, assign.payload_mode)) {
                                 valid = false;
@@ -1584,7 +1591,7 @@ fn computeOutcomeRestitution(
                         const effect = if (!consume_dead_boxes and assign.op == .box_unbox)
                             assign.op.arcBorrowedResultVariant().?.rcEffect()
                         else
-                            assign.op.arcInferenceRcEffect(assign.rc_effect);
+                            assign.op.arcInferenceRcEffect(store.stmtRow(assign.rc_effect));
                         // Stored arguments may move their entry unit into the
                         // result instead of retaining it, just like aggregate
                         // operands. Neither transfer can promise restitution.
@@ -2753,11 +2760,12 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 .stmt = current,
             });
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
-            if (assign.result_desc) |desc| {
+            const extra = store.stmtRowOrDefault(assign.extra);
+            if (extra.result_desc) |desc| {
                 try liftBoxyDescRead(solver, desc);
                 if (desc.localOrNull()) |local| try liftVisibilitySeed(solver, local);
             }
-            if (assign.out_desc) |out_desc| {
+            if (extra.out_desc) |out_desc| {
                 try solver.binding_facts.append(allocator, .{ .fresh = out_desc });
                 try solver.unique_facts.append(allocator, .{ .foreign = out_desc });
                 try liftVisibilitySeed(solver, out_desc);
@@ -2777,11 +2785,12 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 }
             }
         },
-        .assign_call_erased => |assign| {
+        .assign_call_erased => |assign_stmt| {
+            const assign = store.stmtRow(assign_stmt.data);
             if (!LIR.erasedCallReuseFieldsMatch(assign)) {
                 solveInvariant("erased call reuse flag and ownership source disagreed");
             }
-            try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
+            try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
             if (assign.result_desc) |desc| {
                 try liftBoxyDescRead(solver, desc);
                 if (desc.localOrNull()) |local| try liftVisibilitySeed(solver, local);
@@ -2810,8 +2819,8 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 try liftVisibilitySeed(solver, arg_desc);
             }
             try liftVisibilitySeed(solver, assign.closure);
-            try liftVisibilitySeed(solver, assign.target);
-            try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
+            try liftVisibilitySeed(solver, assign_stmt.target);
+            try solver.unique_facts.append(allocator, .{ .foreign = assign_stmt.target });
             if (assign.reuse_source) |reuse_source| {
                 try solver.unique_facts.append(allocator, .{ .consume = .{ .local = reuse_source, .stmt = current } });
             } else {
@@ -2821,20 +2830,22 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 try solver.unique_facts.append(allocator, .{ .destroy = GuardedList.at(args, index) });
             }
         },
-        .assign_packed_erased_fn => |assign| {
+        .assign_packed_erased_fn => |assign_stmt| {
+            const assign = store.stmtRow(assign_stmt.data);
             solver.address_taken.set(@backingInt(assign.proc));
-            try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
+            try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
             if (assign.capture) |capture| try solver.binding_facts.append(allocator, .{ .demand = capture });
             if (assign.reuse) |reuse| try solver.binding_facts.append(allocator, .{ .demand = reuse });
-            if (assign.capture) |capture| try liftVisibilityLink(solver, assign.target, capture);
+            if (assign.capture) |capture| try liftVisibilityLink(solver, assign_stmt.target, capture);
             if (assign.result_desc) |desc| try liftBoxyDescRead(solver, desc);
-            try solver.unique_facts.append(allocator, .{ .birth = assign.target });
+            try solver.unique_facts.append(allocator, .{ .birth = assign_stmt.target });
             if (assign.capture) |capture| try solver.unique_facts.append(allocator, .{ .destroy = capture });
             if (assign.reuse) |reuse| try solver.unique_facts.append(allocator, .{ .consume = .{ .local = reuse, .stmt = current } });
         },
-        .assign_boxy_desc_ref => |assign| {
-            try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
-            try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
+        .assign_boxy_desc_ref => |assign_stmt| {
+            const assign = store.stmtRow(assign_stmt.data);
+            try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
+            try solver.unique_facts.append(allocator, .{ .foreign = assign_stmt.target });
             try liftBoxyDescRead(solver, assign.desc);
             if (assign.tag_residual_for) |desc| try liftBoxyDescRead(solver, desc);
             const captures = store.getLocalSpan(assign.captures);
@@ -2858,87 +2869,97 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 try solver.unique_facts.append(allocator, .{ .read = local });
             }
         },
-        .assign_boxy_box => |assign| {
-            try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
-            try solver.unique_facts.append(allocator, .{ .birth = assign.target });
+        .assign_boxy_box => |assign_stmt| {
+            const assign = store.stmtRow(assign_stmt.data);
+            try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
+            try solver.unique_facts.append(allocator, .{ .birth = assign_stmt.target });
             try liftBoxyTransfer(solver, assign.payload, assign.payload_mode, current);
             if (assign.source_desc) |desc| try liftBoxyDescRead(solver, desc);
             if (assign.payload_desc) |desc| try liftBoxyDescRead(solver, desc);
-            try liftVisibilityLink(solver, assign.target, assign.payload);
+            try liftVisibilityLink(solver, assign_stmt.target, assign.payload);
         },
-        .assign_boxy_record_update => |assign| {
-            try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
-            try solver.unique_facts.append(allocator, .{ .birth = assign.target });
+        .assign_boxy_record_update => |assign_stmt| {
+            const assign = store.stmtRow(assign_stmt.data);
+            try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
+            try solver.unique_facts.append(allocator, .{ .birth = assign_stmt.target });
             try liftBoxyTransfer(solver, assign.base, .borrow, current);
             try liftBoxyTransfer(solver, assign.fields, .move, current);
             try liftBoxyDescRead(solver, assign.base_desc);
             try liftBoxyDescRead(solver, assign.fields_desc);
-            try liftVisibilityLink(solver, assign.target, assign.base);
-            try liftVisibilityLink(solver, assign.target, assign.fields);
+            try liftVisibilityLink(solver, assign_stmt.target, assign.base);
+            try liftVisibilityLink(solver, assign_stmt.target, assign.fields);
         },
-        .assign_boxy_unbox => |assign| {
-            try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
-            try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
+        .assign_boxy_unbox => |assign_stmt| {
+            const assign = store.stmtRow(assign_stmt.data);
+            try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
+            try solver.unique_facts.append(allocator, .{ .foreign = assign_stmt.target });
             try liftBoxyTransfer(solver, assign.source, assign.source_mode, current);
             try liftBoxyDescRead(solver, assign.source_desc);
             if (assign.target_desc) |desc| try liftBoxyDescRead(solver, desc);
-            try liftVisibilityLink(solver, assign.target, assign.source);
+            try liftVisibilityLink(solver, assign_stmt.target, assign.source);
         },
-        .assign_boxy_adapt => |assign| {
-            try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
-            try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
+        .assign_boxy_adapt => |assign_stmt| {
+            const assign = store.stmtRow(assign_stmt.data);
+            try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
+            try solver.unique_facts.append(allocator, .{ .foreign = assign_stmt.target });
             try liftBoxyTransfer(solver, assign.source, assign.source_mode, current);
             if (assign.source_desc) |desc| try liftBoxyDescRead(solver, desc);
             if (assign.target_desc) |desc| try liftBoxyDescRead(solver, desc);
-            try liftVisibilityLink(solver, assign.target, assign.source);
+            try liftVisibilityLink(solver, assign_stmt.target, assign.source);
         },
-        .assign_boxy_inspect => |assign| {
-            try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
-            try solver.unique_facts.append(allocator, .{ .birth = assign.target });
+        .assign_boxy_inspect => |assign_stmt| {
+            const assign = store.stmtRow(assign_stmt.data);
+            try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
+            try solver.unique_facts.append(allocator, .{ .birth = assign_stmt.target });
             try liftBoxyTransfer(solver, assign.source, assign.source_mode, current);
             try liftBoxyDescRead(solver, assign.source_desc);
         },
-        .assign_boxy_eq => |assign| {
-            try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
-            try solver.unique_facts.append(allocator, .{ .birth = assign.target });
+        .assign_boxy_eq => |assign_stmt| {
+            const assign = store.stmtRow(assign_stmt.data);
+            try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
+            try solver.unique_facts.append(allocator, .{ .birth = assign_stmt.target });
             try liftBoxyTransfer(solver, assign.lhs, .borrow, current);
             try liftBoxyTransfer(solver, assign.rhs, .borrow, current);
             try liftBoxyDescRead(solver, assign.desc);
         },
-        .assign_boxy_hash => |assign| {
-            try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
-            try solver.unique_facts.append(allocator, .{ .birth = assign.target });
+        .assign_boxy_hash => |assign_stmt| {
+            const assign = store.stmtRow(assign_stmt.data);
+            try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
+            try solver.unique_facts.append(allocator, .{ .birth = assign_stmt.target });
             try liftBoxyTransfer(solver, assign.value, .borrow, current);
             try liftBoxyTransfer(solver, assign.hasher, .borrow, current);
             try liftBoxyDescRead(solver, assign.desc);
         },
-        .assign_boxy_tag => |assign| {
-            try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
-            try solver.unique_facts.append(allocator, .{ .birth = assign.target });
+        .assign_boxy_tag => |assign_stmt| {
+            const assign = store.stmtRow(assign_stmt.data);
+            try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
+            try solver.unique_facts.append(allocator, .{ .birth = assign_stmt.target });
             try liftBoxyDescRead(solver, assign.target_desc);
             if (assign.payload) |payload| {
                 try liftBoxyTransfer(solver, payload, assign.payload_mode, current);
-                try liftVisibilityLink(solver, assign.target, payload);
+                try liftVisibilityLink(solver, assign_stmt.target, payload);
             }
             if (assign.payload_desc) |desc| try liftBoxyDescRead(solver, desc);
         },
-        .assign_boxy_tag_payload => |assign| {
+        .assign_boxy_tag_payload => |assign_stmt| {
+            const assign = store.stmtRow(assign_stmt.data);
             switch (assign.source_mode) {
-                .borrow => try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = assign.source } }),
-                .copy, .move => try solver.binding_facts.append(allocator, .{ .fresh = assign.target }),
+                .borrow => try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign_stmt.target, .source = assign.source } }),
+                .copy, .move => try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target }),
             }
-            try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
+            try solver.unique_facts.append(allocator, .{ .foreign = assign_stmt.target });
             if (assign.target_desc) |target_desc| {
                 try solver.binding_facts.append(allocator, .{ .fresh = target_desc });
                 try solver.unique_facts.append(allocator, .{ .foreign = target_desc });
             }
             try liftBoxyTransfer(solver, assign.source, assign.source_mode, current);
             try liftBoxyDescRead(solver, assign.source_desc);
-            try liftVisibilityLink(solver, assign.target, assign.source);
+            try liftVisibilityLink(solver, assign_stmt.target, assign.source);
         },
-        .assign_call_dict => |assign| {
-            try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
-            try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
+        .assign_call_dict => |assign_stmt| {
+            const assign = store.stmtRow(assign_stmt.data);
+            try solver.binding_facts.append(allocator, .{ .fresh = assign_stmt.target });
+            try solver.unique_facts.append(allocator, .{ .foreign = assign_stmt.target });
             if (assign.dict.localOrNull()) |local| {
                 try solver.binding_facts.append(allocator, .{ .demand = local });
                 try solver.unique_facts.append(allocator, .{ .read = local });
@@ -2965,13 +2986,13 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 try solver.unique_facts.append(allocator, .{ .destroy = arg });
                 try liftVisibilitySeed(solver, arg);
             }
-            try liftVisibilitySeed(solver, assign.target);
+            try liftVisibilitySeed(solver, assign_stmt.target);
         },
         .assign_low_level => |assign| {
-            const rc_effect = inferenceRcEffect(solver, assign.op, assign.rc_effect);
+            const rc_effect = inferenceRcEffect(solver, assign.op, store.stmtRow(assign.rc_effect));
             const args = store.getLocalSpan(assign.args);
             if (assign.op.arcBorrowedResultVariant() != null and assign.op != .box_unbox) {
-                const consumed = assign.rc_effect.consume_args;
+                const consumed = store.stmtRow(assign.rc_effect).consume_args;
                 for (0..@min(GuardedList.borrowLen(args), 64)) |position| {
                     if ((consumed & (@as(u64, 1) << @as(u6, @intCast(position)))) == 0) continue;
                     try solver.binding_facts.append(allocator, .{ .consuming_result = .{
@@ -3075,7 +3096,7 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
         .assign_tag => |assign| {
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
             try solver.unique_facts.append(allocator, .{ .birth = assign.target });
-            if (assign.target_desc) |desc| {
+            if (store.optionalStmtRow(assign.target_desc)) |desc| {
                 try liftBoxyDescRead(solver, desc);
                 if (desc.localOrNull()) |local| try liftVisibilityLink(solver, assign.target, local);
             }
@@ -3186,9 +3207,10 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 if (solver.domain.indexOf(param)) |arc_index| solver.join_param.set(arc_index);
                 try solver.unique_facts.append(allocator, .{ .join_target = param });
             }
-            const maybe_uninitialized_params = store.getLocalSpan(join_stmt.maybe_uninitialized_params);
-            const maybe_uninitialized_conditions = store.getLocalSpan(join_stmt.maybe_uninitialized_conditions);
-            const maybe_uninitialized_condition_masks = store.getU64Span(join_stmt.maybe_uninitialized_condition_masks);
+            const join_extra = store.stmtRowOrDefault(join_stmt.extra);
+            const maybe_uninitialized_params = store.getLocalSpan(join_extra.maybe_uninitialized_params);
+            const maybe_uninitialized_conditions = store.getLocalSpan(join_extra.maybe_uninitialized_conditions);
+            const maybe_uninitialized_condition_masks = store.getU64Span(join_extra.maybe_uninitialized_condition_masks);
             if (maybe_uninitialized_params.len != maybe_uninitialized_conditions.len or maybe_uninitialized_params.len != maybe_uninitialized_condition_masks.len) {
                 solveInvariant("maybe-uninitialized join metadata arity mismatch");
             }
@@ -3285,7 +3307,7 @@ pub fn computePinnedProcs(
         if (stmt.* == .assign_literal and stmt.assign_literal.value == .proc_ref) {
             pinned.set(@backingInt(stmt.assign_literal.value.proc_ref));
         } else if (stmt.* == .assign_packed_erased_fn) {
-            pinned.set(@backingInt(stmt.assign_packed_erased_fn.proc));
+            pinned.set(@backingInt(store.stmtRow(stmt.assign_packed_erased_fn.data).proc));
         }
     }
     return pinned;
@@ -3557,7 +3579,7 @@ fn computeVisibilityFromLift(
                 }
             },
             .assign_tag => |assign| {
-                if (assign.target_desc) |target_desc| if (target_desc.localOrNull()) |local| {
+                if (store.optionalStmtRow(assign.target_desc)) |target_desc| if (target_desc.localOrNull()) |local| {
                     addEdge(&sets, rc_local, @backingInt(assign.target), @backingInt(local));
                 };
                 if (assign.payload) |payload| {
@@ -3565,27 +3587,33 @@ fn computeVisibilityFromLift(
                 }
             },
             .store_struct, .store_tag => {},
-            .assign_packed_erased_fn => |assign| {
+            .assign_packed_erased_fn => |assign_stmt| {
+                const assign = store.stmtRow(assign_stmt.data);
                 if (assign.capture) |capture| {
-                    addEdge(&sets, rc_local, @backingInt(assign.target), @backingInt(capture));
+                    addEdge(&sets, rc_local, @backingInt(assign_stmt.target), @backingInt(capture));
                 }
             },
-            .assign_boxy_box => |assign| {
-                addEdge(&sets, rc_local, @backingInt(assign.target), @backingInt(assign.payload));
+            .assign_boxy_box => |assign_stmt| {
+                const assign = store.stmtRow(assign_stmt.data);
+                addEdge(&sets, rc_local, @backingInt(assign_stmt.target), @backingInt(assign.payload));
             },
-            .assign_boxy_record_update => |assign| {
-                addEdge(&sets, rc_local, @backingInt(assign.target), @backingInt(assign.base));
-                addEdge(&sets, rc_local, @backingInt(assign.target), @backingInt(assign.fields));
+            .assign_boxy_record_update => |assign_stmt| {
+                const assign = store.stmtRow(assign_stmt.data);
+                addEdge(&sets, rc_local, @backingInt(assign_stmt.target), @backingInt(assign.base));
+                addEdge(&sets, rc_local, @backingInt(assign_stmt.target), @backingInt(assign.fields));
             },
-            inline .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_tag_payload => |assign| {
-                addEdge(&sets, rc_local, @backingInt(assign.target), @backingInt(assign.source));
+            inline .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_tag_payload => |assign_stmt| {
+                const assign = store.stmtRow(assign_stmt.data);
+                addEdge(&sets, rc_local, @backingInt(assign_stmt.target), @backingInt(assign.source));
             },
-            .assign_boxy_tag => |assign| {
+            .assign_boxy_tag => |assign_stmt| {
+                const assign = store.stmtRow(assign_stmt.data);
                 if (assign.payload) |payload| {
-                    addEdge(&sets, rc_local, @backingInt(assign.target), @backingInt(payload));
+                    addEdge(&sets, rc_local, @backingInt(assign_stmt.target), @backingInt(payload));
                 }
             },
-            .assign_call_dict => |assign| {
+            .assign_call_dict => |assign_stmt| {
+                const assign = store.stmtRow(assign_stmt.data);
                 if (assign.dict.localOrNull()) |local| seedLocal(&visible, rc_local, @backingInt(local));
                 if (assign.result_desc) |desc| if (desc.localOrNull()) |local| {
                     seedLocal(&visible, rc_local, @backingInt(local));
@@ -3602,7 +3630,7 @@ fn computeVisibilityFromLift(
                 for (0..GuardedList.borrowLen(hidden_args)) |index| {
                     seedLocal(&visible, rc_local, @backingInt(GuardedList.at(hidden_args, index)));
                 }
-                seedLocal(&visible, rc_local, @backingInt(assign.target));
+                seedLocal(&visible, rc_local, @backingInt(assign_stmt.target));
             },
             .str_match => |str_match| {
                 const steps = store.getStrMatchSteps(str_match.steps);
@@ -3634,12 +3662,12 @@ fn computeVisibilityFromLift(
             .assign_call => |assign| {
                 const callee = store.getProcSpec(assign.proc);
                 const args = store.getLocalSpan(assign.args);
-                if (assign.result_desc) |result_desc| {
+                if (store.stmtRowOrDefault(assign.extra).result_desc) |result_desc| {
                     if (result_desc.localOrNull()) |local| {
                         seedLocal(&visible, rc_local, @backingInt(local));
                     }
                 }
-                if (assign.out_desc) |out_desc| seedLocal(&visible, rc_local, @backingInt(out_desc));
+                if (store.stmtRowOrDefault(assign.extra).out_desc) |out_desc| seedLocal(&visible, rc_local, @backingInt(out_desc));
                 if (callee.body == null) {
                     // No body to flow through: everything at the boundary is
                     // host-visible.
@@ -3660,7 +3688,8 @@ fn computeVisibilityFromLift(
                     }
                 }
             },
-            .assign_call_erased => |assign| {
+            .assign_call_erased => |assign_stmt| {
+                const assign = store.stmtRow(assign_stmt.data);
                 // The callee is unknown; the boundary is treated like a
                 // pinned signature.
                 seedLocal(&visible, rc_local, @backingInt(assign.closure));
@@ -3678,7 +3707,7 @@ fn computeVisibilityFromLift(
                 for (0..GuardedList.borrowLen(arg_descs)) |arg_index| {
                     seedLocal(&visible, rc_local, @backingInt(GuardedList.at(arg_descs, arg_index)));
                 }
-                seedLocal(&visible, rc_local, @backingInt(assign.target));
+                seedLocal(&visible, rc_local, @backingInt(assign_stmt.target));
             },
             .assign_low_level => |assign| {
                 const target = @backingInt(assign.target);
@@ -3690,7 +3719,7 @@ fn computeVisibilityFromLift(
                     seedLocal(&visible, rc_local, target);
                     continue;
                 }
-                const effect = assign.op.arcInferenceRcEffect(assign.rc_effect);
+                const effect = assign.op.arcInferenceRcEffect(store.stmtRow(assign.rc_effect));
                 const args = store.getLocalSpan(assign.args);
                 const share_mask = effect.result_aliases_consumed_args |
                     effect.result_borrows_args |
@@ -4927,7 +4956,7 @@ const UniquenessComponentTask = struct {
                 const effect = if (!self.consume_dead_boxes and assign.op == .box_unbox)
                     assign.op.arcBorrowedResultVariant().?.rcEffect()
                 else
-                    assign.op.arcInferenceRcEffect(assign.rc_effect);
+                    assign.op.arcInferenceRcEffect(self.store.stmtRow(assign.rc_effect));
                 const args = self.store.getLocalSpan(assign.args);
                 for (0..@min(GuardedList.borrowLen(args), 64)) |position| {
                     if ((effect.may_runtime_uniqueness_check_args & (@as(u64, 1) << @as(u6, @intCast(position)))) == 0) continue;
@@ -5328,7 +5357,7 @@ fn settleUniquenessOracle(
                     const rc_effect = if (!consume_dead_boxes and assign.op == .box_unbox)
                         assign.op.arcBorrowedResultVariant().?.rcEffect()
                     else
-                        assign.op.arcInferenceRcEffect(assign.rc_effect);
+                        assign.op.arcInferenceRcEffect(store.stmtRow(assign.rc_effect));
                     const check_mask = rc_effect.may_runtime_uniqueness_check_args;
                     if (check_mask == 0) continue;
                     const args = store.getLocalSpan(assign.args);
@@ -5739,7 +5768,7 @@ fn computeUniquenessDetailed(
                     // A read of a static list of copies that names a fresh
                     // form is a birth if the read takes that form; which
                     // reads do is settled from where their values reach.
-                    .static_data => if (assign.fresh_alternative != null) {
+                    .static_data => if (store.stmtRowOrDefault(assign.extra).fresh_alternative != null) {
                         marks.noteBirth(&born, assign.target);
                         if (marks.indexOf(assign.target)) |target| try candidate_defs.append(allocator, .{ .stmt = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))), .target = target });
                     } else {
@@ -5762,7 +5791,7 @@ fn computeUniquenessDetailed(
             },
             .assign_call => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
-                if (assign.out_desc) |out_desc| {
+                if (store.stmtRowOrDefault(assign.extra).out_desc) |out_desc| {
                     marks.trackDef(&has_def, &multi_def, out_desc);
                     marks.destroy(&foreign_def, out_desc);
                 }
@@ -5834,9 +5863,10 @@ fn computeUniquenessDetailed(
                     }
                 }
             },
-            .assign_call_erased => |assign| {
-                marks.trackDef(&has_def, &multi_def, assign.target);
-                marks.destroy(&foreign_def, assign.target);
+            .assign_call_erased => |assign_stmt| {
+                const assign = store.stmtRow(assign_stmt.data);
+                marks.trackDef(&has_def, &multi_def, assign_stmt.target);
+                marks.destroy(&foreign_def, assign_stmt.target);
                 if (assign.out_desc) |out_desc| {
                     marks.trackDef(&has_def, &multi_def, out_desc);
                     marks.destroy(&foreign_def, out_desc);
@@ -5852,9 +5882,10 @@ fn computeUniquenessDetailed(
                     marks.destroy(&destroyed, arg);
                 }
             },
-            .assign_packed_erased_fn => |assign| {
-                marks.trackDef(&has_def, &multi_def, assign.target);
-                marks.noteBirth(&born, assign.target);
+            .assign_packed_erased_fn => |assign_stmt| {
+                const assign = store.stmtRow(assign_stmt.data);
+                marks.trackDef(&has_def, &multi_def, assign_stmt.target);
+                marks.noteBirth(&born, assign_stmt.target);
                 if (assign.capture) |capture| marks.destroy(&destroyed, capture);
                 if (assign.reuse) |reuse| try marks.consumeAt(allocator, &consumes, reuse, @intCast(stmt_index));
             },
@@ -5862,47 +5893,55 @@ fn computeUniquenessDetailed(
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.destroy(&foreign_def, assign.target);
             },
-            .assign_boxy_box => |assign| {
-                marks.trackDef(&has_def, &multi_def, assign.target);
-                marks.noteBirth(&born, assign.target);
+            .assign_boxy_box => |assign_stmt| {
+                const assign = store.stmtRow(assign_stmt.data);
+                marks.trackDef(&has_def, &multi_def, assign_stmt.target);
+                marks.noteBirth(&born, assign_stmt.target);
                 try marks.transfer(allocator, &consumes, &destroyed, assign.payload, assign.payload_mode, @intCast(stmt_index));
             },
-            .assign_boxy_record_update => |assign| {
-                marks.trackDef(&has_def, &multi_def, assign.target);
-                marks.noteBirth(&born, assign.target);
+            .assign_boxy_record_update => |assign_stmt| {
+                const assign = store.stmtRow(assign_stmt.data);
+                marks.trackDef(&has_def, &multi_def, assign_stmt.target);
+                marks.noteBirth(&born, assign_stmt.target);
                 try marks.transfer(allocator, &consumes, &destroyed, assign.base, .borrow, @intCast(stmt_index));
                 try marks.transfer(allocator, &consumes, &destroyed, assign.fields, .move, @intCast(stmt_index));
             },
-            inline .assign_boxy_unbox, .assign_boxy_adapt => |assign| {
-                marks.trackDef(&has_def, &multi_def, assign.target);
-                marks.destroy(&foreign_def, assign.target);
+            inline .assign_boxy_unbox, .assign_boxy_adapt => |assign_stmt| {
+                const assign = store.stmtRow(assign_stmt.data);
+                marks.trackDef(&has_def, &multi_def, assign_stmt.target);
+                marks.destroy(&foreign_def, assign_stmt.target);
                 try marks.transfer(allocator, &consumes, &destroyed, assign.source, assign.source_mode, @intCast(stmt_index));
             },
-            .assign_boxy_inspect => |assign| {
-                marks.trackDef(&has_def, &multi_def, assign.target);
-                marks.noteBirth(&born, assign.target);
+            .assign_boxy_inspect => |assign_stmt| {
+                const assign = store.stmtRow(assign_stmt.data);
+                marks.trackDef(&has_def, &multi_def, assign_stmt.target);
+                marks.noteBirth(&born, assign_stmt.target);
                 try marks.transfer(allocator, &consumes, &destroyed, assign.source, assign.source_mode, @intCast(stmt_index));
             },
-            .assign_boxy_eq => |assign| {
-                marks.trackDef(&has_def, &multi_def, assign.target);
-                marks.noteBirth(&born, assign.target);
+            .assign_boxy_eq => |assign_stmt| {
+                const assign = store.stmtRow(assign_stmt.data);
+                marks.trackDef(&has_def, &multi_def, assign_stmt.target);
+                marks.noteBirth(&born, assign_stmt.target);
                 try marks.transfer(allocator, &consumes, &destroyed, assign.lhs, .borrow, @intCast(stmt_index));
                 try marks.transfer(allocator, &consumes, &destroyed, assign.rhs, .borrow, @intCast(stmt_index));
             },
-            .assign_boxy_hash => |assign| {
-                marks.trackDef(&has_def, &multi_def, assign.target);
-                marks.noteBirth(&born, assign.target);
+            .assign_boxy_hash => |assign_stmt| {
+                const assign = store.stmtRow(assign_stmt.data);
+                marks.trackDef(&has_def, &multi_def, assign_stmt.target);
+                marks.noteBirth(&born, assign_stmt.target);
                 try marks.transfer(allocator, &consumes, &destroyed, assign.value, .borrow, @intCast(stmt_index));
                 try marks.transfer(allocator, &consumes, &destroyed, assign.hasher, .borrow, @intCast(stmt_index));
             },
-            .assign_boxy_tag => |assign| {
-                marks.trackDef(&has_def, &multi_def, assign.target);
-                marks.noteBirth(&born, assign.target);
+            .assign_boxy_tag => |assign_stmt| {
+                const assign = store.stmtRow(assign_stmt.data);
+                marks.trackDef(&has_def, &multi_def, assign_stmt.target);
+                marks.noteBirth(&born, assign_stmt.target);
                 if (assign.payload) |payload| try marks.transfer(allocator, &consumes, &destroyed, payload, assign.payload_mode, @intCast(stmt_index));
             },
-            .assign_boxy_tag_payload => |assign| {
-                marks.trackDef(&has_def, &multi_def, assign.target);
-                marks.destroy(&foreign_def, assign.target);
+            .assign_boxy_tag_payload => |assign_stmt| {
+                const assign = store.stmtRow(assign_stmt.data);
+                marks.trackDef(&has_def, &multi_def, assign_stmt.target);
+                marks.destroy(&foreign_def, assign_stmt.target);
                 if (assign.target_desc) |local| {
                     marks.trackDef(&has_def, &multi_def, local);
                     marks.destroy(&foreign_def, local);
@@ -5910,9 +5949,10 @@ fn computeUniquenessDetailed(
                 try marks.transfer(allocator, &consumes, &destroyed, assign.source, assign.source_mode, @intCast(stmt_index));
             },
             .boxy_tag_match => {},
-            .assign_call_dict => |assign| {
-                marks.trackDef(&has_def, &multi_def, assign.target);
-                marks.destroy(&foreign_def, assign.target);
+            .assign_call_dict => |assign_stmt| {
+                const assign = store.stmtRow(assign_stmt.data);
+                marks.trackDef(&has_def, &multi_def, assign_stmt.target);
+                marks.destroy(&foreign_def, assign_stmt.target);
                 const args = store.getLocalSpan(assign.args);
                 for (0..GuardedList.borrowLen(args)) |index| {
                     const arg = GuardedList.at(args, index);
@@ -5958,7 +5998,7 @@ fn computeUniquenessDetailed(
                 const rc_effect = if (!consume_dead_boxes and assign.op == .box_unbox)
                     assign.op.arcBorrowedResultVariant().?.rcEffect()
                 else
-                    assign.op.arcInferenceRcEffect(assign.rc_effect);
+                    assign.op.arcInferenceRcEffect(store.stmtRow(assign.rc_effect));
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 const args = store.getLocalSpan(assign.args);
                 // An op that neither allocates nor checks and whose result
@@ -6558,7 +6598,7 @@ fn computeUniquenessDetailed(
                     const rc_effect = if (!consume_dead_boxes and assign.op == .box_unbox)
                         assign.op.arcBorrowedResultVariant().?.rcEffect()
                     else
-                        assign.op.arcInferenceRcEffect(assign.rc_effect);
+                        assign.op.arcInferenceRcEffect(store.stmtRow(assign.rc_effect));
                     const args = store.getLocalSpan(assign.args);
                     for (0..@min(GuardedList.borrowLen(args), 64)) |position| {
                         if ((rc_effect.may_runtime_uniqueness_check_args & (@as(u64, 1) << @as(u6, @intCast(position)))) == 0) continue;
@@ -7403,7 +7443,7 @@ test "component uniqueness inventories join parameters incoming transfers and no
     const mutate = try f.store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
         .op = .list_reverse,
-        .rc_effect = LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.RcEffect.runtimeUniqueness(1)),
         .args = try f.store.addLocalSpan(&.{joined}),
         .next = try f.ret(result),
     } }, .test_fixture);
@@ -7448,7 +7488,7 @@ test "uniqueness seed masks compose through direct calls" {
     const leaf = try f.proc(&.{param}, try f.store.addCFStmt(.{ .assign_low_level = .{
         .target = reversed,
         .op = .list_reverse,
-        .rc_effect = LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.RcEffect.runtimeUniqueness(1)),
         .args = try f.store.addLocalSpan(&.{param}),
         .next = try f.ret(reversed),
     } }, .test_fixture), f.list);
@@ -7499,7 +7539,7 @@ test "uniqueness carries a candidate read's origin through a returned record fie
     const check = try f.store.addCFStmt(.{ .assign_low_level = .{
         .target = reversed,
         .op = .list_reverse,
-        .rc_effect = LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.RcEffect.runtimeUniqueness(1)),
         .args = try f.store.addLocalSpan(&.{first}),
         .next = try f.ret(reversed),
     } }, .test_fixture);
@@ -7513,7 +7553,9 @@ test "uniqueness carries a candidate read's origin through a returned record fie
     const read = try f.store.addCFStmt(.{ .assign_literal = .{
         .target = candidate,
         .value = .{ .static_data = static_list },
-        .fresh_alternative = fresh_form,
+        .extra = try f.store.addOptionalStmtRow(LIR.LiteralExtra, .{
+            .fresh_alternative = fresh_form,
+        }),
         .next = call,
     } }, .test_fixture);
     _ = try f.proc(&.{}, read, f.list);
@@ -7533,7 +7575,9 @@ test "uniqueness carries a candidate read's origin through a returned record fie
     const idle_read = try f.store.addCFStmt(.{ .assign_literal = .{
         .target = idle,
         .value = .{ .static_data = static_list },
-        .fresh_alternative = fresh_form,
+        .extra = try f.store.addOptionalStmtRow(LIR.LiteralExtra, .{
+            .fresh_alternative = fresh_form,
+        }),
         .next = idle_call,
     } }, .test_fixture);
     _ = try f.proc(&.{}, idle_read, f.list);
@@ -7580,7 +7624,7 @@ test "uniqueness vetoes a join cell's field that a call definition does not vouc
     const get = try f.store.addCFStmt(.{ .assign_low_level = .{
         .target = elem,
         .op = .list_get_unsafe,
-        .rc_effect = LIR.LowLevel.list_get_unsafe.rcEffect(),
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.list_get_unsafe.rcEffect()),
         .args = try f.store.addLocalSpan(&.{ callee_lists, callee_index }),
         .next = make_fresh,
     } }, .test_fixture);

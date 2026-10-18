@@ -6771,7 +6771,7 @@ fn generateBoxyValueOp(self: *Self, plan: boxy_call_plan.Plan) Allocator.Error!v
     try self.emitBoxyOutValue(target_layout, out_ptr);
 }
 
-fn generateBoxyCallDict(self: *Self, assign: anytype) Allocator.Error!void {
+fn generateBoxyCallDict(self: *Self, target: LIR.LocalId, assign: anytype) Allocator.Error!void {
     const arg_locals = self.store.getLocalSpan(assign.args);
     const arg_desc_locals = self.store.getLocalSpan(assign.arg_descs);
     const hidden_locals = self.store.getLocalSpan(assign.hidden_args);
@@ -6802,7 +6802,7 @@ fn generateBoxyCallDict(self: *Self, assign: anytype) Allocator.Error!void {
         break :blk ptr;
     };
 
-    const target_layout = self.procLocalLayoutIdx(assign.target);
+    const target_layout = self.procLocalLayoutIdx(target);
     const out_ptr = try self.allocBoxyOutPtr(target_layout);
     const out_desc_ptr = try self.allocBoxyOutDescPtr();
     try self.emitLocalGets(.{ out_ptr, out_desc_ptr });
@@ -6816,7 +6816,7 @@ fn generateBoxyCallDict(self: *Self, assign: anytype) Allocator.Error!void {
     if (assign.result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
     try self.emitI32Const(@intCast(@backingInt(target_layout)));
     try self.emitBoxyCall("roc_boxy_call_dict");
-    try self.bindBoxyOutDesc(assign.target, out_desc_ptr);
+    try self.bindBoxyOutDesc(target, out_desc_ptr);
     try self.emitBoxyOutValue(target_layout, out_ptr);
 }
 
@@ -7442,18 +7442,20 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         .assign_call => |assign| if (assign.replaces_frame) {
             try self.generateFrameReplacingCall(assign.proc, assign.args);
         } else {
+            const extra = self.store.stmtRowOrDefault(assign.extra);
             try self.generateCall(.{
                 .proc = assign.proc,
                 .args = assign.args,
                 .ret_layout = self.procLocalLayoutIdx(assign.target),
-                .out_desc = assign.out_desc,
+                .out_desc = extra.out_desc,
             });
-            try self.emitDrivePending(assign.drive, self.procLocalLayoutIdx(assign.target), assign.result_desc, assign.out_desc);
+            try self.emitDrivePending(assign.drive, self.procLocalLayoutIdx(assign.target), extra.result_desc, extra.out_desc);
             try self.bindAssignedLocal(assign.target);
-            if (assign.returns_pending) |pending| try self.emitReturnIfCallPending(pending);
+            if (extra.returns_pending) |pending| try self.emitReturnIfCallPending(pending);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
-        .assign_call_erased => |assign| {
+        .assign_call_erased => |assign_stmt| {
+            const assign = self.store.stmtRow(assign_stmt.data);
             try self.generateErasedCall(.{
                 .closure = assign.closure,
                 .args = assign.args,
@@ -7461,33 +7463,34 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 .arg_descs = assign.arg_descs,
                 .arg_desc_keys = assign.arg_desc_keys,
                 .arg_plan = assign.arg_plan,
-                .ret_layout = self.procLocalLayoutIdx(assign.target),
+                .ret_layout = self.procLocalLayoutIdx(assign_stmt.target),
                 .result_desc = assign.result_desc,
                 .out_desc = assign.out_desc,
                 .reuse_closure = assign.reuse_closure,
                 .deferred = assign.deferred,
             });
-            try self.emitDrivePending(assign.drive, self.procLocalLayoutIdx(assign.target), assign.result_desc, assign.out_desc);
-            try self.bindAssignedLocal(assign.target);
+            try self.emitDrivePending(assign.drive, self.procLocalLayoutIdx(assign_stmt.target), assign.result_desc, assign.out_desc);
+            try self.bindAssignedLocal(assign_stmt.target);
             if (assign.returns_pending) |pending| try self.emitReturnIfCallPending(pending);
-            try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
+            try work.append(wa, .{ .node = .{ .stmt_id = assign_stmt.next, .stop = stop } });
         },
-        .assign_packed_erased_fn => |assign| {
+        .assign_packed_erased_fn => |assign_stmt| {
+            const assign = self.store.stmtRow(assign_stmt.data);
             try self.generatePackedErasedFn(.{
                 .proc = assign.proc,
                 .capture = assign.capture,
-                .target_layout = self.procLocalLayoutIdx(assign.target),
+                .target_layout = self.procLocalLayoutIdx(assign_stmt.target),
                 .capture_layout = assign.capture_layout,
                 .on_drop = assign.on_drop,
                 .result_desc = assign.result_desc,
                 .reuse = assign.reuse,
                 .reuse_unique = assign.reuse_unique,
             });
-            try self.bindAssignedLocal(assign.target);
-            try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
+            try self.bindAssignedLocal(assign_stmt.target);
+            try work.append(wa, .{ .node = .{ .stmt_id = assign_stmt.next, .stop = stop } });
         },
         .assign_boxy_desc_ref => |assign| {
-            try self.generateBoxyDescRef(assign);
+            try self.generateBoxyDescRef(self.store.stmtRow(assign.data));
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
@@ -7497,15 +7500,16 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
         .assign_boxy_eq => |assign| {
-            if (builtin.mode == .debug and self.procLocalLayoutIdx(assign.rhs) != self.procLocalLayoutIdx(assign.lhs)) {
+            const data = self.store.stmtRow(assign.data);
+            if (builtin.mode == .debug and self.procLocalLayoutIdx(data.rhs) != self.procLocalLayoutIdx(data.lhs)) {
                 wasmInvariantFmt("WASM/codegen invariant violated: boxy equality operands had different layouts", .{});
             }
-            try self.generateBoxyValueOp(boxy_call_plan.forStatement(.assign_boxy_eq, assign));
+            try self.generateBoxyValueOp(boxy_call_plan.forStatement(.assign_boxy_eq, assign.target, data));
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
         inline .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload => |assign, tag| {
-            try self.generateBoxyValueOp(boxy_call_plan.forStatement(tag, assign));
+            try self.generateBoxyValueOp(boxy_call_plan.forStatement(tag, assign.target, self.store.stmtRow(assign.data)));
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
@@ -7519,7 +7523,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try work.append(wa, .{ .node = .{ .stmt_id = tag_match.on_match, .stop = stop } });
         },
         .assign_call_dict => |assign| {
-            try self.generateBoxyCallDict(assign);
+            try self.generateBoxyCallDict(assign.target, self.store.stmtRow(assign.data));
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
@@ -7803,9 +7807,10 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try self.generateRcStmt(.decref, dec.value, dec.rc, dec.atomicity, 1);
             try work.append(wa, .{ .node = .{ .stmt_id = dec.next, .stop = stop } });
         },
-        .decref_if_initialized => |dec| {
-            const cond_vt = try self.procLocalValType(dec.cond);
-            try self.emitProcLocal(dec.cond);
+        .decref_if_initialized => |dec_stmt| {
+            const dec = self.store.stmtRow(dec_stmt.data);
+            const cond_vt = try self.procLocalValType(dec_stmt.cond);
+            try self.emitProcLocal(dec_stmt.cond);
             switch (cond_vt) {
                 .i64 => {
                     try self.emitI64Const(@bitCast(dec.cond_mask));
@@ -7821,18 +7826,18 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 },
                 .f32, .f64, .v128 => wasmInvariantFmt(
                     "WASM/codegen invariant violated: decref_if_initialized condition local {d} had non-integer value type {s}",
-                    .{ @backingInt(dec.cond), @tagName(cond_vt) },
+                    .{ @backingInt(dec_stmt.cond), @tagName(cond_vt) },
                 ),
             }
             self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
             self.currentCode().append(self.allocator, 0x40) catch return error.OutOfMemory;
             self.cf_depth += 1;
 
-            try self.generateRcStmt(.decref, dec.value, dec.rc, dec.atomicity, 1);
+            try self.generateRcStmt(.decref, dec_stmt.value, dec.rc, dec.atomicity, 1);
 
             self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
             self.cf_depth -= 1;
-            try work.append(wa, .{ .node = .{ .stmt_id = dec.next, .stop = stop } });
+            try work.append(wa, .{ .node = .{ .stmt_id = dec_stmt.next, .stop = stop } });
         },
         .free => |free_stmt| {
             try self.generateRcStmt(.free, free_stmt.value, free_stmt.rc, free_stmt.atomicity, 1);
@@ -7904,18 +7909,18 @@ fn generateLiteral(self: *Self, target: ProcLocalId, value: LIR.LiteralValue) Al
         },
         .dec_literal => |lit| try self.generateI128Literal(lit),
         .str_literal => |str_idx| try self.generateStrLiteral(str_idx),
-        .boxy_dynamic_num_literal => |lit| try self.generateBoxyDynamicLiteral(
+        .boxy_dynamic_num_literal => |id| try self.generateBoxyDynamicLiteral(
             target,
-            lit.value,
-            lit.desc,
-            lit.default_layout,
+            self.store.stmtRow(id).value,
+            self.store.stmtRow(id).desc,
+            self.store.stmtRow(id).default_layout,
             false,
         ),
-        .boxy_dynamic_frac_literal => |lit| try self.generateBoxyDynamicLiteral(
+        .boxy_dynamic_frac_literal => |id| try self.generateBoxyDynamicLiteral(
             target,
-            lit.dec_bits,
-            lit.desc,
-            lit.default_layout,
+            self.store.stmtRow(id).dec_bits,
+            self.store.stmtRow(id).desc,
+            self.store.stmtRow(id).default_layout,
             true,
         ),
         .static_data => |id| try self.generateStaticDataLiteral(id, self.procLocalLayoutIdx(target)),
@@ -16046,7 +16051,7 @@ test "wasm backend fuses overflow predicate with matching wrapping result" {
     const wrapping_result = try store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
         .op = .num_int_add_wrap,
-        .rc_effect = LIR.LowLevel.num_int_add_wrap.rcEffect(),
+        .rc_effect = try store.addRcEffect(LIR.LowLevel.num_int_add_wrap.rcEffect()),
         .args = arithmetic_args,
         .next = ret_result,
     } }, .test_fixture);
@@ -16060,7 +16065,7 @@ test "wasm backend fuses overflow predicate with matching wrapping result" {
     const predicate = try store.addCFStmt(.{ .assign_low_level = .{
         .target = overflowed,
         .op = .num_int_add_overflows,
-        .rc_effect = LIR.LowLevel.num_int_add_overflows.rcEffect(),
+        .rc_effect = try store.addRcEffect(LIR.LowLevel.num_int_add_overflows.rcEffect()),
         .args = arithmetic_args,
         .next = choose,
     } }, .test_fixture);
@@ -16291,7 +16296,7 @@ fn timeProcCompileNs(allocator: Allocator, proc_count: usize) Allocator.Error!u6
         const add = try store.addCFStmt(.{ .assign_low_level = .{
             .target = sum,
             .op = .num_int_add_wrap,
-            .rc_effect = LIR.LowLevel.num_int_add_wrap.rcEffect(),
+            .rc_effect = try store.addRcEffect(LIR.LowLevel.num_int_add_wrap.rcEffect()),
             .args = try store.addLocalSpan(&.{ lhs, rhs }),
             .next = ret,
         } }, .test_fixture);
@@ -16356,7 +16361,7 @@ fn procCompileBindingRowsVisited(allocator: Allocator, proc_count: usize) Alloca
         const add = try store.addCFStmt(.{ .assign_low_level = .{
             .target = sum,
             .op = .num_int_add_wrap,
-            .rc_effect = LIR.LowLevel.num_int_add_wrap.rcEffect(),
+            .rc_effect = try store.addRcEffect(LIR.LowLevel.num_int_add_wrap.rcEffect()),
             .args = try store.addLocalSpan(&.{ lhs, rhs }),
             .next = ret,
         } }, .test_fixture);

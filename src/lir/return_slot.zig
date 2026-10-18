@@ -182,7 +182,7 @@ fn testLowLevel(store: *LirStore, target: LocalId, op: LowLevelOp, args: []const
     return try store.addCFStmt(.{ .assign_low_level = .{
         .target = target,
         .op = op,
-        .rc_effect = op.rcEffect(),
+        .rc_effect = try store.addRcEffect(op.rcEffect()),
         .args = try store.addLocalSpan(args),
         .next = next,
     } }, .test_fixture);

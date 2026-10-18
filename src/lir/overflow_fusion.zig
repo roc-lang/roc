@@ -114,7 +114,7 @@ test "finds an overflow result through false-arm aliases" {
     const consumer = try store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
         .op = .num_int_add_wrap,
-        .rc_effect = .none(),
+        .rc_effect = try store.addRcEffect(.none()),
         .args = consumer_args,
         .next = done,
     } }, .test_fixture);
@@ -139,7 +139,7 @@ test "finds an overflow result through false-arm aliases" {
     const predicate = try store.addCFStmt(.{ .assign_low_level = .{
         .target = overflowed,
         .op = .num_int_add_overflows,
-        .rc_effect = .none(),
+        .rc_effect = try store.addRcEffect(.none()),
         .args = predicate_args,
         .next = choose,
     } }, .test_fixture);
@@ -163,7 +163,7 @@ test "does not commute subtraction operands" {
     const consumer = try store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
         .op = .num_int_sub_wrap,
-        .rc_effect = .none(),
+        .rc_effect = try store.addRcEffect(.none()),
         .args = consumer_args,
         .next = done,
     } }, .test_fixture);
@@ -178,7 +178,7 @@ test "does not commute subtraction operands" {
     const predicate = try store.addCFStmt(.{ .assign_low_level = .{
         .target = overflowed,
         .op = .num_int_sub_overflows,
-        .rc_effect = .none(),
+        .rc_effect = try store.addRcEffect(.none()),
         .args = predicate_args,
         .next = choose,
     } }, .test_fixture);

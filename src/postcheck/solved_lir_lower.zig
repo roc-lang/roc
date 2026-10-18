@@ -2542,7 +2542,7 @@ const Lowerer = struct {
         if (self.return_forwarding_repeatable_depth != 0) {
             Common.invariant("static initializer lowering left a repeatable return-forwarding region active");
         }
-        self.resolveErasedCallOwnerUses(erased_owner_use_start);
+        try self.resolveErasedCallOwnerUses(erased_owner_use_start);
         const frame_locals = try self.writeFrameLocals(&proc_locals);
         const proc = self.result.store.getProcSpecPtr(initializer.proc);
         proc.body = body;
@@ -2709,7 +2709,7 @@ const Lowerer = struct {
                         body,
                     );
                 }
-                self.resolveErasedCallOwnerUses(erased_owner_use_start);
+                try self.resolveErasedCallOwnerUses(erased_owner_use_start);
 
                 const frame_locals = try self.writeFrameLocals(&proc_locals);
                 const proc = self.result.store.getProcSpec(proc_id);
@@ -3709,7 +3709,7 @@ const Lowerer = struct {
         return try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = .erased_capture_load,
-            .rc_effect = LIR.LowLevel.erased_capture_load.rcEffect(),
+            .rc_effect = try self.result.store.addRcEffect(LIR.LowLevel.erased_capture_load.rcEffect()),
             .args = try self.result.store.addLocalSpan(&[_]LIR.LocalId{ptr}),
             .next = next,
         } }, where.source());
@@ -3732,7 +3732,7 @@ const Lowerer = struct {
         return try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = .erased_capture_load,
-            .rc_effect = LIR.LowLevel.RcEffect.retainsResult(),
+            .rc_effect = try self.result.store.addRcEffect(LIR.LowLevel.RcEffect.retainsResult()),
             .args = try self.result.store.addLocalSpan(&[_]LIR.LocalId{ ptr, owner }),
             .next = next,
         } }, where.source());
@@ -5797,8 +5797,10 @@ const Lowerer = struct {
         return try self.result.store.addCFStmt(.{ .assign_literal = .{
             .target = target,
             .value = .{ .static_data = id },
-            .fresh_alternative = fresh_alternative,
-            .list_len = list_len,
+            .extra = try self.result.store.addOptionalStmtRow(LIR.LiteralExtra, .{
+                .fresh_alternative = fresh_alternative,
+                .list_len = list_len,
+            }),
             .next = next,
         } }, where.source());
     }
@@ -6255,7 +6257,7 @@ const Lowerer = struct {
         param_span: LIR.LocalSpan = undefined,
         maybe_uninitialized_span: LIR.LocalSpan = undefined,
         maybe_uninitialized_conditions_span: LIR.LocalSpan = undefined,
-        maybe_uninitialized_condition_masks_span: @FieldType(@FieldType(LIR.CFStmt, "join"), "maybe_uninitialized_condition_masks") = undefined,
+        maybe_uninitialized_condition_masks_span: @FieldType(LIR.JoinExtra, "maybe_uninitialized_condition_masks") = undefined,
         join_id: LIR.JoinPointId = undefined,
         body_stmt: LIR.CFStmtId = undefined,
     };
@@ -6274,7 +6276,7 @@ const Lowerer = struct {
         retained_span: LIR.LocalSpan = undefined,
         maybe_uninitialized_span: LIR.LocalSpan = undefined,
         maybe_uninitialized_conditions_span: LIR.LocalSpan = undefined,
-        maybe_uninitialized_condition_masks_span: @FieldType(@FieldType(LIR.CFStmt, "join"), "maybe_uninitialized_condition_masks") = undefined,
+        maybe_uninitialized_condition_masks_span: @FieldType(LIR.JoinExtra, "maybe_uninitialized_condition_masks") = undefined,
         lir_join_id: LIR.JoinPointId = undefined,
         body_stmt: LIR.CFStmtId = undefined,
     };
@@ -7157,8 +7159,10 @@ const Lowerer = struct {
             return .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
                 .value = .{ .static_data = id },
-                .fresh_alternative = fresh_alternative,
-                .list_len = list_len,
+                .extra = try self.result.store.addOptionalStmtRow(LIR.LiteralExtra, .{
+                    .fresh_alternative = fresh_alternative,
+                    .list_len = list_len,
+                }),
                 .next = next,
             } }, where.source()) };
         }
@@ -7832,11 +7836,13 @@ const Lowerer = struct {
         const reuse = try self.erasedCallableReuseForPack(target, capture_layout);
         const assign = try self.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
             .target = target,
-            .proc = try self.markReachableFn(fn_id),
-            .capture = capture,
-            .capture_layout = capture_layout,
-            .on_drop = self.erasedCallableOnDrop(capture_layout),
-            .reuse = reuse,
+            .data = try self.result.store.addStmtRow(LIR.PackedErasedFnData, .{
+                .proc = try self.markReachableFn(fn_id),
+                .capture = capture,
+                .capture_layout = capture_layout,
+                .on_drop = self.erasedCallableOnDrop(capture_layout),
+                .reuse = reuse,
+            }),
             .next = next,
         } }, where.source());
         if (capture_ty) |ty| return .{ .tail = try self.captureRecordTask(where, capture.?, captures, capture_operands, ty, assign) };
@@ -8271,12 +8277,14 @@ const Lowerer = struct {
         const reuse_closure = try self.erasedResultDemand(abi_ret_ty) == .single_slot;
         const call_stmt = try self.result.store.addCFStmt(.{ .assign_call_erased = .{
             .target = call_target,
-            .closure = callee,
-            .args = try self.result.store.addLocalSpan(args.ids),
-            .arg_layouts = try self.appendErasedArgumentLayouts(args.ids),
-            .arg_plan = try self.erasedCallArgsPlan(args.ids),
-            .reuse_closure = reuse_closure,
-            .reuse_source = if (reuse_closure) callee else null,
+            .data = try self.result.store.addStmtRow(LIR.ErasedCallData, .{
+                .closure = callee,
+                .args = try self.result.store.addLocalSpan(args.ids),
+                .arg_layouts = try self.appendErasedArgumentLayouts(args.ids),
+                .arg_plan = try self.erasedCallArgsPlan(args.ids),
+                .reuse_closure = reuse_closure,
+                .reuse_source = if (reuse_closure) callee else null,
+            }),
             .next = after_call,
         } }, where.source());
         if (reuse_closure) {
@@ -8449,7 +8457,7 @@ const Lowerer = struct {
             const hint = try self.result.store.addCFStmt(.{ .assign_low_level = .{
                 .target = try self.addLocalForLayout(.zst),
                 .op = .list_prefetch,
-                .rc_effect = LIR.LowLevel.list_prefetch.rcEffect(),
+                .rc_effect = try self.result.store.addRcEffect(LIR.LowLevel.list_prefetch.rcEffect()),
                 .args = try self.result.store.addLocalSpan(lowered.ids),
                 .next = alias,
             } }, where.source());
@@ -8480,7 +8488,7 @@ const Lowerer = struct {
             const current = try self.result.store.addCFStmt(.{ .assign_low_level = .{
                 .target = target,
                 .op = op,
-                .rc_effect = op.rcEffect(),
+                .rc_effect = try self.result.store.addRcEffect(op.rcEffect()),
                 .args = try self.result.store.addLocalSpan(lowered.ids),
                 .interchangeable = interchangeable,
                 .map_output_elem = map_output_elem,
@@ -8497,7 +8505,7 @@ const Lowerer = struct {
         const current = try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = lowered_op,
-            .rc_effect = lowered_op.rcEffect(),
+            .rc_effect = try self.result.store.addRcEffect(lowered_op.rcEffect()),
             .args = try self.result.store.addLocalSpan(lowered.ids),
             .next = next,
         } }, where.source());
@@ -9151,11 +9159,13 @@ const Lowerer = struct {
                 const stmt = try self.result.store.addCFStmt(.{ .join = .{
                     .id = task.join_id,
                     .params = task.param_span,
-                    .maybe_uninitialized_params = task.maybe_uninitialized_span,
-                    .maybe_uninitialized_conditions = task.maybe_uninitialized_conditions_span,
-                    .maybe_uninitialized_condition_masks = task.maybe_uninitialized_condition_masks_span,
                     .body = task.body_stmt,
                     .remainder = input.?,
+                    .extra = try self.result.store.addOptionalStmtRow(LIR.JoinExtra, .{
+                        .maybe_uninitialized_params = task.maybe_uninitialized_span,
+                        .maybe_uninitialized_conditions = task.maybe_uninitialized_conditions_span,
+                        .maybe_uninitialized_condition_masks = task.maybe_uninitialized_condition_masks_span,
+                    }),
                 } }, task.where.glue());
                 self.leaveLoop(task);
                 return .{ .ret = stmt };
@@ -9274,11 +9284,13 @@ const Lowerer = struct {
                     .id = task.lir_join_id,
                     .params = task.param_span,
                     .retained = task.retained_span,
-                    .maybe_uninitialized_params = task.maybe_uninitialized_span,
-                    .maybe_uninitialized_conditions = task.maybe_uninitialized_conditions_span,
-                    .maybe_uninitialized_condition_masks = task.maybe_uninitialized_condition_masks_span,
                     .body = task.body_stmt,
                     .remainder = input.?,
+                    .extra = try self.result.store.addOptionalStmtRow(LIR.JoinExtra, .{
+                        .maybe_uninitialized_params = task.maybe_uninitialized_span,
+                        .maybe_uninitialized_conditions = task.maybe_uninitialized_conditions_span,
+                        .maybe_uninitialized_condition_masks = task.maybe_uninitialized_condition_masks_span,
+                    }),
                 } }, task.where.glue());
                 self.leaveJoinPoint(task);
                 return .{ .ret = stmt };
@@ -9650,7 +9662,7 @@ const Lowerer = struct {
         return try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = op,
-            .rc_effect = op.rcEffect(),
+            .rc_effect = try self.result.store.addRcEffect(op.rcEffect()),
             .args = try self.result.store.addLocalSpan(&args),
             .next = next,
         } }, where.source());
@@ -9719,7 +9731,7 @@ const Lowerer = struct {
         return try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = slot.binding.slot,
             .op = .box_alloc_zeroed,
-            .rc_effect = LIR.LowLevel.box_alloc_zeroed.rcEffect(),
+            .rc_effect = try self.result.store.addRcEffect(LIR.LowLevel.box_alloc_zeroed.rcEffect()),
             .args = LIR.LocalSpan.empty(),
             .next = next,
         } }, where.source());
@@ -9752,7 +9764,7 @@ const Lowerer = struct {
         var current = try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = unit,
             .op = .ptr_store,
-            .rc_effect = LIR.LowLevel.ptr_store.rcEffect(),
+            .rc_effect = try self.result.store.addRcEffect(LIR.LowLevel.ptr_store.rcEffect()),
             .args = try self.result.store.addLocalSpan(&ptr_store_args),
             .next = after_store,
         } }, where.source());
@@ -10050,10 +10062,12 @@ const Lowerer = struct {
     /// not inspect completed control flow: every followed edge is an explicit
     /// representation-transparent producer edge, and ambiguity declines the
     /// outer-owner optimization in favor of consuming `closure` itself.
-    fn resolveErasedCallOwnerUses(self: *Lowerer, start: usize) void {
+    fn resolveErasedCallOwnerUses(self: *Lowerer, start: usize) Allocator.Error!void {
         for (self.erased_call_owner_uses.items[start..]) |use| {
             const call = &self.result.store.getCFStmtPtr(use.stmt).assign_call_erased;
-            call.reuse_source = self.resolveErasedOwner(use.closure) orelse use.closure;
+            var data = self.result.store.stmtRow(call.data);
+            data.reuse_source = self.resolveErasedOwner(use.closure) orelse use.closure;
+            call.data = try self.result.store.addStmtRow(LIR.ErasedCallData, data);
         }
         self.erased_call_owner_uses.shrinkRetainingCapacity(start);
     }
@@ -10243,7 +10257,7 @@ const Lowerer = struct {
         return try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = op,
-            .rc_effect = op.rcEffect(),
+            .rc_effect = try self.result.store.addRcEffect(op.rcEffect()),
             .args = try self.result.store.addLocalSpan(&args),
             .next = next,
         } }, where.source());
@@ -11452,7 +11466,7 @@ const Lowerer = struct {
         return try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = op,
-            .rc_effect = op.rcEffect(),
+            .rc_effect = try self.result.store.addRcEffect(op.rcEffect()),
             .args = try self.result.store.addLocalSpan(&args),
             .next = next,
         } }, where.source());
@@ -11867,7 +11881,7 @@ const Lowerer = struct {
         const compare_disc = try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = tag_union.same_disc,
             .op = eq_op,
-            .rc_effect = eq_op.rcEffect(),
+            .rc_effect = try self.result.store.addRcEffect(eq_op.rcEffect()),
             .args = try self.result.store.addLocalSpan(&[_]LIR.LocalId{ tag_union.lhs_disc, tag_union.rhs_disc }),
             .next = disc_switch,
         } }, where.source());
@@ -11902,14 +11916,14 @@ const Lowerer = struct {
             const lower_rhs = try self.result.store.addCFStmt(.{ .assign_low_level = .{
                 .target = rhs_bits,
                 .op = .simd_to_u128_bits,
-                .rc_effect = LIR.LowLevel.simd_to_u128_bits.rcEffect(),
+                .rc_effect = try self.result.store.addRcEffect(LIR.LowLevel.simd_to_u128_bits.rcEffect()),
                 .args = try self.result.store.addLocalSpan(&[_]LIR.LocalId{rhs}),
                 .next = compare,
             } }, where.source());
             return try self.result.store.addCFStmt(.{ .assign_low_level = .{
                 .target = lhs_bits,
                 .op = .simd_to_u128_bits,
-                .rc_effect = LIR.LowLevel.simd_to_u128_bits.rcEffect(),
+                .rc_effect = try self.result.store.addRcEffect(LIR.LowLevel.simd_to_u128_bits.rcEffect()),
                 .args = try self.result.store.addLocalSpan(&[_]LIR.LocalId{lhs}),
                 .next = lower_rhs,
             } }, where.source());
@@ -11925,7 +11939,7 @@ const Lowerer = struct {
             return try self.result.store.addCFStmt(.{ .assign_low_level = .{
                 .target = target,
                 .op = eq_op,
-                .rc_effect = eq_op.rcEffect(),
+                .rc_effect = try self.result.store.addRcEffect(eq_op.rcEffect()),
                 .args = try self.result.store.addLocalSpan(&args),
                 .next = next,
             } }, where.source());
@@ -11934,14 +11948,14 @@ const Lowerer = struct {
         const not_stmt = try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = not_op,
-            .rc_effect = not_op.rcEffect(),
+            .rc_effect = try self.result.store.addRcEffect(not_op.rcEffect()),
             .args = try self.result.store.addLocalSpan(&[_]LIR.LocalId{raw}),
             .next = next,
         } }, where.source());
         return try self.result.store.addCFStmt(.{ .assign_low_level = .{
             .target = raw,
             .op = eq_op,
-            .rc_effect = eq_op.rcEffect(),
+            .rc_effect = try self.result.store.addRcEffect(eq_op.rcEffect()),
             .args = try self.result.store.addLocalSpan(&args),
             .next = not_stmt,
         } }, where.source());
@@ -13101,11 +13115,13 @@ const Lowerer = struct {
                 if (task.target_variant.capture_ty == null and task.source_variant.capture_ty == null) {
                     return .{ .ret = try self.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
                         .target = target,
-                        .proc = try self.markReachableFn(task.target_variant.target),
-                        .capture = null,
-                        .capture_layout = null,
-                        .on_drop = .none,
-                        .reuse = try self.erasedCallableReuseForPack(target, null),
+                        .data = try self.result.store.addStmtRow(LIR.PackedErasedFnData, .{
+                            .proc = try self.markReachableFn(task.target_variant.target),
+                            .capture = null,
+                            .capture_layout = null,
+                            .on_drop = .none,
+                            .reuse = try self.erasedCallableReuseForPack(target, null),
+                        }),
                         .next = next,
                     } }, where.glue()) };
                 }
@@ -13118,11 +13134,13 @@ const Lowerer = struct {
                 const capture_layout = self.result.store.getLocal(capture).layout_idx;
                 const pack = try self.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
                     .target = target,
-                    .proc = try self.markReachableFn(task.target_variant.target),
-                    .capture = capture,
-                    .capture_layout = capture_layout,
-                    .on_drop = self.erasedCallableOnDrop(capture_layout),
-                    .reuse = try self.erasedCallableReuseForPack(target, capture_layout),
+                    .data = try self.result.store.addStmtRow(LIR.PackedErasedFnData, .{
+                        .proc = try self.markReachableFn(task.target_variant.target),
+                        .capture = capture,
+                        .capture_layout = capture_layout,
+                        .on_drop = self.erasedCallableOnDrop(capture_layout),
+                        .reuse = try self.erasedCallableReuseForPack(target, capture_layout),
+                    }),
                     .next = next,
                 } }, where.glue());
                 if (self.isZstLocal(task.source)) return .{ .ret = try self.assignZst(where, capture, pack) };

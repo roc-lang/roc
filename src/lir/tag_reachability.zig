@@ -226,8 +226,9 @@ const Pass = struct {
                 if (callee_index >= self.proc_returns.len) tagReachabilityInvariant("callee proc id exceeded proc table");
                 return try self.localInfoMut(s.target).mergeFrom(self.allocator, &self.proc_returns[callee_index]);
             },
-            .assign_call_erased => |s| {
-                var changed = self.localInfoMut(s.target).markAll(self.allocator);
+            .assign_call_erased => |inline_s| {
+                const s = self.store.stmtRow(inline_s.data);
+                var changed = self.localInfoMut(inline_s.target).markAll(self.allocator);
                 if (s.out_desc) |out_desc| {
                     if (self.localInfoMut(out_desc).markAll(self.allocator)) changed = true;
                 }
@@ -1049,9 +1050,11 @@ test "tag reachability retains branches for erased call results" {
     } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_call_erased = .{
         .target = result,
-        .closure = closure,
-        .args = LIR.LocalSpan.empty(),
-        .arg_plan = arg_plan,
+        .data = try store.addStmtRow(LIR.ErasedCallData, .{
+            .closure = closure,
+            .args = LIR.LocalSpan.empty(),
+            .arg_plan = arg_plan,
+        }),
         .next = disc_read,
     } }, .test_fixture);
     const proc = try store.addProcSpec(.{

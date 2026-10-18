@@ -65,7 +65,7 @@ fn lowLevelStmtWithUnique(store: *LirStore, target: LocalId, op: LowLevel, args:
     return try store.addCFStmt(.{ .assign_low_level = .{
         .target = target,
         .op = op,
-        .rc_effect = op.rcEffect(),
+        .rc_effect = try store.addRcEffect(op.rcEffect()),
         .args = try store.addLocalSpan(args),
         .unique_args = unique_args,
         .next = next,
@@ -1421,12 +1421,14 @@ test "tail-call proof consumes the explicit boxy adapter operation" {
         builder.adapters = adapters.items;
         const ret = try store.addCFStmt(.{ .ret = .{ .value = forwarded } }, .test_fixture);
         const adapt = try store.addCFStmt(.{ .assign_boxy_adapt = .{
-            .source = result,
             .target = forwarded,
-            .source_desc = null,
-            .target_desc = null,
-            .source_mode = .move,
-            .adapter = adapter_id,
+            .data = try store.addStmtRow(LIR.BoxyAdaptData, .{
+                .source = result,
+                .source_desc = null,
+                .target_desc = null,
+                .source_mode = .move,
+                .adapter = adapter_id,
+            }),
             .next = ret,
         } }, .test_fixture);
         const call = try store.addCFStmt(.{ .assign_call = .{

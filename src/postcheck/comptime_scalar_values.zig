@@ -315,7 +315,7 @@ fn emitWithCapacity(ctx: anytype, store: *core.LirStore, origin: LIR.StmtOrigin,
     const build = try store.addCFStmt(.{ .assign_low_level = .{
         .target = target,
         .op = .list_with_capacity,
-        .rc_effect = LIR.LowLevel.list_with_capacity.rcEffect(),
+        .rc_effect = try store.addRcEffect(LIR.LowLevel.list_with_capacity.rcEffect()),
         .args = try store.addLocalSpan(&[_]LIR.LocalId{capacity_local}),
         .next = next,
     } }, origin);
@@ -352,7 +352,7 @@ pub fn emitRepeat(ctx: anytype, store: *core.LirStore, layouts: *const layout.St
         const append = try store.addCFStmt(.{ .assign_low_level = .{
             .target = target,
             .op = .list_append_unsafe,
-            .rc_effect = LIR.LowLevel.list_append_unsafe.rcEffect(),
+            .rc_effect = try store.addRcEffect(LIR.LowLevel.list_append_unsafe.rcEffect()),
             .args = try store.addLocalSpan(&[_]LIR.LocalId{ reserved, element_local }),
             .next = next,
         } }, origin);
@@ -369,7 +369,7 @@ pub fn emitRepeat(ctx: anytype, store: *core.LirStore, layouts: *const layout.St
     const fill = try store.addCFStmt(.{ .assign_low_level = .{
         .target = target,
         .op = .list_append_range_within_unsafe,
-        .rc_effect = LIR.LowLevel.list_append_range_within_unsafe.rcEffect(),
+        .rc_effect = try store.addRcEffect(LIR.LowLevel.list_append_range_within_unsafe.rcEffect()),
         .args = try store.addLocalSpan(&[_]LIR.LocalId{ seeded, zero, rest }),
         .next = next,
     } }, origin);
@@ -378,7 +378,7 @@ pub fn emitRepeat(ctx: anytype, store: *core.LirStore, layouts: *const layout.St
     const seed = try store.addCFStmt(.{ .assign_low_level = .{
         .target = seeded,
         .op = .list_append_unsafe,
-        .rc_effect = LIR.LowLevel.list_append_unsafe.rcEffect(),
+        .rc_effect = try store.addRcEffect(LIR.LowLevel.list_append_unsafe.rcEffect()),
         .args = try store.addLocalSpan(&[_]LIR.LocalId{ reserved, element_local }),
         .next = zero_literal,
     } }, origin);
@@ -392,7 +392,7 @@ fn emitReserveAndElement(ctx: anytype, store: *core.LirStore, layouts: *const la
     const reserve = try store.addCFStmt(.{ .assign_low_level = .{
         .target = reserved,
         .op = .list_with_capacity,
-        .rc_effect = LIR.LowLevel.list_with_capacity.rcEffect(),
+        .rc_effect = try store.addRcEffect(LIR.LowLevel.list_with_capacity.rcEffect()),
         .args = try store.addLocalSpan(&[_]LIR.LocalId{capacity_local}),
         .next = build_element,
     } }, origin);

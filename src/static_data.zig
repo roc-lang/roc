@@ -428,7 +428,7 @@ const StaticInitializerMachine = struct {
                 },
                 .assign_packed_erased_fn => |assign| {
                     const target_layout = self.store().getLocal(assign.target).layout_idx;
-                    setLocal(locals, assign.target, try self.evalPackedErasedFn(locals, assign, target_layout));
+                    setLocal(locals, assign.target, try self.evalPackedErasedFn(locals, self.store().stmtRow(assign.data), target_layout));
                     current = assign.next;
                 },
                 .assign_low_level => |assign| {

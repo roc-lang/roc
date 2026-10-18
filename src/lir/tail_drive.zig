@@ -118,13 +118,14 @@ pub fn run(
                     .caller = @intCast(proc_index),
                     .callee = @backingInt(stmt.assign_call.proc),
                     .stmt = stmt_id,
-                    .returns = try returnOf(allocator, store, join_bodies.items, &late_desc_locals, stmt.assign_call),
+                    .returns = try returnOf(allocator, store, join_bodies.items, &late_desc_locals, stmt.assign_call.target, stmt.assign_call.next, store.stmtRowOrDefault(stmt.assign_call.extra).out_desc),
                 });
             } else if (stmt == .assign_call_erased) {
-                if (stmt.assign_call_erased.deferred) try deferred_calls.append(allocator, .{
+                const erased = store.stmtRow(stmt.assign_call_erased.data);
+                if (erased.deferred) try deferred_calls.append(allocator, .{
                     .caller = @intCast(proc_index),
                     .stmt = stmt_id,
-                    .returns = try returnOf(allocator, store, join_bodies.items, &late_desc_locals, stmt.assign_call_erased),
+                    .returns = try returnOf(allocator, store, join_bodies.items, &late_desc_locals, stmt.assign_call_erased.target, stmt.assign_call_erased.next, erased.out_desc),
                 });
             } else if (stmt == .assign_literal and stmt.assign_literal.value == .proc_ref) {
                 outside.set(@backingInt(stmt.assign_literal.value.proc_ref));
@@ -157,12 +158,14 @@ pub fn run(
     for (deferred_calls.items) |deferred| {
         const drive = driveAfter(store, &outside, deferred.caller, deferred.returns != .no);
         const updated = &store.getCFStmtPtr(deferred.stmt).assign_call_erased;
-        updated.drive = drive;
+        var data = store.stmtRow(updated.data);
+        data.drive = drive;
         // The conversions that follow would read a value that is not there
         // while the call is pending, so the procedure returns before them.
         if (deferred.returns == .converted and drive.canLeavePending()) {
-            updated.returns_pending = deferred.returns.converted;
+            data.returns_pending = deferred.returns.converted;
         }
+        updated.data = try store.addStmtRow(LIR.ErasedCallData, data);
         if (drive == .unless_caller_drives) store.getProcSpecPtr(@fromBackingInt(deferred.caller)).reads_caller_drives = true;
     }
     for (direct_calls.items) |call| {
@@ -174,7 +177,9 @@ pub fn run(
         // the caller's to make, before the conversions that follow read a
         // value that is not there yet.
         if (call.returns == .converted and drive.canLeavePending()) {
-            updated.returns_pending = call.returns.converted;
+            var extra = store.stmtRowOrDefault(updated.extra);
+            extra.returns_pending = call.returns.converted;
+            updated.extra = try store.addStmtRow(LIR.CallExtra, extra);
         }
         // A call that runs pending calls afterwards keeps its frame to do so.
         if (drive.canDriveHere()) updated.replaces_frame = false;
@@ -216,10 +221,11 @@ fn returnOf(
     store: *const LirStore,
     join_bodies: []const ?LIR.CFStmtId,
     late_desc_locals: *std.ArrayList(LateDescLocal),
-    call: anytype,
+    value: LIR.LocalId,
+    call_next: LIR.CFStmtId,
+    out_desc: ?LIR.LocalId,
 ) Allocator.Error!Returns {
-    const value: LIR.LocalId = call.target;
-    var current: LIR.CFStmtId = call.next;
+    var current: LIR.CFStmtId = call_next;
     var returned = value;
     // The value the latest conversion consumed; its counts bracket that
     // conversion.
@@ -231,7 +237,7 @@ fn returnOf(
     // returns right after a call that left another pending has none of them,
     // so the last conversion's descriptor is named without them.
     late_desc_locals.clearRetainingCapacity();
-    if (call.out_desc) |out_desc| try late_desc_locals.append(allocator, .{ .local = out_desc, .names = .returned });
+    if (out_desc) |desc| try late_desc_locals.append(allocator, .{ .local = desc, .names = .returned });
     // Each jump enters a join body, and a body that jumps back to its own
     // join never returns, so more jumps than joins is such a cycle.
     var jumps: usize = 0;
@@ -266,16 +272,17 @@ fn returnOf(
         }
         if (stmt.* == .assign_boxy_adapt) {
             const adapt = stmt.assign_boxy_adapt;
-            if (adapt.source != returned or adapt.source_mode != .move) return .no;
+            const adapt_data = store.stmtRow(adapt.data);
+            if (adapt_data.source != returned or adapt_data.source_mode != .move) return .no;
             converted_from = returned;
             returned = adapt.target;
-            converted_to = adapt.target_desc;
+            converted_to = adapt_data.target_desc;
             converts = true;
             current = adapt.next;
             continue;
         }
         if (stmt.* == .assign_boxy_desc_ref) {
-            const desc_ref = stmt.assign_boxy_desc_ref;
+            const desc_ref = store.stmtRow(stmt.assign_boxy_desc_ref.data);
             const names_whole_descriptor = desc_ref.nested_index == null and
                 desc_ref.box_payload_layout == null and
                 desc_ref.tag_payload == null and
@@ -283,7 +290,7 @@ fn returnOf(
                 desc_ref.tag_residual_for == null and
                 desc_ref.captures.len == 0;
             try late_desc_locals.append(allocator, .{
-                .local = desc_ref.target,
+                .local = stmt.assign_boxy_desc_ref.target,
                 .names = if (names_whole_descriptor) .{ .descriptor = desc_ref.desc } else .part,
             });
             current = stmt.assign_boxy_desc_ref.next;

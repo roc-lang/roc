@@ -417,7 +417,7 @@ fn certifyRcAtomicity(
         else if (stmt.* == .decref)
             .{ .value = stmt.decref.value, .atomicity = stmt.decref.atomicity }
         else if (stmt.* == .decref_if_initialized)
-            .{ .value = stmt.decref_if_initialized.value, .atomicity = stmt.decref_if_initialized.atomicity }
+            .{ .value = stmt.decref_if_initialized.value, .atomicity = store.stmtRow(stmt.decref_if_initialized.data).atomicity }
         else if (stmt.* == .free)
             .{ .value = stmt.free.value, .atomicity = stmt.free.atomicity }
         else
@@ -508,7 +508,7 @@ fn certifyUniqueArgs(
 
         for (proc_stmts.items) |current| {
             const stmt = store.getCFStmt(current);
-            if (stmt == .assign_literal and stmt.assign_literal.fresh_alternative != null) {
+            if (stmt == .assign_literal and store.stmtRowOrDefault(stmt.assign_literal.extra).fresh_alternative != null) {
                 diag.context_proc = proc_id;
                 diag.context_stmt = current;
                 diag.set("stmt={d}: a read still names a fresh form after ARC chose", .{@backingInt(current)});
@@ -518,7 +518,7 @@ fn certifyUniqueArgs(
             const assign = stmt.assign_low_level;
             if (assign.unique_args == 0) continue;
             const stmt_index = @backingInt(current);
-            if ((assign.unique_args & ~assign.rc_effect.may_runtime_uniqueness_check_args) != 0) {
+            if ((assign.unique_args & ~store.stmtRow(assign.rc_effect).may_runtime_uniqueness_check_args) != 0) {
                 diag.context_proc = proc_id;
                 diag.context_stmt = current;
                 diag.set("stmt={d}: unique_args bit outside the op's runtime-checked argument mask", .{stmt_index});
@@ -680,12 +680,15 @@ fn writeFailureContext(
             .init_uninitialized => |a| context.append(" target={d} next={d}", .{ @backingInt(a.target), @backingInt(a.next) }),
             .incref => |rc| context.append(" value={d} next={d}", .{ @backingInt(rc.value), @backingInt(rc.next) }),
             .decref => |rc| context.append(" value={d} next={d}", .{ @backingInt(rc.value), @backingInt(rc.next) }),
-            .decref_if_initialized => |rc| context.append(" cond={d}/0x{x} value={d} next={d}", .{
-                @backingInt(rc.cond),
-                rc.cond_mask,
-                @backingInt(rc.value),
-                @backingInt(rc.next),
-            }),
+            .decref_if_initialized => |rc_stmt| blk_rc: {
+                const rc = store.stmtRow(rc_stmt.data);
+                break :blk_rc context.append(" cond={d}/0x{x} value={d} next={d}", .{
+                    @backingInt(rc_stmt.cond),
+                    rc.cond_mask,
+                    @backingInt(rc_stmt.value),
+                    @backingInt(rc_stmt.next),
+                });
+            },
             .free => |rc| context.append(" value={d} next={d}", .{ @backingInt(rc.value), @backingInt(rc.next) }),
             .assign_call => |a| {
                 const sig = sigs.get(a.proc);
@@ -698,23 +701,25 @@ fn writeFailureContext(
                 appendLocalSpan(context, store, a.args);
                 context.append(" next={d}", .{@backingInt(a.next)});
             },
-            .assign_call_erased => |a| {
-                context.append(" target={d} closure={d} args=", .{ @backingInt(a.target), @backingInt(a.closure) });
+            .assign_call_erased => |inline_a| {
+                const a = store.stmtRow(inline_a.data);
+                context.append(" target={d} closure={d} args=", .{ @backingInt(inline_a.target), @backingInt(a.closure) });
                 appendLocalSpan(context, store, a.args);
                 if (a.result_desc) |result_desc| {
                     context.append(" result_desc=", .{});
                     appendBoxyDescRef(context, result_desc);
                 }
                 if (a.out_desc) |out_desc| context.append(" out_desc={d}", .{@backingInt(out_desc)});
-                context.append(" next={d}", .{@backingInt(a.next)});
+                context.append(" next={d}", .{@backingInt(inline_a.next)});
             },
             .assign_low_level => |a| {
                 context.append(" target={d} op={s} args=", .{ @backingInt(a.target), @tagName(a.op) });
                 appendLocalSpan(context, store, a.args);
                 context.append(" next={d}", .{@backingInt(a.next)});
             },
-            .assign_call_dict => |a| {
-                context.append(" target={d} method={d} slot={d} args=", .{ @backingInt(a.target), @backingInt(a.method), a.method_slot });
+            .assign_call_dict => |inline_a| {
+                const a = store.stmtRow(inline_a.data);
+                context.append(" target={d} method={d} slot={d} args=", .{ @backingInt(inline_a.target), @backingInt(a.method), a.method_slot });
                 appendLocalSpan(context, store, a.args);
                 context.append(" arg_descs=", .{});
                 appendLocalSpan(context, store, a.arg_descs);
@@ -724,7 +729,7 @@ fn writeFailureContext(
                     context.append(" result_desc=", .{});
                     appendBoxyDescRef(context, result_desc);
                 }
-                context.append(" next={d}", .{@backingInt(a.next)});
+                context.append(" next={d}", .{@backingInt(inline_a.next)});
             },
             .str_match => |a| context.append(" source={d} match={d} miss={d}", .{
                 @backingInt(a.source), @backingInt(a.on_match), @backingInt(a.on_miss),
@@ -762,11 +767,12 @@ fn writeFailureContext(
                 appendLocalSpan(context, store, a.fields);
                 context.append(" next={d}", .{@backingInt(a.next)});
             },
-            .assign_boxy_tag => |a| {
-                const target_layout_idx = store.getLocal(a.target).layout_idx;
+            .assign_boxy_tag => |inline_a| {
+                const a = store.stmtRow(inline_a.data);
+                const target_layout_idx = store.getLocal(inline_a.target).layout_idx;
                 const target_layout = layouts.getLayout(target_layout_idx);
                 context.append(" target={d} target_layout={d}:{s}:rc={}", .{
-                    @backingInt(a.target),
+                    @backingInt(inline_a.target),
                     @backingInt(target_layout_idx),
                     @tagName(target_layout.tag),
                     layouts.layoutContainsRefcounted(target_layout),
@@ -780,11 +786,12 @@ fn writeFailureContext(
                     context.append(" payload_desc=", .{});
                     appendBoxyDescRef(context, desc);
                 }
-                context.append(" next={d}", .{@backingInt(a.next)});
+                context.append(" next={d}", .{@backingInt(inline_a.next)});
             },
-            .assign_boxy_box => |a| {
+            .assign_boxy_box => |inline_a| {
+                const a = store.stmtRow(inline_a.data);
                 context.append(" target={d} payload={d} payload_layout={d} mode={s}", .{
-                    @backingInt(a.target),
+                    @backingInt(inline_a.target),
                     @backingInt(a.payload),
                     @backingInt(a.payload_layout),
                     @tagName(a.payload_mode),
@@ -793,11 +800,12 @@ fn writeFailureContext(
                     context.append(" payload_desc=", .{});
                     appendBoxyDescRef(context, desc);
                 }
-                context.append(" next={d}", .{@backingInt(a.next)});
+                context.append(" next={d}", .{@backingInt(inline_a.next)});
             },
-            .assign_boxy_record_update => |a| {
+            .assign_boxy_record_update => |inline_a| {
+                const a = store.stmtRow(inline_a.data);
                 context.append(" target={d} base={d} fields={d} fields_layout={d} base_desc=", .{
-                    @backingInt(a.target),
+                    @backingInt(inline_a.target),
                     @backingInt(a.base),
                     @backingInt(a.fields),
                     @backingInt(a.fields_layout),
@@ -805,7 +813,7 @@ fn writeFailureContext(
                 appendBoxyDescRef(context, a.base_desc);
                 context.append(" fields_desc=", .{});
                 appendBoxyDescRef(context, a.fields_desc);
-                context.append(" next={d}", .{@backingInt(a.next)});
+                context.append(" next={d}", .{@backingInt(inline_a.next)});
             },
             .assign_tag => |a| {
                 const target_layout_idx = store.getLocal(a.target).layout_idx;
@@ -822,9 +830,10 @@ fn writeFailureContext(
                 });
                 context.append(" next={d}", .{@backingInt(a.next)});
             },
-            .assign_boxy_unbox => |a| {
+            .assign_boxy_unbox => |inline_a| {
+                const a = store.stmtRow(inline_a.data);
                 context.append(" target={d} source={d} mode={s}", .{
-                    @backingInt(a.target),
+                    @backingInt(inline_a.target),
                     @backingInt(a.source),
                     @tagName(a.source_mode),
                 });
@@ -832,32 +841,44 @@ fn writeFailureContext(
                     context.append(" target_desc=", .{});
                     appendBoxyDescRef(context, desc);
                 }
-                context.append(" next={d}", .{@backingInt(a.next)});
+                context.append(" next={d}", .{@backingInt(inline_a.next)});
             },
-            .assign_boxy_tag_payload => |a| context.append(" target={d} source={d} mode={s} next={d}", .{
-                @backingInt(a.target),
-                @backingInt(a.source),
-                @tagName(a.source_mode),
-                @backingInt(a.next),
-            }),
-            .assign_boxy_inspect => |a| context.append(" target={d} source={d} mode={s} next={d}", .{
-                @backingInt(a.target),
-                @backingInt(a.source),
-                @tagName(a.source_mode),
-                @backingInt(a.next),
-            }),
-            .assign_boxy_eq => |a| context.append(" target={d} lhs={d} rhs={d} next={d}", .{
-                @backingInt(a.target),
-                @backingInt(a.lhs),
-                @backingInt(a.rhs),
-                @backingInt(a.next),
-            }),
-            .assign_boxy_hash => |a| context.append(" target={d} value={d} hasher={d} next={d}", .{
-                @backingInt(a.target),
-                @backingInt(a.value),
-                @backingInt(a.hasher),
-                @backingInt(a.next),
-            }),
+            .assign_boxy_tag_payload => |inline_a| blk_a: {
+                const a = store.stmtRow(inline_a.data);
+                break :blk_a context.append(" target={d} source={d} mode={s} next={d}", .{
+                    @backingInt(inline_a.target),
+                    @backingInt(a.source),
+                    @tagName(a.source_mode),
+                    @backingInt(inline_a.next),
+                });
+            },
+            .assign_boxy_inspect => |inline_a| blk_a: {
+                const a = store.stmtRow(inline_a.data);
+                break :blk_a context.append(" target={d} source={d} mode={s} next={d}", .{
+                    @backingInt(inline_a.target),
+                    @backingInt(a.source),
+                    @tagName(a.source_mode),
+                    @backingInt(inline_a.next),
+                });
+            },
+            .assign_boxy_eq => |inline_a| blk_a: {
+                const a = store.stmtRow(inline_a.data);
+                break :blk_a context.append(" target={d} lhs={d} rhs={d} next={d}", .{
+                    @backingInt(inline_a.target),
+                    @backingInt(a.lhs),
+                    @backingInt(a.rhs),
+                    @backingInt(inline_a.next),
+                });
+            },
+            .assign_boxy_hash => |inline_a| blk_a: {
+                const a = store.stmtRow(inline_a.data);
+                break :blk_a context.append(" target={d} value={d} hasher={d} next={d}", .{
+                    @backingInt(inline_a.target),
+                    @backingInt(a.value),
+                    @backingInt(a.hasher),
+                    @backingInt(inline_a.next),
+                });
+            },
             inline .assign_literal, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_adapt => |a| context.append(" target={d} next={d}", .{ @backingInt(a.target), @backingInt(a.next) }),
             .store_struct,
             .store_tag,
@@ -977,9 +998,10 @@ const MaybeUninitializedConditions = struct {
             const stmt = store.getCFStmtImmediate(stmt_id);
             if (stmt.* != .join) continue;
 
-            const params = store.getLocalSpan(stmt.join.maybe_uninitialized_params);
-            const conditions = store.getLocalSpan(stmt.join.maybe_uninitialized_conditions);
-            const masks = store.getU64Span(stmt.join.maybe_uninitialized_condition_masks);
+            const join_extra = store.stmtRowOrDefault(stmt.join.extra);
+            const params = store.getLocalSpan(join_extra.maybe_uninitialized_params);
+            const conditions = store.getLocalSpan(join_extra.maybe_uninitialized_conditions);
+            const masks = store.getU64Span(join_extra.maybe_uninitialized_condition_masks);
             if (params.len != conditions.len or params.len != masks.len) {
                 diag.context_stmt = stmt_id;
                 diag.set("stmt={d}: maybe-uninitialized join metadata arity mismatch", .{stmt_index});
@@ -3774,7 +3796,8 @@ const Certifier = struct {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocalSpan(assign.args);
                 },
-                .assign_call_erased => |assign| {
+                .assign_call_erased => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     self.diag.context_proc = self.current_proc;
                     self.diag.context_stmt = current;
                     try certifyErasedCallArgsPlan(
@@ -3786,7 +3809,7 @@ const Certifier = struct {
                         self.store.getLocalSpan(assign.args).len,
                         self.diag,
                     );
-                    try self.noteProcLocal(assign.target);
+                    try self.noteProcLocal(assign_stmt.target);
                     try self.noteProcLocal(assign.closure);
                     if (assign.reuse_source) |reuse_source| {
                         try self.noteProcLocal(reuse_source);
@@ -3798,16 +3821,18 @@ const Certifier = struct {
                     }
                     try self.noteProcLocalSpan(assign.args);
                 },
-                .assign_packed_erased_fn => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_packed_erased_fn => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     if (assign.capture) |capture| try self.noteProcLocal(capture);
                     if (assign.result_desc) |result_desc| {
                         if (result_desc.localOrNull()) |local| try self.noteProcLocal(local);
                     }
                     if (assign.reuse) |reuse| try self.noteProcLocal(reuse);
                 },
-                .assign_boxy_desc_ref => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_boxy_desc_ref => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     if (assign.desc.localOrNull()) |local| try self.noteProcLocal(local);
                     if (assign.tag_residual_for) |desc| if (desc.localOrNull()) |local| try self.noteProcLocal(local);
                     try self.noteProcLocalSpan(assign.captures);
@@ -3817,63 +3842,73 @@ const Certifier = struct {
                     if (assign.dict.localOrNull()) |local| try self.noteProcLocal(local);
                     try self.noteProcLocalSpan(assign.captures);
                 },
-                .assign_boxy_box => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_boxy_box => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     try self.noteProcLocal(assign.payload);
                     if (assign.payload_desc) |desc| if (desc.localOrNull()) |local| try self.noteProcLocal(local);
                 },
-                .assign_boxy_record_update => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_boxy_record_update => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     try self.noteProcLocal(assign.base);
                     try self.noteProcLocal(assign.fields);
                     if (assign.base_desc.localOrNull()) |local| try self.noteProcLocal(local);
                     if (assign.fields_desc.localOrNull()) |local| try self.noteProcLocal(local);
                 },
-                .assign_boxy_unbox => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_boxy_unbox => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     try self.noteProcLocal(assign.source);
                     if (assign.source_desc.localOrNull()) |local| try self.noteProcLocal(local);
                     if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try self.noteProcLocal(local);
                 },
-                .assign_boxy_adapt => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_boxy_adapt => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     try self.noteProcLocal(assign.source);
                     if (assign.source_desc) |desc| if (desc.localOrNull()) |local| try self.noteProcLocal(local);
                     if (assign.target_desc) |desc| if (desc.localOrNull()) |local| try self.noteProcLocal(local);
                 },
-                .assign_boxy_inspect => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_boxy_inspect => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     try self.noteProcLocal(assign.source);
                     if (assign.source_desc.localOrNull()) |local| try self.noteProcLocal(local);
                 },
-                .assign_boxy_eq => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_boxy_eq => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     try self.noteProcLocal(assign.lhs);
                     try self.noteProcLocal(assign.rhs);
                     if (assign.desc.localOrNull()) |local| try self.noteProcLocal(local);
                 },
-                .assign_boxy_hash => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_boxy_hash => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     try self.noteProcLocal(assign.value);
                     try self.noteProcLocal(assign.hasher);
                     if (assign.desc.localOrNull()) |local| try self.noteProcLocal(local);
                 },
-                .assign_boxy_tag => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_boxy_tag => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     if (assign.target_desc.localOrNull()) |local| try self.noteProcLocal(local);
                     if (assign.payload) |payload| try self.noteProcLocal(payload);
                     if (assign.payload_desc) |desc| {
                         if (desc.localOrNull()) |local| try self.noteProcLocal(local);
                     }
                 },
-                .assign_boxy_tag_payload => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_boxy_tag_payload => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     if (assign.target_desc) |target_desc| try self.noteProcLocal(target_desc);
                     try self.noteProcLocal(assign.source);
                     if (assign.source_desc.localOrNull()) |local| try self.noteProcLocal(local);
                 },
-                .assign_call_dict => |assign| {
-                    try self.noteProcLocal(assign.target);
+                .assign_call_dict => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
+                    try self.noteProcLocal(assign_stmt.target);
                     if (assign.dict.localOrNull()) |local| try self.noteProcLocal(local);
                     if (assign.result_desc) |result_desc| {
                         if (result_desc.localOrNull()) |local| try self.noteProcLocal(local);
@@ -4227,8 +4262,14 @@ const Certifier = struct {
             try body_clone.tryForEachStmtRead(self.store, current, &exposed, ExposedReads.note);
             if (body_clone.definedTarget(current)) |target| self.setReadBeforeRebindDef(&graph, node_index, target);
             switch (current) {
-                .assign_call_erased => |s| if (s.out_desc) |out_desc| self.setReadBeforeRebindDef(&graph, node_index, out_desc),
-                .assign_boxy_tag_payload => |s| if (s.target_desc) |target_desc| self.setReadBeforeRebindDef(&graph, node_index, target_desc),
+                .assign_call_erased => |inline_s| blk_s: {
+                    const s = self.store.stmtRow(inline_s.data);
+                    break :blk_s if (s.out_desc) |out_desc| self.setReadBeforeRebindDef(&graph, node_index, out_desc);
+                },
+                .assign_boxy_tag_payload => |inline_s| blk_s: {
+                    const s = self.store.stmtRow(inline_s.data);
+                    break :blk_s if (s.target_desc) |target_desc| self.setReadBeforeRebindDef(&graph, node_index, target_desc);
+                },
                 .init_uninitialized,
                 .assign_ref,
                 .assign_literal,
@@ -5492,11 +5533,12 @@ const Certifier = struct {
                     cursor = init.next;
                 },
                 .assign_call => |assign| {
-                    if (assign.result_desc) |result_desc| try self.requireBoxyDescRef(&state, result_desc);
+                    if (self.store.stmtRowOrDefault(assign.extra).result_desc) |result_desc| try self.requireBoxyDescRef(&state, result_desc);
                     try self.applyCall(&state, assign.target, self.sigs.get(assign.proc), assign.args);
                     cursor = assign.next;
                 },
-                .assign_call_erased => |assign| {
+                .assign_call_erased => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     if (!LIR.erasedCallReuseFieldsMatch(assign)) {
                         return self.fail("erased call reuse flag and ownership source disagreed", .{});
                     }
@@ -5508,11 +5550,12 @@ const Certifier = struct {
                         try self.requireLive(&state, reuse_source)
                     else
                         no_value;
-                    try self.applyCall(&state, assign.target, arc_sig.RcSig.all_owned, assign.args);
+                    try self.applyCall(&state, assign_stmt.target, arc_sig.RcSig.all_owned, assign.args);
                     if (assign.reuse_source) |reuse_source| try self.consumeUnit(&state, reuse_value, reuse_source);
-                    cursor = assign.next;
+                    cursor = assign_stmt.next;
                 },
-                .assign_packed_erased_fn => |assign| {
+                .assign_packed_erased_fn => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     if (assign.result_desc) |result_desc| try self.requireBoxyDescRef(&state, result_desc);
                     const capture_value = if (assign.capture) |capture|
                         try self.requireLive(&state, capture)
@@ -5522,8 +5565,8 @@ const Certifier = struct {
                         try self.requireLive(&state, reuse)
                     else
                         no_value;
-                    if (self.isRc(assign.target)) {
-                        const target_value = try self.bindFresh(&state, assign.target, 1, &.{});
+                    if (self.isRc(assign_stmt.target)) {
+                        const target_value = try self.bindFresh(&state, assign_stmt.target, 1, &.{});
                         if (assign.capture != null) {
                             try self.consumeIntoHolder(&state, capture_value, target_value);
                         }
@@ -5538,17 +5581,18 @@ const Certifier = struct {
                     } else if (assign.reuse != null) {
                         try self.consumeUnit(&state, reuse_value, assign.reuse.?);
                     }
-                    cursor = assign.next;
+                    cursor = assign_stmt.next;
                 },
-                .assign_boxy_desc_ref => |assign| {
+                .assign_boxy_desc_ref => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.requireBoxyDescRef(&state, assign.desc);
                     const captures = self.store.getLocalSpan(assign.captures);
                     for (0..GuardedList.borrowLen(captures)) |index| {
                         const local = GuardedList.at(captures, index);
                         _ = try self.requireLive(&state, local);
                     }
-                    _ = try self.bindBoxyOwnedTarget(&state, assign.target);
-                    cursor = assign.next;
+                    _ = try self.bindBoxyOwnedTarget(&state, assign_stmt.target);
+                    cursor = assign_stmt.next;
                 },
                 .assign_boxy_dict_ref => |assign| {
                     try self.requireBoxyDictRef(&state, assign.dict);
@@ -5559,84 +5603,93 @@ const Certifier = struct {
                     _ = try self.bindBoxyOwnedTarget(&state, assign.target);
                     cursor = assign.next;
                 },
-                .assign_boxy_box => |assign| {
+                .assign_boxy_box => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     if (assign.payload_desc) |desc| try self.requireBoxyDescRef(&state, desc);
-                    const target_value = try self.bindBoxyOwnedTarget(&state, assign.target);
+                    const target_value = try self.bindBoxyOwnedTarget(&state, assign_stmt.target);
                     try self.consumeBoxyTransferIntoHolder(&state, assign.payload, assign.payload_mode, target_value);
-                    cursor = assign.next;
+                    cursor = assign_stmt.next;
                 },
-                .assign_boxy_record_update => |assign| {
+                .assign_boxy_record_update => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.requireBoxyDescRef(&state, assign.base_desc);
                     try self.requireBoxyDescRef(&state, assign.fields_desc);
                     _ = try self.requireBoxyTransferSource(&state, assign.base, .borrow);
-                    const target_value = try self.bindBoxyOwnedTarget(&state, assign.target);
+                    const target_value = try self.bindBoxyOwnedTarget(&state, assign_stmt.target);
                     try self.consumeBoxyTransferIntoHolder(&state, assign.fields, .move, target_value);
-                    cursor = assign.next;
+                    cursor = assign_stmt.next;
                 },
-                .assign_boxy_unbox => |assign| {
+                .assign_boxy_unbox => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.requireBoxyDescRef(&state, assign.source_desc);
                     if (assign.target_desc) |desc| try self.requireBoxyDescRef(&state, desc);
                     const source_value = try self.requireBoxyTransferSource(&state, assign.source, assign.source_mode);
-                    if (self.isRc(assign.target)) {
+                    if (self.isRc(assign_stmt.target)) {
                         switch (assign.source_mode) {
-                            .move, .copy => _ = try self.bindFresh(&state, assign.target, 1, &.{}),
-                            .borrow => _ = try self.bindFresh(&state, assign.target, 0, &.{source_value}),
+                            .move, .copy => _ = try self.bindFresh(&state, assign_stmt.target, 1, &.{}),
+                            .borrow => _ = try self.bindFresh(&state, assign_stmt.target, 0, &.{source_value}),
                         }
                     }
-                    cursor = assign.next;
+                    cursor = assign_stmt.next;
                 },
-                .assign_boxy_adapt => |assign| {
+                .assign_boxy_adapt => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     if (assign.source_desc) |desc| try self.requireBoxyDescRef(&state, desc);
                     if (assign.target_desc) |desc| try self.requireBoxyDescRef(&state, desc);
-                    _ = try self.bindBoxyOwnedTarget(&state, assign.target);
+                    _ = try self.bindBoxyOwnedTarget(&state, assign_stmt.target);
                     _ = try self.requireBoxyTransferSource(&state, assign.source, assign.source_mode);
-                    cursor = assign.next;
+                    cursor = assign_stmt.next;
                 },
-                .assign_boxy_inspect => |assign| {
+                .assign_boxy_inspect => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.requireBoxyDescRef(&state, assign.source_desc);
-                    _ = try self.bindBoxyOwnedTarget(&state, assign.target);
+                    _ = try self.bindBoxyOwnedTarget(&state, assign_stmt.target);
                     _ = try self.requireBoxyTransferSource(&state, assign.source, assign.source_mode);
-                    cursor = assign.next;
+                    cursor = assign_stmt.next;
                 },
-                .assign_boxy_eq => |assign| {
+                .assign_boxy_eq => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.requireBoxyDescRef(&state, assign.desc);
                     _ = try self.requireLive(&state, assign.lhs);
                     _ = try self.requireLive(&state, assign.rhs);
-                    _ = try self.bindBoxyOwnedTarget(&state, assign.target);
-                    cursor = assign.next;
+                    _ = try self.bindBoxyOwnedTarget(&state, assign_stmt.target);
+                    cursor = assign_stmt.next;
                 },
-                .assign_boxy_hash => |assign| {
+                .assign_boxy_hash => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.requireBoxyDescRef(&state, assign.desc);
                     _ = try self.requireLive(&state, assign.value);
                     _ = try self.requireLive(&state, assign.hasher);
-                    _ = try self.bindBoxyOwnedTarget(&state, assign.target);
-                    cursor = assign.next;
+                    _ = try self.bindBoxyOwnedTarget(&state, assign_stmt.target);
+                    cursor = assign_stmt.next;
                 },
-                .assign_boxy_tag => |assign| {
+                .assign_boxy_tag => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.requireBoxyDescRef(&state, assign.target_desc);
                     if (assign.payload_desc) |desc| try self.requireBoxyDescRef(&state, desc);
-                    const target_value = try self.bindBoxyOwnedTarget(&state, assign.target);
+                    const target_value = try self.bindBoxyOwnedTarget(&state, assign_stmt.target);
                     if (assign.payload) |payload| {
                         try self.consumeBoxyTransferIntoHolder(&state, payload, assign.payload_mode, target_value);
                     }
-                    cursor = assign.next;
+                    cursor = assign_stmt.next;
                 },
-                .assign_boxy_tag_payload => |assign| {
+                .assign_boxy_tag_payload => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.requireBoxyDescRef(&state, assign.source_desc);
                     const source_value = try self.requireBoxyTransferSource(&state, assign.source, assign.source_mode);
-                    if (self.isRc(assign.target)) {
+                    if (self.isRc(assign_stmt.target)) {
                         switch (assign.source_mode) {
                             .borrow => {
                                 if (source_value == no_value) {
-                                    _ = try self.bindBorrowedFromImplicitLive(&state, assign.target);
+                                    _ = try self.bindBorrowedFromImplicitLive(&state, assign_stmt.target);
                                 } else {
-                                    _ = try self.bindFresh(&state, assign.target, 0, &.{source_value});
+                                    _ = try self.bindFresh(&state, assign_stmt.target, 0, &.{source_value});
                                 }
                             },
-                            .copy, .move => _ = try self.bindFresh(&state, assign.target, 1, &.{}),
+                            .copy, .move => _ = try self.bindFresh(&state, assign_stmt.target, 1, &.{}),
                         }
                     }
-                    cursor = assign.next;
+                    cursor = assign_stmt.next;
                 },
                 .boxy_tag_match => |tag_match| {
                     _ = try self.requireLive(&state, tag_match.source);
@@ -5650,10 +5703,11 @@ const Certifier = struct {
                     try work.append(self.allocator, .{ .segment = .{ .cursor = tag_match.on_miss, .state = miss_state, .origin_join = segment.origin_join, .walk = segment.walk } });
                     return;
                 },
-                .assign_call_dict => |assign| {
+                .assign_call_dict => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.requireBoxyDictRef(&state, assign.dict);
                     if (assign.result_desc) |result_desc| try self.requireBoxyDescRef(&state, result_desc);
-                    try self.applyCall(&state, assign.target, arc_sig.RcSig.all_owned, assign.args);
+                    try self.applyCall(&state, assign_stmt.target, arc_sig.RcSig.all_owned, assign.args);
                     const arg_descs = self.store.getLocalSpan(assign.arg_descs);
                     for (0..GuardedList.borrowLen(arg_descs)) |index| {
                         _ = try self.requireLive(&state, GuardedList.at(arg_descs, index));
@@ -5663,7 +5717,7 @@ const Certifier = struct {
                         const hidden = GuardedList.at(hidden_args, index);
                         _ = try self.requireLive(&state, hidden);
                     }
-                    cursor = assign.next;
+                    cursor = assign_stmt.next;
                 },
                 .assign_low_level => |assign| {
                     try self.applyLowLevel(&state, assign);
@@ -5678,7 +5732,7 @@ const Certifier = struct {
                     cursor = assign.next;
                 },
                 .assign_tag => |assign| {
-                    if (assign.target_desc) |target_desc| try self.requireBoxyDescRef(&state, target_desc);
+                    if (self.store.optionalStmtRow(assign.target_desc)) |target_desc| try self.requireBoxyDescRef(&state, target_desc);
                     if (assign.payload) |payload| {
                         const operands = [_]LIR.LocalId{payload};
                         try self.applyAggregate(&state, assign.target, &operands);
@@ -5920,7 +5974,8 @@ const Certifier = struct {
                     return;
                 },
                 .join => |join_stmt| {
-                    const maybe_uninitialized_params = self.store.getLocalSpan(join_stmt.maybe_uninitialized_params);
+                    const join_maybe_uninitialized = self.store.stmtRowOrDefault(join_stmt.extra).maybe_uninitialized_params;
+                    const maybe_uninitialized_params = self.store.getLocalSpan(join_maybe_uninitialized);
                     for (0..GuardedList.borrowLen(maybe_uninitialized_params)) |index| {
                         const dense = self.denseOf(GuardedList.at(maybe_uninitialized_params, index));
                         if (dense != no_dense) {
@@ -5940,7 +5995,7 @@ const Certifier = struct {
                         // split loops with conditionally initialized payload
                         // cells into one entry summary per field-presence subset.
                         const relevant = (try self.computeReadsBeforeRebind(join_stmt.body)).*;
-                        const maybe_uninitialized = try self.computeJoinMaybeUninitialized(join_stmt.maybe_uninitialized_params);
+                        const maybe_uninitialized = try self.computeJoinMaybeUninitialized(join_maybe_uninitialized);
                         record.value_ptr.* = .{
                             .body = join_stmt.body,
                             .params = join_stmt.params,
@@ -6425,7 +6480,7 @@ const Certifier = struct {
         // real argument count names nothing: the ownership it describes is
         // dropped instead of applied. This is the one place where a row and the
         // arguments it talks about are both in hand.
-        if (rc_effect_rules.maskExceedsArgCount(assign.rc_effect, GuardedList.borrowLen(arg_locals))) |position| {
+        if (rc_effect_rules.maskExceedsArgCount(self.store.stmtRow(assign.rc_effect), GuardedList.borrowLen(arg_locals))) |position| {
             return self.fail(
                 "low-level op {s} has an RcEffect mask naming argument {d}, but it takes {d} arguments",
                 .{ @tagName(assign.op), position, GuardedList.borrowLen(arg_locals) },
@@ -6446,13 +6501,13 @@ const Certifier = struct {
             if (index >= 64) break;
             if (!self.isRc(arg)) continue;
             const bit = @as(u64, 1) << @as(u6, @intCast(index));
-            if ((assign.rc_effect.consume_args & bit) == 0) continue;
+            if ((self.store.stmtRow(assign.rc_effect).consume_args & bit) == 0) continue;
             try self.consumeUnit(state, arg_values_buffer[index], arg);
         }
 
         var target_value: ValueId = no_value;
         if (self.isRc(assign.target)) {
-            if (assign.rc_effect.retain_result) {
+            if (self.store.stmtRow(assign.rc_effect).retain_result) {
                 // The result reads payload data out of the op's refcounted
                 // arguments; it borrows until the trailing incref lands.
                 var lenders_buffer: [64]ValueId = undefined;
@@ -6484,7 +6539,7 @@ const Certifier = struct {
             if (index >= 64) break;
             if (!self.isRc(arg)) continue;
             const bit = @as(u64, 1) << @as(u6, @intCast(index));
-            if ((assign.rc_effect.retain_args & bit) == 0) continue;
+            if ((self.store.stmtRow(assign.rc_effect).retain_args & bit) == 0) continue;
             try self.consumeIntoHolder(state, arg_values_buffer[index], target_value);
         }
     }
@@ -6612,7 +6667,7 @@ test "certify list metadata survives release but payload and retain do not" {
             var read = try f.store.addCFStmt(.{ .assign_low_level = .{
                 .target = result,
                 .op = op,
-                .rc_effect = op.rcEffect(),
+                .rc_effect = try f.store.addRcEffect(op.rcEffect()),
                 .args = try f.store.addLocalSpan(if (use == .payload) &.{ alias, index } else &.{alias}),
                 .next = ret,
             } }, .test_fixture);
@@ -6658,7 +6713,7 @@ test "certify list metadata from a container requires extraction before release"
         const read_length = try f.store.addCFStmt(.{ .assign_low_level = .{
             .target = length,
             .op = .list_len,
-            .rc_effect = LIR.LowLevel.list_len.rcEffect(),
+            .rc_effect = try f.store.addRcEffect(LIR.LowLevel.list_len.rcEffect()),
             .args = try f.store.addLocalSpan(&.{inner}),
             .next = ret,
         } }, .test_fixture);
@@ -6666,7 +6721,7 @@ test "certify list metadata from a container requires extraction before release"
         const extract = try f.store.addCFStmt(.{ .assign_low_level = .{
             .target = inner,
             .op = .list_get_unsafe,
-            .rc_effect = LIR.LowLevel.list_get_unsafe.rcEffect(),
+            .rc_effect = try f.store.addRcEffect(LIR.LowLevel.list_get_unsafe.rcEffect()),
             .args = try f.store.addLocalSpan(&.{ outer, index }),
             .next = after_extract,
         } }, .test_fixture);
@@ -6775,7 +6830,9 @@ const CertifyTest = struct {
         return try self.store.addCFStmt(.{ .decref_if_initialized = .{
             .cond = cond,
             .value = value,
-            .rc = rcHelper(.decref, layout_idx),
+            .data = try self.store.addStmtRow(LIR.DecrefIfInitializedData, .{
+                .rc = rcHelper(.decref, layout_idx),
+            }),
             .next = next,
         } }, .test_fixture);
     }
@@ -7037,9 +7094,11 @@ test "certify rejects an erased call site whose argument plan differs" {
     const wrong_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{ .u8, .u8 });
     const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
         .target = result,
-        .closure = closure,
-        .args = args,
-        .arg_plan = wrong_plan,
+        .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
+            .closure = closure,
+            .args = args,
+            .arg_plan = wrong_plan,
+        }),
         .next = ret,
     } }, .test_fixture);
     _ = try f.addProc(&.{ closure, first, second }, body, .i64);
@@ -7068,7 +7127,7 @@ test "unique-argument certification isolates shared locals between procedures" {
         const checked = try f.store.addCFStmt(.{ .assign_low_level = .{
             .target = result,
             .op = .str_concat,
-            .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
+            .rc_effect = try f.store.addRcEffect(LIR.LowLevel.str_concat.rcEffect()),
             .args = checked_args,
             .unique_args = 1,
             .next = ret,
@@ -7076,7 +7135,7 @@ test "unique-argument certification isolates shared locals between procedures" {
         const birth = try f.store.addCFStmt(.{ .assign_low_level = .{
             .target = fresh,
             .op = .str_concat,
-            .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
+            .rc_effect = try f.store.addRcEffect(LIR.LowLevel.str_concat.rcEffect()),
             .args = args,
             .next = checked,
         } }, .test_fixture);
@@ -7108,7 +7167,7 @@ test "unique-argument certification rejects a multiply-defined local with a fore
     const checked = try f.store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
         .op = .str_concat,
-        .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.str_concat.rcEffect()),
         .args = checked_args,
         .unique_args = 1,
         .next = ret,
@@ -7116,7 +7175,7 @@ test "unique-argument certification rejects a multiply-defined local with a fore
     const first_birth = try f.store.addCFStmt(.{ .assign_low_level = .{
         .target = fresh,
         .op = .str_concat,
-        .rc_effect = LIR.LowLevel.str_concat.rcEffect(),
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.str_concat.rcEffect()),
         .args = args,
         .next = checked,
     } }, .test_fixture);
@@ -7162,11 +7221,13 @@ test "certify rejects inconsistent erased call reuse fields" {
         const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
         const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
             .target = result,
-            .closure = closure,
-            .args = LIR.LocalSpan.empty(),
-            .arg_plan = arg_plan,
-            .reuse_closure = true,
-            .reuse_source = null,
+            .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
+                .closure = closure,
+                .args = LIR.LocalSpan.empty(),
+                .arg_plan = arg_plan,
+                .reuse_closure = true,
+                .reuse_source = null,
+            }),
             .next = ret,
         } }, .test_fixture);
         _ = try f.addProc(&.{closure}, body, erased_callable);
@@ -7184,11 +7245,13 @@ test "certify rejects inconsistent erased call reuse fields" {
         const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
         const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
             .target = result,
-            .closure = closure,
-            .args = LIR.LocalSpan.empty(),
-            .arg_plan = arg_plan,
-            .reuse_closure = false,
-            .reuse_source = closure,
+            .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
+                .closure = closure,
+                .args = LIR.LocalSpan.empty(),
+                .arg_plan = arg_plan,
+                .reuse_closure = false,
+                .reuse_source = closure,
+            }),
             .next = ret,
         } }, .test_fixture);
         _ = try f.addProc(&.{closure}, body, erased_callable);
@@ -7208,11 +7271,13 @@ test "certify accepts erased call reuse from a transparent outer owner" {
     const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
     const call = try f.store.addCFStmt(.{ .assign_call_erased = .{
         .target = result,
-        .closure = closure,
-        .args = LIR.LocalSpan.empty(),
-        .arg_plan = arg_plan,
-        .reuse_closure = true,
-        .reuse_source = owner,
+        .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
+            .closure = closure,
+            .args = LIR.LocalSpan.empty(),
+            .arg_plan = arg_plan,
+            .reuse_closure = true,
+            .reuse_source = owner,
+        }),
         .next = ret,
     } }, .test_fixture);
     const body = try f.store.addCFStmt(.{ .assign_ref = .{
@@ -7238,11 +7303,13 @@ test "erased owner resolution re-derives a reuse source that became an alias" {
     // `read` is now an alias of `owner`, so `owner` is the allocation.
     const call = try f.store.addCFStmt(.{ .assign_call_erased = .{
         .target = result,
-        .closure = closure,
-        .args = LIR.LocalSpan.empty(),
-        .arg_plan = arg_plan,
-        .reuse_closure = true,
-        .reuse_source = read,
+        .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
+            .closure = closure,
+            .args = LIR.LocalSpan.empty(),
+            .arg_plan = arg_plan,
+            .reuse_closure = true,
+            .reuse_source = read,
+        }),
         .next = ret,
     } }, .test_fixture);
     const closure_assign = try f.store.addCFStmt(.{ .assign_ref = .{
@@ -7259,7 +7326,7 @@ test "erased owner resolution re-derives a reuse source that became an alias" {
     try testing.expectError(error.Certification, f.certify());
 
     try erased_owner.resolveProcReuseSources(f.allocator, &f.store, &f.layouts, proc_id);
-    try testing.expectEqual(owner, f.store.getCFStmtImmediate(call).assign_call_erased.reuse_source.?);
+    try testing.expectEqual(owner, f.store.stmtRow(f.store.getCFStmtImmediate(call).assign_call_erased.data).reuse_source.?);
     try f.certify();
 }
 
@@ -7274,11 +7341,13 @@ test "certify rejects erased call reuse from a different allocation" {
     const arg_plan = try f.store.internErasedCallArgsPlan(&f.layouts, &.{});
     const body = try f.store.addCFStmt(.{ .assign_call_erased = .{
         .target = result,
-        .closure = closure,
-        .args = LIR.LocalSpan.empty(),
-        .arg_plan = arg_plan,
-        .reuse_closure = true,
-        .reuse_source = unrelated,
+        .data = try f.store.addStmtRow(LIR.ErasedCallData, .{
+            .closure = closure,
+            .args = LIR.LocalSpan.empty(),
+            .arg_plan = arg_plan,
+            .reuse_closure = true,
+            .reuse_source = unrelated,
+        }),
         .next = ret,
     } }, .test_fixture);
     _ = try f.addProc(&.{ closure, unrelated }, body, erased_callable);
@@ -7846,9 +7915,11 @@ fn conditionalJoinChainWork(field_count: usize) CertifyError!CertifierWorkStats 
     for (payloads[0..field_count], masks[0..field_count]) |payload, mask| {
         loop_body = try f.store.addCFStmt(.{ .decref_if_initialized = .{
             .cond = presence,
-            .cond_mask = mask,
             .value = payload,
-            .rc = CertifyTest.rcHelper(.decref, .str),
+            .data = try f.store.addStmtRow(LIR.DecrefIfInitializedData, .{
+                .cond_mask = mask,
+                .rc = CertifyTest.rcHelper(.decref, .str),
+            }),
             .next = loop_body,
         } }, .test_fixture);
     }
@@ -7870,9 +7941,11 @@ fn conditionalJoinChainWork(field_count: usize) CertifyError!CertifierWorkStats 
         const parse_value = try f.assignStr(parsed, initialize_payload);
         const clear_old_payload = try f.store.addCFStmt(.{ .decref_if_initialized = .{
             .cond = presence,
-            .cond_mask = masks[field_index],
             .value = payloads[field_index],
-            .rc = CertifyTest.rcHelper(.decref, .str),
+            .data = try f.store.addStmtRow(LIR.DecrefIfInitializedData, .{
+                .cond_mask = masks[field_index],
+                .rc = CertifyTest.rcHelper(.decref, .str),
+            }),
             .next = parse_value,
         } }, .test_fixture);
         const choose = try f.store.addCFStmt(.{ .switch_stmt = .{
@@ -7893,11 +7966,13 @@ fn conditionalJoinChainWork(field_count: usize) CertifyError!CertifierWorkStats 
     const outer_join = try f.store.addCFStmt(.{ .join = .{
         .id = loop_join,
         .params = try f.store.addLocalSpan(payloads[0..field_count]),
-        .maybe_uninitialized_params = try f.store.addLocalSpan(payloads[0..field_count]),
-        .maybe_uninitialized_conditions = try f.store.addLocalSpan(conditions[0..field_count]),
-        .maybe_uninitialized_condition_masks = try f.store.addU64Span(masks[0..field_count]),
         .body = loop_body,
         .remainder = field_flow,
+        .extra = try f.store.addOptionalStmtRow(LIR.JoinExtra, .{
+            .maybe_uninitialized_params = try f.store.addLocalSpan(payloads[0..field_count]),
+            .maybe_uninitialized_conditions = try f.store.addLocalSpan(conditions[0..field_count]),
+            .maybe_uninitialized_condition_masks = try f.store.addU64Span(masks[0..field_count]),
+        }),
     } }, .test_fixture);
     const body = try f.assignI64(presence, outer_join);
     _ = try f.addProc(&.{}, body, .i64);
@@ -7965,11 +8040,13 @@ test "certify compresses maybe-initialized join payload states" {
     const join_stmt = try f.store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try f.store.addLocalSpan(&.{payload}),
-        .maybe_uninitialized_params = try f.store.addLocalSpan(&.{payload}),
-        .maybe_uninitialized_conditions = try f.store.addLocalSpan(&.{cond}),
-        .maybe_uninitialized_condition_masks = try f.store.addU64Span(&.{1}),
         .body = result_assign,
         .remainder = switch_stmt,
+        .extra = try f.store.addOptionalStmtRow(LIR.JoinExtra, .{
+            .maybe_uninitialized_params = try f.store.addLocalSpan(&.{payload}),
+            .maybe_uninitialized_conditions = try f.store.addLocalSpan(&.{cond}),
+            .maybe_uninitialized_condition_masks = try f.store.addU64Span(&.{1}),
+        }),
     } }, .test_fixture);
     const cond_assign = try f.assignI64(cond, join_stmt);
     const body = try f.assignStr(payload, cond_assign);
@@ -8017,11 +8094,13 @@ test "certify promotes conditional payload on initialized switch edge" {
     const join_stmt = try f.store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try f.store.addLocalSpan(&.{payload}),
-        .maybe_uninitialized_params = try f.store.addLocalSpan(&.{payload}),
-        .maybe_uninitialized_conditions = try f.store.addLocalSpan(&.{presence}),
-        .maybe_uninitialized_condition_masks = try f.store.addU64Span(&.{1}),
         .body = first_switch,
         .remainder = choose_presence,
+        .extra = try f.store.addOptionalStmtRow(LIR.JoinExtra, .{
+            .maybe_uninitialized_params = try f.store.addLocalSpan(&.{payload}),
+            .maybe_uninitialized_conditions = try f.store.addLocalSpan(&.{presence}),
+            .maybe_uninitialized_condition_masks = try f.store.addU64Span(&.{1}),
+        }),
     } }, .test_fixture);
     const presence_assign = try f.assignI64(presence, join_stmt);
     const body = try f.assignStr(payload, presence_assign);
@@ -8073,11 +8152,13 @@ test "certify does not repeat conditional payload work after initialized edge" {
     const join_stmt = try f.store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try f.store.addLocalSpan(&.{payload}),
-        .maybe_uninitialized_params = try f.store.addLocalSpan(&.{payload}),
-        .maybe_uninitialized_conditions = try f.store.addLocalSpan(&.{presence}),
-        .maybe_uninitialized_condition_masks = try f.store.addU64Span(&.{1}),
         .body = initialized_branch,
         .remainder = choose_presence,
+        .extra = try f.store.addOptionalStmtRow(LIR.JoinExtra, .{
+            .maybe_uninitialized_params = try f.store.addLocalSpan(&.{payload}),
+            .maybe_uninitialized_conditions = try f.store.addLocalSpan(&.{presence}),
+            .maybe_uninitialized_condition_masks = try f.store.addU64Span(&.{1}),
+        }),
     } }, .test_fixture);
     const presence_assign = try f.assignI64(presence, join_stmt);
     const body = try f.assignStr(payload, presence_assign);
@@ -8121,11 +8202,13 @@ test "certify rejects a mismatched conditional payload guard before refinement" 
     const join_stmt = try f.store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = try f.store.addLocalSpan(&.{payload}),
-        .maybe_uninitialized_params = try f.store.addLocalSpan(&.{payload}),
-        .maybe_uninitialized_conditions = try f.store.addLocalSpan(&.{presence}),
-        .maybe_uninitialized_condition_masks = try f.store.addU64Span(&.{1}),
         .body = mismatched_switch,
         .remainder = choose_presence,
+        .extra = try f.store.addOptionalStmtRow(LIR.JoinExtra, .{
+            .maybe_uninitialized_params = try f.store.addLocalSpan(&.{payload}),
+            .maybe_uninitialized_conditions = try f.store.addLocalSpan(&.{presence}),
+            .maybe_uninitialized_condition_masks = try f.store.addU64Span(&.{1}),
+        }),
     } }, .test_fixture);
     const unrelated_assign = try f.assignI64(unrelated, join_stmt);
     const presence_assign = try f.assignI64(presence, unrelated_assign);
@@ -8190,7 +8273,7 @@ fn certifyDistinctBorrowLenders(release_last_lender: bool) (CertifyError || erro
     body = try f.store.addCFStmt(.{ .assign_low_level = .{
         .target = result,
         .op = .str_count_utf8_bytes,
-        .rc_effect = LIR.LowLevel.str_count_utf8_bytes.rcEffect(),
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.str_count_utf8_bytes.rcEffect()),
         .args = try f.store.addLocalSpan(&.{field}),
         .next = body,
     } }, .test_fixture);
@@ -10075,7 +10158,7 @@ test "certify rejects consuming Box.unbox after the ARC boundary" {
     const body = try f.store.addCFStmt(.{ .assign_low_level = .{
         .target = payload,
         .op = .box_unbox,
-        .rc_effect = LIR.LowLevel.box_unbox.rcEffect(),
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.box_unbox.rcEffect()),
         .args = try f.store.addLocalSpan(&.{boxed}),
         .next = ret,
     } }, .test_fixture);

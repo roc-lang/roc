@@ -252,10 +252,12 @@ const BranchRewriter = struct {
                 const rc = self.payloadRelease() orelse return next;
                 return try cloner.store.addCFStmt(.{ .decref_if_initialized = .{
                     .cond = try cloner.mapLocal(release.cond),
-                    .cond_mask = release.cond_mask,
                     .value = self.payload,
-                    .rc = rc,
-                    .atomicity = release.atomicity,
+                    .data = try cloner.store.addStmtRow(LIR.DecrefIfInitializedData, .{
+                        .cond_mask = cloner.store.stmtRow(release.data).cond_mask,
+                        .rc = rc,
+                        .atomicity = cloner.store.stmtRow(release.data).atomicity,
+                    }),
                     .next = next,
                 } }, origin);
             },
@@ -517,7 +519,7 @@ fn findCandidate(
         if (node != .join) continue;
         const join = node.join;
         const params = store.getLocalSpan(join.params);
-        if (params.len != 1 or !join.maybe_uninitialized_params.isEmpty()) continue;
+        if (params.len != 1 or !store.stmtRowOrDefault(join.extra).maybe_uninitialized_params.isEmpty()) continue;
         if (store.getLocalSpan(join.retained).len != 0) continue;
         const param = GuardedList.at(params, 0);
         const param_layout = layouts.getLayout(store.getLocal(param).layout_idx);
@@ -621,7 +623,7 @@ fn findCandidate(
             if (stmt == .jump and stmt.jump.target == join.id) jump_count += 1;
             if (stmt != .assign_tag) continue;
             const assign = stmt.assign_tag;
-            if (assign.target != param or assign.target_desc != null) continue;
+            if (assign.target != param or assign.target_desc != .none) continue;
             const edge_jump = producerEdgeJump(store, assign.next, param, assign.payload, join.id) orelse continue;
             const build: BuildSite = .{
                 .stmt = stmt_id,
@@ -1788,10 +1790,12 @@ fn testConditionalAliasRelease(extra_read: bool) TestError!void {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const release = try store.addCFStmt(.{ .decref_if_initialized = .{
         .cond = result,
-        .cond_mask = 8,
         .value = alias,
-        .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = tag_layout }),
-        .atomicity = .single_thread,
+        .data = try store.addStmtRow(LIR.DecrefIfInitializedData, .{
+            .cond_mask = 8,
+            .rc = LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = tag_layout }),
+            .atomicity = .single_thread,
+        }),
         .next = if (extra_read) try store.addCFStmt(.{ .ret = .{ .value = alias } }, .test_fixture) else ret,
     } }, .test_fixture);
     const left = try graph.local(.u64);
@@ -1853,8 +1857,8 @@ fn testConditionalAliasRelease(extra_read: bool) TestError!void {
             releases += 1;
             const cloned = stmt.decref_if_initialized;
             try testing.expectEqual(result, cloned.cond);
-            try testing.expectEqual(@as(u64, 8), cloned.cond_mask);
-            try testing.expectEqual(LIR.RcAtomicity.single_thread, cloned.atomicity);
+            try testing.expectEqual(@as(u64, 8), store.stmtRow(cloned.data).cond_mask);
+            try testing.expectEqual(LIR.RcAtomicity.single_thread, store.stmtRow(cloned.data).atomicity);
             try testing.expectEqual(layout_mod.Idx.str, store.getLocal(cloned.value).layout_idx);
             try testing.expect(cloned.value != param and cloned.value != alias and cloned.value != matched);
         }

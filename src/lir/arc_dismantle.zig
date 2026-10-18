@@ -2079,25 +2079,28 @@ fn classifyStatement(
             }
             try analysis.noteDef(stmt.target, current);
         },
-        .assign_call_erased => |stmt| {
+        .assign_call_erased => |inline_stmt| {
+            const stmt = store.stmtRow(inline_stmt.data);
             try analysis.useWhole(current, stmt.closure);
             if (stmt.reuse_source) |reuse_source| try analysis.useWhole(current, reuse_source);
             const args = store.getLocalSpan(stmt.args);
             for (0..GuardedList.borrowLen(args)) |i| try analysis.useWholeAt(GuardedList.at(args, i), current);
-            try analysis.noteDef(stmt.target, current);
+            try analysis.noteDef(inline_stmt.target, current);
         },
-        .assign_packed_erased_fn => |stmt| {
+        .assign_packed_erased_fn => |inline_stmt| {
+            const stmt = store.stmtRow(inline_stmt.data);
             if (stmt.capture) |capture| try analysis.useWhole(current, capture);
             if (stmt.reuse) |reuse| try analysis.useWhole(current, reuse);
-            try analysis.noteDef(stmt.target, current);
+            try analysis.noteDef(inline_stmt.target, current);
         },
-        .assign_boxy_desc_ref => |stmt| {
+        .assign_boxy_desc_ref => |inline_stmt| {
+            const stmt = store.stmtRow(inline_stmt.data);
             if (stmt.desc.localOrNull()) |local| try analysis.useWhole(current, local);
             if (stmt.tag_residual_for) |desc| if (desc.localOrNull()) |local| try analysis.useWhole(current, local);
             const captures = store.getLocalSpan(stmt.captures);
             for (0..GuardedList.borrowLen(captures)) |i| try analysis.useWhole(current, GuardedList.at(captures, i));
-            try analysis.noteDef(stmt.target, current);
-            analysis.disqualify(stmt.target);
+            try analysis.noteDef(inline_stmt.target, current);
+            analysis.disqualify(inline_stmt.target);
         },
         .assign_boxy_dict_ref => |stmt| {
             if (stmt.dict.localOrNull()) |local| try analysis.useWhole(current, local);
@@ -2106,49 +2109,57 @@ fn classifyStatement(
             try analysis.noteDef(stmt.target, current);
             analysis.disqualify(stmt.target);
         },
-        .assign_boxy_box => |stmt| {
+        .assign_boxy_box => |inline_stmt| {
+            const stmt = store.stmtRow(inline_stmt.data);
             try analysis.useWhole(current, stmt.payload);
-            try analysis.noteDef(stmt.target, current);
-            analysis.disqualify(stmt.target);
+            try analysis.noteDef(inline_stmt.target, current);
+            analysis.disqualify(inline_stmt.target);
         },
-        .assign_boxy_record_update => |stmt| {
+        .assign_boxy_record_update => |inline_stmt| {
+            const stmt = store.stmtRow(inline_stmt.data);
             try analysis.useWhole(current, stmt.base);
             try analysis.useWhole(current, stmt.fields);
-            try analysis.noteDef(stmt.target, current);
-            analysis.disqualify(stmt.target);
+            try analysis.noteDef(inline_stmt.target, current);
+            analysis.disqualify(inline_stmt.target);
         },
-        inline .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect => |stmt| {
+        inline .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect => |stmt_stmt| {
+            const stmt = store.stmtRow(stmt_stmt.data);
             try analysis.useWhole(current, stmt.source);
-            try analysis.noteDef(stmt.target, current);
-            analysis.disqualify(stmt.target);
+            try analysis.noteDef(stmt_stmt.target, current);
+            analysis.disqualify(stmt_stmt.target);
         },
-        .assign_boxy_eq => |stmt| {
+        .assign_boxy_eq => |inline_stmt| {
+            const stmt = store.stmtRow(inline_stmt.data);
             try analysis.useWhole(current, stmt.lhs);
             try analysis.useWhole(current, stmt.rhs);
-            try analysis.noteDef(stmt.target, current);
-            analysis.disqualify(stmt.target);
+            try analysis.noteDef(inline_stmt.target, current);
+            analysis.disqualify(inline_stmt.target);
         },
-        .assign_boxy_hash => |stmt| {
+        .assign_boxy_hash => |inline_stmt| {
+            const stmt = store.stmtRow(inline_stmt.data);
             try analysis.useWhole(current, stmt.value);
             try analysis.useWhole(current, stmt.hasher);
-            try analysis.noteDef(stmt.target, current);
-            analysis.disqualify(stmt.target);
+            try analysis.noteDef(inline_stmt.target, current);
+            analysis.disqualify(inline_stmt.target);
         },
-        .assign_boxy_tag => |stmt| {
+        .assign_boxy_tag => |inline_stmt| {
+            const stmt = store.stmtRow(inline_stmt.data);
             if (stmt.payload) |payload| try analysis.useWhole(current, payload);
-            try analysis.noteDef(stmt.target, current);
-            analysis.disqualify(stmt.target);
+            try analysis.noteDef(inline_stmt.target, current);
+            analysis.disqualify(inline_stmt.target);
         },
-        .assign_boxy_tag_payload => |stmt| {
+        .assign_boxy_tag_payload => |inline_stmt| {
+            const stmt = store.stmtRow(inline_stmt.data);
             try analysis.useWhole(current, stmt.source);
-            try analysis.noteDef(stmt.target, current);
-            analysis.disqualify(stmt.target);
+            try analysis.noteDef(inline_stmt.target, current);
+            analysis.disqualify(inline_stmt.target);
             if (stmt.target_desc) |target_desc| {
                 try analysis.noteDef(target_desc, current);
                 analysis.disqualify(target_desc);
             }
         },
-        .assign_call_dict => |stmt| {
+        .assign_call_dict => |inline_stmt| {
+            const stmt = store.stmtRow(inline_stmt.data);
             if (stmt.dict.localOrNull()) |local| try analysis.useWhole(current, local);
             const args = store.getLocalSpan(stmt.args);
             for (0..GuardedList.borrowLen(args)) |i| try analysis.useWhole(current, GuardedList.at(args, i));
@@ -2156,12 +2167,12 @@ fn classifyStatement(
             for (0..GuardedList.borrowLen(arg_descs)) |i| try analysis.useWhole(current, GuardedList.at(arg_descs, i));
             const hidden_args = store.getLocalSpan(stmt.hidden_args);
             for (0..GuardedList.borrowLen(hidden_args)) |i| try analysis.useWhole(current, GuardedList.at(hidden_args, i));
-            try analysis.noteDef(stmt.target, current);
-            analysis.disqualify(stmt.target);
+            try analysis.noteDef(inline_stmt.target, current);
+            analysis.disqualify(inline_stmt.target);
         },
         .assign_low_level => |stmt| {
             const args = store.getLocalSpan(stmt.args);
-            const demand_mask = stmt.rc_effect.consume_args | stmt.rc_effect.retain_args;
+            const demand_mask = store.stmtRow(stmt.rc_effect).consume_args | store.stmtRow(stmt.rc_effect).retain_args;
             for (0..GuardedList.borrowLen(args)) |i| {
                 const arg = GuardedList.at(args, i);
                 try analysis.useWholeAt(arg, current);

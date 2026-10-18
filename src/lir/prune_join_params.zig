@@ -110,8 +110,9 @@ const Pass = struct {
                         try self.pinDescriptor(param);
                     }
                     try self.pinSpan(join.retained);
-                    try self.pinSpan(join.maybe_uninitialized_params);
-                    try self.pinSpan(join.maybe_uninitialized_conditions);
+                    const extra = store.stmtRowOrDefault(join.extra);
+                    try self.pinSpan(extra.maybe_uninitialized_params);
+                    try self.pinSpan(extra.maybe_uninitialized_conditions);
                 },
                 .set_local => |set| try self.pinDescriptor(set.target),
                 .init_uninitialized,

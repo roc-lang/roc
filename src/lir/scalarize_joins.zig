@@ -1079,7 +1079,7 @@ const Pass = struct {
         const payload = site.payload orelse return false;
         if (site.variant_index != 0 or site.discriminant != 0) return false;
         const assign = self.store.getCFStmtImmediate(site.stmt).assign_tag;
-        if (assign.target_desc != null or self.store.getLocal(payload).layout_idx != payload_layout) return false;
+        if (assign.target_desc != .none or self.store.getLocal(payload).layout_idx != payload_layout) return false;
 
         var closure = try self.aliasClosureOf(local);
         defer closure.deinit(self.allocator);
@@ -1173,7 +1173,7 @@ const Pass = struct {
         if (self.anyRoundClaimed(&.{listing_joins})) return false;
         for (listing_joins) |listing_id| {
             const listing = self.store.getCFStmtImmediate(listing_id).join;
-            const maybe_uninitialized = self.store.getLocalSpan(listing.maybe_uninitialized_params);
+            const maybe_uninitialized = self.store.getLocalSpan(self.store.stmtRowOrDefault(listing.extra).maybe_uninitialized_params);
             for (0..GuardedList.borrowLen(maybe_uninitialized)) |index| {
                 if (GuardedList.at(maybe_uninitialized, index) == param) return false;
             }
@@ -1207,7 +1207,7 @@ const Pass = struct {
             const payload = site.payload orelse return false;
             if (site.variant_index != 0 or site.discriminant != 0) return false;
             const assign = self.store.getCFStmtImmediate(site.stmt).assign_tag;
-            if (assign.target_desc != null or self.store.getLocal(payload).layout_idx != payload_layout) return false;
+            if (assign.target_desc != .none or self.store.getLocal(payload).layout_idx != payload_layout) return false;
         }
 
         var claimed = collections.DenseMap(LIR.CFStmtId, void).init(self.allocator);
@@ -1413,7 +1413,7 @@ const Pass = struct {
         // local; splitting it is not modeled.
         for (listing_joins) |listing_id| {
             const listing = self.store.getCFStmtImmediate(listing_id).join;
-            const maybe_uninitialized = self.store.getLocalSpan(listing.maybe_uninitialized_params);
+            const maybe_uninitialized = self.store.getLocalSpan(self.store.stmtRowOrDefault(listing.extra).maybe_uninitialized_params);
             for (0..GuardedList.borrowLen(maybe_uninitialized)) |i| {
                 if (GuardedList.at(maybe_uninitialized, i) == param) return false;
             }
@@ -2011,14 +2011,15 @@ const Pass = struct {
                 .assign_literal => |assign| try self.noteWrite(assign.target),
                 .init_uninitialized => |initialize| try self.noteWrite(initialize.target),
                 .assign_call => |assign| {
-                    if (assign.result_desc) |result_desc| {
+                    if (self.store.stmtRowOrDefault(assign.extra).result_desc) |result_desc| {
                         if (result_desc.localOrNull()) |local| try self.noteUse(local);
                     }
                     const args = self.store.getLocalSpan(assign.args);
                     for (0..args.len) |index| try self.noteUse(GuardedList.at(args, index));
                     try self.noteWrite(assign.target);
                 },
-                .assign_call_erased => |assign| {
+                .assign_call_erased => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteUse(assign.closure);
                     if (assign.result_desc) |result_desc| {
                         if (result_desc.localOrNull()) |local| try self.noteUse(local);
@@ -2026,23 +2027,25 @@ const Pass = struct {
                     if (assign.reuse_source) |reuse_source| try self.noteUse(reuse_source);
                     const args = self.store.getLocalSpan(assign.args);
                     for (0..args.len) |index| try self.noteUse(GuardedList.at(args, index));
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                     if (assign.out_desc) |out_desc| try self.noteWrite(out_desc);
                 },
-                .assign_packed_erased_fn => |assign| {
+                .assign_packed_erased_fn => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     if (assign.capture) |capture| try self.noteUse(capture);
                     if (assign.result_desc) |result_desc| {
                         if (result_desc.localOrNull()) |local| try self.noteUse(local);
                     }
                     if (assign.reuse) |reuse| try self.noteUse(reuse);
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                 },
-                .assign_boxy_desc_ref => |assign| {
+                .assign_boxy_desc_ref => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteDescUse(assign.desc);
                     if (assign.tag_residual_for) |desc| try self.noteDescUse(desc);
                     const captures = self.store.getLocalSpan(assign.captures);
                     for (0..GuardedList.borrowLen(captures)) |index| try self.noteUse(GuardedList.at(captures, index));
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                 },
                 .assign_boxy_dict_ref => |assign| {
                     try self.noteDictUse(assign.dict);
@@ -2050,64 +2053,74 @@ const Pass = struct {
                     for (0..GuardedList.borrowLen(captures)) |index| try self.noteUse(GuardedList.at(captures, index));
                     try self.noteWrite(assign.target);
                 },
-                .assign_boxy_box => |assign| {
+                .assign_boxy_box => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteUse(assign.payload);
                     if (assign.payload_desc) |desc| try self.noteDescUse(desc);
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                 },
-                .assign_boxy_record_update => |assign| {
+                .assign_boxy_record_update => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteUse(assign.base);
                     try self.noteUse(assign.fields);
                     try self.noteDescUse(assign.base_desc);
                     try self.noteDescUse(assign.fields_desc);
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                 },
-                .assign_boxy_unbox => |assign| {
+                .assign_boxy_unbox => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteUse(assign.source);
                     try self.noteDescUse(assign.source_desc);
                     if (assign.target_desc) |desc| try self.noteDescUse(desc);
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                 },
-                .assign_boxy_adapt => |assign| {
+                .assign_boxy_adapt => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteUse(assign.source);
                     if (assign.source_desc) |desc| try self.noteDescUse(desc);
                     if (assign.target_desc) |desc| try self.noteDescUse(desc);
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                 },
-                .assign_boxy_inspect => |assign| {
+                .assign_boxy_inspect => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteUse(assign.source);
                     try self.noteDescUse(assign.source_desc);
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                 },
-                .assign_boxy_eq => |assign| {
+                .assign_boxy_eq => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteUse(assign.lhs);
                     try self.noteUse(assign.rhs);
                     try self.noteDescUse(assign.desc);
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                 },
-                .assign_boxy_hash => |assign| {
+                .assign_boxy_hash => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteUse(assign.value);
                     try self.noteUse(assign.hasher);
                     try self.noteDescUse(assign.desc);
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                 },
-                .assign_boxy_tag => |assign| {
+                .assign_boxy_tag => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteDescUse(assign.target_desc);
                     if (assign.payload) |payload| try self.noteUse(payload);
                     if (assign.payload_desc) |desc| try self.noteDescUse(desc);
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                 },
-                .assign_boxy_tag_payload => |assign| {
+                .assign_boxy_tag_payload => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteUse(assign.source);
                     try self.noteDescUse(assign.source_desc);
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                     if (assign.target_desc) |target_desc| try self.noteWrite(target_desc);
                 },
                 .boxy_tag_match => |s| {
                     try self.noteUse(s.source);
                     try self.noteDescUse(s.source_desc);
                 },
-                .assign_call_dict => |assign| {
+                .assign_call_dict => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.noteDictUse(assign.dict);
                     const args = self.store.getLocalSpan(assign.args);
                     for (0..GuardedList.borrowLen(args)) |index| try self.noteUse(GuardedList.at(args, index));
@@ -2115,7 +2128,7 @@ const Pass = struct {
                     for (0..GuardedList.borrowLen(arg_descs)) |index| try self.noteUse(GuardedList.at(arg_descs, index));
                     const hidden_args = self.store.getLocalSpan(assign.hidden_args);
                     for (0..GuardedList.borrowLen(hidden_args)) |index| try self.noteUse(GuardedList.at(hidden_args, index));
-                    try self.noteWrite(assign.target);
+                    try self.noteWrite(assign_stmt.target);
                 },
                 .assign_low_level => |assign| {
                     const args = self.store.getLocalSpan(assign.args);
@@ -2136,7 +2149,7 @@ const Pass = struct {
                     }
                 },
                 .assign_tag => |assign| {
-                    if (assign.target_desc) |target_desc| try self.noteDescUse(target_desc);
+                    if (self.store.optionalStmtRow(assign.target_desc)) |target_desc| try self.noteDescUse(target_desc);
                     if (assign.payload) |payload| {
                         try self.noteUse(payload);
                         if (self.tag_builds.getPtr(payload)) |build| build.payload_uses += 1;

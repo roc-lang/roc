@@ -1069,7 +1069,7 @@ const Transform = struct {
         try self.store.replaceCFStmt(ret_stmt, .{ .assign_low_level = .{
             .target = st,
             .op = .ptr_store,
-            .rc_effect = LowLevelOp.ptr_store.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.ptr_store.rcEffect()),
             .args = store_args,
             .next = load,
         } }, origin);
@@ -1086,7 +1086,7 @@ const Transform = struct {
         const cell = blk: {
             var alloc = self.store.getCFStmtImmediate(candidate.box_stmt).assign_low_level;
             alloc.op = .box_alloc_zeroed;
-            alloc.rc_effect = LowLevelOp.box_alloc_zeroed.rcEffect();
+            alloc.rc_effect = try self.store.addRcEffect(LowLevelOp.box_alloc_zeroed.rcEffect());
             alloc.args = empty_args;
             try self.store.replaceCFStmt(candidate.box_stmt, .{ .assign_low_level = alloc }, box_origin);
             break :blk alloc.target;
@@ -1099,7 +1099,7 @@ const Transform = struct {
         const cast = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = next_hole,
             .op = .ptr_cast,
-            .rc_effect = LowLevelOp.ptr_cast.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.ptr_cast.rcEffect()),
             .args = try self.store.addLocalSpan(&.{cell}),
             .next = self.nextOf(candidate.box_stmt),
         } }, box_origin);
@@ -1124,7 +1124,7 @@ const Transform = struct {
         try self.store.replaceCFStmt(candidate.terminal_stmt, .{ .assign_low_level = .{
             .target = st,
             .op = .ptr_store,
-            .rc_effect = LowLevelOp.ptr_store.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.ptr_store.rcEffect()),
             .args = store_args,
             .next = loop_back,
         } }, terminal_origin);

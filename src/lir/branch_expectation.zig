@@ -162,7 +162,7 @@ const Fixture = struct {
             current = try store.addCFStmt(.{ .assign_low_level = .{
                 .target = marked,
                 .op = .bool_likely,
-                .rc_effect = .none(),
+                .rc_effect = try store.addRcEffect(.none()),
                 .args = try store.addLocalSpan(&.{compared}),
                 .next = current,
             } }, .test_fixture);
@@ -170,7 +170,7 @@ const Fixture = struct {
         current = try store.addCFStmt(.{ .assign_low_level = .{
             .target = compared,
             .op = .num_is_lt,
-            .rc_effect = .none(),
+            .rc_effect = try store.addRcEffect(.none()),
             .args = try store.addLocalSpan(&.{ a, b }),
             .next = current,
         } }, .test_fixture);

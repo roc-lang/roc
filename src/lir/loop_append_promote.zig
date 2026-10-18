@@ -1293,7 +1293,7 @@ const Pass = struct {
             var it = chain_params.valueIterator();
             while (it.next()) |owner| {
                 const join = self.store.getCFStmtImmediate(owner.*).join;
-                const maybe = self.store.getLocalSpan(join.maybe_uninitialized_params);
+                const maybe = self.store.getLocalSpan(self.store.stmtRowOrDefault(join.extra).maybe_uninitialized_params);
                 for (0..GuardedList.borrowLen(maybe)) |i| {
                     if (carriers.contains(GuardedList.at(maybe, i))) return false;
                 }
@@ -1509,7 +1509,7 @@ const Pass = struct {
                         .alias => try self.store.replaceCFStmt(edge.stmt, .{ .assign_low_level = .{
                             .target = edge.target,
                             .op = .list_map_prepare_reuse,
-                            .rc_effect = LowLevelOp.list_map_prepare_reuse.rcEffect(),
+                            .rc_effect = try self.store.addRcEffect(LowLevelOp.list_map_prepare_reuse.rcEffect()),
                             .args = try self.store.addLocalSpan(&.{edge.source}),
                             .next = seed,
                         } }, origin),
@@ -1739,7 +1739,7 @@ const Pass = struct {
                 try self.store.replaceCFStmt(edge.stmt, .{ .assign_low_level = .{
                     .target = incoming,
                     .op = .list_map_prepare_reuse,
-                    .rc_effect = LowLevelOp.list_map_prepare_reuse.rcEffect(),
+                    .rc_effect = try self.store.addRcEffect(LowLevelOp.list_map_prepare_reuse.rcEffect()),
                     .args = try self.store.addLocalSpan(&.{edge.source}),
                     .next = seed,
                 } }, origin);
@@ -1801,7 +1801,7 @@ const Pass = struct {
         const hot_set = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = call.target,
             .op = .list_set_in_place_unsafe,
-            .rc_effect = LowLevelOp.list_set_in_place_unsafe.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.list_set_in_place_unsafe.rcEffect()),
             .args = call.args,
             .next = hot_jump,
         } }, origin);
@@ -2239,7 +2239,7 @@ const Pass = struct {
         const hot_append = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = call.target,
             .op = .list_append_range_within_unsafe,
-            .rc_effect = LowLevelOp.list_append_range_within_unsafe.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.list_append_range_within_unsafe.rcEffect()),
             .args = call.args,
             .next = hot_forward,
         } }, origin);
@@ -2346,7 +2346,7 @@ const Pass = struct {
             // released per join under conditions ARC tracks; the copy would
             // need that environment duplicated, which is not modeled here.
             if (self.store.getLocalSpan(join.retained).len != 0) continue;
-            if (self.store.getLocalSpan(join.maybe_uninitialized_params).len != 0) continue;
+            if (self.store.getLocalSpan(self.store.stmtRowOrDefault(join.extra).maybe_uninitialized_params).len != 0) continue;
             var stmts = try body_clone.ReachableStmts.initWithScratch(self.store, join.body, self.analysis);
             defer stmts.deinit();
             var size: u32 = 0;
@@ -2581,7 +2581,7 @@ const Pass = struct {
             }
             const join = self.store.getCFStmtImmediate(entry.key_ptr.*).join;
             if (self.store.getLocalSpan(join.retained).len != 0) continue;
-            if (self.store.getLocalSpan(join.maybe_uninitialized_params).len != 0) continue;
+            if (self.store.getLocalSpan(self.store.stmtRowOrDefault(join.extra).maybe_uninitialized_params).len != 0) continue;
             try candidates.append(allocator, entry.key_ptr.*);
         }
         // Deterministic order: statement ids are allocation order.
@@ -2968,7 +2968,7 @@ const Pass = struct {
         head = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = remaining,
             .op = .num_int_sub_wrap,
-            .rc_effect = LowLevelOp.num_int_sub_wrap.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.num_int_sub_wrap.rcEffect()),
             .args = try self.store.addLocalSpan(&operands),
             .next = head,
         } }, origin);
@@ -3185,7 +3185,7 @@ const Pass = struct {
             head = try self.store.addCFStmt(.{ .assign_low_level = .{
                 .target = combined.items[index],
                 .op = .num_bitwise_and,
-                .rc_effect = LowLevelOp.num_bitwise_and.rcEffect(),
+                .rc_effect = try self.store.addRcEffect(LowLevelOp.num_bitwise_and.rcEffect()),
                 .args = try self.store.addLocalSpan(&.{ left, flags[index + 1] }),
                 .next = head,
             } }, origin);
@@ -3301,11 +3301,9 @@ const VersionRewriter = struct {
                 .id = self.join_map.get(s.id).?,
                 .params = try cloner.mapLocalSpan(s.params),
                 .retained = try cloner.mapLocalSpan(s.retained),
-                .maybe_uninitialized_params = try cloner.mapLocalSpan(s.maybe_uninitialized_params),
-                .maybe_uninitialized_conditions = try cloner.mapLocalSpan(s.maybe_uninitialized_conditions),
-                .maybe_uninitialized_condition_masks = s.maybe_uninitialized_condition_masks,
                 .body = cloned[0],
                 .remainder = cloned[1],
+                .extra = try cloner.mapJoinExtra(s.extra),
             } }, origin),
             .switch_stmt => return cloned[0],
             .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_initialized_payload, .str_match, .str_match_set, .jump, .ret, .crash => unreachable,
@@ -3423,7 +3421,7 @@ const SlackVersionRewriter = struct {
             return try cloner.store.addCFStmt(.{ .assign_low_level = .{
                 .target = try cloner.mapLocal(site.target),
                 .op = .list_append_unsafe,
-                .rc_effect = LowLevelOp.list_append_unsafe.rcEffect(),
+                .rc_effect = try cloner.store.addRcEffect(LowLevelOp.list_append_unsafe.rcEffect()),
                 .args = try cloner.store.addLocalSpan(&.{ try cloner.mapLocal(site.list), try cloner.mapLocal(site.elem) }),
                 .next = next,
             } }, origin);
@@ -3432,11 +3430,9 @@ const SlackVersionRewriter = struct {
             .id = self.join_map.get(s.id).?,
             .params = try cloner.mapLocalSpan(s.params),
             .retained = try cloner.mapLocalSpan(s.retained),
-            .maybe_uninitialized_params = try cloner.mapLocalSpan(s.maybe_uninitialized_params),
-            .maybe_uninitialized_conditions = try cloner.mapLocalSpan(s.maybe_uninitialized_conditions),
-            .maybe_uninitialized_condition_masks = s.maybe_uninitialized_condition_masks,
             .body = cloned[0],
             .remainder = cloned[1],
+            .extra = try cloner.mapJoinExtra(s.extra),
         } }, origin);
     }
 };
@@ -3652,14 +3648,14 @@ const PromoteTest = struct {
         const unsafe_append = try store.addCFStmt(.{ .assign_low_level = .{
             .target = appended,
             .op = .list_append_unsafe,
-            .rc_effect = LowLevelOp.list_append_unsafe.rcEffect(),
+            .rc_effect = try store.addRcEffect(LowLevelOp.list_append_unsafe.rcEffect()),
             .args = try store.addLocalSpan(&.{ reserved, elem_arg }),
             .next = ret,
         } }, .test_fixture);
         const reserve = try store.addCFStmt(.{ .assign_low_level = .{
             .target = reserved,
             .op = .list_reserve_for_append,
-            .rc_effect = LowLevelOp.list_reserve_for_append.rcEffect(),
+            .rc_effect = try store.addRcEffect(LowLevelOp.list_reserve_for_append.rcEffect()),
             .args = try store.addLocalSpan(&.{ list_arg, spare }),
             .next = unsafe_append,
         } }, .test_fixture);
@@ -3777,7 +3773,7 @@ test "promote summaries reject discarded operations before checked append" {
             try f.store.addCFStmt(.{ .assign_low_level = .{
                 .target = ignored,
                 .op = low_level,
-                .rc_effect = low_level.rcEffect(),
+                .rc_effect = try f.store.addRcEffect(low_level.rcEffect()),
                 .args = args,
                 .next = next,
             } }, .test_fixture)
@@ -3815,7 +3811,7 @@ test "promote summaries do not treat an exact reserve as an append's growth step
     const reserve = f.store.getCFStmtPtr(literal.next);
     try testing.expectEqual(LowLevelOp.list_reserve_for_append, reserve.assign_low_level.op);
     reserve.assign_low_level.op = .list_reserve;
-    reserve.assign_low_level.rc_effect = LowLevelOp.list_reserve.rcEffect();
+    reserve.assign_low_level.rc_effect = try f.store.addRcEffect(LowLevelOp.list_reserve.rcEffect());
     var prepared = try prepareCallees(&f.store, testing.allocator);
     defer prepared.deinit();
     try testing.expectEqual(@as(?ProcKind, null), prepared.kinds.get(helper).?);
@@ -3832,7 +3828,7 @@ test "promote summaries preserve direct reserve and unsafe append wrappers" {
         const body = try f.store.addCFStmt(.{ .assign_low_level = .{
             .target = result,
             .op = op,
-            .rc_effect = op.rcEffect(),
+            .rc_effect = try f.store.addRcEffect(op.rcEffect()),
             .args = args,
             .next = ret,
         } }, .test_fixture);
@@ -3876,7 +3872,7 @@ test "promote summary provenance distinguishes aliased reserve siblings" {
             next = try f.store.addCFStmt(.{ .assign_low_level = .{
                 .target = sibling,
                 .op = .list_reserve_for_append,
-                .rc_effect = LowLevelOp.list_reserve_for_append.rcEffect(),
+                .rc_effect = try f.store.addRcEffect(LowLevelOp.list_reserve_for_append.rcEffect()),
                 .args = reserve.args,
                 .next = next,
             } }, .test_fixture);
@@ -3949,7 +3945,7 @@ test "promote metadata follows alias observations across source redefinitions" {
         const read = try store.addCFStmt(.{ .assign_low_level = .{
             .target = item,
             .op = .list_get_unsafe,
-            .rc_effect = LowLevelOp.list_get_unsafe.rcEffect(),
+            .rc_effect = try store.addRcEffect(LowLevelOp.list_get_unsafe.rcEffect()),
             .args = try store.addLocalSpan(&.{ saved, index }),
             .next = done,
         } }, .test_fixture);
@@ -4618,7 +4614,7 @@ const CountedLoop = struct {
         const decrement = try store.addCFStmt(.{ .assign_low_level = .{
             .target = cur1,
             .op = .num_int_sub_wrap,
-            .rc_effect = LowLevelOp.num_int_sub_wrap.rcEffect(),
+            .rc_effect = try store.addRcEffect(LowLevelOp.num_int_sub_wrap.rcEffect()),
             .args = try store.addLocalSpan(&.{ cur, one }),
             .next = elem_lit,
         } }, .test_fixture);
@@ -4642,7 +4638,7 @@ const CountedLoop = struct {
             compare_next = try store.addCFStmt(.{ .assign_low_level = .{
                 .target = done,
                 .op = .bool_not,
-                .rc_effect = LowLevelOp.bool_not.rcEffect(),
+                .rc_effect = try store.addRcEffect(LowLevelOp.bool_not.rcEffect()),
                 .args = try store.addLocalSpan(&.{equal}),
                 .next = test_switch,
             } }, .test_fixture);
@@ -4651,7 +4647,7 @@ const CountedLoop = struct {
         const compare = try store.addCFStmt(.{ .assign_low_level = .{
             .target = compare_target,
             .op = .num_is_eq,
-            .rc_effect = LowLevelOp.num_is_eq.rcEffect(),
+            .rc_effect = try store.addRcEffect(LowLevelOp.num_is_eq.rcEffect()),
             .args = try store.addLocalSpan(&.{ cur, zero }),
             .next = compare_next,
         } }, .test_fixture);
@@ -5020,7 +5016,7 @@ fn addSetSite(f: *PromoteTest, target: LocalId, list: LocalId, next: CFStmtId) A
     const set_stmt = try store.addCFStmt(.{ .assign_low_level = .{
         .target = target,
         .op = .list_set,
-        .rc_effect = LowLevelOp.list_set.rcEffect(),
+        .rc_effect = try store.addRcEffect(LowLevelOp.list_set.rcEffect()),
         .args = try store.addLocalSpan(&.{ list, idx, elem }),
         .next = next,
     } }, .test_fixture);
