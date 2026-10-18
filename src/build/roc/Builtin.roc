@@ -600,7 +600,7 @@ Builtin :: [].{
 
 			normalize_json_dec_digits : Bool, Str, I64 -> Try(Str, [BadNumStr])
 			normalize_json_dec_digits = |negative, digits, point| {
-				sign = if negative "-" else ""
+				sign = if (negative) "-" else ""
 
 				if point <= 0 {
 					zero_count = point.negate().to_u64_wrap()
@@ -1148,14 +1148,14 @@ Builtin :: [].{
 
 			start_string_tag_payloads : JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
 			start_string_tag_payloads = |state, count|
-				if count == 0 Ok(state) else Err(Json.invalid_json({}))
+				if (count == 0) Ok(state) else Err(Json.invalid_json({}))
 
 			next_string_tag_payload : JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str)])
 			next_string_tag_payload = |_, _, _| Err(Json.invalid_json({}))
 
 			finish_string_tag_payloads : JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
 			finish_string_tag_payloads = |state, count|
-				if count == 0 Ok(state) else Err(Json.invalid_json({}))
+				if (count == 0) Ok(state) else Err(Json.invalid_json({}))
 
 			## A multi-payload tag writes its payloads as a JSON array, which is
 			## a fixed-arity sequence, so it reads back through the tuple
@@ -1798,7 +1798,7 @@ Builtin :: [].{
 			encode_bool = |value, state|
 				Ok(
 					JsonEncodeState.{
-						output: Json.append_json_string_bytes(state.output, if value "true" else "false"),
+						output: Json.append_json_string_bytes(state.output, if (value) "true" else "false"),
 					},
 				)
 
@@ -1986,7 +1986,7 @@ Builtin :: [].{
 			encode_key_str = |_, key, state| JsonEncoding.encode_str(key, state)
 
 			encode_key_bool : JsonEncoding, Bool, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
-			encode_key_bool = |_, key, state| JsonEncoding.encode_str(if key "true" else "false", state)
+			encode_key_bool = |_, key, state| JsonEncoding.encode_str(if (key) "true" else "false", state)
 
 			encode_key_u8 : JsonEncoding, U8, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
 			encode_key_u8 = |_, key, state| JsonEncoding.encode_str(json_u8_to_str(key), state)
@@ -5322,7 +5322,7 @@ Builtin :: [].{
 		split_at = |list, idx| {
 			before = list.sublist({ start: 0, len: idx })
 			len = list.len()
-			others = if idx > len
+			others = if (idx > len)
 				[]
 			else
 				list.sublist({ start: idx, len: len - idx })
@@ -7066,7 +7066,7 @@ Builtin :: [].{
 			## ```
 			max : U8, U8 -> U8
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -7077,7 +7077,7 @@ Builtin :: [].{
 			## ```
 			min : U8, U8 -> U8
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -7133,7 +7133,7 @@ Builtin :: [].{
 			## ```
 			plus_saturated : U8, U8 -> U8
 			plus_saturated = |a, b|
-				if a.plus_overflows(b)
+				if (a.plus_overflows(b))
 					highest
 				else
 					a.plus_wrap(b)
@@ -7825,7 +7825,7 @@ Builtin :: [].{
 			## ```
 			max : I8, I8 -> I8
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -7838,7 +7838,7 @@ Builtin :: [].{
 			## ```
 			min : I8, I8 -> I8
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -7913,8 +7913,8 @@ Builtin :: [].{
 			## ```
 			plus_saturated : I8, I8 -> I8
 			plus_saturated = |a, b|
-				if a.plus_overflows(b)
-					if b > 0
+				if (a.plus_overflows(b))
+					if (b > 0)
 						highest
 					else
 						lowest
@@ -8722,7 +8722,7 @@ Builtin :: [].{
 			## ```
 			max : U16, U16 -> U16
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -8733,7 +8733,7 @@ Builtin :: [].{
 			## ```
 			min : U16, U16 -> U16
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -8789,7 +8789,7 @@ Builtin :: [].{
 			## ```
 			plus_saturated : U16, U16 -> U16
 			plus_saturated = |a, b|
-				if a.plus_overflows(b)
+				if (a.plus_overflows(b))
 					highest
 				else
 					a.plus_wrap(b)
@@ -9542,7 +9542,7 @@ Builtin :: [].{
 			## ```
 			max : I16, I16 -> I16
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -9555,7 +9555,7 @@ Builtin :: [].{
 			## ```
 			min : I16, I16 -> I16
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -9630,8 +9630,8 @@ Builtin :: [].{
 			## ```
 			plus_saturated : I16, I16 -> I16
 			plus_saturated = |a, b|
-				if a.plus_overflows(b)
-					if b > 0
+				if (a.plus_overflows(b))
+					if (b > 0)
 						highest
 					else
 						lowest
@@ -10481,7 +10481,7 @@ Builtin :: [].{
 			## ```
 			max : U32, U32 -> U32
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -10492,7 +10492,7 @@ Builtin :: [].{
 			## ```
 			min : U32, U32 -> U32
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -10548,7 +10548,7 @@ Builtin :: [].{
 			## ```
 			plus_saturated : U32, U32 -> U32
 			plus_saturated = |a, b|
-				if a.plus_overflows(b)
+				if (a.plus_overflows(b))
 					highest
 				else
 					a.plus_wrap(b)
@@ -11335,7 +11335,7 @@ Builtin :: [].{
 			## ```
 			max : I32, I32 -> I32
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -11348,7 +11348,7 @@ Builtin :: [].{
 			## ```
 			min : I32, I32 -> I32
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -11423,8 +11423,8 @@ Builtin :: [].{
 			## ```
 			plus_saturated : I32, I32 -> I32
 			plus_saturated = |a, b|
-				if a.plus_overflows(b)
-					if b > 0
+				if (a.plus_overflows(b))
+					if (b > 0)
 						highest
 					else
 						lowest
@@ -12292,7 +12292,7 @@ Builtin :: [].{
 			## ```
 			max : U64, U64 -> U64
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -12303,7 +12303,7 @@ Builtin :: [].{
 			## ```
 			min : U64, U64 -> U64
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -12359,7 +12359,7 @@ Builtin :: [].{
 			## ```
 			plus_saturated : U64, U64 -> U64
 			plus_saturated = |a, b|
-				if a.plus_overflows(b)
+				if (a.plus_overflows(b))
 					highest
 				else
 					a.plus_wrap(b)
@@ -13210,7 +13210,7 @@ Builtin :: [].{
 			## ```
 			max : I64, I64 -> I64
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -13223,7 +13223,7 @@ Builtin :: [].{
 			## ```
 			min : I64, I64 -> I64
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -13299,8 +13299,8 @@ Builtin :: [].{
 			## ```
 			plus_saturated : I64, I64 -> I64
 			plus_saturated = |a, b|
-				if a.plus_overflows(b)
-					if b > 0
+				if (a.plus_overflows(b))
+					if (b > 0)
 						highest
 					else
 						lowest
@@ -14191,7 +14191,7 @@ Builtin :: [].{
 			## ```
 			max : U128, U128 -> U128
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -14202,7 +14202,7 @@ Builtin :: [].{
 			## ```
 			min : U128, U128 -> U128
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -14258,7 +14258,7 @@ Builtin :: [].{
 			## ```
 			plus_saturated : U128, U128 -> U128
 			plus_saturated = |a, b|
-				if a.plus_overflows(b)
+				if (a.plus_overflows(b))
 					highest
 				else
 					a.plus_wrap(b)
@@ -15124,7 +15124,7 @@ Builtin :: [].{
 			## ```
 			max : I128, I128 -> I128
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -15137,7 +15137,7 @@ Builtin :: [].{
 			## ```
 			min : I128, I128 -> I128
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -15214,8 +15214,8 @@ Builtin :: [].{
 			## ```
 			plus_saturated : I128, I128 -> I128
 			plus_saturated = |a, b|
-				if a.plus_overflows(b)
-					if b > 0
+				if (a.plus_overflows(b))
+					if (b > 0)
 						highest
 					else
 						lowest
@@ -16166,7 +16166,7 @@ Builtin :: [].{
 			## ```
 			max : Dec, Dec -> Dec
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -16179,7 +16179,7 @@ Builtin :: [].{
 			## ```
 			min : Dec, Dec -> Dec
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -16214,7 +16214,7 @@ Builtin :: [].{
 				if a == b {
 					True
 				} else {
-					diff_result = if a > b Dec.minus_try(a, b) else Dec.minus_try(b, a)
+					diff_result = if (a > b) Dec.minus_try(a, b) else Dec.minus_try(b, a)
 					match diff_result {
 						Ok(diff) => {
 							magnitude = if a == Dec.lowest or b == Dec.lowest {
@@ -17515,7 +17515,7 @@ Builtin :: [].{
 			## ```
 			max : F32, F32 -> F32
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -17528,7 +17528,7 @@ Builtin :: [].{
 			## ```
 			min : F32, F32 -> F32
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -17960,7 +17960,7 @@ Builtin :: [].{
 
 			range_len_if_known : F32, F32, F32, [Exclusive, Inclusive] -> [Known(U64), Unknown]
 			range_len_if_known = |lower, upper, step, upper_bound|
-				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) Known(0) else Unknown
+				if (step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive)) Known(0) else Unknown
 
 			range_iter : F32, F32, F32, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(F32)
 			range_iter = range_iter_float
@@ -18530,7 +18530,7 @@ Builtin :: [].{
 			## ```
 			max : F64, F64 -> F64
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -18543,7 +18543,7 @@ Builtin :: [].{
 			## ```
 			min : F64, F64 -> F64
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -18975,7 +18975,7 @@ Builtin :: [].{
 
 			range_len_if_known : F64, F64, F64, [Exclusive, Inclusive] -> [Known(U64), Unknown]
 			range_len_if_known = |lower, upper, step, upper_bound|
-				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) Known(0) else Unknown
+				if (step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive)) Known(0) else Unknown
 
 			range_iter : F64, F64, F64, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(F64)
 			range_iter = range_iter_float
@@ -25078,7 +25078,7 @@ sort_copy_range_within = |list, to, from, count| {
 sort_swap_if_after : List(item), U64, (item, item -> [Before, Same, After]) -> (List(item), U64)
 sort_swap_if_after = |list, index, compare_items| {
 	next = plus_infallible(index, 1)
-	swapped = if sort_after(list, index, next, compare_items) 1 else 0
+	swapped = if (sort_after(list, index, next, compare_items)) 1 else 0
 	later = list_move_out_unsafe(list, minus_infallible(next, swapped))
 	shifted = sort_copy(list, index, plus_infallible(index, swapped))
 	(list_move_in_unsafe(shifted, next, later), swapped)
@@ -25108,11 +25108,11 @@ sort_merge_head : List(item), U64, List(item), U64, U64, Bool, Bool, (item, item
 sort_merge_head = |dest, dest_index, src, left_head, right_head, left_available, right_available, compare_items| {
 	# A spent run's head is past its end, so compare the live run against
 	# itself and ignore the answer.
-	probe_left = if left_available left_head else right_head
-	probe_right = if right_available right_head else left_head
+	probe_left = if (left_available) left_head else right_head
+	probe_right = if (right_available) right_head else left_head
 	lte = compare_items(list_get_unsafe(src, probe_left), list_get_unsafe(src, probe_right)) != After
-	took_left = if !right_available True else if !left_available False else lte
-	from = if took_left left_head else right_head
+	took_left = if (!right_available) True else if (!left_available) False else lte
+	from = if (took_left) left_head else right_head
 	{ dest: list_move_in_unsafe(dest, dest_index, list_move_out_unsafe(src, from)), took_left }
 }
 
@@ -25122,11 +25122,11 @@ sort_merge_tail : List(item), U64, List(item), U64, U64, Bool, Bool, (item, item
 sort_merge_tail = |dest, dest_index, src, left_end, right_end, left_available, right_available, compare_items| {
 	# A run that has items ends after at least one slot, so its end is at
 	# least one; a spent run's end is never used.
-	probe_left = if left_available minus_infallible(left_end, 1) else minus_infallible(right_end, 1)
-	probe_right = if right_available minus_infallible(right_end, 1) else minus_infallible(left_end, 1)
+	probe_left = if (left_available) minus_infallible(left_end, 1) else minus_infallible(right_end, 1)
+	probe_right = if (right_available) minus_infallible(right_end, 1) else minus_infallible(left_end, 1)
 	gt = compare_items(list_get_unsafe(src, probe_left), list_get_unsafe(src, probe_right)) == After
-	took_left = if !right_available True else if !left_available False else gt
-	from = if took_left probe_left else probe_right
+	took_left = if (!right_available) True else if (!left_available) False else gt
+	from = if (took_left) probe_left else probe_right
 	{ dest: list_move_in_unsafe(dest, dest_index, list_move_out_unsafe(src, from)), took_left }
 }
 
@@ -25147,14 +25147,14 @@ parity_merge = |dest, dest_start, src, src_start, left_len, right_len, compare_i
 	# The two scans write every slot of the merged run exactly once. When the
 	# left run is shorter, the head scan covers the middle slot by itself, and
 	# the extra step is one of the right run's slots.
-	var $head_steps = if left_len < right_len plus_infallible(left_len, 1) else left_len
+	var $head_steps = if (left_len < right_len) plus_infallible(left_len, 1) else left_len
 	var $tail_steps = minus_infallible(plus_infallible(left_len, right_len), $head_steps)
 	# Each step takes from a run that still has items: `took` is 1 only when
 	# the left run does and 0 only when the right run does.
 	while $head_steps > 0 {
 		step = sort_merge_head($dest, $dest_head, src, $left_head, $right_head, $left_remaining != 0, $right_remaining != 0, compare_items)
 		$dest = step.dest
-		took = if step.took_left 1 else 0
+		took = if (step.took_left) 1 else 0
 		not_took = minus_infallible(1, took)
 		$left_head = plus_infallible($left_head, took)
 		$right_head = plus_infallible($right_head, not_took)
@@ -25166,7 +25166,7 @@ parity_merge = |dest, dest_start, src, src_start, left_len, right_len, compare_i
 			$dest_end = minus_infallible($dest_end, 1)
 			tail = sort_merge_tail($dest, $dest_end, src, $left_end, $right_end, $left_remaining != 0, $right_remaining != 0, compare_items)
 			$dest = tail.dest
-			took_tail = if tail.took_left 1 else 0
+			took_tail = if (tail.took_left) 1 else 0
 			not_took_tail = minus_infallible(1, took_tail)
 			$left_end = minus_infallible($left_end, took_tail)
 			$right_end = minus_infallible($right_end, not_took_tail)
@@ -25259,7 +25259,7 @@ cross_merge = |dest, dest_start, src, src_start, left_len, right_len, compare_it
 			while $pair < pairs_per_batch and $left_head < $left_end and $right_head < $right_end {
 				head = sort_merge_head($dest, $dest_head, src, $left_head, $right_head, True, True, compare_items)
 				$dest = head.dest
-				took = if head.took_left 1 else 0
+				took = if (head.took_left) 1 else 0
 				$left_head = plus_infallible($left_head, took)
 				$right_head = plus_infallible($right_head, minus_infallible(1, took))
 				$dest_head = plus_infallible($dest_head, 1)
@@ -25267,7 +25267,7 @@ cross_merge = |dest, dest_start, src, src_start, left_len, right_len, compare_it
 					$dest_end = minus_infallible($dest_end, 1)
 					tail = sort_merge_tail($dest, $dest_end, src, $left_end, $right_end, True, True, compare_items)
 					$dest = tail.dest
-					took_tail = if tail.took_left 1 else 0
+					took_tail = if (tail.took_left) 1 else 0
 					$left_end = minus_infallible($left_end, took_tail)
 					$right_end = minus_infallible($right_end, minus_infallible(1, took_tail))
 				}
@@ -25280,7 +25280,7 @@ cross_merge = |dest, dest_start, src, src_start, left_len, right_len, compare_it
 	while $left_head < $left_end and $right_head < $right_end {
 		head = sort_merge_head($dest, $dest_head, src, $left_head, $right_head, True, True, compare_items)
 		$dest = head.dest
-		took = if head.took_left 1 else 0
+		took = if (head.took_left) 1 else 0
 		$left_head = plus_infallible($left_head, took)
 		$right_head = plus_infallible($right_head, minus_infallible(1, took))
 		$dest_head = plus_infallible($dest_head, 1)
@@ -25394,11 +25394,11 @@ parity_swap_six = |items, start, swap, compare_items| {
 	}
 	# Order each half of three in swap, then merge the halves back. Each `gt`
 	# is 0 or 1, so the slots it selects between are the pair's own.
-	first_gt = if sort_after(fourth, start, at(1), compare_items) 1 else 0
+	first_gt = if (sort_after(fourth, start, at(1), compare_items)) 1 else 0
 	swap_a = list_move_in_unsafe(swap, 0, list_move_out_unsafe(fourth, at(first_gt)))
 	swap_b = list_move_in_unsafe(swap_a, 1, list_move_out_unsafe(fourth, at(minus_infallible(1, first_gt))))
 	swap_c = list_move_in_unsafe(swap_b, 2, list_move_out_unsafe(fourth, at(2)))
-	second_gt = if sort_after(fourth, at(4), at(5), compare_items) 1 else 0
+	second_gt = if (sort_after(fourth, at(4), at(5), compare_items)) 1 else 0
 	swap_d = list_move_in_unsafe(swap_c, 4, list_move_out_unsafe(fourth, at(plus_infallible(4, second_gt))))
 	swap_e = list_move_in_unsafe(swap_d, 5, list_move_out_unsafe(fourth, at(minus_infallible(5, second_gt))))
 	swap_f = list_move_in_unsafe(swap_e, 3, list_move_out_unsafe(fourth, at(3)))
@@ -25420,14 +25420,14 @@ parity_swap_seven = |items, start, swap, compare_items| {
 	(seventh, _) = sort_swap_if_after(sixth, at(4), compare_items)
 	# Order a run of three and a run of four in swap, then merge them back.
 	# Each `gt` is 0 or 1, so the slots it selects between are the pair's own.
-	first_gt = if sort_after(seventh, start, at(1), compare_items) 1 else 0
+	first_gt = if (sort_after(seventh, start, at(1), compare_items)) 1 else 0
 	swap_a = list_move_in_unsafe(swap, 0, list_move_out_unsafe(seventh, at(first_gt)))
 	swap_b = list_move_in_unsafe(swap_a, 1, list_move_out_unsafe(seventh, at(minus_infallible(1, first_gt))))
 	swap_c = list_move_in_unsafe(swap_b, 2, list_move_out_unsafe(seventh, at(2)))
-	second_gt = if sort_after(seventh, at(3), at(4), compare_items) 1 else 0
+	second_gt = if (sort_after(seventh, at(3), at(4), compare_items)) 1 else 0
 	swap_d = list_move_in_unsafe(swap_c, 3, list_move_out_unsafe(seventh, at(plus_infallible(3, second_gt))))
 	swap_e = list_move_in_unsafe(swap_d, 4, list_move_out_unsafe(seventh, at(minus_infallible(4, second_gt))))
-	third_gt = if sort_after(seventh, at(5), at(6), compare_items) 1 else 0
+	third_gt = if (sort_after(seventh, at(5), at(6), compare_items)) 1 else 0
 	swap_f = list_move_in_unsafe(swap_e, 5, list_move_out_unsafe(seventh, at(plus_infallible(5, third_gt))))
 	swap_g = list_move_in_unsafe(swap_f, 6, list_move_out_unsafe(seventh, at(minus_infallible(6, third_gt))))
 	parity_merge(seventh, start, swap_g, 0, 3, 4, compare_items)
@@ -25531,10 +25531,10 @@ quad_swap = |items, start, len, swap, compare_items| {
 					$done = True
 				} else {
 					$count = minus_infallible($count, 1)
-					v1 = if sort_after($items, block, at(1), compare_items) 1 else 0
-					v2 = if sort_after($items, at(2), at(3), compare_items) 1 else 0
-					v3 = if sort_after($items, at(4), at(5), compare_items) 1 else 0
-					v4 = if sort_after($items, at(6), at(7), compare_items) 1 else 0
+					v1 = if (sort_after($items, block, at(1), compare_items)) 1 else 0
+					v2 = if (sort_after($items, at(2), at(3), compare_items)) 1 else 0
+					v3 = if (sort_after($items, at(4), at(5), compare_items)) 1 else 0
+					v4 = if (sort_after($items, at(6), at(7), compare_items)) 1 else 0
 					pairs = plus_infallible(plus_infallible(v1, v2), plus_infallible(v3, v4))
 					if pairs == 0 {
 						if !sort_after($items, at(1), at(2), compare_items) and !sort_after($items, at(3), at(4), compare_items) and !sort_after($items, at(5), at(6), compare_items) {
@@ -25561,10 +25561,10 @@ quad_swap = |items, start, len, swap, compare_items| {
 					$done = True
 				} else {
 					$count = minus_infallible($count, 1)
-					v1 = if sort_after($items, block, at(1), compare_items) 1 else 0
-					v2 = if sort_after($items, at(2), at(3), compare_items) 1 else 0
-					v3 = if sort_after($items, at(4), at(5), compare_items) 1 else 0
-					v4 = if sort_after($items, at(6), at(7), compare_items) 1 else 0
+					v1 = if (sort_after($items, block, at(1), compare_items)) 1 else 0
+					v2 = if (sort_after($items, at(2), at(3), compare_items)) 1 else 0
+					v3 = if (sort_after($items, at(4), at(5), compare_items)) 1 else 0
+					v4 = if (sort_after($items, at(6), at(7), compare_items)) 1 else 0
 					pairs = plus_infallible(plus_infallible(v1, v2), plus_infallible(v3, v4))
 					if pairs != 0 {
 						if pairs == 4 and sort_after($items, at(1), at(2), compare_items) and sort_after($items, at(3), at(4), compare_items) and sort_after($items, at(5), at(6), compare_items) {
@@ -25576,7 +25576,7 @@ quad_swap = |items, start, len, swap, compare_items| {
 							$swap = scratch
 							$run = NoRun
 						}
-					} else if !sort_after($items, at(1), at(2), compare_items) and !sort_after($items, at(3), at(4), compare_items) and !sort_after($items, at(5), at(6), compare_items) {
+					} else if (!sort_after($items, at(1), at(2), compare_items) and !sort_after($items, at(3), at(4), compare_items) and !sort_after($items, at(5), at(6), compare_items)) {
 						# Still ordered.
 					} else {
 						(merged, scratch) = quad_swap_merge($items, block, $swap, compare_items)
@@ -25609,12 +25609,12 @@ quad_swap = |items, start, len, swap, compare_items| {
 				} else {
 					$count = minus_infallible($count, 1)
 					# 1 for a pair that is in order, so not reversed.
-					u1 = if sort_after($items, block, at(1), compare_items) 0 else 1
-					u2 = if sort_after($items, at(2), at(3), compare_items) 0 else 1
-					u3 = if sort_after($items, at(4), at(5), compare_items) 0 else 1
-					u4 = if sort_after($items, at(6), at(7), compare_items) 0 else 1
+					u1 = if (sort_after($items, block, at(1), compare_items)) 0 else 1
+					u2 = if (sort_after($items, at(2), at(3), compare_items)) 0 else 1
+					u3 = if (sort_after($items, at(4), at(5), compare_items)) 0 else 1
+					u4 = if (sort_after($items, at(6), at(7), compare_items)) 0 else 1
 					ordered_pairs = plus_infallible(plus_infallible(u1, u2), plus_infallible(u3, u4))
-					if ordered_pairs == 0 and sort_after($items, before, block, compare_items) and sort_after($items, at(1), at(2), compare_items) and sort_after($items, at(3), at(4), compare_items) and sort_after($items, at(5), at(6), compare_items) {
+					if (ordered_pairs == 0 and sort_after($items, before, block, compare_items) and sort_after($items, at(1), at(2), compare_items) and sort_after($items, at(3), at(4), compare_items) and sort_after($items, at(5), at(6), compare_items)) {
 						# Still reversed, across the block boundary too.
 					} else {
 						$items = quad_reversal($items, $reverse_head, before)
@@ -25740,7 +25740,7 @@ tail_merge = |items, start, len, swap, swap_len, block_len, compare_items| {
 	while $block_len < len and $block_len <= swap_len {
 		var $block = start
 		while $block + $block_len < end {
-			merge_len = if $block + $block_len * 2 < end $block_len * 2 else end - $block
+			merge_len = if ($block + $block_len * 2 < end) $block_len * 2 else end - $block
 			(merged, scratch) = partial_backwards_merge($items, $block, merge_len, $swap, swap_len, $block_len, compare_items)
 			$items = merged
 			$swap = scratch
@@ -25820,8 +25820,8 @@ partial_backwards_merge = |items, start, len, swap, swap_len, block_len, compare
 					$items = sort_copy_range_within($items, $dest_end, $left_end, 2)
 				} else {
 					lte = !sort_after_across($items, minus_infallible($left_end, 1), $swap, minus_infallible($right_end, 1), compare_items)
-					right_slot = if lte minus_infallible($dest_end, 1) else minus_infallible($dest_end, 2)
-					left_slot = if lte minus_infallible($dest_end, 2) else minus_infallible($dest_end, 1)
+					right_slot = if (lte) minus_infallible($dest_end, 1) else minus_infallible($dest_end, 2)
+					left_slot = if (lte) minus_infallible($dest_end, 2) else minus_infallible($dest_end, 1)
 					$right_end = minus_infallible($right_end, 1)
 					$items = list_move_in_unsafe($items, right_slot, list_move_out_unsafe($swap, $right_end))
 					$left_end = minus_infallible($left_end, 1)
@@ -25829,7 +25829,7 @@ partial_backwards_merge = |items, start, len, swap, swap_len, block_len, compare
 					$dest_end = minus_infallible($dest_end, 3)
 					step = sort_merge_tail_across($items, $dest_end, $left_end, $swap, $right_end, compare_items)
 					$items = step.items
-					took = if step.took_left 1 else 0
+					took = if (step.took_left) 1 else 0
 					$left_end = minus_infallible($left_end, took)
 					$right_end = minus_infallible($right_end, minus_infallible(1, took))
 				}
@@ -25849,8 +25849,8 @@ partial_backwards_merge = |items, start, len, swap, swap_len, block_len, compare
 			$items = sort_copy_range_within($items, $dest_end, $left_end, 2)
 		} else {
 			lte = !sort_after_across($items, minus_infallible($left_end, 1), $swap, minus_infallible($right_end, 1), compare_items)
-			right_slot = if lte minus_infallible($dest_end, 1) else minus_infallible($dest_end, 2)
-			left_slot = if lte minus_infallible($dest_end, 2) else minus_infallible($dest_end, 1)
+			right_slot = if (lte) minus_infallible($dest_end, 1) else minus_infallible($dest_end, 2)
+			left_slot = if (lte) minus_infallible($dest_end, 2) else minus_infallible($dest_end, 1)
 			$right_end = minus_infallible($right_end, 1)
 			$items = list_move_in_unsafe($items, right_slot, list_move_out_unsafe($swap, $right_end))
 			$left_end = minus_infallible($left_end, 1)
@@ -25858,7 +25858,7 @@ partial_backwards_merge = |items, start, len, swap, swap_len, block_len, compare
 			$dest_end = minus_infallible($dest_end, 3)
 			step = sort_merge_tail_across($items, $dest_end, $left_end, $swap, $right_end, compare_items)
 			$items = step.items
-			took = if step.took_left 1 else 0
+			took = if (step.took_left) 1 else 0
 			$left_end = minus_infallible($left_end, took)
 			$right_end = minus_infallible($right_end, minus_infallible(1, took))
 		}
@@ -25869,7 +25869,7 @@ partial_backwards_merge = |items, start, len, swap, swap_len, block_len, compare
 		$dest_end = minus_infallible($dest_end, 1)
 		step = sort_merge_tail_across($items, $dest_end, $left_end, $swap, $right_end, compare_items)
 		$items = step.items
-		took = if step.took_left 1 else 0
+		took = if (step.took_left) 1 else 0
 		$left_end = minus_infallible($left_end, took)
 		$right_end = minus_infallible($right_end, minus_infallible(1, took))
 	}
@@ -25912,8 +25912,8 @@ partial_forward_merge = |items, start, len, swap, block_len, compare_items| {
 			$left_head = plus_infallible($left_head, 2)
 		} else {
 			lte = !sort_after_across($swap, $left_head, $items, $right_head, compare_items)
-			right_slot = if lte plus_infallible($dest_head, 1) else $dest_head
-			left_slot = if lte $dest_head else plus_infallible($dest_head, 1)
+			right_slot = if (lte) plus_infallible($dest_head, 1) else $dest_head
+			left_slot = if (lte) $dest_head else plus_infallible($dest_head, 1)
 			$items = sort_copy($items, right_slot, $right_head)
 			$right_head = plus_infallible($right_head, 1)
 			$items = list_move_in_unsafe($items, left_slot, list_move_out_unsafe($swap, $left_head))
@@ -25921,7 +25921,7 @@ partial_forward_merge = |items, start, len, swap, block_len, compare_items| {
 			$dest_head = plus_infallible($dest_head, 2)
 			step = sort_merge_head_across($items, $dest_head, $swap, $left_head, $right_head, compare_items)
 			$items = step.items
-			took = if step.took_left 1 else 0
+			took = if (step.took_left) 1 else 0
 			$left_head = plus_infallible($left_head, took)
 			$right_head = plus_infallible($right_head, minus_infallible(1, took))
 			$dest_head = plus_infallible($dest_head, 1)
@@ -25932,7 +25932,7 @@ partial_forward_merge = |items, start, len, swap, block_len, compare_items| {
 	while $left_head < left_end and $right_head < right_end {
 		step = sort_merge_head_across($items, $dest_head, $swap, $left_head, $right_head, compare_items)
 		$items = step.items
-		took = if step.took_left 1 else 0
+		took = if (step.took_left) 1 else 0
 		$left_head = plus_infallible($left_head, took)
 		$right_head = plus_infallible($right_head, minus_infallible(1, took))
 		$dest_head = plus_infallible($dest_head, 1)
@@ -25958,7 +25958,7 @@ rotate_merge = |items, start, len, swap, swap_len, block_len, compare_items| {
 	while $block_len < len {
 		var $block = start
 		while $block + $block_len < end {
-			right_len = if $block + $block_len * 2 < end $block_len else end - $block - $block_len
+			right_len = if ($block + $block_len * 2 < end) $block_len else end - $block - $block_len
 			(merged, scratch) = rotate_merge_block($items, $block, $swap, swap_len, $block_len, right_len, compare_items)
 			$items = merged
 			$swap = scratch
@@ -26050,7 +26050,7 @@ monobound_binary_first = |items, start, len, value, compare_items| {
 trinity_rotation : List(item), U64, U64, List(item), U64, U64 -> (List(item), List(item))
 trinity_rotation = |items, start, len, swap, full_swap_len, left_len| {
 	right_len = len - left_len
-	swap_len = if full_swap_len > 65536 65536 else full_swap_len
+	swap_len = if (full_swap_len > 65536) 65536 else full_swap_len
 	var $items = items
 	var $swap = swap
 	if left_len < right_len {
@@ -26205,15 +26205,15 @@ flux_sort = |items, swap, compare_items| {
 	var $balance_d = 0
 
 	if quad1 < quad2 {
-		$balance_b = $balance_b + (if sort_after($items, $b, $b + 1, compare_items) 1 else 0)
+		$balance_b = $balance_b + (if (sort_after($items, $b, $b + 1, compare_items)) 1 else 0)
 		$b = $b + 1
 	}
 	if quad1 < quad3 {
-		$balance_c = $balance_c + (if sort_after($items, $c, $c + 1, compare_items) 1 else 0)
+		$balance_c = $balance_c + (if (sort_after($items, $c, $c + 1, compare_items)) 1 else 0)
 		$c = $c + 1
 	}
 	if quad1 < quad4 {
-		$balance_d = $balance_d + (if sort_after($items, $d, $d + 1, compare_items) 1 else 0)
+		$balance_d = $balance_d + (if (sort_after($items, $d, $d + 1, compare_items)) 1 else 0)
 		$d = $d + 1
 	}
 
@@ -26229,13 +26229,13 @@ flux_sort = |items, swap, compare_items| {
 		var $sum_d = 0
 		var $step = 0
 		while $step < 32 {
-			$sum_a = plus_infallible($sum_a, (if sort_after($items, $a, plus_infallible($a, 1), compare_items) 1 else 0))
+			$sum_a = plus_infallible($sum_a, (if (sort_after($items, $a, plus_infallible($a, 1), compare_items)) 1 else 0))
 			$a = plus_infallible($a, 1)
-			$sum_b = plus_infallible($sum_b, (if sort_after($items, $b, plus_infallible($b, 1), compare_items) 1 else 0))
+			$sum_b = plus_infallible($sum_b, (if (sort_after($items, $b, plus_infallible($b, 1), compare_items)) 1 else 0))
 			$b = plus_infallible($b, 1)
-			$sum_c = plus_infallible($sum_c, (if sort_after($items, $c, plus_infallible($c, 1), compare_items) 1 else 0))
+			$sum_c = plus_infallible($sum_c, (if (sort_after($items, $c, plus_infallible($c, 1), compare_items)) 1 else 0))
 			$c = plus_infallible($c, 1)
-			$sum_d = plus_infallible($sum_d, (if sort_after($items, $d, plus_infallible($d, 1), compare_items) 1 else 0))
+			$sum_d = plus_infallible($sum_d, (if (sort_after($items, $d, plus_infallible($d, 1), compare_items)) 1 else 0))
 			$d = plus_infallible($d, 1)
 			$step = plus_infallible($step, 1)
 		}
@@ -26247,10 +26247,10 @@ flux_sort = |items, swap, compare_items| {
 		streak_b = $sum_b == 0 or $sum_b == 32
 		streak_c = $sum_c == 0 or $sum_c == 32
 		streak_d = $sum_d == 0 or $sum_d == 32
-		$streaks_a = plus_infallible($streaks_a, (if streak_a 1 else 0))
-		$streaks_b = plus_infallible($streaks_b, (if streak_b 1 else 0))
-		$streaks_c = plus_infallible($streaks_c, (if streak_c 1 else 0))
-		$streaks_d = plus_infallible($streaks_d, (if streak_d 1 else 0))
+		$streaks_a = plus_infallible($streaks_a, (if (streak_a) 1 else 0))
+		$streaks_b = plus_infallible($streaks_b, (if (streak_b) 1 else 0))
+		$streaks_c = plus_infallible($streaks_c, (if (streak_c) 1 else 0))
+		$streaks_d = plus_infallible($streaks_d, (if (streak_d) 1 else 0))
 		if $count > 516 and !streak_a and !streak_b and !streak_c and !streak_d {
 			# Random-looking everywhere: skip ahead, assuming half the pairs
 			# are out of order.
@@ -26267,13 +26267,13 @@ flux_sort = |items, swap, compare_items| {
 		$count = minus_infallible($count, 128)
 	}
 	while $count > 7 {
-		$balance_a = plus_infallible($balance_a, (if sort_after($items, $a, plus_infallible($a, 1), compare_items) 1 else 0))
+		$balance_a = plus_infallible($balance_a, (if (sort_after($items, $a, plus_infallible($a, 1), compare_items)) 1 else 0))
 		$a = plus_infallible($a, 1)
-		$balance_b = plus_infallible($balance_b, (if sort_after($items, $b, plus_infallible($b, 1), compare_items) 1 else 0))
+		$balance_b = plus_infallible($balance_b, (if (sort_after($items, $b, plus_infallible($b, 1), compare_items)) 1 else 0))
 		$b = plus_infallible($b, 1)
-		$balance_c = plus_infallible($balance_c, (if sort_after($items, $c, plus_infallible($c, 1), compare_items) 1 else 0))
+		$balance_c = plus_infallible($balance_c, (if (sort_after($items, $c, plus_infallible($c, 1), compare_items)) 1 else 0))
 		$c = plus_infallible($c, 1)
-		$balance_d = plus_infallible($balance_d, (if sort_after($items, $d, plus_infallible($d, 1), compare_items) 1 else 0))
+		$balance_d = plus_infallible($balance_d, (if (sort_after($items, $d, plus_infallible($d, 1), compare_items)) 1 else 0))
 		$d = plus_infallible($d, 1)
 		$count = minus_infallible($count, 4)
 	}
@@ -26582,7 +26582,7 @@ flux_default_partition = |items, swap, start, len, x_in_swap, pivot, compare_ite
 	var $swap = swap
 	var $kept = start
 	var $moved = 0
-	var $x = if x_in_swap 0 else start
+	var $x = if (x_in_swap) 0 else start
 	var $run = 0
 	# Each item is written to both destinations and only the right one's
 	# cursor advances, so the comparison never has to be branched on. The
@@ -26597,7 +26597,7 @@ flux_default_partition = |items, swap, start, len, x_in_swap, pivot, compare_ite
 			} else {
 				list_move_out_unsafe($items, $x)
 			}
-			keep = if compare_items(item, pivot) != After 1 else 0
+			keep = if (compare_items(item, pivot) != After) 1 else 0
 			$items = list_move_in_unsafe($items, $kept, item)
 			$swap = list_move_in_unsafe($swap, $moved, list_move_out_unsafe($items, $kept))
 			$kept = plus_infallible($kept, keep)
@@ -26617,7 +26617,7 @@ flux_default_partition = |items, swap, start, len, x_in_swap, pivot, compare_ite
 		} else {
 			list_move_out_unsafe($items, $x)
 		}
-		keep = if compare_items(item, pivot) != After 1 else 0
+		keep = if (compare_items(item, pivot) != After) 1 else 0
 		$items = list_move_in_unsafe($items, $kept, item)
 		$swap = list_move_in_unsafe($swap, $moved, list_move_out_unsafe($items, $kept))
 		$kept = plus_infallible($kept, keep)
@@ -26651,7 +26651,7 @@ flux_reverse_partition = |items, swap, start, len, pivot, compare_items| {
 	end = start + len
 	while $x < end {
 		item = list_move_out_unsafe($items, $x)
-		keep = if compare_items(pivot, item) == After 1 else 0
+		keep = if (compare_items(pivot, item) == After) 1 else 0
 		$items = list_move_in_unsafe($items, $kept, item)
 		$swap = list_move_in_unsafe($swap, $moved, list_move_out_unsafe($items, $kept))
 		$kept = plus_infallible($kept, keep)
@@ -26671,7 +26671,7 @@ flux_reverse_partition = |items, swap, start, len, pivot, compare_items| {
 # The item that orders in the middle of nine evenly spaced items of `x`.
 median_of_nine_pivot : List(item), List(item), U64, U64, Bool, (item, item -> [Before, Same, After]) -> item
 median_of_nine_pivot = |items, swap, start, len, x_in_swap, compare_items| {
-	x_start = if x_in_swap 0 else start
+	x_start = if (x_in_swap) 0 else start
 	offset = len // 9
 	sample = |k| if x_in_swap {
 		list_get_unsafe(swap, x_start + k * offset)
@@ -26777,8 +26777,8 @@ sort_within = |list, start, count, scratch, compare_items| {
 	while $run < count {
 		var $offset = 0
 		while $offset < count {
-			left_len = if $offset + $run < count $run else count - $offset
-			right_len = if $offset + $run * 2 < count $run else count - $offset - left_len
+			left_len = if ($offset + $run < count) $run else count - $offset
+			right_len = if ($offset + $run * 2 < count) $run else count - $offset - left_len
 			$list = merge_runs_within($list, $to + $offset, $from + $offset, left_len, right_len, compare_items)
 			$offset = $offset + $run * 2
 		}
@@ -26804,10 +26804,10 @@ merge_runs_within = |list, to, from, left_len, right_len, compare_items| {
 	var $dest = to
 	while $left < left_end and $right < right_end {
 		take_left = !sort_after($list, $left, $right, compare_items)
-		source = if take_left $left else $right
+		source = if (take_left) $left else $right
 		$list = sort_copy($list, $dest, source)
-		$left = $left + (if take_left 1 else 0)
-		$right = $right + (if take_left 0 else 1)
+		$left = $left + (if (take_left) 1 else 0)
+		$right = $right + (if (take_left) 0 else 1)
 		$dest = $dest + 1
 	}
 	$list = sort_copy_range_within($list, $dest, $left, left_end - $left)
@@ -27369,11 +27369,11 @@ range_standard_last = |lower, upper, step, upper_bound| {
 
 		amount_below_upper = match upper_bound {
 			Inclusive => distance_rem
-			Exclusive => if distance_rem == 0 step else distance_rem
+			Exclusive => if (distance_rem == 0) step else distance_rem
 		}
 
 		match upper.minus_try(amount_below_upper) {
-			Ok(last) => if last >= lower Ok(last) else Err(NoMore)
+			Ok(last) => if (last >= lower) Ok(last) else Err(NoMore)
 			Err(Overflow) => Err(NoMore)
 		}
 	}
@@ -27424,7 +27424,7 @@ range_iter_standard = |lower, upper, step, upper_bound, direction, len_if_known|
 						}
 						if step > 0 and within_upper {
 							next_state = match current.plus_try(step) {
-								Ok(next) => if next > current RangeAt(next) else RangeDone
+								Ok(next) => if (next > current) RangeAt(next) else RangeDone
 								Err(Overflow) => RangeDone
 							}
 							Ok((current, next_state))
@@ -27437,7 +27437,7 @@ range_iter_standard = |lower, upper, step, upper_bound, direction, len_if_known|
 							RangeDone
 						} else {
 							match current.minus_try(step) {
-								Ok(next) => if next < current and next >= lower RangeAt(next) else RangeDone
+								Ok(next) => if (next < current and next >= lower) RangeAt(next) else RangeDone
 								Err(Overflow) => RangeDone
 							}
 						}
@@ -27464,7 +27464,7 @@ range_iter_float : num, num, num, [Exclusive, Inclusive], [To, From], [Known(U64
 range_iter_float = |current, upper, step, upper_bound, direction, len_if_known| {
 	initial = match direction {
 		From => RangeDone
-		To => if step > 0 RangeAt(current) else RangeDone
+		To => if (step > 0) RangeAt(current) else RangeDone
 	}
 	Iter.custom(
 		initial,
@@ -27480,7 +27480,7 @@ range_iter_float = |current, upper, step, upper_bound, direction, len_if_known| 
 
 					if step > 0 and within_upper {
 						next = item + step
-						next_state = if next > item RangeAt(next) else RangeDone
+						next_state = if (next > item) RangeAt(next) else RangeDone
 						Ok((item, next_state))
 					} else {
 						Err(NoMore)
@@ -27608,7 +27608,7 @@ scan_json_string_tail = |tail| {
 				raw = str_substring_unsafe(tail, 0, $index)
 				after = str_drop_first_bytes_unsafe(tail, $index + 1)
 
-				return Ok({ after, body: if $had_escape HasEscapes(raw) else NoEscapes(raw) })
+				return Ok({ after, body: if ($had_escape) HasEscapes(raw) else NoEscapes(raw) })
 			}
 			# If we find any backslashes, we mark that we found an escape and consume the full
 			# escape sequence atomically

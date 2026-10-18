@@ -13979,7 +13979,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             if (proc_spec.hosted) |hosted| {
-                return try self.generateHostedCall(hosted, arg_locs, arg_layouts, call.ret_layout);
+                return try self.generateCAbiCall(.{ .hosted = hosted }, arg_locs, arg_layouts, call.ret_layout);
+            }
+            if (proc_spec.c_abi_entry) {
+                return try self.generateCAbiCall(.{ .entry = proc_spec.identity }, arg_locs, arg_layouts, call.ret_layout);
             }
 
             const proc = try self.compiledProcForId(call.proc);
@@ -14810,9 +14813,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return on_drop_reg;
         }
 
-        fn generateHostedCall(
-            self: *Self,
+        /// The callee of a call made through the platform C ABI: a hosted
+        /// function, or the C-ABI entry of a procedure a linked object-cache
+        /// object provides.
+        const CAbiCallee = union(enum) {
             hosted: lir.LIR.HostedProc,
+            entry: lir.ProcIdentity,
+        };
+
+        fn generateCAbiCall(
+            self: *Self,
+            callee: CAbiCallee,
             args: []const ValueLocation,
             arg_layouts: []const layout.Idx,
             ret_layout: layout.Idx,
@@ -14850,11 +14861,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             else
                 false;
 
+            // A linked object-cache entry exists only in a linked object, so
+            // only object output can call one; a fragment compiled for it
+            // emits relocatable calls too.
+            const object_output = self.generation_mode == .object_file or
+                (self.fragment_mode and self.fragment_source_mode == .object_file);
+            if (callee == .entry and !object_output) {
+                if (builtin.mode == .debug) base.invariant("{s}", .{"a C-ABI object-cache entry reached code that is not linked as an object"});
+                unreachable;
+            }
+
             // Native execution resolves the hosted symbol through the host
             // that will run the code; a host without it (compile-time
             // evaluation) makes every hosted call a crash.
-            const native_hosted_address: ?usize = if (self.generation_mode == .native_execution) blk: {
-                const symbol_name = self.store.getString(hosted.symbol);
+            const native_hosted_address: ?usize = if (callee == .hosted and self.generation_mode == .native_execution) blk: {
+                const symbol_name = self.store.getString(callee.hosted.symbol);
                 if (self.hosted_symbol_resolver) |resolver| {
                     if (resolver.resolve(resolver.context, symbol_name)) |address| break :blk address;
                 }
@@ -14935,7 +14956,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (native_hosted_address) |address| {
                 try builder.call(address);
             } else {
-                try builder.callRelocatable(try self.hostedSymbol(hosted.symbol), &self.codegen);
+                const symbol = switch (callee) {
+                    .hosted => |hosted| try self.hostedSymbol(hosted.symbol),
+                    .entry => |identity| symbol: {
+                        var name: [lir.ProcIdentity.symbol_name_len]u8 = undefined;
+                        break :symbol try self.internSymbolName(identity.writeCAbiEntryName(&name), .shared);
+                    },
+                };
+                try builder.callRelocatable(symbol, &self.codegen);
             }
 
             // Register-class return: store each result register into the return slot.
@@ -17920,7 +17948,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.generation_mode = .shim_execution;
             defer self.generation_mode = mode;
             const proc = self.store.getProcSpec(proc_id);
-            std.debug.assert(!proc.external and !proc.is_static_initializer);
+            std.debug.assert(!(proc.external and !proc.c_abi_entry) and !proc.is_static_initializer);
             try self.compileProcSpec(proc_id, proc);
             try self.finishFragment();
         }
@@ -18031,7 +18059,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (self.proc_registry.get(@intCast(i))) |registered| {
                     if (registered.code_start != unresolved_proc_code_start) continue;
                 }
-                if (proc.external) {
+                if (proc.external and !proc.c_abi_entry) {
                     if (builtin.mode == .debug) {
                         base.invariant("Dev/codegen invariant violated: external proc {d} had no object-cache entry spliced before compilation", .{i});
                     }
@@ -18382,7 +18410,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             if (proc.hosted) |hosted| {
-                try self.generateHostedProcWrapper(hosted, proc);
+                try self.generateCAbiProcWrapper(.{ .hosted = hosted }, proc);
+            } else if (proc.c_abi_entry) {
+                // The procedure's code is a linked object-cache entry; this
+                // body forwards to its C-ABI entry, for callers that reach
+                // the procedure other than by a direct call.
+                try self.generateCAbiProcWrapper(.{ .entry = proc.identity }, proc);
             } else {
                 const body = requireProcBody(proc_id, proc);
                 try self.ensureStableLocationsForStmtLocals(body);
@@ -18573,14 +18606,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             );
         }
 
-        fn generateHostedProcWrapper(
+        fn generateCAbiProcWrapper(
             self: *Self,
-            hosted: lir.LIR.HostedProc,
+            callee: CAbiCallee,
             proc: LirProcSpec,
         ) Allocator.Error!void {
             if (builtin.mode == .debug and proc.body != null) {
                 base.invariant(
-                    "Dev/codegen invariant violated: hosted proc {d} unexpectedly carried a statement body",
+                    "Dev/codegen invariant violated: C-ABI proc {d} unexpectedly carried a statement body",
                     .{proc.name.raw()},
                 );
             }
@@ -18595,12 +18628,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const param = GuardedList.at(params, i);
                 const arg_layout = self.localLayout(param);
                 const raw_arg_loc = try self.emitValueLocal(param);
-                arg_locs[i] = self.requireExactValueLocationToLayout(raw_arg_loc, arg_layout, arg_layout, "hosted_wrapper.arg");
+                arg_locs[i] = self.requireExactValueLocationToLayout(raw_arg_loc, arg_layout, arg_layout, "c_abi_wrapper.arg");
                 arg_layouts[i] = arg_layout;
             }
 
-            const raw_result_loc = try self.generateHostedCall(hosted, arg_locs, arg_layouts, proc.ret_layout);
-            const result_loc = self.requireExactValueLocationToLayout(raw_result_loc, proc.ret_layout, proc.ret_layout, "hosted_wrapper.ret");
+            const raw_result_loc = try self.generateCAbiCall(callee, arg_locs, arg_layouts, proc.ret_layout);
+            const result_loc = self.requireExactValueLocationToLayout(raw_result_loc, proc.ret_layout, proc.ret_layout, "c_abi_wrapper.ret");
 
             if (self.ret_ptr_slot) |ret_slot| {
                 try self.copyResultToReturnPointer(result_loc, proc.ret_layout, ret_slot);
@@ -23534,7 +23567,7 @@ fn compileProcSpecsInOrder(cg: anytype, demand: []const lir.LIR.LirProcSpecId) A
         if (cg.proc_registry.get(@backingInt(proc_id))) |registered| {
             if (registered.code_start != unresolved_proc_code_start) continue;
         }
-        std.debug.assert(!proc.external);
+        std.debug.assert(!proc.external or proc.c_abi_entry);
         if (comptime @TypeOf(cg.*).roc_target.toCpuArch() == .aarch64) {
             try cg.emitBranchIslandIfNeeded();
             try cg.codegen.compactBranchSites();

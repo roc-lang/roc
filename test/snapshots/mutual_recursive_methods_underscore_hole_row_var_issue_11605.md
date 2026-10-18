@@ -193,7 +193,7 @@ Client(effects) := { effects : effects }.{
 	command : Client(_), Str, U64 -> Try(Str, [Refused(Str), ..others])
 	command = |client, sql, attempts| {
 		_ = say(sql)
-		if attempts == 0 Ok("done") else retry(client, sql, attempts - 1)
+		if (attempts == 0) Ok("done") else retry(client, sql, attempts - 1)
 	}
 
 	retry : Client(_), Str, U64 -> Try(Str, [Refused(Str), ..others])

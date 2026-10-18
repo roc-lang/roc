@@ -430,6 +430,10 @@ const CustomCase = enum {
     default_platform_build_wasm32,
     default_platform_wasm32_archive_reproducible,
     native_build_thread_count_reproducible,
+    native_build_pack_store_thread_count_reproducible,
+    boxed_closure_object_cache,
+    spliced_procedure_debug_lines,
+    linked_object_pack,
     native_build_artifact_round_trip,
     native_build_pack_objects,
     native_build_pack_hits,
@@ -2240,6 +2244,10 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12029: tail calls between functions run in constant stack (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/MutualTailCalls.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (9) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "overflowed its stack" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12029: tail calls between functions run in constant stack (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "test", "--opt=size", "--no-cache" }, .roc_file = "test/cli/MutualTailCalls.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (9) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "overflowed its stack" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12029: tail calls between functions run in constant stack (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/MutualTailCalls.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (9) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "overflowed its stack" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12029: inlined capturing lambdas bind their captures (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/InlinedCapturingLambdas.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (6) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12029: inlined capturing lambdas bind their captures (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/InlinedCapturingLambdas.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (6) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12029: inlined capturing lambdas bind their captures (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "test", "--opt=size", "--no-cache" }, .roc_file = "test/cli/InlinedCapturingLambdas.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (6) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12029: inlined capturing lambdas bind their captures (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/InlinedCapturingLambdas.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (6) tests passed" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12029: tail calls between functions build for wasm32 (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=dev", "--no-cache", "--output=mutual_tail_calls_dev.wasm" }, .roc_file = "test/wasm/mutual_tail_calls_static_lib_app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12029: tail calls between functions build for wasm32 (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=size", "--no-cache", "--output=mutual_tail_calls_size.wasm" }, .roc_file = "test/wasm/mutual_tail_calls_static_lib_app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12029: tail calls between functions build for wasm32 (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--opt=speed", "--no-cache", "--output=mutual_tail_calls_speed.wasm" }, .roc_file = "test/wasm/mutual_tail_calls_static_lib_app.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
@@ -3012,6 +3020,10 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive succeeds", .body = .{ .custom = .default_platform_build_wasm32 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive output is reproducible", .body = .{ .custom = .default_platform_wasm32_archive_reproducible } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev output is identical across thread counts and repeated builds", .timeout_ms = 600_000, .body = .{ .custom = .native_build_thread_count_reproducible } },
+    .{ .id = 0, .suite = .subcommands, .name = "object cache: a dev build links a URL package's optimized object pack and behaves like the uncached build", .timeout_ms = 900_000, .body = .{ .custom = .linked_object_pack } },
+    .{ .id = 0, .suite = .subcommands, .name = "object cache: spliced procedures keep the debug lines of the cold build", .timeout_ms = 600_000, .body = .{ .custom = .spliced_procedure_debug_lines } },
+    .{ .id = 0, .suite = .subcommands, .name = "object cache: exports taking and returning boxed closures are offered and served warm", .timeout_ms = 600_000, .body = .{ .custom = .boxed_closure_object_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build native dev writes identical object-cache packs across thread counts", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_store_thread_count_reproducible } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev output assembled from its own procedure artifacts is identical", .timeout_ms = 600_000, .body = .{ .custom = .native_build_artifact_round_trip } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev pack programs are deterministic and round-trip through artifacts", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_objects } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11673: imported callable identity survives cold warm and sibling builds", .timeout_ms = 600_000, .body = .{ .custom = .issue_11673_callable_cache } },
@@ -4895,6 +4907,10 @@ fn runCustomCase(
         .default_platform_build_wasm32 => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .wasm32),
         .default_platform_wasm32_archive_reproducible => customDefaultPlatformWasm32ArchiveReproducible(io, allocator, &env, &timer, timeout_ms),
         .native_build_thread_count_reproducible => customNativeBuildThreadCountReproducible(io, allocator, &env, &timer, timeout_ms),
+        .native_build_pack_store_thread_count_reproducible => customNativeBuildPackStoreThreadCountReproducible(io, allocator, &env, &timer, timeout_ms),
+        .boxed_closure_object_cache => customBoxedClosureObjectCache(io, allocator, &env, &timer, timeout_ms),
+        .spliced_procedure_debug_lines => customSplicedProcedureDebugLines(io, allocator, &env, &timer, timeout_ms),
+        .linked_object_pack => customLinkedObjectPack(io, allocator, &env, &timer, timeout_ms),
         .native_build_artifact_round_trip => customNativeBuildArtifactRoundTrip(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_objects => customNativeBuildPackObjects(io, allocator, &env, &timer, timeout_ms),
         .issue_11673_callable_cache => customIssue11673CallableCache(io, allocator, &env, &timer, timeout_ms),
@@ -7185,12 +7201,21 @@ fn runLlvmObjdump(
     output_path: []const u8,
     timeout_ms: u64,
 ) CliRunnerError!?std.process.RunResult {
-    const candidates = [_][]const []const u8{
+    return runFirstAvailable(io, allocator, env, &.{
         &.{ "llvm-objdump", "-d", "--no-show-raw-insn", "--symbolize-operands", output_path },
         &.{ "/usr/lib/llvm-18/bin/llvm-objdump", "-d", "--no-show-raw-insn", "--symbolize-operands", output_path },
         &.{ "/usr/bin/llvm-objdump", "-d", "--no-show-raw-insn", "--symbolize-operands", output_path },
-    };
+    }, timeout_ms);
+}
 
+/// Run the first of `candidates` whose program exists; null when none does.
+fn runFirstAvailable(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    candidates: []const []const []const u8,
+    timeout_ms: u64,
+) CliRunnerError!?std.process.RunResult {
     for (candidates) |argv| {
         return runRawInEnv(io, allocator, env, argv, project_root_path, null, timeout_ms) catch |err| switch (err) {
             error.AccessDenied,
@@ -7730,6 +7755,401 @@ fn customNativeBuildThreadCountReproducible(
         }
         if (!std.mem.eql(u8, outputs[1], outputs[2])) {
             return customFailure(allocator, timer, "{s}: native dev build bytes differ between two builds with the default worker count", .{roc_file});
+        }
+    }
+    return null;
+}
+
+/// Apps whose cold dev builds must write the same object-cache packs, with
+/// the same spec tables, on one worker lane and on many. The roc-parser app
+/// reaches specializations through requests less specific than their own
+/// solutions, whose keys a scheduling-dependent store would offer only in
+/// some orders.
+const pack_store_reproducible_apps = [_][]const u8{
+    "test/cli/issue_9889_roc_parser/Issue10167BoxedParserConst.roc",
+    "test/fx/hello_world.roc",
+    "test/str/app_diamond.roc",
+};
+
+/// Every object-cache pack under `cache_root`, by its path relative to it.
+const PackStoreFiles = struct {
+    paths: std.ArrayList([]u8) = .empty,
+    contents: std.ArrayList([]u8) = .empty,
+
+    fn deinit(self: *PackStoreFiles, allocator: Allocator) void {
+        for (self.paths.items) |path| allocator.free(path);
+        for (self.contents.items) |bytes| allocator.free(bytes);
+        self.paths.deinit(allocator);
+        self.contents.deinit(allocator);
+    }
+
+    fn read(io: std.Io, allocator: Allocator, cache_root: []const u8) CliRunnerError!PackStoreFiles {
+        var result: PackStoreFiles = .{};
+        errdefer result.deinit(allocator);
+        var cache = try std.Io.Dir.cwd().openDir(io, cache_root, .{ .iterate = true });
+        defer cache.close(io);
+        var walker = try cache.walk(allocator);
+        defer walker.deinit();
+        while (try walker.next(io)) |entry| {
+            if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".rpk")) continue;
+            const path = try allocator.dupe(u8, entry.path);
+            result.paths.append(allocator, path) catch |err| {
+                allocator.free(path);
+                return err;
+            };
+            const bytes = try cache.readFileAlloc(io, entry.path, allocator, .limited(1024 * 1024 * 1024));
+            result.contents.append(allocator, bytes) catch |err| {
+                allocator.free(bytes);
+                return err;
+            };
+        }
+        return result;
+    }
+
+    fn find(self: *const PackStoreFiles, path: []const u8) ?[]const u8 {
+        for (self.paths.items, self.contents.items) |candidate, bytes| {
+            if (std.mem.eql(u8, candidate, path)) return bytes;
+        }
+        return null;
+    }
+};
+
+/// A cold cached dev build on one worker lane and one on the default lane
+/// count, each with its own cache root, must write the same pack files with
+/// the same bytes: which specializations a store holds, and under which keys,
+/// is a function of the program, not of scheduling.
+fn customNativeBuildPackStoreThreadCountReproducible(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    for (pack_store_reproducible_apps, 0..) |roc_file, app_index| {
+        const variants = [_]struct { suffix: []const u8, jobs: ?[]const u8 }{
+            .{ .suffix = "jobs1", .jobs = "--jobs=1" },
+            .{ .suffix = "default", .jobs = null },
+        };
+        var stores: [variants.len]PackStoreFiles = @splat(.{});
+        defer for (&stores) |*store| store.deinit(allocator);
+        for (variants, 0..) |variant, variant_index| {
+            const cache_root = std.fmt.allocPrint(allocator, "{s}/pack_store_repro_{d}_{s}_cache", .{ env.dirs.work_dir, app_index, variant.suffix }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate cache root: {}", .{err});
+            std.Io.Dir.cwd().createDirPath(io, cache_root) catch |err|
+                return customInfraFailure(allocator, timer, "failed to create {s}: {}", .{ cache_root, err });
+            var store_env = CaseEnv{
+                .dirs = env.dirs,
+                .env_map = env.env_map.clone(allocator) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to clone pack store environment: {}", .{err}),
+            };
+            defer store_env.env_map.deinit();
+            for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+                store_env.env_map.put(key, cache_root) catch |err|
+                    return customInfraFailure(allocator, timer, "failed to set the cache root: {}", .{err});
+            }
+            const output_path = std.fmt.allocPrint(allocator, "{s}/pack_store_repro_{d}_{s}", .{ env.dirs.work_dir, app_index, variant.suffix }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+            const out_arg = outputArg(allocator, output_path) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+            const args: []const []const u8 = if (variant.jobs) |jobs|
+                &.{ "build", "--opt=dev", jobs, out_arg }
+            else
+                &.{ "build", "--opt=dev", out_arg };
+            if (runRocAndCheck(io, allocator, &store_env, timer, timeout_ms, .{
+                .args = args,
+                .roc_file = roc_file,
+                .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+                .not_contains = &.{.{ .stream = .stderr, .text = "panic" }},
+            })) |failure| return failure;
+            stores[variant_index] = PackStoreFiles.read(io, allocator, cache_root) catch |err|
+                return customInfraFailure(allocator, timer, "failed to read the packs under {s}: {}", .{ cache_root, err });
+        }
+
+        if (stores[0].paths.items.len == 0) {
+            return customFailure(allocator, timer, "{s}: the cached build wrote no packs", .{roc_file});
+        }
+        for (stores[0].paths.items, stores[0].contents.items) |path, bytes| {
+            const other = stores[1].find(path) orelse
+                return customFailure(allocator, timer, "{s}: pack {s} was written with --jobs=1 but not with the default worker count", .{ roc_file, path });
+            if (!std.mem.eql(u8, bytes, other)) {
+                return customFailure(allocator, timer, "{s}: pack {s} differs between --jobs=1 and the default worker count", .{ roc_file, path });
+            }
+        }
+        for (stores[1].paths.items) |path| {
+            if (stores[0].find(path) == null) {
+                return customFailure(allocator, timer, "{s}: pack {s} was written with the default worker count but not with --jobs=1", .{ roc_file, path });
+            }
+        }
+    }
+    return null;
+}
+
+/// A module whose exports take and return values that hold functions only
+/// behind a `Box` has closed specializations: every function a box holds is
+/// an erased callable, whichever closures the app puts in it. The cold build
+/// must offer them, and the warm build, served from the cold build's packs,
+/// must hit them and print exactly what the cold build prints.
+fn customBoxedClosureObjectCache(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const roc_file = "test/cli/boxed_closure_object_cache/App.roc";
+    const expected = "button clicked by mouse mouse.\nlink followed key\n";
+    var trace_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone pack trace environment: {}", .{err}),
+    };
+    defer trace_env.env_map.deinit();
+    for ([_][]const u8{ "ROC_PACK_STATS", "ROC_PACK_TRACE" }) |key| {
+        trace_env.env_map.put(key, "1") catch |err|
+            return customInfraFailure(allocator, timer, "failed to enable pack tracing: {}", .{err});
+    }
+    for ([_][]const u8{ "cold", "warm" }) |name| {
+        const exe = std.fmt.allocPrint(allocator, "{s}/boxed_closure_{s}", .{ env.dirs.work_dir, name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const out_arg = outputArg(allocator, exe) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+        const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
+        const built = runRocInEnv(io, allocator, &trace_env, &.{ "build", "--opt=dev", out_arg }, roc_file, .relative, &.{}, null, build_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+        if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
+            return failureFromRun(allocator, timer, built, "dev build did not succeed on the object cache");
+        }
+        if (std.mem.eql(u8, name, "cold")) {
+            if (std.mem.find(u8, built.stderr, " Elem.on\n") == null) {
+                return failureFromRun(allocator, timer, built, "the cold build did not offer Elem.on, which takes a boxed closure");
+            }
+        } else {
+            const hits_marker = "pack hits: ";
+            const hits_at = std.mem.find(u8, built.stderr, hits_marker) orelse
+                return failureFromRun(allocator, timer, built, "the warm build did not report pack hits");
+            if (countAfterMarker(built.stderr[hits_at + hits_marker.len ..]) < 2) {
+                return failureFromRun(allocator, timer, built, "the warm build did not serve Elem's boxed-closure exports from the cold build's packs");
+            }
+        }
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
+            .args = &.{},
+            .stdout_exact = expected,
+        })) |failure| return failure;
+    }
+    return null;
+}
+
+/// Seed `cache_root`'s package directory with the URL package of
+/// `test/cli/linked_object_pack`, as a download would.
+fn seedLinkedObjectPackage(io: std.Io, allocator: Allocator, cache_root: []const u8) CliRunnerError!void {
+    const hash = "FakeHashAbcDefGhiJkLmNoPqRsTuVwXyZ123456789o";
+    const package_dir = try std.fs.path.join(allocator, &.{ cache_root, "roc", "packages", hash });
+    try std.Io.Dir.cwd().createDirPath(io, package_dir);
+    for ([_][]const u8{ "main.roc", "Numeric.roc" }) |name| {
+        const source = try std.fs.path.join(allocator, &.{ "test/cli/linked_object_pack/package", name });
+        const bytes = try std.Io.Dir.cwd().readFileAlloc(io, source, allocator, .limited(1024 * 1024));
+        const destination = try std.fs.path.join(allocator, &.{ package_dir, name });
+        try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = destination, .data = bytes });
+    }
+}
+
+/// A dev build whose store lacks a URL package's optimized object pack
+/// builds it once the package is checked and links it, and so does every
+/// later build; each must print exactly what a build without the store
+/// prints. Two independent stores must write byte-identical object packs.
+fn customLinkedObjectPack(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    if (builtin.os.tag != .linux and builtin.os.tag != .macos) {
+        return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "optimized object packs link on ELF and Mach-O hosts" };
+    }
+    const roc_file = "test/cli/linked_object_pack/App.roc";
+    const expected = "sum of squares to 10: 385\n506\n";
+    var stores: [2][]const u8 = undefined;
+    for (&stores, 0..) |*store_root, store_index| {
+        const cache_root = std.fmt.allocPrint(allocator, "{s}/linked_pack_cache_{d}", .{ env.dirs.work_dir, store_index }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate cache root: {}", .{err});
+        seedLinkedObjectPackage(io, allocator, cache_root) catch |err|
+            return customInfraFailure(allocator, timer, "failed to seed the URL package: {}", .{err});
+        store_root.* = cache_root;
+        var store_env = CaseEnv{
+            .dirs = env.dirs,
+            .env_map = env.env_map.clone(allocator) catch |err|
+                return customInfraFailure(allocator, timer, "failed to clone the store environment: {}", .{err}),
+        };
+        defer store_env.env_map.deinit();
+        for ([_][]const u8{ "ROC_CACHE_DIR", "XDG_CACHE_HOME" }) |key| {
+            store_env.env_map.put(key, cache_root) catch |err|
+                return customInfraFailure(allocator, timer, "failed to set the cache root: {}", .{err});
+        }
+        store_env.env_map.put("ROC_PACK_STATS", "1") catch |err|
+            return customInfraFailure(allocator, timer, "failed to enable pack statistics: {}", .{err});
+        const builds = [_]struct { name: []const u8, cache: bool }{
+            .{ .name = "uncached", .cache = false },
+            .{ .name = "cold", .cache = true },
+            .{ .name = "warm", .cache = true },
+        };
+        for (builds) |build| {
+            const exe = std.fmt.allocPrint(allocator, "{s}/linked_pack_{d}_{s}", .{ env.dirs.work_dir, store_index, build.name }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+            const out_arg = outputArg(allocator, exe) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+            const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+                return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
+            const args: []const []const u8 = if (build.cache) &.{ "build", "--opt=dev", out_arg } else &.{ "build", "--no-cache", "--opt=dev", out_arg };
+            const built = runRocInEnv(io, allocator, &store_env, args, roc_file, .relative, &.{}, null, build_timeout) catch |err|
+                return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+            if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
+                return failureFromRun(allocator, timer, built, "dev build did not succeed");
+            }
+            if (build.cache) {
+                const marker = "linked procs: ";
+                const at = std.mem.find(u8, built.stderr, marker) orelse
+                    return failureFromRun(allocator, timer, built, "the cached build did not report pack statistics");
+                if (countAfterMarker(built.stderr[at + marker.len ..]) == 0) {
+                    return failureFromRun(allocator, timer, built, "the cached build did not link the URL package's optimized object pack");
+                }
+            }
+            if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
+                .args = &.{},
+                .stdout_exact = expected,
+            })) |failure| return failure;
+        }
+    }
+    var first = PackStoreFiles.read(io, allocator, stores[0]) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read the first store's packs: {}", .{err});
+    defer first.deinit(allocator);
+    var second = PackStoreFiles.read(io, allocator, stores[1]) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read the second store's packs: {}", .{err});
+    defer second.deinit(allocator);
+    // A pack is filed under its module's placement, which names the package
+    // by where this store keeps it, and named by its key, which is the same
+    // in every store.
+    var object_packs: usize = 0;
+    for (first.paths.items, first.contents.items) |path, bytes| {
+        if (std.mem.find(u8, path, "-speed") == null) continue;
+        object_packs += 1;
+        const key_name = std.fs.path.basename(path);
+        const other = for (second.paths.items, second.contents.items) |other_path, other_bytes| {
+            if (std.mem.find(u8, other_path, "-speed") != null and std.mem.eql(u8, std.fs.path.basename(other_path), key_name)) break other_bytes;
+        } else return customFailure(allocator, timer, "optimized pack {s} was written by one store and not the other", .{key_name});
+        if (!std.mem.eql(u8, bytes, other)) {
+            return customFailure(allocator, timer, "optimized pack {s} differs between two stores", .{key_name});
+        }
+    }
+    if (object_packs == 0) return customFailure(allocator, timer, "no optimized object pack was written", .{});
+    return null;
+}
+
+/// The source lines (`<file> <line>`) a decoded DWARF line table attributes
+/// code to in `file`, sorted and without duplicates.
+fn decodedSourceLines(allocator: Allocator, decoded: []const u8, file: []const u8) CliRunnerError![]const []const u8 {
+    var result: std.ArrayListUnmanaged([]const u8) = .empty;
+    errdefer result.deinit(allocator);
+    var rows = std.mem.splitScalar(u8, decoded, '\n');
+    while (rows.next()) |row| {
+        var fields = std.mem.tokenizeAny(u8, row, " \t");
+        const name = fields.next() orelse continue;
+        if (!std.mem.eql(u8, name, file)) continue;
+        const line = fields.next() orelse continue;
+        try result.append(allocator, try std.fmt.allocPrint(allocator, "{s} {s}", .{ name, line }));
+    }
+    std.mem.sort([]const u8, result.items, {}, struct {
+        fn lessThan(_: void, left: []const u8, right: []const u8) bool {
+            return std.mem.order(u8, left, right) == .lt;
+        }
+    }.lessThan);
+    var kept: usize = 0;
+    for (result.items) |item| {
+        if (kept != 0 and std.mem.eql(u8, result.items[kept - 1], item)) continue;
+        result.items[kept] = item;
+        kept += 1;
+    }
+    result.shrinkRetainingCapacity(kept);
+    return try result.toOwnedSlice(allocator);
+}
+
+/// A warm dev build splices `Elem`'s procedures from the cold build's packs.
+/// Their line entries are bound to the warm program's source files, so the
+/// debug line table attributes the same `Elem.roc` lines to code in both
+/// builds.
+fn customSplicedProcedureDebugLines(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    if (builtin.os.tag != .linux) {
+        return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = "decoded DWARF line assertion runs only on Linux CI hosts" };
+    }
+    const roc_file = "test/cli/boxed_closure_object_cache/App.roc";
+    var stats_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone pack statistics environment: {}", .{err}),
+    };
+    defer stats_env.env_map.deinit();
+    stats_env.env_map.put("ROC_PACK_STATS", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable pack statistics: {}", .{err});
+    const builds = [_]struct { name: []const u8, cache: bool }{
+        .{ .name = "uncached", .cache = false },
+        .{ .name = "cold", .cache = true },
+        .{ .name = "warm", .cache = true },
+    };
+    var lines: [builds.len][]const []const u8 = undefined;
+    for (builds, 0..) |build, index| {
+        const exe = std.fmt.allocPrint(allocator, "{s}/spliced_lines_{s}", .{ env.dirs.work_dir, build.name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const out_arg = outputArg(allocator, exe) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output argument: {}", .{err});
+        const build_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a build");
+        const args: []const []const u8 = if (build.cache) &.{ "build", "--opt=dev", out_arg } else &.{ "build", "--no-cache", "--opt=dev", out_arg };
+        const built = runRocInEnv(io, allocator, &stats_env, args, roc_file, .relative, &.{}, null, build_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "build spawn error: {}", .{err});
+        if (!processSucceeded(built.term) or std.mem.find(u8, built.stdout, "successfully building") == null or std.mem.find(u8, built.stderr, "panic") != null) {
+            return failureFromRun(allocator, timer, built, "dev build did not succeed");
+        }
+        if (std.mem.eql(u8, build.name, "warm")) {
+            const hits_marker = "pack hits: ";
+            const hits_at = std.mem.find(u8, built.stderr, hits_marker) orelse
+                return failureFromRun(allocator, timer, built, "the warm build did not report pack hits");
+            if (countAfterMarker(built.stderr[hits_at + hits_marker.len ..]) == 0) {
+                return failureFromRun(allocator, timer, built, "the warm build spliced no procedure");
+            }
+        }
+        const dump_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before objdump started");
+        const dumped = runFirstAvailable(io, allocator, env, &.{
+            &.{ "objdump", "--dwarf=decodedline", exe },
+            &.{ "/usr/bin/objdump", "--dwarf=decodedline", exe },
+        }, dump_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "objdump spawn error: {}", .{err});
+        const decoded = dumped orelse
+            return .{ .status = .skip, .phase = .run, .duration_ns = timer.read(), .run_ns = timer.read(), .message = "objdump unavailable on this Linux runner" };
+        if (checkCommandExpectation(allocator, decoded, .{ .args = &.{} })) |message| {
+            return failureFromRun(allocator, timer, decoded, message);
+        }
+        lines[index] = decodedSourceLines(allocator, decoded.stdout, "Elem") catch |err|
+            return customInfraFailure(allocator, timer, "failed to read decoded lines: {}", .{err});
+    }
+    if (lines[0].len == 0) {
+        return customFailure(allocator, timer, "the uncached build attributes no code to Elem.roc", .{});
+    }
+    for (lines[1..], builds[1..]) |build_lines, build| {
+        if (build_lines.len != lines[0].len) {
+            return customFailure(allocator, timer, "the {s} build attributes code to {d} Elem.roc lines, the uncached build to {d}", .{ build.name, build_lines.len, lines[0].len });
+        }
+        for (build_lines, lines[0]) |line, expected| {
+            if (!std.mem.eql(u8, line, expected)) {
+                return customFailure(allocator, timer, "the {s} build attributes code to Elem.roc line '{s}' where the uncached build has '{s}'", .{ build.name, line, expected });
+            }
         }
     }
     return null;

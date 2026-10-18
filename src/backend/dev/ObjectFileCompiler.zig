@@ -351,14 +351,14 @@ fn compileWithCodeGen(
         var external_procs = std.ArrayList(lir.LIR.LirProcSpecId).empty;
         defer external_procs.deinit(allocator);
         for (proc_specs, 0..) |proc, index| {
-            if (proc.external) external_procs.append(allocator, @fromBackingInt(@intCast(@as(u32, @intCast(index))))) catch return CompilationError.OutOfMemory;
+            if (proc.external and !proc.c_abi_entry) external_procs.append(allocator, @fromBackingInt(@intCast(@as(u32, @intCast(index))))) catch return CompilationError.OutOfMemory;
         }
         spliceExternalProcs(CodeGen, allocator, &codegen, proc_specs, external_procs.items, source, &spliced_data) catch return CompilationError.OutOfMemory;
     }
     var demand = std.ArrayList(lir.LIR.LirProcSpecId).empty;
     defer demand.deinit(allocator);
     for (proc_specs, 0..) |proc, index| {
-        if (proc.is_static_initializer or proc.external) continue;
+        if (proc.is_static_initializer or (proc.external and !proc.c_abi_entry)) continue;
         demand.append(allocator, @fromBackingInt(@intCast(index))) catch return CompilationError.OutOfMemory;
     }
     var native_metrics: NativeProcCompiler.Metrics = .{};
@@ -1223,6 +1223,11 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
         // A different consumer has neither the procedure ordinal nor any static table.
         var store = LirStore.init(allocator);
         defer store.deinit();
+        // The consumer has the module versions the pack's code came from.
+        const files = try allocator.alloc(@import("base").SourceFileEntry, pack.set.source_files.len);
+        defer allocator.free(files);
+        for (files, pack.set.source_files) |*file, module_identity| file.* = .{ .name = "module", .qualified_name = "module", .module_identity = module_identity };
+        try store.setSourceFiles(files);
         var layouts = try layout.Store.init(allocator, .u64);
         defer layouts.deinit();
         const CG = LirCodeGenMod.LirCodeGen(target);

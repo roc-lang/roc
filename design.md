@@ -572,6 +572,66 @@ already digest, so such a platform procedure is shared exactly as widely as
 the app procedures it reaches; every other platform procedure keeps one
 identity across apps.
 
+Names a procedure's code carries for the procedures it was built from are
+content identities too. A fused call variant (`body_clone.cloneCallVariant`)
+digests its leading arguments' and return's layouts by content, never by
+layout index. An inline scope names the procedure it inlined by identity
+(`InlineScope.source_identity`): the procedure's own `ProcIdentity` for a
+scope LIR inlining made, and a digest of the lifted function's checked source
+for a scope SpecConstr made. The LLVM backend names inlined debug subprograms
+and source frames from it.
+
+### Object Cache Store
+
+Packs live under `<cache root>/<compiler version>/objects-v<pack format>/
+<target>-<opt>/<local|pkg>/<module identity>/<key>.rpk`. A pack's path is a
+function of its content, so a writer stages it beside its path, renames it
+into place, and leaves a pack already present alone; builds with runtime
+safety compare the bytes they would have written with the pack in place. The
+background sweep (`cache_cleanup.sweep`) deletes every `objects-v*` namespace
+of a format other than the compiler's own, ages the current namespace's
+`local/` packs (rewritten by every edit) on one day and its `pkg/` packs on
+thirty, by last use (`max(atime, mtime)`), and then deletes the least
+recently used persistent cache files of every family until the cache fits
+`CacheConfig.max_size_mb`. Eviction only deletes files; it never changes what
+a build writes.
+
+A pack's line entries index the pack's own source-file table, which names
+each file by its module's content identity in the order the lines first use
+it. Splicing binds each to the receiving program's file for the same module
+identity, so DWARF line programs cover spliced procedures exactly as they do
+compiled ones. A procedure can be served across an edit of its module, since
+its identity does not depend on where it sits in the file; its lines then name
+a module version the program does not have, and they are not emitted rather
+than misattributed.
+
+A URL-package module also gets an optimized object pack, filed in the same
+layout under `<target>-speed/pkg/`: its closed exports lowered under the
+optimized LIR policy and compiled by LLVM into one object, with the same spec
+table naming each entry's procedure. The object defines everything its code
+needs (procedures, constants, refcount helpers, builtins) as internal symbols
+and exports, for each entry it offers, a weak C-ABI entry
+`roc__c{hash}`, the procedure's arguments and result classified by
+`layout.abi` exactly as for a hosted call. Two such objects may export one
+entry; the link keeps one. An entry whose code makes an erased call or builds
+an erased callable is not offered, since the erased-call runtime is passed the
+program's own layout indices, and a module whose object needs the runtime at
+all gets no object pack.
+
+Only a consumer whose code is linked takes an object pack's entry
+(`CodeProvision.permitsLinkedObjects`): a `roc build --opt=dev` program,
+never compile-time evaluation or an in-memory `roc run` image, and never a
+producer shared with compile-time evaluation, which instead takes the dev
+entry of the same procedure and lets the linked consumer switch to the
+object's entry in Direct LIR. Such a procedure is `external` with
+`c_abi_entry` set: the dev backend calls its C-ABI entry like a hosted
+function and compiles a local body that forwards to it for every other use,
+and the build links the objects whose entries it took. A dev pack never
+offers an entry whose code reaches a linked entry, so a program that splices
+dev code never needs an object it did not ask for. A build whose store lacks
+a URL-package module's object pack builds it once the module is checked and
+before the program lowers, so that build already links it.
+
 ### Read-Only Type Analysis
 
 Read-only type analysis must not use permanent solver allocation as scratch.
@@ -7521,7 +7581,11 @@ from the target, backend, symbol names, builtin names, or emitted code. The mode
 changes optimization work, not source meaning or the stage route.
 
 Monotype Lifted closure lifting outputs complete function capture slots and
-function-reference/direct-call operands. When `.none` skips SpecConstr, the
+function-reference/direct-call operands. A call whose function is a function
+definition written as its callee, such as `x |> (|a| a + n)`, is lifted as a
+direct call to that function with the definition's capture values as its
+capture operands, evaluated before the arguments; it constructs no function
+value. When `.none` skips SpecConstr, the
 pipeline consumes that output directly and must not repeat capture analysis.
 SpecConstr can change free-variable use while cloning and rewriting function
 bodies, so SpecConstr owns one exact capture finalization before it returns its
@@ -7537,8 +7601,8 @@ reconstruct uses from emitted code. Lambda Solved does not change the lifted
 expression graph, so function ids and use counts remain exact across that
 boundary.
 
-The solved inline plan admits capture-free functions with exactly one non-cold
-external direct call and no function-value or root uses. A single call-site proof
+The solved inline plan admits functions with exactly one non-cold external
+direct call and no function-value or root uses. A single call-site proof
 permits ordinary statements, branches, local loops, and typed join points because
 lowering the body once cannot duplicate stored code. That proof follows the
 unique call's owning functions through the selected inline plan. If an owning
@@ -7552,7 +7616,10 @@ Solved-to-LIR lowering only substitutes arguments and dumbly lowers a selected
 body at its unique call site. An argument that is a plain read of a caller
 lexical binding at the parameter's exact type and committed layout binds the
 parameter to that caller local itself; every other argument is evaluated into
-a fresh temp as for a call. The inlined body writes no caller local other than
+a fresh temp as for a call. Captures are substituted the same way: each capture
+operand of the call is evaluated, before the arguments as a capture record
+would be, and bound to the callee's capture local, so an inlined call builds no
+capture record. The inlined body writes no caller local other than
 the call's result target, which is excluded, so the substituted local holds
 the argument value for the whole body. A snapshot temp would instead be a
 second name bound before the body's branches: when the caller keeps the
@@ -7568,9 +7635,15 @@ source calls at exactly one site and never uses as a value, among those no
 other module can call: promoted local procedures, and source definitions that
 are neither exposed nor methods, since another module can dispatch to any
 method (`CheckedProcedureTemplateTable.single_source_call_templates`).
-Monotype stamps the flag on each function template, and a capture-free body
-without a procedure-relative return that has it is a source-single-use
-candidate. Every call to it in any program is that one site, lowered in some
+A nested function site qualifies the same way
+(`NestedProcSite.single_source_call`): its expression is the function of a
+call, or the whole value of a non-recursive binding of one name whose only
+reference is the function of a call. A site inside a defaulted-field
+expression never qualifies, since that expression is lowered at every
+construction site that omits its field.
+Monotype stamps the flag on each function template, and a body without a
+procedure-relative return that has it is a source-single-use candidate,
+whether or not it captures. Every call to it in any program is that one site, lowered in some
 specialization of the function containing it, so lowering inlines the call
 wherever the function it is lowering is not a wrapper: a wrapper body can be
 lowered more than once into one procedure, which a body with its own locals
@@ -14778,6 +14851,16 @@ requester-derived component in either identity would make two programs that
 reach one specialization through differently annotated call sites disagree—one
 key naming two procedure identities.
 
+The keys a program offers are the keys of its requests, whatever order the
+requests arrive in. A record's body can solve to a type more specific than the
+request that reserved it, and the record then serves a later request at that
+solved type through its solved view. Had the later request arrived first, it
+would have reserved its own record under its own key. So the index remembers
+every request it served through a solved view (`SpecBuilder.solvedViewHits`),
+Monotype turns each closed one into a key alias (`SpecKeyAliases`), and Direct
+LIR lists the record's procedure under the alias key as well, unless the
+program already lists that key for a record of its own.
+
 A procedure identity hashes its source specialization, ABI choices, and solved
 argument, result, and capture types; the one exception is the plain procedure
 of a layout-keyed Builtin template, which hashes layouts instead (see "Layout-Keyed
@@ -14787,7 +14870,18 @@ selected source and captures already identify the procedure being compiled.
 Passing a closed imported function beside another lambda must not change its
 procedure identity or prevent reuse of its module-pack entry. Callable sets
 nested in arguments, results, and captures remain part of identity because they
-determine runtime representations and dispatch inside the procedure. Function
+determine runtime representations and dispatch inside the procedure. An erased
+callable is the exception: it is one pointer-sized value called through the
+convention of its source function type whichever closures the program puts in
+it, so identity renders its source function type and not its members. A
+procedure that packs a function into an erased callable names that function in
+its own body. For the same reason a specialization request whose function
+types all sit inside a `Box` (every function a box holds is erased, see
+"Erased Callable Requirements") is closed, and the object cache keys it like
+any other closed request. Its entry is offered only when its code makes no
+erased call and builds no erased callable: the erased-call runtime those use
+reads the program's own layout tables, so their relocations name
+`program`-scope symbols (see "Object Symbol Names"). Function
 value type digests retain their complete callable sets, including when reached
 recursively from those nested positions.
 
