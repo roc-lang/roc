@@ -343,7 +343,9 @@ pub const Constants = struct {
     /// 153: a package or platform header's qualified exposures record a
     ///      deferred reference, and canonical diagnostics gain
     ///      `public_type_not_defined`.
-    pub const CACHE_VERSION = 153;
+    /// 154: canonical diagnostics drop `execution_requires_app_or_default_app`,
+    ///      and file-level diagnostics store no region.
+    pub const CACHE_VERSION = 154;
 };
 
 /// Configuration for the Roc cache system.

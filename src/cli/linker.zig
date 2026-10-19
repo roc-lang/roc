@@ -41,7 +41,7 @@ const RocBinaryenOptimizeConfig = extern struct {
     strip_debug: u8,
     strip_producers: u8,
     strip_target_features: u8,
-    simd128: u8,
+    webassembly_1_0: u8,
     validate: u8,
 };
 
@@ -1091,7 +1091,7 @@ fn binaryenConfig(config: LinkConfig) RocBinaryenOptimizeConfig {
         .strip_debug = @intFromBool(!config.wasm_debug_info),
         .strip_producers = 1,
         .strip_target_features = @intFromBool(config.wasm_optimize == .size and !config.wasm_debug_info),
-        .simd128 = @intFromBool(config.wasm_cpu_level == .default),
+        .webassembly_1_0 = @intFromBool(config.wasm_cpu_level == .v1),
         .validate = 1,
     };
 }
@@ -1198,10 +1198,10 @@ test "size wasm strips final target feature metadata" {
 
     const speed = binaryenConfig(.{ .output_path = "out.wasm", .object_files = &.{}, .wasm_optimize = .speed });
     try std.testing.expectEqual(@as(u8, 0), speed.strip_target_features);
-    try std.testing.expectEqual(@as(u8, 1), speed.simd128);
+    try std.testing.expectEqual(@as(u8, 0), speed.webassembly_1_0);
 
     const v1 = binaryenConfig(.{ .output_path = "out.wasm", .object_files = &.{}, .wasm_optimize = .speed, .wasm_cpu_level = .v1 });
-    try std.testing.expectEqual(@as(u8, 0), v1.simd128);
+    try std.testing.expectEqual(@as(u8, 1), v1.webassembly_1_0);
 }
 
 test "wasm initial memory reaches wasm-ld only when configured" {

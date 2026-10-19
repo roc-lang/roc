@@ -30,6 +30,9 @@ pub const ReturnSlot = @import("return_slot.zig");
 pub const StrAppend = @import("str_append.zig");
 /// Shared proc-body cloning and rewrite-soundness helpers before ARC.
 pub const BodyClone = @import("body_clone.zig");
+/// Exact procedure-local stack lifetimes, shared by the native and LLVM
+/// backends.
+pub const StackPlan = @import("StackPlan.zig");
 /// Struct-typed join parameters split into per-field parameters before ARC.
 pub const PruneJoinParams = @import("prune_join_params.zig");
 pub const ScalarizeJoins = @import("scalarize_joins.zig");
@@ -174,6 +177,7 @@ test "lir tests" {
     std.testing.refAllDecls(ReturnSlot);
     std.testing.refAllDecls(StrAppend);
     std.testing.refAllDecls(BodyClone);
+    std.testing.refAllDecls(StackPlan);
     std.testing.refAllDecls(PruneJoinParams);
     std.testing.refAllDecls(ScalarizeJoins);
     std.testing.refAllDecls(ComptimeValueGuards);

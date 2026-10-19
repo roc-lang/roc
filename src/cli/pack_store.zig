@@ -417,7 +417,7 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
                 return rejected(&packs, expected_key, expected_identity, err);
             // A lookup admits the offer's closure, and a failure while doing
             // so makes the whole cache unavailable.
-            const hit = packs.specCacheLookup().lookup(expected_key, null, false) orelse {
+            const hit = packs.specCacheLookup().lookup(expected_key, null, .dev_code) orelse {
                 const err = packs.failure orelse return error.TestUnexpectedResult;
                 return rejected(&packs, expected_key, expected_identity, err);
             };
@@ -427,6 +427,8 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
                 const err = packs.failure orelse return error.TestUnexpectedResult;
                 return rejected(&packs, expected_key, expected_identity, err);
             };
+            // A consumer that cannot splice is never served dev artifacts.
+            try std.testing.expect(packs.specCacheLookup().lookup(expected_key, null, .linked_objects) == null);
             try std.testing.expectEqual(expected_identity, located.set.artifacts[located.index].kind.proc);
         }
 
@@ -435,7 +437,7 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
             try std.testing.expectEqual(err, packs.failure.?);
             try std.testing.expect(packs.state == .unavailable);
             try std.testing.expectError(err, packs.indexPacks());
-            try std.testing.expect(packs.specCacheLookup().lookup(key_to_find, null, false) == null);
+            try std.testing.expect(packs.specCacheLookup().lookup(key_to_find, null, .dev_code) == null);
             const splice = packs.spliceSource();
             try std.testing.expect(splice.find(splice.context, identity_to_find) == null);
             try std.testing.expectEqual(@as(u64, 0), packs.hits);
@@ -467,7 +469,7 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
     defer malformed.deinit();
     try std.testing.expectError(error.MalformedPack, malformed.loadDirInto(io, malformed_path, .cache_offers));
     try std.testing.expectEqual(error.MalformedPack, malformed.failure.?);
-    try std.testing.expect(malformed.specCacheLookup().lookup(key, null, false) == null);
+    try std.testing.expect(malformed.specCacheLookup().lookup(key, null, .dev_code) == null);
     try std.testing.expect(malformed.spliceSource().find(malformed.spliceSource().context, identity) == null);
 }
 
@@ -524,21 +526,21 @@ test "object cache semantic offers select compatible relations in either order" 
             try packs.indexPacks();
             const lookup = packs.specCacheLookup();
             for ([_][32]u8{ first_relation, second_relation }, 0..) |relation, index| {
-                const hit = lookup.lookup(key, relation, false) orelse return error.TestUnexpectedResult;
+                const hit = lookup.lookup(key, relation, .dev_code) orelse return error.TestUnexpectedResult;
                 try std.testing.expectEqualDeep(relation, hit.platform_requirement_relation.?);
                 try std.testing.expectEqualSlices(u8, &lir.ProcIdentity.forTest(@intCast(51 + index)).bytes, &hit.identity);
                 try std.testing.expectEqualSlices(u32, &.{0x0001_02ff}, hit.rc_ret_conditions);
             }
             // Independent offers are still visible beside incompatible ones.
-            const mixed = lookup.lookup(mixed_key, @as([32]u8, @splat(33)), false) orelse return error.TestUnexpectedResult;
+            const mixed = lookup.lookup(mixed_key, @as([32]u8, @splat(33)), .dev_code) orelse return error.TestUnexpectedResult;
             try std.testing.expect(mixed.platform_requirement_relation == null);
             try std.testing.expectEqualSlices(u8, &lir.ProcIdentity.forTest(53).bytes, &mixed.identity);
-            const exact = lookup.lookup(mixed_key, second_relation, false) orelse return error.TestUnexpectedResult;
+            const exact = lookup.lookup(mixed_key, second_relation, .dev_code) orelse return error.TestUnexpectedResult;
             try std.testing.expectEqualDeep(second_relation, exact.platform_requirement_relation.?);
-            try std.testing.expect(lookup.lookup(key, null, false) == null);
-            try std.testing.expect(lookup.lookup(key, @as([32]u8, @splat(33)), false) == null);
+            try std.testing.expect(lookup.lookup(key, null, .dev_code) == null);
+            try std.testing.expect(lookup.lookup(key, @as([32]u8, @splat(33)), .dev_code) == null);
             for ([_]?[32]u8{ null, first_relation, second_relation }) |relation| {
-                const hit = lookup.lookup(independent_key, relation, false) orelse return error.TestUnexpectedResult;
+                const hit = lookup.lookup(independent_key, relation, .dev_code) orelse return error.TestUnexpectedResult;
                 try std.testing.expect(hit.platform_requirement_relation == null);
                 try std.testing.expectEqualSlices(u8, &lir.ProcIdentity.forTest(53).bytes, &hit.identity);
             }
@@ -600,12 +602,12 @@ test "normal native offers attest one exact physical definition and fixed metada
         const next = try Producer.bytes(allocator, identity, second_key, candidate.code, candidate.borrowed);
         defer allocator.free(next);
         try packs.retain(next);
-        try std.testing.expectEqual(candidate.accepted, packs.specCacheLookup().lookup(second_key, null, false) != null);
+        try std.testing.expectEqual(candidate.accepted, packs.specCacheLookup().lookup(second_key, null, .dev_code) != null);
         const selected = splice.find(splice.context, identity).?;
         try std.testing.expect(first.set == selected.set);
         try std.testing.expectEqual(first.index, selected.index);
         try std.testing.expectEqualStrings("\xc3", selected.set.artifacts[selected.index].code);
-        try std.testing.expectEqual(@as(u64, 0), packs.specCacheLookup().lookup(first_key, null, false).?.rc_borrowed_params);
+        try std.testing.expectEqual(@as(u64, 0), packs.specCacheLookup().lookup(first_key, null, .dev_code).?.rc_borrowed_params);
     }
 }
 
@@ -666,7 +668,7 @@ test "identity offers serve lookups by identity for the relation they depend on"
     try std.testing.expectEqual(@as(usize, 0), packs.packs.items.len);
     const lookup = packs.specCacheLookup();
     // Nothing is offered under these bytes as a specialization key.
-    try std.testing.expect(lookup.lookup(caller_identity.bytes, relation, false) == null);
+    try std.testing.expect(lookup.lookup(caller_identity.bytes, relation, .dev_code) == null);
     // The caller's code depends on the relation; the callee's does not.
     try std.testing.expect(lookup.lookupIdentity(caller_identity.bytes, null) == null);
     try std.testing.expect(lookup.lookupIdentity(caller_identity.bytes, @splat(84)) == null);
@@ -824,7 +826,7 @@ test "normal native source certificates reload only against current checked auth
         packs.checked_root = &owner;
         try packs.appendPack(bytes);
         try packs.indexPacks();
-        try std.testing.expectEqual(!stale, packs.specCacheLookup().lookup(key, null, false) != null);
+        try std.testing.expectEqual(!stale, packs.specCacheLookup().lookup(key, null, .dev_code) != null);
         const splice = packs.spliceSource();
         const object = splice.find(splice.context, identity);
         try std.testing.expectEqual(!stale, object != null);
@@ -1112,7 +1114,9 @@ test "the cache sweep finds and ages the packs the store writes" {
 /// What a lazily loaded store needs once checking has produced the module
 /// set: the store and the modules in view.
 pub const Pending = struct {
-    store: *const Store,
+    /// Dev packs, whose artifacts are spliced; null for a consumer whose
+    /// emitter cannot splice them, which only object packs serve.
+    store: ?*const Store,
     /// LLVM-compiled object packs of URL-package modules
     /// (`PackFile.ObjectPack`), which only a consumer whose code is linked
     /// takes.
@@ -2307,9 +2311,10 @@ pub const LoadedPacks = struct {
     }
 
     fn loadPendingDiscovery(self: *LoadedPacks, pending: Pending, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) LoadError!void {
+        const store = pending.store orelse return;
         const placements = try self.pendingPlacements(pending, root_artifact);
         defer self.allocator.free(placements);
-        for (placements) |placement| try pending.store.loadDiscoveryIdentity(pending.io, self, placement.origin, placement.identity);
+        for (placements) |placement| try store.loadDiscoveryIdentity(pending.io, self, placement.origin, placement.identity);
     }
 
     /// The placements of the root module and every module it lowers against,
@@ -3440,10 +3445,11 @@ pub const LoadedPacks = struct {
     }
 
     fn loadPending(self: *LoadedPacks, pending: Pending, root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact) LoadError!void {
+        const store = pending.store orelse return;
         const placements = try self.pendingPlacements(pending, root_artifact);
         defer self.allocator.free(placements);
-        for (placements) |placement| try pending.store.loadIdentity(pending.io, self, placement.origin, placement.identity);
-        try pending.store.loadArtifacts(pending.io, self);
+        for (placements) |placement| try store.loadIdentity(pending.io, self, placement.origin, placement.identity);
+        try store.loadArtifacts(pending.io, self);
     }
 
     pub fn deinit(self: *LoadedPacks) void {
@@ -3540,7 +3546,18 @@ pub const LoadedPacks = struct {
         return try objects.toOwnedSlice(allocator);
     }
 
-    fn findSpec(context: *anyopaque, key: [32]u8, current_relation: ?[32]u8, accept_linked: bool) ?Common.SpecCacheHit {
+    /// Every object pack that served a specialization, in load order, for a
+    /// program that composes their objects into its own.
+    pub fn linkedObjectPacks(self: *const LoadedPacks, allocator: Allocator) Allocator.Error![]const *const PackFile.ObjectPack {
+        var packs = std.ArrayList(*const PackFile.ObjectPack).empty;
+        errdefer packs.deinit(allocator);
+        for (self.object_packs.items, self.object_packs_used.items) |*pack, used| {
+            if (used) try packs.append(allocator, pack);
+        }
+        return try packs.toOwnedSlice(allocator);
+    }
+
+    fn findSpec(context: *anyopaque, key: [32]u8, current_relation: ?[32]u8, takes: Common.SpecCacheTakes) ?Common.SpecCacheHit {
         const self: *LoadedPacks = @ptrCast(@alignCast(context));
         if (self.revoked) return null;
         // Admission changes the index, and lookups come from parallel
@@ -3551,7 +3568,7 @@ pub const LoadedPacks = struct {
         if (self.state != .ready) return null;
         // An optimized object serves a consumer whose code is linked ahead
         // of the dev artifacts of the same specialization.
-        if (accept_linked) {
+        if (takes.takesLinkedObjects()) {
             self.ensureLinkedLoaded();
             if (self.linked_specs.get(key)) |offer| {
                 self.object_packs_used.items[offer.pack] = true;
@@ -3559,6 +3576,7 @@ pub const LoadedPacks = struct {
                 return offer.hit;
             }
         }
+        if (!takes.takesDevCode()) return null;
         // Admission projects materializers against the prepared program.
         const saved_modules = self.projection_modules;
         if (saved_modules == null) if (self.deferred) |deferred| {
@@ -3808,13 +3826,13 @@ test "pack machine callee literals close empty caller demand and recursive SCCs"
             try std.testing.expectEqualDeep(literal, caller.demand.?.literal_reads[0]);
             if (recursive) try std.testing.expectEqual(true, caller.demand.?.literal_reads.ptr == callee.demand.?.literal_reads.ptr);
             const matched = mode == 2;
-            try std.testing.expectEqual(matched, packs.specCacheLookup().lookup(@splat(32), null, false) != null);
-            try std.testing.expectEqual(matched, packs.specCacheLookup().lookup(@splat(33), null, false) != null);
-            try std.testing.expectEqual(true, packs.specCacheLookup().lookup(@splat(34), null, false) != null);
+            try std.testing.expectEqual(matched, packs.specCacheLookup().lookup(@splat(32), null, .dev_code) != null);
+            try std.testing.expectEqual(matched, packs.specCacheLookup().lookup(@splat(33), null, .dev_code) != null);
+            try std.testing.expectEqual(true, packs.specCacheLookup().lookup(@splat(34), null, .dev_code) != null);
             if (matched) {
                 // Declaration recipes borrow only retained decoded owners,
                 // never the caller's source body or this encoded byte buffer.
-                const hit = packs.specCacheLookup().lookup(@splat(32), null, false).?;
+                const hit = packs.specCacheLookup().lookup(@splat(32), null, .dev_code).?;
                 try std.testing.expectEqualDeep(literal, hit.demand.?.literal_reads[0]);
             }
         }

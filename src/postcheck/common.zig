@@ -530,12 +530,35 @@ pub fn procIdentityCacheKey(identity: [32]u8) [32]u8 {
     return hasher.finalResult();
 }
 
+/// Which object-cache entries can serve a consumer, decided by how its code
+/// is emitted.
+pub const SpecCacheTakes = enum {
+    /// Dev code only: the consumer splices code and links nothing.
+    dev_code,
+    /// A linked object's entry (`SpecCacheHit.c_abi_entry`) ahead of the dev
+    /// code of the same specialization: the consumer splices code and
+    /// its output is linked.
+    dev_code_and_linked_objects,
+    /// Linked objects' entries only: the consumer's output is linked, and
+    /// its emitter cannot splice dev code.
+    linked_objects,
+
+    pub fn takesLinkedObjects(self: SpecCacheTakes) bool {
+        return self != .dev_code;
+    }
+
+    pub fn takesDevCode(self: SpecCacheTakes) bool {
+        return self != .linked_objects;
+    }
+};
+
 /// The object cache's answer for a specialization key, asked when Monotype
 /// reserves the specialization and before its body exists. The consumer that
 /// owns the cache supplies the context and the lookup.
 pub const SpecCacheLookup = struct {
     context: *anyopaque,
-    find: *const fn (context: *anyopaque, key: [32]u8, current_relation: ?[32]u8, accept_linked: bool) ?SpecCacheHit,
+    /// `takes`: which entries can serve the asking consumer.
+    find: *const fn (context: *anyopaque, key: [32]u8, current_relation: ?[32]u8, takes: SpecCacheTakes) ?SpecCacheHit,
     /// Whether the provider holds a settled discovery outcome for the
     /// specialization (`lir.Program.DiscoverySummary`).
     find_discovery: ?*const fn (context: *anyopaque, key: [32]u8, current_relation: ?[32]u8) bool = null,
@@ -566,17 +589,16 @@ pub const SpecCacheLookup = struct {
         return hit;
     }
 
-    /// `accept_linked`: whether the asking consumer's code is linked, so a
-    /// linked-object entry (`SpecCacheHit.c_abi_entry`) can serve it.
-    pub fn lookup(self: SpecCacheLookup, key: [32]u8, current_relation: ?[32]u8, accept_linked: bool) ?SpecCacheHit {
-        const hit = self.find(self.context, key, current_relation, accept_linked) orelse return null;
+    /// `takes`: which entries can serve the asking consumer.
+    pub fn lookup(self: SpecCacheLookup, key: [32]u8, current_relation: ?[32]u8, takes: SpecCacheTakes) ?SpecCacheHit {
+        const hit = self.find(self.context, key, current_relation, takes) orelse return null;
         const demand = hit.demand orelse return null;
         if (!demand.permitsRetirement()) return null;
         // Machine relocations to current literal headers do not imply that
         // the executable producer itself is present. Its exact object is an
         // additional semantic dependency supplied by the same provider.
         for (demand.literal_reads) |read| {
-            const producer = self.find(self.context, read.recipe.producer_key, current_relation, accept_linked) orelse return null;
+            const producer = self.find(self.context, read.recipe.producer_key, current_relation, takes) orelse return null;
             if (!std.mem.eql(u8, &producer.identity, &read.recipe.object_identity)) return null;
             const producer_demand = producer.demand orelse return null;
             if (!producer_demand.permitsRetirement()) return null;

@@ -1197,12 +1197,14 @@ test "runtime handoff validates the original declaration and continues the selec
 
 test "shared producer requires the exact non-null provider capability" {
     const Lookup = lir.CheckedPipeline.SpecCacheLookup;
-    const LookupResult = @typeInfo(@typeInfo(@FieldType(Lookup, "find")).pointer.child).@"fn".return_type.?;
+    const LookupFn = @typeInfo(@typeInfo(@FieldType(Lookup, "find")).pointer.child).@"fn";
+    const LookupResult = LookupFn.return_type.?;
+    const Takes = LookupFn.param_types[3].?;
     const Callbacks = struct {
-        fn first(_: *anyopaque, _: [32]u8, _: ?[32]u8, _: bool) LookupResult {
+        fn first(_: *anyopaque, _: [32]u8, _: ?[32]u8, _: Takes) LookupResult {
             return null;
         }
-        fn second(context: *anyopaque, _: [32]u8, _: ?[32]u8, _: bool) LookupResult {
+        fn second(context: *anyopaque, _: [32]u8, _: ?[32]u8, _: Takes) LookupResult {
             // Distinct behavior keeps optimized builds from merging callbacks.
             const count: *u8 = @ptrCast(context);
             count.* += 1;

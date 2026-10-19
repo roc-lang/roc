@@ -2431,59 +2431,18 @@ pub fn build(b: *std.Build) void {
     // Build wasm32 builtins object at build time so the eval/REPL pipeline can
     // merge real compiled builtins into WASM modules (instead of using host imports).
     const wasm32_resolved_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
-    const wasm32_boxy_runtime_obj = buildBoxyRuntimeObject(
-        b,
-        roc_modules,
-        wasm32_resolved_target,
-        strip,
-        omit_frame_pointer,
-        "roc_boxy_runtime_wasm32_eval",
-        b.path("src/boxy_runtime/eval_main.zig"),
-    );
-    const wasm32_boxy_runtime_files = b.addWriteFiles();
-    _ = wasm32_boxy_runtime_files.addCopyFile(
-        wasmObjectArtifact(b, wasm32_boxy_runtime_obj),
-        "roc_boxy_runtime.o",
-    );
-    const wasm32_boxy_runtime_module = b.createModule(.{
-        .root_source_file = wasm32_boxy_runtime_files.add(
-            "wasm32_boxy_runtime.zig",
-            "pub const bytes = @embedFile(\"roc_boxy_runtime.o\");\n",
-        ),
-    });
+    const wasm32_eval_runtime = addEvalWasmRuntimeModules(b, roc_modules, wasm32_resolved_target, "wasm32", optimize, strip, omit_frame_pointer);
+    const wasm32_boxy_runtime_module = wasm32_eval_runtime.boxy_runtime;
+    const wasm32_builtins_module = wasm32_eval_runtime.builtins;
     roc_modules.eval.addImport("wasm32_boxy_runtime", wasm32_boxy_runtime_module);
-
-    const wasm32_builtins_obj = addBuiltinsObject(b, roc_modules, "roc_builtins_wasm32_eval", "src/builtins/static_lib.zig", wasm32_resolved_target, optimize, strip, omit_frame_pointer, false);
-
-    const wasm32_compiler_rt_obj = b.addObject(.{
-        .name = "compiler_rt_wasm32_eval",
-        .root_module = b.createModule(.{
-            .root_source_file = std.Build.LazyPath.zig_lib.path(b, "compiler_rt.zig"),
-            .target = wasm32_resolved_target,
-            .optimize = optimize,
-            .strip = strip,
-            .omit_frame_pointer = omit_frame_pointer,
-            .pic = true,
-        }),
-    });
-    wasm32_compiler_rt_obj.bundle_compiler_rt = false;
-    configureBackend(wasm32_compiler_rt_obj, wasm32_resolved_target);
-
-    const link_wasm32_builtins = b.addSystemCommand(&.{ b.graph.zig_exe, "wasm-ld", "-r" });
-    link_wasm32_builtins.addArg("-o");
-    const merged_wasm32_builtins = link_wasm32_builtins.addOutputFileArg("roc_builtins.o");
-    link_wasm32_builtins.addFileArg(wasm32_builtins_obj.getEmittedBin());
-    link_wasm32_builtins.addFileArg(wasm32_compiler_rt_obj.getEmittedBin());
-
-    const wasm32_builtins_files = b.addWriteFiles();
-    _ = wasm32_builtins_files.addCopyFile(merged_wasm32_builtins, "roc_builtins.o");
-    const wasm32_builtins_module = b.createModule(.{
-        .root_source_file = wasm32_builtins_files.add("wasm32_builtins.zig",
-            \\pub const bytes = @embedFile("roc_builtins.o");
-            \\
-        ),
-    });
     roc_modules.eval.addImport("wasm32_builtins", wasm32_builtins_module);
+    // The same objects for WebAssembly 1.0, which the evaluator's wasm32v1
+    // runs link.
+    const wasm32v1_eval_runtime = addEvalWasmRuntimeModules(b, roc_modules, b.resolveTargetQuery(roc_target.RocTarget.wasm32v1.llvmTargetQuery()), "wasm32v1", optimize, strip, omit_frame_pointer);
+    const wasm32v1_boxy_runtime_module = wasm32v1_eval_runtime.boxy_runtime;
+    const wasm32v1_builtins_module = wasm32v1_eval_runtime.builtins;
+    roc_modules.eval.addImport("wasm32v1_boxy_runtime", wasm32v1_boxy_runtime_module);
+    roc_modules.eval.addImport("wasm32v1_builtins", wasm32v1_builtins_module);
 
     // Setup test platform host libraries
     const wasm_test_hosts = setupTestPlatforms(b, target, optimize, roc_modules, build_test_hosts_step, strip, omit_frame_pointer, platform_filter);
@@ -4051,6 +4010,8 @@ pub fn build(b: *std.Build) void {
             module_test.test_step.root_module.addImport("bytebox", bytebox.module("bytebox"));
             module_test.test_step.root_module.addImport("wasm32_boxy_runtime", wasm32_boxy_runtime_module);
             module_test.test_step.root_module.addImport("wasm32_builtins", wasm32_builtins_module);
+            module_test.test_step.root_module.addImport("wasm32v1_boxy_runtime", wasm32v1_boxy_runtime_module);
+            module_test.test_step.root_module.addImport("wasm32v1_builtins", wasm32v1_builtins_module);
             const compile_build_module = b.createModule(.{
                 .root_source_file = b.path("src/compile/compile_build.zig"),
             });
@@ -5312,6 +5273,71 @@ fn buildBoxyRuntimeObject(
 
 /// Zig's wasm object build places the relocatable code in the emitted
 /// directory beside an empty nominal output.
+/// The Boxy runtime and builtins objects the evaluator merges into the wasm
+/// modules it compiles for `target`, each as a module exposing its bytes.
+fn addEvalWasmRuntimeModules(
+    b: *std.Build,
+    roc_modules: modules.RocModules,
+    target: ResolvedTarget,
+    name: []const u8,
+    optimize: OptimizeMode,
+    strip: bool,
+    omit_frame_pointer: ?bool,
+) struct { boxy_runtime: *std.Build.Module, builtins: *std.Build.Module } {
+    const boxy_runtime_obj = buildBoxyRuntimeObject(
+        b,
+        roc_modules,
+        target,
+        strip,
+        omit_frame_pointer,
+        b.fmt("roc_boxy_runtime_{s}_eval", .{name}),
+        b.path("src/boxy_runtime/eval_main.zig"),
+    );
+    const boxy_runtime_files = b.addWriteFiles();
+    _ = boxy_runtime_files.addCopyFile(
+        wasmObjectArtifact(b, boxy_runtime_obj),
+        "roc_boxy_runtime.o",
+    );
+    const boxy_runtime_module = b.createModule(.{
+        .root_source_file = boxy_runtime_files.add(
+            b.fmt("{s}_boxy_runtime.zig", .{name}),
+            "pub const bytes = @embedFile(\"roc_boxy_runtime.o\");\n",
+        ),
+    });
+
+    const builtins_obj = addBuiltinsObject(b, roc_modules, b.fmt("roc_builtins_{s}_eval", .{name}), "src/builtins/static_lib.zig", target, optimize, strip, omit_frame_pointer, false);
+
+    const compiler_rt_obj = b.addObject(.{
+        .name = b.fmt("compiler_rt_{s}_eval", .{name}),
+        .root_module = b.createModule(.{
+            .root_source_file = std.Build.LazyPath.zig_lib.path(b, "compiler_rt.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .omit_frame_pointer = omit_frame_pointer,
+            .pic = true,
+        }),
+    });
+    compiler_rt_obj.bundle_compiler_rt = false;
+    configureBackend(compiler_rt_obj, target);
+
+    const link_builtins = b.addSystemCommand(&.{ b.graph.zig_exe, "wasm-ld", "-r" });
+    link_builtins.addArg("-o");
+    const merged_builtins = link_builtins.addOutputFileArg("roc_builtins.o");
+    link_builtins.addFileArg(builtins_obj.getEmittedBin());
+    link_builtins.addFileArg(compiler_rt_obj.getEmittedBin());
+
+    const builtins_files = b.addWriteFiles();
+    _ = builtins_files.addCopyFile(merged_builtins, "roc_builtins.o");
+    const builtins_module = b.createModule(.{
+        .root_source_file = builtins_files.add(b.fmt("{s}_builtins.zig", .{name}),
+            \\pub const bytes = @embedFile("roc_builtins.o");
+            \\
+        ),
+    });
+    return .{ .boxy_runtime = boxy_runtime_module, .builtins = builtins_module };
+}
+
 fn wasmObjectArtifact(b: *std.Build, obj: *Step.Compile) std.Build.LazyPath {
     const zcu_name = b.fmt("{s}_zcu.o", .{std.fs.path.stem(obj.out_filename)});
     return obj.getEmittedBinDirectory().path(b, zcu_name);
@@ -6306,6 +6332,9 @@ fn addMainExe(
         .{ .name = "x64glibc", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu } },
         .{ .name = "arm64glibc", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu } },
         .{ .name = "wasm32", .query = .{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none } },
+        // WebAssembly 1.0: a wasm32v1 program links objects that use no
+        // instruction-set extension.
+        .{ .name = "wasm32v1", .query = roc_target.RocTarget.wasm32v1.llvmTargetQuery() },
         .{ .name = "x64win", .query = .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .msvc } },
         .{ .name = "x64mingw", .query = .{ .cpu_arch = .x86_64, .os_tag = .windows, .abi = .gnu } },
         .{ .name = "arm64win", .query = .{ .cpu_arch = .aarch64, .os_tag = .windows, .abi = .msvc } },
@@ -6327,7 +6356,7 @@ fn addMainExe(
         // compiler-rt exclusion is unnecessary with Zig 0.17: both the minimal
         // build-runner IPC repro and Roc's actual extern builtins compile for
         // FreeBSD, OpenBSD, and NetBSD with compiler-rt bundled.
-        const cross_is_wasm = std.mem.eql(u8, cross_target.name, "wasm32");
+        const cross_is_wasm = cross_target.query.cpu_arch == .wasm32;
         const cross_is_macos = cross_target.query.os_tag == .macos;
         const cross_bundle_compiler_rt = !cross_is_wasm and !cross_is_macos;
 
@@ -6338,7 +6367,7 @@ fn addMainExe(
 
         const cross_wasm32_compiler_rt_obj: ?*Step.Compile = if (cross_is_wasm) blk: {
             const compiler_rt_obj = b.addObject(.{
-                .name = "compiler_rt_wasm32",
+                .name = b.fmt("compiler_rt_{s}", .{cross_target.name}),
                 .root_module = b.createModule(.{
                     .root_source_file = std.Build.LazyPath.zig_lib.path(b, "compiler_rt.zig"),
                     .target = cross_resolved_target,

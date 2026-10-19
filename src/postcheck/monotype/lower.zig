@@ -287,13 +287,14 @@ pub const Options = struct {
     proc_debug_names: bool = false,
     /// The object cache to ask for closed specializations at reservation.
     spec_cache: ?Common.SpecCacheLookup = null,
+    /// Which cache entries can serve this program: whether its code is
+    /// linked, so a linked-object entry (`Common.SpecCacheHit.c_abi_entry`)
+    /// can, and whether its emitter splices dev code.
+    spec_cache_takes: Common.SpecCacheTakes = .dev_code,
     root_use_cache: ?Common.SpecCacheLookup = null,
     /// The literal value store consulted for each literal root before its
     /// conversion is lowered (design.md "Literal Value Store").
     literal_value_store: ?Common.LiteralValueLookup = null,
-    /// Whether this program's code is linked, so the cache may serve it a
-    /// linked-object entry (`Common.SpecCacheHit.c_abi_entry`).
-    spec_cache_accepts_linked: bool = false,
     /// Optional deterministic counters for specialization-shape tests.
     specialization_counters: ?*SpecializationCounters = null,
     /// Optional deterministic workload diagnostics. The checked pipeline
@@ -5163,9 +5164,9 @@ const Builder = struct {
     field_kind_scope_pool: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind)) = .empty,
     /// The object cache consulted for closed specializations, if any.
     spec_cache: ?Common.SpecCacheLookup,
+    spec_cache_takes: Common.SpecCacheTakes,
     root_use_cache: ?Common.SpecCacheLookup,
     literal_value_store: ?Common.LiteralValueLookup,
-    spec_cache_accepts_linked: bool,
     counters: ?*SpecializationCounters,
     diagnostics: ?*Diagnostics,
     /// Result-owned sink while one ordinary specialization shard is lowering or
@@ -5464,9 +5465,9 @@ const Builder = struct {
             .current_region = program.current_region,
             .proc_debug_names = options.proc_debug_names,
             .spec_cache = options.spec_cache,
+            .spec_cache_takes = options.spec_cache_takes,
             .root_use_cache = options.root_use_cache,
             .literal_value_store = options.literal_value_store,
-            .spec_cache_accepts_linked = options.spec_cache_accepts_linked,
             .counters = counters,
             .diagnostics = options.diagnostics,
             .active_spec_job_diagnostics = null,
@@ -8720,14 +8721,14 @@ const Builder = struct {
             // it reads no code.
             const settled_discovery = demand == .discovery and body_scheduling == .queued and
                 if (self.spec_cache) |cache| cache.discoverySettled(key.bytes, relation) else false;
-            const root_hit = if (settled_discovery) null else if (self.root_use_cache) |cache| cache.lookup(key.bytes, relation, self.spec_cache_accepts_linked) else null;
+            const root_hit = if (settled_discovery) null else if (self.root_use_cache) |cache| cache.lookup(key.bytes, relation, self.spec_cache_takes) else null;
             if (root_hit) |hit| {
                 fn_template.cached_demand = hit.demand;
                 fn_template.cached_root_uses = hit.checked_root_uses;
             }
             if (!settled_discovery) if (self.spec_cache) |cache| {
                 const same_lookup = if (self.root_use_cache) |root_cache| root_cache.sameProvider(cache) else false;
-                const body_hit = if (same_lookup) root_hit else cache.lookup(key.bytes, relation, self.spec_cache_accepts_linked);
+                const body_hit = if (same_lookup) root_hit else cache.lookup(key.bytes, relation, self.spec_cache_takes);
                 if (body_hit) |hit| {
                     fn_template.cached = hit;
                     if (root_hit == null) {

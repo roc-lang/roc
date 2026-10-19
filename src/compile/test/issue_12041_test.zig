@@ -33,13 +33,14 @@ test "issue 12041: annotated forwarding methods specialize without closing error
     , .{ .monotype_only = true });
 }
 
-test "issue 12041: omitted evidence preserves independent generic method results" {
+test "issue 12041: a generic method used at two types on one receiver keeps each result" {
     try harness.expectLowersToLir(
         \\Producer :: {}.{
         \\    produce : Producer, a -> a
         \\    produce = |_producer, value| value
         \\}
         \\
+        \\forward : Producer -> {}
         \\forward = |producer| {
         \\    _ = producer.produce("first")
         \\    producer.produce({})

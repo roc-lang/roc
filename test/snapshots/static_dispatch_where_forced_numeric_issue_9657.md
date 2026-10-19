@@ -28,16 +28,20 @@ use_it = {
 }
 ~~~
 # EXPECTED
-TYPE NOT DETERMINED - static_dispatch_where_forced_numeric_issue_9657.md:19:17:19:25
+MISSING METHOD - static_dispatch_where_forced_numeric_issue_9657.md:19:17:19:25
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 19 17) (end 19 25))
 		(headline
-			(reflow "Nothing in this program determines a type this needs."))
+			(reflow "A type this needs never resolved to a concrete type, so it has no")
+			(reflow " ")
+			(annotated code "decode")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "static_dispatch_where_forced_numeric_issue_9657.md") (start 19 17) (end 19 25) (annotation error) (line-text "    transform = make_map(|n| n + 1)"))
 			(line-break)
@@ -50,16 +54,7 @@ TYPE NOT DETERMINED - static_dispatch_where_forced_numeric_issue_9657.md:19:17:1
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated code "decode")
-			(reflow " ")
-			(reflow "method to use.")
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be."))))
+			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one."))))
 ~~~
 # TOKENS
 ~~~zig
