@@ -18861,11 +18861,24 @@ normalization removes each join parameter that no reachable statement reads
 and whose only writes are explicit `set_local` statements. The parameter
 leaves its join, and each of its writes is deleted by routing the write's
 incoming edges to its successor; copying a successor over a deleted statement
-would duplicate any join it copied. Deleting a write can leave its value
-unread, so the pass repeats to a fixed point. Reads outside operand positions
-keep a parameter: a join's retained or maybe-uninitialized lists and another
-local's descriptor. A join parameter that is also a procedure argument is
-defined by the call as well, and is never removed.
+would duplicate any join it copied. Reads outside operand positions keep a
+parameter: a join's retained or maybe-uninitialized lists and another local's
+descriptor. A join parameter that is also a procedure argument is defined by
+the call as well, and is never removed.
+
+Deleting a write can leave its value unread. A written value is often a fresh
+read of the variable's current value, such as a re-projection of the field a
+destructure bound it to, placed after the consuming call; left in place, that
+read is a later use of the call's argument and keeps it shared exactly as the
+write did. So when a deleted statement held the last read of a local that has
+exactly one definition, and that definition is pure (`assign_ref`,
+`assign_literal`, `assign_list`, or a descriptor-free `assign_struct` or
+`assign_tag`), the definition is deleted the same way, and its own operands
+are followed in turn. A call, a low-level, or any other statement that can
+have an effect, fail, or diverge ends the chain and stays. The same
+non-operand reads that keep a parameter keep a definition. A written value
+that is itself a join parameter becomes a candidate for the next round, so the
+pass repeats to a fixed point. Only procedures with join parameters change.
 
 Where lowering carries the variables and the construct's result together in
 one struct-typed join parameter, the unread variable is a struct field rather
