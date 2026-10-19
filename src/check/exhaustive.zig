@@ -589,12 +589,42 @@ pub const UnresolvedRows = struct {
 /// occurrence identity.
 pub const NumeralKeyInterner = struct {
     module_env: *const Can.ModuleEnv,
-    map: std.StringHashMapUnmanaged(u32) = .empty,
+    /// Keys borrow the module's digit bytes, which outlive the check.
+    map: std.HashMapUnmanaged(types.numeral.Exact, u32, ExactContext, std.hash_map.default_max_load_percentage) = .empty,
     next_id: u32 = 0,
 
-    /// `allocator` must be the same arena the surrounding check uses: interned
-    /// key bytes live in it until the check completes, and are never freed
-    /// individually.
+    const ExactContext = struct {
+        pub fn hash(_: ExactContext, exact: types.numeral.Exact) u64 {
+            var hasher = std.hash.Wyhash.init(0);
+            std.hash.autoHash(&hasher, exact.before.len);
+            hasher.update(exact.before);
+            hasher.update(exact.after);
+            std.hash.autoHash(&hasher, exact.scale);
+            std.hash.autoHash(&hasher, exact.is_negative);
+            std.hash.autoHash(&hasher, exact.is_fractional);
+            return hasher.final();
+        }
+
+        pub fn eql(_: ExactContext, a: types.numeral.Exact, b: types.numeral.Exact) bool {
+            return a.scale == b.scale and
+                a.is_negative == b.is_negative and
+                a.is_fractional == b.is_fractional and
+                bytesEql(a.before, b.before) and
+                bytesEql(a.after, b.after);
+        }
+
+        fn bytesEql(a: []const u8, b: []const u8) bool {
+            // Local byte compare: `std.mem.eql` is banned in src/check.
+            if (a.len != b.len) return false;
+            for (a, b) |x, y| {
+                if (x != y) return false;
+            }
+            return true;
+        }
+    };
+
+    /// `allocator` must be the same arena the surrounding check uses: the
+    /// map's storage lives in it until the check completes.
     fn idFor(
         self: *NumeralKeyInterner,
         allocator: std.mem.Allocator,
@@ -602,20 +632,7 @@ pub const NumeralKeyInterner = struct {
     ) error{OutOfMemory}!u32 {
         const literal = self.module_env.numeralLiteralForNode(Can.ModuleEnv.nodeIdxFrom(pattern_idx)) orelse
             return self.freshId();
-        const exact = self.module_env.exactNumeral(literal);
-
-        // Unambiguous key: length-prefixed `before` digits, then `after`
-        // digits, then scale and sign/fractional flags.
-        var key: std.ArrayList(u8) = .empty;
-        try key.ensureTotalCapacity(allocator, 4 + exact.before.len + exact.after.len + 5);
-        key.appendSliceAssumeCapacity(&u32LeBytes(@intCast(exact.before.len)));
-        key.appendSliceAssumeCapacity(exact.before);
-        key.appendSliceAssumeCapacity(exact.after);
-        key.appendSliceAssumeCapacity(&u32LeBytes(exact.scale));
-        key.appendAssumeCapacity(@as(u8, @intFromBool(exact.is_negative)) |
-            (@as(u8, @intFromBool(exact.is_fractional)) << 1));
-
-        const entry = try self.map.getOrPut(allocator, key.items);
+        const entry = try self.map.getOrPut(allocator, self.module_env.exactNumeral(literal));
         if (!entry.found_existing) entry.value_ptr.* = self.freshId();
         return entry.value_ptr.*;
     }
@@ -624,15 +641,6 @@ pub const NumeralKeyInterner = struct {
         const id = self.next_id;
         self.next_id += 1;
         return id;
-    }
-
-    fn u32LeBytes(value: u32) [4]u8 {
-        return .{
-            @truncate(value),
-            @truncate(value >> 8),
-            @truncate(value >> 16),
-            @truncate(value >> 24),
-        };
     }
 };
 
@@ -2438,6 +2446,28 @@ pub const ColumnTypes = struct {
     }
 };
 
+/// The arities of `column`'s list patterns, in order, followed by `last`.
+fn listAritiesWith(
+    allocator: std.mem.Allocator,
+    column: []const UnresolvedPattern,
+    last: ListArity,
+) Allocator.Error![]ListArity {
+    var count: usize = 0;
+    for (column) |p| {
+        if (p == .list) count += 1;
+    }
+    const arities = try allocator.alloc(ListArity, count + 1);
+    var i: usize = 0;
+    for (column) |p| {
+        if (p == .list) {
+            arities[i] = p.list.arity;
+            i += 1;
+        }
+    }
+    arities[count] = last;
+    return arities;
+}
+
 /// Build the list of list arities we need to check for exhaustiveness.
 /// This handles the complexity of variable-length list patterns.
 fn buildListCtorsForChecking(
@@ -2465,11 +2495,9 @@ fn buildListCtorsForChecking(
 
     if (!has_slice) {
         // Only exact patterns - check each length from 0 to max+1
-        var result: std.ArrayList(ListArity) = .empty;
-        for (0..max_exact_len + 2) |len| {
-            try result.append(allocator, .{ .exact = len });
-        }
-        return try result.toOwnedSlice(allocator);
+        const result = try allocator.alloc(ListArity, max_exact_len + 2);
+        for (result, 0..) |*arity, len| arity.* = .{ .exact = len };
+        return result;
     }
 
     // Has slice patterns - check each length from 0 to the point where slices take over.
@@ -2480,20 +2508,17 @@ fn buildListCtorsForChecking(
     // pattern's suffix without the two overlapping. That requires
     // `check_until >= max_prefix + max_suffix`; with any less, a prefix element
     // of one pattern and a suffix element of another would share a column.
-    var result: std.ArrayList(ListArity) = .empty;
     const check_until = @max(max_exact_len + 1, max_prefix + max_suffix);
-
-    for (0..check_until) |len| {
-        try result.append(allocator, .{ .exact = len });
-    }
+    const result = try allocator.alloc(ListArity, check_until + 1);
+    for (result[0..check_until], 0..) |*arity, len| arity.* = .{ .exact = len };
 
     // Add one slice pattern to cover all remaining lengths
-    try result.append(allocator, .{ .slice = .{
+    result[check_until] = .{ .slice = .{
         .prefix = check_until - max_suffix,
         .suffix = max_suffix,
-    } });
+    } };
 
-    return try result.toOwnedSlice(allocator);
+    return result;
 }
 
 // Sketched Pattern Path
@@ -2677,18 +2702,12 @@ fn collectCtorsSketched(
         // Previously this returned .non_exhaustive_wildcards when wildcards were
         // present, which caused false non-exhaustive errors because wildcards
         // covering all list arities weren't being considered.
-        var arities: std.ArrayList(ListArity) = .empty;
-        for (first_col) |p| {
-            if (p == .list) {
-                try arities.append(allocator, p.list.arity);
-            }
-        }
-        try arities.append(allocator, .{ .slice = .{
+        const arities = try listAritiesWith(allocator, first_col, .{ .slice = .{
             .prefix = 0,
             .suffix = 0,
         } });
 
-        return .{ .lists = try arities.toOwnedSlice(allocator) };
+        return .{ .lists = arities };
     }
 
     if (found_literal) {
@@ -2700,6 +2719,26 @@ fn collectCtorsSketched(
 
     return .non_exhaustive_wildcards;
 }
+
+/// The rows of a matrix being specialized, at most one per source row, in
+/// one slice sized for every source row.
+const SpecializedRows = struct {
+    rows: [][]const UnresolvedPattern,
+    len: usize = 0,
+
+    fn init(allocator: std.mem.Allocator, source_rows: usize) error{OutOfMemory}!SpecializedRows {
+        return .{ .rows = try allocator.alloc([]const UnresolvedPattern, source_rows) };
+    }
+
+    fn append(self: *SpecializedRows, row: []const UnresolvedPattern) void {
+        self.rows[self.len] = row;
+        self.len += 1;
+    }
+
+    fn matrix(self: SpecializedRows, allocator: std.mem.Allocator) SketchedMatrix {
+        return SketchedMatrix.init(allocator, self.rows[0..self.len]);
+    }
+};
 
 /// Specialize a sketched matrix by a constructor.
 /// Keeps patterns in unresolved form until needed.
@@ -2713,7 +2752,10 @@ fn specializeByConstructorSketched(
     union_info: Union,
     tag_ids_by_name: *const TagIdsByName,
 ) error{OutOfMemory}!SketchedMatrix {
-    var new_rows: std.ArrayList([]const UnresolvedPattern) = .empty;
+    var new_rows = try SpecializedRows.init(allocator, matrix.rows.len);
+    // A record row's field name -> its position among the row's fields.
+    var pat_positions: collections.DenseMapUnmanaged(u29, usize) = .empty;
+    defer pat_positions.deinit(allocator);
 
     // For records, get the target field names we're specializing by
     const target_fields: ?[]const Ident.Idx = switch (union_info.render_as) {
@@ -2734,7 +2776,7 @@ fn specializeByConstructorSketched(
                     const new_row = try allocator.alloc(UnresolvedPattern, c.args.len + rest.len);
                     @memcpy(new_row[0..c.args.len], c.args);
                     @memcpy(new_row[c.args.len..], rest);
-                    try new_rows.append(allocator, new_row);
+                    new_rows.append(new_row);
                 }
             },
             .known_ctor => |kc| {
@@ -2751,9 +2793,8 @@ fn specializeByConstructorSketched(
                         // Build the new row with fields aligned to target order
                         const new_row = try allocator.alloc(UnresolvedPattern, arity + rest.len);
 
-                        var pat_positions: collections.DenseMapUnmanaged(u29, usize) = .empty;
-                        defer pat_positions.deinit(allocator);
-                        try pat_positions.ensureTotalCapacity(allocator, @intCast(pat_fields.len));
+                        pat_positions.clearRetainingCapacity();
+                        try pat_positions.ensureTotalCapacity(allocator, pat_fields.len);
                         for (pat_fields, 0..) |pat_field, j| {
                             const gop = try pat_positions.getOrPut(allocator, pat_field.idx);
                             if (!gop.found_existing) gop.value_ptr.* = j;
@@ -2768,13 +2809,13 @@ fn specializeByConstructorSketched(
                         }
 
                         @memcpy(new_row[arity..], rest);
-                        try new_rows.append(allocator, new_row);
+                        new_rows.append(new_row);
                     } else {
                         // Non-record: use positional matching
                         const new_row = try allocator.alloc(UnresolvedPattern, kc.args.len + rest.len);
                         @memcpy(new_row[0..kc.args.len], kc.args);
                         @memcpy(new_row[kc.args.len..], rest);
-                        try new_rows.append(allocator, new_row);
+                        new_rows.append(new_row);
                     }
                 }
             },
@@ -2784,27 +2825,27 @@ fn specializeByConstructorSketched(
                     new_row[i] = .anything;
                 }
                 @memcpy(new_row[arity..], rest);
-                try new_rows.append(allocator, new_row);
+                new_rows.append(new_row);
             },
             .literal, .str_pattern, .list => {},
         }
     }
 
-    return SketchedMatrix.init(allocator, try new_rows.toOwnedSlice(allocator));
+    return new_rows.matrix(allocator);
 }
 
 /// Specialize the sketched matrix for wildcard - keep only rows starting with wildcard
 fn specializeByAnythingSketched(allocator: std.mem.Allocator, matrix: SketchedMatrix) error{OutOfMemory}!SketchedMatrix {
-    var new_rows: std.ArrayList([]const UnresolvedPattern) = .empty;
+    var new_rows = try SpecializedRows.init(allocator, matrix.rows.len);
 
     for (matrix.rows) |row| {
         if (row.len == 0) continue;
         if (row[0] == .anything) {
-            try new_rows.append(allocator, row[1..]);
+            new_rows.append(row[1..]);
         }
     }
 
-    return SketchedMatrix.init(allocator, try new_rows.toOwnedSlice(allocator));
+    return new_rows.matrix(allocator);
 }
 
 /// Specialize the sketched matrix by a list arity.
@@ -2813,7 +2854,7 @@ fn specializeByListAritySketched(
     matrix: SketchedMatrix,
     arity: ListArity,
 ) error{OutOfMemory}!SketchedMatrix {
-    var new_rows: std.ArrayList([]const UnresolvedPattern) = .empty;
+    var new_rows = try SpecializedRows.init(allocator, matrix.rows.len);
 
     const target_len = arity.minLen();
 
@@ -2846,7 +2887,7 @@ fn specializeByListAritySketched(
                     }
 
                     @memcpy(new_row[target_len..], rest);
-                    try new_rows.append(allocator, new_row);
+                    new_rows.append(new_row);
                 }
             },
             .anything => {
@@ -2855,13 +2896,13 @@ fn specializeByListAritySketched(
                     new_row[i] = .anything;
                 }
                 @memcpy(new_row[target_len..], rest);
-                try new_rows.append(allocator, new_row);
+                new_rows.append(new_row);
             },
             .literal, .str_pattern, .ctor, .known_ctor => {},
         }
     }
 
-    return SketchedMatrix.init(allocator, try new_rows.toOwnedSlice(allocator));
+    return new_rows.matrix(allocator);
 }
 
 /// Walk a tag union's ext var chain and collect any flex ext vars.
@@ -3844,15 +3885,8 @@ fn usefulEnter(
                     }
 
                     const first_col = try existing_matrix.firstColumn();
-                    var arities_list: std.ArrayList(ListArity) = .empty;
-                    for (first_col) |p| {
-                        if (p == .list) {
-                            try arities_list.append(allocator, p.list.arity);
-                        }
-                    }
-                    try arities_list.append(allocator, l.arity);
-
-                    const check_arities = try buildListCtorsForChecking(allocator, arities_list.items);
+                    const pattern_arities = try listAritiesWith(allocator, first_col, l.arity);
+                    const check_arities = try buildListCtorsForChecking(allocator, pattern_arities);
 
                     try frames.append(allocator, .{
                         .matrix = existing_matrix,
