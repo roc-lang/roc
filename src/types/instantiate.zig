@@ -144,7 +144,6 @@ pub const Scratch = struct {
     value_stack: std.ArrayListUnmanaged(Var) = .empty,
     pending_tags: std.ArrayListUnmanaged(Tag) = .empty,
     pending_fields: std.ArrayListUnmanaged(RecordField) = .empty,
-    pending_constraints: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty,
     pending_parts: std.ArrayListUnmanaged(InterpolationPartMetadata) = .empty,
     /// Buffers for the scheme pre-walk that decides which monomorphic nodes a
     /// scheme instantiation copies. `reach_state` maps every visited root to
@@ -172,7 +171,6 @@ pub const Scratch = struct {
         self.value_stack.deinit(gpa);
         self.pending_tags.deinit(gpa);
         self.pending_fields.deinit(gpa);
-        self.pending_constraints.deinit(gpa);
         self.pending_parts.deinit(gpa);
         self.reach_edges.deinit(gpa);
         if (self.reach_heads) |*heads| heads.deinit();
@@ -245,8 +243,10 @@ const FlexLikeFrame = struct {
     cons_start: u32,
     cons_len: u32,
     cons_idx: u32 = 0,
-    /// Base of this frame's collected constraints in `Scratch.pending_constraints`.
-    cons_base: u32,
+    /// Raw base index of the fresh constraint run in the store: a copy of the
+    /// source run, appended when the frame starts, whose callables (and
+    /// interpolation metadata) are rewritten in place as their copies finish.
+    fresh_start: u32,
     fresh_fn_var: Var = undefined,
     /// Base of the current constraint's collected interpolation parts in
     /// `Scratch.pending_parts`.
@@ -1019,14 +1019,12 @@ pub const Instantiator = struct {
         // entry-length invariant on both exit paths.
         const tags_base = machine.pending_tags.items.len;
         const fields_base = machine.pending_fields.items.len;
-        const constraints_base = machine.pending_constraints.items.len;
         const parts_base = machine.pending_parts.items.len;
         errdefer {
             machine.frames.items.len = frames_base;
             machine.value_stack.items.len = values_base;
             machine.pending_tags.items.len = tags_base;
             machine.pending_fields.items.len = fields_base;
-            machine.pending_constraints.items.len = constraints_base;
             machine.pending_parts.items.len = parts_base;
         }
 
@@ -1243,7 +1241,7 @@ pub const Instantiator = struct {
                     .name = rigid.name,
                     .cons_start = @backingInt(rigid.constraints.start),
                     .cons_len = @intCast(rigid.constraints.len()),
-                    .cons_base = @intCast(machine.pending_constraints.items.len),
+                    .fresh_start = try self.appendConstraintRunCopy(rigid.constraints),
                 } });
                 return false;
             },
@@ -1269,7 +1267,7 @@ pub const Instantiator = struct {
                     .name = flex.name,
                     .cons_start = @backingInt(flex.constraints.start),
                     .cons_len = @intCast(flex.constraints.len()),
-                    .cons_base = @intCast(machine.pending_constraints.items.len),
+                    .fresh_start = try self.appendConstraintRunCopy(flex.constraints),
                 } });
                 return false;
             },
@@ -1465,16 +1463,35 @@ pub const Instantiator = struct {
     // slice. Source entries are append-only, so index-based re-fetching
     // always sees the original values.
 
+    /// Append a copy of the constraint run `source` for a flex-like frame to
+    /// rewrite in place, returning its raw base index.
+    fn appendConstraintRunCopy(self: *Self, source: StaticDispatchConstraint.SafeList.Range) std.mem.Allocator.Error!u32 {
+        const constraints = &self.store.static_dispatch_constraints.items;
+        const fresh_start = std.math.cast(u32, constraints.items.len) orelse return error.OutOfMemory;
+        try constraints.ensureUnusedCapacity(self.store.gpa, source.count);
+        // The source run lives in the same list, so it is sliced only once
+        // the list can no longer move.
+        const source_start: usize = @backingInt(source.start);
+        constraints.appendSliceAssumeCapacity(constraints.items[source_start..][0..source.count]);
+        return fresh_start;
+    }
+
+    /// The fresh copy of the frame's current constraint. Re-fetched on every
+    /// use, since child copies append to the same list.
+    fn freshConstraint(self: *Self, frame: *const FlexLikeFrame) *StaticDispatchConstraint {
+        return &self.store.static_dispatch_constraints.items.items[frame.fresh_start + frame.cons_idx];
+    }
+
     fn stepFlexLike(self: *Self, frame: *FlexLikeFrame) std.mem.Allocator.Error!bool {
         const machine = self.scratch();
         while (true) {
             switch (frame.stage) {
                 .dispatch_fn => {
                     if (frame.cons_idx == frame.cons_len) {
-                        const fresh_range = try self.store.appendStaticDispatchConstraints(
-                            machine.pending_constraints.items[frame.cons_base..],
-                        );
-                        machine.pending_constraints.items.len = frame.cons_base;
+                        const fresh_range: StaticDispatchConstraint.SafeList.Range = .{
+                            .start = @fromBackingInt(frame.fresh_start),
+                            .count = frame.cons_len,
+                        };
                         if (frame.has_deferred) try self.recordDeferredSlots(fresh_range);
                         const fresh_content = switch (frame.result) {
                             .flex => Content{ .flex = Flex{ .name = frame.name, .constraints = fresh_range } },
@@ -1500,9 +1517,7 @@ pub const Instantiator = struct {
                     frame.fresh_fn_var = machine.value_stack.pop().?;
                     const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
                     if (!constraint.interpolation.isPresent()) {
-                        var fresh_constraint = constraint;
-                        fresh_constraint.fn_var = frame.fresh_fn_var;
-                        try machine.pending_constraints.append(self.store.gpa, fresh_constraint);
+                        self.freshConstraint(frame).fn_var = frame.fresh_fn_var;
                         frame.cons_idx += 1;
                         frame.stage = .dispatch_fn;
                     } else {
@@ -1541,16 +1556,10 @@ pub const Instantiator = struct {
                         machine.pending_parts.items[frame.parts_base..],
                     );
                     machine.pending_parts.items.len = frame.parts_base;
-                    const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
-                    var fresh_constraint = constraint;
+                    const fresh_constraint = self.freshConstraint(frame);
                     fresh_constraint.fn_var = frame.fresh_fn_var;
-                    fresh_constraint.interpolation = .{
-                        .expr_region = constraint.interpolation.expr_region,
-                        .item_var = fresh_item_var,
-                        .interpolated_parts = fresh_parts_range,
-                        .regions = constraint.interpolation.regions,
-                    };
-                    try machine.pending_constraints.append(self.store.gpa, fresh_constraint);
+                    fresh_constraint.interpolation.item_var = fresh_item_var;
+                    fresh_constraint.interpolation.interpolated_parts = fresh_parts_range;
                     frame.cons_idx += 1;
                     frame.stage = .dispatch_fn;
                 },
