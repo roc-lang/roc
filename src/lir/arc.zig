@@ -496,8 +496,8 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         .layouts = layouts,
         .options = options,
     };
-    const boxy_rc_descs = try computeBoxyRcDescs(store);
-    defer store.allocator.free(boxy_rc_descs);
+    const boxy_rc_descs = try store.snapshotLocalDescs(store.allocator);
+    defer boxy_rc_descs.deinit(store.allocator);
     var boxy_desc_users = try BoxyDescUsers.init(store.allocator, boxy_rc_descs);
     defer boxy_desc_users.deinit(store.allocator);
 
@@ -1029,16 +1029,6 @@ const EmissionOwner = struct {
     }
 };
 
-fn computeBoxyRcDescs(store: *const LirStore) ResourceError![]?LIR.BoxyDescRef {
-    const local_count = store.localCount();
-    const descs = try store.allocator.alloc(?LIR.BoxyDescRef, local_count);
-    for (0..local_count) |index| {
-        const local_id: LIR.LocalId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-        descs[index] = store.getLocal(local_id).boxy_desc;
-    }
-    return descs;
-}
-
 /// The locals whose Boxy descriptor is each descriptor local, in ascending
 /// local order, so a descriptor update visits only the values it invalidates.
 const BoxyDescUsers = struct {
@@ -1046,13 +1036,15 @@ const BoxyDescUsers = struct {
     starts: []u32 = &.{},
     locals: []LIR.LocalId = &.{},
 
-    fn init(allocator: Allocator, descs: []const ?LIR.BoxyDescRef) Allocator.Error!BoxyDescUsers {
-        const starts = try allocator.alloc(u32, descs.len + 1);
+    fn init(allocator: Allocator, descs: LirStore.LocalDescSnapshot) Allocator.Error!BoxyDescUsers {
+        if (descs.isEmpty()) return .{};
+        const local_count = descs.localCount();
+        const starts = try allocator.alloc(u32, local_count + 1);
         errdefer allocator.free(starts);
         @memset(starts, 0);
         var user_count: usize = 0;
-        for (descs) |maybe_desc| {
-            const desc = maybe_desc orelse continue;
+        for (0..local_count) |index| {
+            const desc = descs.get(@fromBackingInt(@intCast(index))) orelse continue;
             const desc_local = desc.localOrNull() orelse continue;
             starts[@backingInt(desc_local) + 1] += 1;
             user_count += 1;
@@ -1060,10 +1052,10 @@ const BoxyDescUsers = struct {
         for (1..starts.len) |index| starts[index] += starts[index - 1];
         const locals = try allocator.alloc(LIR.LocalId, user_count);
         errdefer allocator.free(locals);
-        const cursors = try allocator.dupe(u32, starts[0..descs.len]);
+        const cursors = try allocator.dupe(u32, starts[0..local_count]);
         defer allocator.free(cursors);
-        for (descs, 0..) |maybe_desc, index| {
-            const desc = maybe_desc orelse continue;
+        for (0..local_count) |index| {
+            const desc = descs.get(@fromBackingInt(@intCast(index))) orelse continue;
             const desc_local = desc.localOrNull() orelse continue;
             const cursor = &cursors[@backingInt(desc_local)];
             locals[cursor.*] = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
@@ -1084,10 +1076,8 @@ const BoxyDescUsers = struct {
     }
 };
 
-fn boxyDescForLocal(descs: []const ?LIR.BoxyDescRef, local: LIR.LocalId) ?LIR.BoxyDescRef {
-    const index = @backingInt(local);
-    if (index >= descs.len) return null;
-    return descs[index];
+fn boxyDescForLocal(descs: LirStore.LocalDescSnapshot, local: LIR.LocalId) ?LIR.BoxyDescRef {
+    return descs.get(local);
 }
 
 /// Emission shares the immutable solver table unless a capture view must be
@@ -1721,7 +1711,7 @@ const Inserter = struct {
     layouts: *const layout_mod.Store,
     options: InsertOptions,
     local_contains_refcounted: []const bool = &.{},
-    boxy_rc_descs: []const ?LIR.BoxyDescRef = &.{},
+    boxy_rc_descs: LirStore.LocalDescSnapshot = .{},
     boxy_desc_users: BoxyDescUsers = .{},
     solution: *const arc_solve.Solution = undefined,
     /// Field takes solved against the ownership-neutral bodies; consulted by
@@ -7435,12 +7425,7 @@ const Inserter = struct {
     }
 
     fn rcHelperForLocal(self: *const Inserter, op: layout_mod.RcOp, local: LIR.LocalId) LIR.RcHelper {
-        const local_index = @backingInt(local);
-        if (local_index < self.boxy_rc_descs.len) {
-            if (self.boxy_rc_descs[local_index]) |desc| {
-                return .{ .boxy = desc };
-            }
-        }
+        if (self.boxy_rc_descs.get(local)) |desc| return .{ .boxy = desc };
 
         const local_layout = self.store.getLocal(local).layout_idx;
         const helper = self.rcHelperForLayout(op, local_layout);
@@ -8901,7 +8886,7 @@ test "ARC uses erased capture views as solver-only Boxy borrow anchors" {
     const capture_ptr = try f.local(.opaque_ptr);
     const capture_view = try f.local(capture_layout);
     const captured_value = try f.local(erased_box);
-    f.store.setLocalBoxyDesc(captured_value, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
+    try f.store.setLocalBoxyDesc(captured_value, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
 
     const result = try f.local(.i64);
     const ret = try f.ret(result);
@@ -9581,7 +9566,7 @@ test "ARC proc domain excludes scalar and other-proc locals" {
     }, .none);
 
     const local_contains_refcounted = [_]bool{ true, false, true };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &local_contains_refcounted, &.{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &local_contains_refcounted, .{}, &.{}, true);
     defer solution.deinit();
     var global_local_index = collections.DenseMap(LIR.LocalId, u32).init(testing.allocator);
     defer global_local_index.deinit();
@@ -9656,7 +9641,7 @@ test "ARC proc domain filters module-wide borrow groups to its frame" {
     }, .none);
 
     const local_contains_refcounted = [_]bool{ true, true, true };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &local_contains_refcounted, &.{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &local_contains_refcounted, .{}, &.{}, true);
     defer solution.deinit();
     try testing.expectEqual(leader, solution.leaderOf(local_alias));
 
@@ -9706,7 +9691,7 @@ test "ARC lender-death query sees a live solver-only borrow anchor" {
     const proc = try f.addProc(&.{anchor}, body, .i64);
 
     const solver_rc = [_]bool{ true, true, false };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &solver_rc, &.{}, &.{proc}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &solver_rc, .{}, &.{proc}, true);
     defer solution.deinit();
     try testing.expectEqual(anchor, solution.leaderOf(concrete));
 
@@ -9756,7 +9741,7 @@ test "ARC prepared source liveness survives transient domains and frozen reuse" 
     const body = try f.ret(local);
     const proc = try f.addProc(&.{local}, body, .str);
     const rc = [_]bool{true};
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, &.{proc}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, .{}, &.{proc}, true);
     defer solution.deinit();
     var durable = collections.SingleThreadArena.init(testing.allocator);
     defer durable.deinit();
@@ -9813,7 +9798,7 @@ test "ARC proc domain sparse high global IDs retain only a tiny frame" {
     defer testing.allocator.free(rc);
     @memset(rc, false);
     rc[@backingInt(local)] = true;
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, &.{proc}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, .{}, &.{proc}, true);
     defer solution.deinit();
     var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
@@ -9853,7 +9838,7 @@ test "ARC grouped raw liveness agrees with exhaustive resource queries" {
     const proc = try f.addProc(&.{}, body, .i64);
     var rc = @as([(locals.len + 1)]bool, @splat(true));
     rc[locals.len] = false;
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
     defer solution.deinit();
     for (locals, 0..) |local, i| try testing.expectEqual(locals[i % 3], solution.leaderOf(local));
     var indices = collections.DenseMap(LIR.LocalId, u32).init(testing.allocator);
@@ -11638,7 +11623,7 @@ test "RC loop payload view preserves field units of a tag union defined outside 
 
     const rc = try arc_solve.computeLocalContainsRefcounted(testing.allocator, &f.store, &f.layouts);
     defer testing.allocator.free(rc);
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, .{}, &.{}, true);
     defer solution.deinit();
     var dismantles = try arc_dismantle.compute(testing.allocator, &f.store, &f.layouts, rc, &solution, .{});
     defer dismantles.deinit();
@@ -11701,7 +11686,7 @@ test "RC loop payload view takes fresh field units of a tag union rebuilt inside
 
     const rc = try arc_solve.computeLocalContainsRefcounted(testing.allocator, &f.store, &f.layouts);
     defer testing.allocator.free(rc);
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, .{}, &.{}, true);
     defer solution.deinit();
     var dismantles = try arc_dismantle.compute(testing.allocator, &f.store, &f.layouts, rc, &solution, .{});
     defer dismantles.deinit();
@@ -15162,7 +15147,7 @@ test "RC outcome restitution spends retained arguments through aliases only on s
             is_rc.* = f.layouts.layoutContainsRefcounted(f.layouts.getLayout(local.layout_idx));
         }
         {
-            var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, &.{caller}, true);
+            var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, .{}, &.{caller}, true);
             defer solution.deinit();
             const outcomes = solution.availableOutcomeSpanOf(callee);
             try testing.expectEqual(@as(u32, 2), outcomes.len);
@@ -15472,7 +15457,7 @@ test "ARC outcome capability rejects a stale discriminant after return-local reb
         &f.store,
         &f.layouts,
         &rc_local,
-        &.{},
+        .{},
         &.{},
         true,
     );
@@ -15545,7 +15530,7 @@ test "ARC outcome capability rejects stale witnesses across set-local and join r
         &f.store,
         &f.layouts,
         rc_local,
-        &.{},
+        .{},
         &.{},
         true,
     );
@@ -15895,7 +15880,7 @@ fn outcomeScratchWork(proc_count: usize) (Allocator.Error || error{TestExpectedE
     defer testing.allocator.free(rc);
     for (rc, 0..) |*value, i| value.* = i % 4 != 1;
     const before = arc_solve.outcome_scratch_entries;
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, .{}, &.{}, true);
     defer solution.deinit();
     for (0..proc_count) |i| {
         const span = solution.availableOutcomeSpanOf(@fromBackingInt(@intCast(@as(u32, @intCast(i)))));
@@ -17160,7 +17145,7 @@ test "RC recursive tail carrier stops at an owned alias" {
     const own = try f.assignRefLocal(owned_alias, original, store);
     f.store.setProcSpecBody(proc, try f.assignStr(original, "still live", own));
     const rc = [_]bool{ true, true, true, true, true, true, false };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
     defer solution.deinit();
     try testing.expect(!solution.isBorrowed(owned_alias));
     try testing.expect(solution.isBorrowed(borrowed_alias));
@@ -17197,7 +17182,7 @@ test "RC borrowed alias transfers its nearest owned carrier" {
     const body = try f.assignStr(original, "still live", own);
     _ = try f.addProc(&.{}, body, .str);
     const rc = [_]bool{ true, true, true, true, true, true, false };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
     defer solution.deinit();
     try testing.expect(!solution.isBorrowed(owned_alias));
     try testing.expect(solution.isBorrowed(borrowed_alias));
@@ -17277,7 +17262,7 @@ test "RC releases descriptor-backed old set_local value before immutable replace
     const desc = try f.local(.opaque_ptr);
     const current = try f.local(.str);
     const replacement = try f.local(.str);
-    f.store.setLocalBoxyDesc(current, .{ .local = desc });
+    try f.store.setLocalBoxyDesc(current, .{ .local = desc });
 
     const ret = try f.ret(current);
     const set_current = try f.setLocal(current, replacement, .replace_existing, ret);
@@ -17304,7 +17289,7 @@ test "RC descriptor updates scan only the current proc frame" {
     const desc = try f.local(.opaque_ptr);
     const current = try f.local(.str);
     const result = try f.local(.i64);
-    f.store.setLocalBoxyDesc(current, .{ .local = desc });
+    try f.store.setLocalBoxyDesc(current, .{ .local = desc });
 
     const unrelated_ret = try f.ret(unrelated);
     const unrelated_body = try f.assignStr(unrelated, "other proc", unrelated_ret);
@@ -17356,8 +17341,8 @@ test "RC descriptor snapshot owns an alias across source descriptor reuse" {
     const source = try f.local(.str);
     const alias = try f.local(.str);
     const result = try f.local(.i64);
-    f.store.setLocalBoxyDesc(source, .{ .local = source_desc });
-    f.store.setLocalBoxyDesc(alias, .{ .local = alias_desc });
+    try f.store.setLocalBoxyDesc(source, .{ .local = source_desc });
+    try f.store.setLocalBoxyDesc(alias, .{ .local = alias_desc });
 
     const ret = try f.ret(result);
     const assign_result = try f.assignI64(result, 1, ret);
@@ -17394,8 +17379,8 @@ test "RC preserves a surviving source before a consuming boxy adapter" {
     const adapted = try f.local(f.list_i64);
     const result = try f.local(.i64);
     const desc = LIR.BoxyDescRef{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) };
-    f.store.setLocalBoxyDesc(source, desc);
-    f.store.setLocalBoxyDesc(adapted, desc);
+    try f.store.setLocalBoxyDesc(source, desc);
+    try f.store.setLocalBoxyDesc(adapted, desc);
 
     const ret = try f.ret(result);
     const assign_result = try f.assignI64(result, 1, ret);
@@ -17464,8 +17449,8 @@ test "RC does not treat a descriptor-bearing scalar dictionary result as refcoun
     const desc = LIR.BoxyDescRef{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) };
     const result = try f.local(.u32);
     const adapted = try f.local(.u32);
-    f.store.setLocalBoxyDesc(result, desc);
-    f.store.setLocalBoxyDesc(adapted, desc);
+    try f.store.setLocalBoxyDesc(result, desc);
+    try f.store.setLocalBoxyDesc(adapted, desc);
 
     const ret = try f.ret(result);
     const adapt = try f.store.addCFStmt(.{ .assign_boxy_adapt = .{

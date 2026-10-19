@@ -448,9 +448,9 @@ pub fn procRewriteChanged(self: *const Self) bool {
     }
     if (!std.meta.eql(rewrite.proc, source.getProcSpec(rewrite.proc_id))) return true;
     inline for (.{
-        "cf_stmts",    "cf_switch_branches",    "str_match_steps", "str_match_arms",
-        "join_points", "locals",                "local_ids",       "u64s",
-        "u32s",        "erased_call_arg_plans", "inline_scopes",
+        "cf_stmts",    "cf_switch_branches", "str_match_steps",       "str_match_arms",
+        "join_points", "locals",             "local_descs",           "local_ids",
+        "u64s",        "u32s",               "erased_call_arg_plans", "inline_scopes",
     }) |field| {
         if (@field(self, field).len() != 0) return true;
     }
@@ -489,6 +489,7 @@ pub const BodyPrefix = struct {
     str_match_arms: u32,
     join_points: u32,
     locals: u32,
+    local_descs: u32,
     local_ids: u32,
     u64s: u32,
     u32s: u32,
@@ -533,6 +534,7 @@ pub const BodyRelocation = struct {
     str_match_arms: u32,
     join_points: u32,
     locals: u32,
+    local_descs: u32,
     local_ids: u32,
     u64s: u32,
     u32s: u32,
@@ -622,6 +624,7 @@ pub fn captureBodyPrefix(self: *const Self) BodyPrefix {
         .str_match_arms = @intCast(self.str_match_arms.len()),
         .join_points = @intCast(self.join_points.len()),
         .locals = @intCast(self.locals.len()),
+        .local_descs = @intCast(self.local_descs.len()),
         .local_ids = @intCast(self.local_ids.len()),
         .u64s = @intCast(self.u64s.len()),
         .u32s = @intCast(self.u32s.len()),
@@ -677,6 +680,7 @@ pub fn captureBodyShard(self: *const Self, prefix: BodyPrefix) AppendBodyError!B
         prefix.str_match_arms > self.str_match_arms.len() or
         prefix.join_points > self.join_points.len() or
         prefix.locals > self.locals.len() or
+        prefix.local_descs > self.local_descs.len() or
         prefix.local_ids > self.local_ids.len() or
         prefix.u64s > self.u64s.len() or
         prefix.u32s > self.u32s.len() or
@@ -730,6 +734,10 @@ fn relocateBodyValue(comptime T: type, value: T, prefix: BodyPrefix, bases: Body
         return .site(relocateBodyValue(CFStmtId, next, prefix, bases));
     }
     if (T == LocalId) return @fromBackingInt(@intCast(movedIndex(@backingInt(value), prefix.locals, bases.locals)));
+    if (T == LocalDescId) {
+        if (value == .none) return value;
+        return @fromBackingInt(movedIndex(@backingInt(value), prefix.local_descs, bases.local_descs));
+    }
     if (T == CFStmtId) return @fromBackingInt(@intCast(movedIndex(@backingInt(value), prefix.cf_stmts, bases.cf_stmts)));
     if (T == ErasedCallArgsPlanId) return @fromBackingInt(@intCast(movedIndex(@backingInt(value), prefix.erased_call_arg_plans, bases.erased_call_arg_plans)));
     if (T == base.StringLiteral.Idx) {
@@ -835,6 +843,7 @@ pub fn appendBodyShardWithJoinRelocation(
         .str_match_arms = @intCast(self.str_match_arms.len()),
         .join_points = @intCast(self.join_points.len()),
         .locals = @intCast(self.locals.len()),
+        .local_descs = @intCast(self.local_descs.len()),
         .local_ids = @intCast(self.local_ids.len()),
         .u64s = @intCast(self.u64s.len()),
         .u32s = @intCast(self.u32s.len()),
@@ -878,6 +887,7 @@ pub fn appendBodyShardWithJoinRelocation(
     try self.join_points.ensureUnusedCapacity(self.allocator, source.join_points.len() - source_prefix.join_points);
     try self.locals.ensureUnusedCapacity(self.allocator, local_len);
     try self.local_names.ensureUnusedCapacity(self.allocator, local_len);
+    try self.local_descs.ensureUnusedCapacity(self.allocator, source.local_descs.len() - source_prefix.local_descs);
     try self.local_ids.ensureUnusedCapacity(self.allocator, source.local_ids.len() - source_prefix.local_ids);
     try self.u64s.ensureUnusedCapacity(self.allocator, source.u64s.len() - source_prefix.u64s);
     try self.u32s.ensureUnusedCapacity(self.allocator, source.u32s.len() - source_prefix.u32s);
@@ -911,7 +921,8 @@ pub fn appendBodyShardWithJoinRelocation(
             self.stmt_rows[column].appendAssumeCapacity(relocateBodyValue(Row, item, prefix, bases));
         }
     }
-    for (source.locals.unsafeRawItemsForView()[source_prefix.locals..]) |item| self.locals.appendAssumeCapacity(relocateBodyValue(Local, item, prefix, bases));
+    for (source.locals.unsafeRawItemsForView()[source_prefix.locals..]) |item| self.locals.appendAssumeCapacity(relocateBodyValue(StoredLocal, item, prefix, bases));
+    for (source.local_descs.unsafeRawItemsForView()[source_prefix.local_descs..]) |item| self.local_descs.appendAssumeCapacity(relocateBodyValue(lir_defs.BoxyDescRef, item, prefix, bases));
     for (source.local_names.unsafeRawItemsForView()[source_prefix.locals..]) |name| {
         self.local_names.appendAssumeCapacity(
             if (name == no_local_name)
@@ -965,7 +976,11 @@ cf_switch_branches: GuardedList.List(CFSwitchBranch, "LirStore.cf_switch_branche
 str_match_steps: GuardedList.List(StrMatchStep, "LirStore.str_match_steps"),
 str_match_arms: GuardedList.List(StrMatchArm, "LirStore.str_match_arms"),
 join_points: GuardedList.List(JoinPoint, "LirStore.join_points"),
-locals: GuardedList.List(Local, "LirStore.locals"),
+/// Per local: its layout and, when it has one, its Boxy descriptor's row in
+/// `local_descs`.
+locals: GuardedList.List(StoredLocal, "LirStore.locals"),
+/// Boxy descriptors of the locals that have one.
+local_descs: GuardedList.List(lir_defs.BoxyDescRef, "LirStore.local_descs"),
 local_ids: GuardedList.List(LocalId, "LirStore.local_ids"),
 u64s: GuardedList.List(u64, "LirStore.u64s"),
 u32s: GuardedList.List(u32, "LirStore.u32s"),
@@ -1046,6 +1061,7 @@ pub fn init(allocator: Allocator) Self {
         .str_match_arms = .empty,
         .join_points = .empty,
         .locals = .empty,
+        .local_descs = .empty,
         .local_ids = .empty,
         .u64s = .empty,
         .u32s = .empty,
@@ -1117,6 +1133,7 @@ pub fn releaseCode(self: *Self) void {
         "str_match_arms",
         "join_points",
         "locals",
+        "local_descs",
         "local_ids",
         "u64s",
         "u32s",
@@ -1145,6 +1162,7 @@ pub fn deinit(self: *Self) void {
     self.str_match_arms.deinit(self.allocator);
     self.join_points.deinit(self.allocator);
     self.locals.deinit(self.allocator);
+    self.local_descs.deinit(self.allocator);
     self.local_ids.deinit(self.allocator);
     self.u64s.deinit(self.allocator);
     self.u32s.deinit(self.allocator);
@@ -1646,12 +1664,80 @@ fn assertBodyMetadataImmutable(self: *const Self) void {
     unreachable;
 }
 
+/// A row in `local_descs`.
+pub const LocalDescId = enum(u32) {
+    none = std.math.maxInt(u32),
+    _,
+};
+
+/// A local as the store keeps it: the layout every consumer reads, and the
+/// row of its Boxy descriptor, which only Boxy programs have.
+pub const StoredLocal = struct {
+    layout_idx: layout.Idx,
+    desc: LocalDescId = .none,
+};
+
 /// Registers one LIR local and returns its id.
 pub fn addLocal(self: *Self, local: Local) Allocator.Error!LocalId {
     const idx = self.locals.len() + if (self.body_coordinator != null) self.body_prefix.locals else 0;
-    try self.locals.append(self.allocator, local);
-    try self.local_names.append(self.allocator, no_local_name);
+    try self.locals.ensureUnusedCapacity(self.allocator, 1);
+    try self.local_names.ensureUnusedCapacity(self.allocator, 1);
+    const desc: LocalDescId = if (local.boxy_desc) |boxy_desc| try self.addLocalDesc(boxy_desc) else .none;
+    self.locals.appendAssumeCapacity(.{ .layout_idx = local.layout_idx, .desc = desc });
+    self.local_names.appendAssumeCapacity(no_local_name);
     return @fromBackingInt(@intCast(@as(u32, @intCast(idx))));
+}
+
+fn addLocalDesc(self: *Self, desc: lir_defs.BoxyDescRef) Allocator.Error!LocalDescId {
+    const idx = self.local_descs.len() + if (self.body_coordinator != null) self.body_prefix.local_descs else 0;
+    if (idx >= @backingInt(LocalDescId.none)) return error.OutOfMemory;
+    try self.local_descs.append(self.allocator, desc);
+    return @fromBackingInt(@intCast(idx));
+}
+
+/// Every local's descriptor row as of one moment, read through the store.
+/// Locals added later read as having none. Empty when no local has a
+/// descriptor.
+pub const LocalDescSnapshot = struct {
+    store: ?*const Self = null,
+    ids: []const LocalDescId = &.{},
+
+    pub fn get(self: LocalDescSnapshot, local: LocalId) ?lir_defs.BoxyDescRef {
+        const index = @backingInt(local);
+        if (index >= self.ids.len) return null;
+        return self.store.?.localDesc(self.ids[index]);
+    }
+
+    pub fn isEmpty(self: LocalDescSnapshot) bool {
+        return self.ids.len == 0;
+    }
+
+    pub fn localCount(self: LocalDescSnapshot) usize {
+        return self.ids.len;
+    }
+
+    pub fn deinit(self: LocalDescSnapshot, allocator: Allocator) void {
+        allocator.free(self.ids);
+    }
+};
+
+/// Snapshot every local's descriptor row; empty when no local has one.
+pub fn snapshotLocalDescs(self: *const Self, allocator: Allocator) Allocator.Error!LocalDescSnapshot {
+    const desc_count = self.local_descs.len() + if (self.body_coordinator != null) self.body_prefix.local_descs else 0;
+    if (desc_count == 0) return .{};
+    const ids = try allocator.alloc(LocalDescId, self.localCount());
+    for (ids, 0..) |*id, index| id.* = self.storedLocal(@fromBackingInt(@intCast(index))).desc;
+    return .{ .store = self, .ids = ids };
+}
+
+fn localDesc(self: *const Self, id: LocalDescId) ?lir_defs.BoxyDescRef {
+    if (id == .none) return null;
+    const index = @backingInt(id);
+    if (self.body_coordinator) |coordinator| {
+        if (index < self.body_prefix.local_descs) return coordinator.localDesc(id);
+        return self.local_descs.get(index - self.body_prefix.local_descs);
+    }
+    return self.local_descs.get(index);
 }
 
 /// Number of stored LIR locals.
@@ -1660,22 +1746,32 @@ pub fn localCount(self: *const Self) usize {
 }
 
 /// Returns all stored LIR locals.
-pub fn getLocals(self: *const Self) []const Local {
+pub fn getLocals(self: *const Self) []const StoredLocal {
     return self.locals.unsafeRawItemsForView();
 }
 
-/// Returns one stored LIR local.
-pub fn getLocal(self: *const Self, id: LocalId) Local {
+fn storedLocal(self: *const Self, id: LocalId) StoredLocal {
     const index = @backingInt(id);
     if (self.body_coordinator) |coordinator| {
-        if (index < self.body_prefix.locals) return coordinator.getLocal(id);
+        if (index < self.body_prefix.locals) return coordinator.storedLocal(id);
         return self.locals.get(index - self.body_prefix.locals);
     }
     return self.locals.get(index);
 }
 
+/// Returns one stored LIR local.
+pub fn getLocal(self: *const Self, id: LocalId) Local {
+    const stored = self.storedLocal(id);
+    return .{ .layout_idx = stored.layout_idx, .boxy_desc = self.localDesc(stored.desc) };
+}
+
+/// The layout of one stored LIR local.
+pub fn localLayout(self: *const Self, id: LocalId) layout.Idx {
+    return self.storedLocal(id).layout_idx;
+}
+
 /// Returns a mutable pointer to one stored LIR local.
-pub fn getLocalPtr(self: *Self, id: LocalId) *Local {
+pub fn getLocalPtr(self: *Self, id: LocalId) *StoredLocal {
     const index = @backingInt(id);
     if (self.body_coordinator != null and index < self.body_prefix.locals) {
         self.assertBodyMetadataImmutable();
@@ -1684,9 +1780,9 @@ pub fn getLocalPtr(self: *Self, id: LocalId) *Local {
 }
 
 /// Records the boxy descriptor governing a local's runtime payload.
-pub fn setLocalBoxyDesc(self: *Self, id: LocalId, desc: lir_defs.BoxyDescRef) void {
+pub fn setLocalBoxyDesc(self: *Self, id: LocalId, desc: lir_defs.BoxyDescRef) Allocator.Error!void {
     const local = self.getLocalPtr(id);
-    if (local.boxy_desc) |existing| {
+    if (self.localDesc(local.desc)) |existing| {
         if (!std.meta.eql(existing, desc)) {
             base.invariant(
                 "LIR store invariant violated: local {d} was assigned two different boxy descriptors: existing={any} new={any}",
@@ -1695,7 +1791,7 @@ pub fn setLocalBoxyDesc(self: *Self, id: LocalId, desc: lir_defs.BoxyDescRef) vo
         }
         return;
     }
-    local.boxy_desc = desc;
+    local.desc = try self.addLocalDesc(desc);
 }
 
 /// Attaches descriptor metadata without mutating existing LIR statements.

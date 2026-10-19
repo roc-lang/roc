@@ -69,7 +69,7 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      layouts are plain layout indices.
 /// v51: statements keep their rows out of line, and the store records its
 ///      lowering modules' keys.
-pub const FORMAT_VERSION: u32 = 51;
+pub const FORMAT_VERSION: u32 = 52;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -185,6 +185,7 @@ pub const LirStoreImage = extern struct {
     str_match_arms: ArrayRef,
     join_points: ArrayRef,
     locals: ArrayRef,
+    local_descs: ArrayRef,
     local_ids: ArrayRef,
     u64s: ArrayRef,
     u32s: ArrayRef,
@@ -219,6 +220,7 @@ pub const LirStoreImage = extern struct {
             .str_match_arms = try encoder.ref(store.str_match_arms.unsafeRawItemsForView()),
             .join_points = try encoder.ref(store.join_points.unsafeRawItemsForView()),
             .locals = try encoder.ref(store.locals.unsafeRawItemsForView()),
+            .local_descs = try encoder.ref(store.local_descs.unsafeRawItemsForView()),
             .local_ids = try encoder.ref(store.local_ids.unsafeRawItemsForView()),
             .u64s = try encoder.ref(store.u64s.unsafeRawItemsForView()),
             .u32s = try encoder.ref(store.u32s.unsafeRawItemsForView()),
@@ -268,7 +270,8 @@ pub const LirStoreImage = extern struct {
             .str_match_steps = try guardedListFromRef(LIR.StrMatchStep, "LirStore.str_match_steps", base_ptr, image_size, self.str_match_steps),
             .str_match_arms = try guardedListFromRef(LIR.StrMatchArm, "LirStore.str_match_arms", base_ptr, image_size, self.str_match_arms),
             .join_points = try guardedListFromRef(LIR.JoinPoint, "LirStore.join_points", base_ptr, image_size, self.join_points),
-            .locals = try guardedListFromRef(LIR.Local, "LirStore.locals", base_ptr, image_size, self.locals),
+            .locals = try guardedListFromRef(LirStore.StoredLocal, "LirStore.locals", base_ptr, image_size, self.locals),
+            .local_descs = try guardedListFromRef(LIR.BoxyDescRef, "LirStore.local_descs", base_ptr, image_size, self.local_descs),
             .local_ids = try guardedListFromRef(LIR.LocalId, "LirStore.local_ids", base_ptr, image_size, self.local_ids),
             .u64s = try guardedListFromRef(u64, "LirStore.u64s", base_ptr, image_size, self.u64s),
             .u32s = try guardedListFromRef(u32, "LirStore.u32s", base_ptr, image_size, self.u32s),
@@ -825,7 +828,7 @@ comptime {
     // `facts` are transient worker state, not serialized, and default to
     // null or empty in views. The layout store's `digest_cache` is a memo
     // each view starts empty.
-    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 37);
+    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 38);
     std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 18);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".field_names.len == 1);
 
@@ -1501,7 +1504,7 @@ test "LIR image declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
-/// The 24 `LirStore` array-backed lists serialized as `ArrayRef`s, in the order
+/// The 25 `LirStore` array-backed lists serialized as `ArrayRef`s, in the order
 /// they appear in `LirStoreImage`. `strings` (a sub-image) and the scalar
 /// `next_synthetic_symbol` are serialized too but exercised separately below.
 const serialized_guarded_fields = [_][]const u8{
@@ -1511,6 +1514,7 @@ const serialized_guarded_fields = [_][]const u8{
     "str_match_arms",
     "join_points",
     "locals",
+    "local_descs",
     "local_ids",
     "u64s",
     "u32s",

@@ -3558,8 +3558,8 @@ const ProcedureBuilder = struct {
         const desc = try proc.addFrameLocal(.opaque_ptr);
         try proc.markReadOnlyDescriptorInput(desc);
         try proc.arg_locals.append(self.allocator, desc);
-        self.result.store.setLocalBoxyDesc(first, .{ .local = desc });
-        if (hasher_layout == null) self.result.store.setLocalBoxyDesc(second, .{ .local = desc });
+        try self.result.store.setLocalBoxyDesc(first, .{ .local = desc });
+        if (hasher_layout == null) try self.result.store.setLocalBoxyDesc(second, .{ .local = desc });
         const ret_layout = hasher_layout orelse .bool;
         const result = try proc.addFrameLocal(ret_layout);
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = result } }, proc.derivedOrigin());
@@ -3980,7 +3980,7 @@ const ProcedureBuilder = struct {
         for (requirement_args, requirement_arg_locals) |arg, local| {
             const arg_desc = self.plan.representations.items[@backingInt(self.descriptorIdentityRep(arg.rep))].descriptor;
             const frame_index = if (arg_desc) |desc| frameRequirementDescriptorIndex(frame_requirement_descs, desc) else null;
-            self.result.store.setLocalBoxyDesc(local, if (frame_index) |index|
+            try self.result.store.setLocalBoxyDesc(local, if (frame_index) |index|
                 .{ .local = frame_requirement_locals[index] }
             else
                 try self.staticDescRefForWorkerRepWithSourceMap(
@@ -5318,8 +5318,8 @@ const ProcedureBuilder = struct {
         // The operand descriptor describes the operands themselves, as a
         // worker argument's does.
         if (shape.operand_desc) {
-            self.result.store.setLocalBoxyDesc(first, .{ .local = frame_desc_locals[0] });
-            if (job.method == .equality) self.result.store.setLocalBoxyDesc(second, .{ .local = frame_desc_locals[0] });
+            try self.result.store.setLocalBoxyDesc(first, .{ .local = frame_desc_locals[0] });
+            if (job.method == .equality) try self.result.store.setLocalBoxyDesc(second, .{ .local = frame_desc_locals[0] });
         }
         try proc.arg_locals.appendSlice(self.allocator, frame_desc_locals);
         try proc.arg_locals.appendSlice(self.allocator, frame_dict_locals);
@@ -12032,8 +12032,8 @@ const ProcedureBuilder = struct {
         const acc = try proc.addFrameLocal(list_layout);
         const target_desc = try proc.stableDescriptorForConstructedValue(value, shape_rep);
         if (target_desc.desc) |desc| {
-            self.result.store.setLocalBoxyDesc(value, desc);
-            self.result.store.setLocalBoxyDesc(acc, desc);
+            try self.result.store.setLocalBoxyDesc(value, desc);
+            try self.result.store.setLocalBoxyDesc(acc, desc);
         }
         const loop = GeneratedListLoop{
             .subject_type = subject_type,
@@ -12058,7 +12058,7 @@ const ProcedureBuilder = struct {
         const elem_value = try proc.addGeneratedParserOutputLocalForRep(loop.elem.rep);
         const parsed_rest = try proc.addGeneratedParserOutputLocalForRep(context.state_rep);
         const next_acc = try proc.addFrameLocal(self.result.store.getLocal(loop.acc).layout_idx);
-        if (self.result.store.getLocal(loop.acc).boxy_desc) |desc| self.result.store.setLocalBoxyDesc(next_acc, desc);
+        if (self.result.store.getLocal(loop.acc).boxy_desc) |desc| try self.result.store.setLocalBoxyDesc(next_acc, desc);
         const one = try proc.addFrameLocal(.u64);
         const next_remaining = try proc.addFrameLocal(.u64);
         var element = try self.result.store.addCFStmt(.{ .jump = .{ .target = loop.join_id } }, proc.derivedOrigin());
@@ -12991,7 +12991,7 @@ const ProcedureBuilder = struct {
         capacity: LIR.LocalId,
     ) Allocator.Error!LIR.CFStmtId {
         const initial_list = try proc.addFrameLocal(self.result.store.getLocal(loop.acc).layout_idx);
-        if (list_desc) |desc| self.result.store.setLocalBoxyDesc(initial_list, desc);
+        if (list_desc) |desc| try self.result.store.setLocalBoxyDesc(initial_list, desc);
         const counted_value = try proc.addFrameLocal(.bool);
         var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = loop.join_id } }, proc.derivedOrigin());
         continuation = try proc.setLocalInitializeJoinParam(loop.remaining, capacity, continuation);
@@ -13230,7 +13230,7 @@ const ProcedureBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const payload = try proc.generatedParserSingleTagPayloadLocal(variant);
         const next_acc = try proc.addFrameLocal(self.result.store.getLocal(acc).layout_idx);
-        if (self.result.store.getLocal(acc).boxy_desc) |desc| self.result.store.setLocalBoxyDesc(next_acc, desc);
+        if (self.result.store.getLocal(acc).boxy_desc) |desc| try self.result.store.setLocalBoxyDesc(next_acc, desc);
         var continuation = try self.result.store.addCFStmt(.{ .jump = .{ .target = join_id } }, proc.derivedOrigin());
         continuation = try proc.setLocalInitializeJoinParam(acc, next_acc, continuation);
         continuation = try proc.setLocalInitializeJoinParamFromRep(cursor, payload.local, payload.child.rep, continuation);
@@ -14273,7 +14273,7 @@ const ProcedureBuilder = struct {
         // allocation can reserve a runtime descriptor for nested dynamic data,
         // which would conflict with the call's descriptor even on a fresh local.
         if (host_result_desc) |desc| {
-            self.result.store.setLocalBoxyDesc(host_ret_local, desc);
+            try self.result.store.setLocalBoxyDesc(host_ret_local, desc);
         }
 
         var continuation = ret_stmt;
@@ -14396,7 +14396,7 @@ const ProcedureBuilder = struct {
             try proc.addFrameLocalForRepWithRequiredFreshDescriptor(worker_ret_rep)
         else if (external_result_desc) |desc| blk: {
             const local = try proc.addFrameLocal(proc.workerRuntimeLayoutForRep(worker_ret_rep).layoutIdx());
-            self.result.store.setLocalBoxyDesc(local, desc);
+            try self.result.store.setLocalBoxyDesc(local, desc);
             break :blk local;
         } else try proc.addFrameLocalForRep(worker_ret_rep);
         const ret_desc_local = if (worker_returns_desc)
@@ -15861,7 +15861,7 @@ const ProcBodyBuilder = struct {
                         boxyLowerInvariant("boxy worker argument was pre-bound to a different storage descriptor");
                     }
                 } else {
-                    self.parent.result.store.setLocalBoxyDesc(arg_local, .{ .local = local });
+                    try self.parent.result.store.setLocalBoxyDesc(arg_local, .{ .local = local });
                 }
             }
             try self.recordLocalDescriptorEnvironment(arg_local, arg.rep, bindings.items);
@@ -16004,7 +16004,7 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("boxy erased worker capture descriptor did not match its field layout");
             const field_desc_local = try self.addFrameLocal(.opaque_ptr);
             const field_desc_ref = LIR.BoxyDescRef{ .local = field_desc_local };
-            self.parent.result.store.setLocalBoxyDesc(captured_local, field_desc_ref);
+            try self.parent.result.store.setLocalBoxyDesc(captured_local, field_desc_ref);
             try self.erased_capture_value_desc_initializers.append(self.parent.allocator, .{
                 .local = field_desc_local,
                 .materialize = .{ .local = contents_desc },
@@ -16318,7 +16318,7 @@ const ProcBodyBuilder = struct {
                         boxyLowerInvariant("boxy erased argument value was pre-bound to a different root descriptor");
                     }
                 } else {
-                    self.parent.result.store.setLocalBoxyDesc(arg_local, .{ .local = local });
+                    try self.parent.result.store.setLocalBoxyDesc(arg_local, .{ .local = local });
                 }
             }
             try self.recordLocalDescriptorEnvironment(arg_local, arg.rep, bindings.items);
@@ -17091,7 +17091,7 @@ const ProcBodyBuilder = struct {
             chain.current = switch (item) {
                 .lower => |task| return .{ .child = withNext(task, chain.current) },
                 .propagate_desc => |pair| blk: {
-                    self.propagateBoundaryDescriptorMetadata(pair.target, pair.source);
+                    try self.propagateBoundaryDescriptorMetadata(pair.target, pair.source);
                     break :blk chain.current;
                 },
                 .prepend_field_initializers => try self.prependDescriptorArgMaterializations(chain.aggregate_desc.?.field_initializers, chain.current),
@@ -17284,7 +17284,7 @@ const ProcBodyBuilder = struct {
                 // so run the loop into a unit temporary and box the unit.
                 const unit_local = try self.addFrameLocal(.zst);
                 const payload_desc = try self.appendLiteralPayloadDesc(.zst, expr.ty);
-                self.parent.result.store.setLocalBoxyDesc(target, payload_desc);
+                try self.parent.result.store.setLocalBoxyDesc(target, payload_desc);
                 const box = try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
                     .target = target,
                     .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
@@ -17581,7 +17581,7 @@ const ProcBodyBuilder = struct {
         const worker_value = try self.addFrameLocalForRepWithFreshDescriptor(target_rep);
         if (self.parent.result.store.getLocal(target).layout_idx == self.parent.result.store.getLocal(worker_value).layout_idx) {
             if (self.parent.result.store.getLocal(target).boxy_desc) |target_desc| {
-                self.parent.result.store.setLocalBoxyDesc(worker_value, target_desc);
+                try self.parent.result.store.setLocalBoxyDesc(worker_value, target_desc);
             }
         }
         const store_payload = try self.assignWorkerValueToTagPayloadStorage(target, worker_value, target_rep, next);
@@ -17609,7 +17609,7 @@ const ProcBodyBuilder = struct {
             if (target_desc_local.localOrNull() == elem_desc_local) {
                 const fresh_target = try self.addFrameLocal(self.parent.result.store.getLocal(target).layout_idx);
                 const fresh_desc_local = try self.addFrameLocal(.opaque_ptr);
-                self.parent.result.store.setLocalBoxyDesc(fresh_target, .{ .local = fresh_desc_local });
+                try self.parent.result.store.setLocalBoxyDesc(fresh_target, .{ .local = fresh_desc_local });
                 const transfer = try self.assignLocal(target, fresh_target, next);
                 return .{ .tail = .{ .list = .{ .target = fresh_target, .list_ty = list_ty, .items = items, .next = transfer } } };
             }
@@ -17627,7 +17627,7 @@ const ProcBodyBuilder = struct {
         else
             try self.stableDescriptorForConstructedValue(target, target_rep);
         if (target_desc_info.desc) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(target, desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, desc);
         }
 
         var continuation = try self.assignList(target, elem_locals, next);
@@ -19422,7 +19422,7 @@ const ProcBodyBuilder = struct {
             self.matchConditionNeedsExactResultDescriptor(discriminant.value, value_rep))
         {
             const desc_local = try self.addFrameLocal(.opaque_ptr);
-            self.parent.result.store.setLocalBoxyDesc(value, .{ .local = desc_local });
+            try self.parent.result.store.setLocalBoxyDesc(value, .{ .local = desc_local });
         }
 
         const done = self.freshJoinPointId();
@@ -19476,7 +19476,7 @@ const ProcBodyBuilder = struct {
         const lhs = try self.addStructuralEqOperandLocalForRep(rep_id);
         const rhs = try self.addFrameLocal(operand_layout);
         if (self.parent.result.store.getLocal(lhs).boxy_desc) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(rhs, desc);
+            try self.parent.result.store.setLocalBoxyDesc(rhs, desc);
         }
         if (self.parent.result.store.getLocal(lhs).layout_idx != operand_layout or
             self.parent.result.store.getLocal(rhs).layout_idx != operand_layout)
@@ -20419,7 +20419,7 @@ const ProcBodyBuilder = struct {
                 try self.recordDescriptorLocalTemplate(local, source_materialization);
                 break :blk LIR.BoxyDescRef{ .local = local };
             };
-            self.parent.result.store.setLocalBoxyDesc(concrete, source_desc);
+            try self.parent.result.store.setLocalBoxyDesc(concrete, source_desc);
 
             var continuation = try self.assignPlannedCallBoundary(
                 target,
@@ -20499,7 +20499,7 @@ const ProcBodyBuilder = struct {
             const payload_desc_info = try self.storageDescriptorForRepIfNeeded(result_rep);
             const payload_desc = payload_desc_info.desc orelse
                 boxyLowerInvariant("boxy list_replace_unsafe result box had no payload descriptor");
-            self.parent.result.store.setLocalBoxyDesc(target, payload_desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, payload_desc);
             const box = try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
                 .target = target,
                 .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
@@ -20663,7 +20663,7 @@ const ProcBodyBuilder = struct {
         defer self.parent.allocator.free(elem_locals);
         for (elem_locals) |*local| local.* = try self.addFrameLocal(elem_layout);
         const target_desc_info = try self.stableDescriptorForConstructedValue(target, target_rep);
-        if (target_desc_info.desc) |desc| self.parent.result.store.setLocalBoxyDesc(target, desc);
+        if (target_desc_info.desc) |desc| try self.parent.result.store.setLocalBoxyDesc(target, desc);
         var continuation = try self.assignList(target, elem_locals, next);
         continuation = try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, continuation);
         var index = interpolation.segments.len;
@@ -20987,17 +20987,17 @@ const ProcBodyBuilder = struct {
 
         const target_layout = self.parent.result.store.getLocal(target).layout_idx;
         if (!self.parent.layoutNeedsNestedBoxyDesc(target_layout)) return;
-        self.parent.result.store.setLocalBoxyDesc(target, .{ .local = try self.addFrameLocal(.opaque_ptr) });
+        try self.parent.result.store.setLocalBoxyDesc(target, .{ .local = try self.addFrameLocal(.opaque_ptr) });
     }
 
     fn propagateBoundaryDescriptorMetadata(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
         source: LIR.LocalId,
-    ) void {
+    ) Allocator.Error!void {
         if (self.parent.result.store.getLocal(target).boxy_desc != null) return;
         if (self.parent.result.store.getLocal(source).boxy_desc) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(target, desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, desc);
         }
     }
 
@@ -21087,7 +21087,7 @@ const ProcBodyBuilder = struct {
         if (target_layout == source_layout and self.descriptorStorageRep(target_rep) == self.descriptorStorageRep(source_rep)) {
             if (self.parent.result.store.getLocal(source).boxy_desc == null and self.repContainsDynamicStorage(source_rep)) {
                 const desc = try self.descriptorRefForSourceLocalRep(source, source_rep);
-                self.parent.result.store.setLocalBoxyDesc(source, desc);
+                try self.parent.result.store.setLocalBoxyDesc(source, desc);
             }
             if (self.parent.result.store.getLocal(source).boxy_desc == null) {
                 return try self.assignDescriptorAwareNominalBoundary(
@@ -21566,7 +21566,7 @@ const ProcBodyBuilder = struct {
                     variant.index,
                 );
                 const payload_storage = try self.addFrameLocal(payload_layout);
-                self.propagateBoundaryDescriptorMetadata(payload_storage, payload);
+                try self.propagateBoundaryDescriptorMetadata(payload_storage, payload);
                 const descriptor_fields = [_]AggregateDescriptorField{.{
                     .local = payload_storage,
                     .target_rep = target_child.rep,
@@ -21596,7 +21596,7 @@ const ProcBodyBuilder = struct {
                 try self.bindConstructedTargetDescriptor(target, target_rep);
                 const target_desc = try self.constructedTargetDescForRep(target_rep);
                 const dynamic_payload = try self.dynamicTagPayloadLocalForChildren(target_payloads);
-                self.propagateBoundaryDescriptorMetadata(dynamic_payload.local, payload);
+                try self.propagateBoundaryDescriptorMetadata(dynamic_payload.local, payload);
                 const descriptor_fields = [_]AggregateDescriptorField{.{
                     .local = dynamic_payload.local,
                     .target_rep = target_child.rep,
@@ -23124,7 +23124,7 @@ const ProcBodyBuilder = struct {
         const initial = try self.addFrameLocal(list_layout);
         const next_acc = try self.addFrameLocal(list_layout);
         if (self.parent.result.store.getLocal(target).boxy_desc) |desc| {
-            for ([_]LIR.LocalId{ acc, initial, next_acc }) |local| self.parent.result.store.setLocalBoxyDesc(local, desc);
+            for ([_]LIR.LocalId{ acc, initial, next_acc }) |local| try self.parent.result.store.setLocalBoxyDesc(local, desc);
         }
         const len = try self.addFrameLocal(.u64);
         const zero = try self.addFrameLocal(.u64);
@@ -23221,7 +23221,7 @@ const ProcBodyBuilder = struct {
         continuation: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         const payload_desc = try self.descriptorRefForKnownRep(source_elem_rep);
-        self.parent.result.store.setLocalBoxyDesc(elem_local, payload_desc);
+        try self.parent.result.store.setLocalBoxyDesc(elem_local, payload_desc);
         return try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
             .target = elem_local,
             .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
@@ -23770,7 +23770,7 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("boxy erased capture descriptor need disappeared during materialization");
             const desc_local = try self.addFrameLocal(.opaque_ptr);
             const desc_ref = LIR.BoxyDescRef{ .local = desc_local };
-            self.parent.result.store.setLocalBoxyDesc(capture_local, desc_ref);
+            try self.parent.result.store.setLocalBoxyDesc(capture_local, desc_ref);
             capture_desc_initializer = materialization.initializer(desc_local);
             break :blk desc_ref;
         } else null;
@@ -24105,7 +24105,7 @@ const ProcBodyBuilder = struct {
             const materialization = try self.descriptorMaterializationForSourceRep(desc_rep);
             if (materialization.captures.len == 0) {
                 switch (mode) {
-                    .reuse_existing => self.parent.result.store.setLocalBoxyDesc(field_local, materialization.desc),
+                    .reuse_existing => try self.parent.result.store.setLocalBoxyDesc(field_local, materialization.desc),
                     .snapshot_existing => descriptor_overrides.?[index] = materialization.desc,
                 }
                 continue;
@@ -24113,7 +24113,7 @@ const ProcBodyBuilder = struct {
 
             const desc_local = try self.addFrameLocal(.opaque_ptr);
             switch (mode) {
-                .reuse_existing => self.parent.result.store.setLocalBoxyDesc(field_local, .{ .local = desc_local }),
+                .reuse_existing => try self.parent.result.store.setLocalBoxyDesc(field_local, .{ .local = desc_local }),
                 .snapshot_existing => descriptor_overrides.?[index] = .{ .local = desc_local },
             }
             try initializers.append(self.parent.allocator, materialization.initializer(desc_local));
@@ -24369,7 +24369,7 @@ const ProcBodyBuilder = struct {
             ) orelse boxyLowerInvariant("generated erased callable capture descriptor need disappeared during materialization");
             const desc_local = try self.addFrameLocal(.opaque_ptr);
             const desc_ref = LIR.BoxyDescRef{ .local = desc_local };
-            self.parent.result.store.setLocalBoxyDesc(capture_local, desc_ref);
+            try self.parent.result.store.setLocalBoxyDesc(capture_local, desc_ref);
             capture_desc_initializer = materialization.initializer(desc_local);
             break :blk desc_ref;
         } else null;
@@ -25124,7 +25124,7 @@ const ProcBodyBuilder = struct {
         else
             ResultDescriptorSource{};
         if (result_desc_info.desc) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(call_target, desc);
+            try self.parent.result.store.setLocalBoxyDesc(call_target, desc);
         }
 
         continuation = try self.parent.result.store.addCFStmt(.{ .assign_call_dict = .{
@@ -25468,7 +25468,7 @@ const ProcBodyBuilder = struct {
             const raw_result_desc = self.resultDescriptorForCallTarget(raw_ret, direct_result_desc);
             if (self.parent.result.store.getLocal(raw_ret).boxy_desc == null) {
                 if (raw_result_desc.desc) |desc| {
-                    self.parent.result.store.setLocalBoxyDesc(raw_ret, desc);
+                    try self.parent.result.store.setLocalBoxyDesc(raw_ret, desc);
                 }
             }
             continuation = try self.assignPlannedCallBoundary(target, raw_ret, target_rep, worker_ret_rep, continuation);
@@ -25514,7 +25514,7 @@ const ProcBodyBuilder = struct {
         const result_desc = result_desc_info.desc;
         if (self.parent.result.store.getLocal(call_target).boxy_desc == null) {
             if (result_desc) |desc| {
-                self.parent.result.store.setLocalBoxyDesc(call_target, desc);
+                try self.parent.result.store.setLocalBoxyDesc(call_target, desc);
             }
         }
 
@@ -25702,7 +25702,7 @@ const ProcBodyBuilder = struct {
         const target_desc = target_desc_info.desc orelse
             boxyLowerInvariant("planned boxy call adapter had no target descriptor");
         if (self.parent.result.store.getLocal(target).boxy_desc == null) {
-            self.parent.result.store.setLocalBoxyDesc(target, target_desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, target_desc);
         }
         const value_storage_is_interchangeable = source_layout == target_layout or
             (self.parent.layoutIsBoxStorage(source_layout) and
@@ -27315,7 +27315,7 @@ const ProcBodyBuilder = struct {
                 self.matchConditionNeedsExactResultDescriptor(task.cond, task.cond_rep))
             {
                 const desc_local = try self.addFrameLocal(.opaque_ptr);
-                self.parent.result.store.setLocalBoxyDesc(task.cond_local, .{ .local = desc_local });
+                try self.parent.result.store.setLocalBoxyDesc(task.cond_local, .{ .local = desc_local });
             }
             task.outer_descriptors = try self.snapshotDescriptorBindings();
             task.done = self.freshJoinPointId();
@@ -27811,7 +27811,7 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("bound constructed descriptor had no matching local")
         else
             (try self.reserveDescriptorLocalForRep(rep_id)) orelse return;
-        self.parent.result.store.setLocalBoxyDesc(target, .{ .local = local });
+        try self.parent.result.store.setLocalBoxyDesc(target, .{ .local = local });
     }
 
     fn dynamicTagPayloadLocalForChildren(
@@ -28232,7 +28232,7 @@ const ProcBodyBuilder = struct {
                     boxyLowerInvariant("dynamic record field access receiver had no descriptor payload layout");
                 const payload = try self.addFrameLocal(payload_layout);
                 if (unboxed_receiver_desc_info.desc) |desc| {
-                    self.parent.result.store.setLocalBoxyDesc(payload, desc);
+                    try self.parent.result.store.setLocalBoxyDesc(payload, desc);
                 }
                 break :blk payload;
             },
@@ -28283,7 +28283,7 @@ const ProcBodyBuilder = struct {
             // A field read borrows the exact stored field. Any conversion to
             // its worker representation is an explicit owned materialization.
             const field_desc = self.parent.result.store.getLocal(read_target).boxy_desc;
-            if (field_desc) |desc| self.parent.result.store.setLocalBoxyDesc(stored_field_local, desc);
+            if (field_desc) |desc| try self.parent.result.store.setLocalBoxyDesc(stored_field_local, desc);
             break :blk try self.parent.result.store.addCFStmt(.{ .assign_boxy_adapt = .{
                 .target = read_target,
                 .data = try self.parent.result.store.addStmtRow(LIR.BoxyAdaptData, .{
@@ -28844,7 +28844,7 @@ const ProcBodyBuilder = struct {
         const target_desc_info = try self.descriptorRefForPayloadStorageTarget(target, rep);
         const target_desc = target_desc_info.desc orelse
             boxyLowerInvariant("boxy recursive value slot read had no target descriptor");
-        self.parent.result.store.setLocalBoxyDesc(target, target_desc);
+        try self.parent.result.store.setLocalBoxyDesc(target, target_desc);
         if (target_desc_info.materialize) |materialize| {
             try self.erased_capture_value_desc_initializers.append(self.parent.allocator, materialize);
         }
@@ -29816,7 +29816,7 @@ const ProcBodyBuilder = struct {
                 const payload_desc: ?LIR.BoxyDescRef = target_desc_info.desc orelse
                     if (self.repContainsDynamicStorage(record_rep)) source_desc else null;
                 if (payload_desc) |desc| {
-                    self.parent.result.store.setLocalBoxyDesc(payload, desc);
+                    try self.parent.result.store.setLocalBoxyDesc(payload, desc);
                 }
                 break :blk .{
                     .local = payload,
@@ -29933,7 +29933,7 @@ const ProcBodyBuilder = struct {
         }
 
         if (self.parent.result.store.getLocal(source).boxy_desc) |source_desc| {
-            self.parent.result.store.setLocalBoxyDesc(target, source_desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, source_desc);
         }
         if (self.localDescriptorEnvironmentForLocal(source)) |env| {
             if (self.descriptorStorageRep(env.rep) != self.descriptorStorageRep(list_rep)) {
@@ -30241,7 +30241,7 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!LIR.CFStmtId {
         const reserved = try self.addFrameLocal(self.parent.result.store.getLocal(list).layout_idx);
         if (self.parent.result.store.getLocal(list).boxy_desc) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(reserved, desc);
+            try self.parent.result.store.setLocalBoxyDesc(reserved, desc);
         }
         const one = try self.addFrameLocal(.u64);
         var continuation = try self.assignListAppendMovingElement(target, reserved, elem, next);
@@ -30832,7 +30832,7 @@ const ProcBodyBuilder = struct {
             try self.dictionaryCallResultDescriptorRef(self.repForTypeRef(ret_type), hidden_desc_args, hidden_desc_locals),
         );
         if (result_desc_info.desc) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(target, desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, desc);
         }
 
         var continuation = try self.parent.result.store.addCFStmt(.{ .assign_call_dict = .{
@@ -32200,7 +32200,7 @@ const ProcBodyBuilder = struct {
         constructed_desc: LIR.BoxyDescRef,
     ) Allocator.Error!ResultDescriptorSource {
         const existing = self.parent.result.store.getLocal(target).boxy_desc orelse {
-            self.parent.result.store.setLocalBoxyDesc(target, constructed_desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, constructed_desc);
             return .{ .desc = constructed_desc };
         };
         if (std.meta.eql(existing, constructed_desc)) {
@@ -32245,7 +32245,7 @@ const ProcBodyBuilder = struct {
 
         const desc_local = try self.addFrameLocal(.opaque_ptr);
         const desc_ref = LIR.BoxyDescRef{ .local = desc_local };
-        self.parent.result.store.setLocalBoxyDesc(target, desc_ref);
+        try self.parent.result.store.setLocalBoxyDesc(target, desc_ref);
         try self.recordDescriptorLocalTemplate(desc_local, materialization);
         return .{
             .desc = desc_ref,
@@ -32364,7 +32364,7 @@ const ProcBodyBuilder = struct {
             const target_desc_info = try self.descriptorRefForPayloadStorageTarget(target, rep_id);
             const target_desc = target_desc_info.desc orelse
                 boxyLowerInvariant("boxy tag payload storage unbox had no target descriptor");
-            self.parent.result.store.setLocalBoxyDesc(target, target_desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, target_desc);
             const unbox = try self.parent.result.store.addCFStmt(.{ .assign_boxy_unbox = .{
                 .target = target,
                 .data = try self.parent.result.store.addStmtRow(LIR.BoxyUnboxData, .{
@@ -32384,7 +32384,7 @@ const ProcBodyBuilder = struct {
             const target_desc_info = try self.descriptorRefForPayloadStorageTarget(target, rep_id);
             const target_desc = target_desc_info.desc orelse
                 boxyLowerInvariant("boxy tag payload storage box had no target descriptor");
-            self.parent.result.store.setLocalBoxyDesc(target, target_desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, target_desc);
             const box = try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
                 .target = target,
                 .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
@@ -32567,7 +32567,7 @@ const ProcBodyBuilder = struct {
         const source_desc_rep = self.parent.tagPayloadStorageDescRepForLayout(rep_id, source_layout, true) orelse
             boxyLowerInvariant("boxy tag payload storage source descriptor did not match source layout");
         const source_desc = try self.descriptorRefForKnownRep(source_desc_rep);
-        self.parent.result.store.setLocalBoxyDesc(source, source_desc);
+        try self.parent.result.store.setLocalBoxyDesc(source, source_desc);
         return source_desc;
     }
 
@@ -32854,7 +32854,7 @@ const ProcBodyBuilder = struct {
         const desc_local = try self.addFrameLocal(.opaque_ptr);
         try self.recordDescriptorLocalTemplate(desc_local, initial);
         if (self.parent.layoutNeedsNestedBoxyDesc(self.parent.result.store.getLocal(value).layout_idx)) {
-            self.parent.result.store.setLocalBoxyDesc(value, .{ .local = desc_local });
+            try self.parent.result.store.setLocalBoxyDesc(value, .{ .local = desc_local });
         }
         try initializers.append(self.parent.allocator, .{
             .local = desc_local,
@@ -33926,7 +33926,7 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!?LIR.BoxyDescRef {
         if (self.parent.result.store.getLocal(target).boxy_desc) |existing| return existing;
         const derived = try self.descriptorRefForRepIfNeeded(target_rep) orelse return null;
-        self.parent.result.store.setLocalBoxyDesc(target, derived);
+        try self.parent.result.store.setLocalBoxyDesc(target, derived);
         return derived;
     }
 
@@ -36056,7 +36056,7 @@ const ProcBodyBuilder = struct {
             try self.dictionaryCallResultDescriptorRef(function.ret, hidden_desc_args, hidden_desc_locals),
         );
         if (result_desc_info.desc) |desc| {
-            if (self.parent.result.store.getLocal(target).boxy_desc == null) self.parent.result.store.setLocalBoxyDesc(target, desc);
+            if (self.parent.result.store.getLocal(target).boxy_desc == null) try self.parent.result.store.setLocalBoxyDesc(target, desc);
         }
         var continuation = try self.parent.result.store.addCFStmt(.{ .assign_call_dict = .{
             .target = target,
@@ -37025,7 +37025,7 @@ const ProcBodyBuilder = struct {
         for (elems) |*elem| elem.* = try self.addFrameLocal(.u8);
 
         const desc_info = try self.stableDescriptorForConstructedValue(target, target_rep);
-        if (desc_info.desc) |desc| self.parent.result.store.setLocalBoxyDesc(target, desc);
+        if (desc_info.desc) |desc| try self.parent.result.store.setLocalBoxyDesc(target, desc);
         var continuation = try self.assignList(target, elems, next);
         continuation = try self.prependOptionalDescriptorMaterialization(desc_info.materialize, continuation);
         var index = elems.len;
@@ -37375,7 +37375,7 @@ const ProcBodyBuilder = struct {
                 .shape = LirProgram.BoxyDescShape.forStorage(source_layout_value),
             });
             const payload_desc = LIR.BoxyDescRef{ .static = desc_id };
-            self.parent.result.store.setLocalBoxyDesc(target, payload_desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, payload_desc);
             return try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
                 .target = target,
                 .data = try self.parent.result.store.addStmtRow(LIR.BoxyBoxData, .{
@@ -38214,7 +38214,7 @@ const ProcBodyBuilder = struct {
         const target_desc = target_info.descriptor orelse return;
         for (bindings.items) |binding| {
             if (binding.desc == target_desc and self.descriptorStorageRep(binding.rep) == identity_target) {
-                self.parent.result.store.setLocalBoxyDesc(target, .{ .local = binding.local });
+                try self.parent.result.store.setLocalBoxyDesc(target, .{ .local = binding.local });
                 return;
             }
         }
@@ -39019,7 +39019,7 @@ const ProcBodyBuilder = struct {
                     const existing_target_desc = self.parent.result.store.getLocal(target).boxy_desc;
                     const payload_desc = existing_target_desc orelse desc_for_payload;
                     if (existing_target_desc == null) {
-                        self.parent.result.store.setLocalBoxyDesc(target, payload_desc);
+                        try self.parent.result.store.setLocalBoxyDesc(target, payload_desc);
                     }
                     const writable_target_desc = if (existing_target_desc) |desc| blk_desc: {
                         const local = desc.localOrNull() orelse break :blk_desc null;
@@ -39085,7 +39085,7 @@ const ProcBodyBuilder = struct {
                     const resolved_target_desc = self.resultDescriptorForCallTarget(target, selected_target_desc);
                     if (self.parent.result.store.getLocal(target).boxy_desc == null) {
                         if (resolved_target_desc.desc) |desc| {
-                            self.parent.result.store.setLocalBoxyDesc(target, desc);
+                            try self.parent.result.store.setLocalBoxyDesc(target, desc);
                         }
                     }
                     const adapt = try self.assignDynamicBoxMaterialization(
@@ -39384,7 +39384,7 @@ const ProcBodyBuilder = struct {
         else
             null;
         if (source_payload_desc) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(source_payload, desc);
+            try self.parent.result.store.setLocalBoxyDesc(source_payload, desc);
         }
         return try self.beginRecordFieldsBoundary(frames, request, target_record, target_field_count, .{
             .target = request.target,
@@ -39454,7 +39454,7 @@ const ProcBodyBuilder = struct {
             const target_layout = self.parent.result.store.getLocal(target).layout_idx;
             const source_layout = self.parent.result.store.getLocal(source).layout_idx;
             const boxed_source = try self.addFrameLocal(boxed_source_layout);
-            self.parent.result.store.setLocalBoxyDesc(boxed_source, source_desc);
+            try self.parent.result.store.setLocalBoxyDesc(boxed_source, source_desc);
             var continuation = try self.parent.result.store.addCFStmt(.{ .assign_boxy_unbox = .{
                 .target = target,
                 .data = try self.parent.result.store.addStmtRow(LIR.BoxyUnboxData, .{
@@ -39690,9 +39690,9 @@ const ProcBodyBuilder = struct {
         else
             try self.stableDescriptorForConstructedValue(target, target_rep);
         if (state.target_desc_info.desc) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(target, desc);
-            self.parent.result.store.setLocalBoxyDesc(initial_list, desc);
-            self.parent.result.store.setLocalBoxyDesc(acc, desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, desc);
+            try self.parent.result.store.setLocalBoxyDesc(initial_list, desc);
+            try self.parent.result.store.setLocalBoxyDesc(acc, desc);
         }
         state.join_id = self.freshJoinPointId();
 
@@ -39726,16 +39726,16 @@ const ProcBodyBuilder = struct {
             try self.addFrameBoundaryTargetLocalForRep(target_elem.rep);
         if (state.target_elem != state.source_elem) {
             if (target_elem_desc_local) |desc_local| {
-                self.parent.result.store.setLocalBoxyDesc(state.target_elem, .{ .local = desc_local });
+                try self.parent.result.store.setLocalBoxyDesc(state.target_elem, .{ .local = desc_local });
             }
         }
         state.source_elem_desc_info = try self.descriptorForSourceListElement(source, source_rep, source_elem.rep);
         const source_elem_desc = state.source_elem_desc_info.desc orelse
             boxyLowerInvariant("boxy list boundary source element descriptor had no descriptor");
-        self.parent.result.store.setLocalBoxyDesc(state.source_elem, source_elem_desc);
+        try self.parent.result.store.setLocalBoxyDesc(state.source_elem, source_elem_desc);
         const next_acc = try self.addFrameLocal(self.parent.result.store.getLocal(acc).layout_idx);
         if (self.parent.result.store.getLocal(acc).boxy_desc) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(next_acc, desc);
+            try self.parent.result.store.setLocalBoxyDesc(next_acc, desc);
         }
         state.one = try self.addFrameLocal(.u64);
         state.next_index = try self.addFrameLocal(.u64);
@@ -40069,7 +40069,7 @@ const ProcBodyBuilder = struct {
                 const target_desc = target_desc_info.desc orelse
                     boxyLowerInvariant("boxy concrete tag relabel had no target descriptor");
                 if (existing_target_desc == null) {
-                    self.parent.result.store.setLocalBoxyDesc(target, target_desc);
+                    try self.parent.result.store.setLocalBoxyDesc(target, target_desc);
                 }
                 const box = try self.parent.result.store.addCFStmt(.{ .assign_boxy_box = .{
                     .target = target,
@@ -40344,7 +40344,7 @@ const ProcBodyBuilder = struct {
         const resolved_target_desc = self.resultDescriptorForCallTarget(target, selected_target_desc);
         if (self.parent.result.store.getLocal(target).boxy_desc == null) {
             if (resolved_target_desc.desc) |desc| {
-                self.parent.result.store.setLocalBoxyDesc(target, desc);
+                try self.parent.result.store.setLocalBoxyDesc(target, desc);
             }
         }
         const adapt = try self.assignDynamicBoxMaterialization(
@@ -40410,7 +40410,7 @@ const ProcBodyBuilder = struct {
                         } }, self.glueOrigin());
                     }
                     if (self.parent.result.store.getLocal(source).boxy_desc == null) {
-                        self.parent.result.store.setLocalBoxyDesc(source, source_desc);
+                        try self.parent.result.store.setLocalBoxyDesc(source, source_desc);
                     }
                     return try self.assignLocal(target, source, next);
                 }
@@ -40426,7 +40426,7 @@ const ProcBodyBuilder = struct {
                 if (self.localIsReadOnlyDescriptorInput(target_desc)) {
                     target_desc = try self.addFrameLocal(.opaque_ptr);
                 }
-                self.parent.result.store.setLocalBoxyDesc(target, .{ .local = target_desc });
+                try self.parent.result.store.setLocalBoxyDesc(target, .{ .local = target_desc });
                 const rebind = try self.parent.result.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
                     .target = target_desc,
                     .data = try self.parent.result.store.addStmtRow(LIR.BoxyDescRefData, .{
@@ -40437,7 +40437,7 @@ const ProcBodyBuilder = struct {
                 return rebind;
             }
         }
-        self.parent.result.store.setLocalBoxyDesc(target, source_desc);
+        try self.parent.result.store.setLocalBoxyDesc(target, source_desc);
         return if (target == source) next else try self.assignLocal(target, source, next);
     }
 
@@ -41122,7 +41122,7 @@ const ProcBodyBuilder = struct {
         const maybe_source_desc = self.parent.result.store.getLocal(source).boxy_desc;
         const target_desc = self.parent.result.store.getLocal(target).boxy_desc orelse {
             const source_desc = maybe_source_desc orelse return next;
-            self.parent.result.store.setLocalBoxyDesc(target, source_desc);
+            try self.parent.result.store.setLocalBoxyDesc(target, source_desc);
             return next;
         };
         const target_desc_local = target_desc.localOrNull() orelse return next;
@@ -41288,7 +41288,7 @@ const ProcBodyBuilder = struct {
             }
         }
         const local = try self.addFrameLocal(layout_idx);
-        if (desc) |desc_ref| self.parent.result.store.setLocalBoxyDesc(local, desc_ref);
+        if (desc) |desc_ref| try self.parent.result.store.setLocalBoxyDesc(local, desc_ref);
         return local;
     }
 
@@ -41312,7 +41312,7 @@ const ProcBodyBuilder = struct {
         }
 
         const desc_local = try self.addFrameLocal(.opaque_ptr);
-        self.parent.result.store.setLocalBoxyDesc(local, .{ .local = desc_local });
+        try self.parent.result.store.setLocalBoxyDesc(local, .{ .local = desc_local });
         try self.recordDescriptorLocalTemplate(
             desc_local,
             try self.descriptorMaterializationForExactRep(rep_id),
@@ -41328,16 +41328,16 @@ const ProcBodyBuilder = struct {
             (identity.contains_dynamic and self.parent.layoutNeedsNestedBoxyDesc(layout_idx)))
         {
             const desc_local = try self.addFrameLocal(.opaque_ptr);
-            self.parent.result.store.setLocalBoxyDesc(local, .{ .local = desc_local });
+            try self.parent.result.store.setLocalBoxyDesc(local, .{ .local = desc_local });
         } else if (self.repContainsDynamicStorage(rep_id)) {
-            self.parent.result.store.setLocalBoxyDesc(local, try self.parent.staticDescRefForRep(identity_rep));
+            try self.parent.result.store.setLocalBoxyDesc(local, try self.parent.staticDescRefForRep(identity_rep));
         } else if (try self.descriptorRefForRepIfNeeded(rep_id)) |desc| {
             switch (desc) {
-                .static => self.parent.result.store.setLocalBoxyDesc(local, desc),
+                .static => try self.parent.result.store.setLocalBoxyDesc(local, desc),
                 .local,
                 .runtime,
                 .dict_method_hidden,
-                => self.parent.result.store.setLocalBoxyDesc(local, .{ .local = try self.addFrameLocal(.opaque_ptr) }),
+                => try self.parent.result.store.setLocalBoxyDesc(local, .{ .local = try self.addFrameLocal(.opaque_ptr) }),
             }
         }
         if (self.parent.result.store.getLocal(local).boxy_desc) |desc| {
@@ -41354,7 +41354,7 @@ const ProcBodyBuilder = struct {
     fn addFrameLocalForRepWithRequiredFreshDescriptor(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!LIR.LocalId {
         const local = try self.addFrameLocal(self.workerRuntimeLayoutForRep(rep_id).layoutIdx());
         const desc_local = try self.addFrameLocal(.opaque_ptr);
-        self.parent.result.store.setLocalBoxyDesc(local, .{ .local = desc_local });
+        try self.parent.result.store.setLocalBoxyDesc(local, .{ .local = desc_local });
         try self.recordDescriptorLocalTemplate(
             desc_local,
             try self.descriptorMaterializationForExactRep(rep_id),
@@ -41397,7 +41397,7 @@ const ProcBodyBuilder = struct {
         else
             null;
         const local = try self.addFrameLocal(runtime.layoutIdx());
-        if (desc) |desc_ref| self.parent.result.store.setLocalBoxyDesc(local, desc_ref);
+        if (desc) |desc_ref| try self.parent.result.store.setLocalBoxyDesc(local, desc_ref);
         if (desc) |desc_ref| {
             if (desc_ref.localOrNull()) |desc_local| {
                 try self.recordDescriptorLocalTemplate(
@@ -41456,7 +41456,7 @@ const ProcBodyBuilder = struct {
         }
         const desc = try self.frameDescriptorRefForRep(rep_id);
         const local = try self.addFrameLocal(runtime.layoutIdx());
-        if (desc) |desc_ref| self.parent.result.store.setLocalBoxyDesc(local, desc_ref);
+        if (desc) |desc_ref| try self.parent.result.store.setLocalBoxyDesc(local, desc_ref);
         return local;
     }
 
@@ -41506,7 +41506,7 @@ const ProcBodyBuilder = struct {
         if (self.parent.result.store.getLocal(local).boxy_desc != null) return;
         const desc_ref = try self.descriptorRefForRepIfNeeded(rep_id);
         if (desc_ref) |desc| {
-            self.parent.result.store.setLocalBoxyDesc(local, desc);
+            try self.parent.result.store.setLocalBoxyDesc(local, desc);
         }
     }
 
@@ -41516,7 +41516,7 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("boxy runtime descriptor initialization targeted a statically described value");
         }
         const local = try self.addFrameLocal(.opaque_ptr);
-        self.parent.result.store.setLocalBoxyDesc(value, .{ .local = local });
+        try self.parent.result.store.setLocalBoxyDesc(value, .{ .local = local });
         return local;
     }
 
@@ -41930,7 +41930,7 @@ const ProcBodyBuilder = struct {
 
         const desc_local = try self.reserveRuntimeDescriptorLocalForType(ty) orelse
             try self.addFrameLocal(.opaque_ptr);
-        self.parent.result.store.setLocalBoxyDesc(value, .{ .local = desc_local });
+        try self.parent.result.store.setLocalBoxyDesc(value, .{ .local = desc_local });
         return desc_local;
     }
 

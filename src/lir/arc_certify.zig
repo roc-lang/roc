@@ -7559,7 +7559,7 @@ test "certify accepts a retained Boxy field borrowed from implicit capture stora
     const result = try f.local(.i64);
     const desc_local = try f.local(.opaque_ptr);
     const desc = LIR.BoxyDescRef{ .local = desc_local };
-    f.store.setLocalBoxyDesc(field, desc);
+    try f.store.setLocalBoxyDesc(field, desc);
 
     const ret = try f.ret(result);
     const result_assign = try f.assignI64(result, ret);

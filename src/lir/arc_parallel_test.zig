@@ -388,7 +388,7 @@ const UniquenessFixture = struct {
         const rc = try testing.allocator.alloc(bool, self.fixture.store.localCount());
         defer testing.allocator.free(rc);
         @memset(rc, true);
-        return arc_solve.solveWithOptions(testing.allocator, &self.fixture.store, &self.fixture.layouts, rc, &.{}, &.{}, true, true, .{
+        return arc_solve.solveWithOptions(testing.allocator, &self.fixture.store, &self.fixture.layouts, rc, .{}, &.{}, true, true, .{
             .executor = runner,
             .metrics = metrics,
         });
@@ -827,7 +827,7 @@ const DismantleRangeFixture = struct {
         const store = &self.fixture.store;
         const rc = try arc_solve.computeLocalContainsRefcounted(testing.allocator, store, &self.fixture.layouts);
         defer testing.allocator.free(rc);
-        var solution = try arc_solve.solve(testing.allocator, store, &self.fixture.layouts, rc, &.{}, &.{}, true);
+        var solution = try arc_solve.solve(testing.allocator, store, &self.fixture.layouts, rc, .{}, &.{}, true);
         defer solution.deinit();
         return arc_dismantle.compute(testing.allocator, store, &self.fixture.layouts, rc, &solution, options);
     }

@@ -2518,14 +2518,14 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .local => |desc_local| old = desc_local,
                     .static, .runtime, .dict_method_hidden => {
                         _ = pending.pop();
-                        self.store.setLocalBoxyDesc(fresh, desc);
+                        try self.store.setLocalBoxyDesc(fresh, desc);
                         try self.new_locals.append(self.allocator, fresh);
                         break fresh;
                     },
                 }
             };
             while (pending.pop()) |entry| {
-                self.store.setLocalBoxyDesc(entry.fresh, .{ .local = mapped });
+                try self.store.setLocalBoxyDesc(entry.fresh, .{ .local = mapped });
                 try self.new_locals.append(self.allocator, entry.fresh);
                 mapped = entry.fresh;
             }

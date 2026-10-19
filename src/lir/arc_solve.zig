@@ -697,7 +697,7 @@ const Solver = struct {
     allocator: Allocator,
     store: *const LirStore,
     rc_local: []const bool,
-    boxy_rc_descs: []const ?LIR.BoxyDescRef,
+    boxy_rc_descs: LirStore.LocalDescSnapshot,
     consume_dead_boxes: bool,
     /// Run the host-visibility analysis. Off, every local is visible.
     thread_confined_rc: bool,
@@ -767,7 +767,7 @@ pub fn solve(
     store: *const LirStore,
     layouts: *const layout_mod.Store,
     rc_local: []const bool,
-    boxy_rc_descs: []const ?LIR.BoxyDescRef,
+    boxy_rc_descs: LirStore.LocalDescSnapshot,
     roots: []const LIR.LirProcSpecId,
     consume_dead_boxes: bool,
 ) SolveError!Solution {
@@ -780,7 +780,7 @@ pub fn solveWithOptions(
     store: *const LirStore,
     layouts: *const layout_mod.Store,
     rc_local: []const bool,
-    boxy_rc_descs: []const ?LIR.BoxyDescRef,
+    boxy_rc_descs: LirStore.LocalDescSnapshot,
     roots: []const LIR.LirProcSpecId,
     consume_dead_boxes: bool,
     thread_confined_rc: bool,
@@ -788,7 +788,7 @@ pub fn solveWithOptions(
 ) SolveError!Solution {
     const local_count = store.localCount();
     const proc_count = store.procSpecCount();
-    if (boxy_rc_descs.len != 0 and boxy_rc_descs.len != local_count) {
+    if (!boxy_rc_descs.isEmpty() and boxy_rc_descs.localCount() != local_count) {
         solveInvariant("ARC Boxy descriptor table did not cover every local");
     }
     var domain = try ArcLocalDomain.init(allocator, rc_local);
@@ -3237,10 +3237,10 @@ fn aliasPreservesBoxyRcDescriptor(
     target: LIR.LocalId,
     source: LIR.LocalId,
 ) bool {
-    if (solver.boxy_rc_descs.len == 0) return true;
+    if (solver.boxy_rc_descs.isEmpty()) return true;
     return std.meta.eql(
-        solver.boxy_rc_descs[@backingInt(target)],
-        solver.boxy_rc_descs[@backingInt(source)],
+        solver.boxy_rc_descs.get(target),
+        solver.boxy_rc_descs.get(source),
     );
 }
 
@@ -6802,7 +6802,7 @@ test "ARC public solve cleans up every coordinator allocation failure" {
 
     const Probe = struct {
         fn run(allocator: Allocator, fixture: *const UniquenessTest, rc: []const bool, root: LIR.LirProcSpecId) SolveError!void {
-            var solution = try solve(allocator, &fixture.store, &fixture.layouts, rc, &.{}, &.{root}, true);
+            var solution = try solve(allocator, &fixture.store, &fixture.layouts, rc, .{}, &.{root}, true);
             defer solution.deinit();
         }
     };
@@ -7110,7 +7110,7 @@ test "uniqueness fixed point propagates fresh returns through a call diamond and
     @memset(rc, true);
     const builds_before = @import("use_order.zig").topology_builds;
     const rounds_before = uniqueness_analysis_rounds;
-    var solution = try solve(allocator, &f.store, &f.layouts, rc, &.{}, &.{}, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, rc, .{}, &.{}, true);
     defer solution.deinit();
     try testing.expectEqual(@as(usize, 1), @import("use_order.zig").topology_builds - builds_before);
     try testing.expect(uniqueness_analysis_rounds - rounds_before > 8);
@@ -7224,7 +7224,7 @@ test "component uniqueness preserves shared RC definitions shared statements and
     // parameter scan; component formation must not reorder these definitions.
     _ = try f.proc(&.{shared}, null, f.list);
     const rc = [_]bool{ true, true, false };
-    var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
     defer solution.deinit();
     UniquenessOracleState.resetCapabilities(&solution);
     var metrics: UniquenessMetrics = .{};
@@ -7281,7 +7281,7 @@ test "component uniqueness revisits only dirty callers along a long chain" {
         _ = try f.proc(&.{}, body, f.list);
     }
     const rc = @as([17]bool, @splat(true));
-    var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
     defer solution.deinit();
     UniquenessOracleState.resetCapabilities(&solution);
     var metrics: UniquenessMetrics = .{};
@@ -7315,7 +7315,7 @@ test "component uniqueness ignores offset-only return condition changes" {
         f.store.setProcSpecBody(procs[caller], try f.call(result, procs[callee], &.{params[caller]}, try f.ret(result)));
     }
     const rc = @as([6]bool, @splat(true));
-    var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
     defer solution.deinit();
     // Owned inputs transfer their unit into the conditional-return edge.
     for (solution.sigs) |*sig| {
@@ -7358,7 +7358,7 @@ test "component uniqueness read-only return refinement revives a borrowed-view l
     } }, .test_fixture);
     _ = try f.proc(&.{}, body, f.list);
     const rc = [_]bool{ true, true, false, true, false };
-    var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
     defer solution.deinit();
     try std.testing.expect(solution.borrowed.isSet(@backingInt(view)));
     UniquenessOracleState.resetCapabilities(&solution);
@@ -7403,7 +7403,7 @@ test "component uniqueness recursive conditional fields restart after committed 
     } }, .test_fixture);
     const field_proc = try f.proc(&.{field_param}, field_body, f.pair);
     const rc = [_]bool{ true, true, true, true, false, true, true };
-    var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
     defer solution.deinit();
     for (solution.sigs) |*sig| {
         sig.borrowed_params = 0;
@@ -7469,7 +7469,7 @@ test "component uniqueness inventories join parameters incoming transfers and no
     } }, .test_fixture);
     const proc = try f.proc(&.{param}, body, f.list);
     const rc = @as([3]bool, @splat(true));
-    var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
     defer solution.deinit();
     UniquenessOracleState.resetCapabilities(&solution);
     var metrics: UniquenessMetrics = .{};
@@ -7507,7 +7507,7 @@ test "uniqueness seed masks compose through direct calls" {
     const rc = try allocator.alloc(bool, f.store.localCount());
     defer allocator.free(rc);
     @memset(rc, true);
-    var solution = try solve(allocator, &f.store, &f.layouts, rc, &.{}, &.{}, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, rc, .{}, &.{}, true);
     defer solution.deinit();
     try std.testing.expectEqual(@as(arc_sig.ParamMask, 0b01), solution.unique_seed_masks[@backingInt(leaf)]);
     try std.testing.expectEqual(@as(arc_sig.ParamMask, 0b10), solution.unique_seed_masks[@backingInt(middle)]);
@@ -7597,7 +7597,7 @@ test "uniqueness carries a candidate read's origin through a returned record fie
     const rc = try allocator.alloc(bool, f.store.localCount());
     defer allocator.free(rc);
     @memset(rc, true);
-    var solution = try solve(allocator, &f.store, &f.layouts, rc, &.{}, &.{}, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, rc, .{}, &.{}, true);
     defer solution.deinit();
     try settleUniquenessWithOptions(allocator, &f.store, &f.layouts, rc, &solution, .stamped, true, .{});
     try std.testing.expect(solution.fresh_reads.isSet(@backingInt(read)));
@@ -7686,7 +7686,7 @@ test "uniqueness vetoes a join cell's field that a call definition does not vouc
     defer allocator.free(rc);
     @memset(rc, true);
     for ([_]LIR.LocalId{ callee_index, caller_index, flag }) |scalar| rc[@backingInt(scalar)] = false;
-    var solution = try solve(allocator, &f.store, &f.layouts, rc, &.{}, &.{}, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, rc, .{}, &.{}, true);
     defer solution.deinit();
     try settleUniquenessWithOptions(allocator, &f.store, &f.layouts, rc, &solution, .stamped, true, .{});
     try std.testing.expect(solution.sigOf(callee).ret_unique);
@@ -7752,7 +7752,7 @@ test "uniqueness gives a tail loop parameter no field origins from its back edge
     } }, .test_fixture);
     _ = try f.proc(&.{ param, flag }, loop, f.list);
     const rc = [_]bool{ true, false, true, true, true, true };
-    var solution = try solve(allocator, &f.store, &f.layouts, &rc, &.{}, &.{}, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, &rc, .{}, &.{}, true);
     defer solution.deinit();
     UniquenessOracleState.resetCapabilities(&solution);
     var takes = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, f.store.cfStmtCount());
