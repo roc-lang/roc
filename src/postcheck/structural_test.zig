@@ -1472,8 +1472,8 @@ test "hosted Try adaptation consumes checker-recorded nominal provenance" {
     try expectContains(adapter_source, "self.hostedTryInfoOrNull(try_capability, requested.ret)");
     try expectContains(adapter_source, "self.hostedTryInfoOrNull(try_capability, declared.ret)");
     try expectContains(lower_source, "sameTypeDef(named.def, capability.def)");
-    try expectContains(lower_source, "tagByNameOrNull(backing_ty.ty, capability.ok_tag)");
-    try expectContains(lower_source, "tagByNameOrNull(backing_ty.ty, capability.err_tag)");
+    try expectContains(lower_source, "tagByNameOrNull(self.coordinatorTypes(), &self.program.names, backing_ty.ty, capability.ok_tag)");
+    try expectContains(lower_source, "tagByNameOrNull(self.coordinatorTypes(), &self.program.names, backing_ty.ty, capability.err_tag)");
     try expectNotContains(lower_source, "fn graphTryInfoOrNull(");
     try expectNotContains(lower_source, "fn graphTagByText(");
     try expectNotContains(lower_source, "fn tryInfoOrNull(");
