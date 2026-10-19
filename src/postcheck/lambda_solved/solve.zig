@@ -2555,9 +2555,12 @@ const Solver = struct {
     /// Monotype reaches a cycle. A cyclic Monotype keeps the ordinary
     /// relation, which joins the class's distinct cells at the positions the
     /// clone ties back together; so does an uninhabited one, whose class
-    /// selection differs. A clone-invariant leaf already shares one clone,
-    /// and a positional leaf (`LeafSharing.positional`) materializes through
-    /// the ordinary relation, which joins its rows where its value flows.
+    /// selection differs. A clone-invariant leaf already shares one clone.
+    /// A positional leaf (`LeafSharing.positional`) holds only fresh rows
+    /// and no callable slot, so relating it to a class instantiated from its
+    /// Monotype joins nothing the class does not already have; one in an
+    /// argument scope keeps the ordinary relation, which registers its
+    /// children in that scope.
     fn linkUntouchedLeafToInstance(
         self: *Solver,
         leaf_root: Type.TypeVarId,
@@ -2568,7 +2571,10 @@ const Solver = struct {
         if (leaf_content != .mono) return false;
         const leaf = leaf_content.mono;
         const id = leaf.id;
-        if (self.isCallableFree(id)) return false;
+        if (self.isCallableFree(id)) {
+            if (self.leafSharing(id) != .positional) return false;
+            if (self.leaf_arg_scopes.get(leaf_root) != null) return false;
+        }
         if (leaf.ctx != Type.no_leaf_context) {
             const shape = self.leaf_context_shapes.items[leaf.ctx];
             if (!shape.chain or shape.unexpanded != 1) return false;
