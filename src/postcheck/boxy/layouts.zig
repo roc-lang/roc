@@ -1312,7 +1312,7 @@ test "boxy layout planner records private worker function arg and return layouts
         .id = @fromBackingInt(@intCast(1)),
         .root_request = roots[0],
         .source = extra_source,
-        .checked_type = .{ .ty = @fromBackingInt(@intCast(2)) },
+        .checked_type = .{ .module = .root, .ty = @fromBackingInt(@intCast(2)) },
         .rep = extra_rep,
     });
 

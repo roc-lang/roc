@@ -62,23 +62,33 @@ pub const WorkerPlanId = enum(u32) { _ };
 pub const DescriptorRequirementId = enum(u32) { _ };
 /// Stable index of an explicit runtime dictionary requirement.
 pub const DictionaryRequirementId = enum(u32) { _ };
+/// Dense index of one checked module among those a program plan names. The
+/// plan's `module_keys` holds each module's checked key, so plan rows name a
+/// module in four bytes and compare and hash it as one integer.
+pub const PlanModuleId = enum(u32) {
+    /// The module a plan indexes first: its root module.
+    root = 0,
+    /// A module view not yet given its plan index.
+    unplanned = std.math.maxInt(u32),
+    _,
+};
 
 /// Module-qualified checked type reference used throughout planning.
 pub const CheckedTypeIdentity = struct {
-    module: checked.ModuleId = .{},
+    module: PlanModuleId,
     ty: checked.CheckedTypeId,
 };
 
 /// Module-qualified identity of producer-owned monomorphic type evidence in a
 /// checked module's `ConstStore`.
 pub const StoredTypeIdentity = struct {
-    module: checked.ModuleId,
+    module: PlanModuleId,
     ty: check.ConstStore.ConstTypeId,
 };
 
 /// Module-qualified checked expression reference used throughout planning.
 pub const CheckedExprIdentity = struct {
-    module: checked.ModuleId = .{},
+    module: PlanModuleId,
     expr: checked.CheckedExprId,
 };
 
@@ -178,12 +188,12 @@ pub const LiteralCallEdge = union(enum) {
 };
 
 const CheckedPatternIdentity = struct {
-    module: checked.ModuleId = .{},
+    module: PlanModuleId,
     pattern: checked.CheckedPatternId,
 };
 
 const CheckedStatementIdentity = struct {
-    module: checked.ModuleId = .{},
+    module: PlanModuleId,
     statement: checked.CheckedStatementId,
 };
 
@@ -311,7 +321,7 @@ pub const RepChild = struct {
 /// One tag name and its planned payload representation span.
 pub const TagVariant = struct {
     name: TagLabelId,
-    name_module: checked.ModuleId = .{},
+    name_module: PlanModuleId,
     payloads: Span = .{},
 };
 
@@ -466,7 +476,7 @@ pub const WorkerEvidenceDescriptorParam = struct {
 
 /// Checked module and absolute evidence-pool index of a scheme requirement.
 pub const SchemeDictionaryKey = struct {
-    module: checked.ModuleId,
+    module: PlanModuleId,
     param: u32,
     callable_contract: ?u32 = null,
 };
@@ -589,7 +599,7 @@ pub const DictionaryMethodEvidence = struct {
     instantiation_rep: ?TypeRepId = null,
 
     pub const EvidenceEdge = struct {
-        module: checked.ModuleId,
+        module: PlanModuleId,
         node: static_dispatch.EvidenceNodeId,
     };
 
@@ -659,7 +669,7 @@ pub const RecursiveSlotRep = struct {
 
 /// Exact checked source and worker selected for a stored function value.
 pub const StaticFnPlan = struct {
-    store_module: checked.ModuleId,
+    store_module: PlanModuleId,
     fn_id: checked.ConstFnId,
     rep: TypeRepId,
     worker: WorkerPlanId,
@@ -691,7 +701,7 @@ pub const DictionaryRequirement = struct {
 /// consumers compare their checked source spelling while planning and use only `slot`
 /// after LIR lowering begins.
 pub const DictionaryMethodSlotIdentity = struct {
-    module: checked.ModuleId,
+    module: PlanModuleId,
     method: MethodNameId,
 };
 
@@ -734,7 +744,7 @@ pub const GeneratedCodecCallPlan = struct {
     caller: WorkerPlanId,
     dispatch_type: CheckedTypeIdentity,
     subject_type: ?CheckedTypeIdentity,
-    method_module: checked.ModuleId,
+    method_module: PlanModuleId,
     method: MethodNameId,
     worker: WorkerPlanId,
     arg_types: Span,
@@ -836,7 +846,7 @@ fn isGeneratedEncoderCallback(source: WorkerSource) bool {
 pub const GeneratedParserFieldCapture = struct {
     worker: WorkerPlanId,
     record_type: CheckedTypeIdentity,
-    field_module: checked.ModuleId,
+    field_module: PlanModuleId,
     field_name: RecordFieldLabelId,
     source_type: CheckedTypeIdentity,
     parse_type: CheckedTypeIdentity,
@@ -866,7 +876,7 @@ pub const GeneratedParserFieldKind = union(enum) {
     /// archived checked default, whose identity is relative to `module`
     /// (the module owning the record field).
     defaulted: struct {
-        module: checked.ModuleId,
+        module: PlanModuleId,
         default: checked.CheckedFieldDefault,
     },
 };
@@ -895,7 +905,7 @@ pub const GeneratedParserTryPlan = struct {
 pub const GeneratedParserDictionaryFieldStrategy = union(enum) {
     /// The format's key method for this key type (`parse_key_str`, ...).
     method: struct {
-        module: checked.ModuleId,
+        module: PlanModuleId,
         name: MethodNameId,
     },
     /// A closed unit-tag key read through `parse_key_str` at this checked
@@ -952,7 +962,7 @@ const WorkerIdentity = struct {
 
 /// Const-store identity of a function value persisted into runtime code.
 pub const StoredFnSource = struct {
-    module: checked.ModuleId,
+    module: PlanModuleId,
     fn_id: checked.ConstFnId,
 };
 
@@ -1087,7 +1097,7 @@ pub const StoredCallableCaptureSource = struct {
 
     pub const Source = union(enum) {
         const_node: struct {
-            store_module: checked.ModuleId,
+            store_module: PlanModuleId,
             node: checked.ConstNodeId,
             stored_type: check.ConstStore.ConstTypeId,
         },
@@ -1124,7 +1134,7 @@ pub const DescriptorMethodPlan = struct {
     kind: DescriptorMethod,
     source_rep: TypeRepId,
     worker: WorkerPlanId,
-    method_module: checked.ModuleId,
+    method_module: PlanModuleId,
     method: MethodNameId,
     /// The call's result type: an equality call's is the Bool, and a hash
     /// call's the Hasher, of the derivation that demanded it, since the
@@ -1234,7 +1244,7 @@ pub const IteratorCallKind = enum {
 
 /// Worker and substitutions for one checked iterator protocol call.
 pub const IteratorCallPlan = struct {
-    module: checked.ModuleId,
+    module: PlanModuleId,
     for_plan: static_dispatch.IteratorForPlanId,
     kind: IteratorCallKind,
     caller: WorkerPlanId,
@@ -1304,6 +1314,16 @@ pub fn orderedDerivedEnv(allocator: Allocator, stack: []const DerivedBinding) Al
 /// Target-independent Boxy representation and call plan for a checked program.
 pub const ProgramPlan = struct {
     allocator: Allocator,
+    /// The checked key of each module the plan names, by `PlanModuleId`.
+    module_keys: std.ArrayList(checked.ModuleId) = .empty,
+    /// Each named module's id, by the key bytes that identify it.
+    module_ids: std.AutoHashMapUnmanaged([32]u8, PlanModuleId) = .empty,
+    /// The planned view of each named module, by `PlanModuleId`. The views
+    /// borrow the checked modules planning read, which outlive the plan.
+    module_views: std.ArrayList(ModuleView) = .empty,
+    /// The planned views a method lookup searches after its owner's module:
+    /// the imports, then the relation modules.
+    search_views: std.ArrayList(ModuleView) = .empty,
     literal_sites: std.ArrayList(LiteralSite) = .empty,
     literal_evidence: ?LiteralEvidencePlan = null,
     roots: std.ArrayList(RootPlan),
@@ -1467,7 +1487,55 @@ pub const ProgramPlan = struct {
         return null;
     }
 
+    /// The checked key of the module `id` names.
+    pub fn moduleKey(self: *const ProgramPlan, id: PlanModuleId) checked.ModuleId {
+        return self.module_keys.items[@backingInt(id)];
+    }
+
+    /// The id of the module with checked key `key`, when the plan names it.
+    pub fn moduleIdForKey(self: *const ProgramPlan, key: checked.ModuleId) ?PlanModuleId {
+        return self.module_ids.get(key.bytes);
+    }
+
+    /// The planned view of the module `id` names.
+    pub fn moduleView(self: *const ProgramPlan, id: PlanModuleId) ModuleView {
+        return self.module_views.items[@backingInt(id)];
+    }
+
+    /// The planned view of the module with checked key `key`.
+    pub fn moduleViewForKey(self: *const ProgramPlan, key: checked.ModuleId) ModuleView {
+        const id = self.moduleIdForKey(key) orelse
+            boxyPlanInvariant("boxy referenced a checked module outside its program plan");
+        return self.moduleView(id);
+    }
+
+    /// The method lookup search order over this plan's modules.
+    pub fn methodSearchModules(self: *const ProgramPlan) MethodSearchModules {
+        return .{ .views = self.search_views.items };
+    }
+
+    /// Give `view`'s module its plan id and return its planned view; a module
+    /// already named keeps the view it was first given.
+    fn planModule(self: *ProgramPlan, view: ModuleView) Allocator.Error!ModuleView {
+        const entry = try self.module_ids.getOrPut(self.allocator, view.key.bytes);
+        if (entry.found_existing) return self.moduleView(entry.value_ptr.*);
+        errdefer _ = self.module_ids.remove(view.key.bytes);
+        if (self.module_keys.items.len >= @backingInt(PlanModuleId.unplanned)) return error.OutOfMemory;
+        const id: PlanModuleId = @fromBackingInt(@intCast(self.module_keys.items.len));
+        var planned_view = view;
+        planned_view.id = id;
+        try self.module_keys.ensureUnusedCapacity(self.allocator, 1);
+        try self.module_views.append(self.allocator, planned_view);
+        self.module_keys.appendAssumeCapacity(view.key);
+        entry.value_ptr.* = id;
+        return planned_view;
+    }
+
     pub fn deinit(self: *ProgramPlan) void {
+        self.search_views.deinit(self.allocator);
+        self.module_views.deinit(self.allocator);
+        self.module_ids.deinit(self.allocator);
+        self.module_keys.deinit(self.allocator);
         self.literal_sites.deinit(self.allocator);
         if (self.literal_evidence) |*evidence| evidence.deinit(self.allocator);
         self.static_fns.deinit(self.allocator);
@@ -1802,7 +1870,7 @@ pub const ProgramPlan = struct {
             const variants_b = self.tagVariantSlice(rep_b.tag_variants);
             if (variants_a.len != variants_b.len) return false;
             for (variants_a, variants_b) |variant_a, variant_b| {
-                if (variant_a.name != variant_b.name or !moduleKeyEqual(variant_a.name_module, variant_b.name_module)) return false;
+                if (variant_a.name != variant_b.name or variant_a.name_module != variant_b.name_module) return false;
                 if (!try self.pushIdenticalChildren(allocator, &pending, variant_a.payloads, variant_b.payloads)) return false;
             }
         }
@@ -2073,7 +2141,7 @@ pub const ProgramPlan = struct {
 
     pub fn repForStoredType(self: *const ProgramPlan, source_type: StoredTypeIdentity) ?TypeRepId {
         for (self.stored_type_reps.items) |binding| {
-            if (moduleKeyEqual(binding.source_type.module, source_type.module) and binding.source_type.ty == source_type.ty) {
+            if (binding.source_type.module == source_type.module and binding.source_type.ty == source_type.ty) {
                 return binding.rep;
             }
         }
@@ -2166,13 +2234,13 @@ pub const ProgramPlan = struct {
 
     pub fn iteratorCallPlanFor(
         self: *const ProgramPlan,
-        module: checked.ModuleId,
+        module: PlanModuleId,
         for_plan: static_dispatch.IteratorForPlanId,
         kind: IteratorCallKind,
         caller: WorkerPlanId,
     ) ?IteratorCallPlan {
         for (self.iterator_calls.items) |call| {
-            if (moduleKeyEqual(call.module, module) and
+            if (call.module == module and
                 call.for_plan == for_plan and
                 call.kind == kind and
                 call.caller == caller)
@@ -2201,6 +2269,9 @@ pub const AnalyzeOptions = struct {};
 /// Checked module data required by the Boxy representation planner.
 pub const ModuleView = struct {
     key: checked.ModuleId = .{},
+    /// This module's index in the plan; set only on the views the plan's
+    /// module table hands out.
+    id: PlanModuleId = .unplanned,
     canonical_names: ?*const checked_names.CanonicalNameStore = null,
     checked_types: checked.CheckedTypeStoreView,
     checked_bodies: checked.CheckedBodyStoreView = .{},
@@ -2221,27 +2292,6 @@ pub const ModuleView = struct {
     const_templates: ?*const checked.ConstTemplateTable = null,
     module_env: ?*const can.ModuleEnv = null,
 };
-
-/// The view of checked module `key` among the modules lowering received.
-pub fn moduleViewForKey(modules: Common.CheckedModules, key: checked.ModuleId) ModuleView {
-    if (moduleKeyEqual(modules.root.module.key, key)) return moduleViewFromCheckedModule(modules.root.module);
-    return importedModuleViewForKey(modules.imports, modules.root.relation_modules, key) orelse
-        boxyPlanInvariant("boxy referenced a checked module that was not available to lowering");
-}
-
-fn importedModuleViewForKey(
-    imports: []const checked.ImportedModuleView,
-    relation_modules: []const checked.ImportedModuleView,
-    key: checked.ModuleId,
-) ?ModuleView {
-    for (imports) |imported| {
-        if (moduleKeyEqual(key, imported.key)) return moduleViewFromImported(imported);
-    }
-    for (relation_modules) |relation| {
-        if (moduleKeyEqual(key, relation.key)) return moduleViewFromImported(relation);
-    }
-    return null;
-}
 
 /// Checked modules, roots, and standalone layout requests to analyze together.
 pub const ProgramInput = struct {
@@ -2694,7 +2744,7 @@ const LiteralPlanner = struct {
                             try children.append(allocator, child);
                             index += 1;
                         }
-                        try variants.append(allocator, .{ .name = tag.name, .name_module = view.key, .payloads = .{ .start = start, .len = tag.args_len } });
+                        try variants.append(allocator, .{ .name = tag.name, .name_module = viewModule(view), .payloads = .{ .start = start, .len = tag.args_len } });
                     }
                     const extension = self.builder.plan.representations.items[@backingInt(args[index])];
                     switch (extension.kind) {
@@ -3749,7 +3799,7 @@ pub fn analyzeProgram(
     input: ProgramInput,
     _: AnalyzeOptions,
 ) Allocator.Error!ProgramPlan {
-    var builder = Builder.init(allocator, input);
+    var builder = try Builder.init(allocator, input);
     defer builder.deinit();
     try builder.collectQuantifiedVariables();
     try builder.bindInterpolationItemRepresentations();
@@ -3757,7 +3807,7 @@ pub fn analyzeProgram(
     if (input.source_modules.len != 0 and input.source_modules.len != input.roots.len)
         boxyPlanInvariant("root source module count differs from request count");
     for (input.roots, 0..) |root, index| {
-        const view = if (input.source_modules.len == 0) builder.root_view else builder.moduleForId(input.source_modules[index]);
+        const view = if (input.source_modules.len == 0) builder.root_view else builder.moduleForKey(input.source_modules[index]);
         try builder.analyzeRoot(root, view);
     }
     for (input.layout_requests) |layout_request| {
@@ -3817,7 +3867,7 @@ pub fn analyzeProgram(
 /// Resolve checked ABI requests without discovering workers or private types.
 /// Glue uses the same checked-source resolver as Boxy host ABI boundaries.
 pub fn analyzeHostAbi(allocator: Allocator, input: ProgramInput) Allocator.Error!ProgramPlan {
-    var builder = Builder.init(allocator, input);
+    var builder = try Builder.init(allocator, input);
     defer builder.deinit();
     builder.host_mode = true;
     for (input.layout_requests) |ty| {
@@ -3889,7 +3939,7 @@ const Builder = struct {
     };
 
     const NominalDeclarationKey = struct {
-        module: checked.ModuleId,
+        module: PlanModuleId,
         declaration: checked.CheckedNominalDeclarationId,
     };
 
@@ -3986,7 +4036,7 @@ const Builder = struct {
     };
     const HostNominalEntry = struct { context: u32, rep: TypeRepId };
     const HostNominalKey = struct {
-        module: checked.ModuleId,
+        module: PlanModuleId,
         declaration: checked.CheckedNominalDeclarationId,
         args: []const TypeRepId,
 
@@ -4001,13 +4051,20 @@ const Builder = struct {
                 return hasher.final();
             }
             pub fn eql(_: @This(), a: HostNominalKey, b: HostNominalKey) bool {
-                return moduleKeyEqual(a.module, b.module) and a.declaration == b.declaration and
+                return a.module == b.module and a.declaration == b.declaration and
                     std.mem.eql(TypeRepId, a.args, b.args);
             }
         };
     };
 
-    fn init(allocator: Allocator, input: ProgramInput) Builder {
+    fn init(allocator: Allocator, input: ProgramInput) Allocator.Error!Builder {
+        var builder = initUnindexed(allocator, input);
+        errdefer builder.deinit();
+        try builder.indexModules();
+        return builder;
+    }
+
+    fn initUnindexed(allocator: Allocator, input: ProgramInput) Builder {
         const root_view = if (input.root_view) |root_view|
             root_view
         else if (input.root_module) |root_module|
@@ -4040,6 +4097,20 @@ const Builder = struct {
             .scheme_dictionary_uses = .empty,
             .active_worker = null,
         };
+    }
+
+    /// Give every module the planner can reach its plan id, the root first,
+    /// then the extra views, the imports and the relation modules. A key
+    /// seen again keeps the view it was first given.
+    fn indexModules(self: *Builder) Allocator.Error!void {
+        const plan = &self.plan;
+        self.root_view = try plan.planModule(self.root_view);
+        for (self.extra_module_views) |view| _ = try plan.planModule(view);
+        for (self.imports) |imported| _ = try plan.planModule(moduleViewFromImported(imported));
+        for (self.relation_modules) |relation| _ = try plan.planModule(moduleViewFromImported(relation));
+        try plan.search_views.ensureTotalCapacity(self.allocator, self.imports.len + self.relation_modules.len);
+        for (self.imports) |imported| plan.search_views.appendAssumeCapacity(plan.moduleViewForKey(imported.key));
+        for (self.relation_modules) |relation| plan.search_views.appendAssumeCapacity(plan.moduleViewForKey(relation.key));
     }
 
     fn deinit(self: *Builder) void {
@@ -4084,9 +4155,9 @@ const Builder = struct {
 
     fn collectQuantifiedVariables(self: *Builder) Allocator.Error!void {
         try self.collectModuleQuantifiedVariables(self.root_view);
-        for (self.extra_module_views) |view| try self.collectModuleQuantifiedVariables(view);
-        for (self.imports) |imported| try self.collectModuleQuantifiedVariables(moduleViewFromImported(imported));
-        for (self.relation_modules) |imported| try self.collectModuleQuantifiedVariables(moduleViewFromImported(imported));
+        for (self.extra_module_views) |view| try self.collectModuleQuantifiedVariables(self.moduleForKey(view.key));
+        for (self.imports) |imported| try self.collectModuleQuantifiedVariables(self.moduleForKey(imported.key));
+        for (self.relation_modules) |imported| try self.collectModuleQuantifiedVariables(self.moduleForKey(imported.key));
     }
 
     /// Bind each interpolation's item type to its values' representation
@@ -4095,9 +4166,9 @@ const Builder = struct {
     /// requirement, already uses it.
     fn bindInterpolationItemRepresentations(self: *Builder) Allocator.Error!void {
         try self.bindModuleInterpolationItemRepresentations(self.root_view);
-        for (self.extra_module_views) |view| try self.bindModuleInterpolationItemRepresentations(view);
-        for (self.imports) |imported| try self.bindModuleInterpolationItemRepresentations(moduleViewFromImported(imported));
-        for (self.relation_modules) |imported| try self.bindModuleInterpolationItemRepresentations(moduleViewFromImported(imported));
+        for (self.extra_module_views) |view| try self.bindModuleInterpolationItemRepresentations(self.moduleForKey(view.key));
+        for (self.imports) |imported| try self.bindModuleInterpolationItemRepresentations(self.moduleForKey(imported.key));
+        for (self.relation_modules) |imported| try self.bindModuleInterpolationItemRepresentations(self.moduleForKey(imported.key));
     }
 
     fn bindModuleInterpolationItemRepresentations(self: *Builder, view: ModuleView) Allocator.Error!void {
@@ -4131,7 +4202,7 @@ const Builder = struct {
     }
 
     /// The module data the shared label-comparing queries need.
-    pub fn moduleNames(self: *Builder, module_id: checked.ModuleId) ModuleNames {
+    pub fn moduleNames(self: *Builder, module_id: PlanModuleId) ModuleNames {
         return moduleNamesOf(self.moduleForId(module_id));
     }
 
@@ -4146,20 +4217,20 @@ const Builder = struct {
     }
 
     fn methodSearchModules(self: *const Builder) MethodSearchModules {
-        return .{ .imports = self.imports, .relation_modules = self.relation_modules };
+        return self.plan.methodSearchModules();
     }
 
-    fn moduleForId(self: *Builder, module_id: checked.ModuleId) ModuleView {
-        if (moduleKeyEqual(module_id, self.root_view.key)) return self.root_view;
-        for (self.extra_module_views) |*view| {
-            if (moduleKeyEqual(module_id, view.key)) return view.*;
-        }
-        return importedModuleViewForKey(self.imports, self.relation_modules, module_id) orelse
-            boxyPlanInvariant("checked nominal representation referenced a module outside boxy planner input");
+    fn moduleForId(self: *const Builder, module_id: PlanModuleId) ModuleView {
+        return self.plan.moduleView(module_id);
     }
 
-    fn moduleForCheckedModuleId(self: *Builder, checked_module: anytype) ModuleView {
-        return self.moduleForId(.{ .bytes = checked_module.bytes });
+    /// The planned view of the module with checked key `key`.
+    fn moduleForKey(self: *const Builder, key: checked.ModuleId) ModuleView {
+        return self.plan.moduleViewForKey(key);
+    }
+
+    fn moduleForCheckedModuleId(self: *const Builder, checked_module: anytype) ModuleView {
+        return self.moduleForKey(.{ .bytes = checked_module.bytes });
     }
 
     // Worker planning //
@@ -4852,7 +4923,7 @@ const Builder = struct {
                 }
             },
             .callable_lookup_use => |state| {
-                const use = CheckedExprIdentity{ .module = state.view.key, .expr = state.expr };
+                const use = CheckedExprIdentity{ .module = viewModule(state.view), .expr = state.expr };
                 const caller = self.active_worker orelse
                     boxyPlanInvariant("boxy callable lookup was analyzed outside a worker body");
                 try self.analyzeUseSchemeSubstitution(state.worker, use);
@@ -4920,7 +4991,7 @@ const Builder = struct {
                 } });
             },
             .nested_callable_use_for_caller => |state| {
-                const use = CheckedExprIdentity{ .module = state.view.key, .expr = state.expr };
+                const use = CheckedExprIdentity{ .module = viewModule(state.view), .expr = state.expr };
                 for (self.plan.nested_callable_uses.items) |planned| {
                     if (planned.caller == state.caller and
                         exprRefEql(planned.use, use) and
@@ -4929,7 +5000,7 @@ const Builder = struct {
                         return;
                     }
                 }
-                const source = WorkerSource{ .nested_expr = .{ .module = state.view.key, .expr = state.expr } };
+                const source = WorkerSource{ .nested_expr = .{ .module = viewModule(state.view), .expr = state.expr } };
                 try self.pushPlanActions(actions, &.{
                     .{ .ensure_worker = .{
                         .source = source,
@@ -4941,7 +5012,7 @@ const Builder = struct {
             },
             .nested_callable_use_record => |state| {
                 const worker = self.plan_worker_result;
-                const use = CheckedExprIdentity{ .module = state.view.key, .expr = state.expr };
+                const use = CheckedExprIdentity{ .module = viewModule(state.view), .expr = state.expr };
                 try self.analyzeUseSchemeSubstitution(worker, use);
                 try self.plan.nested_callable_uses.append(self.allocator, .{
                     .use = use,
@@ -4963,7 +5034,7 @@ const Builder = struct {
                 const caller = self.active_worker orelse
                     boxyPlanInvariant("boxy nested callable use was analyzed outside a worker body");
                 try self.plan.nested_callable_uses.append(self.allocator, .{
-                    .use = .{ .module = state.view.key, .expr = state.func },
+                    .use = .{ .module = viewModule(state.view), .expr = state.func },
                     .caller = caller,
                     .worker = self.plan_worker_result,
                     .callable_ty = state.callable_ty,
@@ -4997,7 +5068,7 @@ const Builder = struct {
             },
             .direct_call_after_worker => |state| {
                 const worker = self.plan_worker_result;
-                const call_ref = CheckedExprIdentity{ .module = state.view.key, .expr = state.call_expr };
+                const call_ref = CheckedExprIdentity{ .module = viewModule(state.view), .expr = state.call_expr };
                 const caller = self.active_worker orelse
                     boxyPlanInvariant("boxy direct call was analyzed outside a worker body");
                 if (self.plan.directWorkerForCall(call_ref, caller)) |existing| {
@@ -5036,14 +5107,14 @@ const Builder = struct {
                     .procedure_template, .procedure_binding, .procedure_use, .generated_codec, .generated_field_iterator => {},
                 }
                 for (self.plan.static_fns.items) |planned| {
-                    if (moduleKeyEqual(planned.store_module, state.store_view.key) and planned.fn_id == state.fn_id and planned.rep == state.requested_rep) {
+                    if (planned.store_module == viewModule(state.store_view) and planned.fn_id == state.fn_id and planned.rep == state.requested_rep) {
                         if (planned.worker != worker) boxyPlanInvariant("stored function value planned two workers for one representation");
                         self.plan_worker_result = worker;
                         return;
                     }
                 }
                 try self.plan.static_fns.append(self.allocator, .{
-                    .store_module = state.store_view.key,
+                    .store_module = viewModule(state.store_view),
                     .fn_id = state.fn_id,
                     .rep = state.requested_rep,
                     .worker = worker,
@@ -5256,7 +5327,7 @@ const Builder = struct {
         var checked_call: ?static_dispatch.GeneratedCodecCall = null;
         for (contract.derivation.callsSlice(contract.view.static_dispatch_plans)) |candidate| {
             if (!std.mem.eql(u8, contract_names.methodNameText(candidate.method), method_text)) continue;
-            if (!moduleKeyEqual(dispatch_type.module, contract.view.key) or candidate.dispatcher_ty != dispatch_type.ty) continue;
+            if (dispatch_type.module != viewModule(contract.view) or candidate.dispatcher_ty != dispatch_type.ty) continue;
             const candidate_subject = if (candidate.subject_ty) |ty| typeRef(contract.view, ty) else null;
             if (!optionalTypeRefEql(candidate_subject, subject_type)) continue;
             if (checked_call) |existing| {
@@ -5314,9 +5385,9 @@ const Builder = struct {
                     .from_callable => boxyPlanInvariant("generated codec call retained callable-derived evidence"),
                 };
                 source = workerSourceForMethodTarget(lookup, dispatch_type, null);
-                source_fn_type = .{ .module = target_view.key, .ty = node.target.callable_ty };
+                source_fn_type = .{ .module = viewModule(target_view), .ty = node.target.callable_ty };
                 checked_evidence = .{ .start = nested.start, .len = nested.len };
-                const edge: DictionaryMethodEvidence.EvidenceEdge = .{ .module = contract.view.key, .node = node_id };
+                const edge: DictionaryMethodEvidence.EvidenceEdge = .{ .module = viewModule(contract.view), .node = node_id };
                 try self.analyzeEvidenceEdgeSchemeSubstitution(edge);
                 evidence_edge = edge;
                 break :blk;
@@ -5331,7 +5402,7 @@ const Builder = struct {
                     .shape = dispatch_type,
                     .contract_derivation = derivation_id,
                 } };
-                source_fn_type = .{ .module = contract.view.key, .ty = nested.constructor_ty };
+                source_fn_type = .{ .module = viewModule(contract.view), .ty = nested.constructor_ty };
                 break :blk;
             },
             .pending => boxyPlanInvariant("unlinked generated codec call reached Boxy planning"),
@@ -5365,7 +5436,7 @@ const Builder = struct {
             .caller = finish.request.caller,
             .dispatch_type = finish.request.dispatch_type,
             .subject_type = finish.request.subject_type,
-            .method_module = finish.contract_view.key,
+            .method_module = viewModule(finish.contract_view),
             .method = finish.method,
             .worker = worker,
             .arg_types = .{ .start = arg_start, .len = function.arg_count },
@@ -5390,7 +5461,7 @@ const Builder = struct {
         var subject_type: ?CheckedTypeIdentity = null;
         for (contract.derivation.callsSlice(contract.view.static_dispatch_plans)) |candidate| {
             if (!std.mem.eql(u8, names.methodNameText(candidate.method), method_text)) continue;
-            if (!moduleKeyEqual(dispatch_type.module, contract.view.key) or candidate.dispatcher_ty != dispatch_type.ty) continue;
+            if (dispatch_type.module != viewModule(contract.view) or candidate.dispatcher_ty != dispatch_type.ty) continue;
             const candidate_ty = candidate.subject_ty orelse
                 boxyPlanInvariant("generated codec method required a checked subject but the producer recorded none");
             const candidate_type = typeRef(contract.view, candidate_ty);
@@ -5634,7 +5705,7 @@ const Builder = struct {
         const parser_kind: GeneratedParserFieldKind = switch (field.kind.tag) {
             .optional => .optional_slot,
             .undetermined => .undetermined_slot,
-            .defaulted => .{ .defaulted = .{ .module = field_view.key, .default = field.kind.default } },
+            .defaulted => .{ .defaulted = .{ .module = viewModule(field_view), .default = field.kind.default } },
             .err => boxyPlanInvariant("checked-error record field reached generated parser planning"),
             // Only a builtin `Try(ok, [Missing])` field of the required
             // kind may otherwise be absent; every other field parses at
@@ -5657,7 +5728,7 @@ const Builder = struct {
         try self.plan.generated_parser_field_captures.append(self.allocator, .{
             .worker = worker,
             .record_type = fields_state.shape.shape,
-            .field_module = field_view.key,
+            .field_module = viewModule(field_view),
             .field_name = field.name,
             .source_type = fields_state.rename_ret.?,
             .parse_type = parse_type,
@@ -6075,7 +6146,7 @@ const Builder = struct {
         for (self.plan.generated_parser_field_captures.items) |capture| {
             if (capture.worker == contract_worker and
                 typeRefEql(capture.record_type, record_shape) and
-                moduleKeyEqual(capture.field_module, field_view.key) and
+                capture.field_module == viewModule(field_view) and
                 capture.field_name == field.name)
             {
                 found_capture = true;
@@ -6086,7 +6157,7 @@ const Builder = struct {
             try self.plan.generated_parser_field_captures.append(self.allocator, .{
                 .worker = contract_worker,
                 .record_type = record_shape,
-                .field_module = field_view.key,
+                .field_module = viewModule(field_view),
                 .field_name = field.name,
                 .source_type = record.rename_ret.?,
                 .parse_type = encode_type,
@@ -6157,7 +6228,7 @@ const Builder = struct {
         if (lookup) |method| {
             if (self.plan.descriptorMethodForRep(rep_id, kind) == null) {
                 const source = workerSourceForMethodTarget(method, rep.source_type, null);
-                const source_fn_type = CheckedTypeIdentity{ .module = method.view.key, .ty = method.target.callable_ty };
+                const source_fn_type = CheckedTypeIdentity{ .module = viewModule(method.view), .ty = method.target.callable_ty };
                 _ = try self.analyzeType(method.view, method.target.callable_ty);
                 try actions.append(self.allocator, .{ .ensure_worker = .{ .source = source, .checked_type = source_fn_type, .root_request = null } });
                 try actions.append(self.allocator, .{ .descriptor_override = .{ .rep_id = rep_id, .kind = kind, .lookup = method, .source_fn_type = source_fn_type } });
@@ -6185,7 +6256,7 @@ const Builder = struct {
         const rep = self.plan.representations.items[@backingInt(rep_id)];
         const source = workerSourceForMethodTarget(lookup, rep.source_type, null);
         const evidence: ?DictionaryMethodEvidence.EvidenceEdge = if (kind == .inspect) .{
-            .module = lookup.view.key,
+            .module = viewModule(lookup.view),
             .node = lookup.inspect_evidence orelse
                 boxyPlanInvariant("planned boxy inspect target had no checked use evidence"),
         } else null;
@@ -6211,7 +6282,7 @@ const Builder = struct {
             .second_type = if (kind == .hash) ret_type else null,
             .source_rep = rep_id,
             .worker = worker,
-            .method_module = lookup.view.key,
+            .method_module = viewModule(lookup.view),
             .method = lookup.method orelse
                 boxyPlanInvariant("planned boxy inspect target had no checked method identity"),
             .evidence = evidence,
@@ -6300,7 +6371,7 @@ const Builder = struct {
         const worker = self.active_worker orelse
             boxyPlanInvariant("checked expression was analyzed outside a worker body");
         const entry = try self.body_exprs_seen.getOrPut(.{
-            .expr = .{ .module = view.key, .expr = expr_id },
+            .expr = .{ .module = viewModule(view), .expr = expr_id },
             .worker = worker,
         });
         if (entry.found_existing) return;
@@ -6382,7 +6453,7 @@ const Builder = struct {
                 else
                     null;
                 if (call.direct_target != null and direct_target == null) {
-                    try self.plan.alias_calls.append(self.allocator, .{ .module = view.key, .expr = expr_id });
+                    try self.plan.alias_calls.append(self.allocator, .{ .module = viewModule(view), .expr = expr_id });
                 }
                 const local_proc_direct_target = if (direct_target) |target|
                     self.directTargetIsLocalProc(view, target)
@@ -6532,7 +6603,7 @@ const Builder = struct {
                 },
                 .evidence_dependent => {
                     try self.generic_numeral_sites.append(self.allocator, .{
-                        .source = .{ .module = view.key, .expr = expr_id },
+                        .source = .{ .module = viewModule(view), .expr = expr_id },
                         .worker = self.active_worker orelse boxyPlanInvariant("generic numeral had no worker"),
                         .dispatch = plan_id,
                     });
@@ -6632,7 +6703,7 @@ const Builder = struct {
         if (const_use.requested_source_ty_payload) |requested_ty| {
             _ = try self.analyzeType(view, requested_ty);
         }
-        const store_view = self.moduleForId(checked.constModuleId(const_use.const_ref));
+        const store_view = self.moduleForKey(checked.constModuleId(const_use.const_ref));
         // A constant whose value is computed by evaluating a body (rather than
         // a compile-time-stored value) is produced at runtime by calling the
         // constant's entry-wrapper thunk. Plan that thunk as a worker so the
@@ -6756,7 +6827,7 @@ const Builder = struct {
                 boxyPlanInvariant("boxy dictionary dispatch was analyzed outside a worker body");
             const scheme_requirement: ?DictionaryRequirementId = if (dispatch.resolution == .evidence_dependent and dispatch.resolution.evidence_dependent.scheme_param != null) blk: {
                 const dictionary = try self.requireWorkerSchemeDictionary(caller, .{
-                    .module = view.key,
+                    .module = viewModule(view),
                     .param = dispatch.resolution.evidence_dependent.scheme_param.?,
                     .callable_contract = dispatch.resolution.evidence_dependent.callable_contract,
                 });
@@ -6770,7 +6841,7 @@ const Builder = struct {
                 try self.registerStructuralDispatchDerivation(view, caller, dispatch, dispatcher_rep);
             }
             if (scheme_requirement != null or self.plan.representations.items[@backingInt(dictionary_rep)].dictionaries.len != 0) {
-                const call_ref = CheckedExprIdentity{ .module = view.key, .expr = site.call_expr };
+                const call_ref = CheckedExprIdentity{ .module = viewModule(view), .expr = site.call_expr };
                 if (self.plan.dictionaryDispatchPlanForCall(call_ref, caller) == null) {
                     try self.plan.dictionary_dispatches.append(self.allocator, .{
                         .call = call_ref,
@@ -6824,7 +6895,7 @@ const Builder = struct {
             break :blk selectedDispatchCallableType(view, lookup.view, selected);
         };
         _ = try self.analyzeType(self.moduleForId(source_fn_type.module), source_fn_type.ty);
-        const call_ref = CheckedExprIdentity{ .module = view.key, .expr = site.call_expr };
+        const call_ref = CheckedExprIdentity{ .module = viewModule(view), .expr = site.call_expr };
         const caller = self.active_worker orelse
             boxyPlanInvariant("boxy dispatch call was analyzed outside a worker body");
         if (self.plan.directWorkerForCall(call_ref, caller)) |existing| {
@@ -7005,7 +7076,7 @@ const Builder = struct {
 
         const caller = self.active_worker orelse
             boxyPlanInvariant("boxy iterator call was analyzed outside a worker body");
-        if (self.plan.iteratorCallPlanFor(view.key, site.plan_id, site.kind, caller)) |existing| {
+        if (self.plan.iteratorCallPlanFor(viewModule(view), site.plan_id, site.kind, caller)) |existing| {
             if (existing.worker != worker or !typeRefEql(existing.source_fn_type, source_fn_type)) {
                 boxyPlanInvariant("boxy iterator dispatch plan tried to bind a checked iterator call to two workers");
             }
@@ -7044,7 +7115,7 @@ const Builder = struct {
         const call_ret_rep = self.plan.repForSourceType(site.ret_type) orelse
             boxyPlanInvariant("boxy iterator dispatch return type was not analyzed");
         try self.plan.iterator_calls.append(self.allocator, .{
-            .module = view.key,
+            .module = viewModule(view),
             .for_plan = site.plan_id,
             .kind = site.kind,
             .caller = caller,
@@ -7069,7 +7140,7 @@ const Builder = struct {
         const worker = self.active_worker orelse
             boxyPlanInvariant("checked statement was analyzed outside a worker body");
         const entry = try self.body_statements_seen.getOrPut(.{
-            .statement = .{ .module = view.key, .statement = statement_id },
+            .statement = .{ .module = viewModule(view), .statement = statement_id },
             .worker = worker,
         });
         if (entry.found_existing) return;
@@ -7132,7 +7203,7 @@ const Builder = struct {
         const worker = self.active_worker orelse
             boxyPlanInvariant("checked pattern was analyzed outside a worker body");
         const entry = try self.body_patterns_seen.getOrPut(.{
-            .pattern = .{ .module = view.key, .pattern = pattern_id },
+            .pattern = .{ .module = viewModule(view), .pattern = pattern_id },
             .worker = worker,
         });
         if (entry.found_existing) return;
@@ -7250,7 +7321,7 @@ const Builder = struct {
                         boxyPlanInvariant("transparent static nominal node was not unwrapped before traversal");
                     }
                 } else {
-                    const nominal_view = self.moduleForId(.{ .bytes = nominal.named_type.module.bytes });
+                    const nominal_view = self.moduleForKey(.{ .bytes = nominal.named_type.module.bytes });
                     const nominal_rep = try self.analyzeType(nominal_view, nominal.named_type.ty);
                     try actions.append(self.allocator, child.at(state, node, nominal_rep, null));
                 }
@@ -7364,7 +7435,7 @@ const Builder = struct {
         const_type: ?check.ConstStore.ConstTypeId,
     ) Allocator.Error!void {
         for (self.plan.static_fns.items) |planned| {
-            if (moduleKeyEqual(planned.store_module, store_view.key) and planned.fn_id == fn_id and planned.rep == requested_rep) {
+            if (planned.store_module == viewModule(store_view) and planned.fn_id == fn_id and planned.rep == requested_rep) {
                 self.plan_worker_result = planned.worker;
                 return;
             }
@@ -7448,12 +7519,12 @@ const Builder = struct {
         }
         for (self.imports) |imported| {
             if (std.mem.eql(u8, &imported.module_identity.stable_hash, origin_hash)) {
-                return moduleViewFromImported(imported);
+                return self.moduleForKey(imported.key);
             }
         }
         for (self.relation_modules) |relation| {
             if (std.mem.eql(u8, &relation.module_identity.stable_hash, origin_hash)) {
-                return moduleViewFromImported(relation);
+                return self.moduleForKey(relation.key);
             }
         }
         boxyPlanInvariant("defaulted record field's declaring module was absent from boxy planning");
@@ -7465,7 +7536,7 @@ const Builder = struct {
     /// module otherwise (design.md "Defaulted Fields").
     fn moduleForStoredNestedFn(self: *Builder, nested: anytype) ModuleView {
         const identity = nested.default_root orelse
-            return self.moduleForId(.{ .bytes = checked_names.procTemplateModuleDigest(nested.owner).bytes });
+            return self.moduleForKey(.{ .bytes = checked_names.procTemplateModuleDigest(nested.owner).bytes });
         if (self.root_module) |root_module| {
             if (std.mem.eql(u8, &root_module.module.module_identity.stable_hash, &identity.bytes)) {
                 return self.root_view;
@@ -7473,12 +7544,12 @@ const Builder = struct {
         }
         for (self.imports) |imported| {
             if (std.mem.eql(u8, &imported.module_identity.stable_hash, &identity.bytes)) {
-                return moduleViewFromImported(imported);
+                return self.moduleForKey(imported.key);
             }
         }
         for (self.relation_modules) |relation| {
             if (std.mem.eql(u8, &relation.module_identity.stable_hash, &identity.bytes)) {
-                return moduleViewFromImported(relation);
+                return self.moduleForKey(relation.key);
             }
         }
         boxyPlanInvariant("stored default-root function's declaring module was absent from boxy planning");
@@ -7515,7 +7586,7 @@ const Builder = struct {
     }
 
     fn analyzeStaticDataRequest(self: *Builder, request: Common.StaticDataRequest) Allocator.Error!void {
-        const store_view = self.moduleForId(checked.constModuleId(request.const_locator));
+        const store_view = self.moduleForKey(checked.constModuleId(request.const_locator));
         const templates = store_view.const_templates orelse
             boxyPlanInvariant("static data request module had no const templates");
         const stored = switch (templates.get(request.const_locator).state) {
@@ -7612,12 +7683,12 @@ const Builder = struct {
                     break;
                 }
                 break :blk .{ .nested_expr = .{
-                    .module = view.key,
+                    .module = viewModule(view),
                     .expr = site_expr orelse boxyPlanInvariant("stored nested function referenced a missing checked nested site"),
                 } };
             },
             .parser_runtime => |runtime| blk: {
-                const view = self.moduleForId(.{ .bytes = checked_names.procTemplateModuleDigest(runtime.owner).bytes });
+                const view = self.moduleForKey(.{ .bytes = checked_names.procTemplateModuleDigest(runtime.owner).bytes });
                 break :blk .{ .generated_codec = self.storedGeneratedCodecSource(
                     view,
                     runtime.expr,
@@ -7628,7 +7699,7 @@ const Builder = struct {
                 ) };
             },
             .encoder_for_runtime => |runtime| blk: {
-                const view = self.moduleForId(.{ .bytes = checked_names.procTemplateModuleDigest(runtime.owner).bytes });
+                const view = self.moduleForKey(.{ .bytes = checked_names.procTemplateModuleDigest(runtime.owner).bytes });
                 break :blk .{ .generated_codec = self.storedGeneratedCodecSource(
                     view,
                     runtime.expr,
@@ -7677,7 +7748,7 @@ const Builder = struct {
             fn_value,
             typeRef(store_view, fn_value.source_fn_ty),
         );
-        const view = self.moduleForId(.{ .bytes = checked_names.procTemplateModuleDigest(selected.owner).bytes });
+        const view = self.moduleForKey(.{ .bytes = checked_names.procTemplateModuleDigest(selected.owner).bytes });
         const selected_contract = self.generatedCodecContractForRuntimeExpr(
             view,
             selected.expr,
@@ -7694,13 +7765,13 @@ const Builder = struct {
             .runtime_type = typeRef(view, derivation.runtime_ty),
             .capture_type = typeRef(view, derivation.encoding_ty),
             .contract_derivation = selected_contract.id,
-            .contract_expr = .{ .module = view.key, .expr = selected.expr },
+            .contract_expr = .{ .module = viewModule(view), .expr = selected.expr },
         } };
     }
 
     const StoredCheckedTypePair = struct {
         stored: check.ConstStore.ConstTypeId,
-        checked_module: checked.ModuleId,
+        checked_module: PlanModuleId,
         checked_ty: checked.CheckedTypeId,
     };
 
@@ -7731,7 +7802,7 @@ const Builder = struct {
         while (pending.pop()) |pair| {
             const visit = try visited.getOrPut(.{
                 .stored = pair.stored,
-                .checked_module = pair.checked_view.key,
+                .checked_module = viewModule(pair.checked_view),
                 .checked_ty = pair.checked_ty,
             });
             if (visit.found_existing) continue;
@@ -8271,7 +8342,7 @@ const Builder = struct {
             .runtime_type = typeRef(view, derivation.runtime_ty),
             .capture_type = typeRef(view, derivation.encoding_ty),
             .contract_derivation = selected.id,
-            .contract_expr = .{ .module = view.key, .expr = expr_id },
+            .contract_expr = .{ .module = viewModule(view), .expr = expr_id },
         };
     }
 
@@ -8471,9 +8542,9 @@ const Builder = struct {
             => boxyPlanInvariant("generated codec constructor contract requested for a runtime worker"),
         };
         const view = self.moduleForId(runtime_type.module);
-        if (!moduleKeyEqual(codec.shape.module, view.key) or
-            !moduleKeyEqual(constructor_type.module, view.key) or
-            !moduleKeyEqual(encoding_type.module, view.key))
+        if (codec.shape.module != viewModule(view) or
+            constructor_type.module != viewModule(view) or
+            encoding_type.module != viewModule(view))
         {
             boxyPlanInvariant("generated codec constructor components belonged to different checked modules");
         }
@@ -8552,12 +8623,12 @@ const Builder = struct {
             self.moduleForId(expr.module)
         else
             self.moduleForId(contract_worker.checked_type.module);
-        if (!moduleKeyEqual(contract_codec.shape.module, view.key)) {
+        if (contract_codec.shape.module != viewModule(view)) {
             boxyPlanInvariant("generated codec shape and runtime contract belonged to different checked modules");
         }
         const capture_type = contract_codec.capture_type orelse
             boxyPlanInvariant("generated codec runtime had no capture type");
-        if (!moduleKeyEqual(capture_type.module, view.key)) {
+        if (capture_type.module != viewModule(view)) {
             boxyPlanInvariant("generated codec capture and runtime contract belonged to different checked modules");
         }
         const runtime_type = contract_codec.runtime_type orelse contract_worker.checked_type;
@@ -8568,7 +8639,7 @@ const Builder = struct {
         }
         const derivation = view.static_dispatch_plans.generated_codec_derivations[@backingInt(derivation_id)];
         if (derivation.kind != expected_kind or
-            !moduleKeyEqual(runtime_type.module, view.key) or
+            runtime_type.module != viewModule(view) or
             !std.meta.eql(view.checked_types.rootKey(runtime_type.ty), view.checked_types.rootKey(derivation.runtime_ty)) or
             !std.meta.eql(view.checked_types.rootKey(contract_codec.shape.ty), view.checked_types.rootKey(derivation.shape_ty)) or
             !std.meta.eql(view.checked_types.rootKey(capture_type.ty), view.checked_types.rootKey(derivation.encoding_ty)))
@@ -8753,7 +8824,7 @@ const Builder = struct {
     }
 
     const GeneratedRecordCheckedField = struct {
-        module: checked.ModuleId,
+        module: PlanModuleId,
         field: checked.CheckedRecordField,
     };
 
@@ -8775,7 +8846,7 @@ const Builder = struct {
             switch (view.checked_types.payload(row_type.ty)) {
                 .record => |record| {
                     for (record.fields) |field| {
-                        try fields.append(self.allocator, .{ .module = view.key, .field = field });
+                        try fields.append(self.allocator, .{ .module = viewModule(view), .field = field });
                     }
                     current = typeRef(view, record.ext);
                 },
@@ -8811,7 +8882,7 @@ const Builder = struct {
             boxyPlanInvariant("generated codec contract module had no checked names");
         for (contract.derivation.callsSlice(contract.view.static_dispatch_plans)) |candidate| {
             if (!std.mem.eql(u8, names.methodNameText(candidate.method), method_text)) continue;
-            if (!moduleKeyEqual(dispatch_type.module, contract.view.key) or candidate.dispatcher_ty != dispatch_type.ty) continue;
+            if (dispatch_type.module != viewModule(contract.view) or candidate.dispatcher_ty != dispatch_type.ty) continue;
             const candidate_subject = candidate.subject_ty orelse continue;
             if (typeRefEql(typeRef(contract.view, candidate_subject), subject_type)) return true;
         }
@@ -9426,8 +9497,8 @@ const Builder = struct {
                 });
                 const variant_start: u32 = @intCast(self.plan.tag_variants.items.len);
                 try self.plan.tag_variants.appendSlice(self.allocator, &.{
-                    .{ .name = slot.missing, .name_module = slot.view.key },
-                    .{ .name = slot.present, .name_module = slot.view.key, .payloads = .{ .start = child_start, .len = 1 } },
+                    .{ .name = slot.missing, .name_module = viewModule(slot.view) },
+                    .{ .name = slot.present, .name_module = viewModule(slot.view), .payloads = .{ .start = child_start, .len = 1 } },
                 });
                 self.plan.representations.items[@backingInt(slot.rep_id)] = .{
                     .source_type = slot.source_type,
@@ -9769,7 +9840,7 @@ const Builder = struct {
                 try roles.append(self.allocator, .{ .tag_payload = .{ .tag = entry.tag.name, .index = @intCast(index) } });
                 try requests.append(self.allocator, .{ .checked = .{ .view = entry.view, .ty = arg, .context = entry.context } });
             }
-            try variants.append(self.allocator, .{ .name = entry.tag.name, .name_module = entry.view.key, .payloads = .{ .start = start, .len = entry.tag.args_len } });
+            try variants.append(self.allocator, .{ .name = entry.tag.name, .name_module = viewModule(entry.view), .payloads = .{ .start = start, .len = entry.tag.args_len } });
         }
         if (open_extension) |ext| {
             try roles.append(self.allocator, .tag_ext);
@@ -10142,7 +10213,7 @@ const Builder = struct {
                 for (value.tags) |tag| {
                     try self.plan.tag_variants.append(self.allocator, .{
                         .name = tag.name,
-                        .name_module = value.view.key,
+                        .name_module = viewModule(value.view),
                         .payloads = .{ .start = payload_start, .len = tag.args_len },
                     });
                     payload_start += tag.args_len;
@@ -10281,7 +10352,7 @@ const Builder = struct {
                 }
                 if (build.next < build.sources.len) return .{ .request = .{ .host = build.sources[build.next] } };
 
-                const nominal_key: HostNominalKey = .{ .module = build.lookup.view.key, .declaration = build.lookup.declaration.id, .args = build.args };
+                const nominal_key: HostNominalKey = .{ .module = viewModule(build.lookup.view), .declaration = build.lookup.declaration.id, .args = build.args };
                 if (self.host_nominals.get(nominal_key)) |existing| {
                     try self.host_types.put(self.allocator, build.key, existing.rep);
                     return .{ .done = existing.rep };
@@ -10530,7 +10601,7 @@ const Builder = struct {
         ty: check.ConstStore.ConstTypeId,
         checked_source: CheckedTypeIdentity,
     ) Allocator.Error!?TypeRepId {
-        const source_type = StoredTypeIdentity{ .module = store_view.key, .ty = ty };
+        const source_type = StoredTypeIdentity{ .module = viewModule(store_view), .ty = ty };
         const entry = try self.by_stored_type.getOrPut(source_type);
         if (entry.found_existing) return entry.value_ptr.*;
 
@@ -10796,7 +10867,7 @@ const Builder = struct {
                     const payloads = store.type_store.typeSpan(tag.payloads);
                     try self.plan.tag_variants.append(self.allocator, .{
                         .name = tag.checked_name,
-                        .name_module = frame.store_view.key,
+                        .name_module = viewModule(frame.store_view),
                         .payloads = .{ .start = payload_start, .len = @intCast(payloads.len) },
                     });
                     payload_start += @intCast(payloads.len);
@@ -10976,7 +11047,7 @@ const Builder = struct {
         }
 
         const entry = try self.nominal_declaration_formals.getOrPut(.{
-            .module = formal_source.view.key,
+            .module = viewModule(formal_source.view),
             .declaration = formal_source.declaration.id,
         });
         if (!entry.found_existing) {
@@ -11044,7 +11115,7 @@ const Builder = struct {
                 .ty = view.interface_capabilities.boxPayloadCapability(capability.capability).backing_ty,
             },
             .imported_box_payload_capability => |capability| blk: {
-                const source_view = self.moduleForId(checked.importedBoxPayloadCapabilityModuleId(capability));
+                const source_view = self.moduleForKey(checked.importedBoxPayloadCapabilityModuleId(capability));
                 const source_capability = source_view.interface_capabilities.boxPayloadCapability(capability.capability);
                 break :blk .{ .view = source_view, .ty = source_capability.backing_ty };
             },
@@ -11104,7 +11175,7 @@ const Builder = struct {
                 };
             },
             .imported_declaration => |imported| blk: {
-                const source_view = self.moduleForId(checked.importedNominalDeclarationModuleId(imported));
+                const source_view = self.moduleForKey(checked.importedNominalDeclarationModuleId(imported));
                 const declaration = source_view.checked_types.nominalDeclarationById(imported.declaration);
                 break :blk .{
                     .view = source_view,
@@ -11124,7 +11195,7 @@ const Builder = struct {
                 };
             },
             .imported_box_payload_capability => |capability_ref| blk: {
-                const source_view = self.moduleForId(checked.importedBoxPayloadCapabilityModuleId(capability_ref));
+                const source_view = self.moduleForKey(checked.importedBoxPayloadCapabilityModuleId(capability_ref));
                 const capability = source_view.interface_capabilities.boxPayloadCapability(capability_ref.capability);
                 const declaration = source_view.checked_types.nominalDeclaration(capability.nominal) orelse break :blk null;
                 break :blk .{
@@ -11270,7 +11341,7 @@ const Builder = struct {
 
     fn internDictionaryMethodSlot(
         self: *Builder,
-        module: checked.ModuleId,
+        module: PlanModuleId,
         method: MethodNameId,
     ) Allocator.Error!u32 {
         const source_names = self.moduleForId(module).canonical_names;
@@ -11475,7 +11546,7 @@ const Builder = struct {
                 }
             }
             if (entry.resolution != .direct) continue;
-            const edge = DictionaryMethodEvidence.EvidenceEdge{ .module = view.key, .node = entry.resolution.direct };
+            const edge = DictionaryMethodEvidence.EvidenceEdge{ .module = viewModule(view), .node = entry.resolution.direct };
             if ((try self.observed_numeral_evidence.getOrPut(self.allocator, edge)).found_existing) continue;
             const node = view.static_dispatch_plans.evidenceNode(edge.node);
             const nested_schema: ?WorkerEvidenceParams = switch (node.target.kind) {
@@ -11498,7 +11569,7 @@ const Builder = struct {
         const own = self.workerEvidenceParams(worker.source);
         if (index.depth == 0) if (own) |schema| {
             if (index.index >= schema.params.len) boxyPlanInvariant("numeral evidence index exceeded its checked scheme");
-            return .{ .module = schema.view.key, .param = schema.start + index.index };
+            return .{ .module = viewModule(schema.view), .param = schema.start + index.index };
         };
         if (worker.source != .nested_expr) boxyPlanInvariant("numeral evidence depth exceeded its checked worker");
         const expr = worker.source.nested_expr;
@@ -11518,7 +11589,7 @@ const Builder = struct {
             const current = view.checked_procedure_templates.dispatch_scopes[@backingInt(scope.generalized)];
             if (depth == 0) {
                 if (index.index >= current.evidence_params.len) boxyPlanInvariant("numeral evidence index exceeded its lexical scheme");
-                return .{ .module = view.key, .param = current.evidence_params.start + index.index };
+                return .{ .module = viewModule(view), .param = current.evidence_params.start + index.index };
             }
             depth -= 1;
             scope = if (current.parent) |parent| .{ .generalized = parent } else .root;
@@ -11526,7 +11597,7 @@ const Builder = struct {
         if (depth != 0 or site.owner != .template) boxyPlanInvariant("numeral evidence escaped its checked template");
         const root = self.templateEvidenceParams(site.owner.template);
         if (index.index >= root.params.len) boxyPlanInvariant("numeral evidence index exceeded its template scheme");
-        return .{ .module = root.view.key, .param = root.start + index.index };
+        return .{ .module = viewModule(root.view), .param = root.start + index.index };
     }
 
     fn activateCustomNumeralSites(self: *Builder) Allocator.Error!void {
@@ -11536,7 +11607,7 @@ const Builder = struct {
             const view = self.moduleForId(site.source.module);
             const dispatch = view.static_dispatch_plans.plans[@backingInt(site.dispatch)];
             const evidence = dispatch.resolution.evidence_dependent;
-            const key = if (evidence.scheme_param) |param| SchemeDictionaryKey{ .module = view.key, .param = param } else self.workerEvidenceKey(site.worker, evidence.index);
+            const key = if (evidence.scheme_param) |param| SchemeDictionaryKey{ .module = viewModule(view), .param = param } else self.workerEvidenceKey(site.worker, evidence.index);
             try self.analyzeDispatchPlanTypes(view, site.dispatch);
             const dictionary = try self.requireWorkerSchemeDictionary(site.worker, key);
             try self.plan.literal_sites.append(self.allocator, site);
@@ -12125,7 +12196,7 @@ const Builder = struct {
 
     const WorkerEdge = struct { caller: WorkerPlanId, callee: WorkerPlanId };
 
-    const ScopeKey = struct { module: checked.ModuleId, scope: u32 };
+    const ScopeKey = struct { module: PlanModuleId, scope: u32 };
 
     /// The generalized-local scopes whose quantified variables each worker's
     /// frame describes. A local scope's variables reach a worker's body types
@@ -12173,7 +12244,7 @@ const Builder = struct {
                 const entry = try depths.getOrPut(rep);
                 if (entry.found_existing and entry.value_ptr.* <= depth) continue;
                 entry.value_ptr.* = depth;
-                try owner.put(rep, .{ .module = view.key, .scope = @intCast(scope_index) });
+                try owner.put(rep, .{ .module = viewModule(view), .scope = @intCast(scope_index) });
             }
         }
     }
@@ -12182,9 +12253,9 @@ const Builder = struct {
         var owner = collections.DenseMap(TypeRepId, ScopeKey).init(self.allocator);
         errdefer owner.deinit();
         try self.indexScopeVariables(self.root_view, &owner);
-        for (self.extra_module_views) |view| try self.indexScopeVariables(view, &owner);
-        for (self.imports) |imported| try self.indexScopeVariables(moduleViewFromImported(imported), &owner);
-        for (self.relation_modules) |imported| try self.indexScopeVariables(moduleViewFromImported(imported), &owner);
+        for (self.extra_module_views) |view| try self.indexScopeVariables(self.moduleForKey(view.key), &owner);
+        for (self.imports) |imported| try self.indexScopeVariables(self.moduleForKey(imported.key), &owner);
+        for (self.relation_modules) |imported| try self.indexScopeVariables(self.moduleForKey(imported.key), &owner);
 
         const chains = try self.allocator.alloc(std.AutoHashMap(ScopeKey, void), self.plan.workers.items.len);
         for (chains) |*chain| chain.* = std.AutoHashMap(ScopeKey, void).init(self.allocator);
@@ -12214,7 +12285,7 @@ const Builder = struct {
                 if (scope.checked_expr != site_expr) continue;
                 var current: ?u32 = @intCast(scope_index);
                 while (current) |index| {
-                    try chains[worker_index].put(.{ .module = view.key, .scope = index }, {});
+                    try chains[worker_index].put(.{ .module = viewModule(view), .scope = index }, {});
                     current = if (templates.dispatch_scopes[index].parent) |parent| @backingInt(parent) else null;
                 }
                 break;
@@ -12509,15 +12580,15 @@ const Builder = struct {
     fn workerSchemeVars(self: *Builder, source: WorkerSource) ?WorkerSchemeVars {
         return switch (source) {
             .procedure_template => |template| self.templateSchemeVars(template),
-            .procedure_binding => |binding| self.bindingSchemeVars(self.moduleForId(binding.artifact), binding.binding),
+            .procedure_binding => |binding| self.bindingSchemeVars(self.moduleForKey(binding.artifact), binding.binding),
             .procedure_use => |use| switch (use.binding) {
-                .top_level => |binding| self.bindingSchemeVars(self.moduleForId(binding.artifact), binding.binding),
+                .top_level => |binding| self.bindingSchemeVars(self.moduleForKey(binding.artifact), binding.binding),
                 .platform_required => |required| self.bindingSchemeVars(
-                    self.moduleForId(required.app_value.artifact),
+                    self.moduleForKey(required.app_value.artifact),
                     required.procedure_binding,
                 ),
                 .imported => |imported| blk: {
-                    const view = self.moduleForId(imported.artifact);
+                    const view = self.moduleForKey(imported.artifact);
                     break :blk self.bindingBodySchemeVars(importedProcedureBinding(view, imported).body);
                 },
                 .hosted => null,
@@ -12696,15 +12767,15 @@ const Builder = struct {
     fn workerEvidenceParams(self: *Builder, source: WorkerSource) ?WorkerEvidenceParams {
         return switch (source) {
             .procedure_template => |template| self.templateEvidenceParams(template),
-            .procedure_binding => |binding| self.bindingEvidenceParams(self.moduleForId(binding.artifact), binding.binding),
+            .procedure_binding => |binding| self.bindingEvidenceParams(self.moduleForKey(binding.artifact), binding.binding),
             .procedure_use => |use| switch (use.binding) {
-                .top_level => |binding| self.bindingEvidenceParams(self.moduleForId(binding.artifact), binding.binding),
+                .top_level => |binding| self.bindingEvidenceParams(self.moduleForKey(binding.artifact), binding.binding),
                 .platform_required => |required| self.bindingEvidenceParams(
-                    self.moduleForId(required.app_value.artifact),
+                    self.moduleForKey(required.app_value.artifact),
                     required.procedure_binding,
                 ),
                 .imported => |imported| blk: {
-                    const view = self.moduleForId(imported.artifact);
+                    const view = self.moduleForKey(imported.artifact);
                     const binding = importedProcedureBinding(view, imported);
                     break :blk self.bindingBodyEvidenceParams(binding.body);
                 },
@@ -12789,14 +12860,14 @@ const Builder = struct {
                 const literal_numeral = self.has_custom_numeral and
                     std.mem.eql(u8, schema.view.canonical_names.?.methodNameText(param.method), Ident.FROM_NUMERAL_METHOD_NAME);
                 if ((param.runtime_dictionary and param.source != .scheme_callable) or literal_numeral) {
-                    var hidden = try self.schemeDictionary(.{ .module = schema.view.key, .param = param_index });
+                    var hidden = try self.schemeDictionary(.{ .module = viewModule(schema.view), .param = param_index });
                     hidden.evidence_index = @intCast(index);
                     if (!(try groups.getOrPut(self.allocator, hidden.dictionaries)).found_existing)
                         try pending.append(self.allocator, hidden);
                 }
                 if (param.runtime_dictionary) for (0..param.callable_contracts.len) |contract| {
                     var hidden = try self.schemeDictionary(.{
-                        .module = schema.view.key,
+                        .module = viewModule(schema.view),
                         .param = param_index,
                         .callable_contract = @intCast(contract),
                     });
@@ -12868,7 +12939,7 @@ const Builder = struct {
             .compile_time_only = compile_time_only,
             .source_type = typeRef(view, param.dispatcher_ty),
             .constraint_index = key.param,
-            .slot = try self.internDictionaryMethodSlot(view.key, param.method),
+            .slot = try self.internDictionaryMethodSlot(viewModule(view), param.method),
             .fn_name = param.method,
             .fn_ty = typeRef(view, callable_ty),
             .origin = .method_call,
@@ -13364,7 +13435,7 @@ const Builder = struct {
             boxyPlanInvariant("stored generated codec constructor did not have one checked operand");
         }
         return switch (operands[0]) {
-            .checked_expr => |expr| .{ .module = view.key, .expr = expr },
+            .checked_expr => |expr| .{ .module = viewModule(view), .expr = expr },
             .generated_interpolation_segments,
             .generated_numeral,
             .generated_quote,
@@ -13796,7 +13867,7 @@ const Builder = struct {
     }
 
     fn schemeVarsContain(scheme: WorkerSchemeVars, variable: CheckedTypeIdentity) bool {
-        if (!moduleKeyEqual(scheme.view.key, variable.module)) return false;
+        if (viewModule(scheme.view) != variable.module) return false;
         for (scheme.vars) |candidate| {
             if (candidate == variable.ty) return true;
         }
@@ -14082,7 +14153,7 @@ const Builder = struct {
         }
         const rep = self.plan.representations.items[@backingInt(rep_id)];
         const source = workerSourceForMethodTarget(lookup, rep.source_type, null);
-        const fn_type = CheckedTypeIdentity{ .module = lookup.view.key, .ty = lookup.target.callable_ty };
+        const fn_type = CheckedTypeIdentity{ .module = viewModule(lookup.view), .ty = lookup.target.callable_ty };
         _ = try self.analyzeType(lookup.view, lookup.target.callable_ty);
         const worker = try self.ensureWorker(source, fn_type, null);
         const index: u32 = @intCast(self.plan.derived_component_calls.items.len);
@@ -14474,7 +14545,7 @@ const Builder = struct {
             if (!capture.id.isCanonical()) continue;
             const binder_rep = self.plan.repForSourceType(typeRef(fn_view, checkedBinderType(fn_view, capture.id.binder()))) orelse
                 boxyPlanInvariant("stored function capture binder type was not analyzed");
-            const stored_rep = self.plan.repForStoredType(.{ .module = store_view.key, .ty = capture.ty }) orelse
+            const stored_rep = self.plan.repForStoredType(.{ .module = viewModule(store_view), .ty = capture.ty }) orelse
                 boxyPlanInvariant("stored function capture type was not analyzed");
             try self.collectStoredRepSubstitutions(binder_rep, stored_rep, out, &seen);
         }
@@ -16972,7 +17043,7 @@ const Builder = struct {
                         self.workerCheckedTypeForSource(source, callable_type),
                         null,
                     );
-                    const evidence_edge: DictionaryMethodEvidence.EvidenceEdge = .{ .module = view.key, .node = node_id };
+                    const evidence_edge: DictionaryMethodEvidence.EvidenceEdge = .{ .module = viewModule(view), .node = node_id };
                     try self.analyzeEvidenceEdgeSchemeSubstitution(evidence_edge);
                     const method: DictionaryMethodEvidence = .{
                         .requirement_type = requirement.fn_ty,
@@ -17035,7 +17106,7 @@ const Builder = struct {
                 .constraint => |constraint| blk: {
                     if (state.selected.items.len == 1) {
                         if (constraint.scheme_param) |param| {
-                            state.bound_evidence = .{ .module = view.key, .param = param, .callable_contract = constraint.callable_contract };
+                            state.bound_evidence = .{ .module = viewModule(view), .param = param, .callable_contract = constraint.callable_contract };
                         } else if (requirement.compile_time_only) {
                             const caller = state.caller_id orelse boxyPlanInvariant("forwarded numeral proof had no lexical caller");
                             state.bound_evidence = self.workerEvidenceKey(caller, constraint.index);
@@ -17205,7 +17276,7 @@ const Builder = struct {
                     .parser, .encoder, .map, .map_effectful => {},
                 };
                 const source = workerSourceForMethodTarget(lookup, source_rep.source_type, null);
-                const callable_type = CheckedTypeIdentity{ .module = lookup.view.key, .ty = lookup.target.callable_ty };
+                const callable_type = CheckedTypeIdentity{ .module = viewModule(lookup.view), .ty = lookup.target.callable_ty };
                 _ = try self.analyzeType(lookup.view, lookup.target.callable_ty);
                 const worker = try self.ensureWorker(source, callable_type, null);
                 const instantiation = try self.staticDictionaryMethodInstantiation(self.requirementCallInstantiation(state.call), source_rep_id, requirement, callable_type);
@@ -19226,8 +19297,8 @@ const Builder = struct {
             .equality, .hash, .map, .map_effectful => boxyPlanInvariant("non-codec dictionary requested a generated codec worker"),
         };
         const source_view = self.moduleForId(source_rep.source_type.module);
-        if (!moduleKeyEqual(source_view.key, requirement_view.key) or
-            !moduleKeyEqual(requirement.fn_ty.module, requirement_view.key))
+        if (viewModule(source_view) != viewModule(requirement_view) or
+            requirement.fn_ty.module != viewModule(requirement_view))
         {
             boxyPlanInvariant("generated codec dictionary types belonged to different checked modules");
         }
@@ -19504,14 +19575,14 @@ const Builder = struct {
     fn rootWorkerBody(self: *Builder, source: WorkerSource) WorkerBody {
         return switch (source) {
             .procedure_template => |template| self.rootProcedureTemplateBody(template),
-            .procedure_binding => |binding| self.rootProcedureBindingBody(self.moduleForId(binding.artifact), binding.binding),
+            .procedure_binding => |binding| self.rootProcedureBindingBody(self.moduleForKey(binding.artifact), binding.binding),
             .procedure_use => |use| switch (use.binding) {
                 .top_level => |top_level| blk: {
-                    const view = self.moduleForId(top_level.artifact);
+                    const view = self.moduleForKey(top_level.artifact);
                     break :blk self.rootProcedureBindingBody(view, top_level.binding);
                 },
                 .platform_required => |required| blk: {
-                    const view = self.moduleForId(required.app_value.artifact);
+                    const view = self.moduleForKey(required.app_value.artifact);
                     break :blk self.rootProcedureBindingBody(view, required.procedure_binding);
                 },
                 .imported => |imported| self.importedProcedureBindingBody(imported),
@@ -19579,7 +19650,7 @@ const Builder = struct {
     ) Allocator.Error!void {
         const expr = view.checked_bodies.expr(expr_id);
         const wrapper_type = typeRef(producer.view, producer.wrapper.checked_fn_root);
-        const use = CheckedExprIdentity{ .module = view.key, .expr = expr_id };
+        const use = CheckedExprIdentity{ .module = viewModule(view), .expr = expr_id };
         const caller = self.active_worker orelse
             boxyPlanInvariant("boxy callable-eval producer call was analyzed outside a worker body");
         if (self.plan.directWorkerForCall(use, caller)) |existing| {
@@ -19613,20 +19684,20 @@ const Builder = struct {
     fn pendingCallableEvalProducer(self: *Builder, source: WorkerSource) ?PendingCallableEvalProducer {
         const view, const template_id = switch (source) {
             .procedure_binding => |binding_ref| blk: {
-                const view = self.moduleForId(binding_ref.artifact);
+                const view = self.moduleForKey(binding_ref.artifact);
                 break :blk .{ view, callableEvalTemplateOf(view.top_level_procedure_bindings.get(binding_ref.binding).body) orelse return null };
             },
             .procedure_use => |procedure| switch (procedure.binding) {
                 .top_level => |binding_ref| blk: {
-                    const view = self.moduleForId(binding_ref.artifact);
+                    const view = self.moduleForKey(binding_ref.artifact);
                     break :blk .{ view, callableEvalTemplateOf(view.top_level_procedure_bindings.get(binding_ref.binding).body) orelse return null };
                 },
                 .platform_required => |required| blk: {
-                    const view = self.moduleForId(required.app_value.artifact);
+                    const view = self.moduleForKey(required.app_value.artifact);
                     break :blk .{ view, callableEvalTemplateOf(view.top_level_procedure_bindings.get(required.procedure_binding).body) orelse return null };
                 },
                 .imported => |imported| blk: {
-                    const view = self.moduleForId(imported.artifact);
+                    const view = self.moduleForKey(imported.artifact);
                     break :blk .{ view, callableEvalTemplateOf(importedProcedureBinding(view, imported).body) orelse return null };
                 },
                 .hosted => return null,
@@ -19667,10 +19738,10 @@ const Builder = struct {
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => boxyPlanInvariant("checked direct call target did not reference a procedure"),
         };
         const body_is_callable_eval = switch (procedure.binding) {
-            .top_level => |binding_ref| self.moduleForId(binding_ref.artifact).top_level_procedure_bindings.get(binding_ref.binding).body == .callable_eval_template,
-            .platform_required => |required| self.moduleForId(required.app_value.artifact).top_level_procedure_bindings.get(required.procedure_binding).body == .callable_eval_template,
+            .top_level => |binding_ref| self.moduleForKey(binding_ref.artifact).top_level_procedure_bindings.get(binding_ref.binding).body == .callable_eval_template,
+            .platform_required => |required| self.moduleForKey(required.app_value.artifact).top_level_procedure_bindings.get(required.procedure_binding).body == .callable_eval_template,
             .imported => |imported| blk: {
-                const imported_view = self.moduleForId(imported.artifact);
+                const imported_view = self.moduleForKey(imported.artifact);
                 break :blk importedProcedureBinding(imported_view, imported).body == .callable_eval_template;
             },
             .hosted => false,
@@ -19683,7 +19754,7 @@ const Builder = struct {
     }
 
     fn importedProcedureBindingBody(self: *Builder, binding_ref: checked.ImportedProcedureBindingRef) WorkerBody {
-        const view = self.moduleForId(binding_ref.artifact);
+        const view = self.moduleForKey(binding_ref.artifact);
         return self.procedureBindingBody(view, importedProcedureBinding(view, binding_ref).body);
     }
 
@@ -19702,7 +19773,7 @@ const Builder = struct {
     }
 
     fn hostedProcedureBody(self: *Builder, hosted_ref: checked.HostedProcRef) WorkerBody {
-        const view = self.moduleForId(checked.hostedProcedureTemplateModuleId(hosted_ref));
+        const view = self.moduleForKey(checked.hostedProcedureTemplateModuleId(hosted_ref));
         if (view.checked_procedure_templates.get(hosted_ref.template.template).target != .hosted) {
             boxyPlanInvariant("hosted procedure ref pointed at a non-hosted checked template");
         }
@@ -19776,7 +19847,7 @@ const Builder = struct {
         if (fn_value.captures.len != 0) {
             switch (body.kind) {
                 .checked_expr => body.stored_fn = .{
-                    .module = store_view.key,
+                    .module = viewModule(store_view),
                     .fn_id = fn_id,
                 },
                 .intrinsic_wrapper,
@@ -19980,7 +20051,7 @@ const Builder = struct {
         const worker = self.active_worker orelse
             boxyPlanInvariant("literal conversion was planned outside a worker");
         try self.plan.literal_sites.append(self.allocator, .{
-            .source = .{ .module = view.key, .expr = expr },
+            .source = .{ .module = viewModule(view), .expr = expr },
             .worker = worker,
             .dispatch = dispatch,
         });
@@ -20033,7 +20104,7 @@ const Builder = struct {
             }
             stored_encoding_type = capture.ty;
         }
-        const view = self.moduleForId(.{ .bytes = checked_names.procTemplateModuleDigest(codec.owner).bytes });
+        const view = self.moduleForKey(.{ .bytes = checked_names.procTemplateModuleDigest(codec.owner).bytes });
         const source = if (stored_encoding_type) |encoding_type|
             try self.storedGeneratedCodecSourceAtEncodingType(
                 store_view,
@@ -20081,7 +20152,7 @@ const Builder = struct {
             .runtime_type = typeRef(view, derivation.runtime_ty),
             .capture_type = typeRef(view, derivation.encoding_ty),
             .contract_derivation = selected.id,
-            .contract_expr = .{ .module = view.key, .expr = expr_id },
+            .contract_expr = .{ .module = viewModule(view), .expr = expr_id },
         };
     }
 
@@ -20364,7 +20435,7 @@ const Builder = struct {
                 .source = if (topLevelProcedureBindingForExpr(dispatch_view, local.expr)) |binding|
                     .{ .procedure_binding = binding }
                 else
-                    .{ .nested_expr = .{ .module = dispatch_view.key, .expr = nestedCallableSiteExprFor(dispatch_view, local.expr) orelse local.expr } },
+                    .{ .nested_expr = .{ .module = viewModule(dispatch_view), .expr = nestedCallableSiteExprFor(dispatch_view, local.expr) orelse local.expr } },
             },
             .structural => |kind| .{
                 .view = dispatch_view,
@@ -20416,7 +20487,7 @@ const Builder = struct {
         const record = resolvedValueRecord(view, target);
         if (record.ref == .platform_required_proc) {
             return .{
-                .module = view.key,
+                .module = viewModule(view),
                 .ty = record.ref.platform_required_proc.procedure.source_fn_ty_payload orelse
                     boxyPlanInvariant("platform-required procedure call missing relation-owned source function type"),
             };
@@ -20434,7 +20505,7 @@ const Builder = struct {
             .local_proc => |local| if (topLevelProcedureBindingForExpr(view, local.expr)) |binding|
                 .{ .procedure_binding = binding }
             else
-                .{ .nested_expr = .{ .module = view.key, .expr = nestedCallableSiteExprFor(view, local.expr) orelse local.expr } },
+                .{ .nested_expr = .{ .module = viewModule(view), .expr = nestedCallableSiteExprFor(view, local.expr) orelse local.expr } },
             .imported_proc, .hosted_proc => |procedure| self.workerSourceForProcedureUse(procedure),
             .local_param,
             .local_value,
@@ -20497,7 +20568,7 @@ const Builder = struct {
                         .local_proc => |local| return if (topLevelProcedureBindingForExpr(view, local.expr)) |binding|
                             .{ .procedure_binding = binding }
                         else
-                            .{ .nested_expr = .{ .module = view.key, .expr = nestedCallableSiteExprFor(view, local.expr) orelse local.expr } },
+                            .{ .nested_expr = .{ .module = viewModule(view), .expr = nestedCallableSiteExprFor(view, local.expr) orelse local.expr } },
                         .top_level_proc,
                         .promoted_top_level_proc,
                         => |procedure| .{ .procedure_use = procedure },
@@ -20520,7 +20591,7 @@ const Builder = struct {
                     const view = root.view;
                     const expr = view.checked_bodies.expr(root.expr);
                     if (expr.data == .lambda or expr.data == .closure) {
-                        return .{ .nested_expr = .{ .module = view.key, .expr = root.expr } };
+                        return .{ .nested_expr = .{ .module = viewModule(view), .expr = root.expr } };
                     }
                     const maybe_ref: ?checked.ResolvedValueRefId = if (expr.data == .lookup_local)
                         expr.data.lookup_local.resolved
@@ -20536,21 +20607,21 @@ const Builder = struct {
                 .procedure_use => |procedure| next: {
                     const evaluated: ?WorkerSourceQuery = switch (procedure.binding) {
                         .top_level => |top_level| blk: {
-                            const view = self.moduleForId(top_level.artifact);
+                            const view = self.moduleForKey(top_level.artifact);
                             break :blk switch (view.top_level_procedure_bindings.get(top_level.binding).body) {
                                 .callable_eval_template => |template| .{ .eval_template = .{ .view = view, .template = template } },
                                 .checked_error, .direct_template => null,
                             };
                         },
                         .platform_required => |required| blk: {
-                            const view = self.moduleForId(required.app_value.artifact);
+                            const view = self.moduleForKey(required.app_value.artifact);
                             break :blk switch (view.top_level_procedure_bindings.get(required.procedure_binding).body) {
                                 .callable_eval_template => |template| .{ .eval_template = .{ .view = view, .template = template } },
                                 .checked_error, .direct_template => null,
                             };
                         },
                         .imported => |imported| blk: {
-                            const view = self.moduleForId(imported.artifact);
+                            const view = self.moduleForKey(imported.artifact);
                             break :blk switch (importedProcedureBinding(view, imported).body) {
                                 .callable_eval_template => |template| .{ .eval_template = .{ .view = view, .template = template } },
                                 .checked_error, .direct_template => null,
@@ -20588,14 +20659,14 @@ const Builder = struct {
         const procedure = maybe_procedure orelse return null;
         return switch (procedure.binding) {
             .top_level => |top_level| blk: {
-                const view = self.moduleForId(top_level.artifact);
+                const view = self.moduleForKey(top_level.artifact);
                 if (!self.procedureBindingBodyIsPendingEval(view, top_level.binding)) {
                     _ = self.rootProcedureBindingBody(view, top_level.binding);
                 }
                 break :blk .{ .procedure_binding = top_level };
             },
             .platform_required => |required| blk: {
-                const view = self.moduleForId(required.app_value.artifact);
+                const view = self.moduleForKey(required.app_value.artifact);
                 if (!self.procedureBindingBodyIsPendingEval(view, required.procedure_binding)) {
                     _ = self.rootProcedureBindingBody(view, required.procedure_binding);
                 }
@@ -20650,7 +20721,7 @@ const Builder = struct {
                 .binding = required.procedure_binding,
             }),
             .imported => |imported| blk: {
-                const view = self.moduleForId(imported.artifact);
+                const view = self.moduleForKey(imported.artifact);
                 const binding = importedProcedureBinding(view, imported);
                 break :blk switch (binding.body) {
                     .checked_error => null,
@@ -20666,7 +20737,7 @@ const Builder = struct {
         self: *Builder,
         binding_ref: checked.ArtifactTopLevelProcedureBindingRef,
     ) ?StoredFnSource {
-        const view = self.moduleForId(binding_ref.artifact);
+        const view = self.moduleForKey(binding_ref.artifact);
         const binding = view.top_level_procedure_bindings.get(binding_ref.binding);
         return switch (binding.body) {
             .checked_error => null,
@@ -20683,7 +20754,7 @@ const Builder = struct {
         const template = self.callableEvalTemplate(view, template_id);
         const root = view.compile_time_roots.root(template.root);
         return switch (root.payload) {
-            .fn_value => |fn_id| .{ .module = view.key, .fn_id = fn_id },
+            .fn_value => |fn_id| .{ .module = viewModule(view), .fn_id = fn_id },
             .pending, .unevaluated, .const_node, .discarded, .expect, .runtime => null,
         };
     }
@@ -20715,7 +20786,7 @@ const Builder = struct {
         self: *Builder,
         binding_ref: checked.ArtifactTopLevelProcedureBindingRef,
     ) CheckedTypeIdentity {
-        const view = self.moduleForId(binding_ref.artifact);
+        const view = self.moduleForKey(binding_ref.artifact);
         return self.checkedTypeForBindingBody(view, view.top_level_procedure_bindings.get(binding_ref.binding).body);
     }
 
@@ -20723,7 +20794,7 @@ const Builder = struct {
         self: *Builder,
         binding_ref: checked.ImportedProcedureBindingRef,
     ) CheckedTypeIdentity {
-        const view = self.moduleForId(binding_ref.artifact);
+        const view = self.moduleForKey(binding_ref.artifact);
         return self.checkedTypeForBindingBody(view, importedProcedureBinding(view, binding_ref).body);
     }
 
@@ -20803,7 +20874,7 @@ const Builder = struct {
     fn workerSourceForCallableEvalSource(self: *Builder, source: WorkerSource) WorkerSource {
         return switch (source) {
             .procedure_binding => |binding_ref| blk: {
-                const view = self.moduleForId(binding_ref.artifact);
+                const view = self.moduleForKey(binding_ref.artifact);
                 const binding = view.top_level_procedure_bindings.get(binding_ref.binding);
                 break :blk switch (binding.body) {
                     .checked_error => boxyPlanInvariant("rejected binding reached Boxy planning callable consumption"),
@@ -20858,7 +20929,7 @@ fn workerSourceEql(a: WorkerSource, b: WorkerSource) bool {
 /// label-comparing representation queries need. Callers build this from
 /// whatever module view they already hold.
 pub const ModuleNames = struct {
-    key: checked.ModuleId = .{},
+    module: PlanModuleId,
     canonical_names: ?*const checked_names.CanonicalNameStore = null,
 };
 
@@ -21227,7 +21298,7 @@ pub fn sameChildRoleKind(a: ChildRole, b: ChildRole) bool {
 /// Representation queries that compare source-level labels, and therefore need
 /// to resolve a module id to its name store.
 ///
-/// `Modules` is any type exposing `moduleNames(checked.ModuleId) ModuleNames`.
+/// `Modules` is any type exposing `moduleNames(PlanModuleId) ModuleNames`.
 /// Boxy planning and Boxy lowering hold different module-view types; this is
 /// the seam that lets both ask one implementation the same question.
 pub fn NamedRepQuery(comptime Modules: type) type {
@@ -21584,7 +21655,7 @@ fn isLookupExpr(data: anytype) bool {
 
 /// Return the module identity and label store used for cross-module comparison.
 pub fn moduleNamesOf(view: ModuleView) ModuleNames {
-    return .{ .key = view.key, .canonical_names = view.canonical_names };
+    return .{ .module = viewModule(view), .canonical_names = view.canonical_names };
 }
 
 /// True when two record field labels name the same field, comparing by text
@@ -21595,7 +21666,7 @@ pub fn recordFieldNameMatches(
     target: ModuleNames,
     target_name: RecordFieldLabelId,
 ) bool {
-    if (moduleKeyEqual(source.key, target.key)) return source_name == target_name;
+    if (source.module == target.module) return source_name == target_name;
     const source_names = source.canonical_names orelse return source_name == target_name;
     const target_names = target.canonical_names orelse return source_name == target_name;
     return std.mem.eql(
@@ -21613,7 +21684,7 @@ pub fn tagLabelNameMatches(
     target: ModuleNames,
     target_name: TagLabelId,
 ) bool {
-    if (moduleKeyEqual(source.key, target.key)) return source_name == target_name;
+    if (source.module == target.module) return source_name == target_name;
     const source_names = source.canonical_names orelse return source_name == target_name;
     const target_names = target.canonical_names orelse return source_name == target_name;
     return checked.tagLabelsMatch(source_names, source_name, target_names, target_name);
@@ -22052,8 +22123,8 @@ fn hostedRepresentationForTemplate(
 /// The modules a method lookup searches after the owner's own module: the
 /// program's imports, then its relation modules.
 pub const MethodSearchModules = struct {
-    imports: []const checked.ImportedModuleView,
-    relation_modules: []const checked.ImportedModuleView,
+    /// The program's imports, then its relation modules, as planned views.
+    views: []const ModuleView,
 };
 
 /// A method target together with the module view that declares it.
@@ -22096,14 +22167,8 @@ pub fn lookupMethodTargetByText(
     method_text: []const u8,
 ) ?MethodLookupResult {
     if (lookupMethodTargetInView(owner_view, owner_view, owner, method_text)) |target| return target;
-    for (modules.imports) |imported| {
-        const view = moduleViewFromImported(imported);
-        if (moduleKeyEqual(view.key, owner_view.key)) continue;
-        if (lookupMethodTargetInView(view, owner_view, owner, method_text)) |target| return target;
-    }
-    for (modules.relation_modules) |relation| {
-        const view = moduleViewFromImported(relation);
-        if (moduleKeyEqual(view.key, owner_view.key)) continue;
+    for (modules.views) |view| {
+        if (viewModule(view) == viewModule(owner_view)) continue;
         if (lookupMethodTargetInView(view, owner_view, owner, method_text)) |target| return target;
     }
     return null;
@@ -22119,14 +22184,8 @@ pub fn lookupInspectOverride(
     owner: static_dispatch.MethodOwner,
 ) ?MethodTargetLookup {
     if (inspectOverrideInView(owner_view, owner_view, owner)) |decision| return decision.target;
-    for (modules.imports) |imported| {
-        const view = moduleViewFromImported(imported);
-        if (moduleKeyEqual(view.key, owner_view.key)) continue;
-        if (inspectOverrideInView(view, owner_view, owner)) |decision| return decision.target;
-    }
-    for (modules.relation_modules) |relation| {
-        const view = moduleViewFromImported(relation);
-        if (moduleKeyEqual(view.key, owner_view.key)) continue;
+    for (modules.views) |view| {
+        if (viewModule(view) == viewModule(owner_view)) continue;
         if (inspectOverrideInView(view, owner_view, owner)) |decision| return decision.target;
     }
     return null;
@@ -22196,7 +22255,7 @@ pub fn workerSourceForMethodTarget(
             if (nestedCallableRuntimeCaptures(lookup.view, site_expr).len != 0) {
                 boxyPlanInvariant("method evidence selected a local procedure that needs values of its declaration context");
             }
-            break :blk .{ .nested_expr = .{ .module = lookup.view.key, .expr = site_expr } };
+            break :blk .{ .nested_expr = .{ .module = viewModule(lookup.view), .expr = site_expr } };
         },
         .structural => |kind| switch (kind) {
             .parser => .{ .generated_codec = .{
@@ -22266,12 +22325,18 @@ pub fn moduleViewFromCheckedModule(checked_module: *const checked.CheckedModuleA
     };
 }
 
+/// The plan index of a view a module table handed out.
+pub fn viewModule(view: ModuleView) PlanModuleId {
+    std.debug.assert(view.id != .unplanned);
+    return view.id;
+}
+
 fn typeRef(view: ModuleView, ty: checked.CheckedTypeId) CheckedTypeIdentity {
-    return .{ .module = view.key, .ty = ty };
+    return .{ .module = viewModule(view), .ty = ty };
 }
 
 fn typeRefEql(a: CheckedTypeIdentity, b: CheckedTypeIdentity) bool {
-    return a.ty == b.ty and moduleKeyEqual(a.module, b.module);
+    return a.ty == b.ty and a.module == b.module;
 }
 
 fn optionalTypeRefEql(a: ?CheckedTypeIdentity, b: ?CheckedTypeIdentity) bool {
@@ -22304,7 +22369,7 @@ fn generatedCodecDerivationsEql(
 }
 
 fn exprRefEql(a: CheckedExprIdentity, b: CheckedExprIdentity) bool {
-    return a.expr == b.expr and moduleKeyEqual(a.module, b.module);
+    return a.expr == b.expr and a.module == b.module;
 }
 
 fn moduleKeyEqual(a: checked.ModuleId, b: checked.ModuleId) bool {
@@ -22595,8 +22660,8 @@ test "boxy planner records root wrapper plans from checked root metadata" {
     try std.testing.expectEqual(RootWrapperKind.host_shaped_wrapper, plan.roots.items[0].wrapper_kind);
     try std.testing.expectEqual(@as(u32, 3), plan.roots.items[0].request.order);
     try std.testing.expectEqual(plan.roots.items[0].host_rep, plan.roots.items[0].worker_rep);
-    try expectTypeRef(root_view.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), plan.roots.items[0].host_type);
-    try expectTypeRef(root_view.key, @fromBackingInt(@intCast(1)), plan.roots.items[0].source_type);
+    try expectTypeRef(&plan, root_view.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), plan.roots.items[0].host_type);
+    try expectTypeRef(&plan, root_view.key, @fromBackingInt(@intCast(1)), plan.roots.items[0].source_type);
     try std.testing.expect(plan.roots.items[0].host_rep != plan.roots.items[0].source_rep);
     try std.testing.expectEqual(@as(usize, 1), plan.root_reps.items.len);
 }
@@ -22737,26 +22802,26 @@ test "boxy planner walks callable eval finalized const function bodies" {
         .const_store = &const_store,
     };
 
-    var body_builder = Builder.init(gpa, .{ .root_view = root_view });
+    var body_builder = try Builder.init(gpa, .{ .root_view = root_view });
     defer body_builder.deinit();
-    const body = body_builder.callableEvalTemplateBody(root_view, @fromBackingInt(@intCast(fixtureTableIndex(0))));
+    const body = body_builder.callableEvalTemplateBody(body_builder.root_view, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     if (body.kind != .checked_expr) return error.TestUnexpectedResult;
     const stored_fn = body.stored_fn orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(root_key, stored_fn.module);
+    try std.testing.expectEqual(body_builder.plan.moduleIdForKey(root_key), stored_fn.module);
     try std.testing.expectEqual(fn_id, stored_fn.fn_id);
     const worker_id = try body_builder.ensureWorker(
         .{ .procedure_binding = .{
             .artifact = root_key,
             .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         } },
-        typeRef(root_view, @fromBackingInt(@intCast(1))),
+        typeRef(body_builder.root_view, @fromBackingInt(@intCast(1))),
         null,
     );
     const previous_worker = body_builder.active_worker;
     body_builder.active_worker = worker_id;
     defer body_builder.active_worker = previous_worker;
     try body_builder.analyzeWorkerBodyTypes(body);
-    try std.testing.expect(body_builder.plan.repForSourceType(.{ .module = root_key, .ty = @fromBackingInt(@intCast(2)) }) != null);
+    try std.testing.expect(body_builder.plan.repForSourceType(.{ .module = .root, .ty = @fromBackingInt(@intCast(2)) }) != null);
 
     var plan = try analyzeProgram(gpa, .{
         .root_view = root_view,
@@ -22765,9 +22830,9 @@ test "boxy planner walks callable eval finalized const function bodies" {
     defer plan.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), plan.workers.items.len);
-    try std.testing.expectEqual(WorkerSource{ .nested_expr = .{ .module = root_key, .expr = @fromBackingInt(@intCast(fixtureTableIndex(0))) } }, plan.workers.items[0].source);
-    try expectTypeRef(root_key, @fromBackingInt(@intCast(1)), plan.workers.items[0].checked_type);
-    try std.testing.expect(plan.repForSourceType(.{ .module = root_key, .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))) }) != null);
+    try std.testing.expectEqual(WorkerSource{ .nested_expr = .{ .module = .root, .expr = @fromBackingInt(@intCast(fixtureTableIndex(0))) } }, plan.workers.items[0].source);
+    try expectTypeRef(&plan, root_key, @fromBackingInt(@intCast(1)), plan.workers.items[0].checked_type);
+    try std.testing.expect(plan.repForSourceType(.{ .module = .root, .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))) }) != null);
 }
 
 test "boxy planner describes an imported hosted worker's type variables on the Roc side of its extern" {
@@ -22963,7 +23028,7 @@ test "boxy planner describes an imported hosted worker's type variables on the R
     defer plan.deinit();
 
     try std.testing.expect(plan.descriptors.items.len != 0);
-    const call_ref = CheckedExprIdentity{ .module = root_checked_module.key, .expr = @fromBackingInt(@intCast(1)) };
+    const call_ref = CheckedExprIdentity{ .module = plan.moduleIdForKey(root_checked_module.key).?, .expr = @fromBackingInt(@intCast(1)) };
     const direct = plan.directCallPlanForCall(call_ref, plan.roots.items[0].worker) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(plan.roots.items[0].worker, direct.caller);
     const callee_worker = plan.workers.items[@backingInt(direct.worker)];
@@ -22986,14 +23051,14 @@ test "boxy planner describes an imported hosted worker's type variables on the R
     try std.testing.expectEqual(worker_function.ret, host_function.ret);
     const substitutions = plan.callTypeSubstitutionSlice(direct.arg_substitutions);
     try std.testing.expectEqual(@as(usize, 1), substitutions.len);
-    try expectTypeRef(root_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), substitutions[0].operand_type);
+    try expectTypeRef(&plan, root_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), substitutions[0].operand_type);
     try std.testing.expectEqual(plan.repForSourceType(substitutions[0].operand_type).?, substitutions[0].operand_rep);
-    try expectTypeRef(root_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), substitutions[0].call_type);
+    try expectTypeRef(&plan, root_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), substitutions[0].call_type);
     try std.testing.expectEqual(plan.repForSourceType(substitutions[0].call_type).?, substitutions[0].call_rep);
-    try expectTypeRef(import_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), plan.representations.items[@backingInt(substitutions[0].worker_rep)].source_type);
+    try expectTypeRef(&plan, import_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), plan.representations.items[@backingInt(substitutions[0].worker_rep)].source_type);
     const ret_substitution = direct.ret_substitution orelse return error.TestUnexpectedResult;
-    try expectTypeRef(root_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), ret_substitution.call_type);
-    try expectTypeRef(import_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), plan.representations.items[@backingInt(ret_substitution.worker_rep)].source_type);
+    try expectTypeRef(&plan, root_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), ret_substitution.call_type);
+    try expectTypeRef(&plan, import_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), plan.representations.items[@backingInt(ret_substitution.worker_rep)].source_type);
 }
 
 test "boxy planner records relation-owned source type for platform-required direct calls" {
@@ -23161,16 +23226,16 @@ test "boxy planner records relation-owned source type for platform-required dire
     defer plan.deinit();
 
     const direct = plan.directCallPlanForCall(.{
-        .module = platform_checked_module.key,
+        .module = plan.moduleIdForKey(platform_checked_module.key).?,
         .expr = @fromBackingInt(@intCast(1)),
     }, plan.roots.items[0].worker) orelse return error.TestUnexpectedResult;
-    try expectTypeRef(platform_checked_module.key, @fromBackingInt(@intCast(2)), direct.source_fn_type);
-    try std.testing.expect(plan.repForSourceType(.{ .module = platform_checked_module.key, .ty = @fromBackingInt(@intCast(2)) }) != null);
+    try expectTypeRef(&plan, platform_checked_module.key, @fromBackingInt(@intCast(2)), direct.source_fn_type);
+    try std.testing.expect(plan.repForSourceType(.{ .module = plan.moduleIdForKey(platform_checked_module.key).?, .ty = @fromBackingInt(@intCast(2)) }) != null);
     try std.testing.expectEqual(@as(usize, 0), plan.callTypeSubstitutionSlice(direct.arg_substitutions).len);
     const ret_substitution = direct.ret_substitution orelse return error.TestUnexpectedResult;
-    try expectTypeRef(platform_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), ret_substitution.call_type);
+    try expectTypeRef(&plan, platform_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), ret_substitution.call_type);
     try std.testing.expectEqual(plan.repForSourceType(ret_substitution.call_type).?, ret_substitution.call_rep);
-    try expectTypeRef(app_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), plan.representations.items[@backingInt(ret_substitution.worker_rep)].source_type);
+    try expectTypeRef(&plan, app_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), plan.representations.items[@backingInt(ret_substitution.worker_rep)].source_type);
 }
 
 test "boxy planner records explicit source type representation bindings" {
@@ -23294,19 +23359,19 @@ test "boxy dictionary owners share signature groups and forward exact callable c
         .resolution = .{ .constraint = .{ .scheme_param = 0, .index = .{ .depth = 0, .index = 0 } } },
     }};
     const plans = static_dispatch.StaticDispatchPlanTable{ .evidence_refs = &refs };
-    var builder = Builder.init(gpa, .{ .root_view = .{
+    var builder = try Builder.init(gpa, .{ .root_view = .{
         .checked_types = .{ .stored_payloads = &payloads, .constraint_pool = &constraints },
         .checked_procedure_templates = &templates,
         .static_dispatch_plans = &plans,
     } });
     defer builder.deinit();
 
-    const first = try builder.schemeDictionary(.{ .module = .{}, .param = 0 });
-    const second = try builder.schemeDictionary(.{ .module = .{}, .param = 1 });
+    const first = try builder.schemeDictionary(.{ .module = .root, .param = 0 });
+    const second = try builder.schemeDictionary(.{ .module = .root, .param = 1 });
     try std.testing.expectEqual(first.dictionaries, second.dictionaries);
     try std.testing.expectEqual(@as(u32, 2), first.dictionaries.len);
     try std.testing.expect(first.dispatch_requirement.? != second.dispatch_requirement.?);
-    const side = try builder.schemeDictionary(.{ .module = .{}, .param = 0, .callable_contract = 0 });
+    const side = try builder.schemeDictionary(.{ .module = .root, .param = 0, .callable_contract = 0 });
     try std.testing.expect(!std.meta.eql(first.dictionaries, side.dictionaries));
     try std.testing.expectEqual(rootTypeRef(@fromBackingInt(@intCast(2))), builder.plan.dictionaries.items[side.dictionaries.start].fn_ty);
 
@@ -23334,7 +23399,7 @@ test "boxy dictionary owners share signature groups and forward exact callable c
     var next: usize = 0;
     const source = try builder.evidenceDictionarySource(builder.root_view, &entries, &next, side.dictionaries, .{}, null, 0, true);
     try std.testing.expectEqual(@as(usize, 1), next);
-    try std.testing.expectEqual(SchemeDictionaryKey{ .module = .{}, .param = 0 }, source.bound_evidence.?);
+    try std.testing.expectEqual(SchemeDictionaryKey{ .module = .root, .param = 0 }, source.bound_evidence.?);
 
     // A signature group skips standalone literal evidence between its methods.
     const grouped_entries = [_]static_dispatch.CheckedEvidence{
@@ -23359,7 +23424,7 @@ test "boxy literal materialization substitutes repeated constructor positions in
         .{ .nominal = builtinNominal(.str, @fromBackingInt(@intCast(3)), .{}) },
     };
     const type_pool = [_]checked.CheckedTypeId{ @fromBackingInt(@intCast(fixtureTableIndex(0))), @fromBackingInt(@intCast(fixtureTableIndex(0))) };
-    var builder = Builder.init(std.testing.allocator, .{ .checked_types = .{ .stored_payloads = &payloads, .type_id_pool = &type_pool } });
+    var builder = try Builder.init(std.testing.allocator, .{ .checked_types = .{ .stored_payloads = &payloads, .type_id_pool = &type_pool } });
     defer builder.deinit();
     var literals = LiteralPlanner.init(&builder);
     defer literals.deinit();
@@ -23389,7 +23454,7 @@ test "boxy literal terms identify defaults and explicit leaves identically" {
         .{ .empty_tag_union = {} },
         .{ .rigid = .{} },
     };
-    var builder = Builder.init(std.testing.allocator, .{ .checked_types = .{ .stored_payloads = &payloads } });
+    var builder = try Builder.init(std.testing.allocator, .{ .checked_types = .{ .stored_payloads = &payloads } });
     defer builder.deinit();
     var literals = LiteralPlanner.init(&builder);
     defer literals.deinit();
@@ -23473,7 +23538,7 @@ test "boxy dictionary slots are stable across module ids and requirement subsets
         .canonical_names = &source_names,
         .checked_types = checked_types,
     }};
-    var builder = Builder.init(gpa, .{
+    var builder = try Builder.init(gpa, .{
         .root_view = .{
             .key = root_key,
             .canonical_names = &root_names,
@@ -23484,14 +23549,14 @@ test "boxy dictionary slots are stable across module ids and requirement subsets
     defer builder.deinit();
 
     const root_span = try builder.appendDictionaryRequirements(
-        .{ .module = root_key, .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
+        .{ .module = builder.plan.moduleIdForKey(root_key).?, .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
         &.{
             .{ .fn_name = root_parser_for, .fn_ty = @fromBackingInt(@intCast(fixtureTableIndex(0))), .origin = .method_call },
             .{ .fn_name = root_to_hash, .fn_ty = @fromBackingInt(@intCast(fixtureTableIndex(0))), .origin = .method_call },
         },
     );
     const source_span = try builder.appendDictionaryRequirements(
-        .{ .module = source_key, .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
+        .{ .module = builder.plan.moduleIdForKey(source_key).?, .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
         &.{
             .{ .fn_name = source_to_hash, .fn_ty = @fromBackingInt(@intCast(fixtureTableIndex(0))), .origin = .method_call },
         },
@@ -23555,7 +23620,7 @@ fn testNominalSubstitution(plan: *ProgramPlan, formal: TypeRepId, actual: TypeRe
 
 test "direct call metadata uses instantiated nominal arguments inside generalized backings" {
     const gpa = std.testing.allocator;
-    var builder = Builder.init(gpa, .{});
+    var builder = try Builder.init(gpa, .{});
     defer builder.deinit();
 
     const worker_nominal: TypeRepId = @fromBackingInt(@intCast(fixtureTableIndex(0)));
@@ -23673,7 +23738,7 @@ test "call descriptor substitutions scope declaration formals to one nominal use
 
 test "direct call descriptors use operand nominal substitutions over generic call types" {
     const gpa = std.testing.allocator;
-    var builder = Builder.init(gpa, .{});
+    var builder = try Builder.init(gpa, .{});
     defer builder.deinit();
 
     const worker_nominal: TypeRepId = @fromBackingInt(@intCast(fixtureTableIndex(0)));
@@ -23752,7 +23817,7 @@ test "nominal result descriptors retain a dynamic callable argument source" {
 
 fn expectNominalResultArgumentSource(alias_argument: bool) (Allocator.Error || error{TestExpectedEqual})!void {
     const gpa = std.testing.allocator;
-    var builder = Builder.init(gpa, .{});
+    var builder = try Builder.init(gpa, .{});
     defer builder.deinit();
 
     const worker_elem: TypeRepId = @fromBackingInt(@intCast(fixtureTableIndex(0)));
@@ -23822,7 +23887,7 @@ test "nominal formal descriptor requests preserve the fixed parameter list for c
     const gpa = std.testing.allocator;
     for ([_]bool{ false, true }) |concrete| {
         for ([_]bool{ false, true }) |request_formal| {
-            var builder = Builder.init(gpa, .{});
+            var builder = try Builder.init(gpa, .{});
             defer builder.deinit();
             const worker_arg: TypeRepId = @fromBackingInt(@intCast(fixtureTableIndex(0)));
             const formal: TypeRepId = @fromBackingInt(@intCast(1));
@@ -23872,7 +23937,7 @@ test "nominal formal descriptor requests preserve the fixed parameter list for c
 
 test "evidence representation paths use exact nominal backing substitutions" {
     const gpa = std.testing.allocator;
-    var builder = Builder.init(gpa, .{});
+    var builder = try Builder.init(gpa, .{});
     defer builder.deinit();
 
     const nominal_rep: TypeRepId = @fromBackingInt(@intCast(1));
@@ -23926,7 +23991,7 @@ test "evidence representation paths use exact nominal backing substitutions" {
 
 test "call wrappers of a structural worker position resolve to their backing under the use's formals" {
     const gpa = std.testing.allocator;
-    var builder = Builder.init(gpa, .{});
+    var builder = try Builder.init(gpa, .{});
     defer builder.deinit();
 
     const call_alias: TypeRepId = @fromBackingInt(@intCast(fixtureTableIndex(0)));
@@ -23981,7 +24046,7 @@ test "call wrappers of a structural worker position resolve to their backing und
 
 test "evidence representation paths apply structural steps through a call-side nominal backing" {
     const gpa = std.testing.allocator;
-    var builder = Builder.init(gpa, .{});
+    var builder = try Builder.init(gpa, .{});
     defer builder.deinit();
 
     const call_nominal: TypeRepId = @fromBackingInt(@intCast(1));
@@ -24023,7 +24088,7 @@ test "evidence representation paths apply structural steps through a call-side n
 
 test "dictionary method hidden descriptors preserve exact implementation substitutions" {
     const gpa = std.testing.allocator;
-    var builder = Builder.init(gpa, .{});
+    var builder = try Builder.init(gpa, .{});
     defer builder.deinit();
 
     const exact_list_rep: TypeRepId = @fromBackingInt(@intCast(fixtureTableIndex(0)));
@@ -24312,7 +24377,7 @@ test "boxy row instantiation retains unmatched zero-payload variants in dynamic 
     for (kinds) |worker_kind| {
         for (kinds) |call_kind| {
             for ([_]bool{ false, true }) |same_tag| {
-                var builder = Builder.init(gpa, .{});
+                var builder = try Builder.init(gpa, .{});
                 defer builder.deinit();
                 const extension = RepChild{
                     .role = .tag_ext,
@@ -24321,8 +24386,8 @@ test "boxy row instantiation retains unmatched zero-payload variants in dynamic 
                 };
                 try builder.plan.children.append(gpa, extension);
                 try builder.plan.tag_variants.appendSlice(gpa, &.{
-                    .{ .name = @fromBackingInt(@intCast(1)), .name_module = builder.root_view.key, .payloads = .{} },
-                    .{ .name = @fromBackingInt(@intCast(@as(u32, if (same_tag) 1 else 2))), .name_module = builder.root_view.key, .payloads = .{} },
+                    .{ .name = @fromBackingInt(@intCast(1)), .name_module = viewModule(builder.root_view), .payloads = .{} },
+                    .{ .name = @fromBackingInt(@intCast(@as(u32, if (same_tag) 1 else 2))), .name_module = viewModule(builder.root_view), .payloads = .{} },
                 });
                 try builder.plan.representations.appendSlice(gpa, &.{
                     .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(fixtureTableIndex(0)))), .kind = worker_kind, .children = .{ .start = 0, .len = 1 }, .tag_variants = .{ .start = 0, .len = 1 } },
@@ -24388,16 +24453,16 @@ test "boxy call row tails use original arguments for complete and empty rows" {
     const tail_desc: DescriptorRequirementId = @fromBackingInt(@intCast(1));
     for ([_]bool{ false, true }) |extra_tag| {
         for ([_]bool{ false, true }) |with_scheme| {
-            var builder = Builder.init(gpa, .{});
+            var builder = try Builder.init(gpa, .{});
             defer builder.deinit();
             try builder.plan.children.appendSlice(gpa, &.{
                 .{ .role = .tag_ext, .source_type = rootTypeRef(@fromBackingInt(@intCast(1))), .rep = tail },
                 .{ .role = .tag_ext, .source_type = rootTypeRef(@fromBackingInt(@intCast(3))), .rep = empty },
             });
             try builder.plan.tag_variants.appendSlice(gpa, &.{
-                .{ .name = @fromBackingInt(@intCast(1)), .name_module = builder.root_view.key, .payloads = .{} },
-                .{ .name = @fromBackingInt(@intCast(1)), .name_module = builder.root_view.key, .payloads = .{} },
-                .{ .name = @fromBackingInt(@intCast(2)), .name_module = builder.root_view.key, .payloads = .{} },
+                .{ .name = @fromBackingInt(@intCast(1)), .name_module = viewModule(builder.root_view), .payloads = .{} },
+                .{ .name = @fromBackingInt(@intCast(1)), .name_module = viewModule(builder.root_view), .payloads = .{} },
+                .{ .name = @fromBackingInt(@intCast(2)), .name_module = viewModule(builder.root_view), .payloads = .{} },
             });
             try builder.plan.representations.appendSlice(gpa, &.{
                 .{ .source_type = rootTypeRef(@fromBackingInt(@intCast(fixtureTableIndex(0)))), .kind = .{ .dynamic = .flex }, .children = .{ .start = 0, .len = 1 }, .tag_variants = .{ .start = 0, .len = 1 }, .descriptor = worker_desc, .contains_dynamic = true },
@@ -24522,7 +24587,7 @@ test "boxy call substitution recognizes open tag rows without named variants" {
         .{ .tag_union = .{ .tags = .{ .start = 0, .len = 1 }, .ext = @fromBackingInt(@intCast(2)) } },
         .{ .record = .{ .fields = .{}, .ext = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
     };
-    var builder = Builder.init(gpa, .{ .checked_types = .{
+    var builder = try Builder.init(gpa, .{ .checked_types = .{
         .stored_payloads = &payloads,
         .tag_pool = &tags,
     } });
@@ -24687,12 +24752,12 @@ test "boxy planner stores tag variants in identity layout order" {
     const err_payloads = plan.childSlice(variants[0].payloads);
     try std.testing.expectEqual(@as(usize, 1), err_payloads.len);
     try std.testing.expectEqual(ChildRole{ .tag_payload = .{ .tag = err_tag, .index = 0 } }, err_payloads[0].role);
-    try expectTypeRef(.{}, @fromBackingInt(@intCast(1)), err_payloads[0].source_type);
+    try expectTypeRef(&plan, .{}, @fromBackingInt(@intCast(1)), err_payloads[0].source_type);
 
     const ok_payloads = plan.childSlice(variants[1].payloads);
     try std.testing.expectEqual(@as(usize, 1), ok_payloads.len);
     try std.testing.expectEqual(ChildRole{ .tag_payload = .{ .tag = ok_tag, .index = 0 } }, ok_payloads[0].role);
-    try expectTypeRef(.{}, @fromBackingInt(@intCast(fixtureTableIndex(0))), ok_payloads[0].source_type);
+    try expectTypeRef(&plan, .{}, @fromBackingInt(@intCast(fixtureTableIndex(0))), ok_payloads[0].source_type);
 }
 
 test "boxy planner records nominal declared field order from checked payloads" {
@@ -24848,14 +24913,14 @@ test "boxy planner resolves local nominal declared order from box payload capabi
     try std.testing.expectEqual(@as(usize, 2), children.len);
     try std.testing.expectEqual(ChildRole.nominal_backing, children[0].role);
     try std.testing.expectEqual(ChildRole{ .nominal_padding_field = 0 }, children[1].role);
-    try expectTypeRef(moduleKey(1), @fromBackingInt(@intCast(fixtureTableIndex(0))), children[1].source_type);
+    try expectTypeRef(&plan, moduleKey(1), @fromBackingInt(@intCast(fixtureTableIndex(0))), children[1].source_type);
 
     const fields = plan.declaredFieldSlice(nominal.declared_fields);
     try std.testing.expectEqual(@as(usize, 3), fields.len);
     try std.testing.expectEqual(@as(u32, 0), fields[0].index);
     try std.testing.expectEqual(@as(u32, 2), fields[1].index);
     try std.testing.expect(fields[1].is_padding);
-    try expectTypeRef(moduleKey(1), @fromBackingInt(@intCast(fixtureTableIndex(0))), fields[1].source_type);
+    try expectTypeRef(&plan, moduleKey(1), @fromBackingInt(@intCast(fixtureTableIndex(0))), fields[1].source_type);
     try std.testing.expectEqual(@as(u32, 1), fields[2].index);
 }
 
@@ -25013,26 +25078,26 @@ test "boxy planner records imported box payload capability source modules" {
     const nominal = plan.representations.items[@backingInt(plan.root_reps.items[0])];
     const children = plan.childSlice(nominal.children);
     try std.testing.expectEqual(@as(usize, 2), children.len);
-    try expectTypeRef(source_key, @fromBackingInt(@intCast(3)), children[0].source_type);
-    try expectTypeRef(source_key, @fromBackingInt(@intCast(5)), children[1].source_type);
+    try expectTypeRef(&plan, source_key, @fromBackingInt(@intCast(3)), children[0].source_type);
+    try expectTypeRef(&plan, source_key, @fromBackingInt(@intCast(5)), children[1].source_type);
 
     const fields = plan.declaredFieldSlice(nominal.declared_fields);
     try std.testing.expectEqual(@as(usize, 3), fields.len);
     try std.testing.expectEqual(@as(u32, 0), fields[0].index);
-    try expectTypeRef(source_key, @fromBackingInt(@intCast(5)), fields[0].source_type);
+    try expectTypeRef(&plan, source_key, @fromBackingInt(@intCast(5)), fields[0].source_type);
     try std.testing.expectEqual(@as(u32, 2), fields[1].index);
     try std.testing.expect(fields[1].is_padding);
-    try expectTypeRef(source_key, @fromBackingInt(@intCast(5)), fields[1].source_type);
+    try expectTypeRef(&plan, source_key, @fromBackingInt(@intCast(5)), fields[1].source_type);
     try std.testing.expectEqual(@as(u32, 1), fields[2].index);
-    try expectTypeRef(source_key, @fromBackingInt(@intCast(1)), fields[2].source_type);
+    try expectTypeRef(&plan, source_key, @fromBackingInt(@intCast(1)), fields[2].source_type);
 }
 
 fn rootTypeRef(ty: checked.CheckedTypeId) CheckedTypeIdentity {
-    return .{ .ty = ty };
+    return .{ .module = .root, .ty = ty };
 }
 
-fn expectTypeRef(module: checked.ModuleId, ty: checked.CheckedTypeId, actual: CheckedTypeIdentity) error{ TestExpectedEqual, TestUnexpectedResult }!void {
-    try std.testing.expect(moduleKeyEqual(module, actual.module));
+fn expectTypeRef(plan: *const ProgramPlan, module: checked.ModuleId, ty: checked.CheckedTypeId, actual: CheckedTypeIdentity) error{ TestExpectedEqual, TestUnexpectedResult }!void {
+    try std.testing.expectEqual(plan.moduleIdForKey(module), actual.module);
     try std.testing.expectEqual(ty, actual.ty);
 }
 
@@ -25133,11 +25198,11 @@ test "boxy nominal substitutions share formals independently of runtime demand a
     };
 
     for ([_]bool{ false, true }) |backing_first| {
-        var builder = Builder.init(gpa, .{ .root_view = view });
+        var builder = try Builder.init(gpa, .{ .root_view = view });
         defer builder.deinit();
-        if (backing_first) _ = try builder.analyzeType(view, @fromBackingInt(@intCast(7)));
+        if (backing_first) _ = try builder.analyzeType(builder.root_view, @fromBackingInt(@intCast(7)));
         var uses: [use_count]TypeRepId = undefined;
-        for (&uses, 0..) |*use, index| use.* = try builder.analyzeType(view, @fromBackingInt(@intCast(9 + index)));
+        for (&uses, 0..) |*use, index| use.* = try builder.analyzeType(builder.root_view, @fromBackingInt(@intCast(9 + index)));
 
         // Formal storage is shared once, actual storage grows only with uses.
         try std.testing.expectEqual(@as(usize, 3), builder.plan.nominal_backing_formals.items.len);
@@ -25154,11 +25219,11 @@ test "boxy nominal substitutions share formals independently of runtime demand a
         }
 
         // Runtime demand fills the existing bindings; no use is rebuilt.
-        _ = try builder.analyzeType(view, @fromBackingInt(@intCast(7)));
+        _ = try builder.analyzeType(builder.root_view, @fromBackingInt(@intCast(7)));
         try builder.materializeDescriptorRequirements();
         try std.testing.expectEqual(@as(usize, 2), builder.plan.descriptors.items.len);
         try std.testing.expectEqual(@as(usize, 1), builder.plan.dictionaries.items.len);
-        try std.testing.expectEqual(null, builder.plan.repForSourceType(typeRef(view, @fromBackingInt(@intCast(4)))));
+        try std.testing.expectEqual(null, builder.plan.repForSourceType(typeRef(builder.root_view, @fromBackingInt(@intCast(4)))));
         for (uses, 0..) |use, use_index| {
             const span = builder.plan.representations.items[@backingInt(use)].nominal_backing_arg_substitutions;
             try std.testing.expectEqual(@as(u32, 0), builder.plan.nominal_backing_uses.items[span.start]);
@@ -25166,9 +25231,9 @@ test "boxy nominal substitutions share formals independently of runtime demand a
             for (0..3) |index| {
                 const substitution = substitutions.next().?;
                 const actual_ty = type_pool[(use_index % 2) * 3 + index];
-                try std.testing.expectEqual(builder.plan.repForSourceType(typeRef(view, actual_ty)).?, substitution.actual_rep);
+                try std.testing.expectEqual(builder.plan.repForSourceType(typeRef(builder.root_view, actual_ty)).?, substitution.actual_rep);
                 try std.testing.expectEqual(substitution.actual_rep, builder.plan.nominalBackingActual(span, @intCast(index)).?);
-                try std.testing.expectEqual(builder.plan.repForSourceType(typeRef(view, @fromBackingInt(@intCast(2 + index)))), substitution.formal_rep);
+                try std.testing.expectEqual(builder.plan.repForSourceType(typeRef(builder.root_view, @fromBackingInt(@intCast(2 + index)))), substitution.formal_rep);
             }
             try std.testing.expectEqual(null, substitutions.next());
         }
@@ -25206,7 +25271,7 @@ test "boxy planner resolves procedure-template workers to checked bodies" {
     };
     checked_module.checked_procedure_templates = .{ .templates = .{ .items = &templates, .capacity = templates.len, .pointer_stability = .{} } };
 
-    var builder = Builder.init(gpa, .{ .root_module = .{ .module = &checked_module, .roots = undefined } });
+    var builder = try Builder.init(gpa, .{ .root_module = .{ .module = &checked_module, .roots = undefined } });
     defer builder.deinit();
     try expectCheckedExprWorkerBody(builder.rootWorkerBody(.{ .procedure_template = template_ref }), template_ref, @fromBackingInt(@intCast(3)));
 }
@@ -25241,7 +25306,7 @@ test "boxy planner resolves top-level direct bindings to checked bodies" {
     };
     checked_module.top_level_procedure_bindings = .{ .bindings = .{ .items = &bindings, .capacity = bindings.len, .pointer_stability = .{} } };
 
-    var builder = Builder.init(gpa, .{ .root_module = .{ .module = &checked_module, .roots = undefined } });
+    var builder = try Builder.init(gpa, .{ .root_module = .{ .module = &checked_module, .roots = undefined } });
     defer builder.deinit();
     try expectCheckedExprWorkerBody(builder.rootWorkerBody(.{ .procedure_binding = .{ .artifact = checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } }), template_ref, @fromBackingInt(@intCast(5)));
 }
@@ -25346,7 +25411,7 @@ test "boxy planner resolves callable eval bindings to finalized const function e
     };
     checked_module.top_level_procedure_bindings = .{ .bindings = .{ .items = &bindings, .capacity = bindings.len, .pointer_stability = .{} } };
 
-    var builder = Builder.init(gpa, .{ .root_module = .{ .module = &checked_module, .roots = undefined } });
+    var builder = try Builder.init(gpa, .{ .root_module = .{ .module = &checked_module, .roots = undefined } });
     defer builder.deinit();
     try expectCheckedExprWorkerBody(builder.rootWorkerBody(.{ .procedure_binding = .{ .artifact = checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } }), template_ref, @fromBackingInt(@intCast(fixtureTableIndex(0))));
 }
