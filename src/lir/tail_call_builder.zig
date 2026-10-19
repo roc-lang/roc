@@ -129,7 +129,7 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
             const erased = stmt.assign_call_erased;
             // A descriptor output is returned with the value only when it is
             // the descriptor local of the value itself.
-            if (erased.out_desc) |out_desc| {
+            if (store.stmtRow(erased.data).out_desc) |out_desc| {
                 const target_desc = store.getLocal(erased.target).boxy_desc orelse continue;
                 if (target_desc.localOrNull() != out_desc) continue;
             }
@@ -144,11 +144,11 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
         // A producer can move a provisional call and retire its old node.
         if (stmt != .assign_call) continue;
         const call = stmt.assign_call;
-        if (call.tail_call != null) continue;
+        if (call.tail_call.isSite()) continue;
         // A runtime result descriptor is another call output. It is returned
         // with the value only when the callee writes it to the descriptor
         // local this procedure returns, which is the value's own.
-        if (call.out_desc) |out_desc| {
+        if (store.stmtRowOrDefault(call.extra).out_desc) |out_desc| {
             if (store.getProcSpecImmediate(proc).runtime_ret_desc != out_desc) continue;
             const target_desc = store.getLocal(call.target).boxy_desc orelse continue;
             if (target_desc.localOrNull() != out_desc) continue;
@@ -157,8 +157,8 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
         if (returned != call.target) continue;
         // A self-call that returns a descriptor replaces its frame like a
         // call to any other procedure; the loop form carries only the value.
-        if (call.proc == proc and call.out_desc == null) {
-            store.getCFStmtPtr(id).assign_call.tail_call = .{ .next = head };
+        if (call.proc == proc and store.stmtRowOrDefault(call.extra).out_desc == null) {
+            store.getCFStmtPtr(id).assign_call.tail_call = .site(head);
             head = id;
         } else if (store.getCFStmtImmediate(call.next).* != .ret and store.getLocal(call.target).layout_idx == ret_layout) {
             const ret = try store.addCFStmt(.{ .ret = .{ .value = call.target } }, store.stmtOrigin(id));
@@ -169,11 +169,11 @@ pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCall
     return if (head) |first| .{ .head = first, .loop = @fromBackingInt(self.next_join) } else null;
 }
 
-fn successor(self: *const Self, stmt: LIR.CFStmt) ?LIR.CFStmtId {
+fn successor(self: *const Self, store: anytype, stmt: LIR.CFStmt) ?LIR.CFStmtId {
     return switch (stmt) {
         .jump => |jump| self.joins.get(jump.target) orelse unreachable,
         .join => |join| join.remainder,
-        .assign_ref => |assign| switch (assign.op) {
+        .assign_ref => |assign| switch (assign.op.kind) {
             .local, .nominal, .list_reinterpret => assign.next,
             .discriminant,
             .field,
@@ -181,7 +181,10 @@ fn successor(self: *const Self, stmt: LIR.CFStmt) ?LIR.CFStmtId {
             .tag_payload_struct,
             => null,
         },
-        .assign_boxy_adapt => |assign| if (assign.source_mode == .move and self.adapters[@backingInt(assign.adapter)].operation == .relabel) assign.next else null,
+        .assign_boxy_adapt => |assign_stmt| blk_assign: {
+            const assign = store.stmtRow(assign_stmt.data);
+            break :blk_assign if (assign.source_mode == .move and self.adapters[@backingInt(assign.adapter)].operation == .relabel) assign_stmt.next else null;
+        },
         .set_local => |assign| if (assign.mode == .initialize_join_param) assign.next else null,
         .init_uninitialized,
         .assign_literal,
@@ -237,7 +240,7 @@ fn returnedLocal(self: *Self, store: anytype, start: LIR.CFStmtId) std.mem.Alloc
         };
         const stmt = store.getCFStmt(current);
         if (stmt == .ret) break stmt.ret.value;
-        const next = self.successor(stmt) orelse break null;
+        const next = self.successor(store, stmt) orelse break null;
         try self.proofs.put(current, .visiting);
         try self.path.append(self.allocator, current);
         current = next;
@@ -247,10 +250,10 @@ fn returnedLocal(self: *Self, store: anytype, start: LIR.CFStmtId) std.mem.Alloc
             // The path holds only statements `successor` forwards through.
             switch (store.getCFStmtImmediate(id).*) {
                 .assign_ref => |assign| {
-                    result = if (assign.target != local) null else switch (assign.op) {
-                        .local => |source| source,
-                        .nominal => |nominal| nominal.backing_ref,
-                        .list_reinterpret => |list| list.backing_ref,
+                    result = if (assign.target != local) null else switch (assign.op.kind) {
+                        .local => assign.op.source,
+                        .nominal => assign.op.source,
+                        .list_reinterpret => assign.op.source,
                         .discriminant,
                         .field,
                         .tag_payload,
@@ -259,7 +262,7 @@ fn returnedLocal(self: *Self, store: anytype, start: LIR.CFStmtId) std.mem.Alloc
                     };
                 },
                 .set_local => |assign| result = if (assign.target == local) assign.value else null,
-                .assign_boxy_adapt => |assign| result = if (assign.target == local) assign.source else null,
+                .assign_boxy_adapt => |assign| result = if (assign.target == local) store.stmtRow(assign.data).source else null,
                 .join, .jump => {},
                 .init_uninitialized,
                 .assign_literal,

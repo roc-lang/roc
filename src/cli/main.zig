@@ -1375,18 +1375,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .licenses => {
             try ctx.io.stdout().writeAll(legalDetailsFileContent);
         },
-        .problem => |problem| {
-            try switch (problem) {
-                .missing_flag_value => |details| ctx.io.stderr().print("Error: no value was supplied for {s}\n", .{details.flag}),
-                .unexpected_argument => |details| ctx.io.stderr().print("Error: roc {s} received an unexpected argument: `{s}`\n", .{ details.cmd, details.arg }),
-                .invalid_flag_value => |details| ctx.io.stderr().print("Error: `{s}` is not a valid value for {s}. The valid options are {s}\n", .{ details.value, details.flag, details.valid_options }),
-                .shorthand_requires_run => |details| ctx.io.stderr().print(
-                    "Error: `{s}` looks like an installed shorthand, and running one requires the `run` subcommand: `roc run {s}`\nIf you meant a local file named `{s}`, write it as `./{s}` instead.\n",
-                    .{ details.name, details.name, details.name, details.name },
-                ),
-            };
-            return error.InvalidArguments;
-        },
+        .problem => |problem| ctx.fail(.{ .invalid_arguments = problem }),
     }) catch |err| {
         // Commands report by recording a problem and returning `CliError`, and
         // a few print straight to stderr instead. Either way the user has been
@@ -8628,7 +8617,7 @@ fn writeLinkedPacksToStore(
 /// needs and exports a weak C-ABI entry for each specialization it offers
 /// (design.md "Object Cache Store"). Null when the module's code cannot be a
 /// linked object: it uses the erased-call runtime, whose calls name this
-/// program's layouts, or a constant has no link-time image.
+/// program's layouts.
 fn compileModuleObjectPack(
     ctx: *CliCtx,
     build_env: *BuildEnv,
@@ -8941,6 +8930,12 @@ fn objectPackBytes(
     }
     if (specs.items.len == 0) return null;
 
+    // Every constant the object carries is weak data under its content name.
+    var data_names = try backend.dev.ProcArtifact.ContentNames.initObjectData(ctx.gpa, static_data_exports);
+    defer data_names.deinit();
+    const pack_data_names = try arena.alloc([]const u8, static_data_exports.len);
+    for (static_data_exports, pack_data_names) |data_export, *name| name.* = data_names.of(data_export.symbol_name);
+
     const std_target = try stdTargetForLlvmBuild(ctx, target);
     var bitcode = generate: {
         var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(
@@ -8954,10 +8949,10 @@ fn objectPackBytes(
         defer codegen.deinit();
         codegen.layout_store = &lowered.lir_result.layouts;
         codegen.object_cache_pack = true;
+        codegen.pack_data_names = pack_data_names;
         try codegen.setStaticDataExports(static_data_exports);
         const generated = codegen.generateEntrypointModule("roc_pack", entrypoints.items) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            // A constant without a link-time image.
             else => return null,
         };
         // The erased-call runtime is initialized with this program's sidecar.
@@ -12957,6 +12952,7 @@ fn optimizedDbgWarningsForBuild(
         .size, .speed => try build_env.renderOptimizedDbgWarnings(
             ctx.io.stderr(),
             @tagName(opt),
+            @tagName(cli_args.default_dev_opt),
             ctx.reportConfig(.stderr),
         ),
         .dev, .interpreter => 0,

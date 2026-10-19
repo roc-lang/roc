@@ -314,10 +314,10 @@ const StaticInitializerMachine = struct {
             current = switch (self.store().getCFStmt(current)) {
                 .assign_literal => |assign| blk: {
                     switch (assign.value) {
-                        .static_data => |dependency| if (self.static_roots[@backingInt(dependency)] == null and
-                            self.frozen_roots[@backingInt(dependency)] == null)
+                        .static_data => |dependency| if (self.static_roots[@backingInt(dependency.id)] == null and
+                            self.frozen_roots[@backingInt(dependency.id)] == null)
                         {
-                            if (try self.readyStatic(dependency) == null) return dependency;
+                            if (try self.readyStatic(dependency.id) == null) return dependency.id;
                         },
                         .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bytes_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .proc_ref => {},
                     }
@@ -428,7 +428,7 @@ const StaticInitializerMachine = struct {
                 },
                 .assign_packed_erased_fn => |assign| {
                     const target_layout = self.store().getLocal(assign.target).layout_idx;
-                    setLocal(locals, assign.target, try self.evalPackedErasedFn(locals, assign, target_layout));
+                    setLocal(locals, assign.target, try self.evalPackedErasedFn(locals, self.store().stmtRow(assign.data), target_layout));
                     current = assign.next;
                 },
                 .assign_low_level => |assign| {
@@ -516,9 +516,9 @@ const StaticInitializerMachine = struct {
         op: lir.LIR.RefOp,
         target_layout: layout.Idx,
     ) MaterializationError!*SymbolicValue {
-        return switch (op) {
-            .local => |source| try self.cloneValueAs(local(locals, source), target_layout),
-            inline .list_reinterpret, .nominal => |source| try self.cloneValueAs(local(locals, source.backing_ref), target_layout),
+        return switch (op.kind) {
+            .local => try self.cloneValueAs(local(locals, op.source), target_layout),
+            inline .list_reinterpret, .nominal => try self.cloneValueAs(local(locals, op.source), target_layout),
             .discriminant,
             .field,
             .tag_payload,
@@ -535,12 +535,15 @@ const StaticInitializerMachine = struct {
         const value = try self.newValue(target_layout);
         switch (literal) {
             .i64_literal => |int| self.writeSigned(value.bytes, int.value),
-            .i128_literal => |int| self.writeSigned(value.bytes, int.value),
+            .i128_literal => |int_id| blk_int: {
+                const int = self.store().stmtRow(int_id);
+                break :blk_int self.writeSigned(value.bytes, int.value);
+            },
             .f64_literal => |float| std.mem.writeInt(u64, value.bytes[0..8], @bitCast(float), .little),
             .f32_literal => |float| std.mem.writeInt(u32, value.bytes[0..4], @bitCast(float), .little),
             .dec_literal => |dec| std.mem.writeInt(i128, value.bytes[0..16], dec, .little),
             .str_literal => |str| return try self.evalStr(str, target_layout),
-            .static_data => |id| return try self.cloneValueAs(try self.evaluateStatic(id), target_layout),
+            .static_data => |read| return try self.cloneValueAs(try self.evaluateStatic(read.id), target_layout),
             .bytes_literal => |list| return try self.evalBytes(list, target_layout),
             .boxy_dynamic_num_literal,
             .boxy_dynamic_frac_literal,

@@ -77,8 +77,8 @@ fn inspectWideRecordConstruction(store: *const lir.LirStore, layouts: *const @im
     for (0..store.cfStmtCount()) |index| {
         const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
         if (stmt == .assign_struct and stmt.assign_struct.fields.len == 50) builds += 1;
-        if (stmt != .assign_ref or stmt.assign_ref.op != .field) continue;
-        const source = store.getLocal(stmt.assign_ref.op.field.source);
+        if (stmt != .assign_ref or stmt.assign_ref.op.kind != .field) continue;
+        const source = store.getLocal(stmt.assign_ref.op.source);
         const source_layout = layouts.getLayout(source.layout_idx);
         if (source_layout.tag == .struct_ and layouts.getStructInfo(source_layout).fields.len == 50) projections += 1;
     }
