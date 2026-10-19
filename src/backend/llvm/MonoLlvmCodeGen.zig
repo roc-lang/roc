@@ -365,12 +365,21 @@ pub const MonoLlvmCodeGen = struct {
     static_data_symbols: std.StringHashMap(LlvmBuilder.Constant),
     /// Distinguishes callable exports from independent modules in one JIT library.
     static_symbol_prefix: []const u8 = "",
-    /// Emit an object-cache pack's object: every procedure, static datum,
-    /// and helper is internal to the object, and each entrypoint is a weak
-    /// C-ABI entry, so the object links beside the program and beside other
-    /// packs' objects (two of which may export the same entry) without any
-    /// other name in common.
+    /// Emit an object-cache pack's object: every procedure and helper is
+    /// internal to the object, each constant is weak data under its content
+    /// name (`pack_data_names`), and each entrypoint is a weak C-ABI entry,
+    /// so the object links beside the program and beside other packs'
+    /// objects, which may define the same entries and constants.
     object_cache_pack: bool = false,
+    /// By static-data export row, the content name an object-cache pack's
+    /// object defines each export under (`ProcArtifact.ContentNames.
+    /// initObjectData`); a host-visible export keeps its own name and stays
+    /// internal to the object.
+    pack_data_names: []const []const u8 = &.{},
+    /// The variable defining each static-data export of an object-cache
+    /// pack, by export row, declared before any procedure and initialized
+    /// once every procedure its code pointers name is declared.
+    pack_data_variables: std.ArrayList(LlvmBuilder.Variable.Index) = .empty,
     runtime_error_func: ?LlvmBuilder.Function.Index = null,
     rc_helpers: std.AutoHashMap(u64, RcHelperEntry),
     /// Atomic helpers required by relocations in the separately emitted
@@ -665,6 +674,7 @@ pub const MonoLlvmCodeGen = struct {
         self.static_data_export_rows.deinit();
         self.clearStaticDataSymbols();
         self.static_data_symbols.deinit();
+        self.pack_data_variables.deinit(self.allocator);
         self.rc_helpers.deinit();
         self.boxy_capture_drop_helpers.deinit();
         self.boxy_dict_thunks.deinit();
@@ -961,9 +971,10 @@ pub const MonoLlvmCodeGen = struct {
             if (self.target.ofmt == .elf) try self.embedGdbScript(&builder);
         }
 
-        if (self.object_cache_pack) try self.definePackStaticData();
+        if (self.object_cache_pack) try self.declarePackStaticData();
         const procs = self.store.getProcSpecs();
         try self.compileAllProcSpecs(procs);
+        if (self.object_cache_pack) try self.initializePackStaticData();
         for (self.static_data_rc_helpers) |helper_key| {
             _ = try self.declareRcHelper(helper_key, .atomic);
         }
@@ -3932,17 +3943,19 @@ pub const MonoLlvmCodeGen = struct {
             .init_uninitialized => |uninit| {
                 try work.append(wa, .{ .node = uninit.next });
             },
-            .assign_call => |assign| if (assign.replaces_frame) {
+            .assign_call => |assign| if (self.store.stmtRowOrDefault(assign.extra).replaces_frame) {
                 try self.emitFrameReplacingCall(assign.proc, assign.args);
             } else {
-                try self.emitDirectCall(assign.target, assign.proc, assign.args, assign.out_desc, assign.is_cold);
-                try self.emitDrivePending(assign.drive, assign.target, assign.result_desc, assign.out_desc);
-                if (assign.returns_pending) |pending| try self.emitReturnIfCallPending(pending);
+                const extra = self.store.stmtRowOrDefault(assign.extra);
+                try self.emitDirectCall(assign.target, assign.proc, assign.args, extra.out_desc, extra.is_cold);
+                try self.emitDrivePending(extra.drive, assign.target, extra.result_desc, extra.out_desc);
+                if (extra.returns_pending) |pending| try self.emitReturnIfCallPending(pending);
                 try work.append(wa, .{ .node = assign.next });
             },
-            .assign_call_erased => |assign| {
+            .assign_call_erased => |assign_stmt| {
+                const assign = self.store.stmtRow(assign_stmt.data);
                 try self.emitErasedCall(
-                    assign.target,
+                    assign_stmt.target,
                     assign.closure,
                     assign.args,
                     assign.arg_layouts,
@@ -3954,13 +3967,14 @@ pub const MonoLlvmCodeGen = struct {
                     assign.reuse_closure,
                     assign.deferred,
                 );
-                try self.emitDrivePending(assign.drive, assign.target, assign.result_desc, assign.out_desc);
+                try self.emitDrivePending(assign.drive, assign_stmt.target, assign.result_desc, assign.out_desc);
                 if (assign.returns_pending) |pending| try self.emitReturnIfCallPending(pending);
-                try work.append(wa, .{ .node = assign.next });
+                try work.append(wa, .{ .node = assign_stmt.next });
             },
-            .assign_packed_erased_fn => |assign| {
+            .assign_packed_erased_fn => |assign_stmt| {
+                const assign = self.store.stmtRow(assign_stmt.data);
                 try self.emitPackedErasedFn(
-                    assign.target,
+                    assign_stmt.target,
                     assign.proc,
                     assign.capture,
                     assign.capture_layout,
@@ -3969,10 +3983,10 @@ pub const MonoLlvmCodeGen = struct {
                     assign.reuse,
                     assign.reuse_unique,
                 );
-                try work.append(wa, .{ .node = assign.next });
+                try work.append(wa, .{ .node = assign_stmt.next });
             },
             .assign_boxy_desc_ref => |assign| {
-                try self.emitBoxyDescRef(assign);
+                try self.emitBoxyDescRef(assign.target, self.store.stmtRow(assign.data));
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_boxy_dict_ref => |assign| {
@@ -3980,16 +3994,16 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = assign.next });
             },
             inline .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload => |assign, tag| {
-                try self.emitBoxyValueOp(boxy_call_plan.forStatement(tag, assign));
+                try self.emitBoxyValueOp(boxy_call_plan.forStatement(tag, assign.target, self.store.stmtRow(assign.data)));
                 try work.append(wa, .{ .node = assign.next });
             },
             .boxy_tag_match => |tag_match| try self.emitBoxyTagMatch(tag_match, wa, work),
             .assign_call_dict => |assign| {
-                try self.emitBoxyCallDict(assign);
+                try self.emitBoxyCallDict(assign.target, self.store.stmtRow(assign.data));
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_low_level => |assign| {
-                try self.emitLowLevel(assign.target, assign.op, assign.args, assign.unique_args, assign.interchangeable, assign.simd_concat_count);
+                try self.emitLowLevel(assign.target, assign.op, assign.args, self.store.stmtRowOrDefault(assign.extra).unique_args, self.store.stmtRowOrDefault(assign.extra).interchangeable, self.store.stmtRowOrDefault(assign.extra).simd_concat_count);
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_list => |assign| {
@@ -4035,19 +4049,20 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = marker.next });
             },
             .incref => |inc| {
-                try self.emitExplicitRcStmt(inc.rc, .incref, inc.value, inc.count, inc.atomicity);
+                try self.emitExplicitRcStmt(self.store.rcHelper(inc.rc), .incref, inc.value, inc.count, inc.atomicity);
                 try work.append(wa, .{ .node = inc.next });
             },
             .decref => |dec| {
-                try self.emitExplicitRcStmt(dec.rc, .decref, dec.value, 1, dec.atomicity);
+                try self.emitExplicitRcStmt(self.store.rcHelper(dec.rc), .decref, dec.value, 1, dec.atomicity);
                 try work.append(wa, .{ .node = dec.next });
             },
-            .decref_if_initialized => |dec| {
-                try self.emitDecrefIfInitialized(dec.cond, dec.cond_mask, dec.value, dec.rc, dec.atomicity);
-                try work.append(wa, .{ .node = dec.next });
+            .decref_if_initialized => |dec_stmt| {
+                const dec = self.store.stmtRow(dec_stmt.data);
+                try self.emitDecrefIfInitialized(dec_stmt.cond, dec.cond_mask, dec_stmt.value, dec.rc, dec.atomicity);
+                try work.append(wa, .{ .node = dec_stmt.next });
             },
             .free => |free_stmt| {
-                try self.emitExplicitRcStmt(free_stmt.rc, .free, free_stmt.value, 1, free_stmt.atomicity);
+                try self.emitExplicitRcStmt(self.store.rcHelper(free_stmt.rc), .free, free_stmt.value, 1, free_stmt.atomicity);
                 try work.append(wa, .{ .node = free_stmt.next });
             },
             .switch_stmt => |sw| try self.emitSwitch(sw, wa, work),
@@ -4089,47 +4104,47 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitAssignRef(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LIR.RefOp) Error!void {
         const target_slot = self.slot(target);
-        switch (op) {
-            .local => |source| try self.copyLocal(target, source),
-            inline .list_reinterpret, .nominal => |ref| try self.copyLocal(target, ref.backing_ref),
-            .discriminant => |ref| {
+        switch (op.kind) {
+            .local => try self.copyLocal(target, op.source),
+            inline .list_reinterpret, .nominal => try self.copyLocal(target, op.source),
+            .discriminant => {
                 try self.prepareLocalWrite(target);
-                try self.materializeLocalIfDeferred(ref.source);
-                const base = try self.resolveTagBase(ref.source);
+                try self.materializeLocalIfDeferred(op.source);
+                const base = try self.resolveTagBase(op.source);
                 const discrim = try self.readTagDiscriminant(base.ptr, base.layout_idx);
                 try self.storeIntToLayout(target_slot.ptr, discrim, target_slot.layout_idx);
             },
-            .field => |ref| {
+            .field => {
                 try self.prepareLocalWrite(target);
-                try self.materializeLocalIfDeferred(ref.source);
-                const base = try self.resolveStructBase(ref.source);
+                try self.materializeLocalIfDeferred(op.source);
+                const base = try self.resolveStructBase(op.source);
                 const base_layout = self.layoutValue(base.layout_idx);
                 if (base_layout.tag != .struct_) return error.CompilationFailed;
-                const offset = self.layouts().getStructFieldOffsetByOriginalIndex(base_layout.getStruct().idx, ref.field_idx);
-                const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(base_layout.getStruct().idx, ref.field_idx);
+                const offset = self.layouts().getStructFieldOffsetByOriginalIndex(base_layout.getStruct().idx, op.index);
+                const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(base_layout.getStruct().idx, op.index);
                 const src = try self.offsetPtr(base.ptr, offset);
                 try self.copyBytes(target_slot.ptr, src, self.layoutDataSize(field_layout), self.alignmentForLayout(field_layout));
             },
-            .tag_payload => |ref| {
+            .tag_payload => {
                 try self.prepareLocalWrite(target);
-                try self.materializeLocalIfDeferred(ref.source);
-                const base = try self.resolveTagBase(ref.source);
-                const payload_layout = self.tagPayloadLayout(base.layout_idx, ref.tag_discriminant);
+                try self.materializeLocalIfDeferred(op.source);
+                const base = try self.resolveTagBase(op.source);
+                const payload_layout = self.tagPayloadLayout(base.layout_idx, op.tag_discriminant);
                 const payload_layout_val = self.layoutValue(payload_layout);
                 var src = base.ptr;
                 var copy_layout = payload_layout;
                 if (payload_layout_val.tag == .struct_) {
-                    const offset = self.layouts().getStructFieldOffsetByOriginalIndex(payload_layout_val.getStruct().idx, ref.payload_idx);
+                    const offset = self.layouts().getStructFieldOffsetByOriginalIndex(payload_layout_val.getStruct().idx, op.index);
                     src = try self.offsetPtr(base.ptr, offset);
-                    copy_layout = self.layouts().getStructFieldLayoutByOriginalIndex(payload_layout_val.getStruct().idx, ref.payload_idx);
+                    copy_layout = self.layouts().getStructFieldLayoutByOriginalIndex(payload_layout_val.getStruct().idx, op.index);
                 }
                 try self.copyBytes(target_slot.ptr, src, self.layoutDataSize(copy_layout), self.alignmentForLayout(copy_layout));
             },
-            .tag_payload_struct => |ref| {
+            .tag_payload_struct => {
                 try self.prepareLocalWrite(target);
-                try self.materializeLocalIfDeferred(ref.source);
-                const base = try self.resolveTagBase(ref.source);
-                const payload_layout = self.tagPayloadLayout(base.layout_idx, ref.tag_discriminant);
+                try self.materializeLocalIfDeferred(op.source);
+                const base = try self.resolveTagBase(op.source);
+                const payload_layout = self.tagPayloadLayout(base.layout_idx, op.tag_discriminant);
                 try self.copyBytes(target_slot.ptr, base.ptr, self.layoutDataSize(payload_layout), self.alignmentForLayout(payload_layout));
             },
         }
@@ -4140,14 +4155,23 @@ pub const MonoLlvmCodeGen = struct {
         const slot_v = self.slot(target);
         switch (value) {
             .i64_literal => |lit| try self.storeIntLiteral(slot_v.ptr, slot_v.layout_idx, lit.value),
-            .i128_literal => |lit| try self.storeI128Literal(slot_v.ptr, slot_v.layout_idx, lit.value),
+            .i128_literal => |lit_id| blk_lit: {
+                const lit = self.store.stmtRow(lit_id);
+                break :blk_lit try self.storeI128Literal(slot_v.ptr, slot_v.layout_idx, lit.value);
+            },
             .f64_literal => |lit| try self.storeFloatLiteral(slot_v.ptr, .f64, lit),
             .f32_literal => |lit| try self.storeFloatLiteral(slot_v.ptr, .f32, lit),
             .dec_literal => |lit| try self.storeI128Literal(slot_v.ptr, .dec, lit),
             .str_literal => |str_idx| try self.emitStrLiteral(slot_v.ptr, str_idx),
-            .boxy_dynamic_num_literal => |lit| try self.emitBoxyDynamicLiteral(target, lit.value, lit.desc, lit.default_layout, false),
-            .boxy_dynamic_frac_literal => |lit| try self.emitBoxyDynamicLiteral(target, lit.dec_bits, lit.desc, lit.default_layout, true),
-            .static_data => |id| try self.emitStaticDataLiteral(slot_v, id),
+            .boxy_dynamic_num_literal => |id| {
+                const lit = self.store.stmtRow(id);
+                try self.emitBoxyDynamicLiteral(target, lit.value, lit.desc, lit.default_layout, false);
+            },
+            .boxy_dynamic_frac_literal => |id| {
+                const lit = self.store.stmtRow(id);
+                try self.emitBoxyDynamicLiteral(target, lit.dec_bits, lit.desc, lit.default_layout, true);
+            },
+            .static_data => |read| try self.emitStaticDataLiteral(slot_v, read.id),
             .bytes_literal => |bytes_idx| try self.emitBytesLiteral(slot_v.ptr, bytes_idx),
             .proc_ref => |proc_id| {
                 const func = self.proc_registry.get(@backingInt(proc_id)) orelse return error.CompilationFailed;
@@ -4247,8 +4271,8 @@ pub const MonoLlvmCodeGen = struct {
         try self.storePointer(self.slot(desc_local).ptr, try self.loadPointer(out_desc_ptr));
     }
 
-    fn emitBoxyDescRef(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
-        try self.prepareLocalWrite(assign.target);
+    fn emitBoxyDescRef(self: *MonoLlvmCodeGen, target: LocalId, assign: anytype) Error!void {
+        try self.prepareLocalWrite(target);
         const ptr_ty = try self.ptrType();
         const captures = self.store.getLocalSpan(assign.captures);
         var desc: LlvmBuilder.Value = undefined;
@@ -4322,7 +4346,7 @@ pub const MonoLlvmCodeGen = struct {
         } else if (assign.tag_ext) {
             desc = try self.callBoxy("roc_boxy_tag_ext_desc", ptr_ty, &.{ptr_ty}, &.{desc});
         }
-        try self.storePointer(self.slot(assign.target).ptr, desc);
+        try self.storePointer(self.slot(target).ptr, desc);
     }
 
     fn emitBoxyDictRef(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
@@ -4416,7 +4440,7 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitBoxyTagMatch(self: *MonoLlvmCodeGen, tag_match: anytype, wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
-        const matches = try self.callBoxyPlan(&boxy_call_plan.tagMatch(tag_match), .i1, undefined);
+        const matches = try self.callBoxyPlan(&boxy_call_plan.tagMatch(tag_match, self.store.stmtRow(tag_match.source_desc)), .i1, undefined);
         const on_match = wip.block(0, "boxy_tag_match") catch return error.OutOfMemory;
         const on_miss = wip.block(0, "boxy_tag_miss") catch return error.OutOfMemory;
         _ = wip.brCond(matches, on_match, on_miss, .none) catch return error.OutOfMemory;
@@ -4424,8 +4448,8 @@ pub const MonoLlvmCodeGen = struct {
         try work.append(wa, .{ .boxy_tag_body = .{ .block = on_match, .stmt = tag_match.on_match } });
     }
 
-    fn emitBoxyCallDict(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
-        try self.prepareLocalWrite(assign.target);
+    fn emitBoxyCallDict(self: *MonoLlvmCodeGen, target: LocalId, assign: anytype) Error!void {
+        try self.prepareLocalWrite(target);
         if (self.builder == null) return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const ptr_ty = try self.ptrType();
@@ -4466,7 +4490,7 @@ pub const MonoLlvmCodeGen = struct {
             "roc_boxy_call_dict",
             &.{ ptr_ty, ptr_ty, ptr_ty, .i32, .i32, ptr_ty, self.ptrSizedIntType(), ptr_ty, self.ptrSizedIntType(), ptr_ty, .i32 },
             &.{
-                try self.boxyValuePtr(assign.target),
+                try self.boxyValuePtr(target),
                 out_desc,
                 try self.resolveBoxyDict(assign.dict),
                 try self.boxyInt(.i32, assign.method_slot),
@@ -4476,10 +4500,10 @@ pub const MonoLlvmCodeGen = struct {
                 hidden_ptr,
                 try self.boxyInt(self.ptrSizedIntType(), hidden_locals.len),
                 if (assign.result_desc) |ref| try self.resolveBoxyDesc(ref) else try self.boxyNullPtr(),
-                try self.boxyInt(.i32, @backingInt(self.localLayout(assign.target))),
+                try self.boxyInt(.i32, @backingInt(self.localLayout(target))),
             },
         );
-        try self.storeBoxyOutDesc(assign.target, out_desc);
+        try self.storeBoxyOutDesc(target, out_desc);
     }
 
     fn emitBoxyDynamicLiteral(
@@ -7955,7 +7979,7 @@ pub const MonoLlvmCodeGen = struct {
         end_ptr: LlvmBuilder.Value,
     };
 
-    fn emitStrMatch(self: *MonoLlvmCodeGen, str_match: anytype, wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
+    fn emitStrMatch(self: *MonoLlvmCodeGen, str_match: @FieldType(lir.LIR.CFStmt, "str_match"), wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
 
         try self.materializeAllDeferredStrCaptures();
@@ -7963,7 +7987,9 @@ pub const MonoLlvmCodeGen = struct {
 
         const on_miss_block = wip.block(0, "str_match_miss") catch return error.OutOfMemory;
         const source = try self.emitStrMatchSourceShape(self.slot(str_match.source).ptr);
-        const match_body = try self.emitStrMatchArmTest(str_match.source, source, str_match, on_miss_block);
+        const pattern = self.store.stmtRow(str_match.data);
+        const arm = .{ .prefix = pattern.prefix, .steps = pattern.steps, .end = pattern.end, .on_match = str_match.on_match };
+        const match_body = try self.emitStrMatchArmTest(str_match.source, source, arm, on_miss_block);
         try work.append(wa, .{ .str_match_body = .{ .block = on_miss_block, .stmt = str_match.on_miss } });
         try work.append(wa, .{ .str_match_body = match_body });
     }
@@ -9167,7 +9193,9 @@ pub const MonoLlvmCodeGen = struct {
         if (self.static_data_globals.get(raw_id)) |value| return value;
 
         const builder = self.builder orelse return error.CompilationFailed;
-        if (self.static_data_export_rows.get(raw_id)) |row| {
+        // A pack's object reads its own definition of every export.
+        const export_row = if (self.object_cache_pack) null else self.static_data_export_rows.get(raw_id);
+        if (export_row) |row| {
             const data_export = self.static_data_exports[row];
             if (data_export.symbol_offset == 0 and data_export.bytes.len >= size) {
                 if (try self.frozenExportConstant(data_export)) |initializer| {
@@ -9192,9 +9220,10 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     /// The image of a frozen export as a constant: its bytes, with each
-    /// address relocation replaced by the target symbol's address plus the
-    /// addend. Null when a relocation has no constant expression here: a
-    /// function pointer, or a pointer field the target's word alignment
+    /// relocation replaced by the target's address plus the addend. Null when
+    /// a relocation has no constant expression here: a function pointer
+    /// outside an object-cache pack, whose object defines every function its
+    /// constants point at, or a pointer field the target's word alignment
     /// cannot place in a packed struct.
     fn frozenExportConstant(self: *MonoLlvmCodeGen, data_export: lir.Program.StaticDataExport) Error!?LlvmBuilder.Constant {
         const image = (try self.frozenExportImage(data_export, true)) orelse return null;
@@ -9217,7 +9246,7 @@ pub const MonoLlvmCodeGen = struct {
         }
         const word: usize = self.targetWordSize();
         for (data_export.relocations) |relocation| {
-            if (relocation.kind != .address or relocation.rc_helper != null) return null;
+            if (relocation.kind == .function_pointer and !self.object_cache_pack) return null;
             if (relocation.offset % word != 0 or relocation.offset > data_export.bytes.len or word > data_export.bytes.len - relocation.offset) return null;
         }
         const sorted = self.allocator.dupe(lir.Program.StaticDataRelocation, data_export.relocations) catch return error.OutOfMemory;
@@ -9243,7 +9272,10 @@ pub const MonoLlvmCodeGen = struct {
                 if (with_value) try field_values.append(self.allocator, chunk);
             }
             if (with_value) {
-                const target = try self.staticDataSymbol(relocation.target_symbol_name);
+                const target = switch (relocation.kind) {
+                    .address => try self.staticDataSymbol(relocation.target_symbol_name),
+                    .function_pointer => try self.packFunctionPointer(relocation),
+                };
                 const addend = builder.intConst(.i64, relocation.addend) catch return error.OutOfMemory;
                 const address = builder.gepConst(.normal, .i8, target, null, &.{addend}) catch return error.OutOfMemory;
                 try field_values.append(self.allocator, address);
@@ -9263,34 +9295,76 @@ pub const MonoLlvmCodeGen = struct {
         };
     }
 
-    /// Define every static-data export inside an object-cache pack's object
-    /// as an internal constant, so the object carries the data its code
-    /// reads and links beside any other object without a name in common.
-    /// Every export is declared before any is initialized, so constants that
-    /// point at one another resolve. An export whose image has no constant
-    /// form here (a code pointer, or a pointer field off word alignment)
-    /// fails the pack, which is then not written.
-    fn definePackStaticData(self: *MonoLlvmCodeGen) Error!void {
+    /// Declare every static-data export inside an object-cache pack's object
+    /// as a constant, so the object carries the data its code reads. Each
+    /// export its program named for itself is weak data under its content
+    /// name, which every pack that carries the same constant defines alike,
+    /// so the link keeps one; its symbol marks the datum's first byte, and
+    /// the object addresses the export `symbol_offset` bytes in. A
+    /// host-visible export is internal to the object. Exports with the same
+    /// content share one definition. Every export is declared before any is
+    /// initialized, so constants that point at one another resolve. An
+    /// export whose image has no constant form here (a pointer field off
+    /// word alignment) fails the pack, which is then not written.
+    fn declarePackStaticData(self: *MonoLlvmCodeGen) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        const variables = self.allocator.alloc(LlvmBuilder.Variable.Index, self.static_data_exports.len) catch return error.OutOfMemory;
-        defer self.allocator.free(variables);
-        for (self.static_data_exports, variables, 0..) |data_export, *variable, row| {
+        if (self.pack_data_names.len != self.static_data_exports.len) {
+            llvmInvariantFmt("an object-cache pack named {d} of its {d} static-data exports", .{ self.pack_data_names.len, self.static_data_exports.len });
+        }
+        self.pack_data_variables.clearRetainingCapacity();
+        try self.pack_data_variables.ensureTotalCapacity(self.allocator, self.static_data_exports.len);
+        var by_content = std.StringHashMap(LlvmBuilder.Variable.Index).init(self.allocator);
+        defer by_content.deinit();
+        for (self.static_data_exports, self.pack_data_names, 0..) |data_export, content_name, row| {
             const image = (try self.frozenExportImage(data_export, false)) orelse return error.CompilationFailed;
-            const name = builder.strtabStringFmt(".roc.pack_data.{d}", .{row}) catch return error.OutOfMemory;
-            variable.* = builder.addVariable(name, image.ty, .default) catch return error.OutOfMemory;
-            variable.ptrConst(builder).global.setLinkage(.internal, builder);
-            variable.setMutability(.constant, builder);
-            variable.setAlignment(LlvmBuilder.Alignment.fromByteUnits(@max(data_export.alignment, 1)), builder);
+            const shared = if (data_export.is_exported) null else try by_content.getOrPut(content_name);
+            const variable = if (shared != null and shared.?.found_existing) shared.?.value_ptr.* else declare: {
+                const name = if (data_export.is_exported)
+                    builder.strtabStringFmt(".roc.pack_data.{d}", .{row}) catch return error.OutOfMemory
+                else
+                    builder.strtabString(content_name) catch return error.OutOfMemory;
+                const variable = builder.addVariable(name, image.ty, .default) catch return error.OutOfMemory;
+                variable.ptrConst(builder).global.setLinkage(if (data_export.is_exported) .internal else .weak_odr, builder);
+                variable.setMutability(.constant, builder);
+                variable.setAlignment(LlvmBuilder.Alignment.fromByteUnits(@max(data_export.alignment, 1)), builder);
+                if (shared) |entry| entry.value_ptr.* = variable;
+                break :declare variable;
+            };
+            self.pack_data_variables.appendAssumeCapacity(variable);
             const offset = builder.intConst(.i64, data_export.symbol_offset) catch return error.OutOfMemory;
             const address = builder.gepConst(.normal, .i8, variable.toConst(builder), null, &.{offset}) catch return error.OutOfMemory;
             const key = self.allocator.dupe(u8, data_export.symbol_name) catch return error.OutOfMemory;
             errdefer self.allocator.free(key);
             try self.static_data_symbols.put(key, address);
         }
-        for (self.static_data_exports, variables) |data_export, variable| {
+    }
+
+    /// Initialize the exports `declarePackStaticData` declared, once every
+    /// procedure their code pointers name is declared.
+    fn initializePackStaticData(self: *MonoLlvmCodeGen) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        for (self.static_data_exports, self.pack_data_variables.items) |data_export, variable| {
+            if (variable.ptrConst(builder).init != .no_init) continue;
             const initializer = (try self.frozenExportConstant(data_export)) orelse return error.CompilationFailed;
             variable.setInitializer(initializer, builder) catch return error.OutOfMemory;
         }
+    }
+
+    /// The function a code pointer in an object-cache pack's constant names,
+    /// which the pack's object defines: the procedure of an erased callable
+    /// or procedure reference, or the refcount helper an erased callable
+    /// drops its capture with.
+    fn packFunctionPointer(self: *MonoLlvmCodeGen, relocation: lir.Program.StaticDataRelocation) Error!LlvmBuilder.Constant {
+        const builder = self.builder orelse return error.CompilationFailed;
+        if (relocation.rc_helper) |helper| {
+            const function = (try self.declareRcHelper(helper, .atomic)) orelse
+                llvmInvariantFmt("a static code pointer named the no-op refcount helper {x}", .{helper.encode()});
+            return function.toConst(builder);
+        }
+        const proc_id = relocation.procedure orelse
+            llvmInvariantFmt("static code pointer {s} names no procedure", .{relocation.target_symbol_name});
+        const function = self.proc_registry.get(@backingInt(proc_id)) orelse return error.CompilationFailed;
+        return function.toConst(builder);
     }
 
     /// Declares a readonly-object symbol once and returns its address.
@@ -14059,6 +14133,63 @@ test "static-data slots with constant images are internal constants and function
     const callable = builder.variables.items[builder.variables.items.len - 1];
     try std.testing.expectEqual(.external, callable.global.ptrConst(&builder).linkage);
     try std.testing.expect(callable.init == .no_init);
+}
+
+test "object-cache pack constants are weak data under their content names and point at the object's own functions" {
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u64);
+    defer layouts.deinit();
+    const proc = try store.addProcSpec(.{ .name = .fromRaw(1), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .bool }, .none);
+    const helper: layout.RcHelperKey = .{ .op = .decref, .layout_idx = .str };
+    const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .aarch64, .os_tag = .macos });
+    var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, &.{}, &.{}, &.{}, target);
+    defer codegen.deinit();
+    codegen.layout_store = &layouts;
+    codegen.object_cache_pack = true;
+    const node = [_]lir.Program.StaticDataRelocation{.{ .offset = 8, .target_symbol_name = "roc__d0_1", .target = .{ .data_symbol = @fromBackingInt(1) } }};
+    const callable = [_]lir.Program.StaticDataRelocation{
+        .{ .offset = 0, .target_symbol_name = "roc__p1", .kind = .function_pointer, .procedure = proc },
+        .{ .offset = 8, .target_symbol_name = "roc__rc_decref_str", .kind = .function_pointer, .rc_helper = helper },
+    };
+    var exports = [_]lir.Program.StaticDataExport{
+        .{ .symbol_name = "roc__d0", .value_id = @fromBackingInt(2), .bytes = &(@as([16]u8, @splat(0))), .alignment = 8, .is_exported = false, .relocations = &node },
+        .{ .symbol_name = "roc__d0_1", .bytes = &(@as([16]u8, @splat(1))), .symbol_offset = 8, .alignment = 8, .is_exported = false },
+        .{ .symbol_name = "roc__d1", .value_id = @fromBackingInt(1), .bytes = &(@as([16]u8, @splat(0))), .alignment = 8, .is_exported = false, .relocations = &callable },
+        .{ .symbol_name = "roc__answer", .bytes = &(@as([8]u8, @splat(2))), .alignment = 8 },
+        .{ .symbol_name = "roc__d2", .bytes = &(@as([16]u8, @splat(1))), .symbol_offset = 8, .alignment = 8, .is_exported = false },
+    };
+    const names = [_][]const u8{ "roc__hnode_parent", "roc__hnode", "roc__hcallable", "roc__answer", "roc__hnode" };
+    codegen.pack_data_names = &names;
+    try codegen.setStaticDataExports(&exports);
+    var builder = try codegen.createBuilder("pack_constants");
+    defer builder.deinit();
+    codegen.builder = &builder;
+    defer codegen.builder = null;
+
+    try codegen.declarePackStaticData();
+    try codegen.declareProcSpec(proc, store.getProcSpec(proc));
+    try codegen.initializePackStaticData();
+    const variables = codegen.pack_data_variables.items;
+    try std.testing.expectEqual(exports.len, variables.len);
+    for (variables, names, exports) |variable, name, data_export| {
+        const global = variable.ptrConst(&builder).global;
+        if (!data_export.is_exported) try std.testing.expectEqualStrings(name, global.name(&builder).slice(&builder).?);
+        try std.testing.expectEqual(if (data_export.is_exported) LlvmBuilder.Linkage.internal else .weak_odr, global.ptrConst(&builder).linkage);
+        try std.testing.expectEqual(.constant, variable.ptrConst(&builder).mutability);
+        try std.testing.expect(variable.ptrConst(&builder).init != .no_init);
+    }
+    // Exports with the same content share one definition.
+    try std.testing.expectEqual(variables[1], variables[4]);
+    // The code pointers name the procedure and the helper the object defines.
+    try std.testing.expect(codegen.rc_helpers.count() == 1);
+
+    // Code reads a slot through the pack's own definition, never a copy.
+    const variable_count = builder.variables.items.len;
+    _ = try codegen.staticDataGlobal(@fromBackingInt(2), 16);
+    _ = try codegen.staticDataGlobal(@fromBackingInt(1), 16);
+    try std.testing.expectEqual(variable_count, builder.variables.items.len);
 }
 
 test "frozen relocation offsets are bounded before host indexing for either target width" {

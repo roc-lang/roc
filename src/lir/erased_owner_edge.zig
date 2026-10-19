@@ -17,16 +17,16 @@ const LirStore = @import("LirStore.zig");
 /// The local `op` reads when the read preserves the exact pointer
 /// representation of a single erased-callable allocation in `target`.
 pub fn transparentSource(store: *const LirStore, layouts: *const layout_mod.Store, op: LIR.RefOp, target: LIR.LocalId) ?LIR.LocalId {
-    const source = switch (op) {
-        .local => |local| local,
-        .nominal => |nominal| nominal.backing_ref,
-        inline .tag_payload, .tag_payload_struct => |payload| blk: {
-            if (payload.variant_index != 0) break :blk null;
-            const source_layout = layouts.getLayout(store.getLocal(payload.source).layout_idx);
+    const source = switch (op.kind) {
+        .local => op.source,
+        .nominal => op.source,
+        inline .tag_payload, .tag_payload_struct => blk: {
+            if (op.variant_index != 0) break :blk null;
+            const source_layout = layouts.getLayout(store.getLocal(op.source).layout_idx);
             if (source_layout.tag != .tag_union) break :blk null;
             const data = layouts.getTagUnionData(source_layout.getTagUnion().idx);
             if (data.discriminant_size != 0) break :blk null;
-            break :blk payload.source;
+            break :blk op.source;
         },
         .discriminant, .field, .list_reinterpret => null,
     } orelse return null;
@@ -73,8 +73,8 @@ test "local and nominal reads of a pointer-width source are transparent" {
     defer t.deinit();
     const source = try t.local(t.erased_callable);
     const target = try t.local(t.erased_callable);
-    try testing.expectEqual(source, t.edge(.{ .local = source }, target).?);
-    try testing.expectEqual(source, t.edge(.{ .nominal = .{ .backing_ref = source } }, target).?);
+    try testing.expectEqual(source, t.edge(LIR.RefOp.local(source), target).?);
+    try testing.expectEqual(source, t.edge(LIR.RefOp.nominal(source), target).?);
 }
 
 test "transparent edges require pointer width on both sides" {
@@ -83,9 +83,9 @@ test "transparent edges require pointer width on both sides" {
     const pointer = try t.local(t.erased_callable);
     const wide = try t.local(.str);
     const narrow = try t.local(.u32);
-    try testing.expectEqual(@as(?LIR.LocalId, null), t.edge(.{ .local = wide }, try t.local(.str)));
-    try testing.expectEqual(@as(?LIR.LocalId, null), t.edge(.{ .local = pointer }, narrow));
-    try testing.expectEqual(@as(?LIR.LocalId, null), t.edge(.{ .nominal = .{ .backing_ref = narrow } }, pointer));
+    try testing.expectEqual(@as(?LIR.LocalId, null), t.edge(LIR.RefOp.local(wide), try t.local(.str)));
+    try testing.expectEqual(@as(?LIR.LocalId, null), t.edge(LIR.RefOp.local(pointer), narrow));
+    try testing.expectEqual(@as(?LIR.LocalId, null), t.edge(LIR.RefOp.nominal(narrow), pointer));
 }
 
 test "zero-discriminant first-variant payload reads are transparent" {
@@ -94,17 +94,8 @@ test "zero-discriminant first-variant payload reads are transparent" {
     const single = try t.layouts.putTagUnion(&.{t.erased_callable});
     const source = try t.local(single);
     const target = try t.local(t.erased_callable);
-    try testing.expectEqual(source, t.edge(.{ .tag_payload = .{
-        .source = source,
-        .payload_idx = 0,
-        .variant_index = 0,
-        .tag_discriminant = 0,
-    } }, target).?);
-    try testing.expectEqual(source, t.edge(.{ .tag_payload_struct = .{
-        .source = source,
-        .variant_index = 0,
-        .tag_discriminant = 0,
-    } }, target).?);
+    try testing.expectEqual(source, t.edge(LIR.RefOp.tagPayload(source, 0, 0, 0), target).?);
+    try testing.expectEqual(source, t.edge(LIR.RefOp.tagPayloadStruct(source, 0, 0), target).?);
 }
 
 test "payload reads of a discriminated union or a later variant are not transparent" {
@@ -115,17 +106,8 @@ test "payload reads of a discriminated union or a later variant are not transpar
     const discriminated = try t.local(pair);
     const single = try t.local(try t.layouts.putTagUnion(&.{t.erased_callable}));
     const target = try t.local(t.erased_callable);
-    try testing.expectEqual(@as(?LIR.LocalId, null), t.edge(.{ .tag_payload = .{
-        .source = discriminated,
-        .payload_idx = 0,
-        .variant_index = 0,
-        .tag_discriminant = 0,
-    } }, target));
-    try testing.expectEqual(@as(?LIR.LocalId, null), t.edge(.{ .tag_payload_struct = .{
-        .source = single,
-        .variant_index = 1,
-        .tag_discriminant = 1,
-    } }, target));
+    try testing.expectEqual(@as(?LIR.LocalId, null), t.edge(LIR.RefOp.tagPayload(discriminated, 0, 0, 0), target));
+    try testing.expectEqual(@as(?LIR.LocalId, null), t.edge(LIR.RefOp.tagPayloadStruct(single, 1, 1), target));
 }
 
 test "discriminant, field, and list reinterpret reads are never transparent" {
@@ -133,9 +115,9 @@ test "discriminant, field, and list reinterpret reads are never transparent" {
     defer t.deinit();
     const source = try t.local(t.erased_callable);
     const target = try t.local(t.erased_callable);
-    try testing.expectEqual(@as(?LIR.LocalId, null), t.edge(.{ .discriminant = .{ .source = source } }, target));
-    try testing.expectEqual(@as(?LIR.LocalId, null), t.edge(.{ .field = .{ .source = source, .field_idx = 0 } }, target));
-    try testing.expectEqual(@as(?LIR.LocalId, null), t.edge(.{ .list_reinterpret = .{ .backing_ref = source } }, target));
+    try testing.expectEqual(@as(?LIR.LocalId, null), t.edge(LIR.RefOp.discriminant(source), target));
+    try testing.expectEqual(@as(?LIR.LocalId, null), t.edge(LIR.RefOp.field(source, 0), target));
+    try testing.expectEqual(@as(?LIR.LocalId, null), t.edge(LIR.RefOp.listReinterpret(source), target));
 }
 
 test "the transparent edge has one definition among its LIR consumers" {

@@ -297,7 +297,7 @@ fn hasLargeStackCallArgument(
         if (stmt == .assign_call and spanHasUnsafeLargeAggregateLocal(store, layouts, stmt.assign_call.args)) {
             return true;
         }
-        if (stmt == .assign_call_erased and spanHasUnsafeLargeAggregateLocal(store, layouts, stmt.assign_call_erased.args)) {
+        if (stmt == .assign_call_erased and spanHasUnsafeLargeAggregateLocal(store, layouts, store.stmtRow(stmt.assign_call_erased.data).args)) {
             return true;
         }
     }
@@ -344,7 +344,7 @@ fn rejectConsumerOwnedLargeStackClosureCaptures(
 
     for (store.getCFStmts()) |stmt| {
         if (stmt == .assign_packed_erased_fn) {
-            const assign = stmt.assign_packed_erased_fn;
+            const assign = store.stmtRow(stmt.assign_packed_erased_fn.data);
             if (assign.capture) |capture| {
                 if (isUnsafeLargeAggregateLocal(store, layouts, capture)) {
                     return error.Issue806UnsafeLargeStackClosureCapture;

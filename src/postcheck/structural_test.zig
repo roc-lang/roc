@@ -24,13 +24,6 @@ fn structFieldType(comptime T: type, comptime name: []const u8) type {
     @compileError("missing struct field: " ++ name);
 }
 
-fn unionPayloadType(comptime T: type, comptime name: []const u8) type {
-    inline for (@typeInfo(T).@"union".field_names, @typeInfo(T).@"union".field_types) |field_name, field_type| {
-        if (std.mem.eql(u8, field_name, name)) return field_type;
-    }
-    @compileError("missing union field: " ++ name);
-}
-
 fn sourceSliceBetween(source: []const u8, start: []const u8, end: []const u8) []const u8 {
     const start_index = std.mem.find(u8, source, start) orelse @panic("missing source slice start marker");
     const after_start = source[start_index..];
@@ -75,10 +68,7 @@ test "post-check row entries carry checked label ids until LIR indices" {
     try std.testing.expect(structFieldType(LambdaMonoType.Field, "name") == names.RecordFieldNameId);
     try std.testing.expect(structFieldType(LambdaMonoType.Tag, "name") == names.TagNameId);
 
-    const lir_field = unionPayloadType(LIR.RefOp, "field");
-    const lir_payload = unionPayloadType(LIR.RefOp, "tag_payload");
-    try std.testing.expect(structFieldType(lir_field, "field_idx") == u32);
-    try std.testing.expect(structFieldType(lir_payload, "payload_idx") == u32);
+    try std.testing.expect(structFieldType(LIR.RefOp, "index") == u32);
 }
 
 test "Monotype record expression lowering does not keep mutable field-store slices across child lowering" {
@@ -715,7 +705,7 @@ test "Monotype loop carries remain graph-native through headers and backedges" {
     const loop_source = sourceSliceBetween(
         lower_source,
         "const LoopCarry = struct",
-        "fn collectReassignedBindersInExpr",
+        "const IterStepShape = struct",
     );
     try expectContains(loop_source, "ty: DraftTypeCell");
     try expectContains(loop_source, "const ty = self.localTypeCell(initial)");

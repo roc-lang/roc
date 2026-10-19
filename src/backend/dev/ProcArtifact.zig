@@ -384,16 +384,61 @@ pub const ContentNames = struct {
             for (artifact.data) |item| try self.items.put(allocator, item.name, item);
         }
         for (set.artifacts) |artifact| {
-            for (artifact.data) |item| {
-                if (!item.program_local_name or self.names.contains(item.name)) continue;
-                var hasher = Sha256.init(.{});
-                _ = try self.write(&hasher, item);
-                const digest = self.digests.get(item.name) orelse unreachable;
-                const name = try std.fmt.allocPrint(self.arena.allocator(), content_data_prefix ++ "{s}", .{&std.fmt.bytesToHex(digest[0..16].*, .lower)});
-                try self.names.put(allocator, item.name, name);
-            }
+            for (artifact.data) |item| try self.nameItem(item);
         }
         return self;
+    }
+
+    /// Content names for the constants an LLVM object pack's object defines
+    /// as weak data (design.md "Object Cache Store"). Not every object format
+    /// can place a weak symbol inside a datum, so each constant is the datum
+    /// whose symbol marks its first byte: one whose symbol sits
+    /// `symbol_offset` bytes in is named with that offset folded into every
+    /// reference to it, and its code addresses it the same way.
+    pub fn initObjectData(allocator: Allocator, exports: []const lir.Program.StaticDataExport) Allocator.Error!ContentNames {
+        var self = ContentNames{ .allocator = allocator, .arena = collections.SingleThreadArena.init(allocator) };
+        errdefer self.deinit();
+        const a = self.arena.allocator();
+        const items = try a.alloc(DataItem, exports.len);
+        for (exports, items) |data_export, *item| {
+            const relocations = try a.alloc(DataRelocation, data_export.relocations.len);
+            for (data_export.relocations, relocations) |relocation, *out| {
+                const name, const anchor: i64 = switch (relocation.target) {
+                    .data_symbol => |target| .{ exports[@backingInt(target)].symbol_name, exports[@backingInt(target)].symbol_offset },
+                    .named => .{ relocation.target_symbol_name, 0 },
+                };
+                out.* = .{
+                    .offset = @intCast(relocation.offset),
+                    .name = name,
+                    .addend = anchor + relocation.addend,
+                    .function = switch (relocation.kind) {
+                        .address => false,
+                        .function_pointer => true,
+                    },
+                };
+            }
+            item.* = .{
+                .name = data_export.symbol_name,
+                .bytes = data_export.bytes,
+                .alignment = data_export.alignment,
+                .symbol_offset = 0,
+                .relocations = relocations,
+                .program_local_name = !data_export.is_exported,
+            };
+        }
+        for (items) |item| try self.items.put(allocator, item.name, item);
+        for (items) |item| try self.nameItem(item);
+        return self;
+    }
+
+    /// Give `item` its content name, when its program named it for itself.
+    fn nameItem(self: *ContentNames, item: DataItem) Allocator.Error!void {
+        if (!item.program_local_name or self.names.contains(item.name)) return;
+        var hasher = Sha256.init(.{});
+        _ = try self.write(&hasher, item);
+        const digest = self.digests.get(item.name) orelse unreachable;
+        const content_name = try std.fmt.allocPrint(self.arena.allocator(), content_data_prefix ++ "{s}", .{&std.fmt.bytesToHex(digest[0..16].*, .lower)});
+        try self.names.put(self.allocator, item.name, content_name);
     }
 
     pub fn deinit(self: *ContentNames) void {
@@ -1630,4 +1675,57 @@ test "constants are named by content across programs, through cycles, and never 
     // The leaf's program-local name is the same in both programs, and its
     // content name is not.
     try testing.expect(!std.mem.eql(u8, one_leaf, names_three.of("roc__d0_2")));
+}
+
+test "an object pack names each constant as the datum anchored at its first byte" {
+    const testing = std.testing;
+    const Export = lir.Program.StaticDataExport;
+    const Relocation = lir.Program.StaticDataRelocation;
+    const zeros = @as([16]u8, @splat('\x00'));
+    const leaf = "\x00\x00\x00\x00\x00\x00\x00\x00leaf!!!!";
+
+    // A parent points at a leaf whose symbol sits 8 bytes in.
+    const to_inner = [_]Relocation{.{ .offset = 0, .target_symbol_name = "roc__d0_1", .target = .{ .data_symbol = @fromBackingInt(1) } }};
+    const inner = [_]Export{
+        .{ .symbol_name = "roc__d0", .bytes = &zeros, .alignment = 8, .is_exported = false, .relocations = &to_inner },
+        .{ .symbol_name = "roc__d0_1", .bytes = leaf, .symbol_offset = 8, .alignment = 8, .is_exported = false },
+        .{ .symbol_name = "roc__answer", .bytes = &zeros, .alignment = 8, .relocations = &to_inner },
+    };
+    // The same memory, with the leaf's symbol at its first byte and the
+    // parent's pointer 8 bytes past it.
+    const to_start = [_]Relocation{.{ .offset = 0, .target_symbol_name = "roc__d3_1", .target = .{ .data_symbol = @fromBackingInt(1) }, .addend = 8 }};
+    const start = [_]Export{
+        .{ .symbol_name = "roc__d3", .bytes = &zeros, .alignment = 8, .is_exported = false, .relocations = &to_start },
+        .{ .symbol_name = "roc__d3_1", .bytes = leaf, .alignment = 8, .is_exported = false },
+    };
+    // A parent pointing at the leaf's first byte instead.
+    const to_leaf_start = [_]Relocation{.{ .offset = 0, .target_symbol_name = "roc__d5_1", .target = .{ .data_symbol = @fromBackingInt(1) } }};
+    const other = [_]Export{
+        .{ .symbol_name = "roc__d5", .bytes = &zeros, .alignment = 8, .is_exported = false, .relocations = &to_leaf_start },
+        .{ .symbol_name = "roc__d5_1", .bytes = leaf, .alignment = 8, .is_exported = false },
+    };
+
+    var inner_names = try ContentNames.initObjectData(testing.allocator, &inner);
+    defer inner_names.deinit();
+    var start_names = try ContentNames.initObjectData(testing.allocator, &start);
+    defer start_names.deinit();
+    var other_names = try ContentNames.initObjectData(testing.allocator, &other);
+    defer other_names.deinit();
+
+    try testing.expect(std.mem.startsWith(u8, inner_names.of("roc__d0"), content_data_prefix));
+    try testing.expectEqualStrings(inner_names.of("roc__d0"), start_names.of("roc__d3"));
+    try testing.expectEqualStrings(inner_names.of("roc__d0_1"), start_names.of("roc__d3_1"));
+    try testing.expect(!std.mem.eql(u8, inner_names.of("roc__d0"), other_names.of("roc__d5")));
+    try testing.expectEqualStrings("roc__answer", inner_names.of("roc__answer"));
+
+    // A constant anchored at its first byte is named as a dev pack names it.
+    var storage: [1]Artifact = undefined;
+    const items = [_]DataItem{
+        testItem("roc__d5", &zeros, &.{testReloc(0, "roc__d5_1", 0)}, true),
+        testItem("roc__d5_1", leaf, &.{}, true),
+    };
+    const set = testDataSet(&storage, &items);
+    var dev_names = try ContentNames.init(testing.allocator, &set);
+    defer dev_names.deinit();
+    try testing.expectEqualStrings(dev_names.of("roc__d5"), other_names.of("roc__d5"));
 }

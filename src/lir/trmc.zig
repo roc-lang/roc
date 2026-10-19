@@ -149,7 +149,7 @@ fn transformProc(
     var tail_site: ?CFStmtId = if (proc.tail_calls) |sites| sites.head else null;
     while (tail_site) |id| {
         tail_count += 1;
-        tail_site = store.getCFStmtImmediate(id).assign_call.tail_call.?.next;
+        tail_site = store.getCFStmtImmediate(id).assign_call.tail_call.next();
     }
     if (construct_count == 0 and tail_count == 0) return null;
     if (builtin.mode == .debug) detection.assertRewrittenStmtsUnshared();
@@ -611,7 +611,7 @@ const Detection = struct {
 
         // A self-call starts a new candidate (after the use checks above, so
         // its arguments invalidate any candidate locals they mention).
-        if (stmt == .assign_call and stmt.assign_call.proc == self.proc_id and stmt.assign_call.tail_call == null) {
+        if (stmt == .assign_call and stmt.assign_call.proc == self.proc_id and !stmt.assign_call.tail_call.isSite()) {
             if (self.scratch.candidates.items.len == max_candidates) {
                 self.bail = true;
                 return;
@@ -695,12 +695,12 @@ const Detection = struct {
             },
             .assign_ref => |s| {
                 if (candidate.state != .tagged) return false;
-                const source = if (s.op == .local)
-                    s.op.local
-                else if (s.op == .nominal)
-                    s.op.nominal.backing_ref
-                else if (s.op == .list_reinterpret)
-                    s.op.list_reinterpret.backing_ref
+                const source = if (s.op.kind == .local)
+                    s.op.source
+                else if (s.op.kind == .nominal)
+                    s.op.source
+                else if (s.op.kind == .list_reinterpret)
+                    s.op.source
                 else
                     return false;
                 if (source != candidate.current()) return false;
@@ -1069,7 +1069,7 @@ const Transform = struct {
         try self.store.replaceCFStmt(ret_stmt, .{ .assign_low_level = .{
             .target = st,
             .op = .ptr_store,
-            .rc_effect = LowLevelOp.ptr_store.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.ptr_store.rcEffect()),
             .args = store_args,
             .next = load,
         } }, origin);
@@ -1086,7 +1086,7 @@ const Transform = struct {
         const cell = blk: {
             var alloc = self.store.getCFStmtImmediate(candidate.box_stmt).assign_low_level;
             alloc.op = .box_alloc_zeroed;
-            alloc.rc_effect = LowLevelOp.box_alloc_zeroed.rcEffect();
+            alloc.rc_effect = try self.store.addRcEffect(LowLevelOp.box_alloc_zeroed.rcEffect());
             alloc.args = empty_args;
             try self.store.replaceCFStmt(candidate.box_stmt, .{ .assign_low_level = alloc }, box_origin);
             break :blk alloc.target;
@@ -1099,7 +1099,7 @@ const Transform = struct {
         const cast = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = next_hole,
             .op = .ptr_cast,
-            .rc_effect = LowLevelOp.ptr_cast.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.ptr_cast.rcEffect()),
             .args = try self.store.addLocalSpan(&.{cell}),
             .next = self.nextOf(candidate.box_stmt),
         } }, box_origin);
@@ -1124,7 +1124,7 @@ const Transform = struct {
         try self.store.replaceCFStmt(candidate.terminal_stmt, .{ .assign_low_level = .{
             .target = st,
             .op = .ptr_store,
-            .rc_effect = LowLevelOp.ptr_store.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.ptr_store.rcEffect()),
             .args = store_args,
             .next = loop_back,
         } }, terminal_origin);
@@ -1134,7 +1134,7 @@ const Transform = struct {
         var site: ?CFStmtId = if (self.store.getProcSpecImmediate(self.proc_id).tail_calls) |sites| sites.head else null;
         while (site) |id| {
             const call = self.store.getCFStmtImmediate(id).assign_call;
-            site = call.tail_call.?.next;
+            site = call.tail_call.next();
             // Every incoming reference reaches the same replacement. The
             // shared return continuation remains available to other paths.
             const loop_back = try self.buildLoopBack(call.args, null, id, trmcOrigin(self.store.stmtOrigin(id)));
@@ -1214,7 +1214,7 @@ const Transform = struct {
             const tmp = try self.addLocal(self.store.getLocal(move.target).layout_idx);
             try self.appendLoopBackStmt(&first, &last, origin, .{ .assign_ref = .{
                 .target = tmp,
-                .op = .{ .local = move.target },
+                .op = .local(move.target),
                 .next = undefined,
             } });
             var index = start;

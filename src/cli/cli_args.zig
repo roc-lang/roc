@@ -378,7 +378,9 @@ const FlagForm = enum {
     /// `--name`, matched exactly. Sets a `bool` field; a flag with no field is
     /// accepted and changes nothing.
     toggle,
-    /// `--name=<value>`, matched by prefix.
+    /// `--name=<value>`: matched when the argument is `--name` exactly (a
+    /// missing value) or starts with `--name=`. The short spelling's value
+    /// follows it directly, so the short spelling is matched by prefix.
     attached,
     /// `--name <value>`, matched exactly, taking the next argument as its value.
     separate,
@@ -386,7 +388,7 @@ const FlagForm = enum {
     terminator,
     /// Matched exactly; the command answers with the compiler's version.
     version,
-    /// Matched by prefix and refused as an unexpected argument.
+    /// Matched like `attached` and refused as an unexpected argument.
     rejected,
     /// Listed in help only; another part of argument parsing consumes it.
     documented,
@@ -537,8 +539,9 @@ const Command = struct {
     rest: ?[]const u8 = null,
     /// The one element `rest` holds when no argument reached it.
     rest_default: ?[]const u8 = null,
-    /// Which unrecognized arguments are problems rather than positional arguments.
-    refuses: enum { nothing, dashed, double_dashed } = .nothing,
+    /// Which unrecognized arguments are problems rather than positional
+    /// arguments. An argument after `--` is never refused.
+    refuses: enum { double_dashed, dashed } = .double_dashed,
     /// The fields no argument sets: the command's implementation fills them.
     derived: []const []const u8 = &.{},
 
@@ -570,18 +573,10 @@ const Command = struct {
     /// Compile error unless the command and its args struct account for each
     /// other: every struct field is set by exactly one of a flag, a positional
     /// argument, `rest`, or the implementation (`derived`); a field with no
-    /// default is always set; and no prefix-matched flag shadows another.
+    /// default is always set.
     fn check(comptime cmd: Command) void {
         @setEvalBranchQuota(100_000);
         const flags = cmd.allFlags();
-        for (flags, 0..) |flag, index| {
-            if (flag.form != .attached and flag.form != .rejected) continue;
-            for (flags, 0..) |other, other_index| {
-                if (index != other_index and other.form != .documented and mem.startsWith(u8, other.name, flag.name)) {
-                    @compileError(flag.name ++ " is matched by prefix, so it would also match " ++ other.name);
-                }
-            }
-        }
 
         const Parsed = cmd.Args();
         if (Parsed == void) return;
@@ -844,7 +839,6 @@ const commands = [_]Command{
         },
         .rest = "paths",
         .rest_default = default_roc_file,
-        .refuses = .double_dashed,
     },
     .{
         .name = "unbundle",
@@ -1061,7 +1055,6 @@ const commands = [_]Command{
         },
         .resolve = .limits,
         .positionals = &.{.{ .field = "path" }},
-        .refuses = .double_dashed,
         .derived = &.{"root_source_url"},
     },
     .{
@@ -1269,9 +1262,11 @@ fn parseArgsFor(comptime cmd: Command, alloc: mem.Allocator, args: []const []con
                     .attached => {
                         var written: ?[]const u8 = null;
                         var maybe_value: ?[]const u8 = null;
-                        if (mem.startsWith(u8, arg, flag.name)) {
+                        if (mem.eql(u8, arg, flag.name)) {
                             written = flag.name;
-                            maybe_value = getFlagValue(arg);
+                        } else if (mem.startsWith(u8, arg, flag.name ++ "=")) {
+                            written = flag.name;
+                            maybe_value = arg[flag.name.len + 1 ..];
                         } else if (flag.short) |short| {
                             if (mem.startsWith(u8, arg, short)) {
                                 written = short;
@@ -1298,13 +1293,12 @@ fn parseArgsFor(comptime cmd: Command, alloc: mem.Allocator, args: []const []con
                         continue :next_arg;
                     },
                     .version => if (mem.eql(u8, arg, flag.name) or mem.eql(u8, arg, flag.short.?)) return .version,
-                    .rejected => if (mem.startsWith(u8, arg, flag.name)) return unexpectedArgument(cmd.name, arg),
+                    .rejected => if (mem.eql(u8, arg, flag.name) or mem.startsWith(u8, arg, flag.name ++ "=")) return unexpectedArgument(cmd.name, arg),
                     .documented => {},
                 }
             }
 
             const refused = switch (cmd.refuses) {
-                .nothing => false,
                 .dashed => mem.startsWith(u8, arg, "-"),
                 .double_dashed => mem.startsWith(u8, arg, "--"),
             };
@@ -1419,13 +1413,6 @@ fn parseUnbundle(comptime cmd: Command, alloc: mem.Allocator, std_io: std.Io, ar
 
 fn isHelpFlag(arg: []const u8) bool {
     return mem.eql(u8, arg, "-h") or mem.eql(u8, arg, "--help");
-}
-
-fn getFlagValue(arg: []const u8) ?[]const u8 {
-    var iter = mem.splitScalar(u8, arg, '=');
-    // ignore the flag key
-    _ = iter.next();
-    return iter.next();
 }
 
 test "specialization strategy parsing" {
@@ -1748,7 +1735,12 @@ test "roc build" {
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--thisisactuallyafile" });
         defer result.deinit(gpa);
-        try testing.expectEqualStrings("--thisisactuallyafile", result.build.path);
+        try testing.expectEqualStrings("--thisisactuallyafile", result.problem.unexpected_argument.arg);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "./--thisisactuallyafile" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("./--thisisactuallyafile", result.build.path);
     }
     {
         const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--keep-temp" });
@@ -2464,6 +2456,36 @@ test "roc run subcommand" {
         defer result.deinit(gpa);
         try testing.expect(result.run.explicit_opt);
     }
+}
+
+// A flag that merely starts with the name of a real flag is not that flag.
+test "flags are not matched by prefix" {
+    const gpa = testing.allocator;
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "run", "--optBORK=speed", "main.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.problem, std.meta.activeTag(result));
+        try testing.expectEqualStrings("--optBORK=speed", result.problem.unexpected_argument.arg);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "--optBORK=speed", "main.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.problem, std.meta.activeTag(result));
+        try testing.expectEqualStrings("--optBORK=speed", result.problem.unexpected_argument.arg);
+    }
+    {
+        const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--optBORK=speed", "main.roc" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(.problem, std.meta.activeTag(result));
+        try testing.expectEqualStrings("--optBORK=speed", result.problem.unexpected_argument.arg);
+    }
+}
+
+test "an attached flag's value is everything after its first =" {
+    const gpa = testing.allocator;
+    const result = try parse(gpa, testing.io, &[_][]const u8{ "build", "--output=out/a=b", "main.roc" });
+    defer result.deinit(gpa);
+    try testing.expectEqualStrings("out/a=b", result.build.output.?);
 }
 
 test "bare shorthand requires the run subcommand" {
