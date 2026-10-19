@@ -115,7 +115,7 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
         // Only a join that some reachable one-parameter join forwards into
         // can be selected below; every other join is settled without walking
         // its body and remainder.
-        if (!forwarded.contains(.{ .join = outer.id, .param = outer_param })) continue;
+        if (!forwarded.contains(outer.id, outer_param)) continue;
 
         // Before ARC, moving a continuation that consumes an owning value can
         // change the dominance facts ARC uses to certify the join parameter's
@@ -189,12 +189,49 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
 
 const IncomingEdges = collections.DenseMap(LIR.CFStmtId, u32);
 
-const ForwardTarget = struct { join: LIR.JoinPointId, param: LIR.LocalId };
+/// The (join, parameter) pairs some reachable one-parameter join forwards
+/// into: each join's parameters chain through one shared node list, so a
+/// lookup reads the join's head and walks the few parameters forwarded to it.
+const ForwardTargets = struct {
+    const end: u32 = std.math.maxInt(u32);
+    const Node = struct { param: LIR.LocalId, next: u32 };
+
+    heads: collections.DenseMap(LIR.JoinPointId, u32),
+    nodes: std.ArrayList(Node) = .empty,
+
+    fn init(allocator: Allocator) ForwardTargets {
+        return .{ .heads = collections.DenseMap(LIR.JoinPointId, u32).init(allocator) };
+    }
+
+    fn deinit(self: *ForwardTargets) void {
+        self.nodes.deinit(self.heads.allocator);
+        self.heads.deinit();
+    }
+
+    fn contains(self: *const ForwardTargets, join: LIR.JoinPointId, param: LIR.LocalId) bool {
+        var index = self.heads.get(join) orelse return false;
+        while (index != end) {
+            const node = self.nodes.items[index];
+            if (node.param == param) return true;
+            index = node.next;
+        }
+        return false;
+    }
+
+    fn put(self: *ForwardTargets, join: LIR.JoinPointId, param: LIR.LocalId) ResourceError!void {
+        if (self.contains(join, param)) return;
+        if (self.nodes.items.len >= end) return error.OutOfMemory;
+        try self.nodes.ensureUnusedCapacity(self.heads.allocator, 1);
+        const head = try self.heads.getOrPut(join);
+        self.nodes.appendAssumeCapacity(.{ .param = param, .next = if (head.found_existing) head.value_ptr.* else end });
+        head.value_ptr.* = @intCast(self.nodes.items.len - 1);
+    }
+};
 
 /// Each join parameter that a reachable one-parameter join's body forwards
 /// its own parameter into (`forwardsToJoin`).
-fn forwardedJoins(store: *LirStore, body: LIR.CFStmtId, allocator: Allocator) ResourceError!std.AutoHashMap(ForwardTarget, void) {
-    var targets = std.AutoHashMap(ForwardTarget, void).init(allocator);
+fn forwardedJoins(store: *LirStore, body: LIR.CFStmtId, allocator: Allocator) ResourceError!ForwardTargets {
+    var targets = ForwardTargets.init(allocator);
     errdefer targets.deinit();
     var walk = try body_clone.ReachableStmts.initWithAllocator(store, body, allocator);
     defer walk.deinit();
@@ -216,7 +253,7 @@ fn forwardedJoins(store: *LirStore, body: LIR.CFStmtId, allocator: Allocator) Re
         } else continue;
         const terminal = store.getCFStmt(terminal_id);
         if (terminal != .jump) continue;
-        try targets.put(.{ .join = terminal.jump.target, .param = target }, {});
+        try targets.put(terminal.jump.target, target);
     }
     return targets;
 }

@@ -32,33 +32,49 @@ const PayloadSlot = struct {
     payload: u32,
 };
 
+/// Known discriminants of a tag value. Discriminants below 64 are bits of
+/// `low`; the rare larger ones are listed in `high`, which is sized exactly.
 const TagSet = struct {
     all: bool = false,
-    /// Known discriminants in first-seen order.
-    values: std.AutoArrayHashMapUnmanaged(u32, void) = .empty,
+    low: u64 = 0,
+    high: []u32 = &.{},
 
     fn deinit(self: *TagSet, allocator: Allocator) void {
-        self.values.deinit(allocator);
+        allocator.free(self.high);
     }
 
     fn markAll(self: *TagSet, allocator: Allocator) bool {
         if (self.all) return false;
-        self.values.clearAndFree(allocator);
+        allocator.free(self.high);
+        self.high = &.{};
+        self.low = 0;
         self.all = true;
         return true;
     }
 
     fn add(self: *TagSet, allocator: Allocator, value: u32) Allocator.Error!bool {
         if (self.all) return false;
-        const entry = try self.values.getOrPut(allocator, value);
-        return !entry.found_existing;
+        if (value < 64) {
+            const bit = @as(u64, 1) << @intCast(value);
+            if (self.low & bit != 0) return false;
+            self.low |= bit;
+            return true;
+        }
+        if (std.mem.findScalar(u32, self.high, value) != null) return false;
+        const grown = try allocator.alloc(u32, self.high.len + 1);
+        @memcpy(grown[0..self.high.len], self.high);
+        grown[self.high.len] = value;
+        allocator.free(self.high);
+        self.high = grown;
+        return true;
     }
 
     fn mergeFrom(self: *TagSet, allocator: Allocator, other: *const TagSet) Allocator.Error!bool {
         if (self.all) return false;
         if (other.all) return self.markAll(allocator);
-        var changed = false;
-        for (other.values.keys()) |value| {
+        var changed = other.low & ~self.low != 0;
+        self.low |= other.low;
+        for (other.high) |value| {
             if (try self.add(allocator, value)) changed = true;
         }
         return changed;
@@ -66,16 +82,22 @@ const TagSet = struct {
 
     fn contains(self: *const TagSet, value: u32) bool {
         if (self.all) return true;
-        return self.values.contains(value);
+        if (value < 64) return self.low & (@as(u64, 1) << @intCast(value)) != 0;
+        return std.mem.findScalar(u32, self.high, value) != null;
+    }
+
+    fn count(self: *const TagSet) usize {
+        return @popCount(self.low) + self.high.len;
     }
 
     fn singleton(self: *const TagSet) ?u32 {
-        if (self.all or self.values.count() != 1) return null;
-        return self.values.keys()[0];
+        if (self.all or self.count() != 1) return null;
+        if (self.low != 0) return @ctz(self.low);
+        return self.high[0];
     }
 
     fn hasKnownValues(self: *const TagSet) bool {
-        return !self.all and self.values.count() != 0;
+        return !self.all and self.count() != 0;
     }
 };
 
