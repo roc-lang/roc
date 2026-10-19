@@ -601,6 +601,9 @@ const Pool = test_harness.ProcessPool(Case, CaseResult, .{
     .stabilizeResult = &stabilizeCaseResult,
     .getName = &getCaseName,
     .use_process_groups = true,
+    // A known strategy gap can end its case's process; on Windows each case
+    // gets its own process so that ends only that case.
+    .windows_persistent_workers = false,
 });
 
 /// The inspected rendering of a `Str` whose contents need no escaping.
