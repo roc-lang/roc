@@ -628,7 +628,8 @@ test "Monotype pairs stored record children in lexicographic field order" {
         "fn finishConstAtNode",
     );
     try expectContains(restore_record, "const graph_fields = (try self.graph.recordNodes(record_node)).fields");
-    try expectContains(restore_record, "const fields = try self.allocator.dupe(InstField, graph_fields)");
+    try expectContains(restore_record, "std.sort.isSorted(InstField, graph_fields, self.nameStore(), instRecordFieldLessThan)");
+    try expectContains(restore_record, "std.mem.sort(InstField, copied, self.nameStore(), instRecordFieldLessThan)");
     try expectContains(restore_record, "instRecordFieldLessThan");
 }
 

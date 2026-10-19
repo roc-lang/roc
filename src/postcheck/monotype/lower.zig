@@ -1529,6 +1529,9 @@ const ModuleViewData = struct {
     const_store: *const checked.ConstStore,
     interface_capabilities: *const checked.ModuleInterfaceCapabilities,
     compile_time_root_reads: *const checked.CompileTimeRootReadTable,
+    /// This module's dense id among the lowering input's modules, seeded
+    /// once with the program's module tables.
+    lowering_module: ?Common.LoweringModuleId = null,
 };
 
 const ConstNode = struct {
@@ -1686,6 +1689,28 @@ fn evidenceContractRelatesAnything(contract: []const SpecEvidence) bool {
         if (evidenceContractRelatesAnything(evidenceCallableContracts(entry))) return true;
     }
     return false;
+}
+
+/// Hash the parts of `entry` that `specEvidenceShallowEql` compares directly,
+/// so evidence that compares equal hashes equal.
+fn hashSpecEvidenceShallow(hasher: *std.hash.Wyhash, entry: SpecEvidence) void {
+    const header = [_]u32{ @backingInt(std.meta.activeTag(entry)), @intCast(evidenceCallableContracts(entry).len) };
+    hasher.update(std.mem.asBytes(&header));
+    switch (entry) {
+        .target => |target| {
+            hasher.update(&target.view.key.bytes);
+            const identity = [_]u32{
+                target.target.module_idx,
+                @backingInt(target.target.def_idx),
+                if (target.local_proc_context) |context| @backingInt(context) else std.math.maxInt(u32),
+                @intFromBool(target.local_proc_context != null),
+            };
+            hasher.update(std.mem.asBytes(&identity));
+        },
+        .from_callable => |use| hasher.update(&.{@intFromBool(use.independent_callable)}),
+        .from_scheme => |index| hasher.update(std.mem.asBytes(&index)),
+        .structural, .unreachable_value, .checked_error => {},
+    }
 }
 
 fn evidenceCallableContracts(evidence: SpecEvidence) []const SpecEvidence {
@@ -3778,6 +3803,36 @@ fn BoxPool(comptime T: type) type {
     };
 }
 
+/// A list a computation takes for its run and gives back afterwards. A nested
+/// run of the same computation finds the slot empty and starts its own list.
+fn ScratchSlot(comptime T: type) type {
+    return struct {
+        const Self = @This();
+        list: std.ArrayListUnmanaged(T) = .empty,
+
+        fn take(self: *Self) std.ArrayListUnmanaged(T) {
+            const list = self.list;
+            self.list = .empty;
+            return list;
+        }
+
+        /// Keep `list`'s capacity unless a nested run already gave its own.
+        fn give(self: *Self, allocator: Allocator, list: *std.ArrayListUnmanaged(T)) void {
+            list.clearRetainingCapacity();
+            if (self.list.capacity == 0) {
+                self.list = list.*;
+            } else {
+                list.deinit(allocator);
+            }
+            list.* = .empty;
+        }
+
+        fn deinit(self: *Self, allocator: Allocator) void {
+            self.list.deinit(allocator);
+        }
+    };
+}
+
 /// See `Builder.task_storage`. Every body context of a builder allocates with
 /// the builder's allocator, so any context may release what another took.
 const TaskStorage = struct {
@@ -4287,7 +4342,7 @@ const SpecJobWorkspace = struct {
     /// This lane's own summaries the coordinator has not yet shared back to
     /// it; summaries the coordinator shares are read from its table.
     interface_summaries: InterfaceSummaryCache,
-    checked_type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
+    checked_type_cache: CheckedTypeMemo(Type.TypeId) = .empty,
     captured_types: Type.Store.EpochBoundary,
     captured_names: names.NameStore.EpochBoundary,
     program: ?*Ast.Program = null,
@@ -4306,7 +4361,6 @@ const SpecJobWorkspace = struct {
             .types = types,
             .name_store = name_store,
             .interface_summaries = InterfaceSummaryCache.init(allocator),
-            .checked_type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
         };
     }
 
@@ -4426,7 +4480,7 @@ const SpecJobWorkspace = struct {
         if (self.workspace_to_program) |*relocation| relocation.deinit();
         if (self.program_to_workspace) |*relocation| relocation.deinit();
         self.interface_summaries.deinit();
-        self.checked_type_cache.deinit();
+        self.checked_type_cache.deinit(self.allocator);
         self.types.deinit();
         self.name_store.deinit();
         self.superseded.deinit(self.allocator);
@@ -5105,10 +5159,18 @@ const Builder = struct {
     /// Instantiation frame stacks, boxed tasks, and boxed child contexts that
     /// body contexts released, kept for the next context to take.
     task_storage: TaskStorage = .{},
+    /// The source line the last lowered expression started on, in the line
+    /// table it was found in.
+    source_line_cursor: struct { line_starts: []const u32 = &.{}, line: u32 = 0 } = .{},
     /// Scratch for lexical-context digests, which are built and hashed
     /// without reentering lowering.
     lexical_binder_scratch: std.ArrayList(LexicalBinderEntry) = .empty,
     local_proc_context_scratch: std.ArrayList(DraftCodecLocalProcContext) = .empty,
+    /// Worklists of `BodyContext.patternNeedsExplicitBinding`.
+    explicit_binding_scratch: struct {
+        visits: ScratchSlot(BodyContext.ExplicitBindingVisit) = .{},
+        children: ScratchSlot(checked.CheckedPatternId) = .{},
+    } = .{},
     field_kind_scope_pool: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind)) = .empty,
     /// The object cache consulted for closed specializations, if any.
     spec_cache: ?Common.SpecCacheLookup,
@@ -5161,7 +5223,7 @@ const Builder = struct {
     force_program_type_destination: bool = false,
     symbols: SymbolDomains = .{},
     next_instantiation_scope: u64 = 0,
-    type_cache: std.AutoHashMap(CheckedTypeAddress, Type.TypeId),
+    type_cache: CheckedTypeMemo(Type.TypeId) = .empty,
     /// Deterministic FIFO of reserved specializations awaiting body lowering.
     /// Wave drains execute entries in dispatch order; an executing body may
     /// append new entries, which the same drain then reaches.
@@ -5223,17 +5285,17 @@ const Builder = struct {
     /// template. Repeated requests over the same open leaves resolve every
     /// slot identically, so they read an equal copy back instead of
     /// allocating another identical vector.
-    resolved_callable_vectors: std.AutoHashMap(u64, std.ArrayList([]const SpecEvidence)),
+    resolved_callable_vectors: collections.AutoChainedBuckets(u64, []const SpecEvidence),
     /// Nested-fn specialization records keyed by function id; the durable
     /// identity and status live on the `Ast.SpecRecord`.
     lowered_nested_by_fn: collections.DenseMap(Ast.FnId, Ast.SpecId),
     nested_site_cache: std.AutoHashMap(NestedSiteAddress, names.ProcSiteId),
     /// Whether each checked type reaches the error type (see
     /// `checkedTypeContainsError`).
-    checked_type_contains_error: std.AutoHashMapUnmanaged(CheckedTypeAddress, bool) = .empty,
+    checked_type_contains_error: CheckedTypeMemo(bool) = .empty,
     /// Whether each checked type is representation-fixed (see
     /// `checkedTypeRepresentationFixed`).
-    checked_type_representation_fixed: std.AutoHashMapUnmanaged(CheckedTypeAddress, bool) = .empty,
+    checked_type_representation_fixed: CheckedTypeMemo(bool) = .empty,
     /// Each scheme's quantified variables by slot, keyed by the scheme's
     /// variable list, for resolving an enclosing variable to its evidence
     /// frame's substitution.
@@ -5358,7 +5420,7 @@ const Builder = struct {
         return &self.program.names;
     }
 
-    fn activeCheckedTypeCache(self: *Builder) *std.AutoHashMap(CheckedTypeAddress, Type.TypeId) {
+    fn activeCheckedTypeCache(self: *Builder) *CheckedTypeMemo(Type.TypeId) {
         if (self.hasPrivateTypeDestination()) return &self.active_body_draft.?.spec_job_workspace.?.checked_type_cache;
         return &self.type_cache;
     }
@@ -5423,12 +5485,11 @@ const Builder = struct {
             .spec_key_aliases_out = options.spec_key_aliases_out,
             .post_check_executor = options.post_check_executor,
             .timing = options.timing,
-            .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
             .interface_summaries = InterfaceSummaryCache.init(allocator),
             .spec_store = spec_store,
             .lowered_templates = collections.DenseMap(Ast.FnId, LoweredTemplate).init(allocator),
             .function_scan_path = collections.DenseMap(Type.TypeId, void).init(allocator),
-            .resolved_callable_vectors = std.AutoHashMap(u64, std.ArrayList([]const SpecEvidence)).init(allocator),
+            .resolved_callable_vectors = .empty,
             .lowered_nested_by_fn = collections.DenseMap(Ast.FnId, Ast.SpecId).init(allocator),
             .nested_site_cache = std.AutoHashMap(NestedSiteAddress, names.ProcSiteId).init(allocator),
             .const_expr_cache = std.AutoHashMap(ConstExprAddress, Ast.ExprId).init(allocator),
@@ -5526,6 +5587,7 @@ const Builder = struct {
             const module_id = try self.program.addLoweringModule(seed.key);
             self.lowering_module_ids.putAssumeCapacity(seed.key.bytes, module_id);
         }
+        for (self.module_views) |*view| view.lowering_module = self.loweringModuleId(view.key);
     }
 
     fn sourceFileIds(self: *const Builder) *const SourceFileIds {
@@ -5648,6 +5710,8 @@ const Builder = struct {
         self.task_storage.deinit(self.allocator);
         self.lexical_binder_scratch.deinit(self.allocator);
         self.local_proc_context_scratch.deinit(self.allocator);
+        self.explicit_binding_scratch.visits.deinit(self.allocator);
+        self.explicit_binding_scratch.children.deinit(self.allocator);
         for (self.field_kind_scope_pool.items) |scope| {
             scope.deinit();
             self.allocator.destroy(scope);
@@ -5691,9 +5755,7 @@ const Builder = struct {
         self.lowered_templates.deinit();
         self.function_mentions.deinit(self.allocator);
         self.function_scan_path.deinit();
-        var resolved_vectors = self.resolved_callable_vectors.valueIterator();
-        while (resolved_vectors.next()) |vectors| vectors.deinit(self.allocator);
-        self.resolved_callable_vectors.deinit();
+        self.resolved_callable_vectors.deinit(self.allocator);
         if (self.shared_summaries) |*summaries| summaries.deinit();
         self.worker_inputs.deinit(self.allocator);
         self.interface_summaries.deinit();
@@ -5706,7 +5768,7 @@ const Builder = struct {
             while (callees.next()) |list| list.deinit(self.allocator);
             self.discovery_callees.deinit(self.allocator);
         }
-        self.type_cache.deinit();
+        self.type_cache.deinit(self.allocator);
         self.const_evidence_memo.deinit();
         self.const_evidence_by_content.deinit();
         self.site_evidence_memo.deinit();
@@ -10164,10 +10226,11 @@ const Builder = struct {
                 var candidates = candidate_iterator;
                 while (candidates.next()) |raw_spec| {
                     const spec = &source_ctx.draft.template_specs.items[raw_spec];
-                    if (!try specEvidenceVectorEql(self.allocator, spec.evidence, evidence)) continue;
+                    // Cheapest comparisons first; all four are pure.
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                    if (!draftTemplateSpecVisibleFrom(source_ctx.draft, spec, source_ctx.draft.current_owner)) continue;
                     if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
+                    if (!draftTemplateSpecVisibleFrom(source_ctx.draft, spec, source_ctx.draft.current_owner)) continue;
+                    if (!try specEvidenceVectorEql(self.allocator, spec.evidence, evidence)) continue;
                     const spec_fn_ty = (try source_ctx.specializationLookupTypeForNode(draftTemplateSpecLookupRequestNode(spec))) orelse continue;
                     if (!try source_ctx.typeStore().typeEql(source_ctx.nameStore(), spec_fn_ty, resolved_request_ty.?)) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
@@ -10195,10 +10258,10 @@ const Builder = struct {
                     const seen = try seen_specs.getOrPut(raw_spec);
                     if (seen.found_existing) continue;
                     const spec = &source_ctx.draft.template_specs.items[raw_spec];
-                    if (!try specEvidenceVectorEql(self.allocator, spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                    if (!draftTemplateSpecVisibleFrom(source_ctx.draft, spec, source_ctx.draft.current_owner)) continue;
                     if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
+                    if (!draftTemplateSpecVisibleFrom(source_ctx.draft, spec, source_ctx.draft.current_owner)) continue;
+                    if (!try specEvidenceVectorEql(self.allocator, spec.evidence, evidence)) continue;
                     const exact_interface = (try source_ctx.graph.sameFunctionInterface(
                         draftTemplateSpecLookupRequestNode(spec),
                         request_fn_node,
@@ -10237,10 +10300,10 @@ const Builder = struct {
                     // calls can reach the same template through a different checked
                     // root; exact interface, evidence, and lexical context prove
                     // that they refer to the same active specialization.
-                    if (!try specEvidenceVectorEql(self.allocator, spec.evidence, evidence)) continue;
                     if (!optionalTypeDigestEql(spec.lexical_context_key, lexical_context_key)) continue;
-                    if (!draftTemplateSpecVisibleFrom(source_ctx.draft, spec, source_ctx.draft.current_owner)) continue;
                     if (!draftCodecContractSpecializationEql(spec.codec_contract, codec_contract)) continue;
+                    if (!draftTemplateSpecVisibleFrom(source_ctx.draft, spec, source_ctx.draft.current_owner)) continue;
+                    if (!try specEvidenceVectorEql(self.allocator, spec.evidence, evidence)) continue;
                     const spec_fn_ty = (try source_ctx.specializationLookupTypeForNode(draftTemplateSpecLookupRequestNode(spec))) orelse continue;
                     if (!try source_ctx.typeStore().typeEql(source_ctx.nameStore(), spec_fn_ty, request_fn_ty)) continue;
                     if (!selection.add(raw_spec, true)) unreachable;
@@ -11058,7 +11121,7 @@ const Builder = struct {
         // arguments; recursive structure closes through the backing's memo.
         const slot: ?Type.Store.RecursiveSlot = if (payload == .alias) null else blk: {
             const reserved = try self.activeTypeStore().beginRecursive();
-            try cache.put(address, reserved.ty);
+            try cache.put(self.allocator, address, reserved.ty);
             break :blk reserved;
         };
         const frame: TypeLowerFrame = .{
@@ -11188,7 +11251,7 @@ const Builder = struct {
         const results = type_run.results.items[frame.results_start..];
         const slot = frame.slot orelse {
             // An alias shares its backing's type.
-            try self.activeCheckedTypeCache().put(frame.address, results[0]);
+            try self.activeCheckedTypeCache().put(self.allocator, frame.address, results[0]);
             return results[0];
         };
         const view = frame.view;
@@ -19067,7 +19130,7 @@ const BodyDraftStore = struct {
     fn init(allocator: Allocator) BodyDraftStore {
         return .{
             .allocator = allocator,
-            .interface_replay = InterfaceReplayState.init(allocator),
+            .interface_replay = InterfaceReplayState.init(),
             .symbol_domain = .coordinator,
             .worker_local_symbol_count = 0,
             .fns = .empty,
@@ -20135,7 +20198,7 @@ const BodyDraftStore = struct {
     /// no slice in those intents may continue to borrow the graph arena.
     fn discardGraphStateAfterSeal(self: *BodyDraftStore) void {
         self.interface_replay.deinit(self.allocator);
-        self.interface_replay = InterfaceReplayState.init(self.allocator);
+        self.interface_replay = InterfaceReplayState.init();
         self.freeDeferredBoundaryPayloads();
         self.deferred_const_uses.clearRetainingCapacity();
         self.deferred_structural_eqs.clearRetainingCapacity();
@@ -21536,6 +21599,31 @@ const InterfaceReplayAddress = struct {
     input_digest: [32]u8,
 };
 
+/// Hashes a replay address by a fold of its fields. Its digests are uniformly
+/// distributed (the input digest's meaningful bytes are its first eight), so
+/// eight bytes of each identify the bucket; equality compares the whole
+/// address.
+const InterfaceReplayAddressContext = struct {
+    pub fn hash(_: InterfaceReplayAddressContext, address: InterfaceReplayAddress) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        const scalars = [_]u32{ @backingInt(address.kind), address.family.proc_base, address.family.template };
+        hasher.update(std.mem.asBytes(&scalars));
+        hasher.update(address.family.module[0..8]);
+        hasher.update(address.family.method_scope[0..8]);
+        hasher.update(address.family.source_fn_key[0..8]);
+        hasher.update(address.evidence_digest[0..8]);
+        hasher.update(address.input_digest[0..8]);
+        return hasher.final();
+    }
+
+    pub fn eql(_: InterfaceReplayAddressContext, left: InterfaceReplayAddress, right: InterfaceReplayAddress) bool {
+        return std.meta.eql(left, right);
+    }
+};
+
+/// Entry indices grouped by replay address, oldest first.
+const InterfaceReplayBuckets = collections.ChainedBuckets(InterfaceReplayAddress, u32, InterfaceReplayAddressContext);
+
 fn interfaceRequestBucket(bytes: []const u8) [32]u8 {
     var bucket = @as([32]u8, @splat(0));
     std.mem.writeInt(u64, bucket[0..8], std.hash.Wyhash.hash(0, bytes), .little);
@@ -21654,7 +21742,7 @@ const InterfaceSummaryCache = struct {
     /// Storage of the entries after the last sealed segment.
     evidence_arena: base.SingleThreadArena,
     entries: std.ArrayList(InterfaceSummaryEntry) = .empty,
-    buckets: std.AutoHashMap(InterfaceReplayAddress, std.ArrayList(u32)),
+    buckets: InterfaceReplayBuckets = .empty,
     /// A lane's segments, oldest first: each holds the entries a shard
     /// captured, up to `end`, and their storage. The coordinator's cache
     /// never seals one.
@@ -21670,14 +21758,11 @@ const InterfaceSummaryCache = struct {
         return .{
             .allocator = allocator,
             .evidence_arena = base.SingleThreadArena.init(allocator),
-            .buckets = std.AutoHashMap(InterfaceReplayAddress, std.ArrayList(u32)).init(allocator),
         };
     }
 
     fn deinit(self: *InterfaceSummaryCache) void {
-        var buckets = self.buckets.valueIterator();
-        while (buckets.next()) |bucket| bucket.deinit(self.allocator);
-        self.buckets.deinit();
+        self.buckets.deinit(self.allocator);
         self.entries.deinit(self.allocator);
         for (self.sealed.items) |*segment| segment.arena.deinit();
         self.sealed.deinit(self.allocator);
@@ -21707,20 +21792,12 @@ const InterfaceSummaryCache = struct {
         const dropped = self.sealed.items[released - 1].end;
         // Index the surviving entries before anything is released, so an
         // allocation failure leaves the cache as it was.
-        var buckets = std.AutoHashMap(InterfaceReplayAddress, std.ArrayList(u32)).init(self.allocator);
-        errdefer {
-            var lists = buckets.valueIterator();
-            while (lists.next()) |list| list.deinit(self.allocator);
-            buckets.deinit();
-        }
-        for (self.entries.items[dropped..], 0..) |entry, index| {
-            const bucket = try buckets.getOrPut(entry.address);
-            if (!bucket.found_existing) bucket.value_ptr.* = .empty;
-            try bucket.value_ptr.append(self.allocator, @intCast(index));
-        }
-        var old_buckets = self.buckets.valueIterator();
-        while (old_buckets.next()) |list| list.deinit(self.allocator);
-        self.buckets.deinit();
+        const surviving = self.entries.items[dropped..];
+        var buckets: InterfaceReplayBuckets = .empty;
+        errdefer buckets.deinit(self.allocator);
+        try buckets.ensureUnusedCapacity(self.allocator, std.math.cast(u32, surviving.len) orelse return error.OutOfMemory, surviving.len);
+        for (surviving, 0..) |entry, index| buckets.appendAssumeCapacity(entry.address, @intCast(index));
+        self.buckets.deinit(self.allocator);
         self.buckets = buckets;
         for (self.sealed.items[0..released]) |*segment| segment.arena.deinit();
         const kept_segments = self.sealed.items.len - released;
@@ -21741,8 +21818,8 @@ const InterfaceSummaryCache = struct {
         types_: *Type.Store,
         name_store: *const names.NameStore,
     ) Allocator.Error!?InterfaceSummary {
-        const candidates = self.buckets.get(address) orelse return null;
-        for (candidates.items) |index| {
+        var candidates = self.buckets.get(address);
+        while (candidates.next()) |index| {
             const entry = self.entries.items[index];
             if (storedConstFnEvidenceEql(entry.evidence, evidence) and try entry.request.eql(request, types_, name_store)) return entry.summary;
         }
@@ -21766,14 +21843,13 @@ const InterfaceSummaryCache = struct {
         request: InterfaceConstraints.Identity,
         summary_relocation: anytype,
     ) Allocator.Error!InterfaceSummary {
-        const bucket = try self.buckets.getOrPut(source.address);
-        if (!bucket.found_existing) bucket.value_ptr.* = .empty;
-        for (bucket.value_ptr.items) |index| {
+        var candidates = self.buckets.get(source.address);
+        while (candidates.next()) |index| {
             const existing = self.entries.items[index];
             if (storedConstFnEvidenceEql(existing.evidence, source.evidence) and
                 try existing.request.eql(request, types_, name_store)) return existing.summary;
         }
-        try bucket.value_ptr.ensureUnusedCapacity(self.allocator, 1);
+        try self.buckets.ensureUnusedCapacity(self.allocator, 1, 1);
         try self.entries.ensureUnusedCapacity(self.allocator, 1);
         const arena = self.evidence_arena.allocator();
         const owned: InterfaceSummaryEntry = .{
@@ -21787,7 +21863,7 @@ const InterfaceSummaryCache = struct {
             .request = try request.copy(arena, InterfaceSummaryCopy{}),
             .summary = try source.summary.copy(arena, summary_relocation),
         };
-        bucket.value_ptr.appendAssumeCapacity(@intCast(self.entries.items.len));
+        self.buckets.appendAssumeCapacity(source.address, @intCast(self.entries.items.len));
         self.entries.appendAssumeCapacity(owned);
         return owned.summary;
     }
@@ -21816,23 +21892,18 @@ const InterfaceReplayEntry = struct {
 const InterfaceReplayState = struct {
     use_finished_summaries: bool = true,
     entries: std.ArrayList(InterfaceReplayEntry),
-    buckets: std.AutoHashMap(InterfaceReplayAddress, std.ArrayList(u32)),
+    buckets: InterfaceReplayBuckets = .empty,
     stack: std.ArrayList(usize) = .empty,
     current: ?usize = null,
 
-    fn init(allocator: Allocator) InterfaceReplayState {
-        return .{
-            .entries = .empty,
-            .buckets = std.AutoHashMap(InterfaceReplayAddress, std.ArrayList(u32)).init(allocator),
-        };
+    fn init() InterfaceReplayState {
+        return .{ .entries = .empty };
     }
 
     fn deinit(self: *InterfaceReplayState, allocator: Allocator) void {
         self.entries.deinit(allocator);
         self.stack.deinit(allocator);
-        var buckets = self.buckets.valueIterator();
-        while (buckets.next()) |bucket| bucket.deinit(allocator);
-        self.buckets.deinit();
+        self.buckets.deinit(allocator);
     }
 };
 
@@ -27686,11 +27757,12 @@ const BodyContext = struct {
         }
         const coordinator = &self.builder.interface_summaries;
         if (coordinator == local) return null;
-        if (coordinator.buckets.get(address)) |candidates| for (candidates.items) |index| {
+        var candidates = coordinator.buckets.get(address);
+        while (candidates.next()) |index| {
             const entry = coordinator.entries.items[index];
             if (!storedConstFnEvidenceEql(entry.evidence, evidence) or !std.mem.eql(u8, entry.request.bytes, request.bytes)) continue;
             if (try self.programRequestMatches(entry.request, request)) return .{ .summary = entry.summary, .domain = .program };
-        };
+        }
         return null;
     }
 
@@ -27969,7 +28041,8 @@ const BodyContext = struct {
         };
 
         var cached: ?FoundInterfaceSummary = null;
-        if (replay_state.buckets.get(address)) |candidates| for (candidates.items) |raw_entry| {
+        var candidates = replay_state.buckets.get(address);
+        while (candidates.next()) |raw_entry| {
             const entry = replay_state.entries.items[raw_entry];
             if (!storedConstFnEvidenceEql(entry.evidence, stored_evidence) or !try entry.request.eql(request, self.typeStore(), self.nameStore())) continue;
             // An unfinished expansion is joined only by the exact request it
@@ -27993,7 +28066,7 @@ const BodyContext = struct {
                     break;
                 },
             }
-        };
+        }
         if (cached == null and replay_state.use_finished_summaries) cached = try self.findInterfaceSummary(address, stored_evidence, request);
         var verify_summary: ?InterfaceSummary = null;
         const saved_use_summaries = replay_state.use_finished_summaries;
@@ -28050,9 +28123,7 @@ const BodyContext = struct {
         replay_state.current = replay_index;
         expansion.parent = parent;
         expansion.restores_current = true;
-        const bucket = try replay_state.buckets.getOrPut(address);
-        if (!bucket.found_existing) bucket.value_ptr.* = .empty;
-        try bucket.value_ptr.append(self.allocator, @intCast(replay_index));
+        try replay_state.buckets.append(self.allocator, address, @intCast(replay_index));
 
         expansion.callee_ctx = try BodyContext.initWithMethodScope(
             self.allocator,
@@ -31527,7 +31598,17 @@ const BodyContext = struct {
         const line_starts = self.view.module_env.common.getLineStartsAll();
         if (line_starts.len == 0) return base.SourceLoc.none;
         const offset = region.start.offset;
-        const line = base.RegionInfo.lineIdx(line_starts, offset);
+        // Consecutive expressions mostly start on the line the previous one
+        // did, which answers without a search.
+        const cursor = &self.builder.source_line_cursor;
+        const line = if (cursor.line_starts.ptr == line_starts.ptr and
+            cursor.line_starts.len == line_starts.len and
+            line_starts[cursor.line] <= offset and
+            (cursor.line + 1 == line_starts.len or offset < line_starts[cursor.line + 1]))
+            cursor.line
+        else
+            base.RegionInfo.lineIdx(line_starts, offset);
+        cursor.* = .{ .line_starts = line_starts, .line = line };
         const column = base.RegionInfo.columnIdx(line_starts, line, offset) catch
             Common.invariant("checked node region resolved to an invalid line/column position");
         return .{
@@ -46865,6 +46946,8 @@ const BodyContext = struct {
         representation_node: NodeId = undefined,
         /// A box's payload or a nominal's backing.
         single_child: ?checked.ConstNodeId = null,
+        /// `single_child`'s graph node.
+        single_child_node: NodeId = undefined,
         children: []const checked.ConstNodeId = &.{},
         /// Each child's graph node, except a tag's, which is computed as its
         /// payload is reached. Owned.
@@ -46908,7 +46991,8 @@ const BodyContext = struct {
                 const child = frame.single_child orelse frame.children[index];
                 const child_node = switch (frame.value) {
                     .tag => try self.graph.tagConstructionPayloadNode(frame.request_node, frame.tag_name, index),
-                    .pending, .zst, .scalar, .str, .crash, .checked_error, .list, .box, .tuple, .record, .nominal, .fn_value => frame.child_nodes[index],
+                    .box, .nominal => frame.single_child_node,
+                    .pending, .zst, .scalar, .str, .crash, .checked_error, .list, .tuple, .record, .fn_value => frame.child_nodes[index],
                 };
                 delivered = try self.beginConstAtNode(&frames, store_view, child, child_node, static_data_const_locator);
                 continue;
@@ -46962,7 +47046,7 @@ const BodyContext = struct {
                 const backing = named.backing orelse
                     Common.invariant("ConstStore nominal restored with a named graph node that had no backing");
                 frame.single_child = nominal.backing;
-                frame.child_nodes = try self.allocator.dupe(NodeId, &.{backing.node});
+                frame.single_child_node = backing.node;
             },
             .pending, .zst, .scalar, .str, .list, .box, .crash, .checked_error => {},
         }
@@ -46978,7 +47062,7 @@ const BodyContext = struct {
             },
             .box => |payload| {
                 frame.single_child = payload;
-                frame.child_nodes = try self.allocator.dupe(NodeId, &.{try self.graph.boxElementNode(request_node)});
+                frame.single_child_node = try self.graph.boxElementNode(request_node);
             },
             .tuple => |items| {
                 const item_nodes = try self.graph.tupleItemNodes(request_node);
@@ -46999,14 +47083,14 @@ const BodyContext = struct {
                 };
                 const graph_fields = (try self.graph.recordNodes(record_node)).fields;
                 if (graph_fields.len != items.len) Common.invariant("ConstStore record length differs from checked graph type");
-                const fields = try self.allocator.dupe(InstField, graph_fields);
-                defer self.allocator.free(fields);
-                std.mem.sort(
-                    InstField,
-                    fields,
-                    self.nameStore(),
-                    instRecordFieldLessThan,
-                );
+                // A row already in lexicographic order is read in place.
+                const sorted = std.sort.isSorted(InstField, graph_fields, self.nameStore(), instRecordFieldLessThan);
+                const fields: []const InstField = if (sorted) graph_fields else blk: {
+                    const copied = try self.allocator.dupe(InstField, graph_fields);
+                    std.mem.sort(InstField, copied, self.nameStore(), instRecordFieldLessThan);
+                    break :blk copied;
+                };
+                defer if (!sorted) self.allocator.free(fields);
                 frame.children = items;
                 frame.child_nodes = try self.allocator.alloc(NodeId, fields.len);
                 frame.field_names = try self.allocator.alloc(@FieldType(InstField, "name"), fields.len);
@@ -51870,13 +51954,21 @@ const BodyContext = struct {
         // way the previous request over this vector did reads that copy back.
         // The callee template is identified by its module and its evidence
         // parameter row, which every request over it shares.
+        // The key also folds in each resolved entry's shallow identity, so a
+        // bucket holds only vectors that agree on it.
         var key_hasher = std.hash.Wyhash.init(0);
         key_hasher.update(&view.key.bytes);
         key_hasher.update(std.mem.asBytes(&@intFromPtr(params.ptr)));
+        var next_hashed: usize = 0;
+        for (evidence, 0..) |source_entry, index| {
+            if (next_hashed < replacements.items.len and replacements.items[next_hashed].index == index) {
+                hashSpecEvidenceShallow(&key_hasher, replacements.items[next_hashed].entry);
+                next_hashed += 1;
+            } else hashSpecEvidenceShallow(&key_hasher, source_entry);
+        }
         const key = key_hasher.final();
-        const cached = try self.builder.resolved_callable_vectors.getOrPut(key);
-        if (!cached.found_existing) cached.value_ptr.* = .empty;
-        for (cached.value_ptr.items) |candidate| reuse: {
+        var candidates = self.builder.resolved_callable_vectors.get(key);
+        while (candidates.next()) |candidate| reuse: {
             if (candidate.len != evidence.len) break :reuse;
             var next_replacement: usize = 0;
             for (candidate, evidence, 0..) |cached_entry, source_entry, index| {
@@ -51890,7 +51982,7 @@ const BodyContext = struct {
         const resolved = try self.builder.evidence_arena.allocator().dupe(SpecEvidence, evidence);
         self.builder.countBodyDiagnostic("callable_evidence_vector_copies");
         for (replacements.items) |replacement| resolved[replacement.index] = replacement.entry;
-        try cached.value_ptr.append(self.allocator, resolved);
+        try self.builder.resolved_callable_vectors.append(self.allocator, key, resolved);
         return resolved;
     }
 
@@ -61273,13 +61365,15 @@ const BodyContext = struct {
     /// Whether any node of the pattern must materialize on its own. Each
     /// pattern's answer is memoized, computed after its subpatterns' from an
     /// explicit work list.
+    const ExplicitBindingVisit = struct { pattern: checked.CheckedPatternId, children_done: bool };
+
     fn patternNeedsExplicitBinding(self: *BodyContext, root: checked.CheckedPatternId) Allocator.Error!bool {
         if (self.explicit_binding_memo.get(root)) |known| return known;
-        const Visit = struct { pattern: checked.CheckedPatternId, children_done: bool };
-        var pending: std.ArrayListUnmanaged(Visit) = .empty;
-        defer pending.deinit(self.allocator);
-        var children: std.ArrayListUnmanaged(checked.CheckedPatternId) = .empty;
-        defer children.deinit(self.allocator);
+        const scratch = &self.builder.explicit_binding_scratch;
+        var pending = scratch.visits.take();
+        defer scratch.visits.give(self.allocator, &pending);
+        var children = scratch.children.take();
+        defer scratch.children.give(self.allocator, &children);
         try pending.append(self.allocator, .{ .pattern = root, .children_done = false });
         while (pending.pop()) |visit| {
             if (self.explicit_binding_memo.contains(visit.pattern)) continue;
@@ -67070,6 +67164,7 @@ test "frozen codec format index resolves equivalent TypeIds only for agreeing ro
     try std.testing.expect(try type_store.typeEql(&name_store, first_shape, second_shape));
 
     var view_data: ModuleViewData = undefined;
+    view_data.lowering_module = @fromBackingInt(0);
     const view = &view_data;
     view.key = .{};
     // These opaque ids are deliberate synthetic identities: this unit only
@@ -67210,6 +67305,7 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
     ctx.graph = graph;
     ctx.owner_template = std.mem.zeroes(names.ProcTemplate);
     var ctx_view: ModuleViewData = undefined;
+    ctx_view.lowering_module = @fromBackingInt(0);
     ctx.view = &ctx_view;
     ctx_view.key = .{ .bytes = @splat(0) };
     ctx_view.types = checked_types.view();
@@ -67294,6 +67390,7 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
     const decode_ty = try checked_types.appendSyntheticFunctionRoot(gpa, .pure, &.{receiver_ty}, receiver_ty);
 
     var frame_view_data: ModuleViewData = undefined;
+    frame_view_data.lowering_module = @fromBackingInt(0);
     const frame_view = &frame_view_data;
     frame_view.names = &frame_names;
     frame_view.types = checked_types.view();
@@ -67333,6 +67430,7 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
     const inner_method = try inner_names.internMethodName(Ident.IS_EQ_METHOD_NAME);
     try std.testing.expectEqual(caller_decode, inner_method);
     var inner_view_data: ModuleViewData = undefined;
+    inner_view_data.lowering_module = @fromBackingInt(0);
     const inner_view = &inner_view_data;
     inner_view.names = &inner_names;
     inner_view.types = checked_types.view();
@@ -67363,21 +67461,25 @@ test "specialization evidence equality includes exact target instantiation" {
     roots[10].key = roots[8].key;
 
     var target_view_data: ModuleViewData = undefined;
+    target_view_data.lowering_module = @fromBackingInt(0);
     const target_view = &target_view_data;
     target_view.key = .{};
     target_view.key.bytes[0] = 1;
     target_view.types = .{ .roots = &roots };
     var other_target_view_data: ModuleViewData = undefined;
+    other_target_view_data.lowering_module = @fromBackingInt(0);
     const other_target_view = &other_target_view_data;
     other_target_view.key = .{};
     other_target_view.key.bytes[0] = 2;
     other_target_view.types = .{ .roots = &roots };
     var instantiation_view_data: ModuleViewData = undefined;
+    instantiation_view_data.lowering_module = @fromBackingInt(0);
     const instantiation_view = &instantiation_view_data;
     instantiation_view.key = .{};
     instantiation_view.key.bytes[0] = 3;
     instantiation_view.types = .{ .roots = &roots };
     var other_instantiation_view_data: ModuleViewData = undefined;
+    other_instantiation_view_data.lowering_module = @fromBackingInt(0);
     const other_instantiation_view = &other_instantiation_view_data;
     other_instantiation_view.key = .{};
     other_instantiation_view.key.bytes[0] = 4;
@@ -68889,10 +68991,39 @@ fn sameTypeDefAcrossStores(
         left.source_decl == right.source_decl;
 }
 
+/// A checked type by its owning module's dense lowering id.
 const CheckedTypeAddress = struct {
-    module_bytes: [32]u8,
-    type_id: u32,
+    module: Common.LoweringModuleId,
+    type_id: checked.CheckedTypeId,
 };
+
+/// Answers memoized per checked type: one dense column per lowering module.
+fn CheckedTypeMemo(comptime V: type) type {
+    return struct {
+        const Self = @This();
+        const Column = collections.DenseMapUnmanaged(checked.CheckedTypeId, V);
+        columns: std.ArrayList(Column) = .empty,
+
+        pub const empty: Self = .{};
+
+        fn deinit(self: *Self, allocator: Allocator) void {
+            for (self.columns.items) |*column| column.deinit(allocator);
+            self.columns.deinit(allocator);
+        }
+
+        fn get(self: *const Self, address: CheckedTypeAddress) ?V {
+            const index = @backingInt(address.module);
+            if (index >= self.columns.items.len) return null;
+            return self.columns.items[index].get(address.type_id);
+        }
+
+        fn put(self: *Self, allocator: Allocator, address: CheckedTypeAddress, value: V) Allocator.Error!void {
+            const index = @backingInt(address.module);
+            if (index >= self.columns.items.len) try self.columns.appendNTimes(allocator, .empty, index + 1 - self.columns.items.len);
+            try self.columns.items[index].put(allocator, address.type_id, value);
+        }
+    };
+}
 
 /// A scheme's quantified-variable list, by the identity of its storage.
 const SchemeVarsAddress = struct {
@@ -68902,8 +69033,9 @@ const SchemeVarsAddress = struct {
 
 fn checkedTypeAddress(view: ModuleView, checked_ty: checked.CheckedTypeId) CheckedTypeAddress {
     return .{
-        .module_bytes = view.key.bytes,
-        .type_id = @backingInt(checked_ty),
+        .module = view.lowering_module orelse
+            Common.invariant("checked module view was read before its lowering module id was seeded"),
+        .type_id = checked_ty,
     };
 }
 
@@ -70980,6 +71112,7 @@ test "issue 11362: checked instantiation reserves only recursive node identities
     ctx.builder = &builder;
     ctx.graph = graph;
     var ctx_view: ModuleViewData = undefined;
+    ctx_view.lowering_module = @fromBackingInt(0);
     ctx.view = &ctx_view;
     ctx_view.key = .{ .bytes = @splat(0) };
     ctx_view.types = checked_types.view();
@@ -71062,6 +71195,7 @@ test "issue 11362: allocation failure removes active checked instantiation marke
             ctx.builder = &builder;
             ctx.graph = graph;
             var ctx_view: ModuleViewData = undefined;
+            ctx_view.lowering_module = @fromBackingInt(0);
             ctx.view = &ctx_view;
             ctx_view.key = .{ .bytes = @splat(0) };
             ctx_view.types = checked_types.view();
@@ -71216,6 +71350,7 @@ fn testLazyCheckedInstantiationAliases(gpa: Allocator) (Allocator.Error || error
     ctx.builder = &builder;
     ctx.graph = graph;
     var ctx_view: ModuleViewData = undefined;
+    ctx_view.lowering_module = @fromBackingInt(0);
     ctx.view = &ctx_view;
     ctx_view.key = .{ .bytes = @splat(0) };
     ctx_view.types = checked_types.view();
@@ -71312,6 +71447,7 @@ test "issue 11362: checked instantiation allocates placeholders only for recursi
     ctx.builder = &builder;
     ctx.graph = graph;
     var ctx_view: ModuleViewData = undefined;
+    ctx_view.lowering_module = @fromBackingInt(0);
     ctx.view = &ctx_view;
     ctx_view.key = .{ .bytes = @splat(0) };
     ctx_view.types = checked_types.view();
@@ -71379,6 +71515,7 @@ test "issue 11362: allocation failure removes checked instantiation markers" {
             ctx.builder = &builder;
             ctx.graph = graph;
             var ctx_view: ModuleViewData = undefined;
+            ctx_view.lowering_module = @fromBackingInt(0);
             ctx.view = &ctx_view;
             ctx_view.key = .{ .bytes = @splat(0) };
             ctx_view.types = view;
@@ -71440,6 +71577,7 @@ fn testLazyCheckedInstantiation(allocator: Allocator, recursive: bool) (Allocato
     ctx.builder = &builder;
     ctx.graph = graph;
     var ctx_view: ModuleViewData = undefined;
+    ctx_view.lowering_module = @fromBackingInt(0);
     ctx.view = &ctx_view;
     ctx_view.key = .{ .bytes = @splat(0) };
     ctx_view.types = checked_types.view();
@@ -71558,6 +71696,7 @@ test "lazy checked instantiation allocates only recursive placeholders and clear
             ctx.builder = &builder;
             ctx.graph = graph;
             var ctx_view: ModuleViewData = undefined;
+            ctx_view.lowering_module = @fromBackingInt(0);
             ctx.view = &ctx_view;
             ctx_view.key = .{ .bytes = @splat(0) };
             ctx_view.types = checked_types.view();
@@ -71625,6 +71764,7 @@ test "lazy checked placeholders obey closed and innermost declaration scopes" {
     defer builder.task_storage.deinit(ctx.allocator);
     ctx.graph = graph;
     var ctx_view: ModuleViewData = undefined;
+    ctx_view.lowering_module = @fromBackingInt(0);
     ctx.view = &ctx_view;
     ctx_view.types = checked_types.view();
     ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), @splat(0));
@@ -71736,9 +71876,10 @@ test "issue 11453: direct alias lowering shares runtime types without wrapper al
     builder.program = &program;
     builder.force_program_type_destination = false;
     builder.active_body_draft = null;
-    builder.type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(gpa);
-    defer builder.type_cache.deinit();
+    builder.type_cache = .empty;
+    defer builder.type_cache.deinit(gpa);
     var view_data: ModuleViewData = undefined;
+    view_data.lowering_module = @fromBackingInt(0);
     const view = &view_data;
     view.key = .{};
     view.names = &source_names;
@@ -71835,6 +71976,7 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     ctx.graph = graph;
     ctx.draft = &draft;
     var view_data: ModuleViewData = undefined;
+    view_data.lowering_module = @fromBackingInt(0);
     const view = &view_data;
     view.names = &source_names;
     view.const_store = &constants;
