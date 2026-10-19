@@ -521,6 +521,15 @@ fn statusFromByte(byte: u8) ?CaseStatus {
     };
 }
 
+/// The eval runner gives a case 240 seconds to compile and run under one
+/// strategy; a differential case compiles and runs under both.
+const default_case_timeout_ms: u64 = 2 * 240_000;
+
+fn caseTimeoutMs(cli: test_harness.StandardArgs) u64 {
+    if (cli.timeout_provided and cli.timeout_ms > 0) return cli.timeout_ms;
+    return default_case_timeout_ms;
+}
+
 fn runCaseForPool(io: std.Io, allocator: std.mem.Allocator, case: Case, timeout_ms: u64) CaseResult {
     _ = timeout_ms; // the pool's parent-side watchdog enforces the budget
     return runCase(allocator, io, case) catch |err| .{
@@ -708,7 +717,8 @@ pub fn main(init: std.process.Init) RunnerError!void {
     // Worker modes: the Windows pool spawned this process to execute specific
     // cases. The worker argv template preserves every selection flag, so the
     // run list built above matches the parent's and indices stay aligned.
-    if (Pool.runWorkerMode(io, cli, run_list.items, cli.timeout_ms)) return;
+    const timeout_ms = caseTimeoutMs(cli);
+    if (Pool.runWorkerMode(io, cli, run_list.items, timeout_ms)) return;
 
     var report = try Report.init(gpa);
     defer report.deinit();
@@ -728,7 +738,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
         const worker_argv_template = try test_harness.buildWorkerArgvTemplate(io, args_arena.allocator(), init.minimal.args);
         const cpu_count = std.Thread.getCpuCount() catch 4;
         const job_limit = @max(cli.max_threads orelse @min(cpu_count, run_list.items.len), 1);
-        Pool.runWithSpans(io, run_list.items, results, null, job_limit, cli.timeout_ms, gpa, worker_argv_template, cli.child_debug);
+        Pool.runWithSpans(io, run_list.items, results, null, job_limit, timeout_ms, gpa, worker_argv_template, cli.child_debug);
 
         for (run_list.items, results) |case, result| try report.record(case, result);
     }
@@ -818,7 +828,7 @@ fn printHelp() void {
             "Options:\n" ++
             "  --filter <substr>   only run cases whose name/source matches (repeatable)\n" ++
             "  --threads <N>       max concurrent case processes (default: min(cpu_count, cases))\n" ++
-            "  --timeout <ms>      per-case watchdog budget (default: 120000)\n" ++
+            "  --timeout <ms>      per-case watchdog budget (default: 480000)\n" ++
             "  --verbose           per-case logging\n" ++
             "  harness-only        only the harness's own corpus\n" ++
             "  fail-fast           stop at the first failure; runs cases sequentially\n" ++
