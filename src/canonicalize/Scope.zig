@@ -48,8 +48,6 @@ pub const TypeBinding = union(enum) {
 pub const ForwardReference = struct {
     /// The pattern index created for this forward reference
     pattern_idx: CIR.Pattern.Idx,
-    /// Regions where this identifier was referenced (for error reporting)
-    reference_regions: std.ArrayList(Region),
 };
 
 /// Information about a type variable alias binding (for static dispatch on type vars)
@@ -64,13 +62,14 @@ pub const TypeVarAliasBinding = struct {
     statement_idx: CIR.Statement.Idx,
 };
 
-/// Maps an Ident to a Pattern in the Can IR
-idents: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx),
-aliases: std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx),
+/// The first of this scope's identifier bindings in the canonicalizer's
+/// identifier `Bindings`, or `no_binding`.
+ident_head: u32,
+/// The first of this scope's alias bindings in the canonicalizer's alias
+/// `Bindings`, or `no_binding`.
+alias_head: u32,
 /// Canonical bindings for type names (local, auto-imported, and imported types)
 type_bindings: std.AutoHashMapUnmanaged(Ident.Idx, TypeBinding),
-/// Maps type variables to their type annotation indices
-type_vars: std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx),
 /// Maps uppercase alias names to type variable aliases (for static dispatch on type vars)
 /// The key is the alias name (e.g., "Thing"), the value contains the type var info
 type_var_aliases: std.AutoHashMapUnmanaged(Ident.Idx, TypeVarAliasBinding),
@@ -88,10 +87,9 @@ associated_type_name: ?Ident.Idx,
 /// Initialize the scope
 pub fn init(is_function_boundary: bool) Scope {
     return Scope{
-        .idents = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx){},
-        .aliases = std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx){},
+        .ident_head = no_binding,
+        .alias_head = no_binding,
         .type_bindings = std.AutoHashMapUnmanaged(Ident.Idx, TypeBinding){},
-        .type_vars = std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx){},
         .type_var_aliases = std.AutoHashMapUnmanaged(Ident.Idx, TypeVarAliasBinding){},
         .module_aliases = std.AutoHashMapUnmanaged(Ident.Idx, ModuleAliasInfo){},
         .exposed_items = std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo){},
@@ -103,11 +101,7 @@ pub fn init(is_function_boundary: bool) Scope {
 
 /// Deinitialize the scope
 pub fn deinit(self: *Scope, gpa: std.mem.Allocator) void {
-    self.idents.deinit(gpa);
-    self.aliases.deinit(gpa);
-
     self.type_bindings.deinit(gpa);
-    self.type_vars.deinit(gpa);
     self.type_var_aliases.deinit(gpa);
     self.module_aliases.deinit(gpa);
     self.exposed_items.deinit(gpa);
@@ -231,49 +225,145 @@ pub const ImportedModuleIntroduceResult = union(enum) {
     already_imported: CIR.Import.Idx, // The module was already imported in this scope
 };
 
-/// Item kinds in a scope
-pub const ItemKind = enum { ident, alias, type_var, module_alias, exposed_item };
+/// The namespaces whose bindings live in a `Bindings` across the scope stack.
+pub const ItemKind = enum { ident, alias };
 
-/// Get the appropriate map for the given item kind
-pub fn items(scope: *Scope, comptime item_kind: ItemKind) switch (item_kind) {
-    .ident, .alias => *std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx),
-    .type_var => *std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx),
-    .module_alias => *std.AutoHashMapUnmanaged(Ident.Idx, ModuleAliasInfo),
-    .exposed_item => *std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo),
-} {
-    return switch (item_kind) {
-        .ident => &scope.idents,
-        .alias => &scope.aliases,
-        .type_var => &scope.type_vars,
-        .module_alias => &scope.module_aliases,
-        .exposed_item => &scope.exposed_items,
+/// The end of a binding list or chain.
+pub const no_binding: u32 = std.math.maxInt(u32);
+
+/// One namespace's bindings across the whole scope stack. A name's innermost
+/// binding is direct-indexed by identifier, and the bindings it shadows in
+/// enclosing scopes hang off it, innermost first. Each scope lists its own
+/// bindings, newest first, from the head the scope keeps.
+pub fn Bindings(comptime V: type) type {
+    return struct {
+        const Self = @This();
+
+        pub const Binding = struct {
+            name: Ident.Idx,
+            value: V,
+            /// Index of the scope that binds the name.
+            scope: u32,
+            /// The name's binding in the nearest enclosing scope that binds it.
+            shadowed: u32,
+            /// The scope's next older binding.
+            next_in_scope: u32,
+        };
+
+        slots: std.ArrayList(Binding) = .empty,
+        /// Slots of bindings whose scopes have exited, for reuse.
+        free_slots: std.ArrayList(u32) = .empty,
+        innermost: collections.DenseMap(Ident.Idx, u32),
+
+        pub fn init(gpa: Allocator) Self {
+            return .{ .innermost = .init(gpa) };
+        }
+
+        pub fn deinit(self: *Self, gpa: Allocator) void {
+            self.slots.deinit(gpa);
+            self.free_slots.deinit(gpa);
+            self.innermost.deinit();
+        }
+
+        /// The innermost binding of `name`, if any open scope binds it.
+        pub fn innermostBinding(self: *const Self, name: Ident.Idx) ?Binding {
+            const slot = self.innermost.get(name) orelse return null;
+            return self.slots.items[slot];
+        }
+
+        /// The value `scope` itself binds `name` to, if it binds it.
+        pub fn getInScope(self: *const Self, name: Ident.Idx, scope: u32) ?V {
+            var slot = self.innermost.get(name) orelse return null;
+            while (slot != no_binding) {
+                const binding = self.slots.items[slot];
+                if (binding.scope == scope) return binding.value;
+                if (binding.scope < scope) return null;
+                slot = binding.shadowed;
+            }
+            return null;
+        }
+
+        /// Bind `name` to `value` in `scope`, replacing the value of a binding
+        /// `scope` already has for it. `head` is `scope`'s list head.
+        pub fn put(self: *Self, gpa: Allocator, head: *u32, scope: u32, name: Ident.Idx, value: V) Allocator.Error!void {
+            const gop = try self.innermost.getOrPut(name);
+            // Find where the scope's binding goes in the name's chain, which
+            // runs from inner scopes to outer ones.
+            var newer: u32 = no_binding;
+            var older: u32 = if (gop.found_existing) gop.value_ptr.* else no_binding;
+            while (older != no_binding) {
+                const binding = &self.slots.items[older];
+                if (binding.scope == scope) {
+                    binding.value = value;
+                    return;
+                }
+                if (binding.scope < scope) break;
+                newer = older;
+                older = binding.shadowed;
+            }
+
+            errdefer if (!gop.found_existing) {
+                _ = self.innermost.remove(name);
+            };
+            try self.free_slots.ensureTotalCapacity(gpa, self.slots.items.len + 1);
+            const slot = self.free_slots.pop() orelse slot: {
+                const fresh = std.math.cast(u32, self.slots.items.len) orelse return error.OutOfMemory;
+                if (fresh == no_binding) return error.OutOfMemory;
+                _ = try self.slots.addOne(gpa);
+                break :slot fresh;
+            };
+            self.slots.items[slot] = .{
+                .name = name,
+                .value = value,
+                .scope = scope,
+                .shadowed = older,
+                .next_in_scope = head.*,
+            };
+            head.* = slot;
+            if (newer == no_binding) {
+                gop.value_ptr.* = slot;
+            } else {
+                self.slots.items[newer].shadowed = slot;
+            }
+        }
+
+        /// Walks one scope's bindings, newest first.
+        pub const Iterator = struct {
+            bindings: *const Self,
+            slot: u32,
+
+            pub fn next(self: *Iterator) ?Binding {
+                if (self.slot == no_binding) return null;
+                const binding = self.bindings.slots.items[self.slot];
+                self.slot = binding.next_in_scope;
+                return binding;
+            }
+        };
+
+        /// The bindings of the scope whose list head is `head`.
+        pub fn scopeIterator(self: *const Self, head: u32) Iterator {
+            return .{ .bindings = self, .slot = head };
+        }
+
+        /// Drop the bindings of the innermost open scope, whose list head is
+        /// `head`, uncovering the bindings they shadowed.
+        pub fn exitScope(self: *Self, head: u32) void {
+            var slot = head;
+            while (slot != no_binding) {
+                const binding = self.slots.items[slot];
+                // Nothing is open inside the innermost scope, so each of its
+                // bindings is its name's innermost.
+                std.debug.assert(self.innermost.get(binding.name).? == slot);
+                if (binding.shadowed == no_binding) {
+                    _ = self.innermost.remove(binding.name);
+                } else {
+                    self.innermost.getPtr(binding.name).?.* = binding.shadowed;
+                }
+                self.free_slots.appendAssumeCapacity(slot);
+                slot = binding.next_in_scope;
+            }
+        }
     };
-}
-
-/// Get the appropriate map for the given item kind (const version)
-pub fn itemsConst(scope: *const Scope, comptime item_kind: ItemKind) switch (item_kind) {
-    .ident, .alias => *const std.AutoHashMapUnmanaged(Ident.Idx, CIR.Pattern.Idx),
-    .type_var => *const std.AutoHashMapUnmanaged(Ident.Idx, CIR.TypeAnno.Idx),
-    .module_alias => *const std.AutoHashMapUnmanaged(Ident.Idx, ModuleAliasInfo),
-    .exposed_item => *const std.AutoHashMapUnmanaged(Ident.Idx, ExposedItemInfo),
-} {
-    return switch (item_kind) {
-        .ident => &scope.idents,
-        .alias => &scope.aliases,
-        .type_var => &scope.type_vars,
-        .module_alias => &scope.module_aliases,
-        .exposed_item => &scope.exposed_items,
-    };
-}
-
-/// Put an item in the scope, panics on OOM
-pub fn put(scope: *Scope, gpa: std.mem.Allocator, comptime item_kind: ItemKind, name: Ident.Idx, value: switch (item_kind) {
-    .ident, .alias => CIR.Pattern.Idx,
-    .type_var => CIR.TypeAnno.Idx,
-    .module_alias => ModuleAliasInfo,
-    .exposed_item => ExposedItemInfo,
-}) std.mem.Allocator.Error!void {
-    try scope.items(item_kind).put(gpa, name, value);
 }
 
 /// Return the statement behind a local type binding, if it has one.
@@ -389,12 +479,8 @@ pub fn introduceTypeBinding(
 
 /// Look up a type variable alias in this scope (for static dispatch on type vars)
 pub fn lookupTypeVarAlias(scope: *const Scope, name: Ident.Idx) TypeVarAliasLookupResult {
-    // Search by identifier equality.
-    var iter = scope.type_var_aliases.iterator();
-    while (iter.next()) |entry| {
-        if (name.eql(entry.key_ptr.*)) {
-            return TypeVarAliasLookupResult{ .found = entry.value_ptr.* };
-        }
+    if (scope.type_var_aliases.get(name)) |binding| {
+        return TypeVarAliasLookupResult{ .found = binding };
     }
     return TypeVarAliasLookupResult{ .not_found = {} };
 }
@@ -409,13 +495,9 @@ pub fn introduceTypeVarAlias(
     statement_idx: CIR.Statement.Idx,
     parent_lookup_fn: ?*const fn (Ident.Idx) ?TypeVarAliasBinding,
 ) std.mem.Allocator.Error!TypeVarAliasIntroduceResult {
-    // Check if already exists in current scope.
-    var iter = scope.type_var_aliases.iterator();
-    while (iter.next()) |entry| {
-        if (alias_name.eql(entry.key_ptr.*)) {
-            // Type var alias already exists in this scope
-            return TypeVarAliasIntroduceResult{ .already_in_scope = entry.value_ptr.* };
-        }
+    if (scope.type_var_aliases.get(alias_name)) |existing| {
+        // Type var alias already exists in this scope
+        return TypeVarAliasIntroduceResult{ .already_in_scope = existing };
     }
 
     // Check for shadowing in parent scopes
@@ -441,12 +523,8 @@ pub fn introduceTypeVarAlias(
 
 /// Look up a module alias in this scope
 pub fn lookupModuleAlias(scope: *const Scope, name: Ident.Idx) ModuleAliasLookupResult {
-    // Search by identifier equality.
-    var iter = scope.module_aliases.iterator();
-    while (iter.next()) |entry| {
-        if (name.eql(entry.key_ptr.*)) {
-            return ModuleAliasLookupResult{ .found = entry.value_ptr.* };
-        }
+    if (scope.module_aliases.get(name)) |info| {
+        return ModuleAliasLookupResult{ .found = info };
     }
     return ModuleAliasLookupResult{ .not_found = {} };
 }
@@ -460,13 +538,9 @@ pub fn introduceModuleAlias(
     is_package_qualified: bool,
     parent_lookup_fn: ?fn (Ident.Idx) ?ModuleAliasInfo,
 ) std.mem.Allocator.Error!ModuleAliasIntroduceResult {
-    // Check if already exists in current scope.
-    var iter = scope.module_aliases.iterator();
-    while (iter.next()) |entry| {
-        if (alias_name.eql(entry.key_ptr.*)) {
-            // Module alias already exists in this scope
-            return ModuleAliasIntroduceResult{ .already_in_scope = entry.value_ptr.* };
-        }
+    if (scope.module_aliases.get(alias_name)) |existing| {
+        // Module alias already exists in this scope
+        return ModuleAliasIntroduceResult{ .already_in_scope = existing };
     }
 
     // Check for shadowing in parent scopes
@@ -480,7 +554,7 @@ pub fn introduceModuleAlias(
         .is_package_qualified = is_package_qualified,
     };
 
-    try scope.put(gpa, .module_alias, alias_name, module_info);
+    try scope.module_aliases.put(gpa, alias_name, module_info);
 
     if (shadowed_module) |info| {
         return ModuleAliasIntroduceResult{ .shadowing_warning = info };
@@ -491,12 +565,8 @@ pub fn introduceModuleAlias(
 
 /// Look up an exposed item in this scope
 pub fn lookupExposedItem(scope: *const Scope, name: Ident.Idx) ExposedItemLookupResult {
-    // Search by identifier equality.
-    var iter = scope.exposed_items.iterator();
-    while (iter.next()) |entry| {
-        if (name.eql(entry.key_ptr.*)) {
-            return ExposedItemLookupResult{ .found = entry.value_ptr.* };
-        }
+    if (scope.exposed_items.get(name)) |info| {
+        return ExposedItemLookupResult{ .found = info };
     }
     return ExposedItemLookupResult{ .not_found = {} };
 }
@@ -509,13 +579,9 @@ pub fn introduceExposedItem(
     item_info: ExposedItemInfo,
     parent_lookup_fn: ?fn (Ident.Idx) ?ExposedItemInfo,
 ) std.mem.Allocator.Error!ExposedItemIntroduceResult {
-    // Check if already exists in current scope.
-    var iter = scope.exposed_items.iterator();
-    while (iter.next()) |entry| {
-        if (item_name.eql(entry.key_ptr.*)) {
-            // Exposed item already exists in this scope
-            return ExposedItemIntroduceResult{ .already_in_scope = entry.value_ptr.* };
-        }
+    if (scope.exposed_items.get(item_name)) |existing| {
+        // Exposed item already exists in this scope
+        return ExposedItemIntroduceResult{ .already_in_scope = existing };
     }
 
     // Check for shadowing in parent scopes
@@ -524,7 +590,7 @@ pub fn introduceExposedItem(
         shadowed_info = lookup_fn(item_name);
     }
 
-    try scope.put(gpa, .exposed_item, item_name, item_info);
+    try scope.exposed_items.put(gpa, item_name, item_info);
 
     if (shadowed_info) |info| {
         return ExposedItemIntroduceResult{ .shadowing_warning = info };
