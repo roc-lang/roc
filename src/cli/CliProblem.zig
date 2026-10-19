@@ -518,6 +518,7 @@ fn createInvalidArgumentsReport(allocator: Allocator, problem: cli_args.ArgProbl
     return switch (problem) {
         .missing_flag_value => |info| try createMissingFlagValueReport(allocator, info),
         .unexpected_argument => |info| try createUnexpectedArgumentReport(allocator, info),
+        .unknown_flag => |info| try createUnknownFlagReport(allocator, info),
         .shorthand_requires_run => |info| try createShorthandRequiresRunReport(allocator, info),
         .invalid_flag_value => |info| try createInvalidFlagValueReport(allocator, info),
     };
@@ -536,6 +537,38 @@ fn createUnexpectedArgumentReport(allocator: Allocator, info: anytype) Allocator
     var report = try Report.init(allocator, "Unexpected Argument", headline, .fatal);
 
     const help_hint = try std.fmt.allocPrint(allocator, "Run `roc{s}{s} --help` to see the arguments it accepts.", .{ separator, info.cmd });
+    defer allocator.free(help_hint);
+    try report.document.addSuggestion(help_hint);
+
+    return report;
+}
+
+/// Explains a dash-prefixed argument that names none of the command's flags,
+/// and how to write it when it was meant for the app or as a file name.
+fn createUnknownFlagReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const separator = if (info.cmd.len == 0) "" else " ";
+    const flag = info.arg[0 .. std.mem.findScalar(u8, info.arg, '=') orelse info.arg.len];
+    const headline = try std.fmt.allocPrint(allocator, "roc{s}{s} does not have a `{s}` flag.", .{ separator, info.cmd, flag });
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Unknown Flag", headline, .fatal);
+
+    if (info.suggestion) |suggestion| {
+        try report.document.addText("Did you mean `");
+        try report.document.addAnnotated(suggestion, .suggestion);
+        try report.document.addText("`?");
+        try report.document.addLineBreaks(2);
+    }
+    if (info.passes_args_to_app) {
+        const app_hint = try std.fmt.allocPrint(allocator, "To pass `{s}` to the app, write it after `--`, as in `roc{s}{s} app.roc -- {s}`.", .{ info.arg, separator, info.cmd, info.arg });
+        defer allocator.free(app_hint);
+        try report.document.addSuggestion(app_hint);
+        try report.document.addLineBreak();
+    }
+    const path_hint = try std.fmt.allocPrint(allocator, "To use a file named `{s}`, write it as `./{s}`.", .{ info.arg, info.arg });
+    defer allocator.free(path_hint);
+    try report.document.addSuggestion(path_hint);
+    try report.document.addLineBreak();
+    const help_hint = try std.fmt.allocPrint(allocator, "Run `roc{s}{s} --help` to see the flags it accepts.", .{ separator, info.cmd });
     defer allocator.free(help_hint);
     try report.document.addSuggestion(help_hint);
 
