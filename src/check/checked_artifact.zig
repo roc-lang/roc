@@ -6437,6 +6437,9 @@ fn appendInstantiatedNamedApplicationFromTemplate(
             const formals = try allocator.dupe(CheckedTypeId, alias.args);
             defer allocator.free(formals);
 
+            // Cloning appends to the store's pools, which the read form's
+            // owner module aliases.
+            const owner_module = alias.owner_module.*;
             var substitution = CheckedTypeSubstitution.init(allocator, names, store, formals, actual_args);
             defer substitution.deinit();
             const backing = try store.cloneCheckedTypeRootSubstituting(allocator, alias.backing, &substitution);
@@ -6447,7 +6450,7 @@ fn appendInstantiatedNamedApplicationFromTemplate(
             break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .alias = .{
                 .name = alias.name,
                 .origin_module = alias.origin_module,
-                .owner_module = alias.owner_module.*,
+                .owner_module = owner_module,
                 .source_decl = alias.source_decl,
                 .builtin_origin = alias.builtin_origin,
                 .backing = backing,
@@ -6461,6 +6464,12 @@ fn appendInstantiatedNamedApplicationFromTemplate(
 
             const formals = try allocator.dupe(CheckedTypeId, nominal.args);
             defer allocator.free(formals);
+            // Cloning appends to the store's pools, which the read form's
+            // owner module and declared fields alias.
+            const owner_module = nominal.owner_module.*;
+            const declared_fields = if (nominal.declared_fields.len == 0) &.{} else try allocator.dupe(CheckedDeclaredField, nominal.declared_fields);
+            var declared_fields_owned = true;
+            errdefer if (declared_fields_owned and declared_fields.len != 0) allocator.free(declared_fields);
 
             var substitution = CheckedTypeSubstitution.init(allocator, names, store, formals, actual_args);
             defer substitution.deinit();
@@ -6471,15 +6480,15 @@ fn appendInstantiatedNamedApplicationFromTemplate(
             const payload_args = if (actual_args.len == 0) &.{} else try allocator.dupe(CheckedTypeId, actual_args);
             var payload_args_owned = true;
             errdefer if (payload_args_owned and payload_args.len != 0) allocator.free(payload_args);
-            const declared_fields = if (nominal.declared_fields.len == 0) &.{} else try allocator.dupe(CheckedDeclaredField, nominal.declared_fields);
 
             // The payload owns all three slices from here and releases them on failure.
             padding_owned = false;
             payload_args_owned = false;
+            declared_fields_owned = false;
             break :blk try appendExplicitCheckedTypePayload(allocator, names, store, .{ .nominal = .{
                 .name = nominal.name,
                 .origin_module = nominal.origin_module,
-                .owner_module = nominal.owner_module.*,
+                .owner_module = owner_module,
                 .source_decl = nominal.source_decl,
                 .builtin = nominal.builtin,
                 .is_opaque = nominal.is_opaque,
