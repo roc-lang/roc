@@ -73,10 +73,7 @@ fn OptionalId(comptime T: type) type {
         const Self = @This();
 
         pub fn of(value: T) Self {
-            const raw: u32 = switch (@typeInfo(T)) {
-                .int => value,
-                else => @backingInt(value),
-            };
+            const raw: u32 = if (comptime @typeInfo(T) == .int) value else @backingInt(value);
             std.debug.assert(raw != std.math.maxInt(u32));
             return @fromBackingInt(raw);
         }
@@ -87,10 +84,7 @@ fn OptionalId(comptime T: type) type {
 
         pub fn get(self: Self) ?T {
             if (self == .none) return null;
-            return switch (@typeInfo(T)) {
-                .int => @backingInt(self),
-                else => @fromBackingInt(@backingInt(self)),
-            };
+            return if (comptime @typeInfo(T) == .int) @backingInt(self) else @fromBackingInt(@backingInt(self));
         }
     };
 }
