@@ -1531,31 +1531,6 @@ pub fn CallResultFusion(comptime Spec: type) type {
     };
 }
 
-/// Clone a source proc body into fresh statements and locals, delegating return
-/// handling to `Rewriter`.
-///
-/// `Rewriter` carries the pass-specific destination state and supplies the
-/// hooks that diverge between passes:
-///
-///   * `cloneRet(self: *Rewriter, cloner: anytype, value: LocalId, origin: LIR.StmtOrigin)`—
-///     optional. Produces the cloned tail for a source `ret value`; without
-///     it the clone returns the mapped value with the source origin.
-///   * `interceptStmt(self: *Rewriter, cloner: anytype, old_id: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin)`—
-///     optional. Returns a cloned statement id to short-circuit the default
-///     clone, letting the pass fuse a direct constructor/concat return into
-///     the tail or rewrite statements it identified up front, or `null` to
-///     fall through to the ordinary clone.
-///   * `preserveLocal(self: *Rewriter, old: LocalId) bool`—optional.
-///     Retains an uncached local's original identity instead of allocating a
-///     clone. This lets subtree rewrites preserve external inputs by default
-///     without seeding a map over the entire store.
-///
-/// `origin` is the provenance of the source statement being cloned, with its
-/// inline scope already mapped into the destination; a hook's statements
-/// state it (with the pass's own kind where the hook rewrites) explicitly.
-///
-/// Both hooks receive the cloner and use its `mapLocal`, `mapLocalSpan`,
-/// `addTemp`, `directReturnOf`, and `store` surface to build their statements.
 /// Mapping and branch storage that a sequence of clones reuses. One clone at
 /// a time borrows it and returns it empty, so each later clone starts with
 /// the capacity an earlier one grew instead of growing its tables again.
@@ -1595,6 +1570,31 @@ pub const CloneScratch = struct {
     }
 };
 
+/// Clone a source proc body into fresh statements and locals, delegating return
+/// handling to `Rewriter`.
+///
+/// `Rewriter` carries the pass-specific destination state and supplies the
+/// hooks that diverge between passes:
+///
+///   * `cloneRet(self: *Rewriter, cloner: anytype, value: LocalId, origin: LIR.StmtOrigin)`—
+///     optional. Produces the cloned tail for a source `ret value`; without
+///     it the clone returns the mapped value with the source origin.
+///   * `interceptStmt(self: *Rewriter, cloner: anytype, old_id: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin)`—
+///     optional. Returns a cloned statement id to short-circuit the default
+///     clone, letting the pass fuse a direct constructor/concat return into
+///     the tail or rewrite statements it identified up front, or `null` to
+///     fall through to the ordinary clone.
+///   * `preserveLocal(self: *Rewriter, old: LocalId) bool`—optional.
+///     Retains an uncached local's original identity instead of allocating a
+///     clone. This lets subtree rewrites preserve external inputs by default
+///     without seeding a map over the entire store.
+///
+/// `origin` is the provenance of the source statement being cloned, with its
+/// inline scope already mapped into the destination; a hook's statements
+/// state it (with the pass's own kind where the hook rewrites) explicitly.
+///
+/// Both hooks receive the cloner and use its `mapLocal`, `mapLocalSpan`,
+/// `addTemp`, `directReturnOf`, and `store` surface to build their statements.
 pub fn BodyCloner(comptime Rewriter: type) type {
     return struct {
         const Self = @This();
