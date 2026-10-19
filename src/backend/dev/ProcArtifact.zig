@@ -403,15 +403,42 @@ pub fn combineDistinct(allocator: Allocator, sets: []const *const Set) Allocator
     }
     var artifacts = try std.ArrayList(Artifact).initCapacity(a, next);
     for (sets, maps, kept) |set, map, flags| {
+        // A constant's program-local name belongs to the program that made
+        // the set, and another set's program can give the same name to a
+        // different constant, so each set names its constants by content
+        // before the sets meet.
+        var names = try ContentNames.init(allocator, set);
+        defer names.deinit();
         for (set.artifacts, flags) |source, keep| {
             if (!keep) continue;
             const first: u32 = @intCast(artifacts.items.len);
             try copyArtifacts(a, &artifacts, &.{ .arena = undefined, .artifacts = &.{source} }, null);
             const refs: []Reference = @constCast(artifacts.items[first].refs);
             for (refs, source.refs) |*ref, original| ref.target = map[original.target];
+            try nameDataByContent(a, &artifacts.items[first], &names);
         }
     }
     return .{ .arena = arena, .artifacts = try artifacts.toOwnedSlice(a), .source_files = try a.dupe([32]u8, source_files) };
+}
+
+/// Replace every program-local constant name `artifact` carries or refers
+/// to with its content name (`ContentNames`), as a pack names it.
+fn nameDataByContent(a: Allocator, artifact: *Artifact, names: *const ContentNames) Allocator.Error!void {
+    for (@constCast(artifact.relocations)) |*relocation| {
+        if (!names.renames(relocation.name)) continue;
+        relocation.name = try a.dupe(u8, names.of(relocation.name));
+        relocation.scope = .shared;
+    }
+    for (@constCast(artifact.data)) |*item| {
+        if (names.renames(item.name)) {
+            item.name = try a.dupe(u8, names.of(item.name));
+            item.program_local_name = false;
+        }
+        for (@constCast(item.relocations)) |*relocation| {
+            if (relocation.external or !names.renames(relocation.name)) continue;
+            relocation.name = try a.dupe(u8, names.of(relocation.name));
+        }
+    }
 }
 
 /// Deep-copy a set whose lines index a source-file table it does not carry
@@ -1760,4 +1787,32 @@ test "constants are named by content across programs, through cycles, and never 
     // The leaf's program-local name is the same in both programs, and its
     // content name is not.
     try testing.expect(!std.mem.eql(u8, one_leaf, names_three.of("roc__d0_2")));
+}
+
+test "combined sets keep the program-local constants of each set apart" {
+    const allocator = std.testing.allocator;
+    // Two programs each named a different constant `roc__d0`, and each
+    // program's procedure reads its own.
+    var first_relocations = [_]NamedRelocation{.{ .offset = 0, .name = "roc__d0", .scope = .program, .kind = .{ .data = .rel32 } }};
+    var second_relocations = [_]NamedRelocation{.{ .offset = 0, .name = "roc__d0", .scope = .program, .kind = .{ .data = .rel32 } }};
+    const first_data = [_]DataItem{testItem("roc__d0", "first constant", &.{}, true)};
+    const second_data = [_]DataItem{testItem("roc__d0", "second constant", &.{}, true)};
+    const first = Set{
+        .arena = collections.SingleThreadArena.init(allocator),
+        .artifacts = &.{.{ .kind = .{ .proc = lir.ProcIdentity.forTest(1) }, .code = "\x00\x00\x00\x00", .entry = 0, .frame = null, .refs = &.{}, .relocations = &first_relocations, .data = &first_data }},
+    };
+    const second = Set{
+        .arena = collections.SingleThreadArena.init(allocator),
+        .artifacts = &.{.{ .kind = .{ .proc = lir.ProcIdentity.forTest(2) }, .code = "\x00\x00\x00\x00", .entry = 0, .frame = null, .refs = &.{}, .relocations = &second_relocations, .data = &second_data }},
+    };
+    var combined = try combineDistinct(allocator, &.{ &first, &second });
+    defer combined.deinit();
+    try std.testing.expectEqual(@as(usize, 2), combined.artifacts.len);
+    for (combined.artifacts, [_][]const u8{ "first constant", "second constant" }) |artifact, bytes| {
+        try std.testing.expectEqualStrings(bytes, artifact.data[0].bytes);
+        try std.testing.expect(!artifact.data[0].program_local_name);
+        try std.testing.expectEqualStrings(artifact.data[0].name, artifact.relocations[0].name);
+        try std.testing.expectEqual(SymbolScope.shared, artifact.relocations[0].scope);
+    }
+    try std.testing.expect(!std.mem.eql(u8, combined.artifacts[0].data[0].name, combined.artifacts[1].data[0].name));
 }
