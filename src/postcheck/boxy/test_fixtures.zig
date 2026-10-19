@@ -83,7 +83,7 @@ pub fn testModuleEnv() *can.ModuleEnv {
 /// An empty checked module for unit tests that build plans and lowerings by hand.
 pub fn minimalCheckedModule(allocator: Allocator) checked.CheckedModuleArtifact {
     return .{
-        .key = moduleKey(1),
+        .key = checkedModuleKey(1),
         .canonical_names = names.CanonicalNameStore.init(allocator),
         .module_identity = testModuleIdentity(),
         .checking_context_identity = .{},
@@ -125,6 +125,13 @@ pub fn moduleKey(byte: u8) checked.ModuleId {
     return key;
 }
 
+/// The artifact key whose digest is `moduleKey(byte)`.
+pub fn checkedModuleKey(byte: u8) checked.CheckedModuleArtifactKey {
+    var key = checked.CheckedModuleArtifactKey{};
+    key.bytes[0] = byte;
+    return key;
+}
+
 /// A distinct checked type digest whose first byte is `byte`.
 pub fn typeKey(byte: u8) names.CanonicalTypeKey {
     var key = names.CanonicalTypeKey{};
@@ -140,9 +147,9 @@ pub fn typeSchemeKey(byte: u8) names.CanonicalTypeSchemeKey {
 }
 
 /// A procedure template reference into `key`'s checked module.
-pub fn procedureTemplateRef(key: checked.CheckedModuleArtifactKey, raw_template_id: u32) names.ProcedureTemplateRef {
+pub fn procedureTemplateRef(key: checked.ModuleId, raw_template_id: u32) names.ProcedureTemplateRef {
     return .{
-        .artifact = .{ .bytes = key.bytes },
+        .artifact = key,
         .proc_base = @fromBackingInt(@intCast(raw_template_id)),
         .template = @fromBackingInt(@intCast(raw_template_id)),
     };

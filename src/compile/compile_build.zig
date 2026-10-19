@@ -3322,8 +3322,8 @@ pub const BuildEnv = struct {
         errdefer artifacts.deinit(allocator);
         const builtin_artifact = &self.builtin_modules.checked_artifact;
         for (root_artifact.lowering_visibility.module_ids) |key| {
-            if (checkedArtifactKeysEqual(key, root_artifact.key)) continue;
-            if (checkedArtifactKeysEqual(key, builtin_artifact.key)) continue;
+            if (checkedArtifactKeysEqual(key, root_artifact.key.digest())) continue;
+            if (checkedArtifactKeysEqual(key, builtin_artifact.key.digest())) continue;
             const artifact = self.artifactByKey(key) orelse continue;
             try artifacts.append(allocator, artifact);
         }
@@ -3356,15 +3356,15 @@ pub const BuildEnv = struct {
     }
 
     fn checkedArtifactKeysEqual(
-        a: check.CheckedArtifact.CheckedModuleArtifactKey,
-        b: check.CheckedArtifact.CheckedModuleArtifactKey,
+        a: check.CheckedArtifact.ModuleId,
+        b: check.CheckedArtifact.ModuleId,
     ) bool {
-        return std.mem.eql(u8, &a.bytes, &b.bytes);
+        return a.eql(b);
     }
 
     fn artifactByKey(
         self: *const BuildEnv,
-        key: check.CheckedArtifact.CheckedModuleArtifactKey,
+        key: check.CheckedArtifact.ModuleId,
     ) ?*const check.CheckedArtifact.CheckedModuleArtifact {
         const coord = self.coordinator orelse return null;
         return coord.checkedArtifactByKey(key);

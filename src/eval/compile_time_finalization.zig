@@ -198,7 +198,7 @@ const DebugEvents = struct {
     fn appendStored(self: *DebugEvents, module: *const checked.CheckedModuleArtifact, demanded: ?*const StoredRootSet) Allocator.Error!void {
         for (module.compile_time_debug.entries) |entry| {
             if (demanded) |set| if (!set.contains(.{ .module = module.key.bytes, .root = entry.root })) continue;
-            try self.appendEvent(module.key, module.compile_time_roots.root(entry.root), module.compile_time_debug.message(entry), false);
+            try self.appendEvent(module.key.digest(), module.compile_time_roots.root(entry.root), module.compile_time_debug.message(entry), false);
         }
     }
 
@@ -217,7 +217,7 @@ const DebugEvents = struct {
             const previous = entry.module.compile_time_debug;
             for (previous.entries) |stored| try inputs.append(self.allocator, .{ .root = stored.root, .message = previous.message(stored) });
             for (self.events.items) |event| {
-                if (event.fresh and std.meta.eql(entry.module.key, event.module)) try inputs.append(self.allocator, .{ .root = event.root, .message = event.message });
+                if (event.fresh and entry.module.key.digest().eql(event.module)) try inputs.append(self.allocator, .{ .root = event.root, .message = event.message });
             }
             std.mem.sort(checked.CompileTimeDebugStore.Input, inputs.items, {}, struct {
                 fn lessThan(_: void, a: checked.CompileTimeDebugStore.Input, b: checked.CompileTimeDebugStore.Input) bool {
@@ -298,7 +298,7 @@ const ModuleOwners = struct {
             slot.* = null;
             var tail = slot;
             for (modules, 0..) |entry, index| {
-                if (!entry.module.key.eql(key)) continue;
+                if (!entry.module.key.digest().eql(key)) continue;
                 tail.* = @intCast(index);
                 tail = &next_alias[index];
             }
@@ -953,7 +953,7 @@ pub fn finalizeProgram(
             // evaluated are read from its store like any other module's.
             if (entry.module.compile_time_roots.root(compileTimeRootForRequest(entry.module, request)).payload != .pending) continue;
             try requests.append(allocator, request);
-            try source_modules.append(allocator, entry.module.key);
+            try source_modules.append(allocator, entry.module.key.digest());
         }
     }
     const requested_root_count = requests.items.len;
@@ -972,7 +972,7 @@ pub fn finalizeProgram(
     if (lss_runtime) {
         try requests.appendSlice(allocator, program_roots.requests);
         if (program_roots.source_modules.len == 0) {
-            try source_modules.appendNTimes(allocator, lowering_modules.root.module.key, program_roots.requests.len);
+            try source_modules.appendNTimes(allocator, lowering_modules.root.module.key.digest(), program_roots.requests.len);
         } else {
             try source_modules.appendSlice(allocator, program_roots.source_modules);
         }
@@ -981,7 +981,7 @@ pub fn finalizeProgram(
         defer declared.deinit(allocator);
         for (modules) |entry| {
             for (entry.module.root_requests.compile_time_requests) |request| {
-                try declared.put(allocator, .{ .module = entry.module.key, .root = compileTimeRootForRequest(entry.module, request) }, {});
+                try declared.put(allocator, .{ .module = entry.module.key.digest(), .root = compileTimeRootForRequest(entry.module, request) }, {});
             }
         }
         const checked_modules: lir.CheckedPipeline.LiteralDemand.CheckedModules = .{ .root = lowering_modules.root, .imports = lowering_modules.imports };
@@ -991,7 +991,7 @@ pub fn finalizeProgram(
         try lir.CheckedPipeline.LiteralDemand.selectDiscoveryRoots(allocator, &literal_demand.?, checked_modules, program_roots.requests, program_roots.source_modules, &selected);
         for (selected.items) |index| {
             try requests.append(allocator, program_roots.requests[index]);
-            try source_modules.append(allocator, if (program_roots.source_modules.len == 0) lowering_modules.root.module.key else program_roots.source_modules[index]);
+            try source_modules.append(allocator, if (program_roots.source_modules.len == 0) lowering_modules.root.module.key.digest() else program_roots.source_modules[index]);
         }
         if (options.timing) |timing| {
             const counters = literal_demand.?.counters;
@@ -1799,7 +1799,7 @@ fn Evaluation(comptime ProgramPtr: type) type {
                 },
                 .checked => |id| {
                     for (self.modules, self.states) |entry, state| {
-                        if (!entry.module.key.eql(module)) continue;
+                        if (!entry.module.key.digest().eql(module)) continue;
                         return state.ordinals[@backingInt(id)] orelse continue;
                     }
                     finalizationInvariant("compile-time slot has no declared producer");
@@ -5007,7 +5007,7 @@ fn reportDevHostEvents(
     const root_region = module.checked_bodies.expr(root.expr).source_region;
     for (events) |event| {
         switch (event) {
-            .dbg => |msg| try reportDebugMessage(allocator, options, module.key, root, msg),
+            .dbg => |msg| try reportDebugMessage(allocator, options, module.key.digest(), root, msg),
             .expect_failed => |failure| if (maybe_problem_store) |store| {
                 const message_idx = try store.putExtraString(failure.message);
                 const failed_at = native.failedAt(failure.point);
@@ -5803,9 +5803,9 @@ test "module owners resolve a lowered program's module ids to their finalized mo
     // of its own. Only `key` is read, so the rest of each artifact stays out
     // of this test.
     var artifacts: [3]checked.CheckedModuleArtifact = undefined;
-    artifacts[0].key = keys[2];
-    artifacts[1].key = keys[0];
-    artifacts[2].key = keys[2];
+    artifacts[0].key = .{ .bytes = keys[2].bytes };
+    artifacts[1].key = .{ .bytes = keys[0].bytes };
+    artifacts[2].key = .{ .bytes = keys[2].bytes };
     const modules = [_]ProgramModule{
         .{ .module = &artifacts[0], .problem_store = null },
         .{ .module = &artifacts[1], .problem_store = null },

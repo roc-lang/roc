@@ -25,6 +25,7 @@ const test_fixtures = @import("test_fixtures.zig");
 const fixtureTableIndex = test_fixtures.tableIndex;
 const builtinNominal = test_fixtures.builtinNominal;
 const moduleKey = test_fixtures.moduleKey;
+const checkedModuleKey = test_fixtures.checkedModuleKey;
 const typeKey = test_fixtures.typeKey;
 const typeSchemeKey = test_fixtures.typeSchemeKey;
 const testIntNumeral = test_fixtures.testIntNumeral;
@@ -134,7 +135,7 @@ fn appendSourceFile(
     try files.append(allocator, .{
         .name = module.module_env.?.module_name,
         .qualified_name = qualified_name,
-        .module_identity = module.key.module_identity_hash,
+        .module_identity = module.module_identity,
     });
 }
 
@@ -323,8 +324,8 @@ const RecordLabelPositions = struct {
     }
 };
 
-fn checked_moduleKeyEqual(a: checked.CheckedModuleArtifactKey, b: checked.CheckedModuleArtifactKey) bool {
-    return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
+fn checked_moduleKeyEqual(a: checked.ModuleId, b: checked.ModuleId) bool {
+    return a.eql(b);
 }
 
 /// The module among `modules` whose content identity is `identity`.
@@ -6412,11 +6413,11 @@ const ProcedureBuilder = struct {
 
         try self.appendHostedCatalogFromModule(&entries, Plan.moduleViewFromCheckedModule(self.modules.root.module));
         for (self.modules.imports, 0..) |imported, index| {
-            if (self.importModuleAlreadyScanned(imported.key, index)) continue;
+            if (self.importModuleAlreadyScanned(imported.key.digest(), index)) continue;
             try self.appendHostedCatalogFromModule(&entries, Plan.moduleViewFromImported(imported));
         }
         for (self.modules.root.relation_modules, 0..) |relation, index| {
-            if (self.relationModuleAlreadyScanned(relation.key, index)) continue;
+            if (self.relationModuleAlreadyScanned(relation.key.digest(), index)) continue;
             try self.appendHostedCatalogFromModule(&entries, Plan.moduleViewFromImported(relation));
         }
 
@@ -6519,21 +6520,21 @@ const ProcedureBuilder = struct {
         }
     }
 
-    fn importModuleAlreadyScanned(self: *ProcedureBuilder, module_key: checked.CheckedModuleArtifactKey, import_index: usize) bool {
-        if (checked_moduleKeyEqual(module_key, self.modules.root.module.key)) return true;
+    fn importModuleAlreadyScanned(self: *ProcedureBuilder, module_key: checked.ModuleId, import_index: usize) bool {
+        if (checked_moduleKeyEqual(module_key, self.modules.root.module.key.digest())) return true;
         for (self.modules.imports[0..import_index]) |imported| {
-            if (checked_moduleKeyEqual(module_key, imported.key)) return true;
+            if (checked_moduleKeyEqual(module_key, imported.key.digest())) return true;
         }
         return false;
     }
 
-    fn relationModuleAlreadyScanned(self: *ProcedureBuilder, module_key: checked.CheckedModuleArtifactKey, relation_index: usize) bool {
-        if (checked_moduleKeyEqual(module_key, self.modules.root.module.key)) return true;
+    fn relationModuleAlreadyScanned(self: *ProcedureBuilder, module_key: checked.ModuleId, relation_index: usize) bool {
+        if (checked_moduleKeyEqual(module_key, self.modules.root.module.key.digest())) return true;
         for (self.modules.imports) |imported| {
-            if (checked_moduleKeyEqual(module_key, imported.key)) return true;
+            if (checked_moduleKeyEqual(module_key, imported.key.digest())) return true;
         }
         for (self.modules.root.relation_modules[0..relation_index]) |relation| {
-            if (checked_moduleKeyEqual(module_key, relation.key)) return true;
+            if (checked_moduleKeyEqual(module_key, relation.key.digest())) return true;
         }
         return false;
     }
@@ -44515,7 +44516,7 @@ test "boxy lowerer emits private worker proc for zero-arg numeric lambda root" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -44663,7 +44664,7 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind, stored: ConstLookupS
     }};
     checked_module.compile_time_roots = .{ .roots = &compile_time_roots };
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -44779,7 +44780,7 @@ test "boxy lowerer emits small decimal expressions as Dec literals" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -44878,8 +44879,8 @@ test "boxy lowerer emits direct calls to planned private workers" {
     });
     try checked_module.checked_bodies.expr_id_pool.append(gpa, @fromBackingInt(@intCast(3)));
 
-    const root_template = procedureTemplateRef(checked_module.key, 0);
-    const callee_template = procedureTemplateRef(checked_module.key, 1);
+    const root_template = procedureTemplateRef(checked_module.key.digest(), 0);
+    const callee_template = procedureTemplateRef(checked_module.key.digest(), 1);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
@@ -44954,7 +44955,7 @@ test "boxy lowerer emits direct calls to planned private workers" {
         .{
             .expr = @fromBackingInt(@intCast(2)),
             .ref = .{ .top_level_proc = .{
-                .binding = .{ .top_level = .{ .artifact = checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
+                .binding = .{ .top_level = .{ .artifact = checked_module.key.digest(), .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
                 .source_fn_ty_template = typeKey(1),
                 .source_fn_ty_payload = @fromBackingInt(@intCast(1)),
                 .runtime_result_provenance = null,
@@ -44994,11 +44995,11 @@ test "boxy lowerer emits direct calls to planned private workers" {
 
     try std.testing.expectEqual(@as(usize, 2), plan.workers.items.len);
     const callee_worker = plan.directWorkerForCall(
-        .{ .module = checked_module.key, .expr = @fromBackingInt(@intCast(1)) },
+        .{ .module = checked_module.key.digest(), .expr = @fromBackingInt(@intCast(1)) },
         plan.roots.items[0].worker,
     ) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(
-        Plan.WorkerSource{ .procedure_binding = .{ .artifact = checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
+        Plan.WorkerSource{ .procedure_binding = .{ .artifact = checked_module.key.digest(), .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
         plan.workers.items[@backingInt(callee_worker)].source,
     );
 
@@ -45048,7 +45049,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
     defer root_checked_module.checked_bodies.deinit(gpa);
 
     var import_checked_module = minimalCheckedModule(gpa);
-    import_checked_module.key = moduleKey(2);
+    import_checked_module.key = checkedModuleKey(2);
     defer import_checked_module.canonical_names.deinit();
     defer import_checked_module.checked_types.deinit(gpa);
     defer import_checked_module.checked_bodies.deinit(gpa);
@@ -45064,8 +45065,8 @@ test "boxy lowerer emits direct calls to planned imported workers" {
         },
     });
 
-    const import_template = procedureTemplateRef(import_checked_module.key, 0);
-    const import_helper_template = procedureTemplateRef(import_checked_module.key, 1);
+    const import_template = procedureTemplateRef(import_checked_module.key.digest(), 0);
+    const import_helper_template = procedureTemplateRef(import_checked_module.key.digest(), 1);
     try import_checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -45128,7 +45129,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
     };
     import_checked_module.top_level_procedure_bindings = .{ .bindings = .{ .items = &import_bindings, .capacity = import_bindings.len, .pointer_stability = .{} } };
     const import_helper_use = checked.ProcedureUseTemplate{
-        .binding = .{ .top_level = .{ .artifact = import_checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
+        .binding = .{ .top_level = .{ .artifact = import_checked_module.key.digest(), .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
         .source_fn_ty_template = typeKey(3),
         .source_fn_ty_payload = @fromBackingInt(@intCast(1)),
         .runtime_result_provenance = null,
@@ -45154,7 +45155,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
     };
 
     const imported_binding = checked.ImportedProcedureBindingRef{
-        .artifact = import_checked_module.key,
+        .artifact = import_checked_module.key.digest(),
         .def = @fromBackingInt(@intCast(7)),
         .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
     };
@@ -45183,7 +45184,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
         },
     });
 
-    const root_template = procedureTemplateRef(root_checked_module.key, 0);
+    const root_template = procedureTemplateRef(root_checked_module.key.digest(), 0);
     try root_checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -45264,16 +45265,16 @@ test "boxy lowerer emits direct calls to planned imported workers" {
 
     try std.testing.expectEqual(@as(usize, 3), plan.workers.items.len);
     const callee_worker = plan.directWorkerForCall(
-        .{ .module = root_checked_module.key, .expr = @fromBackingInt(@intCast(1)) },
+        .{ .module = root_checked_module.key.digest(), .expr = @fromBackingInt(@intCast(1)) },
         plan.roots.items[0].worker,
     ) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(Plan.WorkerSource{ .procedure_use = imported_use }, plan.workers.items[@backingInt(callee_worker)].source);
     const helper_worker = plan.directWorkerForCall(
-        .{ .module = import_checked_module.key, .expr = @fromBackingInt(@intCast(1)) },
+        .{ .module = import_checked_module.key.digest(), .expr = @fromBackingInt(@intCast(1)) },
         callee_worker,
     ) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(
-        Plan.WorkerSource{ .procedure_binding = .{ .artifact = import_checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
+        Plan.WorkerSource{ .procedure_binding = .{ .artifact = import_checked_module.key.digest(), .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
         plan.workers.items[@backingInt(helper_worker)].source,
     );
 
@@ -45353,7 +45354,7 @@ test "boxy lowerer emits recursive direct calls to the current private worker" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -45404,7 +45405,7 @@ test "boxy lowerer emits recursive direct calls to the current private worker" {
         .{
             .expr = @fromBackingInt(@intCast(2)),
             .ref = .{ .top_level_proc = .{
-                .binding = .{ .top_level = .{ .artifact = checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
+                .binding = .{ .top_level = .{ .artifact = checked_module.key.digest(), .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
                 .source_fn_ty_template = typeKey(1),
                 .source_fn_ty_payload = @fromBackingInt(@intCast(1)),
                 .runtime_result_provenance = null,
@@ -45442,7 +45443,7 @@ test "boxy lowerer emits recursive direct calls to the current private worker" {
 
     try std.testing.expectEqual(@as(usize, 1), plan.workers.items.len);
     try std.testing.expectEqual(plan.roots.items[0].worker, plan.directWorkerForCall(
-        .{ .module = checked_module.key, .expr = @fromBackingInt(@intCast(1)) },
+        .{ .module = checked_module.key.digest(), .expr = @fromBackingInt(@intCast(1)) },
         plan.roots.items[0].worker,
     ) orelse return error.TestUnexpectedResult);
 
@@ -45495,7 +45496,7 @@ test "boxy lowerer emits checked crash as terminal LIR crash" {
     try checked_module.checked_bodies.string_bytes.appendSlice(gpa, "boom");
     try checked_module.checked_bodies.string_ranges.append(gpa, .{ .start = 0, .len = 4 });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -45571,7 +45572,7 @@ test "boxy lowerer emits checked ellipsis as identity not-implemented crash" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -45647,7 +45648,7 @@ test "boxy lowerer emits checked return expressions as terminal ret" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -45745,7 +45746,7 @@ test "boxy lowerer emits checked return statements as terminal ret" {
         } },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -45838,7 +45839,7 @@ test "boxy lowerer emits checked runtime error expressions as the runtime error 
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -45918,7 +45919,7 @@ test "boxy lowerer emits checked runtime error statements as the runtime error c
         .data = .runtime_error,
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -46016,7 +46017,7 @@ test "boxy lowerer emits checked while statements as join-backed loops" {
         } },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
@@ -46150,7 +46151,7 @@ test "boxy lowerer emits checked break as the active loop exit" {
         } },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
@@ -46274,7 +46275,7 @@ test "boxy lowerer emits checked if expressions with a shared continuation join"
         .body = @fromBackingInt(@intCast(3)),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
@@ -46429,7 +46430,7 @@ test "boxy lowerer emits checked tag matches as ordered discriminant tests" {
         .{ .pt_start = 1, .pt_len = 1, .value = @fromBackingInt(@intCast(4)), .guard = null },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
@@ -46610,7 +46611,7 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
     });
     try checked_module.checked_bodies.expr_id_pool.append(gpa, @fromBackingInt(@intCast(5)));
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
@@ -46803,7 +46804,7 @@ test "boxy lowerer emits checked list match patterns as length checks and elemen
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(5))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
@@ -46996,7 +46997,7 @@ test "boxy lowerer emits checked string interpolation match patterns" {
         .guard = null,
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -47173,7 +47174,7 @@ test "boxy lowerer maps checked alternative binders onto representative match lo
     });
     try checked_module.checked_bodies.expr_id_pool.append(gpa, @fromBackingInt(@intCast(4)));
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
@@ -47322,7 +47323,7 @@ test "boxy lowerer emits checked numeric literal match patterns as equality test
         .{ .pt_start = 1, .pt_len = 1, .value = @fromBackingInt(@intCast(4)), .guard = null },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -47468,7 +47469,7 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
         .{ .pt_start = 1, .pt_len = 1, .value = @fromBackingInt(@intCast(4)), .guard = null },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
@@ -47624,7 +47625,7 @@ test "boxy lowerer emits checked string literal match patterns as string equalit
         .{ .pt_start = 1, .pt_len = 1, .value = @fromBackingInt(@intCast(4)), .guard = null },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
@@ -47730,7 +47731,7 @@ test "boxy lowerer emits checked unary not as bool low-level call" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -47824,7 +47825,7 @@ test "boxy lowerer emits short-circuit checked boolean and" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -47937,7 +47938,7 @@ test "boxy lowerer emits primitive structural equality as low-level equality" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
@@ -48059,7 +48060,7 @@ test "boxy lowerer emits tuple structural equality with field short-circuiting" 
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(7))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
@@ -48207,7 +48208,7 @@ test "boxy lowerer emits primitive structural hash as hasher low-level" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -48321,7 +48322,7 @@ test "boxy lowerer emits tuple structural hash by threading hasher through field
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(4))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
@@ -48444,7 +48445,7 @@ test "boxy lowerer emits checked string segment literals" {
     try checked_module.checked_bodies.string_bytes.appendSlice(gpa, "hello");
     try checked_module.checked_bodies.string_ranges.append(gpa, .{ .start = 0, .len = 5 });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -48527,7 +48528,7 @@ test "boxy lowerer emits checked bytes literals as byte-backed LIR literals" {
     try checked_module.checked_bodies.string_bytes.appendSlice(gpa, "abc");
     try checked_module.checked_bodies.string_ranges.append(gpa, .{ .start = 0, .len = 3 });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
@@ -48615,7 +48616,7 @@ test "boxy lowerer emits checked string interpolation segments as concat chain" 
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(4))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -48736,7 +48737,7 @@ test "boxy lowerer emits checked dbg expressions before unit result" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
@@ -48830,7 +48831,7 @@ test "boxy lowerer emits checked expect expressions before unit result" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
@@ -48921,7 +48922,7 @@ test "boxy lowerer emits expect_err messages from inspected payloads" {
     try checked_module.checked_bodies.string_bytes.appendSlice(gpa, "fallible?");
     try checked_module.checked_bodies.string_ranges.append(gpa, .{ .start = 0, .len = 9 });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -49054,7 +49055,7 @@ test "boxy lowerer emits checked dbg statements in block order" {
         .data = .{ .dbg = @fromBackingInt(@intCast(2)) },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
@@ -49176,7 +49177,7 @@ test "boxy lowerer emits block declaration bindings with checked type layouts" {
         } },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -49294,7 +49295,7 @@ test "boxy lowerer emits uninitialized mutable block bindings" {
         .data = .{ .var_uninitialized = .{ .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))) } },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -49418,7 +49419,7 @@ test "boxy lowerer emits mutable reassignment as set_local replace" {
         } },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -49590,7 +49591,7 @@ test "boxy lowerer destructures tuple declaration patterns" {
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(6))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
@@ -49779,7 +49780,7 @@ test "boxy lowerer materializes record rest declaration patterns" {
         } },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(4)),
@@ -49962,7 +49963,7 @@ test "boxy lowerer binds irrefutable list rest declaration patterns" {
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(4))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
@@ -50091,7 +50092,7 @@ test "boxy lowerer emits tuple construction in element order" {
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(3))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
@@ -50203,7 +50204,7 @@ test "boxy lowerer emits tuple access as field_read" {
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(4))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
@@ -50319,7 +50320,7 @@ test "boxy lowerer emits record construction in layout order after source-order 
         .{ .label = field_a, .value = @as(checked.CheckedExprId, @fromBackingInt(@intCast(3))) },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
@@ -50438,7 +50439,7 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
         .value = @fromBackingInt(@intCast(3)),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
@@ -50570,7 +50571,7 @@ test "boxy lowerer emits record field access using layout field index" {
         .{ .label = field_a, .value = @as(checked.CheckedExprId, @fromBackingInt(@intCast(4))) },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
@@ -50696,7 +50697,7 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
         .nominal = .{
             .name = @fromBackingInt(@intCast(2)),
             .origin_module = nominal_key.module,
-            .owner_module = checked_module.key,
+            .owner_module = checked_module.key.digest(),
             .source_decl = nominal_key.source_decl,
             .is_opaque = false,
             .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
@@ -50710,7 +50711,7 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
@@ -50863,7 +50864,7 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
         .nominal = .{
             .name = @fromBackingInt(@intCast(4)),
             .origin_module = nominal_key.module,
-            .owner_module = checked_module.key,
+            .owner_module = checked_module.key.digest(),
             .source_decl = nominal_key.source_decl,
             .is_opaque = false,
             .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
@@ -50933,7 +50934,7 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
         .{ .label = field_b, .value = @as(checked.CheckedExprId, @fromBackingInt(@intCast(5))) },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(5)),
@@ -51103,7 +51104,7 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
         .nominal = .{
             .name = try checked_module.canonical_names.internTypeName("WithPadding"),
             .origin_module = nominal_key.module,
-            .owner_module = checked_module.key,
+            .owner_module = checked_module.key.digest(),
             .source_decl = nominal_key.source_decl,
             .is_opaque = false,
             .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
@@ -51124,7 +51125,7 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
         .{ .label = field_b, .value = @as(checked.CheckedExprId, @fromBackingInt(@intCast(5))) },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(5)),
@@ -51297,7 +51298,7 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
         .nominal = .{
             .name = try checked_module.canonical_names.internTypeName("WithPadding"),
             .origin_module = nominal_key.module,
-            .owner_module = checked_module.key,
+            .owner_module = checked_module.key.digest(),
             .source_decl = nominal_key.source_decl,
             .is_opaque = false,
             .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
@@ -51321,7 +51322,7 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
         .{ .label = field_b, .value = @as(checked.CheckedExprId, @fromBackingInt(@intCast(5))) },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(6)),
@@ -51473,7 +51474,7 @@ test "boxy lowerer emits builtin Bool tags by checked Bool names" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -51569,7 +51570,7 @@ test "boxy lowerer emits payload tag construction using planned variant payload 
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(3))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
@@ -51681,7 +51682,7 @@ test "boxy lowerer emits list construction with committed element layout" {
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(3))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
@@ -51818,7 +51819,7 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(3))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
@@ -51956,7 +51957,7 @@ test "boxy lowerer inspects concrete lists with an index and string accumulator 
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(4))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
@@ -52092,7 +52093,7 @@ test "boxy lowerer emits empty list construction" {
         },
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
@@ -52170,7 +52171,7 @@ test "boxy lowerer emits checked low-level calls after source-order argument low
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(3))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -52281,7 +52282,7 @@ test "boxy lowerer boxes concrete values with ordinary box low-level" {
 
     try checked_module.checked_bodies.expr_id_pool.append(gpa, @fromBackingInt(@intCast(2)));
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
@@ -52391,7 +52392,7 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
     });
     try checked_module.checked_bodies.expr_id_pool.append(gpa, @fromBackingInt(@intCast(2)));
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
@@ -52524,7 +52525,7 @@ test "boxy lowerer unboxes concrete values with ordinary box low-level" {
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(3))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(2)),
@@ -52636,7 +52637,7 @@ test "boxy lowerer inspects concrete Box payloads" {
 
     try checked_module.checked_bodies.expr_id_pool.append(gpa, @fromBackingInt(@intCast(3)));
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(3)),
@@ -52825,7 +52826,7 @@ test "boxy lowerer emits checked integer division low-level calls" {
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(3))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -53079,7 +53080,7 @@ test "boxy lowerer emits requested layout metadata for static data requests" {
         .checked_type = @fromBackingInt(@intCast(1)),
         .source_scheme = typeSchemeKey(2),
         .const_ref = .{
-            .artifact = checked_module.key,
+            .artifact = checked_module.key.digest(),
             .owner = .{ .top_level_binding = .{
                 .module_idx = 0,
                 .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -53279,7 +53280,7 @@ fn lowerListMapCanReuseFixture(
         @as(checked.CheckedExprId, @fromBackingInt(@intCast(3))),
     });
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.stored_exprs.append(allocator, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(4)),

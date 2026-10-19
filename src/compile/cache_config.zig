@@ -339,7 +339,7 @@ pub const Constants = struct {
     /// 154: a module records which top-level definitions' calls can invoke a
     ///      function value they do not name, and its strict-demand relation
     ///      follows function values and every selected dispatch.
-    pub const CACHE_VERSION = 155;
+    pub const CACHE_VERSION = 156;
 };
 
 /// Configuration for the Roc cache system.

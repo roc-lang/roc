@@ -439,7 +439,7 @@ const Builder = struct {
             .top_level_binding => |top_level| view.compile_time_roots.lookupIdByPattern(top_level.pattern),
             .hoisted_expr => |hoisted| if (view.hoisted_constants.lookupByExpr(hoisted.expr)) |entry| entry.root else null,
         } orelse return true;
-        return !self.declared.contains(.{ .module = view.key, .root = root_id });
+        return !self.declared.contains(.{ .module = view.key.digest(), .root = root_id });
     }
 
     fn addTemplateTarget(self: *Builder, from: NodeId, target: ?TemplateOrUnbounded) Allocator.Error!void {
@@ -587,7 +587,7 @@ const Builder = struct {
         // A conversion with no root of its own depends on its instance.
         const root_id = conversion_root orelse return dependent;
         return switch (view.compile_time_roots.root(root_id).payload) {
-            .pending => if (self.declared.contains(.{ .module = view.key, .root = root_id })) .{} else unrequested: {
+            .pending => if (self.declared.contains(.{ .module = view.key.digest(), .root = root_id })) .{} else unrequested: {
                 if (traceEnabled()) std.debug.print("ctfe-demand unbounded unrequested-root {s} byte={d}\n", .{ view.canonical_names.moduleNameText(view.module_identity.module_name), expr.source_region.start.offset });
                 break :unrequested .{ .strict = true };
             },
@@ -779,7 +779,7 @@ pub fn selectDiscoveryRoots(
     selected: *std.ArrayList(usize),
 ) Allocator.Error!void {
     for (requests, 0..) |request, index| {
-        const owner = if (source_modules.len == 0) modules.root.module.key else source_modules[index];
+        const owner = if (source_modules.len == 0) modules.root.module.key.digest() else source_modules[index];
         const view = findView(modules, owner) orelse Common.invariant("discovery root named a checked module outside its lowering set");
         const flags = try rootFlags(allocator, demand, modules, view, request);
         const reaches = flags.reachesLiteralRoot();
@@ -818,8 +818,8 @@ fn rootFlags(
 }
 
 fn findView(modules: Common.CheckedModules, key: checked.ModuleId) ?checked.ImportedModuleView {
-    if (std.meta.eql(modules.root.module.key, key)) return checked.importedView(modules.root.module);
-    for (modules.root.relation_modules) |view| if (std.meta.eql(view.key, key)) return view;
-    for (modules.imports) |view| if (std.meta.eql(view.key, key)) return view;
+    if (modules.root.module.key.digest().eql(key)) return checked.importedView(modules.root.module);
+    for (modules.root.relation_modules) |view| if (view.key.digest().eql(key)) return view;
+    for (modules.imports) |view| if (view.key.digest().eql(key)) return view;
     return null;
 }

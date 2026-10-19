@@ -1986,7 +1986,7 @@ pub const Coordinator = struct {
             try views.append(allocator, view);
 
             for (view.direct_import_artifact_keys) |dependency_key| {
-                const artifact = self.checkedArtifactByKey(dependency_key) orelse {
+                const artifact = self.checkedArtifactByKey(dependency_key.digest()) orelse {
                     if (builtin.mode == .debug) {
                         base.invariant("compile.coordinator missing direct dependency checked artifact", .{});
                     }
@@ -2011,19 +2011,12 @@ pub const Coordinator = struct {
 
     fn rootRelationContainsArtifact(
         root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        key: check.CheckedArtifact.CheckedModuleArtifactKey,
+        key: check.CheckedArtifact.ModuleId,
     ) bool {
         for (root_artifact.platform_required_bindings.bindings) |binding| {
             if (std.mem.eql(u8, &binding.app_value.artifact.bytes, &key.bytes)) return true;
         }
         return false;
-    }
-
-    fn checkedArtifactKeyEql(
-        a: CheckedArtifact.CheckedModuleArtifactKey,
-        b: CheckedArtifact.CheckedModuleArtifactKey,
-    ) bool {
-        return std.mem.eql(u8, &a.bytes, &b.bytes);
     }
 
     fn coordinatorInvariant(comptime message: []const u8, args: anytype) noreturn {
@@ -2038,7 +2031,7 @@ pub const Coordinator = struct {
         views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
         allocator: Allocator,
         root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        key: check.CheckedArtifact.CheckedModuleArtifactKey,
+        key: check.CheckedArtifact.ModuleId,
     ) Allocator.Error!void {
         if (std.mem.eql(u8, &key.bytes, &root_artifact.key.bytes)) return;
         if (rootRelationContainsArtifact(root_artifact, key)) return;
@@ -2054,7 +2047,7 @@ pub const Coordinator = struct {
 
     fn importedArtifactViewExists(
         views: []const check.CheckedArtifact.ImportedModuleView,
-        key: check.CheckedArtifact.CheckedModuleArtifactKey,
+        key: check.CheckedArtifact.ModuleId,
     ) bool {
         for (views) |view| {
             if (std.mem.eql(u8, &view.key.bytes, &key.bytes)) return true;
@@ -2450,7 +2443,7 @@ pub const Coordinator = struct {
 
     pub fn checkedArtifactByKey(
         self: *Coordinator,
-        key: check.CheckedArtifact.CheckedModuleArtifactKey,
+        key: check.CheckedArtifact.ModuleId,
     ) ?*const check.CheckedArtifact.CheckedModuleArtifact {
         if (std.mem.eql(u8, &self.builtin_modules.checked_artifact.key.bytes, &key.bytes)) {
             return &self.builtin_modules.checked_artifact;
@@ -2803,7 +2796,7 @@ pub const Coordinator = struct {
             while (pending.pop()) |key| {
                 const entry = try dependencies.getOrPut(key.bytes);
                 if (entry.found_existing) continue;
-                const artifact = self.checkedArtifactByKey(key).?;
+                const artifact = self.checkedArtifactByKey(key.digest()).?;
                 try pending.appendSlice(self.gpa, artifact.direct_import_artifact_keys);
             }
         }
@@ -2916,7 +2909,7 @@ pub const Coordinator = struct {
         else if (ordered_modules.items.len != 0)
             ordered_modules.items[0].module
         else if (test_modules.len != 0)
-            self.checkedArtifactByKey(test_modules[0]) orelse coordinatorInvariant("program test module has no checked module data", .{})
+            self.checkedArtifactByKey(test_modules[0].digest()) orelse coordinatorInvariant("program test module has no checked module data", .{})
         else
             cached_debug_modules.items[0];
         const relations = try self.collectRelationArtifactViews(self.gpa, root);
@@ -2927,7 +2920,7 @@ pub const Coordinator = struct {
         var artifacts = self.checked_artifact_index.iterator();
         while (artifacts.next()) |entry| {
             const artifact = self.checkedArtifactByKey(.{ .bytes = entry.key_ptr.* }).?;
-            if (rootRelationContainsArtifact(root, artifact.key)) continue;
+            if (rootRelationContainsArtifact(root, artifact.key.digest())) continue;
             try appendImportedArtifactViewIfMissing(&imports, self.gpa, root.key, artifact);
         }
         std.mem.sort(CheckedArtifact.ImportedModuleView, imports.items, {}, struct {
@@ -2945,18 +2938,18 @@ pub const Coordinator = struct {
         // Then the program's tests, each owned by the module declaring it.
         var program_requests = std.ArrayList(CheckedArtifact.RootRequest).empty;
         defer program_requests.deinit(self.gpa);
-        var program_sources = std.ArrayList(CheckedArtifact.CheckedModuleArtifactKey).empty;
+        var program_sources = std.ArrayList(CheckedArtifact.ModuleId).empty;
         defer program_sources.deinit(self.gpa);
         if (!explicit_runtime) {
             try program_requests.appendSlice(self.gpa, entrypoint_requests);
-            try program_sources.appendNTimes(self.gpa, root.key, entrypoint_requests.len);
+            try program_sources.appendNTimes(self.gpa, root.key.digest(), entrypoint_requests.len);
             for (test_modules) |key| {
-                const artifact = self.checkedArtifactByKey(key) orelse
+                const artifact = self.checkedArtifactByKey(key.digest()) orelse
                     coordinatorInvariant("program test module has no checked module data", .{});
                 for (artifact.root_requests.requests) |request| {
                     if (request.kind != .test_expect) continue;
                     try program_requests.append(self.gpa, request);
-                    try program_sources.append(self.gpa, key);
+                    try program_sources.append(self.gpa, key.digest());
                 }
             }
         }
@@ -2982,7 +2975,7 @@ pub const Coordinator = struct {
         options.defer_debug_replay = !replay_cached_debug;
         var runtime_target: ?lir.CheckedPipeline.TargetConfig = if (self.runtime_lowering) |config| config.target else null;
         if (runtime_target) |*target| target.post_check_executor = self.postCheckExecutor();
-        var unfinalized = UnfinalizedReportDestinations{ .coordinator = self, .program_root = root.key };
+        var unfinalized = UnfinalizedReportDestinations{ .coordinator = self, .program_root = root.key.digest() };
         defer unfinalized.deinit();
         options.unfinalized_reports = .{ .context = &unfinalized, .module = UnfinalizedReportDestinations.module };
         std.debug.assert(self.program_session == null);
@@ -3048,7 +3041,7 @@ pub const Coordinator = struct {
             const self: *UnfinalizedReportDestinations = @ptrCast(@alignCast(context));
             const coord = self.coordinator;
             const builtin_artifact = &coord.builtin_modules.checked_artifact;
-            if (builtin_artifact.key.eql(key)) {
+            if (builtin_artifact.key.digest().eql(key)) {
                 if (self.builtin_problems == null) self.builtin_problems = try newState(coord);
                 return .{ .module = builtin_artifact, .problem_store = &self.builtin_problems.?.problems };
             }
@@ -7973,7 +7966,7 @@ test "requires signature naming a for-clause alias resolves to the app declarati
         "Model",
         app_artifact.canonical_names.typeNameText(identity_payload.alias.name),
     );
-    try std.testing.expect(Coordinator.checkedArtifactKeyEql(identity_payload.alias.owner_module.*, app_artifact.key));
+    try std.testing.expect(identity_payload.alias.owner_module.eql(app_artifact.key.digest()));
 
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
@@ -8128,7 +8121,7 @@ test "hosted distinctness: identical hosted declarations bound to different plat
     // And the checked platform table binds two distinct target artifacts to
     // two distinct linker symbols in header order.
     var binding_count: usize = 0;
-    var first_target: ?check.CheckedArtifact.CheckedModuleArtifactKey = null;
+    var first_target: ?check.CheckedArtifact.ModuleId = null;
     var first_symbol: ?[]const u8 = null;
     for (view_groups) |views| {
         for (views) |view| {
@@ -10819,7 +10812,7 @@ test "successful compile-time dbg replays from warm checked cache without evalua
             }
         }
         try std.testing.expect(helper_key != null);
-        const maybe_artifact = coord.checkedArtifactByKey(helper_key.?);
+        const maybe_artifact = coord.checkedArtifactByKey(helper_key.?.digest());
         try std.testing.expect(maybe_artifact != null);
         const artifact = maybe_artifact.?;
         try std.testing.expectEqual(@as(usize, 1), artifact.compile_time_debug.entries.len);

@@ -19,6 +19,7 @@ const test_fixtures = @import("test_fixtures.zig");
 const fixtureTableIndex = test_fixtures.tableIndex;
 const builtinNominal = test_fixtures.builtinNominal;
 const moduleKey = test_fixtures.moduleKey;
+const checkedModuleKey = test_fixtures.checkedModuleKey;
 const typeKey = test_fixtures.typeKey;
 const typeSchemeKey = test_fixtures.typeSchemeKey;
 const procedureTemplateRef = test_fixtures.procedureTemplateRef;
@@ -2201,6 +2202,8 @@ pub const AnalyzeOptions = struct {};
 /// Checked module data required by the Boxy representation planner.
 pub const ModuleView = struct {
     key: checked.ModuleId = .{},
+    /// Deep content identity of the module (`ModuleIdentity.stable_hash`).
+    module_identity: [32]u8 = @splat(0),
     canonical_names: ?*const checked_names.CanonicalNameStore = null,
     checked_types: checked.CheckedTypeStoreView,
     checked_bodies: checked.CheckedBodyStoreView = .{},
@@ -2224,7 +2227,7 @@ pub const ModuleView = struct {
 
 /// The view of checked module `key` among the modules lowering received.
 pub fn moduleViewForKey(modules: Common.CheckedModules, key: checked.ModuleId) ModuleView {
-    if (moduleKeyEqual(modules.root.module.key, key)) return moduleViewFromCheckedModule(modules.root.module);
+    if (moduleKeyEqual(modules.root.module.key.digest(), key)) return moduleViewFromCheckedModule(modules.root.module);
     return importedModuleViewForKey(modules.imports, modules.root.relation_modules, key) orelse
         boxyPlanInvariant("boxy referenced a checked module that was not available to lowering");
 }
@@ -2235,10 +2238,10 @@ fn importedModuleViewForKey(
     key: checked.ModuleId,
 ) ?ModuleView {
     for (imports) |imported| {
-        if (moduleKeyEqual(key, imported.key)) return moduleViewFromImported(imported);
+        if (moduleKeyEqual(key, imported.key.digest())) return moduleViewFromImported(imported);
     }
     for (relation_modules) |relation| {
-        if (moduleKeyEqual(key, relation.key)) return moduleViewFromImported(relation);
+        if (moduleKeyEqual(key, relation.key.digest())) return moduleViewFromImported(relation);
     }
     return null;
 }
@@ -20825,7 +20828,7 @@ fn rootRequiresHostWrapper(root: checked.RootRequest) bool {
     return root.abi != .roc or root.exposure != .private;
 }
 
-fn workerSourceForRoot(root: checked.RootRequest, root_key: checked.CheckedModuleArtifactKey) ?WorkerSource {
+fn workerSourceForRoot(root: checked.RootRequest, root_key: checked.ModuleId) ?WorkerSource {
     if (root.procedure_binding) |binding| return .{ .procedure_binding = .{ .artifact = root_key, .binding = binding } };
     if (root.procedure_use) |procedure| return .{ .procedure_use = procedure };
     if (root.procedure_template) |template| return .{ .procedure_template = template };
@@ -22217,7 +22220,8 @@ pub fn workerSourceForMethodTarget(
 /// The planner's view of an imported checked module.
 pub fn moduleViewFromImported(imported: checked.ImportedModuleView) ModuleView {
     return .{
-        .key = imported.key,
+        .key = imported.key.digest(),
+        .module_identity = imported.module_identity.stable_hash,
         .canonical_names = imported.canonical_names,
         .checked_types = imported.checked_types,
         .checked_bodies = imported.checked_bodies,
@@ -22243,7 +22247,8 @@ pub fn moduleViewFromImported(imported: checked.ImportedModuleView) ModuleView {
 /// The planner's view of a checked module.
 pub fn moduleViewFromCheckedModule(checked_module: *const checked.CheckedModuleArtifact) ModuleView {
     return .{
-        .key = checked_module.key,
+        .key = checked_module.key.digest(),
+        .module_identity = checked_module.module_identity.stable_hash,
         .canonical_names = &checked_module.canonical_names,
         .checked_types = checked_module.checked_types.view(),
         .checked_bodies = checked_module.checked_bodies.view(),
@@ -22308,7 +22313,7 @@ fn exprRefEql(a: CheckedExprIdentity, b: CheckedExprIdentity) bool {
 }
 
 fn moduleKeyEqual(a: checked.ModuleId, b: checked.ModuleId) bool {
-    return std.mem.eql(u8, a.bytes[0..], b.bytes[0..]);
+    return a.eql(b);
 }
 
 fn methodOwnerForModuleType(view: ModuleView, ty: checked.CheckedTypeId) ?static_dispatch.MethodOwner {
@@ -22779,7 +22784,7 @@ test "boxy planner describes an imported hosted worker's type variables on the R
     defer root_checked_module.checked_bodies.deinit(gpa);
 
     var import_checked_module = minimalCheckedModule(gpa);
-    import_checked_module.key = moduleKey(2);
+    import_checked_module.key = checkedModuleKey(2);
     defer import_checked_module.canonical_names.deinit();
     defer import_checked_module.checked_types.deinit(gpa);
 
@@ -22793,7 +22798,7 @@ test "boxy planner describes an imported hosted worker's type variables on the R
         },
     });
 
-    const import_template = procedureTemplateRef(import_checked_module.key, 0);
+    const import_template = procedureTemplateRef(import_checked_module.key.digest(), 0);
     var import_templates = [_]checked.CheckedProcedureTemplate{
         checkedTemplate(import_template, @fromBackingInt(@intCast(1)), @fromBackingInt(@intCast(fixtureTableIndex(0))), .hosted),
     };
@@ -22829,7 +22834,7 @@ test "boxy planner describes an imported hosted worker's type variables on the R
     import_checked_module.interface_capabilities.hosted_representations = &hosted_representations;
 
     const imported_binding = checked.ImportedProcedureBindingRef{
-        .artifact = import_checked_module.key,
+        .artifact = import_checked_module.key.digest(),
         .def = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
     };
@@ -22907,7 +22912,7 @@ test "boxy planner describes an imported hosted worker's type variables on the R
         .data = .{ .lookup_local = .{ .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))), .resolved = null } },
     });
 
-    const root_template = procedureTemplateRef(root_checked_module.key, 0);
+    const root_template = procedureTemplateRef(root_checked_module.key.digest(), 0);
     try root_checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .root_expr = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -22963,7 +22968,7 @@ test "boxy planner describes an imported hosted worker's type variables on the R
     defer plan.deinit();
 
     try std.testing.expect(plan.descriptors.items.len != 0);
-    const call_ref = CheckedExprIdentity{ .module = root_checked_module.key, .expr = @fromBackingInt(@intCast(1)) };
+    const call_ref = CheckedExprIdentity{ .module = root_checked_module.key.digest(), .expr = @fromBackingInt(@intCast(1)) };
     const direct = plan.directCallPlanForCall(call_ref, plan.roots.items[0].worker) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(plan.roots.items[0].worker, direct.caller);
     const callee_worker = plan.workers.items[@backingInt(direct.worker)];
@@ -22986,14 +22991,14 @@ test "boxy planner describes an imported hosted worker's type variables on the R
     try std.testing.expectEqual(worker_function.ret, host_function.ret);
     const substitutions = plan.callTypeSubstitutionSlice(direct.arg_substitutions);
     try std.testing.expectEqual(@as(usize, 1), substitutions.len);
-    try expectTypeRef(root_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), substitutions[0].operand_type);
+    try expectTypeRef(root_checked_module.key.digest(), @fromBackingInt(@intCast(fixtureTableIndex(0))), substitutions[0].operand_type);
     try std.testing.expectEqual(plan.repForSourceType(substitutions[0].operand_type).?, substitutions[0].operand_rep);
-    try expectTypeRef(root_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), substitutions[0].call_type);
+    try expectTypeRef(root_checked_module.key.digest(), @fromBackingInt(@intCast(fixtureTableIndex(0))), substitutions[0].call_type);
     try std.testing.expectEqual(plan.repForSourceType(substitutions[0].call_type).?, substitutions[0].call_rep);
-    try expectTypeRef(import_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), plan.representations.items[@backingInt(substitutions[0].worker_rep)].source_type);
+    try expectTypeRef(import_checked_module.key.digest(), @fromBackingInt(@intCast(fixtureTableIndex(0))), plan.representations.items[@backingInt(substitutions[0].worker_rep)].source_type);
     const ret_substitution = direct.ret_substitution orelse return error.TestUnexpectedResult;
-    try expectTypeRef(root_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), ret_substitution.call_type);
-    try expectTypeRef(import_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), plan.representations.items[@backingInt(ret_substitution.worker_rep)].source_type);
+    try expectTypeRef(root_checked_module.key.digest(), @fromBackingInt(@intCast(fixtureTableIndex(0))), ret_substitution.call_type);
+    try expectTypeRef(import_checked_module.key.digest(), @fromBackingInt(@intCast(fixtureTableIndex(0))), plan.representations.items[@backingInt(ret_substitution.worker_rep)].source_type);
 }
 
 test "boxy planner records relation-owned source type for platform-required direct calls" {
@@ -23005,7 +23010,7 @@ test "boxy planner records relation-owned source type for platform-required dire
     defer platform_checked_module.checked_bodies.deinit(gpa);
 
     var app_checked_module = minimalCheckedModule(gpa);
-    app_checked_module.key = moduleKey(3);
+    app_checked_module.key = checkedModuleKey(3);
     defer app_checked_module.canonical_names.deinit();
     defer app_checked_module.checked_types.deinit(gpa);
     defer app_checked_module.checked_bodies.deinit(gpa);
@@ -23020,7 +23025,7 @@ test "boxy planner records relation-owned source type for platform-required dire
             .ret = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         },
     });
-    const app_template = procedureTemplateRef(app_checked_module.key, 0);
+    const app_template = procedureTemplateRef(app_checked_module.key.digest(), 0);
     try app_checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -23071,7 +23076,7 @@ test "boxy planner records relation-owned source type for platform-required dire
         },
     });
 
-    const platform_template = procedureTemplateRef(platform_checked_module.key, 0);
+    const platform_template = procedureTemplateRef(platform_checked_module.key.digest(), 0);
     try platform_checked_module.checked_bodies.stored_exprs.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .ty = @fromBackingInt(@intCast(1)),
@@ -23107,9 +23112,9 @@ test "boxy planner records relation-owned source type for platform-required dire
     platform_checked_module.checked_procedure_templates = .{ .templates = .{ .items = &platform_templates, .capacity = platform_templates.len, .pointer_stability = .{} } };
 
     const required = checked.RequiredAppProcedureRef{
-        .artifact = app_checked_module.key,
+        .artifact = app_checked_module.key.digest(),
         .app_value = .{
-            .artifact = app_checked_module.key,
+            .artifact = app_checked_module.key.digest(),
             .pattern = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         },
         .procedure_binding = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -23161,16 +23166,16 @@ test "boxy planner records relation-owned source type for platform-required dire
     defer plan.deinit();
 
     const direct = plan.directCallPlanForCall(.{
-        .module = platform_checked_module.key,
+        .module = platform_checked_module.key.digest(),
         .expr = @fromBackingInt(@intCast(1)),
     }, plan.roots.items[0].worker) orelse return error.TestUnexpectedResult;
-    try expectTypeRef(platform_checked_module.key, @fromBackingInt(@intCast(2)), direct.source_fn_type);
-    try std.testing.expect(plan.repForSourceType(.{ .module = platform_checked_module.key, .ty = @fromBackingInt(@intCast(2)) }) != null);
+    try expectTypeRef(platform_checked_module.key.digest(), @fromBackingInt(@intCast(2)), direct.source_fn_type);
+    try std.testing.expect(plan.repForSourceType(.{ .module = platform_checked_module.key.digest(), .ty = @fromBackingInt(@intCast(2)) }) != null);
     try std.testing.expectEqual(@as(usize, 0), plan.callTypeSubstitutionSlice(direct.arg_substitutions).len);
     const ret_substitution = direct.ret_substitution orelse return error.TestUnexpectedResult;
-    try expectTypeRef(platform_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), ret_substitution.call_type);
+    try expectTypeRef(platform_checked_module.key.digest(), @fromBackingInt(@intCast(fixtureTableIndex(0))), ret_substitution.call_type);
     try std.testing.expectEqual(plan.repForSourceType(ret_substitution.call_type).?, ret_substitution.call_rep);
-    try expectTypeRef(app_checked_module.key, @fromBackingInt(@intCast(fixtureTableIndex(0))), plan.representations.items[@backingInt(ret_substitution.worker_rep)].source_type);
+    try expectTypeRef(app_checked_module.key.digest(), @fromBackingInt(@intCast(fixtureTableIndex(0))), plan.representations.items[@backingInt(ret_substitution.worker_rep)].source_type);
 }
 
 test "boxy planner records explicit source type representation bindings" {
@@ -25195,7 +25200,7 @@ test "boxy planner resolves procedure-template workers to checked bodies" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .root_expr = @fromBackingInt(@intCast(3)),
@@ -25219,7 +25224,7 @@ test "boxy planner resolves top-level direct bindings to checked bodies" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .root_expr = @fromBackingInt(@intCast(5)),
@@ -25243,7 +25248,7 @@ test "boxy planner resolves top-level direct bindings to checked bodies" {
 
     var builder = Builder.init(gpa, .{ .root_module = .{ .module = &checked_module, .roots = undefined } });
     defer builder.deinit();
-    try expectCheckedExprWorkerBody(builder.rootWorkerBody(.{ .procedure_binding = .{ .artifact = checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } }), template_ref, @fromBackingInt(@intCast(5)));
+    try expectCheckedExprWorkerBody(builder.rootWorkerBody(.{ .procedure_binding = .{ .artifact = checked_module.key.digest(), .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } }), template_ref, @fromBackingInt(@intCast(5)));
 }
 
 test "boxy planner resolves callable eval bindings to finalized const function expressions" {
@@ -25256,7 +25261,7 @@ test "boxy planner resolves callable eval bindings to finalized const function e
     checked_module.const_store = check.ConstStore.ConstStore.init(gpa);
     defer checked_module.const_store.deinit();
 
-    const template_ref = procedureTemplateRef(checked_module.key, 0);
+    const template_ref = procedureTemplateRef(checked_module.key.digest(), 0);
     var callable_templates = [_]checked.CallableEvalTemplate{
         .{
             .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -25348,5 +25353,5 @@ test "boxy planner resolves callable eval bindings to finalized const function e
 
     var builder = Builder.init(gpa, .{ .root_module = .{ .module = &checked_module, .roots = undefined } });
     defer builder.deinit();
-    try expectCheckedExprWorkerBody(builder.rootWorkerBody(.{ .procedure_binding = .{ .artifact = checked_module.key, .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } }), template_ref, @fromBackingInt(@intCast(fixtureTableIndex(0))));
+    try expectCheckedExprWorkerBody(builder.rootWorkerBody(.{ .procedure_binding = .{ .artifact = checked_module.key.digest(), .binding = @fromBackingInt(@intCast(fixtureTableIndex(0))) } }), template_ref, @fromBackingInt(@intCast(fixtureTableIndex(0))));
 }

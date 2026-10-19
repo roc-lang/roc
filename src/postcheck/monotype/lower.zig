@@ -5368,6 +5368,7 @@ const Builder = struct {
 
     const SourceFileSeed = struct {
         key: checked.ModuleId,
+        module_identity: [32]u8,
         name: []const u8,
         qualified_name: []const u8,
 
@@ -5414,6 +5415,7 @@ const Builder = struct {
         gop.value_ptr.* = @intCast(seeds.items.len);
         seeds.appendAssumeCapacity(.{
             .key = view.key,
+            .module_identity = view.module_identity.stable_hash,
             .name = view.module_env.module_name,
             .qualified_name = view.module_env.qualifiedModuleName(),
         });
@@ -5442,7 +5444,7 @@ const Builder = struct {
             const id = try self.program.addSourceFile(.{
                 .name = seed.name,
                 .qualified_name = seed.qualified_name,
-                .module_identity = seed.key.module_identity_hash,
+                .module_identity = seed.module_identity,
             });
             if (id != index) Common.invariant("Monotype program source file id did not match its sorted position");
             self.source_file_ids.getPtr(seed.key.bytes).?.* = id;
@@ -5883,11 +5885,11 @@ const Builder = struct {
 
         try self.appendHostedCatalogFromView(&entries, self.rootModuleView());
         for (self.modules.imports, 0..) |imported, index| {
-            if (self.importModuleAlreadyScanned(imported.key, index)) continue;
+            if (self.importModuleAlreadyScanned(imported.key.digest(), index)) continue;
             try self.appendHostedCatalogFromView(&entries, self.importModuleView(index));
         }
         for (self.modules.root.relation_modules, 0..) |relation, index| {
-            if (self.relationModuleAlreadyScanned(relation.key, index)) continue;
+            if (self.relationModuleAlreadyScanned(relation.key.digest(), index)) continue;
             try self.appendHostedCatalogFromView(&entries, self.relationModuleView(index));
         }
 
@@ -6771,7 +6773,7 @@ const Builder = struct {
     }
 
     fn rootSourceModule(self: *Builder, source_modules: []const checked.ModuleId, index: usize) checked.ModuleId {
-        return if (source_modules.len == 0) self.root_view.key else source_modules[index];
+        return if (source_modules.len == 0) self.root_view.key.digest() else source_modules[index];
     }
 
     /// Run a frozen root batch to completion before committing its first root,
@@ -67652,8 +67654,8 @@ const HashDeriver = struct {
 
 fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
     return .{
-        .code_generation_key = view.code_generation_key,
-        .key = view.key,
+        .code_generation_key = if (view.code_generation_key) |key| key.digest() else null,
+        .key = view.key.digest(),
         .module_env = view.module_env,
         .module_identity = view.module_identity,
         .names = checked.importedNames(view),

@@ -196,7 +196,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     defer artifacts_by_key.deinit();
     for (modules) |mod| {
         const artifact = mod.semantic.checked_artifact orelse continue;
-        try artifacts_by_key.put(artifact.key, artifact);
+        try artifacts_by_key.put(artifact.key.digest(), artifact);
     }
 
     var type_table = TypeTable.init(gpa, &artifacts_by_key);
@@ -1472,7 +1472,7 @@ const CollectedTypeInfo = struct {
 /// Maps checked artifact keys to artifacts. Populated once from the compiled
 /// module list before collection so nominal representation refs can resolve
 /// their declaration owners directly.
-const ArtifactKeyMap = std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, *const CheckedArtifact.CheckedModuleArtifact);
+const ArtifactKeyMap = std.AutoHashMap(CheckedArtifact.ModuleId, *const CheckedArtifact.CheckedModuleArtifact);
 
 /// Where a checked type sits inside the value being converted.
 ///

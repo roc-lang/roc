@@ -253,7 +253,7 @@ test "a build evaluates and materializes only the compile-time values its progra
     // stays explicitly unevaluated. Transcoding rejects a read whose value
     // the host did not materialize, so the runtime continuation below also
     // fails if the wrong root were the evaluated one.
-    try std.testing.expectEqual(@as(usize, 1), materializedAmong(host, helper.key, helper_roots));
+    try std.testing.expectEqual(@as(usize, 1), materializedAmong(host, helper.key.digest(), helper_roots));
     var unevaluated: usize = 0;
     for (helper_roots) |request| {
         if (helper.compile_time_roots.root(request.compile_time_root.?).payload == .unevaluated) unevaluated += 1;
@@ -335,10 +335,10 @@ test "one evaluated root has one completed-value slot however many places read i
     // concrete value, however many places in it read the value.
     for (helper_roots) |request| {
         const root = rootIdentity(request);
-        try std.testing.expect(materializingStage(stages, helper.key, root) != null);
-        for (stages.programs()) |program| try std.testing.expect(valueSlotsForRoot(program, helper.key, root) <= 1);
+        try std.testing.expect(materializingStage(stages, helper.key.digest(), root) != null);
+        for (stages.programs()) |program| try std.testing.expect(valueSlotsForRoot(program, helper.key.digest(), root) <= 1);
     }
-    try std.testing.expectEqual(@as(usize, 3), materializedAmong(stages, helper.key, helper_roots));
+    try std.testing.expectEqual(@as(usize, 3), materializedAmong(stages, helper.key.digest(), helper_roots));
 
     // `doubled` reads `base_value` once it has completed: in a later stage
     // than the one evaluating `base_value`, where the completed scalar is a
@@ -347,22 +347,22 @@ test "one evaluated root has one completed-value slot however many places read i
     const base_root = rootIdentity(try rootWithOrder(helper_roots, 0));
     const doubled_root = rootIdentity(try rootWithOrder(helper_roots, 1));
     const offset_root = rootIdentity(try rootWithOrder(helper_roots, 2));
-    const base_stage = materializingStage(stages, helper.key, base_root).?;
-    const doubled_stage = materializingStage(stages, helper.key, doubled_root).?;
+    const base_stage = materializingStage(stages, helper.key.digest(), base_root).?;
+    const doubled_stage = materializingStage(stages, helper.key.digest(), doubled_root).?;
     try std.testing.expect(doubled_stage > base_stage);
-    try std.testing.expect(valueSlotForRoot(stages.programs()[doubled_stage], helper.key, base_root) == null);
-    const offset_stage = materializingStage(stages, helper.key, offset_root).?;
+    try std.testing.expect(valueSlotForRoot(stages.programs()[doubled_stage], helper.key.digest(), base_root) == null);
+    const offset_stage = materializingStage(stages, helper.key.digest(), offset_root).?;
     for (stages.programs(), 0..) |program, index| {
         if (index == offset_stage) continue;
-        try std.testing.expect(valueSlotForRoot(program, helper.key, offset_root) == null);
+        try std.testing.expect(valueSlotForRoot(program, helper.key.digest(), offset_root) == null);
     }
 
     // `base_value` and `offset` commit the same eight-byte layout and are
     // distinct values, so layout agreement alone never merges two demands.
     const host = stages.programs()[base_stage];
     if (base_stage == offset_stage) {
-        const first = valueSlotForRoot(host, helper.key, base_root).?;
-        const other = valueSlotForRoot(host, helper.key, offset_root).?;
+        const first = valueSlotForRoot(host, helper.key.digest(), base_root).?;
+        const other = valueSlotForRoot(host, helper.key.digest(), offset_root).?;
         try std.testing.expect(first != other);
         const first_layout = host.lir_result.static_data_values.items[@backingInt(first)].layout_idx;
         const other_layout = host.lir_result.static_data_values.items[@backingInt(other)].layout_idx;

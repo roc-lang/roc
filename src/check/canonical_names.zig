@@ -54,9 +54,15 @@ pub const IntrinsicWrapperId = enum(u32) { _ };
 /// Public `EntryWrapperId` declaration.
 pub const EntryWrapperId = enum(u32) { _ };
 
-/// Public `ArtifactRef` declaration.
-pub const ArtifactRef = struct {
+/// A checked module artifact named by its identity digest
+/// (`CheckedModuleArtifactKey.bytes`).
+pub const ArtifactRef = extern struct {
     bytes: [32]u8 = @as([32]u8, @splat(0)),
+
+    /// Integer equality over the digest: a single 256-bit compare.
+    pub fn eql(a: ArtifactRef, b: ArtifactRef) bool {
+        return @as(u256, @bitCast(a.bytes)) == @as(u256, @bitCast(b.bytes));
+    }
 };
 
 /// 32-byte deep module content identity carried raw at post-check boundaries

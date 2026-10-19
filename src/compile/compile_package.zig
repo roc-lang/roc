@@ -246,7 +246,7 @@ pub fn buildCheckOwnerEnvs(
         }
     }
 
-    var seen_public_dependencies = std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, void).init(allocator);
+    var seen_public_dependencies = std.AutoHashMap(CheckedArtifact.ModuleId, void).init(allocator);
     defer seen_public_dependencies.deinit();
 
     for (imported_artifacts) |imported_artifact| {
@@ -266,7 +266,7 @@ fn appendCheckOwnerEnvPublicDependencies(
     allocator: Allocator,
     owner_envs: *std.ArrayList(*const ModuleEnv),
     available_artifacts: []const CheckedArtifact.ImportedModuleView,
-    seen_public_dependencies: *std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, void),
+    seen_public_dependencies: *std.AutoHashMap(CheckedArtifact.ModuleId, void),
     view: CheckedArtifact.ImportedModuleView,
 ) Allocator.Error!void {
     for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {
@@ -311,7 +311,7 @@ fn moduleEnvIdentitiesMatch(a: *const ModuleEnv, b: *const ModuleEnv) bool {
 
 fn availableArtifactByKey(
     available_artifacts: []const CheckedArtifact.ImportedModuleView,
-    key: CheckedArtifact.CheckedModuleArtifactKey,
+    key: CheckedArtifact.ModuleId,
 ) ?CheckedArtifact.ImportedModuleView {
     for (available_artifacts) |artifact| {
         if (std.mem.eql(u8, &artifact.key.bytes, &key.bytes)) return artifact;
