@@ -4466,13 +4466,7 @@ pub const Coordinator = struct {
         }
 
         // Append reports - we take ownership, so clear them after copying.
-        for (reports.items, 0..) |rep, ri| {
-            if (comptime trace_build) {
-                std.debug.print("[COORD] CANONICALIZED: result report {}: owned_strings.len={}\n", .{ ri, rep.owned_strings.items.len });
-                if (rep.owned_strings.items.len > 0) {
-                    std.debug.print("[COORD] CANONICALIZED: first owned_string ptr={} len={}\n", .{ @intFromPtr(rep.owned_strings.items[0].ptr), rep.owned_strings.items[0].len });
-                }
-            }
+        for (reports.items) |rep| {
             try mod.reports.append(self.gpa, rep);
         }
         // Clear reports to transfer ownership - prevents double-free in WorkerResult.deinit
@@ -4481,11 +4475,7 @@ pub const Coordinator = struct {
         if (comptime trace_build) {
             std.debug.print("[COORD] CANONICALIZED: mod ptr={} mod.reports AFTER: len={} cap={}\n", .{ @intFromPtr(mod), mod.reports.items.len, mod.reports.capacity });
             if (mod.reports.items.len > 0) {
-                const mr = &mod.reports.items[0];
-                std.debug.print("[COORD] CANONICALIZED: mod.reports.items.ptr={} owned_strings.len={}\n", .{ @intFromPtr(mod.reports.items.ptr), mr.owned_strings.items.len });
-                if (mr.owned_strings.items.len > 0) {
-                    std.debug.print("[COORD] CANONICALIZED: mod.reports[0] first owned_string ptr={} len={}\n", .{ @intFromPtr(mr.owned_strings.items[0].ptr), mr.owned_strings.items[0].len });
-                }
+                std.debug.print("[COORD] CANONICALIZED: mod.reports.items.ptr={}\n", .{@intFromPtr(mod.reports.items.ptr)});
             }
         }
     }

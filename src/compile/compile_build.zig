@@ -2242,7 +2242,7 @@ pub const BuildEnv = struct {
 
     fn remapSyntheticRootSourceRegion(
         self: *BuildEnv,
-        allocator: Allocator,
+        document: *reporting.Document,
         region: *reporting.SourceCodeDisplayRegion,
         original_line_starts: []const u32,
     ) Allocator.Error!void {
@@ -2260,9 +2260,7 @@ pub const BuildEnv = struct {
         // the staging appended, which is not the user's code; that region
         // keeps its own text and only its file name maps back.
         if (original_line_starts.len == 0 or original_end_line > original_line_starts.len) {
-            const owned_filename = try allocator.dupe(u8, original_path);
-            if (region.filename) |old_filename| allocator.free(old_filename);
-            region.filename = owned_filename;
+            region.filename = try document.ownString(original_path);
             return;
         }
 
@@ -2273,13 +2271,8 @@ pub const BuildEnv = struct {
             .end_col_idx = region.end_column - 1,
         };
 
-        const line_text = try allocator.dupe(u8, region_info.calculateLineText(original_source, original_line_starts));
-        errdefer allocator.free(line_text);
-        const owned_filename = try allocator.dupe(u8, original_path);
-        errdefer allocator.free(owned_filename);
-
-        allocator.free(region.line_text);
-        if (region.filename) |old_filename| allocator.free(old_filename);
+        const line_text = try document.ownString(region_info.calculateLineText(original_source, original_line_starts));
+        const owned_filename = try document.ownString(original_path);
 
         region.line_text = line_text;
         region.filename = owned_filename;
@@ -2289,15 +2282,15 @@ pub const BuildEnv = struct {
 
     fn remapSyntheticRootDocumentElement(
         self: *BuildEnv,
-        allocator: Allocator,
+        document: *reporting.Document,
         element: *reporting.DocumentElement,
         original_line_starts: []const u32,
     ) Allocator.Error!void {
         switch (element.*) {
-            .source_code_region => |*region| try self.remapSyntheticRootSourceRegion(allocator, region, original_line_starts),
+            .source_code_region => |*region| try self.remapSyntheticRootSourceRegion(document, region, original_line_starts),
             .source_code_with_underlines => |*underlines| {
                 const old_start_line = underlines.display_region.start_line;
-                try self.remapSyntheticRootSourceRegion(allocator, &underlines.display_region, original_line_starts);
+                try self.remapSyntheticRootSourceRegion(document, &underlines.display_region, original_line_starts);
                 const header_lines = self.synthetic_root_header_lines;
                 if (header_lines == 0 or old_start_line <= header_lines) return;
                 for (underlines.underline_regions) |*underline| {
@@ -2317,9 +2310,7 @@ pub const BuildEnv = struct {
                 const header_lines = self.synthetic_root_header_lines;
                 if (header_lines > 0 and location.line <= header_lines) return;
 
-                const owned_filename = try allocator.dupe(u8, original_path);
-                if (location.filename) |old_filename| allocator.free(old_filename);
-                location.filename = owned_filename;
+                location.filename = try document.ownString(original_path);
                 if (location.line > header_lines) location.line -= header_lines;
             },
             .text,
@@ -2347,7 +2338,7 @@ pub const BuildEnv = struct {
         defer original_line_starts.deinit(self.gpa);
         for (report.document.elements.items) |*element| {
             try self.remapSyntheticRootDocumentElement(
-                report.document.allocator,
+                &report.document,
                 element,
                 original_line_starts.items.items,
             );
