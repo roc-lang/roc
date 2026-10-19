@@ -352,7 +352,7 @@ test "iterative non-divisible update" {
 
 test "hasherFeed frames short inputs the same as the streaming path" {
     var bytes: [40]u8 = undefined;
-    for (&bytes, 0..) |*byte, index| byte.* = @intCast(index *% 37 +% 11);
+    for (&bytes, 0..) |*byte, index| byte.* = @truncate(index *% 37 +% 11);
     for (0..bytes.len + 1) |len| {
         var len_buf: [8]u8 = undefined;
         writeLe(u64, &len_buf, @intCast(len));

@@ -2043,49 +2043,12 @@ pub fn roc_builtins_num_shr_u128(out_low: *u64, out_high: *u64, a_low: u64, a_hi
 
 // ── Numeric-to-string wrappers ──
 
-/// Format a u128 to decimal string without using compiler_rt intrinsics.
-/// Uses i128h.divTrunc_u128 and i128h.rem_u128 to avoid __udivti3/__umodti3.
-fn u128ToStr(buf: []u8, val: u128) []u8 {
-    if (val == 0) {
-        buf[0] = '0';
-        return buf[0..1];
-    }
-    var tmp: [40]u8 = undefined;
-    var len: usize = 0;
-    var v = val;
-    while (v != 0) {
-        const digit: u8 = @truncate(i128h.rem_u128(v, 10));
-        tmp[len] = '0' + digit;
-        len += 1;
-        v = i128h.divTrunc_u128(v, 10);
-    }
-    // Reverse into output buffer
-    for (0..len) |i| {
-        buf[i] = tmp[len - 1 - i];
-    }
-    return buf[0..len];
+fn signedIntToStr(comptime T: type, buf: []u8, val: T) []const u8 {
+    return i128h.i128_to_str(buf, @as(i128, @intCast(val))).str;
 }
 
-/// Format an i128 to decimal string without using compiler_rt intrinsics.
-fn i128ToStr(buf: []u8, val: i128) []u8 {
-    if (val >= 0) {
-        return u128ToStr(buf, @intCast(val));
-    }
-    buf[0] = '-';
-    const abs: u128 = if (val == std.math.minInt(i128))
-        @as(u128, @bitCast(val))
-    else
-        @intCast(-val);
-    const digits = u128ToStr(buf[1..], abs);
-    return buf[0 .. 1 + digits.len];
-}
-
-fn signedIntToStr(comptime T: type, buf: []u8, val: T) []u8 {
-    return i128ToStr(buf, @as(i128, @intCast(val)));
-}
-
-fn unsignedIntToStr(comptime T: type, buf: []u8, val: T) []u8 {
-    return u128ToStr(buf, @as(u128, @intCast(val)));
+fn unsignedIntToStr(comptime T: type, buf: []u8, val: T) []const u8 {
+    return i128h.u128_to_str(buf, @as(u128, @intCast(val))).str;
 }
 
 /// Unified integer-to-string wrapper: dispatches on int_width/is_signed
@@ -2112,9 +2075,9 @@ pub fn roc_builtins_int_to_str(out: *RocStr, val_low: u64, val_high: u64, int_wi
         16 => blk: {
             const val128: u128 = i128h.from_u64_pair(val_low, val_high);
             break :blk if (is_signed)
-                i128ToStr(&buf, @as(i128, @bitCast(val128)))
+                signedIntToStr(i128, &buf, @as(i128, @bitCast(val128)))
             else
-                u128ToStr(&buf, val128);
+                unsignedIntToStr(u128, &buf, val128);
         },
         else => unreachable,
     };

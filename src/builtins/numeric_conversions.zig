@@ -280,3 +280,28 @@ test "powerOfTwo matches repeated doubling" {
         }
     }
 }
+
+test "integer decimal text matches std formatting across chunk boundaries" {
+    const samples = [_]u128{
+        0,                                                   1,                         9,                                   10,                         12345,
+        std.math.maxInt(u64) - 1,                            std.math.maxInt(u64),      @as(u128, std.math.maxInt(u64)) + 1, 10_000_000_000_000_000_000, 10_000_000_000_000_000_000 * 10,
+        100_000_000_000_000_000_000_000_000_000_000_000_000, std.math.maxInt(u128) - 1, std.math.maxInt(u128),
+    };
+    var buf: [40]u8 = undefined;
+    var expected: [40]u8 = undefined;
+    for (samples) |value| {
+        try std.testing.expectEqualStrings(
+            try std.fmt.bufPrint(&expected, "{d}", .{value}),
+            i128h.u128_to_str(&buf, value).str,
+        );
+        const signed: i128 = @bitCast(value);
+        try std.testing.expectEqualStrings(
+            try std.fmt.bufPrint(&expected, "{d}", .{signed}),
+            i128h.i128_to_str(&buf, signed).str,
+        );
+    }
+    try std.testing.expectEqualStrings(
+        "-170141183460469231731687303715884105728",
+        i128h.i128_to_str(&buf, std.math.minInt(i128)).str,
+    );
+}

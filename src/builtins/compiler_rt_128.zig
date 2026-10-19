@@ -260,6 +260,62 @@ fn udivmod(comptime T: type, a_: T, b_: T) DivMod(T) {
     return .{ .quot = @bitCast(q), .rem = @bitCast(af) };
 }
 
+/// Exact quotient of the 256-bit value `high:low` by `divisor`, or null when
+/// the quotient needs more than 128 bits. This is long division in 64-bit
+/// digits (Hacker's Delight `divlu` with 128-bit words), so it costs a fixed
+/// handful of 64-bit divisions regardless of the operands.
+pub fn udiv_u256_by_u128(high: u128, low: u128, divisor: u128) ?u128 {
+    std.debug.assert(divisor != 0);
+    if (high >= divisor) return null;
+    if (high == 0) return udivmod(u128, low, divisor).quot;
+
+    const d: [2]u64 = @bitCast(divisor);
+    if (d[hi] == 0) {
+        // `high < divisor < 2^64`, so each step divides a two-digit value
+        // whose quotient fits in one digit.
+        const l: [2]u64 = @bitCast(low);
+        var rem: u64 = @truncate(high);
+        const q1 = divwide(u64, rem, l[hi], d[lo], &rem);
+        const q0 = divwide(u64, rem, l[lo], d[lo], &rem);
+        return from_u64_pair(q0, q1);
+    }
+
+    // Normalize so the divisor's top bit is set; `high < divisor` keeps the
+    // shifted top word below the shifted divisor.
+    const shift: u7 = @intCast(@clz(d[hi]));
+    const v = shl(divisor, shift);
+    const top = if (shift == 0) high else shl(high, shift) | shr(low, @intCast(@as(u8, 128) - shift));
+    const rest: [2]u64 = @bitCast(shl(low, shift));
+    const v_digits: [2]u64 = @bitCast(v);
+
+    const q1 = divlu_digit(top, rest[hi], v_digits[hi], v_digits[lo]);
+    const partial = from_u64_pair(rest[hi], @truncate(top)) -% mul_u64_by_u128_wrapping(q1, v);
+    const q0 = divlu_digit(partial, rest[lo], v_digits[hi], v_digits[lo]);
+    return from_u64_pair(q0, q1);
+}
+
+/// One quotient digit of `divlu`: floor((top * 2^64 + next) / (vn1 * 2^64 + vn0))
+/// for a normalized divisor and `top` below it.
+fn divlu_digit(top: u128, next: u64, vn1: u64, vn0: u64) u64 {
+    const digit_base: u128 = @as(u128, 1) << 64;
+    const estimate = udivmod(u128, top, vn1);
+    var qhat = estimate.quot;
+    var rhat = estimate.rem;
+    while (qhat >= digit_base or mul_u64_wide(@intCast(qhat), vn0) > from_u64_pair(next, @intCast(rhat))) {
+        qhat -= 1;
+        rhat += vn1;
+        if (rhat >= digit_base) break;
+    }
+    return @intCast(qhat);
+}
+
+/// `a * b` modulo 2^128.
+fn mul_u64_by_u128_wrapping(a: u64, b: u128) u128 {
+    const b_digits: [2]u64 = @bitCast(b);
+    const high_product: u64 = @truncate(mul_u64_wide(a, b_digits[hi]));
+    return mul_u64_wide(a, b_digits[lo]) +% from_u64_pair(0, high_product);
+}
+
 // Multiplication helpers
 
 fn DoubleInt(comptime T: type) type {
@@ -604,19 +660,32 @@ pub const FormatResult = struct {
     start: usize,
 };
 
+/// The largest power of ten that fits in a u64.
+const pow10_19: u64 = 10_000_000_000_000_000_000;
+
+/// Writes `val` in decimal so the digits end at `buf.len`. Values past the
+/// u64 range are split into 19-digit chunks with one 128-bit division each;
+/// every digit is then produced by native 64-bit arithmetic.
 fn u128_to_str_inner(buf: []u8, val: u128) FormatResult {
-    if (val == 0) {
-        buf[buf.len - 1] = '0';
-        return .{ .str = buf[buf.len - 1 ..], .start = buf.len - 1 };
+    var pos: usize = buf.len;
+    var v = val;
+    while (v > math.maxInt(u64)) {
+        const split = udivmod(u128, v, pow10_19);
+        var chunk: u64 = @intCast(split.rem);
+        for (0..19) |_| {
+            pos -= 1;
+            buf[pos] = '0' + @as(u8, @intCast(chunk % 10));
+            chunk /= 10;
+        }
+        v = split.quot;
     }
 
-    var v = val;
-    var pos: usize = buf.len;
-    while (v != 0) {
+    var low: u64 = @intCast(v);
+    while (true) {
         pos -= 1;
-        const digit: u8 = @truncate(rem_u128(v, 10));
-        buf[pos] = '0' + digit;
-        v = divTrunc_u128(v, 10);
+        buf[pos] = '0' + @as(u8, @intCast(low % 10));
+        low /= 10;
+        if (low == 0) break;
     }
     return .{ .str = buf[pos..], .start = pos };
 }

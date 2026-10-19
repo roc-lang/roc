@@ -21,36 +21,11 @@ const mul_u128 = @import("num.zig").mul_u128;
 const math = std.math;
 
 /// Format an i128 as decimal into a buffer, returning the number of bytes written.
-/// Uses i128h helpers to avoid compiler_rt 128-bit div/mod intrinsics.
 fn printI128Decimal(buf: []u8, val: i128) usize {
-    if (val == 0) {
-        buf[0] = '0';
-        return 1;
-    }
-    const is_negative = val < 0;
-    var abs_val: u128 = if (is_negative) ~@as(u128, @bitCast(val)) +% 1 else @intCast(val);
-
-    // Write digits in reverse into a temp buffer
     var tmp: [40]u8 = undefined;
-    var len: usize = 0;
-    while (abs_val != 0) {
-        const digit: u8 = @truncate(i128h.rem_u128(abs_val, 10));
-        tmp[len] = '0' + digit;
-        len += 1;
-        abs_val = i128h.divTrunc_u128(abs_val, 10);
-    }
-
-    // Write sign then reversed digits into output buffer
-    var pos: usize = 0;
-    if (is_negative) {
-        buf[pos] = '-';
-        pos += 1;
-    }
-    for (0..len) |i| {
-        buf[pos] = tmp[len - 1 - i];
-        pos += 1;
-    }
-    return pos;
+    const text = i128h.i128_to_str(&tmp, val).str;
+    @memcpy(buf[0..text.len], text);
+    return text.len;
 }
 
 /// Round the exact rational `scaled / 10^18` directly to IEEE binary32.
@@ -532,25 +507,22 @@ pub const RocDec = extern struct {
         const denominator_u128 = @abs(denominator_i128);
 
         const numerator_u256: U256 = mul_u128(numerator_u128, comptime math.pow(u128, 10, decimal_places));
-        const answer = div_u256_by_u128(numerator_u256, denominator_u128);
-
-        if (answer.hi != 0) {
+        const answer = i128h.udiv_u256_by_u128(numerator_u256.hi, numerator_u256.lo, denominator_u128) orelse
             roc_ops.crash("Decimal division overflow!");
-        }
 
         if (is_answer_negative) {
             const negative_limit = i128h.shl(@as(u128, 1), 127);
-            if (answer.lo > negative_limit) {
+            if (answer > negative_limit) {
                 roc_ops.crash("Decimal division overflow!");
             }
 
-            return RocDec{ .num = @bitCast(0 -% answer.lo) };
+            return RocDec{ .num = @bitCast(0 -% answer) };
         } else {
-            if (answer.lo > @as(u128, @intCast(math.maxInt(i128)))) {
+            if (answer > @as(u128, @intCast(math.maxInt(i128)))) {
                 roc_ops.crash("Decimal division overflow!");
             }
 
-            return RocDec{ .num = @intCast(answer.lo) };
+            return RocDec{ .num = @intCast(answer) };
         }
     }
 
@@ -1081,177 +1053,6 @@ fn mul_and_decimalize(a: u128, b: u128) WithOverflow(i128) {
         .value = if (has_overflowed) std.math.maxInt(i128) else @as(i128, @intCast(shifted)),
         .has_overflowed = has_overflowed,
     };
-}
-
-// Multiply two 128-bit ints and divide the result by 10^DECIMAL_PLACES
-//
-// Adapted from https://github.com/nlordell/ethnum-rs/blob/c9ed57e131bffde7bcc8274f376e5becf62ef9ac/src/intrinsics/native/divmod.rs
-// Copyright (c) 2020 Nicholas Rodrigues Lordello
-// Licensed under the Apache License version 2.0
-//
-// When translating this to Zig, we often have to use math.shr/shl instead of >>/<<
-// This is because casting to the right types for Zig can be kind of tricky.
-// See https://github.com/ziglang/zig/issues/7605
-fn div_u256_by_u128(numerator: U256, denominator: u128) U256 {
-    const N_UDWORD_BITS: u8 = 128;
-    const N_UTWORD_BITS: u9 = 256;
-
-    var q: U256 = undefined;
-    var r: U256 = undefined;
-    var sr: u8 = undefined;
-
-    // special case
-    if (numerator.hi == 0) {
-        // 0 X
-        // ---
-        // 0 X
-        return .{
-            .hi = 0,
-            .lo = i128h.divTrunc_u128(numerator.lo, denominator),
-        };
-    }
-
-    // numerator.hi != 0
-    if (denominator == 0) {
-        // K X
-        // ---
-        // 0 0
-        return .{
-            .hi = 0,
-            .lo = i128h.divTrunc_u128(numerator.hi, denominator),
-        };
-    } else {
-        // K X
-        // ---
-        // 0 K
-        // NOTE: Modified from `if (d.low() & (d.low() - 1)) == 0`.
-        if (math.isPowerOfTwo(denominator)) {
-            // if d is a power of 2
-            if (denominator == 1) {
-                return numerator;
-            }
-
-            sr = @ctz(denominator);
-
-            return .{
-                .hi = i128h.shr(numerator.hi, @intCast(sr)),
-                .lo = i128h.shl(numerator.hi, @intCast(N_UDWORD_BITS - sr)) | i128h.shr(numerator.lo, @intCast(sr)),
-            };
-        }
-
-        // K X
-        // ---
-        // 0 K
-        const denominator_leading_zeros = @clz(denominator);
-        const numerator_hi_leading_zeros = @clz(numerator.hi);
-        sr = 1 + N_UDWORD_BITS + denominator_leading_zeros - numerator_hi_leading_zeros;
-        // 2 <= sr <= N_UTWORD_BITS - 1
-        // q.all = n.all << (N_UTWORD_BITS - sr);
-        // r.all = n.all >> sr;
-        // #[allow(clippy::comparison_chain)]
-        if (sr == N_UDWORD_BITS) {
-            q = .{
-                .hi = numerator.lo,
-                .lo = 0,
-            };
-            r = .{
-                .hi = 0,
-                .lo = numerator.hi,
-            };
-        } else if (sr < N_UDWORD_BITS) {
-            // 2 <= sr <= N_UDWORD_BITS - 1
-            q = .{
-                .hi = i128h.shl(numerator.lo, @intCast(N_UDWORD_BITS - sr)),
-                .lo = 0,
-            };
-            r = .{
-                .hi = i128h.shr(numerator.hi, @intCast(sr)),
-                .lo = i128h.shl(numerator.hi, @intCast(N_UDWORD_BITS - sr)) | i128h.shr(numerator.lo, @intCast(sr)),
-            };
-        } else {
-            // N_UDWORD_BITS + 1 <= sr <= N_UTWORD_BITS - 1
-            q = .{
-                .hi = i128h.shl(numerator.hi, @intCast(N_UTWORD_BITS - sr)) | i128h.shr(numerator.lo, @intCast(sr - N_UDWORD_BITS)),
-                .lo = i128h.shl(numerator.lo, @intCast(N_UTWORD_BITS - sr)),
-            };
-            r = .{
-                .hi = 0,
-                .lo = i128h.shr(numerator.hi, @intCast(sr - N_UDWORD_BITS)),
-            };
-        }
-    }
-
-    // Not a special case
-    // q and r are initialized with:
-    // q.all = n.all << (N_UTWORD_BITS - sr);
-    // r.all = n.all >> sr;
-    // 1 <= sr <= N_UTWORD_BITS - 1
-    var carry: u128 = 0;
-
-    while (sr > 0) {
-        // r:q = ((r:q)  << 1) | carry
-        r.hi = i128h.shl(r.hi, 1) | i128h.shr(r.lo, 127);
-        r.lo = i128h.shl(r.lo, 1) | i128h.shr(q.hi, 127);
-        q.hi = i128h.shl(q.hi, 1) | i128h.shr(q.lo, 127);
-        q.lo = i128h.shl(q.lo, 1) | carry;
-
-        // carry = 0;
-        // if (r.all >= d.all)
-        // {
-        //     r.all -= d.all;
-        //      carry = 1;
-        // }
-        // NOTE: Modified from `(d - r - 1) >> (N_UTWORD_BITS - 1)` to be an
-        // **arithmetic** shift.
-
-        var answer = @subWithOverflow(denominator, r.lo);
-        var lo = answer[0];
-        var lo_overflowed = answer[1];
-        var hi = 0 -% @as(u128, @intCast(@as(u1, @bitCast(lo_overflowed)))) -% r.hi;
-
-        answer = @subWithOverflow(lo, 1);
-        lo = answer[0];
-        lo_overflowed = answer[1];
-        hi = hi -% @as(u128, @intCast(@as(u1, @bitCast(lo_overflowed))));
-
-        // NOTE: this U256 was originally created by:
-        //
-        // ((hi as i128) >> 127).as_u256()
-        //
-        // As an implementation of `as_u256`, we wrap a negative value around to the maximum value of U256.
-
-        const s_u128 = i128h.shr(hi, 127);
-        var s_hi: u128 = undefined;
-        var s_lo: u128 = undefined;
-        if (s_u128 == 1) {
-            s_hi = math.maxInt(u128);
-            s_lo = math.maxInt(u128);
-        } else {
-            s_hi = 0;
-            s_lo = 0;
-        }
-        const s = .{
-            .hi = s_hi,
-            .lo = s_lo,
-        };
-
-        carry = s.lo & 1;
-
-        // var (lo, carry) = r.lo.overflowing_sub(denom & s.lo);
-        answer = @subWithOverflow(r.lo, (denominator & s.lo));
-        lo = answer[0];
-        lo_overflowed = answer[1];
-        hi = r.hi -% @as(u128, @intCast(@as(u1, @bitCast(lo_overflowed))));
-
-        r = .{ .hi = hi, .lo = lo };
-
-        sr -= 1;
-    }
-
-    const result_hi = i128h.shl(q.hi, 1) | i128h.shr(q.lo, 127);
-    const result_lo = i128h.shl(q.lo, 1) | carry;
-
-    return .{ .hi = result_hi, .lo = result_lo };
 }
 
 const testing = std.testing;
@@ -2700,5 +2501,36 @@ test "parsePrefix Dec properties over generated token compositions" {
     while (iteration < 20_000) : (iteration += 1) {
         const text = @import("num.zig").prefix_parse_testing.randomText(random, &buf);
         try @import("num.zig").prefix_parse_testing.expectProperties(i128, text, decPrefixLen, parsePrefix, decWhole);
+    }
+}
+
+test "udiv_u256_by_u128 matches 256-bit division" {
+    var prng = std.Random.DefaultPrng.init(0x5eed_dec0);
+    const random = prng.random();
+    const edge_values = [_]u128{
+        1,                        2,                         3,                     10,
+        std.math.maxInt(u64) - 1, std.math.maxInt(u64),      @as(u128, 1) << 64,    (@as(u128, 1) << 64) + 1,
+        @as(u128, 1) << 127,      std.math.maxInt(u128) - 1, std.math.maxInt(u128), comptime math.pow(u128, 10, RocDec.decimal_places),
+    };
+    var case: usize = 0;
+    while (case < 20_000) : (case += 1) {
+        const divisor: u128 = switch (case % 4) {
+            0 => edge_values[random.uintLessThan(usize, edge_values.len)],
+            1 => random.int(u64) | 1,
+            2 => random.int(u128) >> random.uintLessThan(u7, 127),
+            else => random.int(u128),
+        };
+        if (divisor == 0) continue;
+        const high: u128 = switch (case % 3) {
+            0 => 0,
+            1 => random.int(u128) % divisor,
+            else => random.int(u128),
+        };
+        const low: u128 = if (case % 5 == 0) edge_values[random.uintLessThan(usize, edge_values.len)] else random.int(u128);
+
+        const wide = (@as(u256, high) << 128) | low;
+        const quotient = wide / divisor;
+        const expected: ?u128 = if (quotient > std.math.maxInt(u128)) null else @intCast(quotient);
+        try expectEqual(expected, i128h.udiv_u256_by_u128(high, low, divisor));
     }
 }
