@@ -3432,27 +3432,24 @@ Builtin :: [].{
 		## values instead.
 		## ```roc
 		## expect [1.I64, 2, 3, 4].iter()
-		## 	   .keep_errs(|n| if n.is_even() Ok(n) else Err(n))
+		## 	   .keep_oks(|n| if n.is_even() Ok(n) else Err(n))
 		## 	   .collect() == [2, 4]
 		## ```
 		keep_oks : Iter(before), (before -> Try(after, _err)) -> Iter(after)
 		keep_oks = |iterator, transform|
 			iter_from_step(
 				Unknown,
-				||
-					match Iter.next(iterator) {
-						Done => Done
-						Skip({ rest }) => Skip({
+				|| match Iter.next(iterator) {
+					Done => Done
+					Skip({ rest }) => Skip({ rest: Iter.keep_oks(rest, transform) })
+					One({ item, rest }) => match transform(item) {
+						Ok(after) => One({
+							item: after,
 							rest: Iter.keep_oks(rest, transform),
 						})
-						One({ item, rest }) => match transform(item) {
-							Ok(after) => One({
-								item: after,
-								rest: Iter.keep_oks(rest, transform),
-							})
-							Err(_) => Skip({ rest: Iter.keep_oks(rest, transform) })
-						}
-					},
+						Err(_) => Skip({ rest: Iter.keep_oks(rest, transform) })
+					}
+				},
 			)
 
 		## Run the given function on each item of an iterator, and return an
@@ -3468,16 +3465,17 @@ Builtin :: [].{
 		keep_errs = |iterator, transform|
 			iter_from_step(
 				Unknown,
-				||
-					match Iter.next(iterator) {
-						Done => Done
-						Skip({ rest }) => Skip({ rest: Iter.keep_errs(rest, transform) })
-						One({ item, rest }) =>
-							match transform(item) {
-								Err(after) => One({ item: after, rest: Iter.keep_errs(rest, transform) })
-								Ok(_) => Skip({ rest: Iter.keep_errs(rest, transform) })
-							}
-					},
+				|| match Iter.next(iterator) {
+					Done => Done
+					Skip({ rest }) => Skip({ rest: Iter.keep_errs(rest, transform) })
+					One({ item, rest }) => match transform(item) {
+						Err(after) => One({
+							item: after,
+							rest: Iter.keep_errs(rest, transform),
+						})
+						Ok(_) => Skip({ rest: Iter.keep_errs(rest, transform) })
+					}
+				},
 			)
 
 		fold : Iter(a), acc, (acc, a -> acc) -> acc
