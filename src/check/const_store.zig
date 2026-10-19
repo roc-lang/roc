@@ -1530,15 +1530,15 @@ pub const ConstStore = struct {
     /// running compiler is well formed and holds no function value: every
     /// node, child, blob and name range it reaches is inside the store.
     pub fn validValueGraph(self: *const ConstStore, root: ConstNodeId) Allocator.Error!bool {
-        var seen = std.AutoHashMap(u32, void).init(self.allocator);
-        defer seen.deinit();
+        var seen = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, self.values.items.len);
+        defer seen.deinit(self.allocator);
         var pending = std.ArrayList(u32).empty;
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, @backingInt(root));
         while (pending.pop()) |raw| {
             if (raw >= self.values.items.len) return false;
-            const entry = try seen.getOrPut(raw);
-            if (entry.found_existing) continue;
+            if (seen.isSet(raw)) continue;
+            seen.set(raw);
             switch (self.values.items[raw]) {
                 .pending, .fn_value => return false,
                 .zst, .scalar => {},

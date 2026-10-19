@@ -5110,7 +5110,7 @@ const Builder = struct {
     literal_top_modules: ??std.AutoHashMapUnmanaged([32]u8, [32]u8) = null,
     /// Top-level statements of each top module whose types a literal value
     /// identity named, by module key.
-    literal_top_statements: std.AutoHashMapUnmanaged([32]u8, std.AutoHashMapUnmanaged(u32, void)) = .empty,
+    literal_top_statements: std.AutoHashMapUnmanaged([32]u8, collections.DenseMap(can.CIR.Statement.Idx, void)) = .empty,
     /// Compile-time roots by module and site, for the modules whose roots a
     /// stored literal value's reads were looked up in.
     literal_read_sites: std.AutoHashMapUnmanaged(LiteralReadSite, u32) = .empty,
@@ -5668,7 +5668,7 @@ const Builder = struct {
         self.literal_reuse.deinit(self.allocator);
         if (self.literal_top_modules) |*known| if (known.*) |*map| map.deinit(self.allocator);
         var top_statements = self.literal_top_statements.valueIterator();
-        while (top_statements.next()) |statements| statements.deinit(self.allocator);
+        while (top_statements.next()) |statements| statements.deinit();
         self.literal_top_statements.deinit(self.allocator);
         self.literal_read_sites.deinit(self.allocator);
         self.literal_read_site_modules.deinit(self.allocator);
@@ -6794,11 +6794,12 @@ const Builder = struct {
         const env = view.module_env;
         const entry = try self.literal_top_statements.getOrPut(self.allocator, view.key.bytes);
         if (!entry.found_existing) {
-            entry.value_ptr.* = .empty;
-            for (env.store.sliceStatements(env.all_statements)) |idx| try entry.value_ptr.put(self.allocator, @backingInt(idx), {});
+            entry.value_ptr.* = collections.DenseMap(can.CIR.Statement.Idx, void).init(self.allocator);
+            for (env.store.sliceStatements(env.all_statements)) |idx| try entry.value_ptr.put(idx, {});
         }
-        if (!entry.value_ptr.contains(statement)) return null;
-        const region = env.store.getStatementRegion(@fromBackingInt(statement));
+        const statement_idx: can.CIR.Statement.Idx = @fromBackingInt(statement);
+        if (!entry.value_ptr.contains(statement_idx)) return null;
+        const region = env.store.getStatementRegion(statement_idx);
         return env.getSourceAll()[region.start.offset..region.end.offset];
     }
 
