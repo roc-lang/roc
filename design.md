@@ -14475,7 +14475,11 @@ below the root is joined with each of that class's origins' memo cells for
 the type. A missing import memo cell is created for the join; a missing
 leaf-scope cell is joined when its scope creates it. That is the join an
 eager relation would have made, and it reads nothing, so class identity
-never depends on whether a class was read. The joins wait until no
+never depends on whether a class was read. A read joins only cells it creates
+into classes that existed before it, and each such join keeps the older
+class's root, so a root held across a read is still a root afterwards;
+interface capture, which keys every captured class by its root, relies on
+this. The joins wait until no
 unification is in progress, so they never change a root a unification is
 relating. Whether a type holds another is answered from per-type heights,
 since a type holds only types no taller than itself, and from each type's
