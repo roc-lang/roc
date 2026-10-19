@@ -2778,7 +2778,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
 
     // Check whether this is a default app—a headerless file with main!, or an
     // app header naming no platform—before linking the platform host shim.
-    if (try stageDefaultApp(ctx, args.path, .execution)) |staged| {
+    if (try stageDefaultApp(ctx, args.path, .running)) |staged| {
         var owned_staged = staged;
         // Default apps never hot reload; they just run once. The shared-memory
         // shim is the run mechanism where the default platform runtime exists (Linux native,
@@ -3547,9 +3547,12 @@ fn stageDefaultApp(
         .invalid => {
             defer result.deinit(ctx.gpa);
             const config = ctx.reportConfig(.stderr);
+            var counts = CheckDiagnosticCounts{};
             for (result.invalid.items) |*report| {
+                if (report.severity.isError()) counts.errors += 1 else counts.warnings += 1;
                 reporting.renderReportToTerminal(report, ctx.io.stderr(), reporting.ColorUtils.getPaletteForConfig(config), config) catch {};
             }
+            renderSummaryHeaderLine(ctx.arena, ctx.io.stderr(), counts.errors, counts.warnings, file_path, config) catch {};
             ctx.io.flush();
             return error.CliError;
         },
@@ -8140,7 +8143,7 @@ fn rocBuildOnce(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     }
 
     // Default apps build through a synthetic default platform.
-    const prepared = stageDefaultApp(ctx, args.path, .execution) catch |err| {
+    const prepared = stageDefaultApp(ctx, args.path, .building) catch |err| {
         // Preparation can fail before a BuildEnv exists. The watch parent
         // must still observe edits that repair the root source.
         if (args.watch_inputs_file) |file_path| {

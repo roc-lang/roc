@@ -1814,7 +1814,6 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .default_app_missing_main,
         .default_app_wrong_arity,
         .cannot_import_default_app,
-        .execution_requires_app_or_default_app,
         .type_name_case_mismatch,
         .redundant_expose_main_type,
         .invalid_main_type_rename_in_exposing,
