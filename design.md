@@ -624,11 +624,19 @@ A URL-package module also gets an optimized object pack, filed in the same
 layout under `<target>-speed/pkg/`: its closed exports lowered under the
 optimized LIR policy and compiled by LLVM into one object, with the same spec
 table naming each entry's procedure. The object defines everything its code
-needs (procedures, constants, refcount helpers, builtins) as internal symbols
-and exports, for each entry it offers, a weak C-ABI entry
-`roc__c{hash}`, the procedure's arguments and result classified by
-`layout.abi` exactly as for a hosted call. Two such objects may export one
-entry; the link keeps one. An entry whose code makes an erased call or builds
+needs: procedures, refcount helpers, and builtins as internal symbols, and
+each constant as weak readonly data under its `roc__h` content name, so two
+objects carrying one constant share a single copy in the link. It exports,
+for each entry it offers, a weak C-ABI entry `roc__c{hash}`, the procedure's
+arguments and result classified by `layout.abi` exactly as for a hosted
+call. Two such objects may export one entry; the link keeps one. Not every
+object format can place a weak symbol inside a datum, so a constant's symbol
+in an object pack marks its first byte: a constant whose symbol sits some
+bytes into its data is named as the datum anchored at its first byte, with
+that offset folded into every reference to it
+(`ContentNames.initObjectData`). A code pointer in a constant (an erased
+callable's procedure or capture drop helper) names the function the object
+defines. An entry whose code makes an erased call or builds
 an erased callable is not offered, since the erased-call runtime is passed the
 program's own layout indices, and a module whose object needs the runtime at
 all gets no object pack.
@@ -18765,9 +18773,9 @@ Fields that do not fit live in out-of-line rows. A statement names a row by a
 - a low-level operation's reference-count effect, which is larger than every
   inline payload
 - the rarely set fields of a common kind: a call's cold-path, frame-replacing,
-  and tail-drive flags, descriptors, and pending return; the ownership facts
+  and tail-drive flags, descriptors, and pending return; the ownership data
   ARC stamps on a reference read; the uniqueness proofs and single-operation
-  facts of a low-level operation; a static data read's list-of-copies facts;
+  data of a low-level operation; a static data read's list-of-copies data;
   a join's retained units and maybe-uninitialized environment; and the
   descriptors of tags, struct contents, Boxy tag matches, and Boxy
   reference-count helpers.
@@ -18779,8 +18787,8 @@ Optional inline references use types that reserve their own absent values
 rather than Zig optionals, which would double their size: a call's
 self-tail link is a `TailCallLink`, whose `none` and `last` tags occupy the
 top two `CFStmtId` values (so the statement count stays below them), and an
-incref, decref, or free names its helper by an `RcHelperRef`, which keeps a
-concrete layout helper inline. A reference read's `RefOp` is a 128-bit packed
+incref, decref, or free names its reference-count helper by a value that
+keeps a concrete layout helper inline. A reference read's `RefOp` is a 128-bit packed
 struct: a 3-bit kind, the source local, a field or payload index, and the
 variant index and discriminant as `layout.VariantIndex`, with the fields a
 kind does not use left zero. Literal values a statement does not hold, such

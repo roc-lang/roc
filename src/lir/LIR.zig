@@ -1835,15 +1835,15 @@ pub const CFStmt = union(enum) {
         msg: CrashMessage,
         /// Set when this crash is a literal conversion rejecting its literal:
         /// compile-time evaluation reports the literal's own diagnostic with
-        /// `msg`, the conversion's error message.
-        literal_rejection: ?LiteralRejectionSite = null,
+        /// `msg`, the conversion's error message; `none` otherwise.
+        literal_rejection: StmtRowId(LiteralRejectionSite) = .none,
         /// Set when this crash is code checking rejected and already
         /// reported: compile-time evaluation that reaches it discards the
         /// result instead of reporting the problem a second time.
         checked_error: bool = false,
         /// Set when this crash is the failure path of a read of a
-        /// compile-time value whose producer failed.
-        failed_value: ?ComptimeValueRef = null,
+        /// compile-time value whose producer failed; `none` otherwise.
+        failed_value: StmtRowId(ComptimeValueRef) = .none,
     },
 };
 

@@ -8599,7 +8599,7 @@ fn writeLinkedPacksToStore(
 /// needs and exports a weak C-ABI entry for each specialization it offers
 /// (design.md "Object Cache Store"). Null when the module's code cannot be a
 /// linked object: it uses the erased-call runtime, whose calls name this
-/// program's layouts, or a constant has no link-time image.
+/// program's layouts.
 fn compileModuleObjectPack(
     ctx: *CliCtx,
     build_env: *BuildEnv,
@@ -8912,6 +8912,12 @@ fn objectPackBytes(
     }
     if (specs.items.len == 0) return null;
 
+    // Every constant the object carries is weak data under its content name.
+    var data_names = try backend.dev.ProcArtifact.ContentNames.initObjectData(ctx.gpa, static_data_exports);
+    defer data_names.deinit();
+    const pack_data_names = try arena.alloc([]const u8, static_data_exports.len);
+    for (static_data_exports, pack_data_names) |data_export, *name| name.* = data_names.of(data_export.symbol_name);
+
     const std_target = try stdTargetForLlvmBuild(ctx, target);
     var bitcode = generate: {
         var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(
@@ -8925,10 +8931,10 @@ fn objectPackBytes(
         defer codegen.deinit();
         codegen.layout_store = &lowered.lir_result.layouts;
         codegen.object_cache_pack = true;
+        codegen.pack_data_names = pack_data_names;
         try codegen.setStaticDataExports(static_data_exports);
         const generated = codegen.generateEntrypointModule("roc_pack", entrypoints.items) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            // A constant without a link-time image.
             else => return null,
         };
         // The erased-call runtime is initialized with this program's sidecar.

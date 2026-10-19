@@ -91,8 +91,9 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
             .owner = program.loweringModuleId(root.module) orelse invariant("{s}", .{"compile-time value guard named a module its program does not lower"}),
             .producer = root.root,
         };
-        const crash = try store.addCFStmt(.{ .crash = .{ .msg = .{ .local = message }, .failed_value = value } }, guard_origin);
-        const checked_crash = try store.addCFStmt(.{ .crash = .{ .msg = .{ .local = message }, .checked_error = true, .failed_value = value } }, guard_origin);
+        const failed_value = try store.addStmtRow(LIR.ComptimeValueRef, value);
+        const crash = try store.addCFStmt(.{ .crash = .{ .msg = .{ .local = message }, .failed_value = failed_value } }, guard_origin);
+        const checked_crash = try store.addCFStmt(.{ .crash = .{ .msg = .{ .local = message }, .checked_error = true, .failed_value = failed_value } }, guard_origin);
         const load_message = try store.addCFStmt(.{ .assign_ref = .{
             .target = message,
             .op = .field(record, @intCast(fields.message_field)),

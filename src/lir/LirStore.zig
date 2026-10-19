@@ -74,6 +74,8 @@ pub const stmt_row_types = .{
     lir_defs.BoxyTagPayloadData,
     lir_defs.CallDictData,
     lir_defs.DecrefIfInitializedData,
+    lir_defs.ComptimeValueRef,
+    lir_defs.LiteralRejectionSite,
 };
 
 /// Number of out-of-line statement row columns.
@@ -1294,11 +1296,13 @@ pub fn failureMeaning(self: *const Self, stmt: CFStmtId) ?lir_defs.FailureMeanin
     return switch (self.getCFStmt(stmt)) {
         .crash => |crash| if (crash.checked_error)
             .checked_error
-        else if (crash.failed_value) |value|
-            .{ .failed_value = .{ .module = self.loweringModuleKey(value.owner), .producer = value.producer } }
-        else if (crash.literal_rejection) |site|
-            .{ .literal_rejection = .{ .module = self.loweringModuleKey(site.owner), .checked_expr = site.checked_expr, .kind = site.kind } }
-        else
+        else if (crash.failed_value != .none) blk: {
+            const value = self.stmtRow(crash.failed_value);
+            break :blk .{ .failed_value = .{ .module = self.loweringModuleKey(value.owner), .producer = value.producer } };
+        } else if (crash.literal_rejection != .none) blk: {
+            const site = self.stmtRow(crash.literal_rejection);
+            break :blk .{ .literal_rejection = .{ .module = self.loweringModuleKey(site.owner), .checked_expr = site.checked_expr, .kind = site.kind } };
+        } else
             null,
         .comptime_exhaustiveness_failed => |failed| .{ .exhaustiveness = .{
             .module = self.loweringModuleKey(failed.owner),
