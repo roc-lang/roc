@@ -890,6 +890,165 @@ pub const ConstTypeStore = struct {
         };
     }
 
+    /// Whether the stored type at `root` can move into a later version of the
+    /// module whose checked digest is `own` and whose content identity is
+    /// `own_identity`: it names no function, erased or generated type, and no
+    /// named type or field default that module declares (design.md
+    /// "Compile-Time Value Reuse Across Edits").
+    pub fn typePortable(
+        self: *const ConstTypeStore,
+        type_names: *const names.NameStore,
+        root: ConstTypeId,
+        own: names.CheckedModuleDigest,
+        own_identity: *const [32]u8,
+    ) Allocator.Error!bool {
+        var seen = collections.DenseMap(ConstTypeId, void).init(self.allocator);
+        defer seen.deinit();
+        var pending = std.ArrayList(ConstTypeId).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |ty| {
+            const entry = try seen.getOrPut(ty);
+            if (entry.found_existing) continue;
+            switch (self.get(ty)) {
+                .func, .erased => return false,
+                .primitive, .zst => {},
+                .list, .box => |elem| try pending.append(self.allocator, elem),
+                .tuple => |span| try pending.appendSlice(self.allocator, self.typeSpan(span)),
+                .record => |span| for (self.fieldSpan(span)) |field| {
+                    if (field.default) |default| {
+                        if (std.mem.eql(u8, type_names.moduleIdentityBytes(default.module), own_identity)) return false;
+                    }
+                    try pending.append(self.allocator, field.ty);
+                    if (field.value_ty) |value_ty| try pending.append(self.allocator, value_ty);
+                },
+                .tag_union => |span| for (self.tagSpan(span)) |tag| try pending.appendSlice(self.allocator, self.typeSpan(tag.payloads)),
+                .named => |named| {
+                    if (named.def.generated != null) return false;
+                    if (std.mem.eql(u8, &named.named_type.module.bytes, &own.bytes)) return false;
+                    if (std.mem.eql(u8, type_names.moduleIdentityBytes(named.def.module), own_identity)) return false;
+                    try pending.appendSlice(self.allocator, self.typeSpan(named.args));
+                    for (self.declaredFieldSpan(named.declared_order)) |declared| switch (declared) {
+                        .named => {},
+                        .padding => |padding| try pending.append(self.allocator, padding),
+                    };
+                    if (named.backing) |backing| try pending.append(self.allocator, backing.ty);
+                },
+            }
+        }
+        return true;
+    }
+
+    /// Structural equality of two stored types, names compared by text and
+    /// named types by declaration; a named type's checked occurrence
+    /// (`named_type.ty`) is provenance, not identity.
+    pub fn graphEql(
+        self: *const ConstTypeStore,
+        self_names: *const names.NameStore,
+        root: ConstTypeId,
+        other: *const ConstTypeStore,
+        other_names: *const names.NameStore,
+        other_root: ConstTypeId,
+    ) Allocator.Error!bool {
+        const Pair = struct { left: ConstTypeId, right: ConstTypeId };
+        var seen = std.AutoHashMap(Pair, void).init(self.allocator);
+        defer seen.deinit();
+        var pending = std.ArrayList(Pair).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ .left = root, .right = other_root });
+        while (pending.pop()) |pair| {
+            const entry = try seen.getOrPut(pair);
+            if (entry.found_existing) continue;
+            const left = self.get(pair.left);
+            const right = other.get(pair.right);
+            if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+            switch (left) {
+                .primitive => |primitive| if (primitive != right.primitive) return false,
+                .zst => {},
+                .erased => |digest| if (!std.meta.eql(digest, right.erased)) return false,
+                inline .list, .box => |elem, tag| try pending.append(self.allocator, .{ .left = elem, .right = @field(right, @tagName(tag)) }),
+                .tuple => |span| if (!try appendTypePairs(&pending, self.allocator, self.typeSpan(span), other.typeSpan(right.tuple))) return false,
+                .func => |function| {
+                    if (!try appendTypePairs(&pending, self.allocator, self.typeSpan(function.args), other.typeSpan(right.func.args))) return false;
+                    try pending.append(self.allocator, .{ .left = function.ret, .right = right.func.ret });
+                },
+                .record => |span| {
+                    const fields = self.fieldSpan(span);
+                    const right_fields = other.fieldSpan(right.record);
+                    if (fields.len != right_fields.len) return false;
+                    for (fields, right_fields) |l, r| {
+                        if (!std.mem.eql(u8, self_names.recordFieldLabelText(l.name), other_names.recordFieldLabelText(r.name))) return false;
+                        if ((l.default == null) != (r.default == null)) return false;
+                        if (l.default) |default| {
+                            if (default.expr_node != r.default.?.expr_node) return false;
+                            if (!std.mem.eql(u8, self_names.moduleIdentityBytes(default.module), other_names.moduleIdentityBytes(r.default.?.module))) return false;
+                        }
+                        if ((l.value_ty == null) != (r.value_ty == null)) return false;
+                        try pending.append(self.allocator, .{ .left = l.ty, .right = r.ty });
+                        if (l.value_ty) |value_ty| try pending.append(self.allocator, .{ .left = value_ty, .right = r.value_ty.? });
+                    }
+                },
+                .tag_union => |span| {
+                    const tags = self.tagSpan(span);
+                    const right_tags = other.tagSpan(right.tag_union);
+                    if (tags.len != right_tags.len) return false;
+                    for (tags, right_tags) |l, r| {
+                        if (!std.mem.eql(u8, self_names.tagLabelText(l.name), other_names.tagLabelText(r.name))) return false;
+                        if (!std.mem.eql(u8, self_names.tagLabelText(l.checked_name), other_names.tagLabelText(r.checked_name))) return false;
+                        if (!try appendTypePairs(&pending, self.allocator, self.typeSpan(l.payloads), other.typeSpan(r.payloads))) return false;
+                    }
+                },
+                .named => |named| {
+                    const r = right.named;
+                    if (!std.mem.eql(u8, &named.named_type.module.bytes, &r.named_type.module.bytes)) return false;
+                    if (named.kind != r.kind or named.builtin_owner != r.builtin_owner) return false;
+                    if (!typeDefEql(self_names, named.def, other_names, r.def)) return false;
+                    if (!try appendTypePairs(&pending, self.allocator, self.typeSpan(named.args), other.typeSpan(r.args))) return false;
+                    const declared = self.declaredFieldSpan(named.declared_order);
+                    const right_declared = other.declaredFieldSpan(r.declared_order);
+                    if (declared.len != right_declared.len) return false;
+                    for (declared, right_declared) |l, rd| {
+                        if (std.meta.activeTag(l) != std.meta.activeTag(rd)) return false;
+                        switch (l) {
+                            .named => |label| if (!std.mem.eql(u8, self_names.recordFieldLabelText(label), other_names.recordFieldLabelText(rd.named))) return false,
+                            .padding => |padding| try pending.append(self.allocator, .{ .left = padding, .right = rd.padding }),
+                        }
+                    }
+                    if ((named.backing == null) != (r.backing == null)) return false;
+                    if (named.backing) |backing| {
+                        if (backing.use != r.backing.?.use or backing.authority != r.backing.?.authority) return false;
+                        try pending.append(self.allocator, .{ .left = backing.ty, .right = r.backing.?.ty });
+                    }
+                },
+            }
+        }
+        return true;
+    }
+
+    fn appendTypePairs(pending: anytype, allocator: Allocator, left: []const ConstTypeId, right: []const ConstTypeId) Allocator.Error!bool {
+        if (left.len != right.len) return false;
+        for (left, right) |l, r| try pending.append(allocator, .{ .left = l, .right = r });
+        return true;
+    }
+
+    fn typeDefEql(left_names: *const names.NameStore, left: TypeDef, right_names: *const names.NameStore, right: TypeDef) bool {
+        if (!std.mem.eql(u8, left_names.moduleIdentityBytes(left.module), right_names.moduleIdentityBytes(right.module))) return false;
+        if (!std.mem.eql(u8, left_names.typeNameText(left.type_name), right_names.typeNameText(right.type_name))) return false;
+        if (left.source_decl != right.source_decl or !std.meta.eql(left.generated, right.generated)) return false;
+        if (left.iterator_representation != right.iterator_representation or left.iterator_kind != right.iterator_kind or left.iterator_depth != right.iterator_depth) return false;
+        if ((left.iterator_topology == null) != (right.iterator_topology == null)) return false;
+        if (left.iterator_topology) |topology| {
+            const other = right.iterator_topology.?;
+            inline for (.{ "len_field", "step_field", "item_field", "rest_field" }) |field| {
+                if (!std.mem.eql(u8, left_names.recordFieldLabelText(@field(topology, field)), right_names.recordFieldLabelText(@field(other, field)))) return false;
+            }
+            inline for (.{ "known_tag", "unknown_tag", "done_tag", "one_tag", "skip_tag" }) |field| {
+                if (!std.mem.eql(u8, left_names.tagLabelText(@field(topology, field)), right_names.tagLabelText(@field(other, field)))) return false;
+            }
+        }
+        return true;
+    }
+
     pub const Serialized = extern struct {
         types: artifact_serialize.SerializedSlice(ConstType) = .{},
         type_pool: artifact_serialize.SerializedSlice(ConstTypeId) = .{},
@@ -1256,6 +1415,174 @@ pub const ConstStore = struct {
             constStoreInvariant("blob view is outside backing data");
         }
         return backing[offset..][0..len];
+    }
+
+    /// Copy the value graph at `root` of `source` into this store, re-adding
+    /// its blobs by content, and return the copy's root. Shared nodes stay
+    /// shared. Named types are copied as they are: a portable value names
+    /// only types declared outside the module that stored it (design.md
+    /// "Compile-Time Value Reuse Across Edits"). A function value is never
+    /// portable, so none reaches the copy.
+    pub fn cloneValueFrom(self: *ConstStore, source: *const ConstStore, root: ConstNodeId) Allocator.Error!ConstNodeId {
+        var map = collections.DenseMap(ConstNodeId, ConstNodeId).init(self.allocator);
+        defer map.deinit();
+        var order = std.ArrayList(ConstNodeId).empty;
+        defer order.deinit(self.allocator);
+        var pending = std.ArrayList(ConstNodeId).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |node| {
+            const entry = try map.getOrPut(node);
+            if (entry.found_existing) continue;
+            entry.value_ptr.* = try self.reserve();
+            try order.append(self.allocator, node);
+            try appendValueChildren(source.get(node), &pending, self.allocator);
+        }
+        var children = std.ArrayList(ConstNodeId).empty;
+        defer children.deinit(self.allocator);
+        for (order.items) |node| {
+            const value = source.get(node);
+            children.clearRetainingCapacity();
+            const copied: ConstValue = switch (value) {
+                .pending => constStoreInvariant("a pending node reached a value copy"),
+                .fn_value => constStoreInvariant("a function value reached a value copy"),
+                .zst => .zst,
+                .scalar => |scalar| .{ .scalar = scalar },
+                .str => |str| .{ .str = try self.copyBlob(source, str) },
+                .crash => |str| .{ .crash = try self.copyBlob(source, str) },
+                .checked_error => |str| .{ .checked_error = try self.copyBlob(source, str) },
+                .box => |payload| .{ .box = map.get(payload).? },
+                .nominal => |nominal| .{ .nominal = .{ .named_type = nominal.named_type, .backing = map.get(nominal.backing).? } },
+                .list => |list| .{ .list = switch (list) {
+                    .nodes => |items| .{ .nodes = try mappedNodes(&children, self.allocator, &map, items) },
+                    .packed_bytes => |packed_list| .{ .packed_bytes = .{
+                        .bytes = try self.copyBlob(source, packed_list.bytes),
+                        .len = packed_list.len,
+                        .element = packed_list.element,
+                        .product_width = packed_list.product_width,
+                    } },
+                    .empty => |capacity| .{ .empty = capacity },
+                } },
+                .tuple => |items| .{ .tuple = try mappedNodes(&children, self.allocator, &map, items) },
+                .record => |items| .{ .record = try mappedNodes(&children, self.allocator, &map, items) },
+                .tag => |tag| .{ .tag = .{ .tag_name = tag.tag_name, .payloads = try mappedNodes(&children, self.allocator, &map, tag.payloads) } },
+            };
+            self.fill(map.get(node).?, copied);
+        }
+        return map.get(root).?;
+    }
+
+    fn copyBlob(self: *ConstStore, source: *const ConstStore, blob: ConstBlob) Allocator.Error!ConstBlob {
+        return .{ .data = try self.addBlobData(source.blobData(blob.data)), .offset = blob.offset, .len = blob.len };
+    }
+
+    fn mappedNodes(
+        out: *std.ArrayList(ConstNodeId),
+        allocator: Allocator,
+        map: *const collections.DenseMap(ConstNodeId, ConstNodeId),
+        items: []const ConstNodeId,
+    ) Allocator.Error![]const ConstNodeId {
+        out.clearRetainingCapacity();
+        for (items) |item| try out.append(allocator, map.get(item).?);
+        return out.items;
+    }
+
+    /// Push the nodes a value refers to directly.
+    fn appendValueChildren(value: ConstValue, out: *std.ArrayList(ConstNodeId), allocator: Allocator) Allocator.Error!void {
+        switch (value) {
+            .pending, .zst, .scalar, .str, .crash, .checked_error, .fn_value => {},
+            .box => |payload| try out.append(allocator, payload),
+            .nominal => |nominal| try out.append(allocator, nominal.backing),
+            .list => |list| switch (list) {
+                .nodes => |items| try out.appendSlice(allocator, items),
+                .packed_bytes, .empty => {},
+            },
+            .tuple, .record => |items| try out.appendSlice(allocator, items),
+            .tag => |tag| try out.appendSlice(allocator, tag.payloads),
+        }
+    }
+
+    /// Whether the value graph at `root` can move into a later version of the
+    /// module `own` names: it holds no function value and no named type that
+    /// module declares (design.md "Compile-Time Value Reuse Across Edits").
+    pub fn valuePortable(self: *const ConstStore, root: ConstNodeId, own: names.CheckedModuleDigest) Allocator.Error!bool {
+        var seen = collections.DenseMap(ConstNodeId, void).init(self.allocator);
+        defer seen.deinit();
+        var pending = std.ArrayList(ConstNodeId).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |node| {
+            const entry = try seen.getOrPut(node);
+            if (entry.found_existing) continue;
+            const value = self.get(node);
+            switch (value) {
+                .pending => constStoreInvariant("a pending node reached a portability walk"),
+                .fn_value => return false,
+                .nominal => |nominal| if (std.mem.eql(u8, &nominal.named_type.module.bytes, &own.bytes)) return false,
+                .zst, .scalar, .str, .crash, .checked_error, .box, .list, .tuple, .record, .tag => {},
+            }
+            try appendValueChildren(value, &pending, self.allocator);
+        }
+        return true;
+    }
+
+    /// Structural equality of two value graphs: scalars bitwise, blob and tag
+    /// bytes, children in order, and named types by declaring module. A named
+    /// type's checked occurrence (`named_type.ty`) is provenance, not value
+    /// identity. Function values are never equal; no compared graph holds one.
+    pub fn graphEql(self: *const ConstStore, root: ConstNodeId, other: *const ConstStore, other_root: ConstNodeId) Allocator.Error!bool {
+        const Pair = struct { left: ConstNodeId, right: ConstNodeId };
+        var seen = std.AutoHashMap(Pair, void).init(self.allocator);
+        defer seen.deinit();
+        var pending = std.ArrayList(Pair).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ .left = root, .right = other_root });
+        while (pending.pop()) |pair| {
+            const entry = try seen.getOrPut(pair);
+            if (entry.found_existing) continue;
+            const left = self.get(pair.left);
+            const right = other.get(pair.right);
+            if (std.meta.activeTag(left) != std.meta.activeTag(right)) return false;
+            switch (left) {
+                .pending, .fn_value => return false,
+                .zst => {},
+                .scalar => |scalar| if (!std.meta.eql(scalar, right.scalar)) return false,
+                .str => |str| if (!std.mem.eql(u8, self.blobBytes(str), other.blobBytes(right.str))) return false,
+                .crash => |str| if (!std.mem.eql(u8, self.blobBytes(str), other.blobBytes(right.crash))) return false,
+                .checked_error => |str| if (!std.mem.eql(u8, self.blobBytes(str), other.blobBytes(right.checked_error))) return false,
+                .box => |payload| try pending.append(self.allocator, .{ .left = payload, .right = right.box }),
+                .nominal => |nominal| {
+                    if (!std.mem.eql(u8, &nominal.named_type.module.bytes, &right.nominal.named_type.module.bytes)) return false;
+                    try pending.append(self.allocator, .{ .left = nominal.backing, .right = right.nominal.backing });
+                },
+                .list => |list| {
+                    const right_list = right.list;
+                    if (std.meta.activeTag(list) != std.meta.activeTag(right_list)) return false;
+                    switch (list) {
+                        .nodes => |items| {
+                            if (items.len != right_list.nodes.len) return false;
+                            for (items, right_list.nodes) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
+                        },
+                        .packed_bytes => |packed_list| {
+                            const r = right_list.packed_bytes;
+                            if (packed_list.len != r.len or packed_list.element != r.element or packed_list.product_width != r.product_width) return false;
+                            if (!std.mem.eql(u8, self.blobBytes(packed_list.bytes), other.blobBytes(r.bytes))) return false;
+                        },
+                        .empty => |capacity| if (capacity != right_list.empty) return false,
+                    }
+                },
+                inline .tuple, .record => |items, tag| {
+                    const right_items = @field(right, @tagName(tag));
+                    if (items.len != right_items.len) return false;
+                    for (items, right_items) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
+                },
+                .tag => |tag| {
+                    if (!std.mem.eql(u8, tag.tag_name, right.tag.tag_name) or tag.payloads.len != right.tag.payloads.len) return false;
+                    for (tag.payloads, right.tag.payloads) |l, r| try pending.append(self.allocator, .{ .left = l, .right = r });
+                },
+            }
+        }
+        return true;
     }
 
     pub fn verifyComplete(self: *const ConstStore) Allocator.Error!void {
