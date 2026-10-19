@@ -505,16 +505,16 @@ fn findCandidate(
         var targets_walk = try body_clone.ReachableStmts.initWithScratch(store, body, analysis);
         defer targets_walk.deinit();
         while (try targets_walk.next()) |stmt_id| {
-            const stmt = store.getCFStmt(stmt_id);
-            if (stmt == .assign_tag) try tag_targets.put(stmt.assign_tag.target, {});
+            const stmt = store.getCFStmtImmediate(stmt_id);
+            if (stmt.* == .assign_tag) try tag_targets.put(stmt.assign_tag.target, {});
         }
     }
     var walk = try body_clone.ReachableStmts.initWithScratch(store, body, analysis);
     defer walk.deinit();
     while (try walk.next()) |join_stmt| {
         stats.discovery_statement_visits += 1;
-        const node = store.getCFStmt(join_stmt);
-        if (node != .join) continue;
+        const node = store.getCFStmtImmediate(join_stmt);
+        if (node.* != .join) continue;
         const join = node.join;
         const params = store.getLocalSpan(join.params);
         if (params.len != 1 or !join.maybe_uninitialized_params.isEmpty()) continue;
@@ -538,22 +538,22 @@ fn findCandidate(
         var alias_sources = std.ArrayList(LIR.LocalId).empty;
         defer alias_sources.deinit(allocator);
         while (true) {
-            const alias_node = store.getCFStmt(match_stmt);
-            if (alias_node != .assign_ref or alias_node.assign_ref.op != .local) break;
+            const alias_node = store.getCFStmtImmediate(match_stmt);
+            if (alias_node.* != .assign_ref or alias_node.assign_ref.op != .local) break;
             if (alias_node.assign_ref.op.local != matched_value) break;
             try alias_sources.append(allocator, matched_value);
             matched_value = alias_node.assign_ref.target;
             match_stmt = alias_node.assign_ref.next;
         }
 
-        const match_node = store.getCFStmt(match_stmt);
-        const switch_stmt = if (match_node == .assign_ref and match_node.assign_ref.op == .discriminant) blk: {
+        const match_node = store.getCFStmtImmediate(match_stmt);
+        const switch_stmt = if (match_node.* == .assign_ref and match_node.assign_ref.op == .discriminant) blk: {
             const discriminant = match_node.assign_ref;
             if (discriminant.op.discriminant.source != matched_value) continue;
-            const switch_node = store.getCFStmt(discriminant.next);
-            if (switch_node != .switch_stmt or switch_node.switch_stmt.cond != discriminant.target) continue;
+            const switch_node = store.getCFStmtImmediate(discriminant.next);
+            if (switch_node.* != .switch_stmt or switch_node.switch_stmt.cond != discriminant.target) continue;
             break :blk discriminant.next;
-        } else if (match_node == .switch_stmt and match_node.switch_stmt.cond == matched_value)
+        } else if (match_node.* == .switch_stmt and match_node.switch_stmt.cond == matched_value)
             match_stmt
         else
             continue;
@@ -593,7 +593,7 @@ fn findCandidate(
             union_locals.deinit(allocator);
             continue;
         }
-        if (match_node == .assign_ref and join_reads.get(match_node.assign_ref.target) != 1) {
+        if (match_node.* == .assign_ref and join_reads.get(match_node.assign_ref.target) != 1) {
             union_locals.deinit(allocator);
             continue;
         }
@@ -617,9 +617,9 @@ fn findCandidate(
             successors.clearRetainingCapacity();
             try body_clone.appendSuccessors(store, &successors, stmt_id, allocator);
             for (successors.items) |next| try predecessors.put(next, (predecessors.get(next) orelse 0) + 1);
-            const stmt = store.getCFStmt(stmt_id);
-            if (stmt == .jump and stmt.jump.target == join.id) jump_count += 1;
-            if (stmt != .assign_tag) continue;
+            const stmt = store.getCFStmtImmediate(stmt_id);
+            if (stmt.* == .jump and stmt.jump.target == join.id) jump_count += 1;
+            if (stmt.* != .assign_tag) continue;
             const assign = stmt.assign_tag;
             if (assign.target != param or assign.target_desc != null) continue;
             const edge_jump = producerEdgeJump(store, assign.next, param, assign.payload, join.id) orelse continue;
@@ -1078,8 +1078,8 @@ fn classifyJoinTagUses(
     var known: u32 = 1;
     for (facts.projections.items) |stmt_id| {
         if (stmt_id == match_stmt) continue;
-        const stmt = store.getCFStmt(stmt_id);
-        if (stmt != .assign_ref) continue;
+        const stmt = store.getCFStmtImmediate(stmt_id);
+        if (stmt.* != .assign_ref) continue;
         const op = stmt.assign_ref.op;
         const projection = if (op == .tag_payload_struct)
             if (op.tag_payload_struct.source == matched_value)
@@ -1122,8 +1122,8 @@ fn branchesUseOnlyPayloads(
 
         var allowed: u32 = 0;
         for (facts.projections.items) |stmt_id| {
-            const stmt = store.getCFStmt(stmt_id);
-            if (stmt != .assign_ref) continue;
+            const stmt = store.getCFStmtImmediate(stmt_id);
+            if (stmt.* != .assign_ref) continue;
             const op = stmt.assign_ref.op;
             if (op == .tag_payload_struct) {
                 const payload = op.tag_payload_struct;
@@ -1296,9 +1296,9 @@ fn applyCandidate(
 /// A statement on a producer edge between the constructor and the edge's
 /// jump, which is always a reference-count operation, and its successor.
 fn edgeStmt(store: *const LirStore, stmt_id: LIR.CFStmtId) struct { stmt: LIR.CFStmt, next: LIR.CFStmtId } {
-    const stmt = store.getCFStmt(stmt_id);
-    return switch (stmt) {
-        .decref, .decref_if_initialized, .incref => .{ .stmt = stmt, .next = body_clone.linearNext(stmt) },
+    const stmt = store.getCFStmtImmediate(stmt_id);
+    return switch (stmt.*) {
+        .decref, .decref_if_initialized, .incref => .{ .stmt = stmt.*, .next = body_clone.linearNext(stmt.*) },
         .init_uninitialized,
         .assign_ref,
         .assign_literal,
@@ -1581,9 +1581,9 @@ fn testIndependentFusions(allocator: Allocator, candidate_count: usize, unrelate
     var walk = try body_clone.ReachableStmts.init(&store, root);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
-        const stmt = store.getCFStmt(stmt_id);
-        try testing.expect(stmt != .assign_tag);
-        if (stmt == .join) try testing.expect(@backingInt(stmt.join.id) > 50000);
+        const stmt = store.getCFStmtImmediate(stmt_id);
+        try testing.expect(stmt.* != .assign_tag);
+        if (stmt.* == .join) try testing.expect(@backingInt(stmt.join.id) > 50000);
     }
     return stats;
 }
@@ -1850,9 +1850,9 @@ fn testConditionalAliasRelease(extra_read: bool) TestError!void {
     var walk = try body_clone.ReachableStmts.init(&store, root);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
-        const stmt = store.getCFStmt(stmt_id);
-        try testing.expect(stmt != .assign_tag);
-        if (stmt == .decref_if_initialized) {
+        const stmt = store.getCFStmtImmediate(stmt_id);
+        try testing.expect(stmt.* != .assign_tag);
+        if (stmt.* == .decref_if_initialized) {
             releases += 1;
             const cloned = stmt.decref_if_initialized;
             try testing.expectEqual(result, cloned.cond);
@@ -1979,8 +1979,8 @@ fn testDiscriminantRouting(missing_payload: bool) TestError!void {
     // One inventory per distinct arm, not per variant selecting the default.
     try testing.expectEqual(@as(usize, 2), stats.definition_walks);
     for (producers, 0..) |producer, index| {
-        const rewritten = store.getCFStmt(producer);
-        const target = if (rewritten == .set_local)
+        const rewritten = store.getCFStmtImmediate(producer);
+        const target = if (rewritten.* == .set_local)
             store.getCFStmtImmediate(rewritten.set_local.next).jump.target
         else
             rewritten.jump.target;
@@ -2007,9 +2007,9 @@ fn testDiscriminantRouting(missing_payload: bool) TestError!void {
     var walk = try body_clone.ReachableStmts.init(&store, root);
     defer walk.deinit();
     while (try walk.next()) |id| {
-        const stmt = store.getCFStmt(id);
-        try testing.expect(stmt != .assign_tag);
-        if (stmt == .ret) {
+        const stmt = store.getCFStmtImmediate(id);
+        try testing.expect(stmt.* != .assign_tag);
+        if (stmt.* == .ret) {
             if (stmt.ret.value == selector) {
                 defaults += 1;
             } else {
@@ -2617,8 +2617,8 @@ fn testContinuationJoin(shared_continuation: bool) TestError!void {
     // The continuation is now the outermost declaration, and every jump to it
     // sits inside its remainder.
     const proc_body = store.getProcSpecImmediate(proc).body.?;
-    const root = store.getCFStmt(if (shared_continuation) store.getCFStmt(proc_body).join.remainder else proc_body);
-    try testing.expect(root == .join);
+    const root = store.getCFStmtImmediate(if (shared_continuation) store.getCFStmt(proc_body).join.remainder else proc_body);
+    try testing.expect(root.* == .join);
     if (shared_continuation) {
         try testing.expect(root.join.id != cont_id);
         try testing.expect(GuardedList.at(store.getLocalSpan(root.join.params), 0) != out);
@@ -2632,12 +2632,12 @@ fn testContinuationJoin(shared_continuation: bool) TestError!void {
     var walk = try body_clone.ReachableStmts.init(&store, root.join.remainder);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
-        const stmt = store.getCFStmt(stmt_id);
-        if (stmt == .assign_tag and stmt.assign_tag.target == param) {
+        const stmt = store.getCFStmtImmediate(stmt_id);
+        if (stmt.* == .assign_tag and stmt.assign_tag.target == param) {
             try testing.expectEqual(external_build, @as(?LIR.CFStmtId, stmt_id));
         }
-        if (stmt == .assign_ref and stmt.assign_ref.target == disc) return error.TestUnexpectedResult;
-        if (stmt == .jump and stmt.jump.target == root.join.id) jumps_to_cont += 1;
+        if (stmt.* == .assign_ref and stmt.assign_ref.target == disc) return error.TestUnexpectedResult;
+        if (stmt.* == .jump and stmt.jump.target == root.join.id) jumps_to_cont += 1;
     }
     try testing.expectEqual(@as(u32, 2), jumps_to_cont);
 
@@ -2646,8 +2646,8 @@ fn testContinuationJoin(shared_continuation: bool) TestError!void {
     var all = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.?);
     defer all.deinit();
     while (try all.next()) |stmt_id| {
-        const stmt = store.getCFStmt(stmt_id);
-        if (stmt != .join) continue;
+        const stmt = store.getCFStmtImmediate(stmt_id);
+        if (stmt.* != .join) continue;
         const entry = try declarations.getOrPut(stmt.join.id);
         try testing.expect(!entry.found_existing);
         entry.value_ptr.* = stmt_id;

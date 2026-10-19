@@ -99,7 +99,7 @@ pub fn run(
     var late_desc_locals = std.ArrayList(LateDescLocal).empty;
     defer late_desc_locals.deinit(allocator);
     for (0..proc_count) |proc_index| {
-        const proc = store.getProcSpec(@fromBackingInt(@as(u32, @intCast(proc_index))));
+        const proc = store.getProcSpecImmediate(@fromBackingInt(@as(u32, @intCast(proc_index))));
         const body = proc.body orelse continue;
         join_bodies.clearRetainingCapacity();
         try work.append(allocator, body);
@@ -186,7 +186,7 @@ const HandsUp = enum { never, always, when_runtime_called };
 
 /// Whether a procedure may return with a call pending.
 fn handsUp(store: *const LirStore, outside: *const std.bit_set.DynamicBitSetUnmanaged, proc_index: u32) HandsUp {
-    const proc = store.getProcSpec(@fromBackingInt(proc_index));
+    const proc = store.getProcSpecImmediate(@fromBackingInt(proc_index));
     return switch (proc.abi) {
         .erased_callable => .when_runtime_called,
         .roc => if (outside.isSet(proc_index)) .never else .always,

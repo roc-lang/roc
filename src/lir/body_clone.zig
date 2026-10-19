@@ -999,7 +999,7 @@ pub fn localIdLessThan(_: void, a: LocalId, b: LocalId) bool {
 /// body of its own to clone: a hosted proc's implementation comes from the
 /// host, and a non-Roc ABI proc's calling convention is fixed by its boundary.
 pub fn rewritableProcBody(store: *const LirStore, proc_id: LIR.LirProcSpecId) ?CFStmtId {
-    const proc = store.getProcSpec(proc_id);
+    const proc = store.getProcSpecImmediate(proc_id);
     if (proc.hosted != null or proc.abi != .roc) return null;
     return proc.body;
 }
@@ -1248,10 +1248,10 @@ pub fn collectCopiedStmts(
         for (successors.items) |successor| {
             try predecessors.append(allocator, .{ .key = @backingInt(successor), .stmt = stmt_id });
         }
-        const stmt = store.getCFStmt(stmt_id);
+        const stmt = store.getCFStmtImmediate(stmt_id);
         var collector: ReaderCollector = .{ .edges = &readers, .stmt = stmt_id, .allocator = allocator };
-        forEachStmtRead(store, stmt, &collector, ReaderCollector.note);
-        if (stmt == .jump) {
+        forEachStmtRead(store, stmt.*, &collector, ReaderCollector.note);
+        if (stmt.* == .jump) {
             const params = join_params.get(stmt.jump.target) orelse
                 base.invariant("{s}", .{"subtree copy plan found a jump to an unknown join"});
             emitSpan(store, &collector, ReaderCollector.note, params);
@@ -1482,14 +1482,14 @@ pub fn CallResultFusion(comptime Spec: type) type {
         }
 
         fn rewriteAt(self: *Self, proc_body: CFStmtId, call_stmt_id: CFStmtId) Allocator.Error!bool {
-            const call_stmt_node = self.store.getCFStmt(call_stmt_id);
-            if (call_stmt_node != .assign_call) return false;
+            const call_stmt_node = self.store.getCFStmtImmediate(call_stmt_id);
+            if (call_stmt_node.* != .assign_call) return false;
             const call = call_stmt_node.assign_call;
 
             const result_layout = self.store.getLocal(call.target).layout_idx;
             if (!Spec.resultEligible(self.state, result_layout)) return false;
 
-            const callee = self.store.getProcSpec(call.proc);
+            const callee = self.store.getProcSpecImmediate(call.proc);
             if (callee.body == null or callee.hosted != null or callee.abi != .roc) return false;
             if (callee.ret_layout != result_layout) return false;
 
@@ -1731,8 +1731,8 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             var walk = try ReachableStmts.initWithAllocator(store, body, allocator);
             defer walk.deinit();
             while (try walk.next()) |stmt_id| {
-                const stmt = store.getCFStmt(stmt_id);
-                if (stmt == .join) try self.declared_joins.put(stmt.join.id, {});
+                const stmt = store.getCFStmtImmediate(stmt_id);
+                if (stmt.* == .join) try self.declared_joins.put(stmt.join.id, {});
             }
             return self;
         }
@@ -2464,8 +2464,8 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         /// True when `next` is a `ret` of exactly `value`, marking a direct
         /// constructor/concat return the rewriter may fuse into its tail.
         pub fn directReturnOf(self: *const Self, next: CFStmtId, value: LocalId) bool {
-            const stmt = self.store.getCFStmt(next);
-            return stmt == .ret and stmt.ret.value == value;
+            const stmt = self.store.getCFStmtImmediate(next);
+            return stmt.* == .ret and stmt.ret.value == value;
         }
 
         fn mapStrMatchSteps(self: *Self, span: LIR.StrMatchStepSpan) Allocator.Error!LIR.StrMatchStepSpan {

@@ -2997,8 +2997,8 @@ const Pass = struct {
         }
         var back: u32 = 0;
         for (scan.cycle.items) |node| {
-            const stmt = self.store.getCFStmt(scan.stmts.items[node]);
-            switch (stmt) {
+            const stmt = self.store.getCFStmtImmediate(scan.stmts.items[node]);
+            switch (stmt.*) {
                 .jump => |j| if (j.target == join_id) {
                     back += 1;
                 },
@@ -3047,7 +3047,7 @@ const Pass = struct {
                 .crash,
                 => {},
             }
-            if (BodyClone.definedTarget(stmt)) |local| {
+            if (BodyClone.definedTarget(stmt.*)) |local| {
                 try self.join_assigned.put(local, @backingInt(join_id), {});
             }
         }
@@ -4640,8 +4640,8 @@ const Pass = struct {
                 var walk = try BodyClone.ReachableStmts.initWithAllocator(self.store, body, self.allocator);
                 defer walk.deinit();
                 while (try walk.next()) |stmt| {
-                    const cf = self.store.getCFStmt(stmt);
-                    if (cf == .jump) try structural_jumps.append(self.allocator, .{ .target = cf.jump.target, .stmt = stmt });
+                    const cf = self.store.getCFStmtImmediate(stmt);
+                    if (cf.* == .jump) try structural_jumps.append(self.allocator, .{ .target = cf.jump.target, .stmt = stmt });
                 }
                 structural_jumps_ready = true;
             }
@@ -6299,8 +6299,8 @@ const Pass = struct {
         const chain = (self.lookup(inner_local) orelse return false).arithmetic_chain orelse return false;
         if (chain.operation != entry.operation or chain.constant < 0 or chain.constant > max) return false;
 
-        const inner_stmt = self.store.getCFStmt(chain.stmt);
-        if (std.meta.activeTag(inner_stmt) != .assign_low_level) return false;
+        const inner_stmt = self.store.getCFStmtImmediate(chain.stmt);
+        if (std.meta.activeTag(inner_stmt.*) != .assign_low_level) return false;
         const inner = inner_stmt.assign_low_level;
         if (inner.target != inner_local) return false;
         const outer_literal_stmt = self.literalDefinitionOnPath(inner.next, stmt, outer_constant_local) orelse return false;
@@ -6342,8 +6342,8 @@ const Pass = struct {
         var definition: ?CFStmtId = null;
         while (remaining > 0) : (remaining -= 1) {
             if (current == target) return definition;
-            const stmt = self.store.getCFStmt(current);
-            if (std.meta.activeTag(stmt) != .assign_literal) return null;
+            const stmt = self.store.getCFStmtImmediate(current);
+            if (std.meta.activeTag(stmt.*) != .assign_literal) return null;
             const literal = stmt.assign_literal;
             if (literal.target == local) definition = current;
             current = literal.next;
@@ -6561,8 +6561,8 @@ const RangeProveCertify = struct {
         while (stack.pop()) |current| {
             if (graph.succs.contains(current)) continue;
             list.clearRetainingCapacity();
-            const stmt = store.getCFStmt(current);
-            switch (stmt) {
+            const stmt = store.getCFStmtImmediate(current);
+            switch (stmt.*) {
                 .join => |t| try join_bodies.put(t.id, t.body),
                 .jump => |t| if (join_bodies.get(t.target)) |target_body| try list.append(allocator, target_body),
                 .init_uninitialized,
@@ -6609,7 +6609,7 @@ const RangeProveCertify = struct {
                 .crash,
                 => {},
             }
-            try BodyClone.forEachFlowSuccessor(store, stmt, &edges, Edges.push);
+            try BodyClone.forEachFlowSuccessor(store, stmt.*, &edges, Edges.push);
             const owned = try allocator.dupe(CFStmtId, list.items);
             try graph.succs.put(current, owned);
             for (owned) |succ| try stack.append(allocator, succ);

@@ -267,7 +267,7 @@ const Pass = struct {
     }
 
     fn markProcBodyEdges(self: *Pass, proc_id: LIR.LirProcSpecId) Allocator.Error!void {
-        const proc = self.store.getProcSpec(proc_id);
+        const proc = self.store.getProcSpecImmediate(proc_id);
         if (proc.body) |body| try self.stmt_stack.append(self.allocator, body);
         const join_points = self.store.getJoinPointSpan(proc.join_points);
         for (0..join_points.len) |index| {
@@ -790,7 +790,7 @@ const Pass = struct {
             if (entry.proc >= proc_count) reachableProcInvariant("proc debug name exceeds compact proc_specs len");
         }
         for (0..self.store.procSpecCount()) |proc_index| {
-            const proc = self.store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+            const proc = self.store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
             if (proc.body) |body| self.verifyStmtRef(body, stmt_count) else if (proc.hosted == null and !proc.external) {
                 reachableProcInvariant("retained Roc proc has no body");
             }

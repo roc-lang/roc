@@ -966,8 +966,8 @@ const Pass = struct {
     }
 
     fn validSingleVariantRead(self: *const Pass, stmt_id: LIR.CFStmtId, payload_layout: layout_mod.Idx) bool {
-        const stmt = self.store.getCFStmt(stmt_id);
-        if (stmt != .assign_ref) return false;
+        const stmt = self.store.getCFStmtImmediate(stmt_id);
+        if (stmt.* != .assign_ref) return false;
         const op = stmt.assign_ref.op;
         if (op == .discriminant) return true;
         if (op == .tag_payload_struct) {
@@ -1644,8 +1644,8 @@ const Pass = struct {
         // The transparent aliases' definitions read a value that no longer
         // exists; every use of them was rewritten above, so they are deleted.
         for (closure.stmts.items) |alias_stmt| {
-            const alias = self.store.getCFStmt(alias_stmt);
-            std.debug.assert(alias == .assign_ref);
+            const alias = self.store.getCFStmtImmediate(alias_stmt);
+            std.debug.assert(alias.* == .assign_ref);
             const alias_next = alias.assign_ref.next;
             try self.removed.put(alias_stmt, alias_next);
         }
@@ -1676,8 +1676,8 @@ const Pass = struct {
                 const operands = self.store.getLocalSpan(site.fields);
                 try self.writeFields(write_stmt, write.next, field_locals, operands);
 
-                const build_stmt = self.store.getCFStmt(site.stmt);
-                std.debug.assert(build_stmt == .assign_struct);
+                const build_stmt = self.store.getCFStmtImmediate(site.stmt);
+                std.debug.assert(build_stmt.* == .assign_struct);
                 const build_next = build_stmt.assign_struct.next;
                 try self.removed.put(site.stmt, build_next);
             } else {
@@ -1695,8 +1695,8 @@ const Pass = struct {
         // Each direct build becomes per-field writes in its place.
         for (direct_builds) |site| {
             const operands = self.store.getLocalSpan(site.fields);
-            const build_stmt = self.store.getCFStmt(site.stmt);
-            std.debug.assert(build_stmt == .assign_struct);
+            const build_stmt = self.store.getCFStmtImmediate(site.stmt);
+            std.debug.assert(build_stmt.* == .assign_struct);
             const build_next = build_stmt.assign_struct.next;
             try self.writeFields(site.stmt, build_next, field_locals, operands);
         }

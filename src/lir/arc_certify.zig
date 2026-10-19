@@ -263,9 +263,9 @@ fn certifyStoreWithWorkStats(
 
     for (0..store.procSpecCount()) |index| {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-        const proc = store.getProcSpec(proc_id);
+        const proc = store.getProcSpecImmediate(proc_id);
         const body = proc.body orelse continue;
-        try certifier.certifyProc(proc_id, proc, body);
+        try certifier.certifyProc(proc_id, proc.*, body);
     }
 }
 
@@ -507,14 +507,14 @@ fn certifyUniqueArgs(
         defer uniqueness.deinit(allocator);
 
         for (proc_stmts.items) |current| {
-            const stmt = store.getCFStmt(current);
-            if (stmt == .assign_literal and stmt.assign_literal.fresh_alternative != null) {
+            const stmt = store.getCFStmtImmediate(current);
+            if (stmt.* == .assign_literal and stmt.assign_literal.fresh_alternative != null) {
                 diag.context_proc = proc_id;
                 diag.context_stmt = current;
                 diag.set("stmt={d}: a read still names a fresh form after ARC chose", .{@backingInt(current)});
                 return error.Certification;
             }
-            if (stmt != .assign_low_level) continue;
+            if (stmt.* != .assign_low_level) continue;
             const assign = stmt.assign_low_level;
             if (assign.unique_args == 0) continue;
             const stmt_index = @backingInt(current);
@@ -612,7 +612,7 @@ fn writeFailureContext(
     local: ?LIR.LocalId,
     extra_locals: []const LIR.LocalId,
 ) void {
-    const proc = store.getProcSpec(proc_id);
+    const proc = store.getProcSpecImmediate(proc_id);
     context.append("\nfailure context: proc={d}", .{@backingInt(proc_id)});
     if (store.procDebugName(proc_id)) |name| context.append(" name={s}", .{name});
     if (local) |l| {
@@ -3764,9 +3764,9 @@ const Certifier = struct {
             if (first_visit) try visited.put(current, {});
             self.collect_region = region;
 
-            const current_stmt = self.store.getCFStmt(current);
-            if (first_visit) try self.erased_owners.noteStmt(self.store, self.layouts, current_stmt);
-            switch (current_stmt) {
+            const current_stmt = self.store.getCFStmtImmediate(current);
+            if (first_visit) try self.erased_owners.noteStmt(self.store, self.layouts, current_stmt.*);
+            switch (current_stmt.*) {
                 .assign_ref => |assign| {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocal(body_clone.refOpSource(assign.op));
@@ -4225,11 +4225,11 @@ const Certifier = struct {
             // tracks one def per statement, not per edge, so they are not
             // marked as unconditional defs; that would hide reads on the miss
             // path. Over-reporting relevance is safe.
-            const current = self.store.getCFStmt(stmt);
+            const current = self.store.getCFStmtImmediate(stmt);
             var exposed: ExposedReads = .{ .certifier = self, .reads = &node_reads };
-            try body_clone.tryForEachStmtRead(self.store, current, &exposed, ExposedReads.note);
-            if (body_clone.definedTarget(current)) |target| self.setReadBeforeRebindDef(&graph, node_index, target);
-            switch (current) {
+            try body_clone.tryForEachStmtRead(self.store, current.*, &exposed, ExposedReads.note);
+            if (body_clone.definedTarget(current.*)) |target| self.setReadBeforeRebindDef(&graph, node_index, target);
+            switch (current.*) {
                 .assign_call_erased => |s| if (s.out_desc) |out_desc| self.setReadBeforeRebindDef(&graph, node_index, out_desc),
                 .assign_boxy_tag_payload => |s| if (s.target_desc) |target_desc| self.setReadBeforeRebindDef(&graph, node_index, target_desc),
                 .init_uninitialized,
@@ -4276,7 +4276,7 @@ const Certifier = struct {
                 .crash,
                 => {},
             }
-            switch (current) {
+            switch (current.*) {
                 .join => |join| {
                     try ensureReadBeforeRebindNode(&graph, &work, join.body);
                     try cache_roots.append(graph_allocator, join.body);
@@ -4995,8 +4995,8 @@ const Certifier = struct {
         try arc_solve.collectProcStatements(self.allocator, self.store, body, &proc_stmts);
         var return_local_mismatch = false;
         for (proc_stmts.items) |stmt_id| {
-            const stmt = self.store.getCFStmt(stmt_id);
-            if (stmt != .ret) continue;
+            const stmt = self.store.getCFStmtImmediate(stmt_id);
+            if (stmt.* != .ret) continue;
             if (self.current_return_local) |expected| {
                 if (expected != stmt.ret.value) {
                     return_local_mismatch = true;
@@ -5397,19 +5397,19 @@ const Certifier = struct {
                 if (seen.found_existing) return;
             }
 
-            const stmt = self.store.getCFStmt(cursor);
+            const stmt = self.store.getCFStmtImmediate(cursor);
             // Any write to the returned local kills its discriminant witness;
             // `assign_tag` establishes a replacement after this kill.
             if (self.current_return_local) |return_local| {
                 // Emission rebinding of the returned local kills its witness exactly
                 // as it does in the solver's outcome domain; `assign_tag`
                 // establishes a replacement witness after this generic kill.
-                if (body_clone.writtenLocal(stmt)) |target| {
+                if (body_clone.writtenLocal(stmt.*)) |target| {
                     if (target == return_local) state.result_discriminant = no_dense;
                 }
             }
             if (state.outcomeDiscriminantCount() != 0) {
-                const consumes_refinement = stmt == .switch_stmt and
+                const consumes_refinement = stmt.* == .switch_stmt and
                     state.hasOutcomeDiscriminant(stmt.switch_stmt.cond);
                 // ARC may insert explicit RC bookkeeping after the source
                 // discriminant read and before its immediately refining
@@ -5417,7 +5417,7 @@ const Certifier = struct {
                 // result/discriminant relation; any balance mutation that
                 // invalidates restitution is checked independently when the
                 // switch replays its exact call receipt.
-                const stmt_tag = std.meta.activeTag(stmt);
+                const stmt_tag = std.meta.activeTag(stmt.*);
                 const preserves_refinement = stmt_tag == .incref or
                     stmt_tag == .decref or
                     stmt_tag == .decref_if_initialized or
@@ -5426,7 +5426,7 @@ const Certifier = struct {
                     state.clearOutcomeDiscriminants();
                 }
             }
-            switch (stmt) {
+            switch (stmt.*) {
                 .assign_ref => |assign| {
                     try self.validateResidualShellFields(&state, assign);
                     switch (assign.op) {
@@ -5960,8 +5960,8 @@ const Certifier = struct {
                         return self.fail("jump to join {d} before its definition", .{@backingInt(jump_stmt.target)});
                     };
                     if (self.current_return_local) |return_local| {
-                        const target_stmt = self.store.getCFStmt(record.body);
-                        if (target_stmt == .ret and target_stmt.ret.value == return_local) {
+                        const target_stmt = self.store.getCFStmtImmediate(record.body);
+                        if (target_stmt.* == .ret and target_stmt.ret.value == return_local) {
                             try self.applyOutcomeRestitution(&state);
                         }
                     }

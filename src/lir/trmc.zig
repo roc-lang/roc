@@ -86,7 +86,7 @@ pub const Report = struct {
 /// Intern worker-required layouts before freezing the phase's shared store.
 pub fn prepareLayouts(store: *const LirStore, layouts: *layout_mod.Store) ResourceError!void {
     for (0..store.procSpecCount()) |index| {
-        const proc = store.getProcSpec(@fromBackingInt(@intCast(index)));
+        const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(index)));
         // Only a procedure that calls itself can be rewritten to thread a
         // pointer to its result.
         if (proc.body != null and proc.hosted == null and proc.abi == .roc and proc.shapes.self_call and
@@ -138,7 +138,7 @@ fn transformProc(
     proc_id: LIR.LirProcSpecId,
     scratch: *Scratch,
 ) ResourceError!?Report {
-    const proc = store.getProcSpec(proc_id);
+    const proc = store.getProcSpecImmediate(proc_id);
     if (proc.body == null or proc.hosted != null or proc.abi != .roc) return null;
 
     var detection = Detection.init(store, layouts, proc_id, scratch);
@@ -185,7 +185,7 @@ fn transformProc(
 /// Emit diagnostics on the coordinator, after committing the proc in order.
 pub fn reportProc(store: *const LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, report: Report) void {
     if (build_options.print_trmc) {
-        const transformed = store.getProcSpec(proc_id);
+        const transformed = store.getProcSpecImmediate(proc_id);
         debugPrint("{s}: proc p{d} ({d} construct sites, {d} tail calls)\n", .{
             @tagName(transformed.tail_transform),
             @backingInt(proc_id),
@@ -489,9 +489,9 @@ const Detection = struct {
         while (steps < limit) : (steps += 1) {
             const params = self.store.getLocalSpan(join.params);
             if (params.len != 1 or GuardedList.at(params, 0) != local) return false;
-            const stmt = self.store.getCFStmt(join.body);
-            if (stmt == .ret) return stmt.ret.value == local;
-            if (stmt != .jump) return false;
+            const stmt = self.store.getCFStmtImmediate(join.body);
+            if (stmt.* == .ret) return stmt.ret.value == local;
+            if (stmt.* != .jump) return false;
             join = self.joins.get(stmt.jump.target) orelse return false;
         }
         return false;

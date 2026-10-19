@@ -202,7 +202,7 @@ const Pass = struct {
 
     fn seedBoundaries(self: *Pass) Allocator.Error!void {
         for (0..self.store.procSpecCount()) |proc_index| {
-            const proc = self.store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+            const proc = self.store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
             if (proc.body == null or proc.hosted != null) {
                 _ = self.proc_returns[proc_index].markAll(self.allocator);
             }
@@ -219,7 +219,7 @@ const Pass = struct {
         while (changed) {
             changed = false;
             for (0..self.store.procSpecCount()) |proc_index| {
-                const proc = self.store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+                const proc = self.store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
                 const body = proc.body orelse continue;
                 if (try self.analyzeProc(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))), body)) {
                     changed = true;
@@ -335,8 +335,8 @@ const Pass = struct {
         if (source.tags.all) return self.localInfoMut(target).markAll(self.allocator);
         var changed = false;
         for (source.constructions.items) |construction| {
-            const stmt = self.store.getCFStmt(construction);
-            if (stmt != .assign_struct) continue;
+            const stmt = self.store.getCFStmtImmediate(construction);
+            if (stmt.* != .assign_struct) continue;
             const fields = self.store.getLocalSpan(stmt.assign_struct.fields);
             if (field_index >= fields.len) tagReachabilityInvariant("field projection exceeded its constructor arity");
             const field = GuardedList.at(fields, field_index);
@@ -351,8 +351,8 @@ const Pass = struct {
         if (!source_info.tags.contains(slot.variant)) return false;
         var changed = false;
         for (source_info.constructions.items) |construction| {
-            const stmt = self.store.getCFStmt(construction);
-            if (stmt != .assign_tag or stmt.assign_tag.discriminant != slot.variant) continue;
+            const stmt = self.store.getCFStmtImmediate(construction);
+            if (stmt.* != .assign_tag or stmt.assign_tag.discriminant != slot.variant) continue;
             const payload = stmt.assign_tag.payload orelse continue;
             if (slot.payload == payload_struct_slot) {
                 if (try self.localInfoMut(target).mergeFrom(self.allocator, self.localInfo(payload))) changed = true;
@@ -372,8 +372,8 @@ const Pass = struct {
         var stmt_index: usize = 0;
         while (stmt_index < self.store.cfStmtCount()) : (stmt_index += 1) {
             const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index))));
-            const stmt = self.store.getCFStmt(stmt_id);
-            if (stmt != .switch_stmt) continue;
+            const stmt = self.store.getCFStmtImmediate(stmt_id);
+            if (stmt.* != .switch_stmt) continue;
             const switch_stmt = stmt.switch_stmt;
             const tags = &self.localInfo(switch_stmt.cond).tags;
             if (!tags.hasKnownValues()) continue;
@@ -420,12 +420,12 @@ const Pass = struct {
         var stmt_index: usize = 0;
         while (stmt_index < self.store.cfStmtCount()) : (stmt_index += 1) {
             const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index))));
-            const stmt = self.store.getCFStmt(stmt_id);
-            if (stmt != .assign_ref) continue;
+            const stmt = self.store.getCFStmtImmediate(stmt_id);
+            if (stmt.* != .assign_ref) continue;
             const assign = stmt.assign_ref;
             if (assign.op != .discriminant) continue;
-            const next_stmt = self.store.getCFStmt(assign.next);
-            if (next_stmt != .switch_stmt) continue;
+            const next_stmt = self.store.getCFStmtImmediate(assign.next);
+            if (next_stmt.* != .switch_stmt) continue;
             const switch_stmt = next_stmt.switch_stmt;
             if (switch_stmt.cond != assign.target) continue;
             if (self.useCount(assign.target) != 1) continue;

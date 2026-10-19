@@ -721,7 +721,7 @@ pub const UseOrder = struct {
         const first: usize = if (only_proc) |id| @backingInt(id) else 0;
         const end = if (only_proc != null) first + 1 else store.procSpecCount();
         for (first..end) |proc_index| {
-            const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+            const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
             const body = proc.body orelse continue;
             seen.clearRetainingCapacity();
             stack.clearRetainingCapacity();
@@ -958,8 +958,8 @@ pub const UseOrder = struct {
                 note(self.ctx, @backingInt(successor));
             }
         };
-        const node = store.getCFStmt(@fromBackingInt(@intCast(stmt)));
-        switch (node) {
+        const node = store.getCFStmtImmediate(@fromBackingInt(@intCast(stmt)));
+        switch (node.*) {
             .jump => {
                 const join_stmt = tables.jump_join[tables.stmtIndex(stmt)];
                 if (join_stmt == no_local) return true;
@@ -1010,7 +1010,7 @@ pub const UseOrder = struct {
             .join,
             .ret,
             .crash,
-            => body_clone.forEachSuccessor(store, node, .{ .join_body = false }, Visitor{ .ctx = ctx }, Visitor.call),
+            => body_clone.forEachSuccessor(store, node.*, .{ .join_body = false }, Visitor{ .ctx = ctx }, Visitor.call),
         }
         return false;
     }

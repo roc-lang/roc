@@ -125,8 +125,8 @@ const Inventory = struct {
             if (self.direct_calls[callee_index] != 1 or self.escapes[callee_index]) continue;
             const site = self.unique_site[callee_index] orelse continue;
             if (!self.store.getProcSpecImmediate(site.caller).iterator_fusion_scope) continue;
-            const stmt = self.store.getCFStmt(site.stmt);
-            if (stmt != .assign_call or @backingInt(stmt.assign_call.proc) != callee_index) continue;
+            const stmt = self.store.getCFStmtImmediate(site.stmt);
+            if (stmt.* != .assign_call or @backingInt(stmt.assign_call.proc) != callee_index) continue;
             if (!eligibleCall(self.store, layouts, stmt.assign_call)) continue;
             candidate[callee_index] = true;
         }
@@ -149,7 +149,7 @@ fn eligibleCall(
     call: @FieldType(LIR.CFStmt, "assign_call"),
 ) bool {
     if (call.is_cold or call.result_desc != null or call.out_desc != null) return false;
-    const callee = store.getProcSpec(call.proc);
+    const callee = store.getProcSpecImmediate(call.proc);
     return callee.body != null and
         callee.hosted == null and
         callee.abi == .roc and
@@ -239,8 +239,8 @@ const ReturnRewriter = struct {
         // When the call site only returns the call's result, a return in the
         // callee is a return in the caller: a tail call in the inlined body
         // stays directly in front of its return.
-        const continuation = cloner.store.getCFStmt(self.next);
-        if (continuation == .ret and continuation.ret.value == self.target and
+        const continuation = cloner.store.getCFStmtImmediate(self.next);
+        if (continuation.* == .ret and continuation.ret.value == self.target and
             cloner.store.getLocal(source).layout_idx == cloner.store.getLocal(self.target).layout_idx)
         {
             return try cloner.store.addCFStmt(.{ .ret = .{ .value = source } }, origin);

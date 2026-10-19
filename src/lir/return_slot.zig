@@ -79,8 +79,8 @@ const Spec = struct {
         result_layout: layout_mod.Idx,
         stored: body_clone.ForwardedAlias,
     ) ?body_clone.CallResultFusion(Spec).Match {
-        const store_stmt_node = store.getCFStmt(stored.next);
-        if (store_stmt_node != .assign_low_level) return null;
+        const store_stmt_node = store.getCFStmtImmediate(stored.next);
+        if (store_stmt_node.* != .assign_low_level) return null;
         const store_stmt = store_stmt_node.assign_low_level;
         if (store_stmt.op != .ptr_store) return null;
         if (store.getLocal(store_stmt.target).layout_idx != .zst) return null;

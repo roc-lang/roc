@@ -567,7 +567,7 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     defer store.allocator.free(sources);
     for (sources, 0..) |*source, index| {
         const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-        const spec = store.getProcSpec(proc);
+        const spec = store.getProcSpecImmediate(proc);
         source.* = .{
             .template = &inserter,
             .proc = proc,
@@ -2402,8 +2402,8 @@ const Inserter = struct {
             .assign_call => |assign| blk: {
                 if (step.retain_call_result) next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .borrowed_call_result }, next);
                 if (step.replaces_frame) {
-                    const returned = self.store.getCFStmt(next);
-                    if (returned != .ret or returned.ret.value != assign.target) {
+                    const returned = self.store.getCFStmtImmediate(next);
+                    if (returned.* != .ret or returned.ret.value != assign.target) {
                         arcInvariant("ARC frame-replacing call was not immediately followed by the return of its result");
                     }
                 }
@@ -7522,8 +7522,8 @@ const Inserter = struct {
                 debug_print.writeProc(self.store.allocator, self.store, self.layouts, self.current_proc, &buffer.writer) catch {};
                 std.debug.print("\n{s}\n", .{buffer.written()});
                 const ref_source: ?LIR.LocalId = if (self.current_rewrite_stmt) |stmt_id| blk: {
-                    const stmt = self.store.getCFStmt(stmt_id);
-                    break :blk if (stmt == .assign_ref) body_clone.refOpSource(stmt.assign_ref.op) else null;
+                    const stmt = self.store.getCFStmtImmediate(stmt_id);
+                    break :blk if (stmt.* == .assign_ref) body_clone.refOpSource(stmt.assign_ref.op) else null;
                 } else null;
                 const ref_source_layout: ?layout_mod.Idx = if (ref_source) |source| self.store.getLocal(source).layout_idx else null;
                 const ref_source_desc: ?LIR.BoxyDescRef = if (ref_source) |source| boxyDescForLocal(self.boxy_rc_descs, source) else null;
@@ -7743,8 +7743,8 @@ fn addCanonicalRetain(
     std.debug.assert(count > 0);
     var canonical_count = count;
     var canonical_next = next;
-    const next_stmt = store.getCFStmt(next);
-    if (next_stmt == .decref) {
+    const next_stmt = store.getCFStmtImmediate(next);
+    if (next_stmt.* == .decref) {
         const release = next_stmt.decref;
         if (rcRetainReleasePair(.{
             .value = local,
@@ -8281,8 +8281,8 @@ const ArcTest = struct {
         var cursor = start;
         var remaining: usize = self.store.cfStmtCount() + 1;
         while (remaining > 0) : (remaining -= 1) {
-            const stmt = self.store.getCFStmt(cursor);
-            switch (stmt) {
+            const stmt = self.store.getCFStmtImmediate(cursor);
+            switch (stmt.*) {
                 .switch_stmt => |switch_stmt| return switch_stmt,
                 .init_uninitialized,
                 .assign_ref,
@@ -8327,7 +8327,7 @@ const ArcTest = struct {
                 .jump,
                 .ret,
                 .crash,
-                => cursor = body_clone.linearNextOrNull(stmt) orelse arcInvariant("ARC test fixture expected a switch_stmt on the linear path"),
+                => cursor = body_clone.linearNextOrNull(stmt.*) orelse arcInvariant("ARC test fixture expected a switch_stmt on the linear path"),
             }
         }
         arcInvariant("ARC test fixture cycled while walking to a switch_stmt");
@@ -8339,8 +8339,8 @@ const ArcTest = struct {
         var cursor = start;
         var remaining: usize = self.store.cfStmtCount() + 1;
         while (remaining > 0) : (remaining -= 1) {
-            const stmt = self.store.getCFStmt(cursor);
-            switch (stmt) {
+            const stmt = self.store.getCFStmtImmediate(cursor);
+            switch (stmt.*) {
                 .assign_call => |call| return call,
                 inline .assign_ref, .assign_literal, .init_uninitialized, .incref, .decref, .decref_if_initialized, .free => |s| cursor = s.next,
                 .assign_call_erased,
@@ -8387,7 +8387,7 @@ const ArcTest = struct {
 
     fn procBody(self: *const ArcTest) LIR.CFStmtId {
         for (0..self.store.procSpecCount()) |proc_index| {
-            const proc = self.store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+            const proc = self.store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
             if (proc.body) |body| return body;
         }
         arcInvariant("ARC test fixture has no procedure body");
@@ -8396,8 +8396,8 @@ const ArcTest = struct {
     fn joinBody(self: *const ArcTest, join_id: LIR.JoinPointId) LIR.CFStmtId {
         var found: ?LIR.CFStmtId = null;
         for (0..self.store.cfStmtCount()) |stmt_index| {
-            const stmt = self.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-            if (stmt == .join) {
+            const stmt = self.store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
+            if (stmt.* == .join) {
                 if (stmt.join.id == join_id) found = stmt.join.body;
             }
         }
@@ -8407,11 +8407,11 @@ const ArcTest = struct {
     fn countRc(self: *const ArcTest, local_id: LIR.LocalId, kind: RcKind) usize {
         var count: usize = 0;
         for (0..self.store.cfStmtCount()) |stmt_index| {
-            const stmt = self.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-            if (stmt == .incref and kind == .incref and stmt.incref.value == local_id) count += 1;
-            if (stmt == .decref and kind == .decref and stmt.decref.value == local_id) count += 1;
-            if (stmt == .decref_if_initialized and kind == .decref and stmt.decref_if_initialized.value == local_id) count += 1;
-            if (stmt == .free and kind == .free and stmt.free.value == local_id) count += 1;
+            const stmt = self.store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
+            if (stmt.* == .incref and kind == .incref and stmt.incref.value == local_id) count += 1;
+            if (stmt.* == .decref and kind == .decref and stmt.decref.value == local_id) count += 1;
+            if (stmt.* == .decref_if_initialized and kind == .decref and stmt.decref_if_initialized.value == local_id) count += 1;
+            if (stmt.* == .free and kind == .free and stmt.free.value == local_id) count += 1;
         }
         return count;
     }
@@ -8421,14 +8421,14 @@ const ArcTest = struct {
     fn expectRcAtomicity(self: *const ArcTest, local_id: LIR.LocalId, expected: LIR.RcAtomicity) ExpectError!void {
         var seen: usize = 0;
         for (0..self.store.cfStmtCount()) |stmt_index| {
-            const stmt = self.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-            const found: LIR.RcAtomicity = if (stmt == .incref and stmt.incref.value == local_id)
+            const stmt = self.store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
+            const found: LIR.RcAtomicity = if (stmt.* == .incref and stmt.incref.value == local_id)
                 stmt.incref.atomicity
-            else if (stmt == .decref and stmt.decref.value == local_id)
+            else if (stmt.* == .decref and stmt.decref.value == local_id)
                 stmt.decref.atomicity
-            else if (stmt == .decref_if_initialized and stmt.decref_if_initialized.value == local_id)
+            else if (stmt.* == .decref_if_initialized and stmt.decref_if_initialized.value == local_id)
                 stmt.decref_if_initialized.atomicity
-            else if (stmt == .free and stmt.free.value == local_id)
+            else if (stmt.* == .free and stmt.free.value == local_id)
                 stmt.free.atomicity
             else
                 continue;
@@ -8441,8 +8441,8 @@ const ArcTest = struct {
     fn uniqueArgsFor(self: *const ArcTest, target: LIR.LocalId) u64 {
         var mask: u64 = 0;
         for (0..self.store.cfStmtCount()) |stmt_index| {
-            const stmt = self.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-            if (stmt == .assign_low_level and stmt.assign_low_level.target == target) {
+            const stmt = self.store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
+            if (stmt.* == .assign_low_level and stmt.assign_low_level.target == target) {
                 mask |= stmt.assign_low_level.unique_args;
             }
         }
@@ -8453,8 +8453,8 @@ const ArcTest = struct {
         var cursor = self.procBody();
         var remaining: usize = self.store.cfStmtCount() + 1;
         while (remaining > 0) : (remaining -= 1) {
-            const stmt = self.store.getCFStmt(cursor);
-            switch (stmt) {
+            const stmt = self.store.getCFStmtImmediate(cursor);
+            switch (stmt.*) {
                 .assign_low_level => |assign| if (assign.target == target) return assign,
                 .init_uninitialized,
                 .assign_ref,
@@ -8501,7 +8501,7 @@ const ArcTest = struct {
                 .crash,
                 => {},
             }
-            cursor = body_clone.linearNextOrNull(stmt) orelse arcInvariant("ARC test fixture expected a low-level op on a linear path");
+            cursor = body_clone.linearNextOrNull(stmt.*) orelse arcInvariant("ARC test fixture expected a low-level op on a linear path");
         }
         arcInvariant("ARC test fixture cycled while walking to a low-level op");
     }
@@ -8577,8 +8577,8 @@ const ArcTest = struct {
     fn countAllRc(self: *const ArcTest) usize {
         var count: usize = 0;
         for (0..self.store.cfStmtCount()) |stmt_index| {
-            const stmt = self.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-            if (stmt == .incref or stmt == .decref or stmt == .decref_if_initialized or stmt == .free) count += 1;
+            const stmt = self.store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
+            if (stmt.* == .incref or stmt.* == .decref or stmt.* == .decref_if_initialized or stmt.* == .free) count += 1;
         }
         return count;
     }
@@ -8593,8 +8593,8 @@ const ArcTest = struct {
         var cursor = start;
         var remaining: usize = self.store.cfStmtCount() + 1;
         while (remaining > 0) : (remaining -= 1) {
-            const stmt = self.store.getCFStmt(cursor);
-            const rc_value: ?LIR.LocalId = switch (stmt) {
+            const stmt = self.store.getCFStmtImmediate(cursor);
+            const rc_value: ?LIR.LocalId = switch (stmt.*) {
                 .incref => |rc| if (kind == .incref) rc.value else null,
                 inline .decref, .decref_if_initialized => |rc| if (kind == .decref) rc.value else null,
                 .free => |rc| if (kind == .free) rc.value else null,
@@ -8641,9 +8641,9 @@ const ArcTest = struct {
                 => null,
             };
             if (rc_value) |rc_local| if (rc_local == local_id) return;
-            if (body_clone.linearNextOrNull(stmt)) |next| {
+            if (body_clone.linearNextOrNull(stmt.*)) |next| {
                 cursor = next;
-            } else switch (stmt) {
+            } else switch (stmt.*) {
                 .ret => {
                     if (before == .ret) return error.ExpectedRcBeforeStop;
                     return;
@@ -8711,8 +8711,8 @@ const ArcTest = struct {
         var cursor = start;
         var remaining: usize = self.store.cfStmtCount() + 1;
         while (remaining > 0) : (remaining -= 1) {
-            const stmt = self.store.getCFStmt(cursor);
-            switch (stmt) {
+            const stmt = self.store.getCFStmtImmediate(cursor);
+            switch (stmt.*) {
                 .decref_if_initialized => |rc| if (rc.value == value and rc.cond == cond and rc.cond_mask == cond_mask) return,
                 .set_local => |set| if (set.target == set_target) return error.SetBeforeConditionalDecref,
                 .init_uninitialized,
@@ -8759,7 +8759,7 @@ const ArcTest = struct {
                 .crash,
                 => {},
             }
-            cursor = body_clone.linearNextOrNull(stmt) orelse return switch (stmt) {
+            cursor = body_clone.linearNextOrNull(stmt.*) orelse return switch (stmt.*) {
                 .jump => error.ExpectedConditionalDecref,
                 .init_uninitialized,
                 .assign_ref,
@@ -8804,7 +8804,7 @@ const ArcTest = struct {
                 .join,
                 .ret,
                 .crash,
-                => if (fixtureTerminal(stmt)) error.ExpectedConditionalDecref else error.NonLinearPath,
+                => if (fixtureTerminal(stmt.*)) error.ExpectedConditionalDecref else error.NonLinearPath,
             };
         }
         return error.CyclicPath;
@@ -8819,8 +8819,8 @@ const ArcTest = struct {
         var cursor = start;
         var remaining = self.store.cfStmtCount() + 1;
         while (remaining > 0) : (remaining -= 1) {
-            const stmt = self.store.getCFStmt(cursor);
-            switch (stmt) {
+            const stmt = self.store.getCFStmtImmediate(cursor);
+            switch (stmt.*) {
                 .decref => |rc| if (rc.value == value) return,
                 .set_local => |set| if (set.target == set_target) return error.SetBeforeDecref,
                 .init_uninitialized,
@@ -8867,7 +8867,7 @@ const ArcTest = struct {
                 .crash,
                 => {},
             }
-            cursor = body_clone.linearNextOrNull(stmt) orelse return if (fixtureTerminal(stmt)) error.ExpectedDecref else error.NonLinearPath;
+            cursor = body_clone.linearNextOrNull(stmt.*) orelse return if (fixtureTerminal(stmt.*)) error.ExpectedDecref else error.NonLinearPath;
         }
         return error.CyclicPath;
     }
@@ -10790,8 +10790,8 @@ test "RC residual shell metadata uses semantic field indices" {
 /// carry none.
 fn residualShellOf(f: *const ArcTest, target: LIR.LocalId) Allocator.Error!?[]const u32 {
     for (0..f.store.cfStmtCount()) |stmt_index| {
-        const stmt = f.store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-        if (stmt != .assign_ref or stmt.assign_ref.target != target) continue;
+        const stmt = f.store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
+        if (stmt.* != .assign_ref or stmt.assign_ref.target != target) continue;
         const absent = f.store.getU32Span(stmt.assign_ref.residual_shell_absent_fields);
         if (absent.len == 0) continue;
         const out = try testing.allocator.alloc(u32, absent.len);
@@ -14217,9 +14217,9 @@ fn expectDecrefBeforeStmt(f: *const ArcTest, start: LIR.CFStmtId, local: LIR.Loc
     var cursor = start;
     var remaining: usize = f.store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
-        const stmt = f.store.getCFStmt(cursor);
-        if (stmt == stop_tag) return error.DecrefNotBeforeStop;
-        switch (stmt) {
+        const stmt = f.store.getCFStmtImmediate(cursor);
+        if (stmt.* == stop_tag) return error.DecrefNotBeforeStop;
+        switch (stmt.*) {
             inline .decref, .decref_if_initialized => |rc| {
                 if (rc.value == local) return;
                 cursor = rc.next;

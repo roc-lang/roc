@@ -70,8 +70,8 @@ const Printer = struct {
                 return;
             }
 
-            const stmt = self.store.getCFStmt(current);
-            switch (stmt) {
+            const stmt = self.store.getCFStmtImmediate(current);
+            switch (stmt.*) {
                 .assign_ref => |s| {
                     try self.writeTarget(s.target, indent, writer);
                     switch (s.op) {

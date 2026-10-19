@@ -2595,7 +2595,7 @@ pub fn compute(
     defer gpa.free(direct_call_position_by_arg);
     @memset(direct_call_position_by_arg, std.math.maxInt(u8));
     for (0..store.procSpecCount()) |proc_index| {
-        const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+        const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
         const body = proc.body orelse continue;
         const params = store.getLocalSpan(proc.args);
         for (0..GuardedList.borrowLen(params)) |position| {

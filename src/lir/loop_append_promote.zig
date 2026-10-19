@@ -1199,16 +1199,16 @@ const Pass = struct {
                 const member = member_entry.local;
                 for (order.topology.reads_of.row(member)) |raw| {
                     const stmt_id: CFStmtId = @fromBackingInt(@intCast(raw));
-                    const stmt = self.store.getCFStmt(stmt_id);
+                    const stmt = self.store.getCFStmtImmediate(stmt_id);
                     // A transparent alias names the same value; account for
                     // its actual uses, including ones after its source dies.
-                    if (stmt == .assign_ref and stmt.assign_ref.op == .local and
+                    if (stmt.* == .assign_ref and stmt.assign_ref.op == .local and
                         parents.contains(stmt.assign_ref.target) and
                         Family.root(parents, stmt.assign_ref.target) == group_root) continue;
                     const occurrence = try occurrences.getOrPut(stmt_id);
                     if (!occurrence.found_existing) occurrence.value_ptr.* = 0;
                     occurrence.value_ptr.* += 1;
-                    if (stmt == .assign_low_level) {
+                    if (stmt.* == .assign_low_level) {
                         const op = stmt.assign_low_level.op;
                         if (op == .list_len or op == .list_get_unsafe or op == .list_prefetch or
                             op == .list_slack_unique or op == .list_owned_unique) continue;
@@ -1258,7 +1258,7 @@ const Pass = struct {
     // Per-parameter qualification and rewrite
 
     fn transformProc(self: *Pass, proc_id: LIR.LirProcSpecId) ResourceError!void {
-        const proc = self.store.getProcSpec(proc_id);
+        const proc = self.store.getProcSpecImmediate(proc_id);
         if (proc.body == null or proc.hosted != null) return;
         const allocator = self.allocator;
         self.resetProcState();
@@ -1314,7 +1314,7 @@ const Pass = struct {
         try self.versionSlackLoops(self.store.getProcSpecImmediate(proc_id).body.?, &max_join_id, new_locals);
 
         if (new_locals.items.len > 0) {
-            const spec = self.store.getProcSpec(proc_id);
+            const spec = self.store.getProcSpecImmediate(proc_id);
             const frame = self.store.getLocalSpan(spec.frame_locals);
             var combined = std.ArrayList(LocalId).empty;
             defer combined.deinit(allocator);

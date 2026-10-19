@@ -235,9 +235,9 @@ fn returnedLocal(self: *Self, store: anytype, start: LIR.CFStmtId) std.mem.Alloc
             .visiting => null,
             .done => |local| local,
         };
-        const stmt = store.getCFStmt(current);
-        if (stmt == .ret) break stmt.ret.value;
-        const next = self.successor(stmt) orelse break null;
+        const stmt = store.getCFStmtImmediate(current);
+        if (stmt.* == .ret) break stmt.ret.value;
+        const next = self.successor(stmt.*) orelse break null;
         try self.proofs.put(current, .visiting);
         try self.path.append(self.allocator, current);
         current = next;

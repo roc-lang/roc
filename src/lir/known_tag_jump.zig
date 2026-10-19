@@ -115,15 +115,15 @@ const Analysis = struct {
         var successors = std.ArrayList(CFStmtId).empty;
         var walk = try body_clone.ReachableStmts.initWithAllocator(store, body, allocator);
         while (try walk.next()) |stmt_id| {
-            const stmt = store.getCFStmt(stmt_id);
-            if (stmt == .join) {
+            const stmt = store.getCFStmtImmediate(stmt_id);
+            if (stmt.* == .join) {
                 try self.joins.put(stmt.join.id, stmt_id);
-            } else if (stmt == .assign_tag) {
+            } else if (stmt.* == .assign_tag) {
                 const tag = stmt.assign_tag;
                 if (tag.payload == null and tag.target_desc == null and defs.get(tag.target) == 1) {
                     try self.tag_defs.put(tag.target, tag.discriminant);
                 }
-            } else if (stmt == .assign_literal) {
+            } else if (stmt.* == .assign_literal) {
                 const literal = stmt.assign_literal;
                 if (boolLiteralDiscriminant(literal.value)) |discriminant| {
                     if (defs.get(literal.target) == 1) try self.tag_defs.put(literal.target, discriminant);
@@ -146,8 +146,8 @@ const Analysis = struct {
     fn findCandidate(self: *Analysis) ResourceError!?Candidate {
         var walk = try body_clone.ReachableStmts.initWithAllocator(self.store, self.body, self.allocator);
         while (try walk.next()) |stmt_id| {
-            const stmt = self.store.getCFStmt(stmt_id);
-            if (stmt != .jump) continue;
+            const stmt = self.store.getCFStmtImmediate(stmt_id);
+            if (stmt.* != .jump) continue;
             if (try self.candidateAt(stmt_id)) |candidate| return candidate;
         }
         return null;
@@ -195,8 +195,8 @@ const Analysis = struct {
 
             var cursor = join.body;
             const step: union(enum) { forward: LIR.JoinPointId, exit: Exit } = while (true) {
-                const stmt = self.store.getCFStmt(cursor);
-                if (stmt == .assign_ref) {
+                const stmt = self.store.getCFStmtImmediate(cursor);
+                if (stmt.* == .assign_ref) {
                     const assign = stmt.assign_ref;
                     const value: Value = switch (assign.op) {
                         .local => |source| self.resolve(&env, source),
@@ -213,14 +213,14 @@ const Analysis = struct {
                     try env.put(assign.target, value);
                     try changed.put(assign.target, {});
                     cursor = assign.next;
-                } else if (stmt == .assign_literal) {
+                } else if (stmt.* == .assign_literal) {
                     try env.put(stmt.assign_literal.target, if (boolLiteralDiscriminant(stmt.assign_literal.value)) |discriminant|
                         .{ .tag = discriminant }
                     else
                         .opaque_value);
                     try changed.put(stmt.assign_literal.target, {});
                     cursor = stmt.assign_literal.next;
-                } else if (stmt == .assign_low_level and stmt.assign_low_level.op == .bool_not) {
+                } else if (stmt.* == .assign_low_level and stmt.assign_low_level.op == .bool_not) {
                     const assign = stmt.assign_low_level;
                     const args = self.store.getLocalSpan(assign.args);
                     if (args.len != 1) return null;
@@ -234,24 +234,24 @@ const Analysis = struct {
                     });
                     try changed.put(assign.target, {});
                     cursor = assign.next;
-                } else if (stmt == .join) {
+                } else if (stmt.* == .join) {
                     cursor = stmt.join.remainder;
-                } else if (stmt == .set_local) {
+                } else if (stmt.* == .set_local) {
                     const set = stmt.set_local;
                     if (set.mode != .initialize_join_param) return null;
                     try pending.put(set.target, self.resolve(&env, set.value));
                     cursor = set.next;
-                } else if (stmt == .jump) {
+                } else if (stmt.* == .jump) {
                     break .{ .forward = stmt.jump.target };
-                } else if (stmt == .switch_stmt) {
+                } else if (stmt.* == .switch_stmt) {
                     if (pending.count() != 0) return null;
                     const discriminant = switch (self.resolve(&env, stmt.switch_stmt.cond)) {
                         .tag, .discriminant => |value| value,
                         .fields, .local, .opaque_value => return null,
                     };
                     const arm = self.selectedArm(stmt.switch_stmt, discriminant);
-                    const arm_stmt = self.store.getCFStmt(arm);
-                    if (arm_stmt == .jump) break .{ .exit = .{ .join = arm_stmt.jump.target } };
+                    const arm_stmt = self.store.getCFStmtImmediate(arm);
+                    if (arm_stmt.* == .jump) break .{ .exit = .{ .join = arm_stmt.jump.target } };
                     if (self.shared.contains(arm)) return null;
                     break .{ .exit = .{ .arm = .{ .switch_stmt = cursor, .arm = arm } } };
                 } else {
@@ -366,10 +366,10 @@ const Analysis = struct {
         try work.append(self.allocator, exit_body);
         while (work.pop()) |current| {
             if ((try seen.getOrPut(current)).found_existing) continue;
-            const stmt = self.store.getCFStmt(current);
-            body_clone.forEachStmtRead(self.store, stmt, &probe, Probe.note);
+            const stmt = self.store.getCFStmtImmediate(current);
+            body_clone.forEachStmtRead(self.store, stmt.*, &probe, Probe.note);
             if (probe.hit) return true;
-            if (stmt == .jump) {
+            if (stmt.* == .jump) {
                 const target = self.joins.get(stmt.jump.target) orelse return true;
                 try work.append(self.allocator, self.store.getCFStmtImmediate(target).join.body);
             } else {
@@ -392,21 +392,21 @@ const Analysis = struct {
         @memset(removed, false);
         var remaining = collections.DenseMap(LocalId, u32).init(self.allocator);
         for (chain[0 .. chain.len - 1], 0..) |stmt_id, index| {
-            const stmt = self.store.getCFStmt(stmt_id);
-            if (stmt == .set_local) removed[index] = true;
-            const target = edgeTarget(stmt) orelse continue;
+            const stmt = self.store.getCFStmtImmediate(stmt_id);
+            if (stmt.* == .set_local) removed[index] = true;
+            const target = edgeTarget(stmt.*) orelse continue;
             try remaining.put(target, self.reads.get(target));
         }
         var index = chain.len - 1;
         while (index > 0) {
             index -= 1;
-            const stmt = self.store.getCFStmt(chain[index]);
+            const stmt = self.store.getCFStmtImmediate(chain[index]);
             if (!removed[index]) {
-                const target = edgeTarget(stmt).?;
+                const target = edgeTarget(stmt.*).?;
                 if (remaining.get(target).? != 0) continue;
                 removed[index] = true;
             }
-            body_clone.forEachStmtRead(self.store, stmt, &remaining, releaseRead);
+            body_clone.forEachStmtRead(self.store, stmt.*, &remaining, releaseRead);
         }
 
         const old_jump = chain[chain.len - 1];
@@ -524,14 +524,14 @@ const FlagLoop = struct {
         var writes_params = false;
         var cursor = self.done_arm;
         while (true) {
-            const stmt = self.store.getCFStmt(cursor);
-            if (stmt == .jump) return .{ .target = stmt.jump.target, .writes_params = writes_params };
-            if (stmt == .set_local) writes_params = true;
-            cursor = if (stmt == .set_local)
+            const stmt = self.store.getCFStmtImmediate(cursor);
+            if (stmt.* == .jump) return .{ .target = stmt.jump.target, .writes_params = writes_params };
+            if (stmt.* == .set_local) writes_params = true;
+            cursor = if (stmt.* == .set_local)
                 stmt.set_local.next
-            else if (stmt == .assign_ref)
+            else if (stmt.* == .assign_ref)
                 stmt.assign_ref.next
-            else if (stmt == .assign_tag)
+            else if (stmt.* == .assign_tag)
                 stmt.assign_tag.next
             else
                 stmt.assign_literal.next;

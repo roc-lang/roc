@@ -89,7 +89,7 @@ const Pass = struct {
         self.deleted.clearRetainingCapacity();
 
         const store = self.store;
-        const proc = store.getProcSpec(self.proc_id);
+        const proc = store.getProcSpecImmediate(self.proc_id);
         const body = proc.body orelse return false;
 
         const args = store.getLocalSpan(proc.args);

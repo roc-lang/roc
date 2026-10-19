@@ -73,8 +73,8 @@ const Spec = struct {
         _: layout_mod.Idx,
         forwarded: body_clone.ForwardedAlias,
     ) ?body_clone.CallResultFusion(Spec).Match {
-        const concat_stmt_node = store.getCFStmt(forwarded.next);
-        if (concat_stmt_node != .assign_low_level) return null;
+        const concat_stmt_node = store.getCFStmtImmediate(forwarded.next);
+        if (concat_stmt_node.* != .assign_low_level) return null;
         const concat_stmt = concat_stmt_node.assign_low_level;
         if (concat_stmt.op != .str_concat) return null;
         const concat_args = store.getLocalSpan(concat_stmt.args);

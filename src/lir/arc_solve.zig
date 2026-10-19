@@ -976,7 +976,7 @@ pub fn solveWithOptions(
     var external_rows = std.ArrayList(arc_sig.RetCondition).empty;
     defer external_rows.deinit(allocator);
     for (0..store.procSpecCount()) |proc_index| {
-        const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+        const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
         var sig = arc_sig.RcSig.all_owned;
         if (proc.external) {
             // The cache entry was compiled with this signature, and its
@@ -1751,14 +1751,14 @@ fn computeOutcomeRestitution(
                             valid = false;
                             break;
                         };
-                        const target_stmt = store.getCFStmt(target);
+                        const target_stmt = store.getCFStmtImmediate(target);
                         if (next_state.discriminant != no_local and
-                            !(target_stmt == .ret and target_stmt.ret.value == ret_local))
+                            !(target_stmt.* == .ret and target_stmt.ret.value == ret_local))
                         {
                             valid = false;
                             break;
                         }
-                        if (target_stmt == .ret and target_stmt.ret.value == ret_local and next_state.discriminant != no_local) {
+                        if (target_stmt.* == .ret and target_stmt.ret.value == ret_local and next_state.discriminant != no_local) {
                             const stmt_index = statement_indices.get(current) orelse
                                 solveInvariant("ARC outcome escape was outside its lifted procedure inventory");
                             const old = bit_escape_discriminants[stmt_index];
@@ -2158,7 +2158,7 @@ fn liftReachableStatements(solver: *Solver) SolveError!void {
     defer facts_seen.deinit(solver.allocator);
 
     for (0..solver.store.procSpecCount()) |proc_index| {
-        const proc = solver.store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+        const proc = solver.store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
         const params = solver.store.getLocalSpan(proc.args);
         for (0..GuardedList.borrowLen(params)) |param_index| {
             const param = GuardedList.at(params, param_index);
@@ -2353,7 +2353,7 @@ fn reachableStatementSet(
         if (store.getProcSpecImmediate(proc_id).body) |body| try stack.append(allocator, body);
     } else {
         for (0..store.procSpecCount()) |proc_index| {
-            const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+            const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
             if (proc.body) |body| try stack.append(allocator, body);
         }
     }
@@ -3400,7 +3400,7 @@ fn fillPinnedProcContracts(
         pinned.set(@backingInt(root));
     }
     for (0..store.procSpecCount()) |proc_index| {
-        const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+        const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
         // A procedure named by site keeps its identity when its body changes,
         // so code compiled against an earlier body calls it; its signature is
         // the one its types determine (`LIR.LirProcSpec.code_key`).
@@ -3442,7 +3442,7 @@ fn computeVisibilityFromFacts(
     // visibility seeds.
     for (0..solver.store.procSpecCount()) |proc_index| {
         if (!solver.pinned.isSet(proc_index)) continue;
-        const proc = solver.store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+        const proc = solver.store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
         const params = solver.store.getLocalSpan(proc.args);
         for (0..GuardedList.borrowLen(params)) |param_index| {
             if (domain.indexOf(GuardedList.at(params, param_index))) |index| seeds.set(index);
@@ -3525,7 +3525,7 @@ fn computeVisibilityFromLift(
         }
     } else {
         for (0..store.procSpecCount()) |proc_index| {
-            const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+            const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
             const body = proc.body orelse continue;
             visited.clearRetainingCapacity();
             stack.clearRetainingCapacity();
@@ -3600,7 +3600,7 @@ fn computeVisibilityFromLift(
     // Seeds: every pinned proc's parameters and returned values reach the
     // host or a caller the solver cannot see.
     for (0..store.procSpecCount()) |proc_index| {
-        const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+        const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
         if (!pinned.isSet(proc_index)) continue;
         const params = store.getLocalSpan(proc.args);
         for (0..GuardedList.borrowLen(params)) |param_index| {
@@ -3624,8 +3624,8 @@ fn computeVisibilityFromLift(
 
     for (0..store.cfStmtCount()) |stmt_index| {
         if (!reachable.isSet(stmt_index)) continue;
-        const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-        switch (stmt) {
+        const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
+        switch (stmt.*) {
             .assign_ref => |assign| {
                 const target = @backingInt(assign.target);
                 switch (assign.op) {
@@ -3732,7 +3732,7 @@ fn computeVisibilityFromLift(
                 addEdge(&sets, rc_local, @backingInt(assign.target), @backingInt(assign.value));
             },
             .assign_call => |assign| {
-                const callee = store.getProcSpec(assign.proc);
+                const callee = store.getProcSpecImmediate(assign.proc);
                 const args = store.getLocalSpan(assign.args);
                 if (assign.result_desc) |result_desc| {
                     if (result_desc.localOrNull()) |local| {
@@ -4794,7 +4794,7 @@ const UniquenessStructure = struct {
         var caller_count: usize = 0;
         for (0..proc_count) |proc_index| {
             partition.proc = @intCast(proc_index);
-            const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+            const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
             const args = store.getLocalSpan(proc.args);
             for (0..GuardedList.borrowLen(args)) |position| partition.local(GuardedList.at(args, position));
             lists[proc_index] = proc_stmts.of(proc_index);
@@ -5090,7 +5090,7 @@ const UniquenessComponentTask = struct {
         // contract, and an object-cache entry's own for an external proc.
         if (pinned) try rows.appendSlice(allocator, self.solution.sigTable().retConditionsOf(sig));
         if (!pinned) {
-            const proc = self.store.getProcSpec(@fromBackingInt(@intCast(proc_index)));
+            const proc = self.store.getProcSpecImmediate(@fromBackingInt(@intCast(proc_index)));
             const params = self.store.getLocalSpan(proc.args);
             var read_only: arc_sig.ParamMask = 0;
             for (0..@min(GuardedList.borrowLen(params), arc_sig.tracked_param_count)) |position| {
@@ -5145,8 +5145,8 @@ const UniquenessComponentTask = struct {
         }
         var seeds: arc_sig.ParamMask = 0;
         for (self.proc_stmts.of(proc_index)) |stmt| {
-            const node = self.store.getCFStmt(stmt);
-            if (node == .assign_low_level) {
+            const node = self.store.getCFStmtImmediate(stmt);
+            if (node.* == .assign_low_level) {
                 const assign = node.assign_low_level;
                 const effect = if (!self.consume_dead_boxes and assign.op == .box_unbox)
                     assign.op.arcBorrowedResultVariant().?.rcEffect()
@@ -5159,7 +5159,7 @@ const UniquenessComponentTask = struct {
                     if (!uniqueness.born_unique.isSet(dense) or uniqueness.destroyed.isSet(dense)) continue;
                     seeds |= uniqueness.conds[dense];
                 }
-            } else if (node == .assign_call) {
+            } else if (node.* == .assign_call) {
                 // A value carried from a parameter into a callee position the
                 // callee's seed mask names composes that seed: the variant
                 // seeded here can demand the callee's.
@@ -5435,7 +5435,7 @@ fn settleUniquenessOracle(
     @memset(returns, .empty);
     defer for (returns) |*list| list.deinit(allocator);
     for (0..proc_count) |proc_index| {
-        const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+        const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
         const body = proc.body orelse continue;
         try collectProcStatements(allocator, store, body, &proc_stmts[proc_index]);
         for (proc_stmts[proc_index].items) |stmt| {
@@ -5462,7 +5462,7 @@ fn settleUniquenessOracle(
             // Borrowed positions the body only reads add no holder to the
             // caller's argument.
             if (!solution.pinned.isSet(proc_index)) {
-                const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+                const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
                 const params = store.getLocalSpan(proc.args);
                 var read_only: arc_sig.ParamMask = 0;
                 for (0..@min(GuardedList.borrowLen(params), arc_sig.tracked_param_count)) |position| {
@@ -5865,7 +5865,7 @@ fn computeUniquenessDetailed(
         if (only_proc_index) |proc_id| {
             if (proc_index != proc_id) continue;
         }
-        const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+        const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
         const params = store.getLocalSpan(proc.args);
         for (0..GuardedList.borrowLen(params)) |param_index| {
             const param = GuardedList.at(params, param_index);
@@ -6750,8 +6750,8 @@ fn computeUniquenessDetailed(
                 defer needed_exact_index += 1;
                 break :blk @backingInt(stmts[needed_exact_index]);
             } else needed_iter.next() orelse break :needed_loop;
-            const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-            switch (stmt) {
+            const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
+            switch (stmt.*) {
                 .assign_low_level => |assign| {
                     const rc_effect = if (!consume_dead_boxes and assign.op == .box_unbox)
                         assign.op.arcBorrowedResultVariant().?.rcEffect()

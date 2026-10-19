@@ -34,7 +34,7 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
     const store = &program.store;
     for (0..store.procSpecCount()) |proc_index| {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
-        const proc = store.getProcSpec(proc_id);
+        const proc = store.getProcSpecImmediate(proc_id);
         // A guarded read is a static-data literal, so only a procedure whose
         // shapes record one can hold a use; Debug builds scan the others too
         // and verify they hold none.
@@ -255,7 +255,7 @@ fn testSharedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || er
     try std.testing.expectEqual(load, guard.entry);
     try std.testing.expectEqual(load, program.comptime_value_guards.items[1].entry);
     for (owners) |owner| {
-        const proc = program.store.getProcSpec(owner);
+        const proc = program.store.getProcSpecImmediate(owner);
         try std.testing.expectEqual(@as(u64, 0), proc.native_code_revision);
         const locals = program.store.getLocalSpan(proc.frame_locals);
         try std.testing.expectEqual(@as(usize, 4), locals.len);
@@ -270,7 +270,7 @@ fn testSharedGuards(allocator: std.mem.Allocator) (std.mem.Allocator.Error || er
     try std.testing.expectEqual(ret, restored.next);
     try completeSuccessfulSlot(&program, slot);
     for (owners) |owner| {
-        const proc = program.store.getProcSpec(owner);
+        const proc = program.store.getProcSpecImmediate(owner);
         try std.testing.expectEqual(@as(u64, 1), proc.native_code_revision);
         try std.testing.expectEqual(LIR.ProcIdentity.forTest(1), proc.identity);
     }

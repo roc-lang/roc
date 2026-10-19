@@ -67,7 +67,7 @@ pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!voi
 
 /// The same explicit eligibility contract is used by serial and worker drivers.
 pub fn rewritableProcBody(store: *const LirStore, proc: LIR.LirProcSpecId) ?LIR.CFStmtId {
-    const spec = store.getProcSpec(proc);
+    const spec = store.getProcSpecImmediate(proc);
     return if (spec.iterator_fusion_scope) spec.body else null;
 }
 
@@ -96,7 +96,7 @@ pub fn runProc(
 }
 
 fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, allocator: Allocator) ResourceError!?Candidate {
-    const proc = store.getProcSpec(proc_id);
+    const proc = store.getProcSpecImmediate(proc_id);
     const proc_body = proc.body orelse return null;
     var incoming_edges = try reachableIncomingEdgeCounts(store, proc_body, allocator);
     defer incoming_edges.deinit();
@@ -106,8 +106,8 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
     var walk = try body_clone.ReachableStmts.initWithAllocator(store, proc_body, allocator);
     defer walk.deinit();
     while (try walk.next()) |outer_stmt| {
-        const outer_node = store.getCFStmt(outer_stmt);
-        if (outer_node != .join) continue;
+        const outer_node = store.getCFStmtImmediate(outer_stmt);
+        if (outer_node.* != .join) continue;
         const outer = outer_node.join;
         const outer_params = store.getLocalSpan(outer.params);
         if (outer_params.len != 1) continue;
@@ -137,21 +137,21 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
         var remainder_walk = try body_clone.ReachableStmts.initWithAllocator(store, outer.remainder, allocator);
         defer remainder_walk.deinit();
         while (try remainder_walk.next()) |inner_stmt| {
-            const inner_node = store.getCFStmt(inner_stmt);
-            if (inner_node == .jump and inner_node.jump.target == outer.id) {
+            const inner_node = store.getCFStmtImmediate(inner_stmt);
+            if (inner_node.* == .jump and inner_node.jump.target == outer.id) {
                 incoming_count += 1;
                 continue;
             }
-            if (inner_node != .join) continue;
+            if (inner_node.* != .join) continue;
             const inner = inner_node.join;
             const inner_params = store.getLocalSpan(inner.params);
             if (inner_params.len != 1) continue;
             const inner_param = GuardedList.at(inner_params, 0);
             if (!forwardsToJoin(store, inner.body, inner_param, outer_param, outer.id)) continue;
-            const forwarding = store.getCFStmt(inner.body);
-            const terminal = if (forwarding == .assign_ref)
+            const forwarding = store.getCFStmtImmediate(inner.body);
+            const terminal = if (forwarding.* == .assign_ref)
                 forwarding.assign_ref.next
-            else if (forwarding == .set_local)
+            else if (forwarding.* == .set_local)
                 forwarding.set_local.next
             else
                 unreachable;
@@ -236,23 +236,23 @@ fn forwardedJoins(store: *LirStore, body: LIR.CFStmtId, allocator: Allocator) Re
     var walk = try body_clone.ReachableStmts.initWithAllocator(store, body, allocator);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
-        const node = store.getCFStmt(stmt_id);
-        if (node != .join) continue;
+        const node = store.getCFStmtImmediate(stmt_id);
+        if (node.* != .join) continue;
         const params = store.getLocalSpan(node.join.params);
         if (params.len != 1) continue;
         const source = GuardedList.at(params, 0);
-        const first = store.getCFStmt(node.join.body);
-        const target: LIR.LocalId, const terminal_id = if (first == .assign_ref) blk: {
+        const first = store.getCFStmtImmediate(node.join.body);
+        const target: LIR.LocalId, const terminal_id = if (first.* == .assign_ref) blk: {
             const assign = first.assign_ref;
             if (assign.op != .local or assign.op.local != source) continue;
             break :blk .{ assign.target, assign.next };
-        } else if (first == .set_local) blk: {
+        } else if (first.* == .set_local) blk: {
             const set = first.set_local;
             if (set.value != source or set.mode != .initialize_join_param) continue;
             break :blk .{ set.target, set.next };
         } else continue;
-        const terminal = store.getCFStmt(terminal_id);
-        if (terminal != .jump) continue;
+        const terminal = store.getCFStmtImmediate(terminal_id);
+        if (terminal.* != .jump) continue;
         try targets.put(terminal.jump.target, target);
     }
     return targets;
@@ -281,8 +281,8 @@ fn subtreeJumpsTo(store: *LirStore, body: LIR.CFStmtId, target: LIR.JoinPointId,
     var walk = try body_clone.ReachableStmts.initWithAllocator(store, body, allocator);
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
-        const stmt = store.getCFStmt(stmt_id);
-        if (stmt == .jump and stmt.jump.target == target) return true;
+        const stmt = store.getCFStmtImmediate(stmt_id);
+        if (stmt.* == .jump and stmt.jump.target == target) return true;
     }
     return false;
 }
@@ -560,15 +560,15 @@ fn testSoleConsumer(scratch_allocator: Allocator, mode: TestMode, unrelated_coun
 
     try testRun(&store, &layouts, proc, scratch_allocator, mode);
 
-    const rewritten_outer = store.getCFStmt(store.getProcSpecImmediate(proc).body.?);
-    try testing.expect(rewritten_outer == .join);
+    const rewritten_outer = store.getCFStmtImmediate(store.getProcSpecImmediate(proc).body.?);
+    try testing.expect(rewritten_outer.* == .join);
     try testing.expectEqual(inner_id, rewritten_outer.join.id);
-    const moved = store.getCFStmt(rewritten_outer.join.body);
-    try testing.expect(moved == .assign_ref);
+    const moved = store.getCFStmtImmediate(rewritten_outer.join.body);
+    try testing.expect(moved.* == .assign_ref);
     try testing.expectEqual(copied, moved.assign_ref.target);
     try testing.expectEqual(inner_param, moved.assign_ref.op.local);
-    const moved_ret = store.getCFStmt(moved.assign_ref.next);
-    try testing.expect(moved_ret == .ret);
+    const moved_ret = store.getCFStmtImmediate(moved.assign_ref.next);
+    try testing.expect(moved_ret.* == .ret);
     try testing.expectEqual(moved.assign_ref.target, moved_ret.ret.value);
     const rewritten_frame = store.getLocalSpan(store.getProcSpecImmediate(proc).frame_locals);
     try testing.expectEqual(@as(usize, 4), rewritten_frame.len);
@@ -656,16 +656,16 @@ fn testSharedTail(scratch_allocator: Allocator, mode: TestMode) TestError!void {
 
     try testRun(&store, &layouts, proc, scratch_allocator, mode);
 
-    const rewritten = store.getCFStmt(store.getProcSpecImmediate(proc).body.?);
-    try testing.expect(rewritten == .join);
+    const rewritten = store.getCFStmtImmediate(store.getProcSpecImmediate(proc).body.?);
+    try testing.expect(rewritten.* == .join);
     try testing.expectEqual(inner_id, rewritten.join.id);
-    const moved_prefix = store.getCFStmt(rewritten.join.body);
-    try testing.expect(moved_prefix == .assign_ref);
+    const moved_prefix = store.getCFStmtImmediate(rewritten.join.body);
+    try testing.expect(moved_prefix.* == .assign_ref);
     try testing.expectEqual(copied, moved_prefix.assign_ref.target);
     try testing.expectEqual(inner_param, moved_prefix.assign_ref.op.local);
     try testing.expectEqual(shared_tail, moved_prefix.assign_ref.next);
 
-    const original_tail = store.getCFStmt(shared_tail);
+    const original_tail = store.getCFStmtImmediate(shared_tail);
     try testing.expectEqual(shared_result, original_tail.assign_ref.target);
     try testing.expectEqual(shared_ret, original_tail.assign_ref.next);
     const rewritten_frame = store.getLocalSpan(store.getProcSpecImmediate(proc).frame_locals);
