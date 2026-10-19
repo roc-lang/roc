@@ -3155,15 +3155,23 @@ pub const StoredCheckedTypePayload = union(enum) {
     err,
     flex: StoredTypeVariable,
     rigid: StoredTypeVariable,
-    alias: StoredAlias,
+    alias: StoredAliasId,
     record: StoredRecord,
     tuple: CheckedTypeRange,
-    nominal: StoredNominal,
+    nominal: StoredNominalId,
     function: StoredFunction,
     empty_record,
     tag_union: StoredTagUnion,
     empty_tag_union,
 };
+
+/// A row of a type store's `alias_row_pool`. Alias and nominal payloads are
+/// far larger than the others, so they are held out of line and a stored
+/// payload names their row.
+pub const StoredAliasId = enum(u32) { _ };
+
+/// A row of a type store's `nominal_row_pool`.
+pub const StoredNominalId = enum(u32) { _ };
 
 /// Materialize a live checked type value of type `Live` (a
 /// `CheckedTypePayload` or one of its parts) from its stored POD form: a
@@ -3192,6 +3200,10 @@ fn reconstructTypeData(comptime Live: type, pool_owner: anytype, stored: anytype
         return storePool(pool_owner, info.pointer.child)[stored.start .. stored.start + stored.len];
     } else if (comptime Stored == OptionalVarNameId) {
         return pool_owner.varName(stored.*);
+    } else if (comptime Stored == StoredAliasId) {
+        return reconstructTypeData(Live, pool_owner, &storePool(pool_owner, StoredAlias)[@backingInt(stored.*)]);
+    } else if (comptime Stored == StoredNominalId) {
+        return reconstructTypeData(Live, pool_owner, &storePool(pool_owner, StoredNominal)[@backingInt(stored.*)]);
     } else if (comptime info == .@"struct") {
         var live: Live = undefined;
         inline for (info.@"struct".field_names, info.@"struct".field_types) |name, FieldType| {
@@ -3248,6 +3260,8 @@ pub const CheckedTypeStoreView = struct {
     schemes: []const CheckedTypeScheme = &.{},
     scheme_index: collections.SafeList(u32) = .{},
     stored_payloads: []const StoredCheckedTypePayload = &.{},
+    alias_row_pool: []const StoredAlias = &.{},
+    nominal_row_pool: []const StoredNominal = &.{},
     nominal_declarations: []const CheckedNominalDeclaration = &.{},
     builtin_nominal_declarations: *const BuiltinNominalDeclarationIndex = &empty_builtin_nominal_declarations,
     type_id_pool: []const CheckedTypeId = &.{},
@@ -4065,6 +4079,9 @@ pub const CheckedTypeStore = struct {
     /// rebuilding, allocation, or scan over unrelated schemes.
     scheme_index: collections.SafeList(u32) = .{},
     payloads: std.ArrayList(StoredCheckedTypePayload) = .empty,
+    /// Out-of-line rows of `alias` and `nominal` payloads.
+    alias_row_pool: std.ArrayList(StoredAlias) = .empty,
+    nominal_row_pool: std.ArrayList(StoredNominal) = .empty,
     nominal_declarations: std.ArrayList(CheckedNominalDeclaration) = .empty,
     builtin_nominal_declarations: BuiltinNominalDeclarationIndex = empty_builtin_nominal_declarations,
     /// Flat pool of `CheckedTypeId`s for alias/nominal/function args, tuples,
@@ -4089,6 +4106,8 @@ pub const CheckedTypeStore = struct {
     const BorrowedColumn = enum {
         roots,
         payloads,
+        alias_row_pool,
+        nominal_row_pool,
         schemes,
         scheme_index,
         root_index,
@@ -4228,6 +4247,15 @@ pub const CheckedTypeStore = struct {
             return self.appendPool(allocator, @typeInfo(Build).pointer.child, build);
         } else if (comptime Stored == OptionalVarNameId) {
             return self.internVarName(allocator, build);
+        } else if (comptime Stored == StoredAliasId or Stored == StoredNominalId) {
+            const Row = if (Stored == StoredAliasId) StoredAlias else StoredNominal;
+            const column: BorrowedColumn = if (Stored == StoredAliasId) .alias_row_pool else .nominal_row_pool;
+            const row = try self.commitTypeData(allocator, Row, build);
+            try self.ownColumn(allocator, column);
+            const pool = &@field(self, @tagName(column));
+            const id: Stored = @fromBackingInt(@intCast(pool.items.len));
+            try pool.append(allocator, row);
+            return id;
         } else if (comptime @typeInfo(Stored) == .@"struct") {
             var stored: Stored = undefined;
             inline for (@typeInfo(Stored).@"struct".field_names) |name| {
@@ -4254,8 +4282,8 @@ pub const CheckedTypeStore = struct {
         if (self.payloads.items[index] != .nominal) {
             checkedArtifactInvariant("nominal representation publication source payload was not nominal", .{});
         }
-        std.debug.assert(!self.borrowed_columns.contains(.payloads));
-        self.payloads.items[index].nominal.representation = representation;
+        std.debug.assert(!self.borrowed_columns.contains(.nominal_row_pool));
+        self.nominal_row_pool.items[@backingInt(self.payloads.items[index].nominal)].representation = representation;
     }
 
     pub fn fromModule(
@@ -4471,6 +4499,8 @@ pub const CheckedTypeStore = struct {
             .schemes = self.schemes.items,
             .scheme_index = self.scheme_index,
             .stored_payloads = self.payloads.items,
+            .alias_row_pool = self.alias_row_pool.items,
+            .nominal_row_pool = self.nominal_row_pool.items,
             .nominal_declarations = self.nominal_declarations.items,
             .builtin_nominal_declarations = &self.builtin_nominal_declarations,
             .type_id_pool = self.type_id_pool.items,
@@ -5157,6 +5187,8 @@ pub const CheckedTypeStore = struct {
         schemes: SerializedSlice(CheckedTypeScheme) = .{},
         scheme_index: collections.SafeList(u32).Serialized = .{ .offset = 0, .len = 0, .capacity = 0 },
         payloads: SerializedSlice(StoredCheckedTypePayload) = .{},
+        alias_row_pool: SerializedSlice(StoredAlias) = .{},
+        nominal_row_pool: SerializedSlice(StoredNominal) = .{},
         nominal_declarations: SerializedSlice(CheckedNominalDeclaration) = .{},
         builtin_nominal_declarations: artifact_serialize.SerializedScalar(BuiltinNominalDeclarationIndex, empty_builtin_nominal_declarations) = .{},
         type_id_pool: SerializedSlice(CheckedTypeId) = .{},
@@ -5168,10 +5200,10 @@ pub const CheckedTypeStore = struct {
         var_names: canonical.NameInterner.Serialized,
 
         comptime {
-            // 15 = 10 `SerializedSlice` fields + both indexes + 3 for `var_names`
+            // 17 = 12 `SerializedSlice` fields + both indexes + 3 for `var_names`
             // (`SerialStringInterner.Serialized` = 3 `SafeList` base pointers). The
             // count is the true total fixups, independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 15);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 17);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(CheckedTypeStore, @This());
@@ -5711,7 +5743,7 @@ fn appendCheckedNominalDeclarationFromStatement(
             .{@tagName(module.typeStoreConst().resolveVar(ModuleEnv.varFrom(statement_idx)).desc.content)},
         );
     }
-    const statement_nominal = statement_payload.nominal;
+    const statement_nominal = store.nominal_row_pool.items[@backingInt(statement_payload.nominal)];
 
     const module_env = module.moduleEnvConst();
     const header = module_env.store.getTypeHeader(header_idx);
@@ -6701,7 +6733,8 @@ fn appendNominalDeclarationRootPayload(
         if (store.payloads.items[index] != .nominal) {
             checkedArtifactInvariant("nominal declaration key collided with a non-nominal payload", .{});
         }
-        const existing_nominal = store.payloads.items[index].nominal;
+        const existing_row = store.payloads.items[index].nominal;
+        const existing_nominal = store.nominal_row_pool.items[@backingInt(existing_row)];
         // The checked root ids can differ when the same closed nominal
         // declaration is reached through a declaration root and a use-site
         // root.
@@ -6721,8 +6754,10 @@ fn appendNominalDeclarationRootPayload(
 
         const stored = try store.commitPayload(allocator, owned_payload);
         payload_owned = false;
-        try store.ownColumn(allocator, .payloads);
-        store.payloads.items[index] = stored;
+        // The new row is the last one; it replaces the existing row in place.
+        std.debug.assert(@backingInt(stored.nominal) + 1 == store.nominal_row_pool.items.len);
+        try store.ownColumn(allocator, .nominal_row_pool);
+        store.nominal_row_pool.items[@backingInt(existing_row)] = store.nominal_row_pool.pop().?;
         return existing;
     }
 
@@ -7131,7 +7166,7 @@ fn embedReachableImportedNominalDecls(
         // pools that projection below can reallocate.
         const payload = store.payloads.items[i];
         if (payload != .nominal) continue;
-        const nominal = payload.nominal;
+        const nominal = store.nominal_row_pool.items[@backingInt(payload.nominal)];
         const origin_module = nominal.origin_module;
         const owner_module = nominal.owner_module;
         const source_decl = nominal.source_decl;
@@ -33337,7 +33372,7 @@ pub const CheckedModuleArtifact = struct {
             // procedure templates and callable contract types add one each,
             // and the single-source-call template list one more. Nested procedure runtime captures add one. The
             // compile-time root read table adds its rows and refs.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 236);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 238);
         }
 
         /// Every field but the inline POD `key` and `module_identity`: the
@@ -39495,8 +39530,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x41, 0xD0, 0x64, 0xE5, 0x74, 0x7F, 0x5C, 0xCF, 0xFA, 0x61, 0x50, 0xC0, 0xDC, 0x23, 0x28, 0x36,
-        0x78, 0x52, 0x4B, 0x2E, 0xA7, 0x04, 0xD9, 0x8F, 0x57, 0xAE, 0x06, 0x33, 0xCE, 0xAF, 0x0E, 0x4D,
+        0x10, 0xC9, 0x2F, 0xB7, 0xBD, 0x1E, 0x4B, 0x69, 0x4F, 0x2E, 0xA9, 0xE4, 0x70, 0xC8, 0x1E, 0xE6,
+        0x27, 0x0D, 0xE4, 0x0C, 0x56, 0xBD, 0x9E, 0xF8, 0x9E, 0xF0, 0x1C, 0xCF, 0xC0, 0x2E, 0x76, 0x29,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

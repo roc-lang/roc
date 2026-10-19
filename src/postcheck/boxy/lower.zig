@@ -44652,9 +44652,8 @@ test "boxy lowerer emits private worker proc for zero-arg numeric lambda root" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -44768,9 +44767,8 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind, stored: ConstLookupS
     checked_module.const_store = check.ConstStore.ConstStore.init(gpa);
     defer checked_module.const_store.deinit();
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -44920,9 +44918,8 @@ test "boxy lowerer emits small decimal expressions as Dec literals" {
 
     const value = can.CIR.SmallDecValue{ .numerator = 314, .denominator_power_of_ten = 2 };
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.dec, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.dec, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -44997,9 +44994,8 @@ test "boxy lowerer emits direct calls to planned private workers" {
     defer checked_module.checked_bodies.deinit(gpa);
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -45208,9 +45204,8 @@ test "boxy lowerer emits direct calls to planned imported workers" {
     defer import_checked_module.checked_types.deinit(gpa);
     defer import_checked_module.checked_bodies.deinit(gpa);
 
-    try import_checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try import_checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try import_checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(import_checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try import_checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -45327,9 +45322,8 @@ test "boxy lowerer emits direct calls to planned imported workers" {
     };
     import_checked_module.exported_procedure_bindings = .{ .bindings = &exported_bindings };
 
-    try root_checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try root_checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try root_checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(root_checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try root_checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -45503,9 +45497,8 @@ test "boxy lowerer emits recursive direct calls to the current private worker" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -45642,9 +45635,8 @@ test "boxy lowerer emits checked crash as terminal LIR crash" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -45721,9 +45713,8 @@ test "boxy lowerer emits checked ellipsis as identity not-implemented crash" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -45797,9 +45788,8 @@ test "boxy lowerer emits checked return expressions as terminal ret" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -45888,9 +45878,8 @@ test "boxy lowerer emits checked return statements as terminal ret" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -45994,9 +45983,8 @@ test "boxy lowerer emits checked runtime error expressions as the runtime error 
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -46067,9 +46055,8 @@ test "boxy lowerer emits checked runtime error statements as the runtime error c
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -46158,13 +46145,11 @@ test "boxy lowerer emits checked while statements as join-backed loops" {
 
     const false_tag = try checked_module.canonical_names.internTagLabel("False");
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.bool, @fromBackingInt(@intCast(1)), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.bool, @fromBackingInt(@intCast(1)), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -46295,13 +46280,11 @@ test "boxy lowerer emits checked break as the active loop exit" {
 
     const true_tag = try checked_module.canonical_names.internTagLabel("True");
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.bool, @fromBackingInt(@intCast(1)), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.bool, @fromBackingInt(@intCast(1)), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -46428,12 +46411,10 @@ test "boxy lowerer emits checked if expressions with a shared continuation join"
 
     const true_tag = try checked_module.canonical_names.internTagLabel("True");
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -46571,9 +46552,8 @@ test "boxy lowerer emits checked tag matches as ordered discriminant tests" {
 
     try checked_module.checked_types.tag_pool.append(gpa, .{ .name = tag_a, .args_start = 0, .args_len = 0 });
     try checked_module.checked_types.tag_pool.append(gpa, .{ .name = tag_b, .args_start = 0, .args_len = 0 });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_tag_union);
     try checked_module.checked_types.payloads.append(gpa, .{
         .tag_union = .{ .tags = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(1)) },
@@ -46741,9 +46721,8 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_types.tag_pool.append(gpa, .{ .name = tag_a, .args_start = 0, .args_len = 1 });
     try checked_module.checked_types.tag_pool.append(gpa, .{ .name = tag_b, .args_start = 1, .args_len = 0 });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_tag_union);
     try checked_module.checked_types.payloads.append(gpa, .{
         .tag_union = .{ .tags = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(1)) },
@@ -46927,12 +46906,10 @@ test "boxy lowerer emits checked list match patterns as length checks and elemen
     defer checked_module.checked_bodies.deinit(gpa);
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -47126,9 +47103,8 @@ test "boxy lowerer emits checked string interpolation match patterns" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.str, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.str, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -47293,9 +47269,8 @@ test "boxy lowerer maps checked alternative binders onto representative match lo
     });
     try checked_module.checked_types.tag_pool.append(gpa, .{ .name = tag_a, .args_start = 0, .args_len = 1 });
     try checked_module.checked_types.tag_pool.append(gpa, .{ .name = tag_c, .args_start = 1, .args_len = 1 });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_tag_union);
     try checked_module.checked_types.payloads.append(gpa, .{
         .tag_union = .{ .tags = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(1)) },
@@ -47475,9 +47450,8 @@ test "boxy lowerer emits checked numeric literal match patterns as equality test
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -47621,12 +47595,10 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
     const value = can.CIR.SmallDecValue{ .numerator = 314, .denominator_power_of_ten = 2 };
     const expected_dec = value.toRocDec().num;
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.dec, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(1)), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.dec, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(1)), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -47780,12 +47752,10 @@ test "boxy lowerer emits checked string literal match patterns as string equalit
     try checked_module.checked_bodies.string_bytes.appendSlice(gpa, "ok");
     try checked_module.checked_bodies.string_ranges.append(gpa, .{ .start = 0, .len = 2 });
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.str, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(1)), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.str, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(1)), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -47914,9 +47884,8 @@ test "boxy lowerer emits checked unary not as bool low-level call" {
 
     const true_tag = try checked_module.canonical_names.internTagLabel("True");
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -48008,9 +47977,8 @@ test "boxy lowerer emits short-circuit checked boolean and" {
     const false_tag = try checked_module.canonical_names.internTagLabel("False");
     const true_tag = try checked_module.canonical_names.internTagLabel("True");
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -48118,12 +48086,10 @@ test "boxy lowerer emits primitive structural equality as low-level equality" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -48236,15 +48202,13 @@ test "boxy lowerer emits tuple structural equality with field short-circuiting" 
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
     });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .tuple = .{ .start = 0, .len = 2 },
     });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -48397,9 +48361,8 @@ test "boxy lowerer emits primitive structural hash as hasher low-level" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -48509,9 +48472,8 @@ test "boxy lowerer emits tuple structural hash by threading hasher through field
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
     });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .tuple = .{ .start = 0, .len = 2 },
     });
@@ -48637,9 +48599,8 @@ test "boxy lowerer emits checked string segment literals" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.str, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.str, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -48717,12 +48678,10 @@ test "boxy lowerer emits checked bytes literals as byte-backed LIR literals" {
     defer checked_module.checked_bodies.deinit(gpa);
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -48799,9 +48758,8 @@ test "boxy lowerer emits checked string interpolation segments as concat chain" 
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.str, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.str, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -48932,9 +48890,8 @@ test "boxy lowerer emits checked dbg expressions before unit result" {
     defer checked_module.checked_bodies.deinit(gpa);
 
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -49029,9 +48986,8 @@ test "boxy lowerer emits checked expect expressions before unit result" {
     const true_tag = try checked_module.canonical_names.internTagLabel("True");
 
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -49117,9 +49073,8 @@ test "boxy lowerer emits expect_err messages from inspected payloads" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -49249,9 +49204,8 @@ test "boxy lowerer emits checked dbg statements in block order" {
     defer checked_module.checked_bodies.deinit(gpa);
 
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -49359,9 +49313,8 @@ test "boxy lowerer emits block declaration bindings with checked type layouts" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -49482,9 +49435,8 @@ test "boxy lowerer emits uninitialized mutable block bindings" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -49593,9 +49545,8 @@ test "boxy lowerer emits mutable reassignment as set_local replace" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -49751,9 +49702,8 @@ test "boxy lowerer destructures tuple declaration patterns" {
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
     });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .tuple = .{ .start = 0, .len = 2 },
     });
@@ -49943,9 +49893,8 @@ test "boxy lowerer materializes record rest declaration patterns" {
     const field_a: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @fromBackingInt(@intCast(1));
     const field_b: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @fromBackingInt(@intCast(2));
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
     try checked_module.checked_types.record_field_pool.appendSlice(gpa, &.{
         .{ .name = field_a, .ty = @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))) },
@@ -50149,12 +50098,10 @@ test "boxy lowerer binds irrefutable list rest declaration patterns" {
     defer checked_module.checked_bodies.deinit(gpa);
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -50317,9 +50264,8 @@ test "boxy lowerer emits tuple construction in element order" {
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
     });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .tuple = .{ .start = 0, .len = 2 },
     });
@@ -50435,9 +50381,8 @@ test "boxy lowerer emits tuple access as field_read" {
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))),
     });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .tuple = .{ .start = 0, .len = 2 },
     });
@@ -50546,9 +50491,8 @@ test "boxy lowerer emits record construction in layout order after source-order 
     const field_a: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @fromBackingInt(@intCast(1));
     const field_b: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @fromBackingInt(@intCast(2));
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
     try checked_module.checked_types.record_field_pool.appendSlice(gpa, &.{
         .{ .name = field_a, .ty = @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))) },
@@ -50671,9 +50615,8 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
 
     const field_a: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @fromBackingInt(@intCast(1));
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
     try checked_module.checked_types.record_field_pool.append(gpa, .{
         .name = field_a,
@@ -50809,9 +50752,8 @@ test "boxy lowerer emits record field access using layout field index" {
     const field_a: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @fromBackingInt(@intCast(1));
     const field_b: @TypeOf(@as(checked.CheckedRecordField, undefined).name) = @fromBackingInt(@intCast(2));
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
     try checked_module.checked_types.record_field_pool.appendSlice(gpa, &.{
         .{ .name = field_a, .ty = @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))) },
@@ -50941,9 +50883,8 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
         .source_decl = 3,
     };
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.nominal_declarations.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .nominal = nominal_key,
@@ -50955,16 +50896,15 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
         .df_start = 0,
         .df_len = 0,
     });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = .{
-            .name = @fromBackingInt(@intCast(2)),
-            .origin_module = nominal_key.module,
-            .owner_module = checked_module.key.digest(),
-            .source_decl = nominal_key.source_decl,
-            .is_opaque = false,
-            .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-        },
+    try checked_module.checked_types.nominal_row_pool.append(gpa, .{
+        .name = @fromBackingInt(@intCast(2)),
+        .origin_module = nominal_key.module,
+        .owner_module = checked_module.key.digest(),
+        .source_decl = nominal_key.source_decl,
+        .is_opaque = false,
+        .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -51095,12 +51035,10 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
     };
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
     try checked_module.checked_types.record_field_pool.appendSlice(gpa, &.{
         .{ .name = field_a, .ty = @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))) },
@@ -51125,18 +51063,17 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
         .df_start = 0,
         .df_len = 3,
     });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = .{
-            .name = @fromBackingInt(@intCast(4)),
-            .origin_module = nominal_key.module,
-            .owner_module = checked_module.key.digest(),
-            .source_decl = nominal_key.source_decl,
-            .is_opaque = false,
-            .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-            .padding_field_types = .{ .start = 0, .len = 1 },
-            .declared_fields = .{ .start = 0, .len = 3 },
-        },
+    try checked_module.checked_types.nominal_row_pool.append(gpa, .{
+        .name = @fromBackingInt(@intCast(4)),
+        .origin_module = nominal_key.module,
+        .owner_module = checked_module.key.digest(),
+        .source_decl = nominal_key.source_decl,
+        .is_opaque = false,
+        .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
+        .padding_field_types = .{ .start = 0, .len = 1 },
+        .declared_fields = .{ .start = 0, .len = 3 },
     });
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -51341,12 +51278,10 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
     };
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
     try checked_module.checked_types.record_field_pool.appendSlice(gpa, &.{
         .{ .name = field_a, .ty = @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))) },
@@ -51371,18 +51306,17 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
         .df_start = 0,
         .df_len = 3,
     });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = .{
-            .name = try checked_module.canonical_names.internTypeName("WithPadding"),
-            .origin_module = nominal_key.module,
-            .owner_module = checked_module.key.digest(),
-            .source_decl = nominal_key.source_decl,
-            .is_opaque = false,
-            .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-            .padding_field_types = .{ .start = 0, .len = 1 },
-            .declared_fields = .{ .start = 0, .len = 3 },
-        },
+    try checked_module.checked_types.nominal_row_pool.append(gpa, .{
+        .name = try checked_module.canonical_names.internTypeName("WithPadding"),
+        .origin_module = nominal_key.module,
+        .owner_module = checked_module.key.digest(),
+        .source_decl = nominal_key.source_decl,
+        .is_opaque = false,
+        .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
+        .padding_field_types = .{ .start = 0, .len = 1 },
+        .declared_fields = .{ .start = 0, .len = 3 },
     });
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -51535,12 +51469,10 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
     };
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u8, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u16, @fromBackingInt(@intCast(1)), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
     try checked_module.checked_types.record_field_pool.appendSlice(gpa, &.{
         .{ .name = field_a, .ty = @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))) },
@@ -51565,21 +51497,19 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
         .df_start = 0,
         .df_len = 3,
     });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = .{
-            .name = try checked_module.canonical_names.internTypeName("WithPadding"),
-            .origin_module = nominal_key.module,
-            .owner_module = checked_module.key.digest(),
-            .source_decl = nominal_key.source_decl,
-            .is_opaque = false,
-            .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-            .padding_field_types = .{ .start = 0, .len = 1 },
-            .declared_fields = .{ .start = 0, .len = 3 },
-        },
+    try checked_module.checked_types.nominal_row_pool.append(gpa, .{
+        .name = try checked_module.canonical_names.internTypeName("WithPadding"),
+        .origin_module = nominal_key.module,
+        .owner_module = checked_module.key.digest(),
+        .source_decl = nominal_key.source_decl,
+        .is_opaque = false,
+        .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
+        .padding_field_types = .{ .start = 0, .len = 1 },
+        .declared_fields = .{ .start = 0, .len = 3 },
     });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(5)), .{}),
-    });
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(5)), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -51734,9 +51664,8 @@ test "boxy lowerer emits builtin Bool tags by checked Bool names" {
 
     const true_tag = try checked_module.canonical_names.internTagLabel("True");
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.bool, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -51821,9 +51750,8 @@ test "boxy lowerer emits payload tag construction using planned variant payload 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_types.tag_pool.append(gpa, .{ .name = tag_a, .args_start = 0, .args_len = 2 });
     try checked_module.checked_types.tag_pool.append(gpa, .{ .name = tag_b, .args_start = 2, .args_len = 0 });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_tag_union);
     try checked_module.checked_types.payloads.append(gpa, .{
         .tag_union = .{ .tags = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(1)) },
@@ -51940,12 +51868,10 @@ test "boxy lowerer emits list construction with committed element layout" {
     defer checked_module.checked_bodies.deinit(gpa);
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -52056,9 +51982,8 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))), // Second function argument.
     });
     try checked_module.checked_types.payloads.append(gpa, .{ .flex = .{} });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -52221,12 +52146,10 @@ test "boxy lowerer inspects concrete lists with an index and string accumulator 
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(1)));
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(1)), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.list, @fromBackingInt(@intCast(2)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(1)), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.list, @fromBackingInt(@intCast(2)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -52365,12 +52288,10 @@ test "boxy lowerer emits empty list construction" {
     defer checked_module.checked_bodies.deinit(gpa);
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.list, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -52441,9 +52362,8 @@ test "boxy lowerer emits checked low-level calls after source-order argument low
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -52558,12 +52478,10 @@ test "boxy lowerer boxes concrete values with ordinary box low-level" {
     defer checked_module.checked_bodies.deinit(gpa);
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.box, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.box, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -52661,9 +52579,8 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
         @as(checked.CheckedTypeId, @fromBackingInt(@intCast(fixtureTableIndex(0)))), // Function argument.
     });
     try checked_module.checked_types.payloads.append(gpa, .{ .flex = .{} });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.box, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.box, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -52804,12 +52721,10 @@ test "boxy lowerer unboxes concrete values with ordinary box low-level" {
     defer checked_module.checked_bodies.deinit(gpa);
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.box, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.box, @fromBackingInt(@intCast(1)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -52922,12 +52837,10 @@ test "boxy lowerer inspects concrete Box payloads" {
 
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(1)));
     try checked_module.checked_types.payloads.append(gpa, .empty_record);
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(1)), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.box, @fromBackingInt(@intCast(2)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(1)), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.box, @fromBackingInt(@intCast(2)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -53115,9 +53028,8 @@ test "boxy lowerer emits checked integer division low-level calls" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
             .kind = .pure,
@@ -53214,9 +53126,8 @@ test "boxy lowerer publishes host wrapper proc for exported roots" {
     defer checked_module.checked_types.deinit(gpa);
     defer checked_module.checked_bodies.deinit(gpa);
 
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_types.payloads.append(gpa, .{
         .function = .{
@@ -53333,9 +53244,8 @@ test "boxy lowerer emits requested layout metadata for layout-only plans" {
     defer checked_module.checked_types.deinit(gpa);
 
     try checked_module.checked_types.roots.append(gpa, .{ .id = @fromBackingInt(@intCast(fixtureTableIndex(0))), .key = typeKey(1) });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
 
     var plan = try Plan.analyzeProgram(gpa, .{
         .checked_types = checked_module.checked_types.view(),
@@ -53370,12 +53280,10 @@ test "boxy lowerer emits requested layout metadata for static data requests" {
 
     try checked_module.checked_types.roots.append(gpa, .{ .id = @fromBackingInt(@intCast(fixtureTableIndex(0))), .key = typeKey(1) });
     try checked_module.checked_types.roots.append(gpa, .{ .id = @fromBackingInt(@intCast(1)), .key = typeKey(2) });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.str, @fromBackingInt(@intCast(1)), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.str, @fromBackingInt(@intCast(1)), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
 
     const data = checked.ProvidedDataExport{
         .source_name = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -53451,9 +53359,8 @@ test "boxy lowerer emits const plans for zero-payload tag variants" {
     try checked_module.checked_types.type_id_pool.append(gpa, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try checked_module.checked_types.tag_pool.append(gpa, .{ .name = tag_a, .args_start = 0, .args_len = 0 });
     try checked_module.checked_types.tag_pool.append(gpa, .{ .name = tag_b, .args_start = 0, .args_len = 1 });
-    try checked_module.checked_types.payloads.append(gpa, .{
-        .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(gpa, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+    try checked_module.checked_types.payloads.append(gpa, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(gpa, .empty_tag_union);
     try checked_module.checked_types.payloads.append(gpa, .{
         .tag_union = .{ .tags = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(1)) },
@@ -53524,16 +53431,13 @@ fn lowerListMapCanReuseFixture(
         try checked_module.checked_types.payloads.append(allocator, .{ .flex = .{} });
         try checked_module.checked_types.payloads.append(allocator, .{ .flex = .{} });
     } else {
-        try checked_module.checked_types.payloads.append(allocator, .{
-            .nominal = builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}),
-        });
-        try checked_module.checked_types.payloads.append(allocator, .{
-            .nominal = builtinNominal(.u8, @fromBackingInt(@intCast(1)), .{}),
-        });
+        try checked_module.checked_types.nominal_row_pool.append(allocator, builtinNominal(.u64, @fromBackingInt(@intCast(fixtureTableIndex(0))), .{}));
+        try checked_module.checked_types.payloads.append(allocator, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
+        try checked_module.checked_types.nominal_row_pool.append(allocator, builtinNominal(.u8, @fromBackingInt(@intCast(1)), .{}));
+        try checked_module.checked_types.payloads.append(allocator, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     }
-    try checked_module.checked_types.payloads.append(allocator, .{
-        .nominal = builtinNominal(.list, @fromBackingInt(@intCast(2)), .{ .start = 0, .len = 1 }),
-    });
+    try checked_module.checked_types.nominal_row_pool.append(allocator, builtinNominal(.list, @fromBackingInt(@intCast(2)), .{ .start = 0, .len = 1 }));
+    try checked_module.checked_types.payloads.append(allocator, .{ .nominal = @fromBackingInt(@intCast(checked_module.checked_types.nominal_row_pool.items.len - 1)) });
     try checked_module.checked_types.payloads.append(allocator, .{
         .function = .{
             .kind = .pure,
