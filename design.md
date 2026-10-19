@@ -15313,6 +15313,45 @@ const MonoProgramView = struct {
 ```
 
 
+### Specialization By Demand
+
+A checked procedure template's body asks for a definite amount of each
+quantified variable of its scheme, and Monotype specializes the template over
+only that much of each variable's substitution. `List.len` reads a length at a
+fixed offset whatever its element type is, so every program has one `List.len`
+specialization, not one per element type.
+
+The demand of a variable is one of three values, the same scale
+`LowLevel.elementDemand` places on a low-level operation's arguments:
+
+- `none`: no value whose type mentions the variable is materialized, inspected,
+  owned, or refcounted by the body. The body only passes such values, as
+  borrowed operands, to operations and procedures that demand `none` of them.
+- `layout`: values whose type mentions the variable are moved, stored,
+  returned, or refcounted, which needs only their layout.
+- `full`: anything else: a dispatch on the variable, equality or hashing, a
+  literal, interpolation or inspection, iteration, any function type that
+  mentions the variable (lambda sets are program-specific), a variable used as
+  a row extension, and a variable the scheme's root type does not mention.
+
+Checking computes the demand vector of every template once, when the checked
+artifact is published (`TemplateDemandPass`), and stores it beside the
+template's `scheme_vars` (`CheckedProcedureTemplateTable.templateDemands`), so a
+cached artifact carries it and no later stage recomputes it. Each body is
+walked once into a base vector and a set of edges: a direct call or a
+dispatch that checking resolved to one procedure template relates each
+caller variable that the callee slot's checked substitution mentions to that
+slot's demand. An imported callee's vector is final and applies directly; a
+local one is an edge, and edges propagate to a fixed point, so recursion
+through any number of templates converges. A direct operand of a call or a
+low-level operation that reads a local materializes nothing; every other
+expression or pattern whose type mentions a variable demands its layout. A
+variable a parameter holds by value rather than as a `List` or `Box` element
+demands at least its layout, because it sizes the parameter. A body that is
+not a checked Roc body (an intrinsic, an entry wrapper, a hosted procedure, or
+an unimplemented declaration, whose crash body still returns at its declared
+type) demands all of every variable.
+
 ### Procedure Aliases
 
 A binding whose value is a lookup of a procedure (`f = g`, local or top level)
