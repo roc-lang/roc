@@ -8382,7 +8382,7 @@ fn customPackageDevPacks(
     }
     return runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{exe}, env.dirs.work_dir, .{
         .args = &.{},
-        .stdout_exact = "sum of squares to 10: 385\n506\n",
+        .stdout_exact = "sum of squares to 10: 385\n506\n29\n",
     });
 }
 
