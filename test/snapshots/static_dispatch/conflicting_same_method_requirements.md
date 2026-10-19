@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Infers independent same-name method requirements and discharges them against one concrete method scheme
+description=Rejects a generalized type whose uses require two incompatible same-name methods
 type=file
 ~~~
 # SOURCE
@@ -18,9 +18,55 @@ g = |l| {
 main = g([1.U32, 2.U32])
 ~~~
 # EXPECTED
-NIL
+TYPE MISMATCH - conflicting_same_method_requirements.md:4:1:4:2
 # PROBLEMS
-NIL
+~~~clojure
+(reports
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 4 1) (end 4 2))
+		(headline
+			(reflow "This is used in a way that requires its type to have two different, incompatible")
+			(reflow " ")
+			(annotated code "map")
+			(reflow " ")
+			(reflow "methods, but no type can have more than one")
+			(reflow " ")
+			(annotated code "map")
+			(reflow " ")
+			(reflow "method."))
+		(document
+			(source-region (file "conflicting_same_method_requirements.md") (start 4 1) (end 4 2) (annotation error) (line-text "g = |l| {"))
+			(line-break)
+			(reflow "One part of this use needs")
+			(reflow " ")
+			(annotated code "map")
+			(reflow " ")
+			(reflow "to have this type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "a, (U32 -> U128) -> _ret")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "Another part needs it to have this type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "a, (U32 -> U64) -> _ret")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "A type has only one")
+			(reflow " ")
+			(annotated code "map")
+			(reflow " ")
+			(reflow "method, so no type can satisfy both."))))
+~~~
 # TOKENS
 ~~~zig
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,OpBar,LowerIdent,OpBar,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseRound,
@@ -159,21 +205,18 @@ main = g([1.U32, 2.U32])
 					(e-call (constraint-fn-var 274)
 						(e-lookup-local
 							(p-assign (ident "f1")))
-						(e-lookup-local
-							(p-assign (ident "l")))))
+						(e-runtime-error (tag "erroneous_value_use"))))
 				(s-let
 					(p-assign (ident "_a2"))
 					(e-call (constraint-fn-var 279)
 						(e-lookup-local
 							(p-assign (ident "f2")))
-						(e-lookup-local
-							(p-assign (ident "l")))))
+						(e-runtime-error (tag "erroneous_value_use"))))
 				(e-num (value "0")))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 301)
-			(e-lookup-local
-				(p-assign (ident "g")))
+		(e-call (constraint-fn-var 300)
+			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-list
 				(elems
 					(e-typed-int (value "1") (type "U32"))
@@ -183,13 +226,13 @@ main = g([1.U32, 2.U32])
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "c -> d where [c.map : c, (U32 -> U64) -> d]"))
-		(patt (type "c -> d where [c.map : c, (U32 -> U128) -> d]"))
-		(patt (type "c -> d where [c.map : c, (U32 -> U128) -> _ret, c.map : c, (U32 -> U64) -> _ret2, d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "a -> b where [a.map : a, (U32 -> U64) -> b]"))
+		(patt (type "a -> b where [a.map : a, (U32 -> U128) -> b]"))
+		(patt (type "Error -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(patt (type "Dec")))
 	(expressions
-		(expr (type "c -> d where [c.map : c, (U32 -> U64) -> d]"))
-		(expr (type "c -> d where [c.map : c, (U32 -> U128) -> d]"))
-		(expr (type "c -> d where [c.map : c, (U32 -> U128) -> _ret, c.map : c, (U32 -> U64) -> _ret2, d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "a -> b where [a.map : a, (U32 -> U64) -> b]"))
+		(expr (type "a -> b where [a.map : a, (U32 -> U128) -> b]"))
+		(expr (type "Error -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 		(expr (type "Dec"))))
 ~~~

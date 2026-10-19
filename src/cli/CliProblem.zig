@@ -17,6 +17,7 @@ const backend = @import("backend");
 const linker = @import("linker.zig");
 const lir = @import("lir");
 const unbundle = @import("unbundle");
+const cli_args = @import("cli_args.zig");
 
 /// Errors that can be attached to structured CLI problem reports.
 pub const ReportedError =
@@ -117,6 +118,11 @@ pub const ReportedError =
 
 /// Structured CLI errors with context for helpful error messages
 pub const CliProblem = union(enum) {
+    // Command Line Problems
+
+    /// The command line arguments could not be parsed
+    invalid_arguments: cli_args.ArgProblem,
+
     // File I/O Problems
 
     /// File was not found at the specified path
@@ -383,6 +389,7 @@ pub const CliProblem = union(enum) {
     pub fn severity(self: CliProblem) Severity {
         return switch (self) {
             // Fatal errors - cannot continue
+            .invalid_arguments,
             .file_not_found,
             .no_platform_found,
             .platform_requires_app,
@@ -436,6 +443,7 @@ pub const CliProblem = union(enum) {
     /// Generate a Report from this problem
     pub fn toReport(self: CliProblem, allocator: Allocator) Allocator.Error!Report {
         return switch (self) {
+            .invalid_arguments => |problem| try createInvalidArgumentsReport(allocator, problem),
             .file_not_found => |info| try createFileNotFoundReport(allocator, info),
             .file_read_failed => |info| try createFileReadFailedReport(allocator, info),
             .file_write_failed => |info| try createFileWriteFailedReport(allocator, info),
@@ -505,6 +513,98 @@ pub const FileContext = enum {
 };
 
 // Report Generation Functions
+
+fn createInvalidArgumentsReport(allocator: Allocator, problem: cli_args.ArgProblem) Allocator.Error!Report {
+    return switch (problem) {
+        .missing_flag_value => |info| try createMissingFlagValueReport(allocator, info),
+        .unexpected_argument => |info| try createUnexpectedArgumentReport(allocator, info),
+        .shorthand_requires_run => |info| try createShorthandRequiresRunReport(allocator, info),
+        .invalid_flag_value => |info| try createInvalidFlagValueReport(allocator, info),
+    };
+}
+
+fn createMissingFlagValueReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "No value was supplied for the {s} flag.", .{info.flag});
+    defer allocator.free(headline);
+    return Report.init(allocator, "Missing Flag Value", headline, .fatal);
+}
+
+fn createUnexpectedArgumentReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const separator = if (info.cmd.len == 0) "" else " ";
+    const headline = try std.fmt.allocPrint(allocator, "roc{s}{s} received an unexpected argument: `{s}`.", .{ separator, info.cmd, info.arg });
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Unexpected Argument", headline, .fatal);
+
+    const help_hint = try std.fmt.allocPrint(allocator, "Run `roc{s}{s} --help` to see the arguments it accepts.", .{ separator, info.cmd });
+    defer allocator.free(help_hint);
+    try report.document.addSuggestion(help_hint);
+
+    return report;
+}
+
+fn createShorthandRequiresRunReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "`{s}` looks like an installed shorthand, and running one requires the `run` subcommand.", .{info.name});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Shorthand Requires Run", headline, .fatal);
+
+    const run_hint = try std.fmt.allocPrint(allocator, "To run the installed shorthand, use: roc run {s}", .{info.name});
+    defer allocator.free(run_hint);
+    try report.document.addSuggestion(run_hint);
+    try report.document.addLineBreak();
+    const path_hint = try std.fmt.allocPrint(allocator, "If you meant a local file named `{s}`, write it as `./{s}` instead.", .{ info.name, info.name });
+    defer allocator.free(path_hint);
+    try report.document.addSuggestion(path_hint);
+
+    return report;
+}
+
+fn createInvalidFlagValueReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "`{s}` is not a valid value for the {s} flag.", .{ info.value, info.flag });
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Invalid Flag Value", headline, .fatal);
+
+    switch (info.expected) {
+        .stated => |sentence| try report.document.addText(sentence),
+        .choices => |choices| {
+            const names = try allocator.alloc([]const u8, choices.len);
+            defer allocator.free(names);
+            for (choices, names) |choice, *name| name.* = choice.name;
+
+            if (try reporting.suggestion.closestCandidate(allocator, info.value, names)) |suggested| {
+                try report.document.addText("Did you mean `");
+                try report.document.addAnnotated(names[suggested], .suggestion);
+                try report.document.addText("`?");
+                const others = names.len - 1;
+                if (others > 0) {
+                    try report.document.addLineBreaks(2);
+                    try report.document.addText(if (others == 1) "The other valid value is " else "The other valid values are ");
+                    var written: usize = 0;
+                    for (names, 0..) |name, index| {
+                        if (index == suggested) continue;
+                        if (written > 0) try report.document.addText(if (written + 1 < others) ", " else if (others == 2) " and " else ", and ");
+                        try report.document.addAnnotated(name, .emphasized);
+                        written += 1;
+                    }
+                    try report.document.addText(".");
+                }
+            } else {
+                try report.document.addText("These are the valid values:");
+                try report.document.addLineBreak();
+                var width: usize = 0;
+                for (names) |name| width = @max(width, name.len);
+                for (choices) |choice| {
+                    try report.document.addLineBreak();
+                    try report.document.addText("    ");
+                    try report.document.addAnnotated(choice.name, .emphasized);
+                    try report.document.addSpace(@intCast(width - choice.name.len + 3));
+                    try report.document.addText(choice.description);
+                }
+            }
+        },
+    }
+
+    return report;
+}
 
 fn createFileNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     const headline = try std.fmt.allocPrint(allocator, "I could not find the {s}.", .{info.context.description()});
@@ -1266,4 +1366,113 @@ test "severity returns correct values" {
         Severity.runtime_error,
         (CliProblem{ .file_read_failed = .{ .path = "", .err = error.OutOfMemory } }).severity(),
     );
+}
+
+fn renderPlainForTest(problem: CliProblem) (Allocator.Error || error{WriteFailed})![]u8 {
+    const allocator = std.testing.allocator;
+    var report = try problem.toReport(allocator);
+    defer report.deinit();
+    var writer: std.Io.Writer.Allocating = .init(allocator);
+    defer writer.deinit();
+    try reporting.renderReportToPlain(&report, &writer.writer, reporting.ReportingConfig.initForTesting());
+    return writer.toOwnedSlice();
+}
+
+const test_opt_choices = [_]cli_args.Choice{
+    .{ .name = "dev", .description = "native dev backend, fast compilation" },
+    .{ .name = "interpreter", .description = "interpreted, no code generation" },
+    .{ .name = "speed", .description = "LLVM, optimized for execution speed" },
+    .{ .name = "size", .description = "LLVM, optimized for binary size" },
+};
+
+test "invalid_flag_value lists every valid value when none is close" {
+    const rendered = try renderPlainForTest(.{ .invalid_arguments = .{ .invalid_flag_value = .{
+        .flag = "--opt",
+        .value = "less_nice",
+        .expected = .{ .choices = &test_opt_choices },
+    } } });
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings(
+        \\── ✗ invalid flag value ────────────────────────────────────────────────────────
+        \\
+        \\`less_nice` is not a valid value for the --opt flag.
+        \\
+        \\These are the valid values:
+        \\
+        \\    dev           native dev backend, fast compilation
+        \\    interpreter   interpreted, no code generation
+        \\    speed         LLVM, optimized for execution speed
+        \\    size          LLVM, optimized for binary size
+        \\
+        \\
+    , rendered);
+}
+
+test "invalid_flag_value suggests the closest valid value" {
+    const rendered = try renderPlainForTest(.{ .invalid_arguments = .{ .invalid_flag_value = .{
+        .flag = "--opt",
+        .value = "sped",
+        .expected = .{ .choices = &test_opt_choices },
+    } } });
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings(
+        \\── ✗ invalid flag value ────────────────────────────────────────────────────────
+        \\
+        \\`sped` is not a valid value for the --opt flag.
+        \\
+        \\Did you mean `speed`?
+        \\
+        \\The other valid values are dev, interpreter, and size.
+        \\
+        \\
+    , rendered);
+}
+
+test "invalid_flag_value names the one other value of a two-value flag" {
+    const choices = [_]cli_args.Choice{
+        .{ .name = "yes", .description = "lambda-set specialization (default)" },
+        .{ .name = "no", .description = "experimental boxy lowering" },
+    };
+    const rendered = try renderPlainForTest(.{
+        .invalid_arguments = .{
+            .invalid_flag_value = .{
+                .flag = "--specialize",
+                // spellchecker:ignore-next-line
+                .value = "yse",
+                .expected = .{ .choices = &choices },
+            },
+        },
+    });
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expect(std.mem.find(u8, rendered, "Did you mean `yes`?\n\nThe other valid value is no.\n") != null);
+}
+
+test "invalid_flag_value states what a free-form value must be" {
+    const rendered = try renderPlainForTest(.{ .invalid_arguments = .{ .invalid_flag_value = .{
+        .flag = "--jobs",
+        .value = "abc",
+        .expected = .{ .stated = "The value must be a positive integer." },
+    } } });
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings(
+        \\── ✗ invalid flag value ────────────────────────────────────────────────────────
+        \\
+        \\`abc` is not a valid value for the --jobs flag.
+        \\
+        \\The value must be a positive integer.
+        \\
+        \\
+    , rendered);
+}
+
+test "unexpected_argument names the command and points at its help" {
+    const rendered = try renderPlainForTest(.{ .invalid_arguments = .{ .unexpected_argument = .{ .cmd = "check", .arg = "--bogus" } } });
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expect(std.mem.find(u8, rendered, "roc check received an unexpected argument: `--bogus`") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "Run `roc check --help`") != null);
+
+    const bare = try renderPlainForTest(.{ .invalid_arguments = .{ .unexpected_argument = .{ .cmd = "", .arg = "x" } } });
+    defer std.testing.allocator.free(bare);
+    try std.testing.expect(std.mem.find(u8, bare, "roc received an unexpected argument: `x`") != null);
+    try std.testing.expect(std.mem.find(u8, bare, "Run `roc --help`") != null);
 }
