@@ -715,7 +715,7 @@ test "Monotype loop carries remain graph-native through headers and backedges" {
     const loop_source = sourceSliceBetween(
         lower_source,
         "const LoopCarry = struct",
-        "fn collectReassignedBindersInExpr",
+        "const IterStepShape = struct",
     );
     try expectContains(loop_source, "ty: DraftTypeCell");
     try expectContains(loop_source, "const ty = self.localTypeCell(initial)");

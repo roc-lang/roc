@@ -565,6 +565,42 @@ pub const Resolver = struct {
         try self.diagnostics.append(self.arena(), .{ .title = title, .message = message });
     }
 
+    /// One piece of a diagnostic's text: prose, or a file path, which the
+    /// report spells the way every report does (relative to the working
+    /// directory).
+    const MessagePart = union(enum) {
+        text: []const u8,
+        path: []const u8,
+    };
+
+    /// Record a problem whose text names file paths, with a report that
+    /// shows each path as reports do.
+    fn addPathDiagnostic(self: *Resolver, title: []const u8, parts: []const MessagePart) Allocator.Error!void {
+        var message = std.ArrayList(u8).empty;
+        var report = try reporting.Report.init(self.gpa, title, "", .runtime_error);
+        errdefer report.deinit();
+        for (parts) |part| switch (part) {
+            .text => |text| {
+                try message.appendSlice(self.arena(), text);
+                try report.headline.addReflowingText(text);
+            },
+            .path => |path| {
+                try message.appendSlice(self.arena(), path);
+                try report.headline.addAnnotated(path, .path);
+            },
+        };
+        try self.diagnostics.append(self.arena(), .{ .title = title, .message = message.items, .located = report });
+    }
+
+    /// Record a problem that begins by naming the declaration's owner, then
+    /// continues with `fmt`.
+    fn addOwnerDiagnostic(self: *Resolver, title: []const u8, owner: Owner, comptime fmt: []const u8, args: anytype) Allocator.Error!void {
+        var parts = std.ArrayList(MessagePart).empty;
+        try appendOwnerParts(self.arena(), &parts, owner);
+        try parts.append(self.arena(), .{ .text = try std.fmt.allocPrint(self.arena(), fmt, args) });
+        return self.addPathDiagnostic(title, parts.items);
+    }
+
     /// Record each header problem in `rejection_reports` (taking the reports
     /// out of it) as a diagnostic of its own, noting that the problem keeps
     /// the package named by `intro` and `source` from loading.
@@ -605,7 +641,7 @@ pub const Resolver = struct {
             error.FileNotFound,
             error.Unsupported,
             => {
-                try self.addDiagnostic("Invalid Package Header", "Could not load the header of {s}: {s}.", .{ root_path, @errorName(err) });
+                try self.addPathDiagnostic("Invalid Package Header", &.{ .{ .text = "Could not load the header of " }, .{ .path = root_path }, .{ .text = try std.fmt.allocPrint(self.arena(), ": {s}.", .{@errorName(err)}) } });
                 return error.ResolutionFailed;
             },
         };
@@ -1187,7 +1223,7 @@ pub const Resolver = struct {
                 error.FileNotFound,
                 error.Unsupported,
                 => {
-                    try self.addDiagnostic("Invalid Package Dependency", "Could not load the package at {s}: {s}.", .{ abs, @errorName(err) });
+                    try self.addPathDiagnostic("Invalid Package Dependency", &.{ .{ .text = "Could not load the package at " }, .{ .path = abs }, .{ .text = try std.fmt.allocPrint(self.arena(), ": {s}.", .{@errorName(err)}) } });
                     continue;
                 },
             };
@@ -1440,42 +1476,48 @@ pub const Resolver = struct {
         for (walk_result.edges.items) |edge| {
             switch (edge.target) {
                 .invalid => |reason| {
-                    const owner = try self.describeOwner(walk_result, edge.parent);
+                    const owner = describeOwner(walk_result, edge.parent);
                     switch (reason) {
-                        .insecure_url => try self.addDiagnostic(
+                        .insecure_url => try self.addOwnerDiagnostic(
                             "Insecure Package URL",
-                            "{s} depends on this URL, which does not use https:\n\n    {s}\n\n" ++
+                            owner,
+                            " depends on this URL, which does not use https:\n\n    {s}\n\n" ++
                                 "Package URLs must use https (or http to localhost, for testing).",
-                            .{ owner, edge.spec },
+                            .{edge.spec},
                         ),
-                        .reserved_version => try self.addDiagnostic(
+                        .reserved_version => try self.addOwnerDiagnostic(
                             "Invalid Package Version",
-                            "{s} depends on this URL, which uses the reserved version 0.0.0:\n\n    {s}\n\n" ++
+                            owner,
+                            " depends on this URL, which uses the reserved version 0.0.0:\n\n    {s}\n\n" ++
                                 "The lowest publishable package version is 0.0.1.",
-                            .{ owner, edge.spec },
+                            .{edge.spec},
                         ),
-                        .ambiguous_version => try self.addDiagnostic(
+                        .ambiguous_version => try self.addOwnerDiagnostic(
                             "Ambiguous Package Version",
-                            "{s} depends on this URL, which contains more than one version number:\n\n    {s}\n\n" ++
+                            owner,
+                            " depends on this URL, which contains more than one version number:\n\n    {s}\n\n" ++
                                 "A package URL must contain exactly one MAJOR.MINOR.PATCH version before its hash, so the version is unambiguous.",
-                            .{ owner, edge.spec },
+                            .{edge.spec},
                         ),
-                        .unparsable_url => try self.addDiagnostic(
+                        .unparsable_url => try self.addOwnerDiagnostic(
                             "Invalid Package URL",
-                            "{s} depends on this URL, which could not be parsed as a package URL:\n\n    {s}.",
-                            .{ owner, edge.spec },
+                            owner,
+                            " depends on this URL, which could not be parsed as a package URL:\n\n    {s}.",
+                            .{edge.spec},
                         ),
-                        .unresolvable_local => try self.addDiagnostic(
+                        .unresolvable_local => try self.addOwnerDiagnostic(
                             "Invalid Package Dependency",
-                            "{s} depends on this local path, which could not be resolved to an existing file:\n\n    {s}\n\n" ++
+                            owner,
+                            " depends on this local path, which could not be resolved to an existing file:\n\n    {s}\n\n" ++
                                 "--replace-dep matches local dependencies by their resolved file, so every local dependency in the graph must exist.",
-                            .{ owner, edge.spec },
+                            .{edge.spec},
                         ),
-                        .absolute_path => try self.addDiagnostic(
+                        .absolute_path => try self.addOwnerDiagnostic(
                             "Absolute Platform Path",
-                            "{s} declares this platform with an absolute path:\n\n    {s}\n\n" ++
+                            owner,
+                            " declares this platform with an absolute path:\n\n    {s}\n\n" ++
                                 "Absolute paths are not allowed for platform specifications. Use a relative path like ../path/to/platform or a URL.",
-                            .{ owner, edge.spec },
+                            .{edge.spec},
                         ),
                     }
                 },
@@ -1741,15 +1783,19 @@ pub const Resolver = struct {
             if (!edge.is_platform or edge.target == .invalid) continue;
             if (platformTargetsEqual(expected.target, edge.target)) continue;
 
-            const expected_owner = try self.describeOwner(walk_result, expected.parent);
-            const actual_owner = try self.describeOwner(walk_result, edge.parent);
-            try self.addDiagnostic(
-                "Platform Dependency Mismatch",
-                "{s} selects this platform:\n\n    {s}\n\n" ++
-                    "but {s} selects a different platform:\n\n    {s}\n\n" ++
+            const expected_owner = describeOwner(walk_result, expected.parent);
+            const actual_owner = describeOwner(walk_result, edge.parent);
+            var parts = std.ArrayList(MessagePart).empty;
+            try appendOwnerParts(self.arena(), &parts, expected_owner);
+            try parts.append(self.arena(), .{ .text = try std.fmt.allocPrint(self.arena(), " selects this platform:\n\n    {s}\n\nbut ", .{try self.describeEdgeSource(expected)}) });
+            try appendOwnerParts(self.arena(), &parts, actual_owner);
+            try parts.append(self.arena(), .{ .text = try std.fmt.allocPrint(
+                self.arena(),
+                " selects a different platform:\n\n    {s}\n\n" ++
                     "Every app and package in one build must declare the identical platform version and content hash.",
-                .{ expected_owner, try self.describeEdgeSource(expected), actual_owner, try self.describeEdgeSource(edge) },
-            );
+                .{try self.describeEdgeSource(edge)},
+            ) });
+            try self.addPathDiagnostic("Platform Dependency Mismatch", parts.items);
         }
         return expected;
     }
@@ -1776,38 +1822,53 @@ pub const Resolver = struct {
     fn checkEdgeKind(self: *Resolver, walk_result: *const WalkResult, declared_edge: Edge, target_kind: HeaderKind) Allocator.Error!void {
         var edge = declared_edge;
         edge.spec = try self.describeEdgeSource(declared_edge);
-        const owner = try self.describeOwner(walk_result, edge.parent);
+        const owner = describeOwner(walk_result, edge.parent);
         if (target_kind == .app) {
-            try self.addDiagnostic(
+            try self.addOwnerDiagnostic(
                 "Invalid Package Dependency",
-                "{s} depends on {s}, which is an app. Packages may not depend on apps.",
-                .{ owner, edge.spec },
+                owner,
+                " depends on {s}, which is an app. Packages may not depend on apps.",
+                .{edge.spec},
             );
             return;
         }
         if (edge.is_platform) {
             if (target_kind != .platform) {
-                try self.addDiagnostic(
+                try self.addOwnerDiagnostic(
                     "Invalid Platform",
-                    "{s} declares {s} as its platform, but that package does not have a platform header.",
-                    .{ owner, edge.spec },
+                    owner,
+                    " declares {s} as its platform, but that package does not have a platform header.",
+                    .{edge.spec},
                 );
             }
             return;
         }
         if (target_kind == .platform) {
-            try self.addDiagnostic(
+            try self.addOwnerDiagnostic(
                 "Invalid Package Dependency",
-                "{s} depends on {s}, which is a platform. Mark this dependency with the `platform` keyword.",
-                .{ owner, edge.spec },
+                owner,
+                " depends on {s}, which is a platform. Mark this dependency with the `platform` keyword.",
+                .{edge.spec},
             );
         }
     }
 
-    fn describeOwner(self: *Resolver, walk_result: *const WalkResult, parent: ?[]const u8) Allocator.Error![]const u8 {
-        const parent_group = parent orelse return "This project's header";
-        const choice = walk_result.candidates.get(parent_group) orelse return "A dependency";
-        return try std.fmt.allocPrint(self.arena(), "The package at {s}", .{choice.url});
+    /// Who declared a dependency, as a diagnostic's text names it: lead
+    /// text, then the declaring package's location when it has one.
+    const Owner = struct {
+        lead: []const u8,
+        path: ?[]const u8 = null,
+    };
+
+    fn appendOwnerParts(arena_allocator: Allocator, parts: *std.ArrayList(MessagePart), owner: Owner) Allocator.Error!void {
+        try parts.append(arena_allocator, .{ .text = owner.lead });
+        if (owner.path) |path| try parts.append(arena_allocator, .{ .path = path });
+    }
+
+    fn describeOwner(walk_result: *const WalkResult, parent: ?[]const u8) Owner {
+        const parent_group = parent orelse return .{ .lead = "This project's header" };
+        const choice = walk_result.candidates.get(parent_group) orelse return .{ .lead = "A dependency" };
+        return .{ .lead = "The package at ", .path = choice.url };
     }
 
     /// Render the chain of dependencies from the root down to (and including)

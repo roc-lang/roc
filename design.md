@@ -561,16 +561,18 @@ keeps program names, so only a pack write pays for the hashing.
 A `ProcIdentity` names the same code in every program only because everything
 that decides a procedure's code is digested into it: its checked source, its
 evidence, and its solved types (`postcheck/proc_identity.zig`). Those also
-decide every procedure it references, except across a platform requirement:
-which app value fills a platform's requirement is chosen by the app, not by
-the platform's source or types. So a function that references a function of
-the app from outside the app (which only a requirement can), or references a
-function that does, digests the program's platform/app relation key into its
-identity (`Lifted.Program.fnReachesPlatformRequirement`). The relation key is a
-function of the app's checked module key, which the app's own procedure identities
-already digest, so such a platform procedure is shared exactly as widely as
-the app procedures it reaches; every other platform procedure keeps one
-identity across apps.
+decide every procedure it references, except the app's: which app value
+fills a platform's requirement is chosen by the app, not by the platform's
+source or types, and an app procedure is named by site (below), not by its
+code. So a function that references a function of the app from outside the
+app (through a platform requirement or a method of an app type its evidence
+names), or references a function that does, digests what it reaches there
+into its identity (`Lifted.Program.fnSourceDigest`): each closed app function
+it reaches contributes that function's own source identity, and any other
+contributes the program's platform/app relation key, a function of the app's
+checked module key. Editing the body of a closed app function therefore
+leaves every procedure reaching it unchanged, and every other procedure keeps
+one identity across apps.
 
 Names a procedure's code carries for the procedures it was built from are
 content identities too. A fused call variant (`body_clone.cloneCallVariant`)
@@ -619,8 +621,8 @@ program's own layout indices, and a module whose object needs the runtime at
 all gets no object pack.
 
 Only a consumer whose code is linked takes an object pack's entry
-(`CodeProvision.permitsLinkedObjects`): a `roc build --opt=dev` program,
-never compile-time evaluation or an in-memory `roc run` image, and never a
+(`CodeProvision.permitsLinkedObjects`): a `roc build --opt=dev` program or
+a `roc run --opt=dev` image, never compile-time evaluation, and never a
 producer shared with compile-time evaluation, which instead takes the dev
 entry of the same procedure and lets the linked consumer switch to the
 object's entry in Direct LIR. Such a procedure is `external` with
@@ -631,6 +633,82 @@ offers an entry whose code reaches a linked entry, so a program that splices
 dev code never needs an object it did not ask for. A build whose store lacks
 a URL-package module's object pack builds it once the module is checked and
 before the program lowers, so that build already links it.
+
+`roc run --opt=dev` links every object pack of its URL packages into the
+cached host program, beside a table of their C-ABI entries that the
+generated platform shim defines (`roc_shim_package_names`), and its image,
+streamed to that host program, calls an entry by name: the machine-code shim
+resolves it from the table as it resolves hosted functions. The object packs
+are part of the host program's identity, so editing the app reloads only
+the image, and a hot reload rebuild that would need other objects reports a
+changed host interface. The image splices the dev packs' entries the same way
+an object build does, with the data they carry.
+
+A tier 2 entry, one the program offers by identity alone, can be optimized
+only once an app requests it. After a cached dev build writes its packs, it
+starts a detached `roc build --tier2-objects=<requests>` naming the entries it
+offered by identity that no object served. That build lowers the app exactly
+as the requesting build did, so each entry keeps its identity, compiles with
+LLVM every entry whose call closure an object can define whole (no literal
+conversion, no erased call, and no procedure served from the cache, named by
+site, or holding a copy of such code), and files the object pack under the
+app module in the optimized store, named by its requests. A later dev build
+loads the root module's object packs too and links such an entry in place of
+its dev code. `roc check` never starts one, and `roc run` links only its URL
+packages' objects, so a hot reload session keeps one host program.
+`ROC_BACKGROUND_OBJECTS=off` disables the build and `wait` makes the dev
+build wait for it.
+
+A specialization whose request mentions a function type has no
+reservation-time key: which closures it receives is decided by lambda
+solving. Its earliest hit is therefore in Direct LIR, once Lambda Mono has
+decided its `ProcIdentity` (source, solved types with their lambda sets,
+captures). A dev pack offers every procedure of the program it was written
+from under `Common.procIdentityCacheKey(identity)`, by the same rules as its
+keyed entries, and Direct LIR looks a finite-ABI procedure up by that key
+when no reservation key served it. Monotype and lifting have already run
+for such a procedure; the hit skips its Direct LIR body, the LIR passes, ARC,
+and code generation. Whether the code evaluates a compile-time root in place
+is read from Monotype's per-function summary (`SpecComptimeReads.fnReads`),
+through the procedure's `source_monotype_fn`.
+
+A function of the root app module is identified by site, not content: its
+template, or its nested owner's, is named by the module's name and the
+definition's name (`Mono.FnTemplate.site_identity`), so editing the module
+leaves its procedure identities, and the identity of every specialization
+that receives one of its functions as a value, unchanged. Such a
+procedure's own code is named by its code key (`LIR.LirProcSpec.code_key`:
+its identity with the module's content key), under which a pack offers it and
+Direct LIR looks it up. Code whose identity names it never holds a copy of
+site-identified code: an entry whose body inlined one
+(`LIR.InlineScope.copies_site_code`) is not offered by identity, and its
+calls to one are extracted as symbolic references by identity rather than as
+references into the pack. A program that takes an entry lowers and retains
+every lambda-set member the entry's signature mentions
+(`Result.retained_procs`), and a splice never follows a symbolic reference
+to a procedure the program compiles itself, so the entry calls the program's
+current code of each closure it receives. Because such code was compiled
+against an earlier body of the procedures it calls by identity, ARC pins
+every procedure with a code key to the signature its types determine (all
+parameters and the return owned, no return uniqueness). An entry whose code reaches the
+app from outside it (`Lifted.Program.appCalleesReachedBy`) is offered under
+its identity only, never under a reservation-time key, and a program that
+takes it lowers and retains every app function it reaches, so the entry
+calls that code's current version too.
+
+A package function that dispatches to a method of an app type records that
+method in its evidence. The evidence digest it is keyed by
+(`Mono.FnTemplate.evidence_site_digest`) names the method's template by site,
+like the method's own identity, so editing the app leaves the package
+specialization's identity unchanged unless the method's declaration or type
+changes.
+
+A type the root app module declares is named the same way
+(`Type.TypeDef.site`): identity digests (the equality digest that seeds keys
+and source digests, and procedure identities) name it by its declaration and
+the structure of its backing rather than by its module's content, so a
+package specialization at an app type keeps its identity across edits that
+leave the type's structure alone.
 
 ### Read-Only Type Analysis
 
@@ -720,15 +798,12 @@ provider supplies both readers the same immutable offers and splice packs.
 This is session-local provider identity, never a persistent cache-key input.
 Separate providers retain source bodies and their independent late native hits.
 
-An early cache offer carries the full-body producer's platform-requirement
-dependency summary. An independent entry is reusable across app fillings;
-a dependent entry names its exact relation and is admitted only for that
-relation. Cached functions seed the same transitive reachability computation
-as full bodies, so erasing a body cannot erase a code-identity input. Offer
-selection retains distinct relations rather than letting an incompatible
-first entry hide a compatible entry. Final procedure identity validation is
-unchanged. Old contracts use a different format and storage namespace and are
-declined before any body is skipped.
+An early cache offer is never code that reaches the app: such code calls app
+procedures whose current bodies only the program has, and Monotype skipping
+its body would hide which ones. It is offered under its procedure identity
+instead, where its body is still lowered. Final procedure identity validation
+is unchanged. Old contracts use a different format and storage namespace and
+are declined before any body is skipped.
 
 Monotype reservation may consume an offered
 closed object specialization during checking finalization under the same proof
@@ -1779,8 +1854,8 @@ An expect never changes state outside its own body (see "Control Flow and Var
 Writes Inside `expect`"), so the shared Monotype lowers it as a plain `expect` statement whose
 condition is an ordinary expression. Running or omitting it changes no variable
 the continuation reads, so target LIR lowering selects run/omit per consumer
-without any merge. Checked loop mutation plans and Monotype state merges
-likewise never look inside expect bodies.
+without any merge. Checked loop mutation and state merge plans likewise
+never look inside expect bodies, so both expect modes read the same plans.
 
 Compile-time evaluation is a function of the checked program alone. Every
 command that finalizes checking specializes the same roots, every checked
@@ -2339,9 +2414,8 @@ the demanded roots only, whether this compilation evaluated them or restored
 their values, so a build reports the same observations with or without a
 cache and whatever an earlier command evaluated.
 
-The object cache composes with demand the way it composes with an app's
-platform requirements: an entry carries what its skipped body would have told
-the program that links it. For each specialization a program may write to
+The object cache composes with demand by having an entry carry what its
+skipped body would have told the program that links it. For each specialization a program may write to
 the object cache, Monotype records the roots its code reads, through every
 procedure it reaches. An entry whose code evaluates a root in place is
 withheld: it would compute the root whenever it runs, in a program that
@@ -3401,6 +3475,28 @@ the retained storage root adopts the second class's descriptor and records the
 second checked representative. This preserves the unifier's descriptor merge
 destination and externally observable survivor while allowing the storage
 tree to remain balanced.
+
+Every merge of two distinct storage roots leaves one descriptor that no slot
+names: the side whose descriptor the merge did not keep (ordinary union, union
+with a frozen class, mismatch poisoning of a class that joins the error class
+whole, a declared solver-mutating redirect, and resetting a storage root to an
+unbound flex). The store recycles that descriptor rather than leaving it dead:
+it goes on a free list, and the next class created takes the most recently
+freed descriptor index (and its root-metadata entry) before the descriptor
+store grows. Freeing forgets everything the store remembers about the
+descriptor by index—its settled mark, its class watch, and its frozen
+anchor—so a reissued index carries nothing from the class that died. Reuse is
+last-in-first-out, so the indices a module's check produces, and the bytes
+written to its cache, stay deterministic. The free list is runtime-only: a
+loaded store starts with none, and nothing outside the store may hold a
+descriptor index across a merge, since the index may name another class once
+reused. While a savepoint is open a merge does not free its orphan, because
+rollback restores the slot that named it; the orphan waits on a pending list
+that commit frees and rollback discards. A probe may still reissue descriptors
+from the free list: those predate the probe, so the writes that reissue them
+journal like any other pre-probe write, and the probe only counts them as
+taken rather than removing them, so commit removes them and rollback forgets
+the count.
 
 `resolveVar` returns the checked representative and class descriptor;
 storage-root traversal is a private store operation. Consequently a checked
@@ -13548,11 +13644,19 @@ function argument may have exposed an overlap in its return row.
 
 Procedure-use roots and ordinary specialization bodies can lower concurrently
 because their results cross the worker boundary as sealed, graph-free drafts.
-Each executor lane owns a private cumulative type/name domain. Ordinary bodies
+Each executor lane owns a private cumulative type/name domain, which the
+coordinator reads in place rather than copying. A completed task's shard
+carries prefix views of the lane's stores at the task's end. The lane never
+moves or rewrites a row below a captured boundary: its stores grow into fresh
+backings, and each replaced backing stays alive until the coordinator has
+absorbed a later epoch of that lane, after which no view reaches it. The
+coordinator's view of a lane is its latest absorbed epoch's views plus the
+cumulative relocation into the program. Digest caches are not part of a view,
+since the lane keeps filling them; the program computes its own. Ordinary bodies
 stream through a bounded executor session: the coordinator accepts completed
 shards strictly in request order and immediately makes discovered requests
 available to free lanes. Running and completed-but-unaccepted tasks share the
-same bounded window. Each immutable lane suffix is absorbed even when its body
+same bounded window. Each immutable lane epoch is absorbed even when its body
 is discarded after an earlier shard committed its reservation, preserving cumulative lane ids.
 The pending FIFO is a reusable geometrically growing ring. Dispatch consumes
 its head without moving the undispatched suffix; ordered acceptance never
@@ -13579,7 +13683,13 @@ which matches the type/name snapshot. Patricia branches preserve all prior
 keys when splitting; full keys and exact evidence/constraint comparisons
 resolve collisions. Entries and their evidence remain alive until workers have
 joined. This keeps memo reuse concurrent without exposing mutable hash-table
-storage or making results depend on completion order. Global identities are still
+storage or making results depend on completion order. A lane replays a
+coordinator entry in place, in the program's store domain: each settled leaf
+and name crosses through the lane's cumulative program-to-workspace relocation
+as instantiation reaches it, and matching a request relocates only the
+request's leaves. A lane keeps copies only of the summaries it produced,
+until the coordinator shares them through a table one of the lane's tasks
+reads; the coordinator's table then answers for them. Global identities are still
 assigned solely by ordered coordinator commit. Root kinds
 that reserve durable identities or write directly to the final program remain
 serial barriers until they have the same sealed-draft boundary. A template
@@ -13963,9 +14073,10 @@ repeats, never what it lowers. The pins are the compile tests "interface
 summary replay of an open request leaf lowers like a fresh expansion within
 one body" and "... across bodies", which lower one program with and without
 summary replay and require identical specialization identities and LIR. The
-coordinator and each executor lane own cumulative tables. Frozen inputs borrow
-the coordinator table read-only; ordered commit relocates interned type leaves
-and interned names.
+coordinator owns the cumulative table; each executor lane holds only its own
+summaries the coordinator has not yet shared back to it. Frozen inputs
+borrow the coordinator table read-only; ordered commit relocates interned type
+leaves and interned names.
 Settled leaves across each completed batch share one type import and interning
 transaction. Cache insertion retains worker leaves before their transaction ends;
 coordinator leaves already belong to permanent storage and need no extra sealing.
@@ -14688,6 +14799,19 @@ Only binders in scope at loop entry become carried state. Every iteration and
 exit transports that state explicitly. An expression-form loop produces unit
 after binding its exit state, and enclosing branch results must be constructed
 inside the scope of those bindings. Discarding unit never discards mutations.
+
+Monotype threads reassigned binders through `if`, `match`, `for`, and
+expression statements as explicit state, and checked output records those
+binders the same way. Every `if`, `match`, and `for` expression and every
+expression statement references a state merge plan: the binders reassigned
+anywhere inside it, in source order with each binder's first occurrence kept,
+excluding nested function bodies and `expect` bodies. A `for` expression's
+plan is its iterable's binders followed by its loop's. One pass over the
+checked bodies records loop and state merge plans together, reusing each
+nested construct's plan instead of revisiting its parts, and an expression
+statement over control flow shares that expression's plan. Monotype reads
+these plans and keeps no memo of its own, so parallel lanes never each
+recompute them.
 
 Monotype normally preserves source control structure, but compiler-generated
 algorithms may introduce typed `join_point` and `jump` expressions when their
@@ -19030,6 +19154,13 @@ no use for. Which form a
 read takes is therefore a question of where its value reaches, and the
 uniqueness analysis answers it.
 
+The fresh procedure's identity is the list's layout and content (the count
+and the item's construction) and nothing a program numbers, so reads of equal
+lists share one procedure. A pack carries the procedure with any code that
+calls it, and a spliced procedure replaces the program's own procedure of the
+same identity, so an identity that named a program's static-data slot would
+let one list's build stand in for another's.
+
 Every such read is a candidate birth. Alongside the born bit and its parameter
 conditions, the settlement carries each local's *origins*: the candidates its
 born value derives from, flowing over the same pure aliases, join edges,
@@ -21760,11 +21891,15 @@ work queue. The finalizer still commits stored values, diagnostics, coverage
 updates, and root completion in sorted request order.
 
 Each root job owns its compile-time host state: `RocOps`, a root-local arena for
-Roc allocations, allocation tracking needed by RocOps, branch-hit records,
-expect/dbg/crash event lists, failure region state, a call-region stack, a crash
-boundary, and its result buffer. Roc runtime allocations are arena allocations
-and are bulk-freed after the result has been copied into `ConstStore`. Host
-events and failure state stay root-local until deterministic replay.
+Roc allocations, branch-hit records, expect/dbg/crash event lists, failure
+region state, a call-region stack, a crash boundary, and its result buffer. Roc
+runtime allocations are arena allocations and are bulk-freed after the result
+has been copied into `ConstStore`. Each allocation carries its length in a
+fixed-size header before the bytes handed to Roc, so reallocation reads the old
+length from the header and deallocation is free; the host keeps no per-pointer
+table, whose cost would grow with the allocations a root has ever held rather
+than with the ones it holds. Host events and failure state stay root-local
+until deterministic replay.
 
 A crash or empirical exhaustiveness failure in one root records that root's
 result and must not change the result of any other root in the same batch. Root

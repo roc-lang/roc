@@ -551,12 +551,19 @@ pub const UnresolvedPattern = union(enum) {
 pub const UnresolvedRow = struct {
     /// The patterns for this row (usually just one, but could be more for multiple scrutinees)
     patterns: []const UnresolvedPattern,
-    /// The source region of this pattern
-    region: Region,
+    /// The source pattern this row checks: one `|` alternative of a branch
+    pattern: CirPattern.Idx,
     /// Whether this branch has a guard condition
     guard: Guard,
     /// Index of the branch this pattern came from (for tracking redundancy)
     branch_index: u32,
+};
+
+/// A branch alternative that can never match: covered by earlier patterns
+/// (redundant), or matching an uninhabited type (unmatchable).
+pub const UselessRow = struct {
+    branch_index: u32,
+    pattern: CirPattern.Idx,
 };
 
 /// Whether a branch has a guard condition
@@ -854,7 +861,6 @@ pub fn convertMatchBranches(
 
         for (branch_patterns) |bp_idx| {
             const bp = store.getMatchBranchPattern(bp_idx);
-            const pattern_region = store.getPatternRegion(bp.pattern);
 
             const converted = try convertPattern(allocator, store, numeral_keys, bp.pattern);
 
@@ -892,7 +898,7 @@ pub fn convertMatchBranches(
 
             rows[row_idx] = .{
                 .patterns = pattern_slice,
-                .region = pattern_region,
+                .pattern = bp.pattern,
                 .guard = if (has_guard) .has_guard else .no_guard,
                 .branch_index = @intCast(branch_i),
             };
@@ -3866,14 +3872,10 @@ fn usefulEnter(
 pub const RedundancyResultSketched = struct {
     /// Non-redundant rows (useful patterns)
     non_redundant_rows: []const []const UnresolvedPattern,
-    /// Indices of redundant branches (covered by previous patterns)
-    redundant_indices: []const u32,
-    /// Regions of redundant branches
-    redundant_regions: []const Region,
-    /// Indices of unmatchable branches (patterns on uninhabited types)
-    unmatchable_indices: []const u32,
-    /// Regions of unmatchable branches
-    unmatchable_regions: []const Region,
+    /// Redundant rows (covered by previous patterns), in source order
+    redundant_rows: []const UselessRow,
+    /// Unmatchable rows (patterns on uninhabited types), in source order
+    unmatchable_rows: []const UselessRow,
 };
 
 /// Process sketched pattern rows and identify redundant and unmatchable patterns.
@@ -3891,10 +3893,8 @@ pub fn checkRedundancySketched(
     close_open_extension: bool,
 ) PatternResolveError!RedundancyResultSketched {
     var non_redundant: std.ArrayList([]const UnresolvedPattern) = .empty;
-    var redundant_indices: std.ArrayList(u32) = .empty;
-    var redundant_regions: std.ArrayList(Region) = .empty;
-    var unmatchable_indices: std.ArrayList(u32) = .empty;
-    var unmatchable_regions: std.ArrayList(Region) = .empty;
+    var redundant_rows: std.ArrayList(UselessRow) = .empty;
+    var unmatchable_rows: std.ArrayList(UselessRow) = .empty;
 
     for (rows) |row| {
         // First check if the pattern is on an uninhabited type (unmatchable)
@@ -3909,8 +3909,7 @@ pub fn checkRedundancySketched(
 
         if (!is_inhabited) {
             // Pattern matches an uninhabited type - it's unmatchable
-            try unmatchable_indices.append(allocator, row.branch_index);
-            try unmatchable_regions.append(allocator, row.region);
+            try unmatchable_rows.append(allocator, .{ .branch_index = row.branch_index, .pattern = row.pattern });
             continue;
         }
 
@@ -3923,17 +3922,14 @@ pub fn checkRedundancySketched(
         if (is_useful) {
             try non_redundant.append(allocator, row.patterns);
         } else {
-            try redundant_indices.append(allocator, row.branch_index);
-            try redundant_regions.append(allocator, row.region);
+            try redundant_rows.append(allocator, .{ .branch_index = row.branch_index, .pattern = row.pattern });
         }
     }
 
     return .{
         .non_redundant_rows = try non_redundant.toOwnedSlice(allocator),
-        .redundant_indices = try redundant_indices.toOwnedSlice(allocator),
-        .redundant_regions = try redundant_regions.toOwnedSlice(allocator),
-        .unmatchable_indices = try unmatchable_indices.toOwnedSlice(allocator),
-        .unmatchable_regions = try unmatchable_regions.toOwnedSlice(allocator),
+        .redundant_rows = try redundant_rows.toOwnedSlice(allocator),
+        .unmatchable_rows = try unmatchable_rows.toOwnedSlice(allocator),
     };
 }
 
@@ -3950,14 +3946,10 @@ pub const CheckResult = struct {
     /// Diagnostic-only missing patterns. Analysis type
     /// metadata is detached before the reader ends; only formatting is valid.
     missing_patterns: []const Pattern,
-    /// Indices of redundant branches (covered by previous patterns)
-    redundant_indices: []const u32,
-    /// Regions of redundant branches
-    redundant_regions: []const Region,
-    /// Indices of unmatchable branches (patterns on uninhabited types)
-    unmatchable_indices: []const u32,
-    /// Regions of unmatchable branches
-    unmatchable_regions: []const Region,
+    /// Redundant rows (covered by previous patterns), in source order
+    redundant_rows: []const UselessRow,
+    /// Unmatchable rows (patterns on uninhabited types), in source order
+    unmatchable_rows: []const UselessRow,
     /// Flex ext vars to close via unification with empty_tag_union.
     /// These are tag union positions where all constructors were exhaustively
     /// covered without wildcards.
@@ -4070,10 +4062,8 @@ pub fn checkMatch(
     return .{
         .is_exhaustive = missing.len == 0,
         .missing_patterns = missing,
-        .redundant_indices = redundancy.redundant_indices,
-        .redundant_regions = redundancy.redundant_regions,
-        .unmatchable_indices = redundancy.unmatchable_indices,
-        .unmatchable_regions = redundancy.unmatchable_regions,
+        .redundant_rows = redundancy.redundant_rows,
+        .unmatchable_rows = redundancy.unmatchable_rows,
         .ext_vars_to_close = filtered_close.items,
         .payload_vars_to_close = payload_vars_to_close.items,
     };
@@ -4107,7 +4097,7 @@ pub fn checkDestructure(
     const rows = try arena_alloc.alloc(UnresolvedRow, 1);
     rows[0] = .{
         .patterns = pattern_slice,
-        .region = node_store.getPatternRegion(pattern_idx),
+        .pattern = pattern_idx,
         .guard = .no_guard,
         .branch_index = 0,
     };
@@ -4170,10 +4160,8 @@ pub fn checkDestructure(
     return .{
         .is_exhaustive = missing.len == 0,
         .missing_patterns = missing,
-        .redundant_indices = redundancy.redundant_indices,
-        .redundant_regions = redundancy.redundant_regions,
-        .unmatchable_indices = redundancy.unmatchable_indices,
-        .unmatchable_regions = redundancy.unmatchable_regions,
+        .redundant_rows = redundancy.redundant_rows,
+        .unmatchable_rows = redundancy.unmatchable_rows,
         .ext_vars_to_close = filtered_close.items,
         .payload_vars_to_close = payload_vars_to_close.items,
     };
@@ -4414,10 +4402,8 @@ fn resultAllocationFailureCase(gpa: Allocator) (Allocator.Error || Ident.Error |
     const result: CheckResult = .{
         .is_exhaustive = false,
         .missing_patterns = missing,
-        .redundant_indices = try arena_alloc.dupe(u32, &.{1}),
-        .redundant_regions = try arena_alloc.dupe(Region, &.{Region.zero()}),
-        .unmatchable_indices = try arena_alloc.dupe(u32, &.{2}),
-        .unmatchable_regions = try arena_alloc.dupe(Region, &.{Region.zero()}),
+        .redundant_rows = try arena_alloc.dupe(UselessRow, &.{.{ .branch_index = 1, .pattern = @fromBackingInt(1) }}),
+        .unmatchable_rows = try arena_alloc.dupe(UselessRow, &.{.{ .branch_index = 2, .pattern = @fromBackingInt(2) }}),
         .ext_vars_to_close = try arena_alloc.dupe(Var, &vars),
         .payload_vars_to_close = try arena_alloc.dupe(Var, &vars),
     };

@@ -1268,6 +1268,9 @@ pub const Coordinator = struct {
     /// compiling an app. This is role metadata; package identity itself still
     /// comes from package_identity.zig.
     app_package_name: ?[]const u8,
+    /// The package whose root module is the file the compiler was pointed at,
+    /// whatever kind of package that is. See `markRootPackage`.
+    root_package_name: ?[]const u8,
     /// True when the build's root is not an app, recorded explicitly so the
     /// hosted transform never has to guess whether an app exists.
     app_package_absent: bool,
@@ -1417,6 +1420,7 @@ pub const Coordinator = struct {
             .frontend_complete = false,
             .total_remaining = 0,
             .app_package_name = null,
+            .root_package_name = null,
             .app_package_absent = false,
             .targeted_module_package = null,
             .targeted_module_id = null,
@@ -1562,6 +1566,15 @@ pub const Coordinator = struct {
 
     pub fn markAppPackage(self: *Coordinator, package_name: []const u8) void {
         self.app_package_name = package_name;
+    }
+
+    /// Record the build's root package: the one whose root module is the file
+    /// the compiler was pointed at (or the `main.roc` that supplied its
+    /// dependency graph), whether that package is an app, a package, a
+    /// platform, or a plain module. Its root module is an entry module; see
+    /// `isEntryModule`.
+    pub fn markRootPackage(self: *Coordinator, package_name: []const u8) void {
+        self.root_package_name = package_name;
     }
 
     /// Record the module for the file the compiler was pointed at, for builds
@@ -4772,9 +4785,9 @@ pub const Coordinator = struct {
             },
             .type_check => "Type Checking Failed",
         };
-        const headline = try std.fmt.allocPrint(self.gpa, "{s}: {s}.", .{ mod.path, @errorName(operation_error) });
-        defer self.gpa.free(headline);
-        const report = try Report.init(self.gpa, title, headline, .fatal);
+        const after = try std.fmt.allocPrint(self.gpa, ": {s}.", .{@errorName(operation_error)});
+        defer self.gpa.free(after);
+        const report = try Report.initWithPath(self.gpa, title, "", mod.path, after, .fatal);
         try appendReportOwned(self.gpa, &mod.reports, report);
         return operation_error;
     }
@@ -5175,14 +5188,14 @@ pub const Coordinator = struct {
     /// compiler was pointed at, rather than one it reached by following
     /// imports.
     ///
-    /// That is the root module of the app package, and—when the two differ—the
-    /// file explicitly targeted while some owning `main.roc` supplied the
-    /// dependency graph (`markTargetedModule`).
+    /// That is the root module of the build's root package, and—when the two
+    /// differ—the file explicitly targeted while some owning `main.roc`
+    /// supplied the dependency graph (`markTargetedModule`).
     ///
     /// Only those modules may be classified `default_app`, and so only they
     /// receive the synthetic `echo!` hosted lambda. Any other headerless
-    /// module with a valid `main!` is an ordinary type module, whichever
-    /// package it lives in.
+    /// module is a type module, whichever package it lives in, and a `main!`
+    /// it defines is an ordinary top-level definition.
     ///
     /// This is the same shape as the `is_platform_pkg` gate on the hosted
     /// transform in `handleCanonicalized`, and for the same reason: a
@@ -5195,8 +5208,8 @@ pub const Coordinator = struct {
                 return true;
             }
         }
-        const app_package_name = self.app_package_name orelse return false;
-        if (!std.mem.eql(u8, pkg.name, app_package_name)) return false;
+        const root_package_name = self.root_package_name orelse return false;
+        if (!std.mem.eql(u8, pkg.name, root_package_name)) return false;
         const root_module_id = pkg.root_module_id orelse return false;
         return root_module_id == module_id;
     }

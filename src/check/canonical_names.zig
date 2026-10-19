@@ -243,12 +243,16 @@ pub const CanonicalNameStore = struct {
     /// Query-only facade; its owner retains every allocation and must remain
     /// alive and unmodified until all borrowed readers have finished.
     borrowed_read_only: bool = false,
+    /// Set on a store whose captured prefixes another thread reads in place
+    /// (see `PrefixView`): growth of interned text, ranges, and proc bases
+    /// keeps each superseded backing alive here instead of moving or freeing it.
+    superseded: ?*collections.SupersededBackings = null,
 
     /// Build-only dedup/scratch fields excluded from serialization: empty on a
     /// frozen store, so the mixin's `deserialize` resets them (`proc_base_by_key`
     /// via `init(allocator)`, `scratch_key` to its default). Declared so a *data*
     /// field accidentally omitted from `Serialized` is a compile error.
-    pub const serde_transient_fields = [_][]const u8{ "proc_base_by_key", "scratch_key", "record_field_text_rank", "tag_text_rank", "borrowed_read_only" };
+    pub const serde_transient_fields = [_][]const u8{ "proc_base_by_key", "scratch_key", "record_field_text_rank", "tag_text_rank", "borrowed_read_only", "superseded" };
 
     pub fn init(allocator: Allocator) CanonicalNameStore {
         return .{
@@ -363,172 +367,82 @@ pub const CanonicalNameStore = struct {
         };
     }
 
-    /// Result-owned canonical-name suffix. String indexes are derived on append;
-    /// the proc-base dedup map remains absent because copied epoch stores
-    /// are immutable coordinator sources rather than interning destinations.
-    pub const EpochDelta = struct {
-        allocator: Allocator,
-        begin: EpochBoundary,
-        end: EpochBoundary,
-        module_names: NameInterner.EpochDelta,
-        module_identities: NameInterner.EpochDelta,
-        type_names: NameInterner.EpochDelta,
-        method_names: NameInterner.EpochDelta,
-        record_field_labels: NameInterner.EpochDelta,
-        tag_labels: NameInterner.EpochDelta,
-        export_names: NameInterner.EpochDelta,
-        external_symbol_names: NameInterner.EpochDelta,
-        proc_bases: []ProcBaseKey,
+    /// The interned names of one text domain below a captured boundary.
+    pub const InternerPrefix = struct {
+        bytes: []const u8,
+        ranges: []const NameInterner.Range,
 
-        pub fn capture(
-            allocator: Allocator,
-            source: *const CanonicalNameStore,
-            begin: EpochBoundary,
-            end: EpochBoundary,
-        ) Allocator.Error!EpochDelta {
-            std.debug.assert(begin.proc_bases <= end.proc_bases);
-            std.debug.assert(end.proc_bases <= source.proc_bases.items.items.len);
-            var module_names = try NameInterner.EpochDelta.capture(
-                allocator,
-                &source.module_names,
-                begin.module_names,
-                end.module_names,
-            );
-            errdefer module_names.deinit();
-            var module_identities = try NameInterner.EpochDelta.capture(
-                allocator,
-                &source.module_identities,
-                begin.module_identities,
-                end.module_identities,
-            );
-            errdefer module_identities.deinit();
-            var type_names = try NameInterner.EpochDelta.capture(
-                allocator,
-                &source.type_names,
-                begin.type_names,
-                end.type_names,
-            );
-            errdefer type_names.deinit();
-            var method_names = try NameInterner.EpochDelta.capture(
-                allocator,
-                &source.method_names,
-                begin.method_names,
-                end.method_names,
-            );
-            errdefer method_names.deinit();
-            var record_field_labels = try NameInterner.EpochDelta.capture(
-                allocator,
-                &source.record_field_labels,
-                begin.record_field_labels,
-                end.record_field_labels,
-            );
-            errdefer record_field_labels.deinit();
-            var tag_labels = try NameInterner.EpochDelta.capture(
-                allocator,
-                &source.tag_labels,
-                begin.tag_labels,
-                end.tag_labels,
-            );
-            errdefer tag_labels.deinit();
-            var export_names = try NameInterner.EpochDelta.capture(
-                allocator,
-                &source.export_names,
-                begin.export_names,
-                end.export_names,
-            );
-            errdefer export_names.deinit();
-            var external_symbol_names = try NameInterner.EpochDelta.capture(
-                allocator,
-                &source.external_symbol_names,
-                begin.external_symbol_names,
-                end.external_symbol_names,
-            );
-            errdefer external_symbol_names.deinit();
-            const proc_bases = try allocator.dupe(
-                ProcBaseKey,
-                source.proc_bases.items.items[begin.proc_bases..end.proc_bases],
-            );
+        pub const empty: InternerPrefix = .{ .bytes = &.{}, .ranges = &.{} };
+
+        fn capture(interner: *const NameInterner) InternerPrefix {
+            return .{ .bytes = interner.bytes.items.items, .ranges = interner.ranges.items.items };
+        }
+
+        fn borrow(self: InternerPrefix) NameInterner {
             return .{
-                .allocator = allocator,
-                .begin = begin,
-                .end = end,
-                .module_names = module_names,
-                .module_identities = module_identities,
-                .type_names = type_names,
-                .method_names = method_names,
-                .record_field_labels = record_field_labels,
-                .tag_labels = tag_labels,
-                .export_names = export_names,
-                .external_symbol_names = external_symbol_names,
-                .proc_bases = proc_bases,
+                .bytes = .{ .items = std.ArrayList(u8).fromOwnedSlice(@constCast(self.bytes)) },
+                .ranges = .{ .items = std.ArrayList(NameInterner.Range).fromOwnedSlice(@constCast(self.ranges)) },
+                .supports_inserts = false,
             };
         }
+    };
 
-        /// Reserve every allocation needed to append this exact suffix.
-        pub fn prepareAppend(
-            self: *const EpochDelta,
-            destination: *CanonicalNameStore,
-        ) Allocator.Error!void {
-            destination.assertMutable();
-            std.debug.assert(std.meta.eql(destination.epochBoundary(), self.begin));
-            try self.module_names.prepareAppend(&destination.module_names, destination.allocator);
-            try self.module_identities.prepareAppend(&destination.module_identities, destination.allocator);
-            try self.type_names.prepareAppend(&destination.type_names, destination.allocator);
-            try self.method_names.prepareAppend(&destination.method_names, destination.allocator);
-            try self.record_field_labels.prepareAppend(&destination.record_field_labels, destination.allocator);
-            try self.tag_labels.prepareAppend(&destination.tag_labels, destination.allocator);
-            try self.export_names.prepareAppend(&destination.export_names, destination.allocator);
-            try self.external_symbol_names.prepareAppend(&destination.external_symbol_names, destination.allocator);
-            try destination.proc_bases.items.ensureTotalCapacity(
-                destination.allocator,
-                self.end.proc_bases,
-            );
-        }
+    /// Every canonical name below a captured boundary, read in place by
+    /// another thread. A store that retains superseded backings never moves
+    /// or rewrites these rows, so a view stays valid while its writer interns
+    /// past it, until the writer releases the backings it was captured from.
+    pub const PrefixView = struct {
+        module_names: InternerPrefix,
+        module_identities: InternerPrefix,
+        type_names: InternerPrefix,
+        method_names: InternerPrefix,
+        record_field_labels: InternerPrefix,
+        tag_labels: InternerPrefix,
+        export_names: InternerPrefix,
+        external_symbol_names: InternerPrefix,
+        proc_bases: []const ProcBaseKey,
 
-        /// Append after `prepareAppend`; no logical mutation can fail.
-        pub fn appendPrepared(
-            self: *const EpochDelta,
-            destination: *CanonicalNameStore,
-        ) void {
-            destination.assertMutable();
-            std.debug.assert(std.meta.eql(destination.epochBoundary(), self.begin));
-            self.module_names.appendPrepared(&destination.module_names, destination.allocator);
-            self.module_identities.appendPrepared(&destination.module_identities, destination.allocator);
-            self.type_names.appendPrepared(&destination.type_names, destination.allocator);
-            self.method_names.appendPrepared(&destination.method_names, destination.allocator);
-            self.record_field_labels.appendPrepared(&destination.record_field_labels, destination.allocator);
-            self.tag_labels.appendPrepared(&destination.tag_labels, destination.allocator);
-            self.export_names.appendPrepared(&destination.export_names, destination.allocator);
-            self.external_symbol_names.appendPrepared(&destination.external_symbol_names, destination.allocator);
-            destination.proc_bases.items.appendSlice(
-                destination.allocator,
-                self.proc_bases,
-            ) catch unreachable;
-            std.debug.assert(std.meta.eql(destination.epochBoundary(), self.end));
-        }
+        pub const empty: PrefixView = .{
+            .module_names = .empty,
+            .module_identities = .empty,
+            .type_names = .empty,
+            .method_names = .empty,
+            .record_field_labels = .empty,
+            .tag_labels = .empty,
+            .export_names = .empty,
+            .external_symbol_names = .empty,
+            .proc_bases = &.{},
+        };
 
-        /// Append this suffix after an identical prefix, preserving every id.
-        pub fn appendTo(
-            self: *const EpochDelta,
-            destination: *CanonicalNameStore,
-        ) Allocator.Error!void {
-            try self.prepareAppend(destination);
-            self.appendPrepared(destination);
-        }
-
-        pub fn deinit(self: *EpochDelta) void {
-            self.allocator.free(self.proc_bases);
-            self.external_symbol_names.deinit();
-            self.export_names.deinit();
-            self.tag_labels.deinit();
-            self.record_field_labels.deinit();
-            self.method_names.deinit();
-            self.type_names.deinit();
-            self.module_identities.deinit();
-            self.module_names.deinit();
-            self.* = undefined;
+        pub fn boundary(self: PrefixView) EpochBoundary {
+            var result: EpochBoundary = undefined;
+            inline for (interner_fields) |field| {
+                @field(result, field) = .{ .ids = @intCast(@field(self, field).ranges.len), .bytes = @intCast(@field(self, field).bytes.len) };
+            }
+            result.proc_bases = @intCast(self.proc_bases.len);
+            return result;
         }
     };
+
+    const interner_fields = .{ "module_names", "module_identities", "type_names", "method_names", "record_field_labels", "tag_labels", "export_names", "external_symbol_names" };
+
+    pub fn capturePrefix(self: *const CanonicalNameStore) PrefixView {
+        var result: PrefixView = undefined;
+        inline for (interner_fields) |field| @field(result, field) = InternerPrefix.capture(&@field(self, field));
+        result.proc_bases = self.proc_bases.items.items;
+        return result;
+    }
+
+    /// A read-only store over a captured prefix, for text lookups by id. It
+    /// owns nothing and is valid exactly as long as the view.
+    pub fn borrowPrefix(allocator: Allocator, prefix: PrefixView) CanonicalNameStore {
+        var result = CanonicalNameStore.init(allocator);
+        inline for (interner_fields) |field| @field(result, field) = @field(prefix, field).borrow();
+        result.proc_bases.items = std.ArrayList(ProcBaseKey).fromOwnedSlice(@constCast(prefix.proc_bases));
+        result.serialized = true;
+        result.borrowed_read_only = true;
+        return result;
+    }
 
     /// Relocatable serialized form (build-only dedup/scratch fields excluded).
     pub const Serialized = extern struct {
@@ -547,9 +461,20 @@ pub const CanonicalNameStore = struct {
         pub const deserialize = Serde.deserializeWithAllocator;
     };
 
+    /// Insert into one of this store's interners. A store that retains
+    /// superseded backings first reserves room for the text and its range, so
+    /// the insert never moves interned names a prefix view may be reading.
+    fn insertName(self: *CanonicalNameStore, interner: *NameInterner, text: []const u8) Allocator.Error!u32 {
+        if (self.superseded) |superseded| {
+            _ = try superseded.ensureUnusedCapacity(u8, &interner.bytes.items, self.allocator, text.len);
+            _ = try superseded.ensureUnusedCapacity(NameInterner.Range, &interner.ranges.items, self.allocator, 1);
+        }
+        return interner.insert(self.allocator, text);
+    }
+
     pub fn internModuleName(self: *CanonicalNameStore, text: []const u8) Allocator.Error!ModuleNameId {
         self.assertMutable();
-        return @fromBackingInt(@intCast(try self.module_names.insert(self.allocator, text)));
+        return @fromBackingInt(@intCast(try self.insertName(&self.module_names, text)));
     }
 
     pub fn internModuleIdent(self: *CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) Allocator.Error!ModuleNameId {
@@ -559,7 +484,7 @@ pub const CanonicalNameStore = struct {
     /// Intern a 32-byte deep module content identity, returning its dense id.
     pub fn internModuleIdentity(self: *CanonicalNameStore, hash: *const [32]u8) Allocator.Error!ModuleIdentityId {
         self.assertMutable();
-        return @fromBackingInt(@intCast(try self.module_identities.insert(self.allocator, hash)));
+        return @fromBackingInt(@intCast(try self.insertName(&self.module_identities, hash)));
     }
 
     /// Look up a module content identity without inserting. This is the single
@@ -583,7 +508,7 @@ pub const CanonicalNameStore = struct {
 
     pub fn internTypeName(self: *CanonicalNameStore, text: []const u8) Allocator.Error!TypeNameId {
         self.assertMutable();
-        return @fromBackingInt(@intCast(try self.type_names.insert(self.allocator, text)));
+        return @fromBackingInt(@intCast(try self.insertName(&self.type_names, text)));
     }
 
     pub fn internMethodIdent(self: *CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) Allocator.Error!MethodNameId {
@@ -592,7 +517,7 @@ pub const CanonicalNameStore = struct {
 
     pub fn internMethodName(self: *CanonicalNameStore, text: []const u8) Allocator.Error!MethodNameId {
         self.assertMutable();
-        return @fromBackingInt(@intCast(try self.method_names.insert(self.allocator, text)));
+        return @fromBackingInt(@intCast(try self.insertName(&self.method_names, text)));
     }
 
     pub fn internRecordFieldIdent(self: *CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) Allocator.Error!RecordFieldLabelId {
@@ -602,7 +527,7 @@ pub const CanonicalNameStore = struct {
     pub fn internRecordFieldLabel(self: *CanonicalNameStore, text: []const u8) Allocator.Error!RecordFieldLabelId {
         self.assertMutable();
         if (self.record_field_text_rank == null) self.record_field_text_rank = try base.TextRankCache.create(self.allocator);
-        return @fromBackingInt(@intCast(try self.record_field_labels.insert(self.allocator, text)));
+        return @fromBackingInt(@intCast(try self.insertName(&self.record_field_labels, text)));
     }
 
     pub fn internTagIdent(self: *CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) Allocator.Error!TagLabelId {
@@ -612,7 +537,7 @@ pub const CanonicalNameStore = struct {
     pub fn internTagLabel(self: *CanonicalNameStore, text: []const u8) Allocator.Error!TagLabelId {
         self.assertMutable();
         if (self.tag_text_rank == null) self.tag_text_rank = try base.TextRankCache.create(self.allocator);
-        return @fromBackingInt(@intCast(try self.tag_labels.insert(self.allocator, text)));
+        return @fromBackingInt(@intCast(try self.insertName(&self.tag_labels, text)));
     }
 
     pub fn internExportIdent(self: *CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) Allocator.Error!ExportNameId {
@@ -621,7 +546,7 @@ pub const CanonicalNameStore = struct {
 
     pub fn internExportName(self: *CanonicalNameStore, text: []const u8) Allocator.Error!ExportNameId {
         self.assertMutable();
-        return @fromBackingInt(@intCast(try self.export_names.insert(self.allocator, text)));
+        return @fromBackingInt(@intCast(try self.insertName(&self.export_names, text)));
     }
 
     pub fn internExternalSymbolIdent(self: *CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) Allocator.Error!ExternalSymbolNameId {
@@ -630,7 +555,7 @@ pub const CanonicalNameStore = struct {
 
     pub fn internExternalSymbolName(self: *CanonicalNameStore, text: []const u8) Allocator.Error!ExternalSymbolNameId {
         self.assertMutable();
-        return @fromBackingInt(@intCast(try self.external_symbol_names.insert(self.allocator, text)));
+        return @fromBackingInt(@intCast(try self.insertName(&self.external_symbol_names, text)));
     }
 
     fn lookupId(comptime Id: type, it: *const NameInterner, text: []const u8) ?Id {
@@ -696,6 +621,7 @@ pub const CanonicalNameStore = struct {
         const owned_key = try self.allocator.dupe(u8, self.scratch_key.items);
         errdefer self.allocator.free(owned_key);
 
+        if (self.superseded) |superseded| _ = try superseded.ensureUnusedCapacity(ProcBaseKey, &self.proc_bases.items, self.allocator, 1);
         _ = try self.proc_bases.append(self.allocator, key);
         try self.proc_base_by_key.put(owned_key, id);
         return id;
@@ -1190,17 +1116,14 @@ test "canonical name relocation qualifies every text domain by owning stores" {
     try std.testing.expectEqual(@as(usize, 0), shared.mappedCount());
 }
 
-test "canonical name epoch deltas own consecutive id ranges" {
+test "canonical name prefix views stay readable while their store grows" {
     const allocator = std.testing.allocator;
+    var superseded: collections.SupersededBackings = .{};
+    defer superseded.deinit(allocator);
     var source = CanonicalNameStore.init(allocator);
-    const start = source.epochBoundary();
-    var empty = try CanonicalNameStore.EpochDelta.capture(
-        allocator,
-        &source,
-        start,
-        start,
-    );
-    defer empty.deinit();
+    defer source.deinit();
+    source.superseded = &superseded;
+    const empty = source.capturePrefix();
     try std.testing.expectEqual(@as(usize, 0), empty.proc_bases.len);
 
     const module_name = try source.internModuleName("Main");
@@ -1217,26 +1140,11 @@ test "canonical name epoch deltas own consecutive id ranges" {
         .kind = .checked_source,
         .ordinal = 7,
     });
-    const middle = source.epochBoundary();
-    var first = try CanonicalNameStore.EpochDelta.capture(
-        allocator,
-        &source,
-        start,
-        middle,
-    );
-    defer first.deinit();
+    const first = source.capturePrefix();
+    try std.testing.expect(std.meta.eql(first.boundary(), source.epochBoundary()));
 
-    const second_field = try source.internRecordFieldLabel("next");
-    const second_tag = try source.internTagLabel("Next");
-    const end = source.epochBoundary();
-    var second = try CanonicalNameStore.EpochDelta.capture(
-        allocator,
-        &source,
-        middle,
-        end,
-    );
-    defer second.deinit();
-
+    // Force every interner a view reads to grow after capture.
+    superseded.generation = 1;
     var index: usize = 0;
     while (index < 256) : (index += 1) {
         var buffer: [32]u8 = undefined;
@@ -1244,25 +1152,20 @@ test "canonical name epoch deltas own consecutive id ranges" {
         _ = try source.internRecordFieldLabel(text);
         _ = try source.internTagLabel(text);
     }
-    source.deinit();
+    try std.testing.expect(superseded.count() != 0);
 
-    var destination = CanonicalNameStore.init(allocator);
-    defer destination.deinit();
-    try empty.appendTo(&destination);
-    try first.appendTo(&destination);
-    try second.appendTo(&destination);
-    try std.testing.expectEqualStrings("Main", destination.moduleNameText(module_name));
-    try std.testing.expectEqualSlices(u8, &(@as([32]u8, @splat(0xAB))), destination.moduleIdentityBytes(module_identity));
-    try std.testing.expectEqualStrings("Model", destination.typeNameText(type_name));
-    try std.testing.expectEqualStrings("render", destination.methodNameText(method_name));
-    try std.testing.expectEqualStrings("value", destination.recordFieldLabelText(field_name));
-    try std.testing.expectEqualStrings("Value", destination.tagLabelText(tag_name));
-    try std.testing.expectEqualStrings("main!", destination.exportNameText(export_name));
-    try std.testing.expectEqualStrings("roc_main", destination.externalSymbolNameText(external_name));
-    try std.testing.expectEqualStrings("next", destination.recordFieldLabelText(second_field));
-    try std.testing.expectEqualStrings("Next", destination.tagLabelText(second_tag));
-    try std.testing.expectEqual(module_name, destination.procBase(proc_base).module_name);
-    try std.testing.expectEqual(export_name, destination.procBase(proc_base).export_name.?);
+    var view = CanonicalNameStore.borrowPrefix(allocator, first);
+    defer view.deinit();
+    try std.testing.expectEqualStrings("Main", view.moduleNameText(module_name));
+    try std.testing.expectEqualSlices(u8, &(@as([32]u8, @splat(0xAB))), view.moduleIdentityBytes(module_identity));
+    try std.testing.expectEqualStrings("Model", view.typeNameText(type_name));
+    try std.testing.expectEqualStrings("render", view.methodNameText(method_name));
+    try std.testing.expectEqualStrings("value", view.recordFieldLabelText(field_name));
+    try std.testing.expectEqualStrings("Value", view.tagLabelText(tag_name));
+    try std.testing.expectEqualStrings("main!", view.exportNameText(export_name));
+    try std.testing.expectEqualStrings("roc_main", view.externalSymbolNameText(external_name));
+    try std.testing.expectEqual(module_name, view.procBase(proc_base).module_name);
+    try std.testing.expectEqual(export_name, view.procBase(proc_base).export_name.?);
 }
 
 test "proc base identity includes nested owner mono specialization" {

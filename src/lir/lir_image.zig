@@ -67,7 +67,7 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 ///      side tables carry only what lowering produces.
 /// v45: layout representation fields are sized for practice, and resolved list
 ///      layouts are plain layout indices.
-pub const FORMAT_VERSION: u32 = 47;
+pub const FORMAT_VERSION: u32 = 49;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -1539,6 +1539,7 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
         const string = try worker.insertString(name);
         const inline_scope = try worker.addInlineScope(.{
             .source_identity = store.getProcSpecImmediate(procs[0]).identity,
+            .copies_site_code = false,
             .source_name = string,
             .source_loc = shard_loc,
             .call_site = .{ .file = 1, .line = 4, .column = 5 },

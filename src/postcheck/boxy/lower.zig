@@ -8931,7 +8931,13 @@ const ProcedureBuilder = struct {
                 boxyLowerInvariant("generated encoder worker was not callable");
             const worker_children = self.plan.childSlice(self.plan.representations.items[@backingInt(function.rep)].children);
             const worker_args = worker_children[function.args_start..][0..function.arg_count];
-            if (worker_args.len != 1) boxyLowerInvariant("generated encoder worker had an unexpected arity");
+            // A value thunk binds only the state; a runtime body binds the
+            // value and then the state. Either way the state is the last
+            // argument, and this encoder writes the worker's result.
+            if (worker_args.len == 0 or proc.arg_locals.items[worker_args.len - 1] != state) {
+                boxyLowerInvariant("generated encoder worker did not bind the encoder state as its last argument");
+            }
+            const state_rep = worker_args[worker_args.len - 1].rep;
             const callable_rep = proc.repForTypeRef(constructor_call.ret_type);
             const callable = try proc.addFrameLocalForRep(callable_rep);
             var continuation = try proc.lowerErasedCallLocalsInto(
@@ -8940,7 +8946,7 @@ const ProcedureBuilder = struct {
                 callable_rep,
                 callable,
                 &.{ value, state },
-                &.{ proc.repForTypeRef(subject_type), worker_args[0].rep },
+                &.{ proc.repForTypeRef(subject_type), state_rep },
                 next,
             );
             continuation = try self.lowerGeneratedCodecCallLocalsInto(

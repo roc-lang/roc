@@ -293,6 +293,11 @@ pub const CliCtx = struct {
         return policy;
     }
 
+    /// Spell `path` the way reports do: relative to the working directory.
+    pub fn displayPath(self: *const Self, path: []const u8) Allocator.Error![]u8 {
+        return reporting.displayPath(self.arena, path, self.baseReportConfig().source_path_base);
+    }
+
     /// Whether a particular standard stream should receive ANSI color.
     pub fn usesColor(self: *Self, stream: OutputStream) bool {
         const policy = self.colorPolicy();
