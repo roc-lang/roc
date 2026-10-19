@@ -1048,6 +1048,11 @@ local_names: GuardedList.List(u32, "LirStore.local_names"),
 /// Active procedure-construction scope. Never persisted in LIR images or
 /// transferred into another body worker; completed proofs live in LIR itself.
 tail_call_builder: ?*TailCallBuilder = null,
+/// The row already holding each reference-count effect this store added, so
+/// statements with equal effects share one row. A handful of distinct effects
+/// covers every low-level statement. Never persisted; compaction renumbers
+/// rows, so it clears this.
+rc_effect_rows: std.AutoHashMapUnmanaged(lir_defs.LowLevel.RcEffect, lir_defs.StmtRowId(lir_defs.LowLevel.RcEffect)) = .empty,
 /// Shapes of the statements appended to this store since the accumulator was
 /// last reset: the body being lowered, or a procedure rewrite's additions.
 shapes: lir_defs.ProcShapes = .{},
@@ -1151,11 +1156,13 @@ pub fn releaseCode(self: *Self) void {
         self.stmt_rows[column].deinit(self.allocator);
         self.stmt_rows[column] = .empty;
     }
+    self.rc_effect_rows.clearAndFree(self.allocator);
 }
 
 /// Releases all storage owned by this LIR store.
 pub fn deinit(self: *Self) void {
     if (self.proc_rewrite) |*rewrite| rewrite.deinit(self.allocator);
+    self.rc_effect_rows.deinit(self.allocator);
     self.cf_stmts.deinit(self.allocator);
     self.cf_switch_branches.deinit(self.allocator);
     self.str_match_steps.deinit(self.allocator);
@@ -1997,7 +2004,11 @@ pub fn rcHelper(self: *const Self, helper: lir_defs.RcHelperRef) lir_defs.RcHelp
 
 /// Adds the reference-count effect of a low-level operation.
 pub fn addRcEffect(self: *Self, effect: lir_defs.LowLevel.RcEffect) Allocator.Error!lir_defs.StmtRowId(lir_defs.LowLevel.RcEffect) {
-    return self.addStmtRow(lir_defs.LowLevel.RcEffect, effect);
+    const entry = try self.rc_effect_rows.getOrPut(self.allocator, effect);
+    if (entry.found_existing) return entry.value_ptr.*;
+    errdefer self.rc_effect_rows.removeByPtr(entry.key_ptr);
+    entry.value_ptr.* = try self.addStmtRow(lir_defs.LowLevel.RcEffect, effect);
+    return entry.value_ptr.*;
 }
 
 // Statement provenance API (design.md "Statement Provenance").
@@ -3073,6 +3084,7 @@ fn compactStmtRows(self: *Self) Allocator.Error!void {
         self.stmt_rows[column].shrinkAndFree(self.allocator, write);
     }
     for (self.cf_stmts.unsafeRawItemsMutForStore()) |*stmt| visitStmtRowIds(CFStmt, stmt, &remaps, .rename);
+    self.rc_effect_rows.clearRetainingCapacity();
 }
 
 /// Marks (`.mark`) or renames to their remapped ids (`.rename`) the

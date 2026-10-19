@@ -824,11 +824,11 @@ comptime {
     // the "LIR image round-trips every populated store field" test at the
     // bottom of this file, then update the expected field count below. A
     // same-build omission is otherwise silent, since `FORMAT_VERSION` only
-    // guards cross-version mismatches. `tail_call_builder`, `proc_rewrite` and
-    // `facts` are transient worker state, not serialized, and default to
-    // null or empty in views. The layout store's `digest_cache` is a memo
+    // guards cross-version mismatches. `tail_call_builder`, `proc_rewrite`,
+    // `rc_effect_rows` and `facts` are transient worker state, not
+    // serialized, and default to null or empty in views. The layout store's `digest_cache` is a memo
     // each view starts empty.
-    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 38);
+    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 39);
     std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 18);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".field_names.len == 1);
 
