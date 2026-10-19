@@ -3792,7 +3792,7 @@ fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Erro
                 .tuple => |items| for (store.span(items)) |item| callback.child(item),
                 .record => |fields| for (store.fieldSpan(fields)) |field| {
                     callback.child(field.ty);
-                    if (field.value_ty) |value_ty| callback.child(value_ty);
+                    if (field.value_ty.get()) |value_ty| callback.child(value_ty);
                 },
                 .tag_union => |tags| for (store.tagSpan(tags)) |tag| {
                     for (store.span(tag.payloads)) |payload| callback.child(payload);
@@ -4346,7 +4346,7 @@ const TypeCloner = struct {
             .tuple => |items| try self.addCloneSpanParts(build, &start, items),
             .record => |fields| for (types.fieldSpan(fields)) |field| {
                 try self.addClonePart(build, .{ .ty = field.ty });
-                if (field.value_ty) |value_ty| try self.addClonePart(build, .{ .ty = value_ty });
+                if (field.value_ty.get()) |value_ty| try self.addClonePart(build, .{ .ty = value_ty });
             },
             .tag_union => |tags| for (types.tagSpan(tags)) |tag| try self.addCloneSpanParts(build, &start, tag.payloads),
             .named => |named| {
@@ -4426,7 +4426,7 @@ const TypeCloner = struct {
                     out.* = .{
                         .name = field.name,
                         .ty = field_ty,
-                        .value_ty = if (field.value_ty != null) reader.next() else null,
+                        .value_ty = if (field.value_ty != .none) reader.next() else null,
                         .default = field.default,
                     };
                 }

@@ -11085,7 +11085,7 @@ const Builder = struct {
                                 .undetermined => Common.invariant("undetermined checked field kind reached direct record-row lowering"),
                                 .err => Common.invariant("poisoned checked field kind reached direct record-row lowering"),
                             },
-                            .value_ty = if (field.kind.tag == .optional) value_ty else null,
+                            .value_ty = .of(if (field.kind.tag == .optional) value_ty else null),
                             .default = try self.monoFieldDefault(frame.view, field),
                         });
                     },
@@ -47460,7 +47460,7 @@ const BodyContext = struct {
                     } else null;
                     const default = results[cursor].field_default;
                     cursor += 1;
-                    slot_out.* = .{ .name = name, .ty = field_ty, .value_ty = value_ty, .default = default };
+                    slot_out.* = .{ .name = name, .ty = field_ty, .value_ty = .of(value_ty), .default = default };
                 }
                 break :blk .{ .record = try self.typeStore().addRecordFields(self.nameStore(), out) };
             },
@@ -48779,10 +48779,10 @@ const BodyContext = struct {
                         const actual_field = GuardedList.at(actual_fields, index);
                         if (expected_field.name != actual_field.name) return false;
                         if (expected_field.kind_state != actual_field.kind_state) return false;
-                        if ((expected_field.value_ty == null) != (actual_field.value_ty == null)) return false;
+                        if ((expected_field.value_ty == .none) != (actual_field.value_ty == .none)) return false;
                         try addPair(items, expected_field.ty, actual_field.ty);
-                        if (expected_field.value_ty) |expected_value_ty| {
-                            try addPair(items, expected_value_ty, actual_field.value_ty.?);
+                        if (expected_field.value_ty.get()) |expected_value_ty| {
+                            try addPair(items, expected_value_ty, actual_field.value_ty.get().?);
                         }
                     }
                     return true;
@@ -48961,7 +48961,7 @@ const BodyContext = struct {
         if (field.kind_state != .resolved) {
             Common.invariant("provisional field kind reached sealed record construction");
         }
-        if (field.value_ty != null) {
+        if (field.value_ty != .none) {
             if (field.default != null) Common.invariant("optional Monotype field carried a default identity");
             return .optional;
         }
@@ -48969,7 +48969,7 @@ const BodyContext = struct {
     }
 
     fn sealedDefaultedFieldIdentity(field: Type.Field) Type.FieldDefault {
-        if (field.kind_state != .resolved or field.value_ty != null) {
+        if (field.kind_state != .resolved or field.value_ty != .none) {
             Common.invariant("sealed defaulted field did not have a resolved inline slot");
         }
         return field.default orelse

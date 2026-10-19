@@ -1067,7 +1067,7 @@ pub const InterfaceConstraints = struct {
                         for (0..GuardedList.borrowLen(record_fields)) |index| {
                             const field = GuardedList.at(record_fields, index);
                             try pending.append(self.allocator, field.ty);
-                            if (field.value_ty) |value_ty| try pending.append(self.allocator, value_ty);
+                            if (field.value_ty.get()) |value_ty| try pending.append(self.allocator, value_ty);
                         }
                     },
                     .named => |named| {
@@ -8315,7 +8315,7 @@ pub const InstGraph = struct {
                     if (field.kind_state == .undetermined) {
                         Common.invariant("finished Monotype import received a provisional record field");
                     }
-                    if (field.value_ty) |value_ty| try out.append(allocator, .{ .ty = value_ty });
+                    if (field.value_ty.get()) |value_ty| try out.append(allocator, .{ .ty = value_ty });
                     try out.append(allocator, .{ .ty = field.ty });
                 }
             },
@@ -8381,7 +8381,7 @@ pub const InstGraph = struct {
                 const inst_fields = try self.arena().alloc(InstField, span.len);
                 for (0..span.len) |index| {
                     const field = GuardedList.at(span, index);
-                    const value_ty: ?NodeId = if (field.value_ty != null) value: {
+                    const value_ty: ?NodeId = if (field.value_ty != .none) value: {
                         next += 1;
                         break :value nodes[next - 1];
                     } else null;
@@ -8605,7 +8605,7 @@ pub const InstGraph = struct {
                     for (0..field_span.len) |index| {
                         const field = GuardedList.at(field_span, index);
                         try pending.append(self.allocator, field.ty);
-                        if (field.value_ty) |value_ty| try pending.append(self.allocator, value_ty);
+                        if (field.value_ty.get()) |value_ty| try pending.append(self.allocator, value_ty);
                     }
                 },
                 .tag_union => |tags| {
@@ -9396,7 +9396,7 @@ pub const GraphTypeFinals = struct {
                 for (0..GuardedList.borrowLen(field_span)) |index| {
                     const field = GuardedList.at(field_span, index);
                     try self.addSealPart(build, .{ .ty = field.ty });
-                    if (field.value_ty) |value_ty| try self.addSealPart(build, .{ .ty = value_ty });
+                    if (field.value_ty.get()) |value_ty| try self.addSealPart(build, .{ .ty = value_ty });
                 }
             },
             .named => |named| {
@@ -9523,14 +9523,14 @@ pub const GraphTypeFinals = struct {
                         // the source type instead of materializing the
                         // unresolved slot node.
                         .ty = source_ty,
-                        .value_ty = source_ty,
+                        .value_ty = .of(source_ty),
                         .kind_state = .undetermined,
                         .default = null,
                     },
                     .specialization_snapshot => .{
                         .name = field.name,
                         .ty = source_ty,
-                        .value_ty = null,
+                        .value_ty = .none,
                         .kind_state = .resolved,
                         .default = null,
                     },
@@ -9546,7 +9546,7 @@ pub const GraphTypeFinals = struct {
             sealed.* = .{
                 .name = field.name,
                 .ty = ty,
-                .value_ty = value_ty,
+                .value_ty = .of(value_ty),
                 .kind_state = .resolved,
                 .default = field.default,
             };
@@ -9579,7 +9579,7 @@ pub const GraphTypeFinals = struct {
                 if (fields.len == 0) break :blk .{ .record = .empty() };
                 for (fields) |*field| {
                     field.ty = reader.next();
-                    if (field.value_ty != null) field.value_ty = reader.next();
+                    if (field.value_ty != .none) field.value_ty = .of(reader.next());
                 }
                 break :blk .{ .record = try types.addRecordFields(self.graph.name_store, fields) };
             },
@@ -10953,7 +10953,7 @@ test "provisional Monotype view preserves an undetermined record field" {
     const provisional = try graph.provisionalTypeViewForNode(record);
     const provisional_fields = type_store.fieldSpan(type_store.get(provisional).record);
     try std.testing.expectEqual(@as(usize, 1), provisional_fields.len);
-    const provisional_value_ty = GuardedList.at(provisional_fields, 0).value_ty orelse return error.TestExpectedEqual;
+    const provisional_value_ty = GuardedList.at(provisional_fields, 0).value_ty.get() orelse return error.TestExpectedEqual;
     try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(provisional_value_ty));
 }
 
@@ -11443,7 +11443,7 @@ test "final sealing follows active snapshots stored only in field value types" {
         .{
             .name = field_name,
             .ty = slot_ty,
-            .value_ty = value_snapshot,
+            .value_ty = .of(value_snapshot),
             .kind_state = .resolved,
             .default = null,
         },
@@ -11460,8 +11460,8 @@ test "final sealing follows active snapshots stored only in field value types" {
     try std.testing.expect(sealed != wrapper);
     const original_field = GuardedList.at(type_store.fieldSpan(type_store.get(wrapper).record), 0);
     const sealed_field = GuardedList.at(type_store.fieldSpan(type_store.get(sealed).record), 0);
-    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(original_field.value_ty.?));
-    try std.testing.expectEqual(Type.Content{ .primitive = .str }, type_store.get(sealed_field.value_ty.?));
+    try std.testing.expectEqual(Type.Content{ .primitive = .u64 }, type_store.get(original_field.value_ty.get().?));
+    try std.testing.expectEqual(Type.Content{ .primitive = .str }, type_store.get(sealed_field.value_ty.get().?));
     try std.testing.expect(!(try graph.typeHasActiveSnapshots(sealed)));
 }
 

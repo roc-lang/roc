@@ -246,7 +246,7 @@ pub const Field = struct {
     /// evidence retained alongside the runtime slot so a finished Monotype
     /// can participate in later specialization without reconstructing field
     /// presence from the slot's shape.
-    value_ty: ?TypeId = null,
+    value_ty: MaybeTypeId = .none,
     /// Explicitly distinguishes a finished slot from a provisional field whose
     /// checked presence variable has not selected inline or optional encoding.
     kind_state: FieldKindState = .resolved,
@@ -946,7 +946,7 @@ pub const Store = struct {
                     for (0..GuardedList.borrowLen(record_fields)) |index| {
                         const field = GuardedList.at(record_fields, index);
                         try self.iterator_interface_pending.append(self.allocator, field.ty);
-                        if (field.value_ty) |value_ty| {
+                        if (field.value_ty.get()) |value_ty| {
                             try self.iterator_interface_pending.append(self.allocator, value_ty);
                         }
                     }
@@ -1150,7 +1150,7 @@ pub const Store = struct {
         }
         for (self.fields.unsafeRawItemsForView()[begin.fields..end.fields]) |field| {
             requireEpochType(field.ty, type_limit);
-            if (field.value_ty) |value_ty| requireEpochType(value_ty, type_limit);
+            if (field.value_ty.get()) |value_ty| requireEpochType(value_ty, type_limit);
         }
         for (self.tags.unsafeRawItemsForView()[begin.tags..end.tags]) |tag| {
             requireEpochSpan(tag.payloads, span_limit);
@@ -1892,7 +1892,7 @@ pub const Store = struct {
                         allocator,
                         field.ty,
                     );
-                    if (field.value_ty) |value_ty| {
+                    if (field.value_ty.get()) |value_ty| {
                         try enqueueImportType(
                             source,
                             relocation,
@@ -2025,8 +2025,8 @@ pub const Store = struct {
                     field.* = GuardedList.at(source_fields, index);
                     field.name = try relocation.name_relocation.relocateRecordFieldLabel(source_names, field.name);
                     field.ty = importType(source_offsets, relocation, reserved, field.ty);
-                    if (field.value_ty) |value_ty| {
-                        field.value_ty = importType(source_offsets, relocation, reserved, value_ty);
+                    if (field.value_ty.get()) |value_ty| {
+                        field.value_ty = .of(importType(source_offsets, relocation, reserved, value_ty));
                     }
                     if (field.default) |*default| {
                         default.module = try relocation.name_relocation.relocateModuleIdentity(source_names, default.module);
@@ -2148,7 +2148,7 @@ pub const Store = struct {
                 for (0..GuardedList.borrowLen(fields_)) |index| {
                     const field = GuardedList.at(fields_, index);
                     try out.append(self.allocator, field.ty);
-                    if (field.value_ty) |value_ty| try out.append(self.allocator, value_ty);
+                    if (field.value_ty.get()) |value_ty| try out.append(self.allocator, value_ty);
                 }
             },
             .tag_union => |span_| {
@@ -2321,7 +2321,7 @@ pub const Store = struct {
             }
             for (self.fields) |field| {
                 if (!self.typeRefInBounds(field.ty)) return .type_ref_out_of_bounds;
-                if (field.value_ty) |value_ty| {
+                if (field.value_ty.get()) |value_ty| {
                     if (!self.typeRefInBounds(value_ty)) return .type_ref_out_of_bounds;
                 }
             }
@@ -2388,7 +2388,7 @@ pub const Store = struct {
             const fields_ = self.fieldSpan(span_);
             for (fields_) |field| {
                 if (!self.typeRefInBounds(field.ty)) return .type_ref_out_of_bounds;
-                if (field.value_ty) |value_ty| {
+                if (field.value_ty.get()) |value_ty| {
                     if (!self.typeRefInBounds(value_ty)) return .type_ref_out_of_bounds;
                 }
             }
@@ -2820,8 +2820,8 @@ pub const Store = struct {
                 defer self.allocator.free(fields_);
                 for (fields_) |*field| {
                     field.ty = transactionType(mark_, remap, field.ty);
-                    if (field.value_ty) |value_ty| {
-                        field.value_ty = transactionType(mark_, remap, value_ty);
+                    if (field.value_ty.get()) |value_ty| {
+                        field.value_ty = .of(transactionType(mark_, remap, value_ty));
                     }
                 }
                 break :blk .{ .record = try self.addFields(fields_) };
@@ -3119,7 +3119,7 @@ pub const Store = struct {
                     try sink.writeBytes(name_store.recordFieldLabelText(field.name));
                     try sinkFieldDefault(sink, name_store, field.default);
                     try sink.writeBytes(@tagName(field.kind_state));
-                    if (field.value_ty) |value_ty| {
+                    if (field.value_ty.get()) |value_ty| {
                         try sink.writeBytes("field-optional-value");
                         try sink.child(value_ty, mode);
                     } else {
@@ -4032,12 +4032,12 @@ const TypeViewEqlScan = struct {
                     if (!std.mem.eql(u8, name_store.recordFieldLabelText(lhs_field.name), name_store.recordFieldLabelText(rhs_field.name)) or
                         !fieldDefaultEql(name_store, lhs_field.default, rhs_field.default) or
                         lhs_field.kind_state != rhs_field.kind_state or
-                        (lhs_field.value_ty == null) != (rhs_field.value_ty == null))
+                        (lhs_field.value_ty == .none) != (rhs_field.value_ty == .none))
                     {
                         try items.add(.{ .decided = false });
                         break;
                     }
-                    if (lhs_field.value_ty) |lhs_value_ty| try addPair(items, lhs_value_ty, rhs_field.value_ty.?);
+                    if (lhs_field.value_ty.get()) |lhs_value_ty| try addPair(items, lhs_value_ty, rhs_field.value_ty.get().?);
                     try addPair(items, lhs_field.ty, rhs_field.ty);
                 }
             },
@@ -4400,7 +4400,7 @@ test "monotype type prefix views stay readable while their store grows" {
         .{
             .name = field_name,
             .ty = primitive,
-            .value_ty = unit,
+            .value_ty = .of(unit),
             .default = null,
         },
     });
@@ -4460,7 +4460,7 @@ test "monotype type prefix views stay readable while their store grows" {
     const view_field = GuardedList.at(view_fields, 0);
     try std.testing.expectEqual(field_name, view_field.name);
     try std.testing.expectEqual(primitive, view_field.ty);
-    try std.testing.expectEqual(unit, view_field.value_ty.?);
+    try std.testing.expectEqual(unit, view_field.value_ty.get().?);
 
     const view_tags = view.tagSpan(view.get(tag_union).tag_union);
     const view_tag = GuardedList.at(view_tags, 0);
@@ -4529,7 +4529,7 @@ test "monotype cross-store import relocates names, side pools, sharing, and recu
     const fields = try source.addFields(&.{.{
         .name = field_name,
         .ty = recursive,
-        .value_ty = leaf,
+        .value_ty = .of(leaf),
         .default = .{ .module = source_module, .expr_node = 19 },
     }});
     const record = try transaction.reserve(&source);
@@ -4576,7 +4576,7 @@ test "monotype cross-store import relocates names, side pools, sharing, and recu
     const imported_fields = destination.fieldSpan(destination.get(imported_record).record);
     const imported_field = GuardedList.at(imported_fields, 0);
     try std.testing.expectEqual(imported_root, imported_field.ty);
-    try std.testing.expectEqual(preexisting_leaf, imported_field.value_ty.?);
+    try std.testing.expectEqual(preexisting_leaf, imported_field.value_ty.get().?);
     try std.testing.expectEqual(@as(u32, 19), imported_field.default.?.expr_node);
     try std.testing.expectEqualSlices(
         u8,
@@ -4852,7 +4852,7 @@ test "monotype cross-store import is atomic under allocation failure" {
     recursive_transaction.fill(&source, record, .{ .record = try source.addFields(&.{.{
         .name = field_name,
         .ty = recursive,
-        .value_ty = unit,
+        .value_ty = .of(unit),
         .default = .{ .module = module, .expr_node = 3 },
     }}) });
     recursive_transaction.fill(&source, recursive, .{ .tag_union = try source.addTags(&.{.{
