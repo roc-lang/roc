@@ -8318,7 +8318,13 @@ fn customPackageDevPacks(
         }
         if (index == 1) {
             if (std.mem.find(u8, ran.stderr, "package dev pack Numeric") == null) {
-                return failureFromRun(allocator, timer, ran, "checking did not prepare the URL package's dev pack");
+                var listing = std.ArrayList(u8).empty;
+                for (files.paths.items) |path| {
+                    listing.appendSlice(allocator, "\n  ") catch {};
+                    listing.appendSlice(allocator, path) catch {};
+                }
+                const message = std.fmt.allocPrint(allocator, "checking did not prepare the URL package's dev pack; the cache holds {d} pack files:{s}", .{ files.paths.items.len, listing.items }) catch "checking did not prepare the URL package's dev pack";
+                return failureFromRun(allocator, timer, ran, message);
             }
             var package_packs: usize = 0;
             for (files.paths.items) |path| {
