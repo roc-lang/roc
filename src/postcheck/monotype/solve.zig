@@ -40,16 +40,16 @@ pub const NodeId = enum(u32) { _ };
 
 /// A node id or none in one id's width. `InstGraph.newNode` never issues the
 /// `none` value as an id.
-const MaybeNodeId = enum(u32) {
+pub const MaybeNodeId = enum(u32) {
     none = std.math.maxInt(u32),
     _,
 
-    fn of(node: ?NodeId) MaybeNodeId {
+    pub fn of(node: ?NodeId) MaybeNodeId {
         const present = node orelse return .none;
         return @fromBackingInt(@backingInt(present));
     }
 
-    fn get(self: MaybeNodeId) ?NodeId {
+    pub fn get(self: MaybeNodeId) ?NodeId {
         if (self == .none) return null;
         return @fromBackingInt(@backingInt(self));
     }
@@ -118,7 +118,7 @@ pub const InstField = struct {
     ty: NodeId,
     /// Source value type before the field kind is consumed into `ty`. Present
     /// on checked optional and undetermined fields; absent means `ty` itself.
-    value_ty: ?NodeId = null,
+    value_ty: MaybeNodeId = .none,
     kind: InstFieldKind = .sealed,
     default: ?Type.FieldDefault,
 };
@@ -5148,13 +5148,13 @@ pub const InstGraph = struct {
                             if (!allow_field_kind_defaults) return false;
                             try pending.append(
                                 pending_allocator,
-                                field.value_ty orelse
+                                field.value_ty.get() orelse
                                     Common.invariant("undetermined field kind carried no source value cell"),
                             );
                             continue;
                         }
                         try pending.append(pending_allocator, field.ty);
-                        if (field.value_ty) |value_ty| try pending.append(pending_allocator, value_ty);
+                        if (field.value_ty.get()) |value_ty| try pending.append(pending_allocator, value_ty);
                     }
                     try pending.append(pending_allocator, row.ext);
                 },
@@ -5369,7 +5369,7 @@ pub const InstGraph = struct {
                 for (row.fields, fields) |field, *out| {
                     out.* = field;
                     out.ty = try self.copyPrivateWitness(field.ty, copies);
-                    if (field.value_ty) |value_ty| out.value_ty = try self.copyPrivateWitness(value_ty, copies);
+                    if (field.value_ty.get()) |value_ty| out.value_ty = .of(try self.copyPrivateWitness(value_ty, copies));
                 }
                 break :blk .{ .record = .{
                     .fields = fields,
@@ -5494,7 +5494,7 @@ pub const InstGraph = struct {
                 .record => |row| {
                     for (row.fields) |field| {
                         try self.containment_pending.append(self.allocator, field.ty);
-                        if (field.value_ty) |value_ty| {
+                        if (field.value_ty.get()) |value_ty| {
                             try self.containment_pending.append(self.allocator, value_ty);
                         }
                     }
@@ -5885,8 +5885,8 @@ pub const InstGraph = struct {
                         private_entry.default,
                     );
                     try self.relateOpaqueChild(
-                        public_entry.value_ty orelse public_entry.ty,
-                        private_entry.value_ty orelse private_entry.ty,
+                        public_entry.value_ty.get() orelse public_entry.ty,
+                        private_entry.value_ty.get() orelse private_entry.ty,
                         row_width,
                         pending,
                     );
@@ -6547,14 +6547,14 @@ pub const InstGraph = struct {
     pub fn fieldValueNode(self: *InstGraph, field: InstField) NodeId {
         const value = switch (field.kind) {
             .required, .defaulted => blk: {
-                if (field.value_ty != null) Common.invariant("inline record field carried a separate source value node");
+                if (field.value_ty != .none) Common.invariant("inline record field carried a separate source value node");
                 break :blk field.ty;
             },
-            .optional, .undetermined => field.value_ty orelse
+            .optional, .undetermined => field.value_ty.get() orelse
                 Common.invariant("record field carried no source value node"),
             // Sealed Monotypes retain source-value metadata for optional slots;
             // its absence explicitly denotes an inline source value.
-            .sealed => field.value_ty orelse field.ty,
+            .sealed => field.value_ty.get() orelse field.ty,
         };
         return self.find(value);
     }
@@ -6568,7 +6568,7 @@ pub const InstGraph = struct {
         const field = try self.recordFieldWithAccess(raw_record, name, .runtime_layout, "required record field access");
         switch (field.kind) {
             .sealed => {
-                if (field.value_ty != null) {
+                if (field.value_ty != .none) {
                     Common.invariant("required access reached a sealed optional record field");
                 }
             },
@@ -6581,7 +6581,7 @@ pub const InstGraph = struct {
                 self.constrainUndeterminedFieldKind(id, .required);
             },
         }
-        const value = field.value_ty orelse field.ty;
+        const value = field.value_ty.get() orelse field.ty;
         try self.unify(field.ty, value);
         return self.find(field.ty);
     }
@@ -6601,7 +6601,7 @@ pub const InstGraph = struct {
         _ = self.unifyFieldKinds(field.kind, field.default, .optional, null);
         return .{
             .slot = self.find(field.ty),
-            .value = self.find(field.value_ty orelse
+            .value = self.find(field.value_ty.get() orelse
                 Common.invariant("optional field access had no source value cell")),
         };
     }
@@ -6632,7 +6632,7 @@ pub const InstGraph = struct {
                 self.constrainUndeterminedFieldKind(id, .required);
                 try self.unify(
                     field.ty,
-                    field.value_ty orelse
+                    field.value_ty.get() orelse
                         Common.invariant("undetermined constructor field carried no source value type"),
                 );
                 return .required;
@@ -6651,7 +6651,7 @@ pub const InstGraph = struct {
         return switch (field.kind) {
             .sealed => if (field.default) |default|
                 .{ .defaulted = default }
-            else if (field.value_ty != null)
+            else if (field.value_ty != .none)
                 .optional
             else
                 .required,
@@ -8161,8 +8161,8 @@ pub const InstGraph = struct {
                     right_field.default,
                 );
                 try pending.append(self.allocator, .{
-                    .left = left_field.value_ty orelse left_field.ty,
-                    .right = right_field.value_ty orelse right_field.ty,
+                    .left = left_field.value_ty.get() orelse left_field.ty,
+                    .right = right_field.value_ty.get() orelse right_field.ty,
                     .row_width = row_width,
                 });
                 try pending.append(self.allocator, .{ .left = left_field.ty, .right = right_field.ty, .row_width = row_width });
@@ -8173,7 +8173,7 @@ pub const InstGraph = struct {
                 try merged.append(row_allocator, .{
                     .name = left_field.name,
                     .ty = left_field.ty,
-                    .value_ty = left_field.value_ty orelse right_field.value_ty,
+                    .value_ty = .of(left_field.value_ty.get() orelse right_field.value_ty.get()),
                     .kind = merged_kind,
                     .default = resolved_default,
                 });
@@ -8389,7 +8389,7 @@ pub const InstGraph = struct {
                     inst_fields[index] = .{
                         .name = field.name,
                         .ty = nodes[next - 1],
-                        .value_ty = value_ty,
+                        .value_ty = .of(value_ty),
                         .kind = if (value_ty != null)
                             .optional
                         else if (field.default) |default|
@@ -9348,16 +9348,16 @@ pub const GraphTypeFinals = struct {
                 build.flat_fields = flat.fields;
                 for (flat.fields) |field| {
                     if (field.kind == .undetermined and self.graph.resolvedFieldKind(field.kind) == null) {
-                        try self.addSealPart(build, .{ .node = field.value_ty orelse
+                        try self.addSealPart(build, .{ .node = field.value_ty.get() orelse
                             Common.invariant("undetermined graph field carried no source value type") });
                         continue;
                     }
                     try self.addSealPart(build, .{ .node = field.ty });
                     if (self.graph.resolvedFieldKind(field.kind)) |kind| switch (kind) {
-                        .optional => try self.addSealPart(build, .{ .node = field.value_ty orelse
+                        .optional => try self.addSealPart(build, .{ .node = field.value_ty.get() orelse
                             Common.invariant("optional graph field carried no source value type") }),
                         .required, .defaulted => {},
-                    } else if (field.value_ty) |value_ty| try self.addSealPart(build, .{ .node = value_ty });
+                    } else if (field.value_ty.get()) |value_ty| try self.addSealPart(build, .{ .node = value_ty });
                 }
             },
             .named => |named| {
@@ -9542,7 +9542,7 @@ pub const GraphTypeFinals = struct {
             const value_ty: ?Type.TypeId = if (self.graph.resolvedFieldKind(field.kind)) |kind| switch (kind) {
                 .optional => reader.next(),
                 .required, .defaulted => null,
-            } else if (field.value_ty != null) reader.next() else null;
+            } else if (field.value_ty != .none) reader.next() else null;
             sealed.* = .{
                 .name = field.name,
                 .ty = ty,
@@ -10941,7 +10941,7 @@ test "provisional Monotype view preserves an undetermined record field" {
     fields[0] = .{
         .name = field_name,
         .ty = slot,
-        .value_ty = value_ty,
+        .value_ty = .of(value_ty),
         .kind = .{ .undetermined = kind },
         .default = null,
     };
@@ -11006,7 +11006,7 @@ test "retained provisional view preserves content across later graph refinement"
         .fields = try graph.arena().dupe(InstField, &.{.{
             .name = try name_store.internRecordFieldLabel("value"),
             .ty = slot,
-            .value_ty = value,
+            .value_ty = .of(value),
             .kind = .{ .undetermined = kind },
             .default = null,
         }}),
@@ -11051,7 +11051,7 @@ test "issue 11303: reading a field value preserves its undetermined storage unti
         .fields = try graph.arena().dupe(InstField, &.{.{
             .name = field_name,
             .ty = slot,
-            .value_ty = value,
+            .value_ty = .of(value),
             .kind = .{ .undetermined = kind },
             .default = null,
         }}),
@@ -11109,7 +11109,7 @@ test "issue 11303: field value reads preserve optional tagged storage and sealed
             .fields = try graph.arena().dupe(InstField, &.{.{
                 .name = field_name,
                 .ty = field_slot,
-                .value_ty = if (case.optional) value else null,
+                .value_ty = .of(if (case.optional) value else null),
                 .kind = case.kind,
                 .default = null,
             }}),
@@ -11842,7 +11842,7 @@ test "generated-private containment follows optional field value types" {
     const fields = try graph.arena().dupe(InstField, &.{.{
         .name = field_name,
         .ty = slot,
-        .value_ty = private_value,
+        .value_ty = .of(private_value),
         .kind = .optional,
         .default = null,
     }});
@@ -11985,7 +11985,7 @@ test "iterator-interface containment agrees between Monotype and graph" {
                     const fields = try self.graph.arena().dupe(InstField, &.{.{
                         .name = self.field_name,
                         .ty = u64_node,
-                        .value_ty = leaf,
+                        .value_ty = .of(leaf),
                         .kind = .optional,
                         .default = null,
                     }});
@@ -12098,7 +12098,7 @@ test "construction row relation absorbs only explicit optional or defaulted fiel
     const right_only = [_]InstField{.{
         .name = b,
         .ty = u64_node,
-        .value_ty = u64_node,
+        .value_ty = .of(u64_node),
         .kind = .optional,
         .default = null,
     }};
@@ -12426,7 +12426,7 @@ test "construction selection preserves private evidence while absorbing optional
             .{
                 .name = optional_field,
                 .ty = optional_ty,
-                .value_ty = optional_ty,
+                .value_ty = .of(optional_ty),
                 .kind = .optional,
                 .default = null,
             },
@@ -14494,7 +14494,7 @@ test "interface constraints preserve recursive and field-presence topology" {
     const row = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
     const field = try name_store.internRecordFieldLabel("value");
     try graph.setContent(row, .{ .record = .{
-        .fields = try graph.arena().dupe(InstField, &.{.{ .name = field, .ty = slot, .value_ty = value, .kind = .{ .undetermined = kind }, .default = null }}),
+        .fields = try graph.arena().dupe(InstField, &.{.{ .name = field, .ty = slot, .value_ty = .of(value), .kind = .{ .undetermined = kind }, .default = null }}),
         .ext = try graph.newNode(.empty_record),
     } });
     try graph.setContent(value, .{ .list = row });
@@ -14503,13 +14503,13 @@ test "interface constraints preserve recursive and field-presence topology" {
     const second = (try constraints.instantiate(graph))[0];
     const first_field = (try graph.content(first)).record.fields[0];
     const second_field = (try graph.content(second)).record.fields[0];
-    try std.testing.expectEqual(first, (try graph.content(first_field.value_ty.?)).list);
+    try std.testing.expectEqual(first, (try graph.content(first_field.value_ty.get().?)).list);
     try std.testing.expect(first_field.kind.undetermined != second_field.kind.undetermined);
     graph.constrainUndeterminedFieldKind(first_field.kind.undetermined, .optional);
     try std.testing.expect(graph.resolvedFieldKind(second_field.kind) == null);
     const cells = graph.field_kinds.items[@backingInt(second_field.kind.undetermined)].cells.?;
     try std.testing.expectEqual(second_field.ty, cells.slot);
-    try std.testing.expectEqual(second_field.value_ty.?, cells.value);
+    try std.testing.expectEqual(second_field.value_ty.get().?, cells.value);
 }
 
 test "interface constraints retain settled producer evidence and exact leaf collision authority" {
@@ -14613,7 +14613,7 @@ test "interface constraints distinguish variable sharing defaults and field-kind
     graph.registerUndeterminedFieldKindCells(kind, str, str);
     graph.constrainUndeterminedFieldKind(kind, .required);
     const row = try graph.newNode(.{ .record = .{
-        .fields = try graph.arena().dupe(InstField, &.{.{ .name = field, .ty = str, .value_ty = str, .kind = .{ .undetermined = kind }, .default = null }}),
+        .fields = try graph.arena().dupe(InstField, &.{.{ .name = field, .ty = str, .value_ty = .of(str), .kind = .{ .undetermined = kind }, .default = null }}),
         .ext = try graph.newNode(.empty_record),
     } });
     const required = try InterfaceConstraints.capture(graph, graph.arena(), &.{row});

@@ -2727,8 +2727,8 @@ fn deferredTemplateTypeArgumentsStep(
                     const request_field = request_record.fields[index];
                     try pending.append(gpa, .{ .field_kind = .{ .checked = checked_field, .request = request_field } });
                     try pending.append(gpa, .{ .argument = .{
-                        .checked_node = checked_field.value_ty orelse checked_field.ty,
-                        .request_node = request_field.value_ty orelse request_field.ty,
+                        .checked_node = checked_field.value_ty.get() orelse checked_field.ty,
+                        .request_node = request_field.value_ty.get() orelse request_field.ty,
                     } });
                     try pending.append(gpa, .{ .argument = .{ .checked_node = checked_field.ty, .request_node = request_field.ty } });
                 }
@@ -3382,8 +3382,8 @@ fn beginCheckedMonoRequestPair(
                 for (checked_row.fields, request_row.fields) |checked_field, request_field| {
                     try ops.append(allocator, .{ .field_kind = .{ .checked = checked_field, .request = request_field } });
                     try ops.append(allocator, .{ .relate = .{
-                        .checked = checked_field.value_ty orelse checked_field.ty,
-                        .request = request_field.value_ty orelse request_field.ty,
+                        .checked = checked_field.value_ty.get() orelse checked_field.ty,
+                        .request = request_field.value_ty.get() orelse request_field.ty,
                     } });
                     try ops.append(allocator, .{ .relate = .{ .checked = checked_field.ty, .request = request_field.ty } });
                 }
@@ -26904,7 +26904,7 @@ const BodyContext = struct {
             .optional => .{
                 .name = name,
                 .ty = try self.optionalSlotNode(value_node),
-                .value_ty = value_node,
+                .value_ty = .of(value_node),
                 .kind = .optional,
                 .default = null,
             },
@@ -26916,7 +26916,7 @@ const BodyContext = struct {
                     break :blk .{
                         .name = name,
                         .ty = existing.slot,
-                        .value_ty = existing.value,
+                        .value_ty = .of(existing.value),
                         .kind = .{ .undetermined = existing.id },
                         .default = null,
                     };
@@ -26933,7 +26933,7 @@ const BodyContext = struct {
                 break :blk .{
                     .name = name,
                     .ty = instantiated.slot,
-                    .value_ty = instantiated.value,
+                    .value_ty = .of(instantiated.value),
                     .kind = .{ .undetermined = instantiated.id },
                     .default = null,
                 };
@@ -30771,7 +30771,7 @@ const BodyContext = struct {
                         if (witness.requires_witness) task.requires_distinct_witness = true;
                         continue;
                     };
-                    task.current_child_node = self.graph.rootNode(field.value_ty orelse field.ty);
+                    task.current_child_node = self.graph.rootNode(field.value_ty.get() orelse field.ty);
                     return evidenceCall(self, .{ .produced_value = .{ .expr = field_value, .request_node = task.current_child_node } });
                 }
                 if (!task.requires_distinct_witness) return .{ .ret = .{ .maybe_node = null } };
@@ -31524,7 +31524,7 @@ const BodyContext = struct {
                     const construction_field = task.construction.?.get(try self.recordFieldName(self.view, field.label));
                     return evidenceCall(self, .{ .relate = .{
                         .expr = field.value,
-                        .expected_node = self.graph.rootNode(construction_field.value_ty orelse construction_field.ty),
+                        .expected_node = self.graph.rootNode(construction_field.value_ty.get() orelse construction_field.ty),
                     } });
                 }
             },
@@ -34350,7 +34350,7 @@ const BodyContext = struct {
                 defer construction.deinit(self.allocator);
                 for (record.record.fields) |field| {
                     const construction_field = construction.get(try self.recordFieldName(self.view, field.label));
-                    task.slots[slot_index] = self.graph.rootNode(construction_field.value_ty orelse construction_field.ty);
+                    task.slots[slot_index] = self.graph.rootNode(construction_field.value_ty.get() orelse construction_field.ty);
                     slot_index += 1;
                 }
             },
@@ -49966,7 +49966,7 @@ const BodyContext = struct {
             } else omitted: {
                 produced_fields[index] = field;
                 if (self.omittedRecordFieldDefault(checked_expr, field.name)) |default| {
-                    const value_node = field.value_ty orelse field.ty;
+                    const value_node = field.value_ty.get() orelse field.ty;
                     break :omitted (try self.defaultedFieldValueFromDefaultAtCell(
                         default,
                         DraftTypeCell.fromGraphNode(value_node),
@@ -49976,7 +49976,7 @@ const BodyContext = struct {
                 const field_kind = self.graph.recordOmittedFieldKindOf(field);
                 break :omitted switch (field_kind) {
                     .defaulted => |default| blk: {
-                        const value_node = field.value_ty orelse field.ty;
+                        const value_node = field.value_ty.get() orelse field.ty;
                         break :blk (try self.defaultedFieldValueFromMonoDefaultAtCell(
                             default,
                             DraftTypeCell.fromGraphNode(value_node),
@@ -58153,7 +58153,7 @@ const BodyContext = struct {
                 .record => |row| {
                     for (row.fields) |field| {
                         try pending.append(self.allocator, field.ty);
-                        if (field.value_ty) |value_ty| try pending.append(self.allocator, value_ty);
+                        if (field.value_ty.get()) |value_ty| try pending.append(self.allocator, value_ty);
                     }
                     try pending.append(self.allocator, row.ext);
                 },
