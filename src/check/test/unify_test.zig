@@ -2630,9 +2630,7 @@ test "unify - non-numeric flex with rigid keeps constraints deferred-only" {
 
     const resolved = env.module_env.types.resolveVar(rigid_var);
     try std.testing.expect(resolved.desc.content == .rigid);
-    // Range.empty() leaves .start undefined; structural expectEqual would read it
-    // and fail under ReleaseFast. Check emptiness via count instead.
-    try std.testing.expectEqual(@as(u32, 0), resolved.desc.content.rigid.constraints.count);
+    try std.testing.expectEqual(types_mod.StaticDispatchConstraint.SafeList.Range.empty(), resolved.desc.content.rigid.constraints);
     try std.testing.expectEqual(1, env.scratch.deferred_constraints.len());
     try std.testing.expectEqual(constraints, env.scratch.deferred_constraints.items.items[0].constraints);
 }

@@ -24783,8 +24783,8 @@ fn failAliasRow(
 }
 
 /// Read the source field at `idx` within `range`. Indexing through the run's
-/// start only happens when the record has fields; start may be undefined when
-/// count is 0.
+/// start only happens when the record has fields; an empty run's start
+/// addresses no row.
 fn aliasRowField(self: *Self, range: types_mod.RecordField.SafeMultiList.Range, idx: u32) types_mod.RecordField {
     return self.types.record_fields.get(@fromBackingInt(@intCast(@backingInt(range.start) + idx)));
 }
@@ -24857,8 +24857,8 @@ fn stepRecordRow(self: *Self, frame: *RecordRowFrame, env: *Env, region: Region)
 }
 
 /// Read the source tag at `idx` within `range`. Indexing through the run's
-/// start only happens when the tag union has tags; start may be undefined when
-/// count is 0.
+/// start only happens when the tag union has tags; an empty run's start
+/// addresses no row.
 fn aliasRowTag(self: *Self, range: types_mod.Tag.SafeMultiList.Range, idx: u32) types_mod.Tag {
     return self.types.tags.get(@fromBackingInt(@intCast(@backingInt(range.start) + idx)));
 }

@@ -3850,6 +3850,79 @@ test "Store.Serialized roundtrip" {
     try std.testing.expectEqual(field_presence, copied_fields.items(.presence)[1].presenceVar());
 }
 
+test "Store.Serialized bytes are a function of the stored types" {
+    // The types store is copied verbatim into every checked module cache entry, so
+    // its bytes must depend on the stored types alone, including the `start` of
+    // every empty range a content holds (a pure function's `effect_deps`, an
+    // unconstrained flex's or rigid's `constraints`).
+    const CompactWriter = collections.CompactWriter;
+
+    // Fills every allocation with `poison` and never grows one in place, so each
+    // store below is built over memory that holds a different stale pattern.
+    const PoisonAllocator = struct {
+        child: Allocator,
+        poison: u8,
+
+        fn allocator(self: *@This()) Allocator {
+            return .{ .ptr = self, .vtable = &.{
+                .alloc = alloc,
+                .resize = Allocator.noResize,
+                .remap = Allocator.noRemap,
+                .free = free,
+            } };
+        }
+
+        fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            const ptr = self.child.rawAlloc(len, alignment, ret_addr) orelse return null;
+            @memset(ptr[0..len], self.poison);
+            return ptr;
+        }
+
+        fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.child.rawFree(memory, alignment, ret_addr);
+        }
+    };
+
+    const Build = struct {
+        fn serialized(poison: u8) (Allocator.Error || error{BufferTooSmall})![]align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 {
+            const gpa = std.testing.allocator;
+            var poisoned: PoisonAllocator = .{ .child = gpa, .poison = poison };
+            var store = try Store.init(poisoned.allocator());
+            defer store.deinit();
+
+            const flex = try store.freshFromContent(.{ .flex = Flex.init() });
+            const rigid = try store.freshFromContent(.{ .rigid = Rigid.init(.{
+                .attributes = .{ .effectful = false, .ignored = false, .reserved = false },
+                .idx = 7,
+            }) });
+            _ = try store.freshFromContent(try store.mkFuncPure(&.{ flex, rigid }, flex));
+            _ = try store.freshFromContent(try store.mkFuncEffectful(&.{}, rigid));
+
+            var writer = CompactWriter.init();
+            defer writer.deinit(gpa);
+            const serialized_ptr = try writer.appendAlloc(gpa, Store.Serialized);
+            try serialized_ptr.serialize(&store, gpa, &writer);
+            const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
+            errdefer gpa.free(buffer);
+            _ = try writer.writeToBuffer(buffer);
+            return buffer;
+        }
+    };
+
+    const over_as = try Build.serialized(0xAA);
+    defer std.testing.allocator.free(over_as);
+    const over_fives = try Build.serialized(0x55);
+    defer std.testing.allocator.free(over_fives);
+
+    try std.testing.expectEqualSlices(u8, over_as, over_fives);
+    // No stale pattern survives, including the debug-build fill of an
+    // `undefined` field.
+    try std.testing.expect(std.mem.find(u8, over_as, &.{ 0xAA, 0xAA, 0xAA, 0xAA }) == null);
+    try std.testing.expect(std.mem.find(u8, over_fives, &.{ 0x55, 0x55, 0x55, 0x55 }) == null);
+}
+
 test "Store multiple instances CompactWriter roundtrip" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;

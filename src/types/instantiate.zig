@@ -311,7 +311,7 @@ const FuncFrame = struct {
 };
 
 /// Source runs are held as whole ranges, never as an unpacked start index:
-/// `SafeRange.empty()` leaves `start` undefined, so `start` may only be read
+/// an empty range's `start` addresses no row, so `start` may only be read
 /// under a `count` guard, which the step functions below apply.
 const RecordFrame = struct {
     common: FillCommon,
@@ -1750,8 +1750,8 @@ pub const Instantiator = struct {
                 .fields => {
                     if (frame.field_idx < frame.source_fields.count) {
                         // Indexing through the run's start only happens when
-                        // the record has fields; start may be undefined when
-                        // count is 0.
+                        // the record has fields; an empty run's start
+                        // addresses no row.
                         const field = self.store.record_fields.get(@fromBackingInt(@intCast(@backingInt(frame.source_fields.start) + frame.field_idx)));
                         const child_var = switch (frame.field_axis) {
                             .type_var => blk: {
@@ -1802,7 +1802,7 @@ pub const Instantiator = struct {
         var vars_idx: usize = vars_base;
         for (0..source_fields.count) |i| {
             // The loop body runs only for a non-empty run, so reading the
-            // run's start here never reads an empty range's undefined start.
+            // run's start here never reads an empty range's start.
             const field = self.store.record_fields.get(@fromBackingInt(@intCast(@backingInt(source_fields.start) + i)));
             const fresh_type_var = machine.value_stack.items[vars_idx];
             vars_idx += 1;
@@ -1840,12 +1840,12 @@ pub const Instantiator = struct {
                         continue;
                     }
                     // Indexing through the run's start only happens when the
-                    // union has tags; start may be undefined when count is 0.
+                    // union has tags; an empty run's start addresses no row.
                     const tag = self.store.tags.get(@fromBackingInt(@intCast(@backingInt(frame.source_tags.start) + frame.tag_idx)));
                     const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
                     if (arrived < tag.args.count) {
                         // Indexing through tag.args.start only happens when the
-                        // tag has payloads; start may be undefined when count is 0.
+                        // tag has payloads; an empty run's start addresses no row.
                         const arg_var = self.store.vars.items.items[@backingInt(tag.args.start) + arrived];
                         self.current_reach = .nested;
                         if (!try self.requestVar(arg_var, false)) return false;
