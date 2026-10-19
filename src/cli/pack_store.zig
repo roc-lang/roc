@@ -51,8 +51,23 @@ pub const Store = struct {
     }
 
     fn packPath(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8) Allocator.Error![]u8 {
-        const name = std.fmt.bytesToHex(key, .lower) ++ ".rpk".*;
+        return self.filePath(origin, identity, key, ".rpk");
+    }
+
+    fn filePath(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8, comptime extension: []const u8) Allocator.Error![]u8 {
+        const name = std.fmt.bytesToHex(key, .lower) ++ extension[0..extension.len].*;
         return std.fs.path.join(self.allocator, &.{ self.root, @tagName(origin), &std.fmt.bytesToHex(identity, .lower), &name });
+    }
+
+    /// File a program's discovery summaries (design.md "Discovery
+    /// Summaries") under a module identity, named by their content, beside
+    /// that module's packs. Summaries already filed are left alone.
+    pub fn writeDiscovery(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
+        var name: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(bytes, &name, .{});
+        const path = try self.filePath(origin, identity, name, discovery_extension);
+        defer self.allocator.free(path);
+        try self.writeAt(origin, identity, path, bytes);
     }
 
     /// Whether the pack for `key` is already in the store.
@@ -66,14 +81,18 @@ pub const Store = struct {
     /// pack already present is left alone: it holds the same bytes, which
     /// builds with runtime safety check.
     pub fn write(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, key: [32]u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
+        const path = try self.packPath(origin, identity, key);
+        defer self.allocator.free(path);
+        try self.writeAt(origin, identity, path, bytes);
+    }
+
+    fn writeAt(self: *const Store, origin: compile.BuildEnv.PackOrigin, identity: [32]u8, path: []const u8, bytes: []const u8) (Allocator.Error || error{PackWriteFailed})!void {
         const dir = try self.identityDir(origin, identity);
         defer self.allocator.free(dir);
         self.roc_ctx.makePath(dir) catch |err| {
             self.reportWriteFailure("create directory", dir, bytes.len, err);
             return error.PackWriteFailed;
         };
-        const path = try self.packPath(origin, identity, key);
-        defer self.allocator.free(path);
         if (self.roc_ctx.fileExists(path)) {
             if (std.debug.runtime_safety) try self.verifyCollision(path, bytes);
             return;
@@ -349,6 +368,34 @@ pub fn compileTimePackKey(code_generation_key: [32]u8) [32]u8 {
     return hasher.finalResult();
 }
 
+/// The file extension of discovery summaries.
+const discovery_extension = ".rds";
+const discovery_magic = "RDSK";
+/// Format version of discovery summary files; a file of another version is
+/// no offer.
+pub const discovery_format_version: u32 = 1;
+
+/// Encode discovery summaries: the magic, the version, the count, and for
+/// each summary its key, its module count, and its module keys, in the
+/// order given (`DiscoverySummary.collect` sorts them).
+pub fn encodeDiscovery(allocator: Allocator, summaries: []const lir.CheckedPipeline.DiscoverySummary.Summary) Allocator.Error![]u8 {
+    var bytes = std.ArrayList(u8).empty;
+    errdefer bytes.deinit(allocator);
+    try bytes.appendSlice(allocator, discovery_magic);
+    var word: [4]u8 = undefined;
+    std.mem.writeInt(u32, &word, discovery_format_version, .little);
+    try bytes.appendSlice(allocator, &word);
+    std.mem.writeInt(u32, &word, @intCast(summaries.len), .little);
+    try bytes.appendSlice(allocator, &word);
+    for (summaries) |summary| {
+        try bytes.appendSlice(allocator, &summary.key);
+        std.mem.writeInt(u32, &word, @intCast(summary.modules.len), .little);
+        try bytes.appendSlice(allocator, &word);
+        for (summary.modules) |module| try bytes.appendSlice(allocator, &module);
+    }
+    return try bytes.toOwnedSlice(allocator);
+}
+
 /// Every pack in a directory, indexed by specialization key and by procedure
 /// identity. Files load in name order so the indexes are deterministic when
 /// two packs carry the same entry.
@@ -380,6 +427,10 @@ pub const LoadedPacks = struct {
     /// Set until `indexPacks` runs; lookups before that load the pending
     /// store's packs for the modules in view first.
     pending: ?Pending = null,
+    /// The discovery settlements of the loaded summary files, by
+    /// specialization key; their module lists live in `discovery_arena`.
+    discovery: std.AutoHashMapUnmanaged([32]u8, std.ArrayList(Common.DiscoverySettlement)) = .empty,
+    discovery_arena: std.heap.ArenaAllocator,
     /// Neither lookup may expose a partial index or retry a failed collection.
     state: enum { pending, ready, unavailable } = .pending,
     failure: ?LoadError = null,
@@ -399,6 +450,7 @@ pub const LoadedPacks = struct {
             .specs = std.AutoHashMap([32]u8, Common.SpecCacheHit).init(allocator),
             .artifacts = std.AutoHashMap([32]u8, backend.dev.LocatedArtifact).init(allocator),
             .linked_specs = std.AutoHashMap([32]u8, LinkedOffer).init(allocator),
+            .discovery_arena = std.heap.ArenaAllocator.init(allocator),
         };
     }
 
@@ -438,7 +490,7 @@ pub const LoadedPacks = struct {
             while (true) {
                 const entry = (entries.next(io) catch return error.PackDirectoryUnreadable) orelse break;
                 if (entry.kind != .file) continue;
-                if (!std.mem.endsWith(u8, entry.name, ".rpk")) continue;
+                if (!std.mem.endsWith(u8, entry.name, ".rpk") and !std.mem.endsWith(u8, entry.name, discovery_extension)) continue;
                 try names.ensureUnusedCapacity(allocator, 1);
                 names.appendAssumeCapacity(try allocator.dupe(u8, entry.name));
             }
@@ -453,6 +505,10 @@ pub const LoadedPacks = struct {
                 else => return error.PackDirectoryUnreadable,
             };
             defer allocator.free(bytes);
+            if (std.mem.endsWith(u8, name, discovery_extension)) {
+                try self.appendDiscovery(bytes);
+                continue;
+            }
             self.appendPack(bytes) catch |err| {
                 switch (err) {
                     error.UnsupportedPackVersion => if (input == .cache_offers) continue,
@@ -505,6 +561,32 @@ pub const LoadedPacks = struct {
             errdefer _ = self.object_packs_used.pop();
             try self.object_packs.append(allocator, pack);
         }
+    }
+
+    /// Index one discovery summary file. A file of another format version
+    /// is no offer.
+    fn appendDiscovery(self: *LoadedPacks, bytes: []const u8) LoadError!void {
+        if (bytes.len < 12 or !std.mem.eql(u8, bytes[0..4], discovery_magic)) return error.MalformedPack;
+        if (std.mem.readInt(u32, bytes[4..8], .little) != discovery_format_version) return;
+        const count = std.mem.readInt(u32, bytes[8..12], .little);
+        const arena = self.discovery_arena.allocator();
+        var offset: usize = 12;
+        for (0..count) |_| {
+            if (bytes.len - offset < 36) return error.MalformedPack;
+            const key = bytes[offset..][0..32].*;
+            const module_count = std.mem.readInt(u32, bytes[offset + 32 ..][0..4], .little);
+            offset += 36;
+            if ((bytes.len - offset) / 32 < module_count) return error.MalformedPack;
+            const modules = try arena.alloc([32]u8, module_count);
+            for (modules) |*module| {
+                module.* = bytes[offset..][0..32].*;
+                offset += 32;
+            }
+            const entry = try self.discovery.getOrPut(self.allocator, key);
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            try entry.value_ptr.append(self.allocator, .{ .modules = modules });
+        }
+        if (offset != bytes.len) return error.MalformedPack;
     }
 
     fn appendPack(self: *LoadedPacks, bytes: []const u8) LoadError!void {
@@ -658,6 +740,10 @@ pub const LoadedPacks = struct {
     }
 
     pub fn deinit(self: *LoadedPacks) void {
+        var settlements = self.discovery.valueIterator();
+        while (settlements.next()) |list| list.deinit(self.allocator);
+        self.discovery.deinit(self.allocator);
+        self.discovery_arena.deinit();
         self.linked_specs.deinit();
         for (self.object_packs.items) |*pack| pack.deinit();
         self.object_packs.deinit(self.allocator);
@@ -670,7 +756,7 @@ pub const LoadedPacks = struct {
 
     /// The lookup Monotype consults at reservation.
     pub fn specCacheLookup(self: *LoadedPacks) Common.SpecCacheLookup {
-        return .{ .context = @ptrCast(self), .find = findSpec };
+        return .{ .context = @ptrCast(self), .find = findSpec, .find_discovery = findDiscovery };
     }
 
     /// The artifact source the object compiler splices from.
@@ -716,6 +802,14 @@ pub const LoadedPacks = struct {
         return hit;
     }
 
+    fn findDiscovery(context: *anyopaque, key: [32]u8) []const Common.DiscoverySettlement {
+        const self: *LoadedPacks = @ptrCast(@alignCast(context));
+        self.ensureLoaded();
+        if (self.state != .ready) return &.{};
+        const list = self.discovery.get(key) orelse return &.{};
+        return list.items;
+    }
+
     fn findArtifact(context: *anyopaque, key: [32]u8) ?backend.dev.LocatedArtifact {
         const self: *LoadedPacks = @ptrCast(@alignCast(context));
         self.ensureLoaded();
@@ -728,4 +822,38 @@ pub const LoadedPacks = struct {
 
 fn nameLessThan(_: void, lhs: []u8, rhs: []u8) bool {
     return std.mem.order(u8, lhs, rhs) == .lt;
+}
+
+test "discovery summaries round-trip and a file of another version is no offer" {
+    const allocator = std.testing.allocator;
+    const Summary = lir.CheckedPipeline.DiscoverySummary.Summary;
+    const modules_a = [_][32]u8{ @splat(1), @splat(2) };
+    const summaries = [_]Summary{
+        .{ .key = @splat(7), .modules = &modules_a },
+        .{ .key = @splat(7), .modules = &.{} },
+        .{ .key = @splat(9), .modules = modules_a[1..] },
+    };
+    const bytes = try encodeDiscovery(allocator, &summaries);
+    defer allocator.free(bytes);
+
+    var packs = LoadedPacks.init(allocator);
+    defer packs.deinit();
+    try packs.appendDiscovery(bytes);
+    packs.state = .ready;
+    const seven = LoadedPacks.findDiscovery(@ptrCast(&packs), @splat(7));
+    try std.testing.expectEqual(@as(usize, 2), seven.len);
+    try std.testing.expectEqualSlices([32]u8, &modules_a, seven[0].modules);
+    try std.testing.expectEqual(@as(usize, 0), seven[1].modules.len);
+    try std.testing.expectEqualSlices([32]u8, modules_a[1..], LoadedPacks.findDiscovery(@ptrCast(&packs), @splat(9))[0].modules);
+    try std.testing.expectEqual(@as(usize, 0), LoadedPacks.findDiscovery(@ptrCast(&packs), @splat(3)).len);
+
+    const other_version = try allocator.dupe(u8, bytes);
+    defer allocator.free(other_version);
+    std.mem.writeInt(u32, other_version[4..8], discovery_format_version + 1, .little);
+    var skipped = LoadedPacks.init(allocator);
+    defer skipped.deinit();
+    try skipped.appendDiscovery(other_version);
+    try std.testing.expectEqual(@as(u32, 0), skipped.discovery.count());
+
+    try std.testing.expectError(error.MalformedPack, skipped.appendDiscovery(bytes[0 .. bytes.len - 1]));
 }

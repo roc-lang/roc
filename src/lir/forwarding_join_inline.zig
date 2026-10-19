@@ -207,7 +207,7 @@ fn forwardedJoins(store: *LirStore, body: LIR.CFStmtId, allocator: Allocator) Re
         const first = store.getCFStmt(node.join.body);
         const target: LIR.LocalId, const terminal_id = if (first == .assign_ref) blk: {
             const assign = first.assign_ref;
-            if (assign.op != .local or assign.op.local != source) continue;
+            if (assign.op.kind != .local or assign.op.source != source) continue;
             break :blk .{ assign.target, assign.next };
         } else if (first == .set_local) blk: {
             const set = first.set_local;
@@ -319,7 +319,7 @@ fn forwardsToJoin(
     const first = store.getCFStmtImmediate(body);
     if (first.* == .assign_ref) {
         const assign = first.assign_ref;
-        if (assign.target != target or assign.op != .local or assign.op.local != source) return false;
+        if (assign.target != target or assign.op.kind != .local or assign.op.source != source) return false;
         const terminal = store.getCFStmtImmediate(assign.next);
         return terminal.* == .jump and terminal.jump.target == join_id;
     }
@@ -477,7 +477,7 @@ fn testSoleConsumer(scratch_allocator: Allocator, mode: TestMode, unrelated_coun
     const outer_ret = try store.addCFStmt(.{ .ret = .{ .value = copied } }, .test_fixture);
     const outer_body = try store.addCFStmt(.{ .assign_ref = .{
         .target = copied,
-        .op = .{ .local = outer_param },
+        .op = .local(outer_param),
         .next = outer_ret,
     } }, .test_fixture);
     const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = outer_id } }, .test_fixture);
@@ -529,7 +529,7 @@ fn testSoleConsumer(scratch_allocator: Allocator, mode: TestMode, unrelated_coun
     const moved = store.getCFStmt(rewritten_outer.join.body);
     try testing.expect(moved == .assign_ref);
     try testing.expectEqual(copied, moved.assign_ref.target);
-    try testing.expectEqual(inner_param, moved.assign_ref.op.local);
+    try testing.expectEqual(inner_param, moved.assign_ref.op.source);
     const moved_ret = store.getCFStmt(moved.assign_ref.next);
     try testing.expect(moved_ret == .ret);
     try testing.expectEqual(moved.assign_ref.target, moved_ret.ret.value);
@@ -561,12 +561,12 @@ fn testSharedTail(scratch_allocator: Allocator, mode: TestMode) TestError!void {
     const shared_ret = try store.addCFStmt(.{ .ret = .{ .value = shared_result } }, .test_fixture);
     const shared_tail = try store.addCFStmt(.{ .assign_ref = .{
         .target = shared_result,
-        .op = .{ .local = one },
+        .op = .local(one),
         .next = shared_ret,
     } }, .test_fixture);
     const outer_body = try store.addCFStmt(.{ .assign_ref = .{
         .target = copied,
-        .op = .{ .local = outer_param },
+        .op = .local(outer_param),
         .next = shared_tail,
     } }, .test_fixture);
     const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = outer_id } }, .test_fixture);
@@ -625,7 +625,7 @@ fn testSharedTail(scratch_allocator: Allocator, mode: TestMode) TestError!void {
     const moved_prefix = store.getCFStmt(rewritten.join.body);
     try testing.expect(moved_prefix == .assign_ref);
     try testing.expectEqual(copied, moved_prefix.assign_ref.target);
-    try testing.expectEqual(inner_param, moved_prefix.assign_ref.op.local);
+    try testing.expectEqual(inner_param, moved_prefix.assign_ref.op.source);
     try testing.expectEqual(shared_tail, moved_prefix.assign_ref.next);
 
     const original_tail = store.getCFStmt(shared_tail);

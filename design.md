@@ -206,6 +206,12 @@ of these widths is checked, and a count past the field's range returns
 `error.OutOfMemory`, the same failure as an allocation returning null. No
 stage narrows such a count unchecked.
 
+A tag union layout has at most `layout.max_tag_union_variants` (2^30)
+variants; the layout store returns `error.OutOfMemory` for a larger one when
+it creates the layout. Every variant index and discriminant therefore fits
+`layout.VariantIndex`, and producers carry them in that type from where they
+number a variant, so later stages never narrow them.
+
 A walk along a chain in a store (alias and wrapper chains, row extensions,
 descriptor extensions) is bounded by that store's entry count: a longer walk
 must revisit an entry, so it has found a cycle, which is an invariant
@@ -2085,6 +2091,32 @@ the program roots offered, the discovery roots kept, the analysis's
 templates, source and reaching templates, and custom literal types, and the discovery bodies,
 parked, unparked, and upgraded requests, and never-run stubs.
 
+#### Discovery Summaries
+
+A check whose evaluation succeeds settles the discovery of every keyed
+specialization it lowered: every literal root the specialization's closure
+registered converted without an error, and evaluation printed nothing a later
+compilation would have to repeat. Once checking reports no error, the CLI
+files a discovery summary for each such specialization beside the root
+module's packs (`DiscoverySummary.collect`): the key the body was reserved
+under (`Mono.FnTemplate.discovery_key` for a discovery body) and the checked
+keys of the modules its closure's code comes from, closed over the lifted
+program's calls and function references, including a literal root's
+conversion through the read that names it. A body the compilation did not
+lower (a parked stub or an object-cache entry) outside the app can reach the
+app through a platform requirement, so a closure holding one records the app
+module's key too. That set covers everything the closure can reach: a
+function names code only in its module's import closure, which the module's
+checked key covers, and a function value a body receives comes from code
+already in the closure.
+
+A later discovery request whose key has a summary, every recorded module of
+which this lowering has at the same key, is parked exactly like a request the
+literal-demand analysis proves reaches no literal root: the same closure
+would register the same literal roots with the same outcomes. An evaluation
+request still unparks it. `--timings` counts these under "Summarized
+requests", which are included in the parked requests.
+
 #### Compile-Time Object Packs
 
 A runtime build fills the object cache with packs of dev code; compile-time
@@ -2096,11 +2128,14 @@ its keyed closed specializations, under the same withholding rules as a
 runtime pack: an entry whose closure names a program-local symbol it does not
 carry, or still converts a literal, is not offered. A completed value the
 code reads is carried, named by its content, so an entry reading one is
-offered with the value it read. Each stage's offers, with everything about
-its procedures they depend on, are gathered as soon as the stage has run, and
-the stage's code is then released: later stages and a runtime consumer read
-only its completed values and their representation metadata, so the levels'
-code never accumulates. The pack is filed beside the root module's
+offered with the value it read. Each stage is its own program, and two
+programs can give one program-local name (`roc__d{N}`) to different
+constants, so each stage's set names its constants by content before the
+sets are combined. Each stage's offers, with everything about its procedures
+they depend on, are gathered as soon as the stage has run, and the stage's
+code is then released: later stages and a runtime consumer read only its
+completed values and their representation metadata, so the levels' code
+never accumulates. The pack is filed beside the root module's
 dev packs under a key derived from the root module's code-generation key,
 which covers every module the program's code comes from and no runtime pack
 uses, so an edited program files a new pack beside the old one. Evaluation
@@ -2111,7 +2146,10 @@ instead of lowering and compiling it.
 
 Native compile-time instruction generation consumes an explicit, read-only LIR
 demand closure seeded by compile-time root procedures and materialized callable
-relocations. Runtime-only procedures are in that program only when the runtime
+relocations, closed over the object-cache code it splices: a spliced entry's
+call to a procedure the program has binds to the program's own code, so that
+procedure joins the closure, and the entries its closure reaches are spliced
+in turn, to a fixed point. Runtime-only procedures are in that program only when the runtime
 consumer shares it, and are then left un-JIT-compiled. Runtime
 machine emission is a distinct consumer: host CPU and root-entry wrapper ABI
 are explicit execution policies. That machine emission does not repeat checked,
@@ -7172,6 +7210,14 @@ payload result positions. They are not arity-specific user APIs, and userspace
 code does not construct or pattern match on them. The compiler specializes every
 use with the concrete tag-union type, so opaque spec operations lower to direct
 tag code.
+
+A tag-union spec's generated backing holds one `Str` per distinct field label
+of the record shapes its payload parsers reach: that label's renamed field
+name. A renamed name depends only on its label, so every payload record reads
+each of its fields' names from the spec by label. The spec therefore carries
+no record identity or record order, and the payload records reaching one
+record type through different paths (directly and through an imported nominal's
+backing, say) share its entries.
 
 Userspace format code operates through safe Roc values, opaque specs, opaque
 field values, iterators, and slice-returning string/list APIs. The compiler does
@@ -18451,11 +18497,16 @@ lifetime and is not the shared-memory IPC transport.
 
 Recursive layout commitment interns unrolled copies of recursive nodes
 before selecting boxed slots. Once a recursive component has exact structural
-keys, its nodes also record their one-step encodings with settled child digests.
+keys, its nodes also record their one-step encodings with settled child digests,
+and the store keeps the one-step shape of every member of the settled group.
 An acyclic node with that same encoding inherits the recursive node's key and
-representation. Thus an unrolled record and its recursive counterpart commit
-the same field storage; graph sharing cannot make one inline and the other
-boxed. Procedure reuse by solved type identity consumes this consistent layout
+representation. A cyclic component that refers into a settled group (a copy of
+a recursive type unrolled through one of its own recursive references) is
+paired coinductively against the group's member shapes and inherits the
+group's keys when every member pairs. Thus an unrolled record and its recursive
+counterpart commit the same field storage, and two spellings of one recursive
+type commit the same layout whether they meet in one graph or in separate
+commits; graph sharing cannot make one inline and the other boxed. Procedure reuse by solved type identity consumes this consistent layout
 commitment.
 
 Layout selection is the first stage that chooses runtime encodings:
@@ -18694,6 +18745,66 @@ builtin a private slot, and returns the three words by value, so the caller's
 result slot never escapes into a non-inlined call; every other builtin's
 shim has the builtin's own signature. Every call site of a builtin states the
 same signature, which is the wrapper's C ABI.
+
+### Statement Storage
+
+Every LIR statement occupies one fixed-size slot in the store's statement
+column: 32 bytes, holding the statement's kind and at most 28 bytes of inline
+fields aligned to 4 bytes. The LIR store is alive through the program's later
+memory peaks (code generation for compile-time evaluation, pack compiles, and
+dev builds), so a statement kind's inline fields are chosen by how often they
+are read and set, not by what the largest kind needs. An inline field is
+narrower than 32 bits only where its producer bounds it (see "Representation
+Capacity"); a field that does not fit moves out of line instead.
+
+Fields that do not fit live in out-of-line rows. A statement names a row by a
+`LIR.StmtRowId(Row)`, and each row type has its own column in the store
+(`LirStore.stmt_row_types`). Rows hold:
+
+- the payload of a rare, large statement kind (Boxy value statements, erased
+  calls, packed erased functions, dictionary calls, and conditional releases),
+  a string match's pattern, and a 128-bit integer literal. The statement keeps its target, its
+  successors, and the few fields generic statement walkers read inline;
+  every other field is in the row
+- a low-level operation's reference-count effect, which is larger than every
+  inline payload
+- the rarely set fields of a common kind: a call's cold-path, frame-replacing,
+  and tail-drive flags, descriptors, and pending return; the ownership facts
+  ARC stamps on a reference read; the uniqueness proofs and single-operation
+  facts of a low-level operation; a static data read's list-of-copies facts;
+  a join's retained units and maybe-uninitialized environment; and the
+  descriptors of tags, struct contents, Boxy tag matches, and Boxy
+  reference-count helpers.
+  Such a row is optional: `none` names no row, meaning there is no
+  descriptor or every field of the row has its default (`optionalStmtRow`,
+  `stmtRowOrDefault`)
+
+Optional inline references use types that reserve their own absent values
+rather than Zig optionals, which would double their size: a call's
+self-tail link is a `TailCallLink`, whose `none` and `last` tags occupy the
+top two `CFStmtId` values (so the statement count stays below them), and an
+incref, decref, or free names its helper by an `RcHelperRef`, which keeps a
+concrete layout helper inline. A reference read's `RefOp` is a 128-bit packed
+struct: a 3-bit kind, the source local, a field or payload index, and the
+variant index and discriminant as `layout.VariantIndex`, with the fields a
+kind does not use left zero. Literal values a statement does not hold, such
+as a completed compile-time scalar, use a store-independent literal type and
+become a `LiteralValue` only when emitted into a store.
+
+Rows are immutable. A rewrite that changes a field adds a new row and points
+the statement at it, and statements copied from one another share their rows.
+A row holds no statement id, no span a procedure rewrite prepares for
+mutation, and no other row id, which the store checks at compile time; a
+procedure rewrite therefore never takes a private copy of a row, and a body
+shard relocates the rows it adds exactly as it relocates its spans. The LIR
+image serializes each row column alongside the statements.
+
+Statement compaction (`ReachableProcs`, which runs before ARC and again after
+ARC and the tail-drive pass) drops every statement no reachable procedure
+reaches, then every row no remaining statement names, and releases the
+capacity both occupied. A procedure body that ARC or a procedure-local
+rewrite replaced therefore does not stay resident after the pass that
+replaced it.
 
 ### Statement Provenance
 

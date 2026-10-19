@@ -56,7 +56,8 @@ const Collector = struct {
                     .bytes_literal => |literal| try self.mark(literal.bytes.backing),
                     .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .proc_ref => {},
                 },
-                .str_match => |s| {
+                .str_match => |s_stmt| {
+                    const s = self.store.stmtRow(s_stmt.data);
                     try self.mark(s.prefix.backing);
                     try self.markSteps(s.steps);
                 },

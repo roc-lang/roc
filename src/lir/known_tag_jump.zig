@@ -118,12 +118,12 @@ const Analysis = struct {
                 try self.joins.put(stmt.join.id, stmt_id);
             } else if (stmt == .assign_tag) {
                 const tag = stmt.assign_tag;
-                if (tag.payload == null and tag.target_desc == null and defs.get(tag.target) == 1) {
+                if (tag.payload == null and tag.target_desc == .none and defs.get(tag.target) == 1) {
                     try self.tag_defs.put(tag.target, tag.discriminant);
                 }
             } else if (stmt == .assign_literal) {
                 const literal = stmt.assign_literal;
-                if (boolLiteralDiscriminant(literal.value)) |discriminant| {
+                if (boolLiteralDiscriminant(store, literal.value)) |discriminant| {
                     if (defs.get(literal.target) == 1) try self.tag_defs.put(literal.target, discriminant);
                 }
             }
@@ -178,7 +178,7 @@ const Analysis = struct {
             if ((try visited.getOrPut(target)).found_existing) return null;
             const join_stmt = self.joins.get(target) orelse return null;
             const join = self.store.getCFStmtImmediate(join_stmt).join;
-            if (!plainJoin(join)) return null;
+            if (!plainJoin(self.store, join)) return null;
             const params = self.store.getLocalSpan(join.params);
             if (params.len == 0 or pending.count() != params.len) return null;
             env.clearRetainingCapacity();
@@ -196,14 +196,14 @@ const Analysis = struct {
                 const stmt = self.store.getCFStmt(cursor);
                 if (stmt == .assign_ref) {
                     const assign = stmt.assign_ref;
-                    const value: Value = switch (assign.op) {
-                        .local => |source| self.resolve(&env, source),
-                        .discriminant => |op| switch (self.resolve(&env, op.source)) {
+                    const value: Value = switch (assign.op.kind) {
+                        .local => self.resolve(&env, assign.op.source),
+                        .discriminant => switch (self.resolve(&env, assign.op.source)) {
                             .tag => |discriminant| .{ .discriminant = discriminant },
                             .discriminant, .fields, .local, .opaque_value => .opaque_value,
                         },
-                        .field => |op| switch (self.resolve(&env, op.source)) {
-                            .fields => |fields| if (op.field_idx < fields.len) fields[op.field_idx] else return null,
+                        .field => switch (self.resolve(&env, assign.op.source)) {
+                            .fields => |fields| if (assign.op.index < fields.len) fields[assign.op.index] else return null,
                             .tag, .discriminant, .local, .opaque_value => .opaque_value,
                         },
                         .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return null,
@@ -212,7 +212,7 @@ const Analysis = struct {
                     try changed.put(assign.target, {});
                     cursor = assign.next;
                 } else if (stmt == .assign_literal) {
-                    try env.put(stmt.assign_literal.target, if (boolLiteralDiscriminant(stmt.assign_literal.value)) |discriminant|
+                    try env.put(stmt.assign_literal.target, if (boolLiteralDiscriminant(self.store, stmt.assign_literal.value)) |discriminant|
                         .{ .tag = discriminant }
                     else
                         .opaque_value);
@@ -267,7 +267,7 @@ const Analysis = struct {
                 if (exit_id == first_target) return null;
                 const exit_stmt = self.joins.get(exit_id) orelse return null;
                 const exit_join = self.store.getCFStmtImmediate(exit_stmt).join;
-                if (!plainJoin(exit_join) or exit_join.params.len != 0) return null;
+                if (!plainJoin(self.store, exit_join) or exit_join.params.len != 0) return null;
                 if (try self.reachableOutside(chain[0], exit_stmt)) return null;
                 if (try self.exitReads(exit_join.body, &changed)) return null;
             },
@@ -289,7 +289,7 @@ const Analysis = struct {
         while (true) {
             if (self.shared.contains(cursor)) break;
             const pred = self.single_pred.get(cursor) orelse break;
-            if (!edgeStatement(self.store.getCFStmt(pred))) break;
+            if (!edgeStatement(self.store, self.store.getCFStmt(pred))) break;
             if (self.shared.contains(pred)) break;
             try reversed.append(self.allocator, pred);
             cursor = pred;
@@ -300,10 +300,10 @@ const Analysis = struct {
 
     /// The value an edge definition binds.
     fn edgeValue(self: *Analysis, env: *const Env, stmt: LIR.CFStmt) ResourceError!Value {
-        if (stmt == .assign_ref) return self.resolve(env, stmt.assign_ref.op.local);
+        if (stmt == .assign_ref) return self.resolve(env, stmt.assign_ref.op.source);
         if (stmt == .assign_tag) return .{ .tag = stmt.assign_tag.discriminant };
         if (stmt == .assign_literal) {
-            if (boolLiteralDiscriminant(stmt.assign_literal.value)) |discriminant| return .{ .tag = discriminant };
+            if (boolLiteralDiscriminant(self.store, stmt.assign_literal.value)) |discriminant| return .{ .tag = discriminant };
         }
         if (stmt == .assign_struct) return .{ .fields = try self.resolveSpan(env, stmt.assign_struct.fields) };
         return .opaque_value;
@@ -448,9 +448,13 @@ fn releaseRead(remaining: *collections.DenseMap(LocalId, u32), local: LocalId) v
 
 /// The discriminant of a payload-free two-variant tag written as a `bool`
 /// literal, whose value is its discriminant.
-fn boolLiteralDiscriminant(value: LIR.LiteralValue) ?u32 {
+fn boolLiteralDiscriminant(store: *const LirStore, value: LIR.LiteralValue) ?u32 {
     return switch (value) {
-        inline .i64_literal, .i128_literal => |literal| if (literal.layout_idx == .bool) @intCast(literal.value) else null,
+        .i64_literal => |literal| if (literal.layout_idx == .bool) @intCast(literal.value) else null,
+        .i128_literal => |id| blk: {
+            const literal = store.stmtRow(id);
+            break :blk if (literal.layout_idx == .bool) @intCast(literal.value) else null;
+        },
         .f64_literal,
         .f32_literal,
         .dec_literal,
@@ -466,11 +470,11 @@ fn boolLiteralDiscriminant(value: LIR.LiteralValue) ?u32 {
 
 /// Statements an edge may consist of before its jump: pure local aliases,
 /// payload-free tags, literals, structs, and join-parameter writes.
-fn edgeStatement(stmt: LIR.CFStmt) bool {
-    if (stmt == .assign_ref) return stmt.assign_ref.op == .local and stmt.assign_ref.take_kind == .none;
-    if (stmt == .assign_tag) return stmt.assign_tag.payload == null and stmt.assign_tag.target_desc == null;
+fn edgeStatement(store: *const LirStore, stmt: LIR.CFStmt) bool {
+    if (stmt == .assign_ref) return stmt.assign_ref.op.kind == .local and store.stmtRowOrDefault(stmt.assign_ref.extra).take_kind == .none;
+    if (stmt == .assign_tag) return stmt.assign_tag.payload == null and stmt.assign_tag.target_desc == .none;
     if (stmt == .assign_literal) return true;
-    if (stmt == .assign_struct) return stmt.assign_struct.contents_desc == null;
+    if (stmt == .assign_struct) return stmt.assign_struct.contents_desc == .none;
     if (stmt == .set_local) return stmt.set_local.mode == .initialize_join_param;
     return false;
 }
@@ -490,8 +494,8 @@ fn withNext(stmt: LIR.CFStmt, next: CFStmtId) LIR.CFStmt {
 
 /// A join with ordinary parameters only: no retained units and no
 /// maybe-uninitialized environment.
-fn plainJoin(join: @FieldType(LIR.CFStmt, "join")) bool {
-    return join.retained.len == 0 and join.maybe_uninitialized_params.len == 0;
+fn plainJoin(store: *const LirStore, join: @FieldType(LIR.CFStmt, "join")) bool {
+    return store.stmtRowOrDefault(join.extra).retained.len == 0 and store.stmtRowOrDefault(join.extra).maybe_uninitialized_params.len == 0;
 }
 
 const testing = std.testing;
@@ -566,7 +570,7 @@ fn flagLoop(exit_reads: enum { steps, done }, true_flag: enum { tag, bool_litera
     const ret = try store.addCFStmt(.{ .ret = .{ .value = exit_value } }, .test_fixture);
     const exit_body = try store.addCFStmt(.{ .assign_ref = .{
         .target = exit_value,
-        .op = .{ .local = if (exit_reads == .steps) steps else done },
+        .op = .local(if (exit_reads == .steps) steps else done),
         .next = ret,
     } }, .test_fixture);
 
@@ -576,7 +580,7 @@ fn flagLoop(exit_reads: enum { steps, done }, true_flag: enum { tag, bool_litera
     for ([_]LocalId{ steps, state, done }, [_]LocalId{ merge_steps, merge_state, merge_done }) |header_param, merge_param| {
         const copy = try local(&store, store.getLocal(merge_param).layout_idx);
         forward = try store.addCFStmt(.{ .set_local = .{ .target = header_param, .value = copy, .mode = .initialize_join_param, .next = forward } }, .test_fixture);
-        forward = try store.addCFStmt(.{ .assign_ref = .{ .target = copy, .op = .{ .local = merge_param }, .next = forward } }, .test_fixture);
+        forward = try store.addCFStmt(.{ .assign_ref = .{ .target = copy, .op = .local(merge_param), .next = forward } }, .test_fixture);
     }
 
     // `Done`: the flag becomes True, the rest of the state is unchanged.
@@ -588,11 +592,11 @@ fn flagLoop(exit_reads: enum { steps, done }, true_flag: enum { tag, bool_litera
     done_arm = try store.addCFStmt(.{ .set_local = .{ .target = merge_steps, .value = same_steps, .mode = .initialize_join_param, .next = done_arm } }, .test_fixture);
     done_arm = try store.addCFStmt(.{ .set_local = .{ .target = merge_state, .value = same_state, .mode = .initialize_join_param, .next = done_arm } }, .test_fixture);
     done_arm = try store.addCFStmt(.{ .set_local = .{ .target = merge_done, .value = true_tag, .mode = .initialize_join_param, .next = done_arm } }, .test_fixture);
-    done_arm = try store.addCFStmt(.{ .assign_ref = .{ .target = same_steps, .op = .{ .local = steps }, .next = done_arm } }, .test_fixture);
-    done_arm = try store.addCFStmt(.{ .assign_ref = .{ .target = same_state, .op = .{ .local = state }, .next = done_arm } }, .test_fixture);
+    done_arm = try store.addCFStmt(.{ .assign_ref = .{ .target = same_steps, .op = .local(steps), .next = done_arm } }, .test_fixture);
+    done_arm = try store.addCFStmt(.{ .assign_ref = .{ .target = same_state, .op = .local(state), .next = done_arm } }, .test_fixture);
     done_arm = try store.addCFStmt(switch (true_flag) {
         .tag => .{ .assign_tag = .{ .target = true_tag, .variant_index = 1, .discriminant = 1, .payload = null, .next = done_arm } },
-        .bool_literal => .{ .assign_literal = .{ .target = true_tag, .value = .{ .i128_literal = .{ .value = 1, .layout_idx = .bool } }, .next = done_arm } },
+        .bool_literal => .{ .assign_literal = .{ .target = true_tag, .value = .{ .i128_literal = try store.addStmtRow(LIR.I128Literal, .{ .value = 1, .layout_idx = .bool }) }, .next = done_arm } },
     }, .test_fixture);
 
     // `Next`: the flag is unchanged and the state is replaced.
@@ -606,7 +610,7 @@ fn flagLoop(exit_reads: enum { steps, done }, true_flag: enum { tag, bool_litera
     next_arm = try store.addCFStmt(.{ .set_local = .{ .target = merge_done, .value = same_done, .mode = .initialize_join_param, .next = next_arm } }, .test_fixture);
     next_arm = try store.addCFStmt(.{ .assign_literal = .{ .target = next_steps, .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } }, .next = next_arm } }, .test_fixture);
     next_arm = try store.addCFStmt(.{ .assign_literal = .{ .target = next_state, .value = .{ .i64_literal = .{ .value = 2, .layout_idx = .u64 } }, .next = next_arm } }, .test_fixture);
-    next_arm = try store.addCFStmt(.{ .assign_ref = .{ .target = same_done, .op = .{ .local = done }, .next = next_arm } }, .test_fixture);
+    next_arm = try store.addCFStmt(.{ .assign_ref = .{ .target = same_done, .op = .local(done), .next = next_arm } }, .test_fixture);
 
     // The step outcome, standing in for a call's result.
     const step = try store.addCFStmt(.{ .switch_stmt = .{
@@ -633,8 +637,8 @@ fn flagLoop(exit_reads: enum { steps, done }, true_flag: enum { tag, bool_litera
                 .branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = try store.addCFStmt(.{ .jump = .{ .target = exit } }, .test_fixture) }}),
                 .default_branch = try store.addCFStmt(.{ .jump = .{ .target = loop_body } }, .test_fixture),
             } }, .test_fixture);
-            const read_discriminant = try store.addCFStmt(.{ .assign_ref = .{ .target = flag_discriminant, .op = .{ .discriminant = .{ .source = flag_copy } }, .next = test_flag } }, .test_fixture);
-            break :blk try store.addCFStmt(.{ .assign_ref = .{ .target = flag_copy, .op = .{ .local = done }, .next = read_discriminant } }, .test_fixture);
+            const read_discriminant = try store.addCFStmt(.{ .assign_ref = .{ .target = flag_discriminant, .op = .discriminant(flag_copy), .next = test_flag } }, .test_fixture);
+            break :blk try store.addCFStmt(.{ .assign_ref = .{ .target = flag_copy, .op = .local(done), .next = read_discriminant } }, .test_fixture);
         },
         .bool_not, .bool_not_inline_exit => blk: {
             const not_done = try local(&store, .bool);
@@ -652,11 +656,11 @@ fn flagLoop(exit_reads: enum { steps, done }, true_flag: enum { tag, bool_litera
             const negate = try store.addCFStmt(.{ .assign_low_level = .{
                 .target = not_done,
                 .op = .bool_not,
-                .rc_effect = LIR.LowLevel.bool_not.rcEffect(),
+                .rc_effect = try store.addRcEffect(LIR.LowLevel.bool_not.rcEffect()),
                 .args = try store.addLocalSpan(&.{flag_copy}),
                 .next = test_flag,
             } }, .test_fixture);
-            break :blk try store.addCFStmt(.{ .assign_ref = .{ .target = flag_copy, .op = .{ .local = done }, .next = negate } }, .test_fixture);
+            break :blk try store.addCFStmt(.{ .assign_ref = .{ .target = flag_copy, .op = .local(done), .next = negate } }, .test_fixture);
         },
     };
     const exit_join = if (header_test == .bool_not_inline_exit)

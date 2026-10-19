@@ -220,8 +220,8 @@ fn forwardLocalAliasChainImpl(
         const stmt_node = store.getCFStmtImmediate(current);
         if (stmt_node.* != .assign_ref) return .{ .value = value, .next = current };
         const stmt = stmt_node.assign_ref;
-        if (stmt.op == .local) {
-            const local = stmt.op.local;
+        if (stmt.op.kind == .local) {
+            const local = stmt.op.source;
             if (local == value and store.getLocal(stmt.target).layout_idx == store.getLocal(value).layout_idx) {
                 if (chain) |list| try list.append(allocator, stmt.target);
                 value = stmt.target;
@@ -515,23 +515,26 @@ pub fn forEachStmtRead(
     switch (stmt) {
         .assign_ref => |s| note(ctx, refOpSource(s.op)),
         .assign_call => |s| {
-            if (s.result_desc) |desc| emitDesc(ctx, note, desc);
+            if (store.stmtRowOrDefault(s.extra).result_desc) |desc| emitDesc(ctx, note, desc);
             const args = store.getLocalSpan(s.args);
             for (0..args.len) |index| note(ctx, GuardedList.at(args, index));
         },
-        .assign_call_erased => |s| {
+        .assign_call_erased => |inline_stmt| {
+            const s = store.stmtRow(inline_stmt.data);
             note(ctx, s.closure);
             emitSpan(store, ctx, note, s.args);
             emitSpan(store, ctx, note, s.arg_descs);
             if (s.result_desc) |desc| emitDesc(ctx, note, desc);
             if (s.reuse_source) |reuse_source| note(ctx, reuse_source);
         },
-        .assign_packed_erased_fn => |s| {
+        .assign_packed_erased_fn => |inline_stmt| {
+            const s = store.stmtRow(inline_stmt.data);
             if (s.capture) |capture| note(ctx, capture);
             if (s.result_desc) |desc| emitDesc(ctx, note, desc);
             if (s.reuse) |reuse| note(ctx, reuse);
         },
-        .assign_boxy_desc_ref => |s| {
+        .assign_boxy_desc_ref => |inline_stmt| {
+            const s = store.stmtRow(inline_stmt.data);
             emitDesc(ctx, note, s.desc);
             if (s.tag_residual_for) |desc| emitDesc(ctx, note, desc);
             emitSpan(store, ctx, note, s.captures);
@@ -540,47 +543,60 @@ pub fn forEachStmtRead(
             emitDict(ctx, note, s.dict);
             emitSpan(store, ctx, note, s.captures);
         },
-        .assign_boxy_box => |s| {
+        .assign_boxy_box => |inline_stmt| {
+            const s = store.stmtRow(inline_stmt.data);
             note(ctx, s.payload);
             if (s.source_desc) |desc| emitDesc(ctx, note, desc);
             if (s.payload_desc) |desc| emitDesc(ctx, note, desc);
         },
-        .assign_boxy_record_update => |s| {
+        .assign_boxy_record_update => |inline_stmt| {
+            const s = store.stmtRow(inline_stmt.data);
             note(ctx, s.base);
             note(ctx, s.fields);
             emitDesc(ctx, note, s.base_desc);
             emitDesc(ctx, note, s.fields_desc);
         },
-        .assign_boxy_unbox => |s| {
+        .assign_boxy_unbox => |inline_stmt| {
+            const s = store.stmtRow(inline_stmt.data);
             note(ctx, s.source);
             emitDesc(ctx, note, s.source_desc);
             if (s.target_desc) |desc| emitDesc(ctx, note, desc);
         },
-        .assign_boxy_adapt => |s| {
+        .assign_boxy_adapt => |inline_stmt| {
+            const s = store.stmtRow(inline_stmt.data);
             note(ctx, s.source);
             if (s.source_desc) |desc| emitDesc(ctx, note, desc);
             if (s.target_desc) |desc| emitDesc(ctx, note, desc);
         },
-        inline .assign_boxy_inspect, .assign_boxy_tag_payload, .boxy_tag_match => |s| {
+        inline .assign_boxy_inspect, .assign_boxy_tag_payload => |inline_stmt| {
+            const s = store.stmtRow(inline_stmt.data);
             note(ctx, s.source);
             emitDesc(ctx, note, s.source_desc);
         },
-        .assign_boxy_eq => |s| {
+        .boxy_tag_match => |s| {
+            note(ctx, s.source);
+            emitDesc(ctx, note, store.stmtRow(s.source_desc));
+        },
+        .assign_boxy_eq => |inline_stmt| {
+            const s = store.stmtRow(inline_stmt.data);
             note(ctx, s.lhs);
             note(ctx, s.rhs);
             emitDesc(ctx, note, s.desc);
         },
-        .assign_boxy_hash => |s| {
+        .assign_boxy_hash => |inline_stmt| {
+            const s = store.stmtRow(inline_stmt.data);
             note(ctx, s.value);
             note(ctx, s.hasher);
             emitDesc(ctx, note, s.desc);
         },
-        .assign_boxy_tag => |s| {
+        .assign_boxy_tag => |inline_stmt| {
+            const s = store.stmtRow(inline_stmt.data);
             emitDesc(ctx, note, s.target_desc);
             if (s.payload) |payload| note(ctx, payload);
             if (s.payload_desc) |desc| emitDesc(ctx, note, desc);
         },
-        .assign_call_dict => |s| {
+        .assign_call_dict => |inline_stmt| {
+            const s = store.stmtRow(inline_stmt.data);
             emitDict(ctx, note, s.dict);
             emitSpan(store, ctx, note, s.args);
             emitSpan(store, ctx, note, s.arg_descs);
@@ -600,7 +616,7 @@ pub fn forEachStmtRead(
             for (0..fields.len) |index| note(ctx, GuardedList.at(fields, index));
         },
         .assign_tag => |s| {
-            if (s.target_desc) |desc| emitDesc(ctx, note, desc);
+            if (store.optionalStmtRow(s.target_desc)) |desc| emitDesc(ctx, note, desc);
             if (s.payload) |payload| note(ctx, payload);
         },
         .store_struct => |s| {
@@ -694,16 +710,23 @@ pub fn forEachStmtDef(
         .assign_tag,
         .set_local,
         => |s| note(ctx, s.target),
-        inline .assign_call, .assign_call_erased => |s| {
+        .assign_call => |s| {
             note(ctx, s.target);
-            if (s.out_desc) |out_desc| note(ctx, out_desc);
+            if (store.stmtRowOrDefault(s.extra).out_desc) |out_desc| note(ctx, out_desc);
+        },
+        .assign_call_erased => |s| {
+            note(ctx, s.target);
+            if (store.stmtRow(s.data).out_desc) |out_desc| note(ctx, out_desc);
         },
         .assign_boxy_tag_payload => |s| {
             note(ctx, s.target);
-            if (s.target_desc) |target_desc| note(ctx, target_desc);
+            if (store.stmtRow(s.data).target_desc) |target_desc| note(ctx, target_desc);
         },
         .join => |s| emitSpan(store, ctx, note, s.params),
-        .str_match => |s| emitStepCaptures(store, ctx, note, s.steps),
+        .str_match => |s_stmt| blk_s: {
+            const s = store.stmtRow(s_stmt.data);
+            break :blk_s emitStepCaptures(store, ctx, note, s.steps);
+        },
         .str_match_set => |s| {
             const arms = store.getStrMatchArms(s.arms);
             for (0..arms.len) |index| emitStepCaptures(store, ctx, note, GuardedList.at(arms, index).steps);
@@ -731,10 +754,10 @@ pub fn forEachStmtDef(
 
 /// The one local a reference operation reads.
 pub fn refOpSource(op: LIR.RefOp) LocalId {
-    return switch (op) {
-        .local => |local| local,
-        inline .discriminant, .field, .tag_payload, .tag_payload_struct => |ref| ref.source,
-        inline .list_reinterpret, .nominal => |ref| ref.backing_ref,
+    return switch (op.kind) {
+        .local => op.source,
+        inline .discriminant, .field, .tag_payload, .tag_payload_struct => op.source,
+        inline .list_reinterpret, .nominal => op.source,
     };
 }
 
@@ -1117,21 +1140,28 @@ pub fn visitStmtDefinitions(store: *const LirStore, defined: anytype, stmt_id: C
         .assign_struct,
         .assign_tag,
         => |stmt| noteDefinition(defined, stmt.target),
-        inline .assign_call, .assign_call_erased => |stmt| {
+        .assign_call => |stmt| {
             noteDefinition(defined, stmt.target);
-            if (stmt.out_desc) |out_desc| noteDefinition(defined, out_desc);
+            if (store.stmtRowOrDefault(stmt.extra).out_desc) |out_desc| noteDefinition(defined, out_desc);
+        },
+        .assign_call_erased => |stmt| {
+            noteDefinition(defined, stmt.target);
+            if (store.stmtRow(stmt.data).out_desc) |out_desc| noteDefinition(defined, out_desc);
         },
         .assign_boxy_tag_payload => |stmt| {
             noteDefinition(defined, stmt.target);
-            if (stmt.target_desc) |target_desc| noteDefinition(defined, target_desc);
+            if (store.stmtRow(stmt.data).target_desc) |target_desc| noteDefinition(defined, target_desc);
         },
         .join => |join| {
             const params = store.getLocalSpan(join.params);
             for (0..params.len) |index| noteDefinition(defined, GuardedList.at(params, index));
-            const maybe_uninitialized = store.getLocalSpan(join.maybe_uninitialized_params);
+            const maybe_uninitialized = store.getLocalSpan(store.stmtRowOrDefault(join.extra).maybe_uninitialized_params);
             for (0..maybe_uninitialized.len) |index| noteDefinition(defined, GuardedList.at(maybe_uninitialized, index));
         },
-        .str_match => |str_match| markStrMatchDefinitions(store, defined, str_match.steps),
+        .str_match => |str_match_stmt| blk_str_match: {
+            const str_match = store.stmtRow(str_match_stmt.data);
+            break :blk_str_match markStrMatchDefinitions(store, defined, str_match.steps);
+        },
         .str_match_set => |str_match_set| {
             const arms = store.getStrMatchArms(str_match_set.arms);
             for (0..arms.len) |index| {
@@ -1509,7 +1539,9 @@ pub fn CallResultFusion(comptime Spec: type) type {
                 .target = consumer.target,
                 .proc = variant_proc,
                 .args = try self.store.addLocalSpan(args.items),
-                .is_cold = call.is_cold,
+                .extra = try self.store.addOptionalStmtRow(LIR.CallExtra, .{
+                    .is_cold = self.store.stmtRowOrDefault(call.extra).is_cold,
+                }),
                 .next = consumer.next,
             } }, origin);
             return true;
@@ -1812,165 +1844,222 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .assign_ref => |s| .{ .assign_ref = .{
                     .target = try self.mapLocal(s.target),
                     .op = try self.mapRefOp(s.op),
-                    .take_kind = s.take_kind,
-                    .residual_shell_absent_fields = s.residual_shell_absent_fields,
+                    .extra = s.extra,
                     .next = s.next,
                 } },
                 .assign_literal => |s| .{ .assign_literal = .{
                     .target = try self.mapLocal(s.target),
                     .value = s.value,
-                    .fresh_alternative = s.fresh_alternative,
-                    .list_len = s.list_len,
                     .next = s.next,
                 } },
                 .assign_call => |s| .{ .assign_call = .{
                     .target = try self.mapLocal(s.target),
                     .proc = s.proc,
                     .args = try self.mapLocalSpan(s.args),
-                    .result_desc = try self.mapMaybeBoxyDescRef(s.result_desc),
-                    .out_desc = try self.mapMaybeLocal(s.out_desc),
-                    .is_cold = s.is_cold,
+                    .extra = try self.mapCallExtra(s.extra),
                     .next = s.next,
                 } },
-                .assign_call_erased => |s| .{ .assign_call_erased = .{
-                    .target = try self.mapLocal(s.target),
-                    .closure = try self.mapLocal(s.closure),
-                    .args = try self.mapLocalSpan(s.args),
-                    .arg_layouts = s.arg_layouts,
-                    .arg_descs = try self.mapLocalSpan(s.arg_descs),
-                    .arg_desc_keys = s.arg_desc_keys,
-                    .result_desc = try self.mapMaybeBoxyDescRef(s.result_desc),
-                    .out_desc = try self.mapMaybeLocal(s.out_desc),
-                    .arg_plan = s.arg_plan,
-                    .reuse_closure = s.reuse_closure,
-                    .reuse_source = try self.mapMaybeLocal(s.reuse_source),
-                    .next = s.next,
-                } },
-                .assign_packed_erased_fn => |s| .{ .assign_packed_erased_fn = .{
-                    .target = try self.mapLocal(s.target),
-                    .proc = s.proc,
-                    .capture = try self.mapMaybeLocal(s.capture),
-                    .capture_layout = s.capture_layout,
-                    .on_drop = s.on_drop,
-                    .result_desc = try self.mapMaybeBoxyDescRef(s.result_desc),
-                    .reuse = try self.mapMaybeLocal(s.reuse),
-                    .reuse_unique = s.reuse_unique,
-                    .next = s.next,
-                } },
-                .assign_boxy_desc_ref => |s| .{ .assign_boxy_desc_ref = .{
-                    .target = try self.mapLocal(s.target),
-                    .desc = try self.mapBoxyDescRef(s.desc),
-                    .nested_index = s.nested_index,
-                    .box_payload_layout = s.box_payload_layout,
-                    .tag_payload = s.tag_payload,
-                    .tag_ext = s.tag_ext,
-                    .tag_residual_for = try self.mapMaybeBoxyDescRef(s.tag_residual_for),
-                    .captures = try self.mapLocalSpan(s.captures),
-                    .next = s.next,
-                } },
+                .assign_call_erased => |inline_stmt| blk: {
+                    const s = self.store.stmtRow(inline_stmt.data);
+                    break :blk .{ .assign_call_erased = .{
+                        .target = try self.mapLocal(inline_stmt.target),
+                        .data = try self.store.addStmtRow(LIR.ErasedCallData, .{
+                            .closure = try self.mapLocal(s.closure),
+                            .args = try self.mapLocalSpan(s.args),
+                            .arg_layouts = s.arg_layouts,
+                            .arg_descs = try self.mapLocalSpan(s.arg_descs),
+                            .arg_desc_keys = s.arg_desc_keys,
+                            .result_desc = try self.mapMaybeBoxyDescRef(s.result_desc),
+                            .out_desc = try self.mapMaybeLocal(s.out_desc),
+                            .arg_plan = s.arg_plan,
+                            .reuse_closure = s.reuse_closure,
+                            .reuse_source = try self.mapMaybeLocal(s.reuse_source),
+                        }),
+                        .next = inline_stmt.next,
+                    } };
+                },
+                .assign_packed_erased_fn => |inline_stmt| blk: {
+                    const s = self.store.stmtRow(inline_stmt.data);
+                    break :blk .{ .assign_packed_erased_fn = .{
+                        .target = try self.mapLocal(inline_stmt.target),
+                        .data = try self.store.addStmtRow(LIR.PackedErasedFnData, .{
+                            .proc = s.proc,
+                            .capture = try self.mapMaybeLocal(s.capture),
+                            .capture_layout = s.capture_layout,
+                            .on_drop = s.on_drop,
+                            .result_desc = try self.mapMaybeBoxyDescRef(s.result_desc),
+                            .reuse = try self.mapMaybeLocal(s.reuse),
+                            .reuse_unique = s.reuse_unique,
+                        }),
+                        .next = inline_stmt.next,
+                    } };
+                },
+                .assign_boxy_desc_ref => |inline_stmt| blk: {
+                    const s = self.store.stmtRow(inline_stmt.data);
+                    break :blk .{ .assign_boxy_desc_ref = .{
+                        .target = try self.mapLocal(inline_stmt.target),
+                        .data = try self.store.addStmtRow(LIR.BoxyDescRefData, .{
+                            .desc = try self.mapBoxyDescRef(s.desc),
+                            .nested_index = s.nested_index,
+                            .box_payload_layout = s.box_payload_layout,
+                            .tag_payload = s.tag_payload,
+                            .tag_ext = s.tag_ext,
+                            .tag_residual_for = try self.mapMaybeBoxyDescRef(s.tag_residual_for),
+                            .captures = try self.mapLocalSpan(s.captures),
+                        }),
+                        .next = inline_stmt.next,
+                    } };
+                },
                 .assign_boxy_dict_ref => |s| .{ .assign_boxy_dict_ref = .{
                     .target = try self.mapLocal(s.target),
                     .dict = try self.mapBoxyDictRef(s.dict),
                     .captures = try self.mapLocalSpan(s.captures),
                     .next = s.next,
                 } },
-                .assign_boxy_box => |s| .{ .assign_boxy_box = .{
-                    .target = try self.mapLocal(s.target),
-                    .payload = try self.mapLocal(s.payload),
-                    .payload_layout = s.payload_layout,
-                    .source_desc = try self.mapMaybeBoxyDescRef(s.source_desc),
-                    .payload_desc = try self.mapMaybeBoxyDescRef(s.payload_desc),
-                    .payload_mode = s.payload_mode,
-                    .next = s.next,
-                } },
-                .assign_boxy_record_update => |s| .{ .assign_boxy_record_update = .{
-                    .target = try self.mapLocal(s.target),
-                    .base = try self.mapLocal(s.base),
-                    .base_desc = try self.mapBoxyDescRef(s.base_desc),
-                    .fields = try self.mapLocal(s.fields),
-                    .fields_layout = s.fields_layout,
-                    .fields_desc = try self.mapBoxyDescRef(s.fields_desc),
-                    .next = s.next,
-                } },
-                .assign_boxy_unbox => |s| .{ .assign_boxy_unbox = .{
-                    .target = try self.mapLocal(s.target),
-                    .source = try self.mapLocal(s.source),
-                    .source_desc = try self.mapBoxyDescRef(s.source_desc),
-                    .target_desc = try self.mapMaybeBoxyDescRef(s.target_desc),
-                    .target_layout = s.target_layout,
-                    .source_mode = s.source_mode,
-                    .next = s.next,
-                } },
-                .assign_boxy_adapt => |s| .{ .assign_boxy_adapt = .{
-                    .target = try self.mapLocal(s.target),
-                    .source = try self.mapLocal(s.source),
-                    .adapter = s.adapter,
-                    .source_desc = try self.mapMaybeBoxyDescRef(s.source_desc),
-                    .target_desc = try self.mapMaybeBoxyDescRef(s.target_desc),
-                    .source_mode = s.source_mode,
-                    .next = s.next,
-                } },
-                .assign_boxy_inspect => |s| .{ .assign_boxy_inspect = .{
-                    .target = try self.mapLocal(s.target),
-                    .source = try self.mapLocal(s.source),
-                    .source_desc = try self.mapBoxyDescRef(s.source_desc),
-                    .source_mode = s.source_mode,
-                    .next = s.next,
-                } },
-                .assign_boxy_eq => |s| .{ .assign_boxy_eq = .{
-                    .target = try self.mapLocal(s.target),
-                    .lhs = try self.mapLocal(s.lhs),
-                    .rhs = try self.mapLocal(s.rhs),
-                    .desc = try self.mapBoxyDescRef(s.desc),
-                    .next = s.next,
-                } },
-                .assign_boxy_hash => |s| .{ .assign_boxy_hash = .{
-                    .target = try self.mapLocal(s.target),
-                    .value = try self.mapLocal(s.value),
-                    .hasher = try self.mapLocal(s.hasher),
-                    .desc = try self.mapBoxyDescRef(s.desc),
-                    .next = s.next,
-                } },
-                .assign_boxy_tag => |s| .{ .assign_boxy_tag = .{
-                    .target = try self.mapLocal(s.target),
-                    .target_desc = try self.mapBoxyDescRef(s.target_desc),
-                    .tag_name = s.tag_name,
-                    .payload = try self.mapMaybeLocal(s.payload),
-                    .payload_layout = s.payload_layout,
-                    .payload_desc = try self.mapMaybeBoxyDescRef(s.payload_desc),
-                    .payload_mode = s.payload_mode,
-                    .next = s.next,
-                } },
-                .assign_boxy_tag_payload => |s| .{ .assign_boxy_tag_payload = .{
-                    .target = try self.mapLocal(s.target),
-                    .target_desc = try self.mapMaybeLocal(s.target_desc),
-                    .source = try self.mapLocal(s.source),
-                    .source_desc = try self.mapBoxyDescRef(s.source_desc),
-                    .tag_name = s.tag_name,
-                    .payload_index = s.payload_index,
-                    .source_mode = s.source_mode,
-                    .next = s.next,
-                } },
-                .assign_call_dict => |s| .{ .assign_call_dict = .{
-                    .target = try self.mapLocal(s.target),
-                    .dict = try self.mapBoxyDictRef(s.dict),
-                    .method = s.method,
-                    .method_slot = s.method_slot,
-                    .args = try self.mapLocalSpan(s.args),
-                    .arg_descs = try self.mapLocalSpan(s.arg_descs),
-                    .hidden_args = try self.mapLocalSpan(s.hidden_args),
-                    .result_desc = try self.mapMaybeBoxyDescRef(s.result_desc),
-                    .is_cold = s.is_cold,
-                    .next = s.next,
-                } },
+                .assign_boxy_box => |inline_stmt| blk: {
+                    const s = self.store.stmtRow(inline_stmt.data);
+                    break :blk .{ .assign_boxy_box = .{
+                        .target = try self.mapLocal(inline_stmt.target),
+                        .data = try self.store.addStmtRow(LIR.BoxyBoxData, .{
+                            .payload = try self.mapLocal(s.payload),
+                            .payload_layout = s.payload_layout,
+                            .source_desc = try self.mapMaybeBoxyDescRef(s.source_desc),
+                            .payload_desc = try self.mapMaybeBoxyDescRef(s.payload_desc),
+                            .payload_mode = s.payload_mode,
+                        }),
+                        .next = inline_stmt.next,
+                    } };
+                },
+                .assign_boxy_record_update => |inline_stmt| blk: {
+                    const s = self.store.stmtRow(inline_stmt.data);
+                    break :blk .{ .assign_boxy_record_update = .{
+                        .target = try self.mapLocal(inline_stmt.target),
+                        .data = try self.store.addStmtRow(LIR.BoxyRecordUpdateData, .{
+                            .base = try self.mapLocal(s.base),
+                            .base_desc = try self.mapBoxyDescRef(s.base_desc),
+                            .fields = try self.mapLocal(s.fields),
+                            .fields_layout = s.fields_layout,
+                            .fields_desc = try self.mapBoxyDescRef(s.fields_desc),
+                        }),
+                        .next = inline_stmt.next,
+                    } };
+                },
+                .assign_boxy_unbox => |inline_stmt| blk: {
+                    const s = self.store.stmtRow(inline_stmt.data);
+                    break :blk .{ .assign_boxy_unbox = .{
+                        .target = try self.mapLocal(inline_stmt.target),
+                        .data = try self.store.addStmtRow(LIR.BoxyUnboxData, .{
+                            .source = try self.mapLocal(s.source),
+                            .source_desc = try self.mapBoxyDescRef(s.source_desc),
+                            .target_desc = try self.mapMaybeBoxyDescRef(s.target_desc),
+                            .target_layout = s.target_layout,
+                            .source_mode = s.source_mode,
+                        }),
+                        .next = inline_stmt.next,
+                    } };
+                },
+                .assign_boxy_adapt => |inline_stmt| blk: {
+                    const s = self.store.stmtRow(inline_stmt.data);
+                    break :blk .{ .assign_boxy_adapt = .{
+                        .target = try self.mapLocal(inline_stmt.target),
+                        .data = try self.store.addStmtRow(LIR.BoxyAdaptData, .{
+                            .source = try self.mapLocal(s.source),
+                            .adapter = s.adapter,
+                            .source_desc = try self.mapMaybeBoxyDescRef(s.source_desc),
+                            .target_desc = try self.mapMaybeBoxyDescRef(s.target_desc),
+                            .source_mode = s.source_mode,
+                        }),
+                        .next = inline_stmt.next,
+                    } };
+                },
+                .assign_boxy_inspect => |inline_stmt| blk: {
+                    const s = self.store.stmtRow(inline_stmt.data);
+                    break :blk .{ .assign_boxy_inspect = .{
+                        .target = try self.mapLocal(inline_stmt.target),
+                        .data = try self.store.addStmtRow(LIR.BoxyInspectData, .{
+                            .source = try self.mapLocal(s.source),
+                            .source_desc = try self.mapBoxyDescRef(s.source_desc),
+                            .source_mode = s.source_mode,
+                        }),
+                        .next = inline_stmt.next,
+                    } };
+                },
+                .assign_boxy_eq => |inline_stmt| blk: {
+                    const s = self.store.stmtRow(inline_stmt.data);
+                    break :blk .{ .assign_boxy_eq = .{
+                        .target = try self.mapLocal(inline_stmt.target),
+                        .data = try self.store.addStmtRow(LIR.BoxyEqData, .{
+                            .lhs = try self.mapLocal(s.lhs),
+                            .rhs = try self.mapLocal(s.rhs),
+                            .desc = try self.mapBoxyDescRef(s.desc),
+                        }),
+                        .next = inline_stmt.next,
+                    } };
+                },
+                .assign_boxy_hash => |inline_stmt| blk: {
+                    const s = self.store.stmtRow(inline_stmt.data);
+                    break :blk .{ .assign_boxy_hash = .{
+                        .target = try self.mapLocal(inline_stmt.target),
+                        .data = try self.store.addStmtRow(LIR.BoxyHashData, .{
+                            .value = try self.mapLocal(s.value),
+                            .hasher = try self.mapLocal(s.hasher),
+                            .desc = try self.mapBoxyDescRef(s.desc),
+                        }),
+                        .next = inline_stmt.next,
+                    } };
+                },
+                .assign_boxy_tag => |inline_stmt| blk: {
+                    const s = self.store.stmtRow(inline_stmt.data);
+                    break :blk .{ .assign_boxy_tag = .{
+                        .target = try self.mapLocal(inline_stmt.target),
+                        .data = try self.store.addStmtRow(LIR.BoxyTagData, .{
+                            .target_desc = try self.mapBoxyDescRef(s.target_desc),
+                            .tag_name = s.tag_name,
+                            .payload = try self.mapMaybeLocal(s.payload),
+                            .payload_layout = s.payload_layout,
+                            .payload_desc = try self.mapMaybeBoxyDescRef(s.payload_desc),
+                            .payload_mode = s.payload_mode,
+                        }),
+                        .next = inline_stmt.next,
+                    } };
+                },
+                .assign_boxy_tag_payload => |inline_stmt| blk: {
+                    const s = self.store.stmtRow(inline_stmt.data);
+                    break :blk .{ .assign_boxy_tag_payload = .{
+                        .target = try self.mapLocal(inline_stmt.target),
+                        .data = try self.store.addStmtRow(LIR.BoxyTagPayloadData, .{
+                            .target_desc = try self.mapMaybeLocal(s.target_desc),
+                            .source = try self.mapLocal(s.source),
+                            .source_desc = try self.mapBoxyDescRef(s.source_desc),
+                            .tag_name = s.tag_name,
+                            .payload_index = s.payload_index,
+                            .source_mode = s.source_mode,
+                        }),
+                        .next = inline_stmt.next,
+                    } };
+                },
+                .assign_call_dict => |inline_stmt| blk: {
+                    const s = self.store.stmtRow(inline_stmt.data);
+                    break :blk .{ .assign_call_dict = .{
+                        .target = try self.mapLocal(inline_stmt.target),
+                        .data = try self.store.addStmtRow(LIR.CallDictData, .{
+                            .dict = try self.mapBoxyDictRef(s.dict),
+                            .method = s.method,
+                            .method_slot = s.method_slot,
+                            .args = try self.mapLocalSpan(s.args),
+                            .arg_descs = try self.mapLocalSpan(s.arg_descs),
+                            .hidden_args = try self.mapLocalSpan(s.hidden_args),
+                            .result_desc = try self.mapMaybeBoxyDescRef(s.result_desc),
+                            .is_cold = s.is_cold,
+                        }),
+                        .next = inline_stmt.next,
+                    } };
+                },
                 .assign_low_level => |s| .{ .assign_low_level = .{
                     .target = try self.mapLocal(s.target),
                     .op = s.op,
                     .rc_effect = s.rc_effect,
-                    .unique_args = s.unique_args,
-                    .interchangeable = s.interchangeable,
-                    .map_output_elem = s.map_output_elem,
-                    .simd_concat_count = s.simd_concat_count,
+                    .extra = s.extra,
                     .args = try self.mapLocalSpan(s.args),
                     .next = s.next,
                 } },
@@ -2033,14 +2122,19 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .atomicity = s.atomicity,
                     .next = s.next,
                 } },
-                .decref_if_initialized => |s| .{ .decref_if_initialized = .{
-                    .cond = try self.mapLocal(s.cond),
-                    .cond_mask = s.cond_mask,
-                    .value = try self.mapLocal(s.value),
-                    .rc = s.rc,
-                    .atomicity = s.atomicity,
-                    .next = s.next,
-                } },
+                .decref_if_initialized => |inline_stmt| blk: {
+                    const s = self.store.stmtRow(inline_stmt.data);
+                    break :blk .{ .decref_if_initialized = .{
+                        .cond = try self.mapLocal(inline_stmt.cond),
+                        .value = try self.mapLocal(inline_stmt.value),
+                        .data = try self.store.addStmtRow(LIR.DecrefIfInitializedData, .{
+                            .cond_mask = s.cond_mask,
+                            .rc = s.rc,
+                            .atomicity = s.atomicity,
+                        }),
+                        .next = inline_stmt.next,
+                    } };
+                },
                 .free => |s| .{ .free = .{
                     .value = try self.mapLocal(s.value),
                     .rc = s.rc,
@@ -2087,10 +2181,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                         frame.built = .{ .join = .{
                             .id = try self.mapJoinPoint(s.id),
                             .params = try self.mapLocalSpan(s.params),
-                            .retained = try self.mapLocalSpan(s.retained),
-                            .maybe_uninitialized_params = try self.mapLocalSpan(s.maybe_uninitialized_params),
-                            .maybe_uninitialized_conditions = try self.mapLocalSpan(s.maybe_uninitialized_conditions),
-                            .maybe_uninitialized_condition_masks = s.maybe_uninitialized_condition_masks,
+                            .extra = try self.mapJoinExtra(s.extra),
                             .body = undefined,
                             .remainder = undefined,
                         } };
@@ -2128,32 +2219,37 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                         return .{ .finished = try self.store.addCFStmt(frame.built, frame.origin) };
                     },
                 },
-                .str_match => |s| switch (step) {
-                    0 => {
-                        frame.built = .{ .str_match = .{
-                            .source = try self.mapLocal(s.source),
-                            .prefix = s.prefix,
-                            .steps = try self.mapStrMatchSteps(s.steps),
-                            .end = s.end,
-                            .on_match = undefined,
-                            .on_miss = undefined,
-                        } };
-                        return .{ .clone = s.on_match };
-                    },
-                    1 => {
-                        frame.built.str_match.on_match = returned.?;
-                        return .{ .clone = s.on_miss };
-                    },
-                    else => {
-                        frame.built.str_match.on_miss = returned.?;
-                        return .{ .finished = try self.store.addCFStmt(frame.built, frame.origin) };
-                    },
+                .str_match => |s_stmt| blk_s: {
+                    const s = self.store.stmtRow(s_stmt.data);
+                    break :blk_s switch (step) {
+                        0 => {
+                            frame.built = .{ .str_match = .{
+                                .source = try self.mapLocal(s_stmt.source),
+                                .data = try self.store.addStmtRow(LIR.StrMatchData, .{
+                                    .prefix = s.prefix,
+                                    .steps = try self.mapStrMatchSteps(s.steps),
+                                    .end = s.end,
+                                }),
+                                .on_match = undefined,
+                                .on_miss = undefined,
+                            } };
+                            return .{ .clone = s_stmt.on_match };
+                        },
+                        1 => {
+                            frame.built.str_match.on_match = returned.?;
+                            return .{ .clone = s_stmt.on_miss };
+                        },
+                        else => {
+                            frame.built.str_match.on_miss = returned.?;
+                            return .{ .finished = try self.store.addCFStmt(frame.built, frame.origin) };
+                        },
+                    };
                 },
                 .boxy_tag_match => |s| switch (step) {
                     0 => {
                         frame.built = .{ .boxy_tag_match = .{
                             .source = try self.mapLocal(s.source),
-                            .source_desc = try self.mapBoxyDescRef(s.source_desc),
+                            .source_desc = try self.store.addStmtRow(LIR.BoxyDescRef, try self.mapBoxyDescRef(self.store.stmtRow(s.source_desc))),
                             .tag_name = s.tag_name,
                             .on_match = undefined,
                             .on_miss = undefined,
@@ -2323,26 +2419,14 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         }
 
         fn mapRefOp(self: *Self, op: LIR.RefOp) Allocator.Error!LIR.RefOp {
-            return switch (op) {
-                .local => |local| .{ .local = try self.mapLocal(local) },
-                .discriminant => |d| .{ .discriminant = .{ .source = try self.mapLocal(d.source) } },
-                .field => |f| .{ .field = .{
-                    .source = try self.mapLocal(f.source),
-                    .field_idx = f.field_idx,
-                } },
-                .tag_payload => |t| .{ .tag_payload = .{
-                    .source = try self.mapLocal(t.source),
-                    .payload_idx = t.payload_idx,
-                    .variant_index = t.variant_index,
-                    .tag_discriminant = t.tag_discriminant,
-                } },
-                .tag_payload_struct => |t| .{ .tag_payload_struct = .{
-                    .source = try self.mapLocal(t.source),
-                    .variant_index = t.variant_index,
-                    .tag_discriminant = t.tag_discriminant,
-                } },
-                .list_reinterpret => |l| .{ .list_reinterpret = .{ .backing_ref = try self.mapLocal(l.backing_ref) } },
-                .nominal => |n| .{ .nominal = .{ .backing_ref = try self.mapLocal(n.backing_ref) } },
+            return switch (op.kind) {
+                .local => LIR.RefOp.local(try self.mapLocal(op.source)),
+                .discriminant => LIR.RefOp.discriminant(try self.mapLocal(op.source)),
+                .field => LIR.RefOp.field(try self.mapLocal(op.source), op.index),
+                .tag_payload => LIR.RefOp.tagPayload(try self.mapLocal(op.source), op.index, op.variant_index, op.tag_discriminant),
+                .tag_payload_struct => LIR.RefOp.tagPayloadStruct(try self.mapLocal(op.source), op.variant_index, op.tag_discriminant),
+                .list_reinterpret => LIR.RefOp.listReinterpret(try self.mapLocal(op.source)),
+                .nominal => LIR.RefOp.nominal(try self.mapLocal(op.source)),
             };
         }
 
@@ -2373,6 +2457,27 @@ pub fn BodyCloner(comptime Rewriter: type) type {
 
         fn mapMaybeBoxyDescRef(self: *Self, maybe: ?LIR.BoxyDescRef) Allocator.Error!?LIR.BoxyDescRef {
             return if (maybe) |desc| try self.mapBoxyDescRef(desc) else null;
+        }
+
+        /// The extra fields a call's clone carries: its cold-path flag, and
+        /// its result descriptor and out-descriptor, remapped.
+        pub fn mapCallExtra(self: *Self, id: LIR.StmtRowId(LIR.CallExtra)) Allocator.Error!LIR.StmtRowId(LIR.CallExtra) {
+            const extra = self.store.stmtRowOrDefault(id);
+            return self.store.addOptionalStmtRow(LIR.CallExtra, .{
+                .is_cold = extra.is_cold,
+                .result_desc = try self.mapMaybeBoxyDescRef(extra.result_desc),
+                .out_desc = try self.mapMaybeLocal(extra.out_desc),
+            });
+        }
+
+        pub fn mapJoinExtra(self: *Self, id: LIR.StmtRowId(LIR.JoinExtra)) Allocator.Error!LIR.StmtRowId(LIR.JoinExtra) {
+            const extra = self.store.stmtRowOrDefault(id);
+            return self.store.addOptionalStmtRow(LIR.JoinExtra, .{
+                .retained = try self.mapLocalSpan(extra.retained),
+                .maybe_uninitialized_params = try self.mapLocalSpan(extra.maybe_uninitialized_params),
+                .maybe_uninitialized_conditions = try self.mapLocalSpan(extra.maybe_uninitialized_conditions),
+                .maybe_uninitialized_condition_masks = extra.maybe_uninitialized_condition_masks,
+            });
         }
 
         fn mapBoxyDictRef(self: *Self, dict: LIR.BoxyDictRef) Allocator.Error!LIR.BoxyDictRef {
@@ -2641,7 +2746,7 @@ test "chainIsSingleUse rejects an extra read of any link" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = b } }, .test_fixture);
     const alias = try store.addCFStmt(.{ .assign_ref = .{
         .target = b,
-        .op = .{ .local = a },
+        .op = .local(a),
         .next = ret,
     } }, .test_fixture);
 
@@ -2651,7 +2756,7 @@ test "chainIsSingleUse rejects an extra read of any link" {
     // A second read of the head link refuses the chain.
     const extra_head = try store.addCFStmt(.{ .assign_ref = .{
         .target = unit,
-        .op = .{ .local = a },
+        .op = .local(a),
         .next = alias,
     } }, .test_fixture);
     try std.testing.expect(!try chainIsSingleUse(&store, extra_head, &.{ a, b }));
@@ -2659,7 +2764,7 @@ test "chainIsSingleUse rejects an extra read of any link" {
     // A second read of the tail link refuses it just the same.
     const extra_tail = try store.addCFStmt(.{ .assign_ref = .{
         .target = unit,
-        .op = .{ .local = b },
+        .op = .local(b),
         .next = alias,
     } }, .test_fixture);
     try std.testing.expect(!try chainIsSingleUse(&store, extra_tail, &.{ a, b }));
@@ -2793,13 +2898,15 @@ test "body_clone scratch is bounded by reachable locals and scopes" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = alias } }, source_origin);
     const copy = try store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
-        .op = .{ .local = value },
+        .op = .local(value),
         .next = ret,
     } }, source_origin);
     const body = try store.addCFStmt(.{ .assign_boxy_desc_ref = .{
         .target = desc,
-        .desc = .{ .local = value },
-        .captures = try store.addLocalSpan(&.{ value, value }),
+        .data = try store.addStmtRow(LIR.BoxyDescRefData, .{
+            .desc = .{ .local = value },
+            .captures = try store.addLocalSpan(&.{ value, value }),
+        }),
         .next = copy,
     } }, source_origin);
     var scratch: [32768]u8 = undefined;
@@ -2923,7 +3030,7 @@ test "body_clone sparse counting propagates allocation failures" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_ref = .{
         .target = local,
-        .op = .{ .local = local },
+        .op = .local(local),
         .next = ret,
     } }, .test_fixture);
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testSparseCountAllocations, .{ &store, body });
@@ -2959,7 +3066,7 @@ test "body_clone retained counts isolate nested inventories and clear only live 
     for (0..100000) |_| _ = try store.addLocal(.{ .layout_idx = .u64 });
     const high = try store.addLocal(.{ .layout_idx = .u64 });
     const ret = try store.addCFStmt(.{ .ret = .{ .value = high } }, .test_fixture);
-    const copy = try store.addCFStmt(.{ .assign_ref = .{ .target = high, .op = .{ .local = low }, .next = ret } }, .test_fixture);
+    const copy = try store.addCFStmt(.{ .assign_ref = .{ .target = high, .op = .local(low), .next = ret } }, .test_fixture);
     // Both successors share a suffix: count its statements once, but count
     // both operand occurrences of low (the condition and the copy).
     const body = try store.addCFStmt(.{ .switch_stmt = .{
@@ -3043,7 +3150,7 @@ test "body_clone retained counting returns every lease on allocation failure" {
     const body = try store.addCFStmt(.{ .assign_low_level = .{
         .target = local,
         .op = .num_int_add_wrap,
-        .rc_effect = .none(),
+        .rc_effect = try store.addRcEffect(.none()),
         .args = try store.addLocalSpan(&.{ local, distant }),
         .next = ret,
     } }, .test_fixture);
@@ -3079,13 +3186,15 @@ test "body cloning preserves committed list map output layout" {
     const source = try store.addCFStmt(.{ .assign_low_level = .{
         .target = target,
         .op = .list_map_can_reuse,
-        .rc_effect = LIR.LowLevel.list_map_can_reuse.rcEffect(),
-        .map_output_elem = .u64,
+        .rc_effect = try store.addRcEffect(LIR.LowLevel.list_map_can_reuse.rcEffect()),
         .args = try store.addLocalSpan(&.{}),
+        .extra = try store.addOptionalStmtRow(LIR.LowLevelExtra, .{
+            .map_output_elem = .u64,
+        }),
         .next = ret,
     } }, .test_fixture);
     var cloner = try BodyCloner(TestRetRewriter).init(&store, .{});
     defer cloner.deinit();
     const cloned = store.getCFStmt(try cloner.cloneStmt(source)).assign_low_level;
-    try std.testing.expectEqual(@as(?layout_mod.Idx, .u64), cloned.map_output_elem);
+    try std.testing.expectEqual(@as(?layout_mod.Idx, .u64), store.stmtRowOrDefault(cloned.extra).map_output_elem);
 }

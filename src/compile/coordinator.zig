@@ -687,6 +687,9 @@ pub const ModuleState = struct {
     reachable_local_imports: std.bit_set.DynamicBitSetUnmanaged,
     /// Diagnostic reports
     reports: std.ArrayList(Report),
+    /// Reports already present when type checking began: parsing and
+    /// canonicalization produced them, and their own caches reproduce them.
+    pre_check_report_count: usize = 0,
     /// Minimum dependency depth from root
     depth: u32,
     /// Accumulated compile time for this module (parse + canonicalize + type-check)
@@ -3142,7 +3145,7 @@ pub const Coordinator = struct {
         // compilation evaluated roots it lacked.
         const evaluated_more = if (mod.reopened_unevaluated) |before| unevaluatedRequestCount(artifact) < before else true;
         mod.reopened_unevaluated = null;
-        if (mod.reports.items.len == 0 and evaluated_more) {
+        if (mod.reports.items.len == mod.pre_check_report_count and evaluated_more) {
             if (artifact.pairing_arena == null) self.storeCheckedModuleInCache(mod, artifact) else self.storePlatformPairingInCache(artifact);
         }
         if (mod.staged_checked_env) |part| {
@@ -4696,9 +4699,11 @@ pub const Coordinator = struct {
         const explicit_roots = try buildExplicitRootRequests(mod, task_payload_alloc);
         errdefer task_payload_alloc.free(explicit_roots);
 
-        if (mod.reports.items.len == 0 and
-            self.tryLoadCachedCheckedModule(pkg, mod, imported_envs, imported_artifacts, platform_requirement_context, explicit_roots))
-        {
+        // Earlier-stage diagnostics are a function of the same source the
+        // cache key names, so they never prevent reuse. A stored entry is one
+        // whose checking and evaluation reported nothing further.
+        mod.pre_check_report_count = mod.reports.items.len;
+        if (self.tryLoadCachedCheckedModule(pkg, mod, imported_envs, imported_artifacts, platform_requirement_context, explicit_roots)) {
             task_payload_alloc.free(imported_envs);
             task_payload_alloc.free(imported_artifacts);
             task_payload_alloc.free(available_artifacts);
@@ -10719,8 +10724,11 @@ test "shared CTFE and runtime requests specialize once across workers and target
                 if (stmt != .assign_literal) continue;
                 switch (stmt.assign_literal.value) {
                     .static_data => slot_reads += 1,
-                    .i128_literal => |literal| if (literal.value == 42) {
-                        literal_answers += 1;
+                    .i128_literal => |literal_id| blk_literal: {
+                        const literal = store.stmtRow(literal_id);
+                        break :blk_literal if (literal.value == 42) {
+                            literal_answers += 1;
+                        };
                     },
                     .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal, .proc_ref => {},
                 }
