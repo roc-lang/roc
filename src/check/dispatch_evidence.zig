@@ -27,6 +27,7 @@
 //! paths over the concrete monomorphic callable instead.
 
 const std = @import("std");
+const collections = @import("collections");
 const Ident = @import("base").Ident;
 const types_mod = @import("types");
 
@@ -176,15 +177,30 @@ pub fn appendPathSteps(
 pub fn PathMemo(comptime T: type) type {
     return struct {
         const Self = @This();
-        const Key = struct { root: u32, node: u32 };
+        /// One root's value at a node; `next` links the node's other roots.
+        const Entry = struct { root: u32, value: T, next: u32 };
+        const no_entry = std.math.maxInt(u32);
 
-        values: std.AutoHashMapUnmanaged(Key, T) = .{},
+        /// Path node -> its most recently computed entry in `entries`.
+        heads: collections.DenseMapUnmanaged(u32, u32) = .empty,
+        entries: std.ArrayListUnmanaged(Entry) = .empty,
         chain: std.ArrayListUnmanaged(u32) = .empty,
 
         pub fn deinit(self: *Self, gpa: Allocator) void {
-            self.values.deinit(gpa);
+            self.heads.deinit(gpa);
+            self.entries.deinit(gpa);
             self.chain.deinit(gpa);
             self.* = .{};
+        }
+
+        fn lookup(self: *const Self, root_key: u32, node: u32) ?T {
+            var entry = self.heads.get(node) orelse return null;
+            while (entry != no_entry) {
+                const known = self.entries.items[entry];
+                if (known.root == root_key) return known.value;
+                entry = known.next;
+            }
+            return null;
         }
 
         /// The value at `last`, with `root` as the value before a first step.
@@ -203,7 +219,7 @@ pub fn PathMemo(comptime T: type) type {
             var value = root;
             var node = last;
             while (node != no_path_node) {
-                if (self.values.get(.{ .root = root_key, .node = node })) |known| {
+                if (self.lookup(root_key, node)) |known| {
                     value = known;
                     break;
                 }
@@ -215,7 +231,15 @@ pub fn PathMemo(comptime T: type) type {
                 i -= 1;
                 const next = self.chain.items[i];
                 value = (try ctx.apply(value, nodes, next)) orelse return null;
-                try self.values.put(gpa, .{ .root = root_key, .node = next }, value);
+                const entry: u32 = std.math.cast(u32, self.entries.items.len) orelse return error.OutOfMemory;
+                try self.entries.ensureUnusedCapacity(gpa, 1);
+                const head = try self.heads.getOrPut(gpa, next);
+                self.entries.appendAssumeCapacity(.{
+                    .root = root_key,
+                    .value = value,
+                    .next = if (head.found_existing) head.value_ptr.* else no_entry,
+                });
+                head.value_ptr.* = entry;
             }
             return value;
         }
@@ -224,15 +248,19 @@ pub fn PathMemo(comptime T: type) type {
 
 /// Reusable scratch state for `enumerateEvidenceParams`.
 pub const Scratch = struct {
-    visited: std.AutoHashMapUnmanaged(Var, void) = .{},
+    visited: collections.DenseMapUnmanaged(Var, void) = .empty,
     stack: std.ArrayListUnmanaged(StackEntry) = .empty,
     fn_var_queue: std.ArrayListUnmanaged(QueuedCallable) = .empty,
     /// Runtime evidence selects a method target, not one particular
     /// instantiation of that target's callable scheme. Independent same-name
     /// calls therefore share this receiver-local slot while retaining their
     /// own callable relations in the checked plans.
-    emitted_methods: std.AutoHashMapUnmanaged(Ident.Idx, u32) = .{},
-    contract_classes: std.AutoHashMapUnmanaged(struct { param: u32, callable: Var }, void) = .{},
+    /// Method name's ident index -> its emitted param.
+    emitted_methods: collections.DenseMapUnmanaged(u29, u32) = .empty,
+    /// Distinct callable -> its most recent `contract_class_links` entry; the
+    /// links chain the params that recorded a contract for that callable.
+    contract_classes: collections.DenseMapUnmanaged(Var, u32) = .empty,
+    contract_class_links: std.ArrayListUnmanaged(ContractClassLink) = .empty,
     contract_entries: std.ArrayListUnmanaged(struct { param: u32, constraint: StaticDispatchConstraint }) = .empty,
     contract_pool: std.ArrayListUnmanaged(StaticDispatchConstraint) = .empty,
     /// Prefix-shared paths of every stack entry, linked toward the walk root.
@@ -244,6 +272,9 @@ pub const Scratch = struct {
     path_chain: std.ArrayListUnmanaged(u32) = .empty,
     /// Child collection buffer for one node's children, in declared order.
     children: std.ArrayListUnmanaged(Child) = .empty,
+
+    const ContractClassLink = struct { param: u32, next: u32 };
+    const no_link = std.math.maxInt(u32);
 
     const Child = struct {
         var_: Var,
@@ -258,6 +289,7 @@ pub const Scratch = struct {
         self.fn_var_queue.deinit(gpa);
         self.emitted_methods.deinit(gpa);
         self.contract_classes.deinit(gpa);
+        self.contract_class_links.deinit(gpa);
         self.contract_entries.deinit(gpa);
         self.contract_pool.deinit(gpa);
         self.path_nodes.deinit(gpa);
@@ -274,6 +306,7 @@ pub const Scratch = struct {
         self.fn_var_queue.clearRetainingCapacity();
         self.emitted_methods.clearRetainingCapacity();
         self.contract_classes.clearRetainingCapacity();
+        self.contract_class_links.clearRetainingCapacity();
         self.contract_entries.clearRetainingCapacity();
         self.contract_pool.clearRetainingCapacity();
         self.path_nodes.clearRetainingCapacity();
@@ -281,6 +314,27 @@ pub const Scratch = struct {
         self.path_node_remap.clearRetainingCapacity();
         self.path_chain.clearRetainingCapacity();
         self.children.clearRetainingCapacity();
+    }
+
+    /// Record that `param` has a contract for `callable`, returning whether
+    /// that pair is new.
+    fn recordContractClass(self: *Scratch, gpa: Allocator, param: u32, callable: Var) Allocator.Error!bool {
+        const link: u32 = std.math.cast(u32, self.contract_class_links.items.len) orelse return error.OutOfMemory;
+        try self.contract_class_links.ensureUnusedCapacity(gpa, 1);
+        const head = try self.contract_classes.getOrPut(gpa, callable);
+        var next: u32 = no_link;
+        if (head.found_existing) {
+            next = head.value_ptr.*;
+            var cursor = next;
+            while (cursor != no_link) {
+                const known = self.contract_class_links.items[cursor];
+                if (known.param == param) return false;
+                cursor = known.next;
+            }
+        }
+        self.contract_class_links.appendAssumeCapacity(.{ .param = param, .next = next });
+        head.value_ptr.* = link;
+        return true;
     }
 
     /// The path nodes that the last enumeration's params refer to.
@@ -656,7 +710,7 @@ fn emitConstraints(
 ) Allocator.Error!void {
     scratch.emitted_methods.clearRetainingCapacity();
     for (store.sliceStaticDispatchConstraints(constraints)) |constraint| {
-        const emitted = try scratch.emitted_methods.getOrPut(gpa, constraint.fn_name);
+        const emitted = try scratch.emitted_methods.getOrPut(gpa, constraint.fn_name.idx);
         if (!emitted.found_existing) {
             emitted.value_ptr.* = @intCast(out.items.len);
             try out.append(gpa, .{
@@ -674,8 +728,7 @@ fn emitConstraints(
             const param = &out.items[param_index];
             const callable = store.resolveVar(constraint.fn_var).var_;
             if (callable != store.resolveVar(param.constraint.fn_var).var_) {
-                const distinct = try scratch.contract_classes.getOrPut(gpa, .{ .param = param_index, .callable = callable });
-                if (!distinct.found_existing) {
+                if (try scratch.recordContractClass(gpa, param_index, callable)) {
                     try scratch.contract_entries.append(gpa, .{ .param = param_index, .constraint = constraint });
                     param.contract_len += 1;
                 }
