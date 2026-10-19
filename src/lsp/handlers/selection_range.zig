@@ -118,13 +118,15 @@ const SelectionRange = struct {
     parent: ?*const SelectionRange = null,
 };
 
+/// Free the parents of a range built by `computeSelectionRange`, which are
+/// one allocation in chain order.
 fn freeSelectionRange(allocator: std.mem.Allocator, range: SelectionRange) void {
-    var current: ?*const SelectionRange = range.parent;
-    while (current) |r| {
-        const next = r.parent;
-        allocator.destroy(r);
-        current = next;
-    }
+    const first = range.parent orelse return;
+    var len: usize = 0;
+    var current: ?*const SelectionRange = first;
+    while (current) |r| : (current = r.parent) len += 1;
+    const parents: [*]const SelectionRange = @ptrCast(first);
+    allocator.free(parents[0..len]);
 }
 
 /// Compute selection range hierarchy for a position.
@@ -185,52 +187,44 @@ fn computeSelectionRange(allocator: std.mem.Allocator, source: []const u8, line:
         }
     }.lessThan);
 
-    // Remove duplicates (regions with same start and end)
-    var unique_regions: std.ArrayList(ByteRange) = .empty;
-    defer unique_regions.deinit(allocator);
-
-    var prev: ?ByteRange = null;
+    // Remove duplicates (regions with same start and end), in place
+    var unique_len: usize = 0;
     for (containing_regions.items) |region| {
-        if (prev) |p| {
-            if (p.start == region.start and p.end == region.end) {
-                continue; // Skip duplicate
-            }
+        if (unique_len > 0) {
+            const prev = containing_regions.items[unique_len - 1];
+            if (prev.start == region.start and prev.end == region.end) continue;
         }
-        try unique_regions.append(allocator, region);
-        prev = region;
+        containing_regions.items[unique_len] = region;
+        unique_len += 1;
     }
+    const unique_regions = containing_regions.items[0..unique_len];
 
-    if (unique_regions.items.len == 0) {
+    if (unique_regions.len == 0) {
         return error.NoRangeFound;
     }
 
-    // Convert to LSP Ranges and build linked list (innermost to outermost)
-    // Start with the outermost range (no parent)
-    var i: usize = unique_regions.items.len;
-    var current_parent: ?*const SelectionRange = null;
-
-    while (i > 1) {
-        i -= 1;
-        const byte_range = unique_regions.items[i];
-        const parent_node = try allocator.create(SelectionRange);
-        parent_node.* = .{
+    // Convert to LSP Ranges and link them innermost to outermost. Every range
+    // but the innermost is a parent, and the parents share one allocation:
+    // `parents[k]` is `unique_regions[k + 1]`.
+    const parents = try allocator.alloc(SelectionRange, unique_regions.len - 1);
+    for (parents, unique_regions[1..], 0..) |*parent, byte_range, k| {
+        parent.* = .{
             .range = .{
                 .start = positionAt(byte_range.start, &line_offsets),
                 .end = positionAt(byte_range.end, &line_offsets),
             },
-            .parent = current_parent,
+            .parent = if (k + 1 < parents.len) &parents[k + 1] else null,
         };
-        current_parent = parent_node;
     }
 
     // Return the innermost range
-    const innermost = unique_regions.items[0];
+    const innermost = unique_regions[0];
     return .{
         .range = .{
             .start = positionAt(innermost.start, &line_offsets),
             .end = positionAt(innermost.end, &line_offsets),
         },
-        .parent = current_parent,
+        .parent = if (parents.len > 0) &parents[0] else null,
     };
 }
 
